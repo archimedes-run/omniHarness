@@ -24,7 +24,7 @@ def _make_model():
 
     return ChatOpenAI(
         model=os.getenv("E2E_MODEL_ID", "ep-20251211175242-llcmh"),
-        base_url=os.getenv("E2E_BASE_URL", "https://ark-cn-beijing.archimedes-run.net/api/v3"),
+        base_url=os.getenv("E2E_BASE_URL", "https://api.openai.com/v1"),
         api_key=os.getenv("OPENAI_API_KEY", ""),
         max_tokens=256,
         temperature=0,

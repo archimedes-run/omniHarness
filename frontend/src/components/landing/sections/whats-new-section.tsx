@@ -38,7 +38,7 @@ const features: BentoCardProps[] = [
     color: COLOR,
     label: "Flexible",
     title: "Multi-Model Support",
-    description: "Doubao, DeepSeek, OpenAI, Gemini, etc.",
+    description: "DeepSeek, OpenAI, Gemini, Anthropic, and more.",
   },
   {
     color: COLOR,

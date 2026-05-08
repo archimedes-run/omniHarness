@@ -101,7 +101,7 @@ models:
 
 ## 思考模式
 
-如果模型支持扩展思考（例如 DeepSeek Reasoner、启用思考的 Doubao、Anthropic Claude 思考模式），Lead Agent 可以在**思考模式**下运行。在此模式下，模型的内部推理步骤在响应流中可见。
+如果模型支持扩展思考（例如 DeepSeek Reasoner、Anthropic Claude 思考模式），Lead Agent 可以在**思考模式**下运行。在此模式下，模型的内部推理步骤在响应流中可见。
 
 思考模式通过每次请求的 `thinking_enabled` 标志控制。如果启用了思考但配置的模型不支持，系统会优雅地回退并记录警告。
 

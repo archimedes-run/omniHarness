@@ -58,9 +58,9 @@ def test_to_json_kwargs_contains_model():
 
 
 def test_to_json_kwargs_contains_custom_api_base():
-    model = _make_model(api_base="https://ark.cn-beijing.volces.com/api/v3")
+    model = _make_model(api_base="https://custom-openai-compatible.example.com/v1")
     result = model.to_json()
-    assert result["kwargs"]["api_base"] == "https://ark.cn-beijing.volces.com/api/v3"
+    assert result["kwargs"]["api_base"] == "https://custom-openai-compatible.example.com/v1"
 
 
 def test_to_json_api_key_is_masked():

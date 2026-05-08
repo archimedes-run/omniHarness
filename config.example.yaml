@@ -244,7 +244,7 @@ models:
   #   supports_vision: true
   #   supports_thinking: true
 
-  # Example: MiniMax (OpenAI-compatible) - CN 中国区用户
+  # Example: MiniMax (OpenAI-compatible)
   # MiniMax provides high-performance models with 204K context window
   # Docs: https://platform.minimaxi.com/docs/api-reference/text-openai-api
   # - name: minimax-m2.7
@@ -518,9 +518,9 @@ sandbox:
 #   use: omniharness.community.aio_sandbox:AioSandboxProvider
 #
 #   # Optional: Container image to use (works with both Docker and Apple Container)
-#   # Default: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
-#   # Recommended: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest (works on both x86_64 and arm64)
-#   # image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+#   # Default: ghcr.io/archimedes-run/omni-harness-sandbox:latest
+#   # Recommended: ghcr.io/archimedes-run/omni-harness-sandbox:latest (works on both x86_64 and arm64)
+#   # image: ghcr.io/archimedes-run/omni-harness-sandbox:latest
 #
 #   # Optional: Base port for sandbox containers (default: 8080)
 #   # port: 8080

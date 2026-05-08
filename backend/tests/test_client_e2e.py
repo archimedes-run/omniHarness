@@ -49,10 +49,10 @@ def _make_e2e_config() -> AppConfig:
     All LLM connection details come from environment variables so that both
     internal CI and external contributors can run the tests:
 
-    - ``E2E_MODEL_NAME``  (default: ``volcengine-ark``)
+    - ``E2E_MODEL_NAME``  (default: ``gpt-4o``)
     - ``E2E_MODEL_USE``   (default: ``langchain_openai:ChatOpenAI``)
     - ``E2E_MODEL_ID``    (default: ``ep-20251211175242-llcmh``)
-    - ``E2E_BASE_URL``    (default: ``https://ark-cn-beijing.archimedes-run.net/api/v3``)
+    - ``E2E_BASE_URL``    (default: ``https://api.openai.com/v1``)
     - ``OPENAI_API_KEY``  (required for LLM tests)
 
     Note: We use model_validate with a raw dict (not AppConfig(models=[ModelConfig(...)]))
@@ -64,11 +64,11 @@ def _make_e2e_config() -> AppConfig:
         {
             "models": [
                 {
-                    "name": os.getenv("E2E_MODEL_NAME", "volcengine-ark"),
+                    "name": os.getenv("E2E_MODEL_NAME", "gpt-4o"),
                     "display_name": "E2E Test Model",
                     "use": os.getenv("E2E_MODEL_USE", "langchain_openai:ChatOpenAI"),
                     "model": os.getenv("E2E_MODEL_ID", "ep-20251211175242-llcmh"),
-                    "base_url": os.getenv("E2E_BASE_URL", "https://ark-cn-beijing.archimedes-run.net/api/v3"),
+                    "base_url": os.getenv("E2E_BASE_URL", "https://api.openai.com/v1"),
                     "api_key": os.getenv("OPENAI_API_KEY", ""),
                     "max_tokens": 512,
                     "temperature": 0.7,
@@ -640,7 +640,7 @@ class TestConfigManagement:
 
     def test_list_models_returns_injected_config(self, e2e_env):
         """list_models() returns the model from the injected AppConfig."""
-        expected_model_name = os.getenv("E2E_MODEL_NAME", "volcengine-ark")
+        expected_model_name = os.getenv("E2E_MODEL_NAME", "gpt-4o")
         c = OmniHarnessClient(checkpointer=None, thinking_enabled=False)
         result = c.list_models()
         assert "models" in result
@@ -650,7 +650,7 @@ class TestConfigManagement:
 
     def test_get_model_found(self, e2e_env):
         """get_model() returns the model when it exists."""
-        expected_model_name = os.getenv("E2E_MODEL_NAME", "volcengine-ark")
+        expected_model_name = os.getenv("E2E_MODEL_NAME", "gpt-4o")
         c = OmniHarnessClient(checkpointer=None, thinking_enabled=False)
         model = c.get_model(expected_model_name)
         assert model is not None

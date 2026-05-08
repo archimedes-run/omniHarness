@@ -39,14 +39,14 @@ class Script:
 
 
 def text_to_speech(text: str, voice_type: str) -> Optional[bytes]:
-    """Convert text to speech using Volcengine TTS."""
-    app_id = os.getenv("VOLCENGINE_TTS_APPID")
-    access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN")
-    cluster = os.getenv("VOLCENGINE_TTS_CLUSTER", "volcano_tts")
+    """Convert text to speech using TTS provider."""
+    app_id = os.getenv("TTS_APP_ID")
+    access_token = os.getenv("TTS_ACCESS_TOKEN")
+    cluster = os.getenv("TTS_CLUSTER", "omniharness_tts")
 
     if not app_id or not access_token:
         raise ValueError(
-            "VOLCENGINE_TTS_APPID and VOLCENGINE_TTS_ACCESS_TOKEN environment variables must be set"
+            "TTS_APP_ID and TTS_ACCESS_TOKEN environment variables must be set"
         )
 
     url = "https://openspeech.archimedes-run.com/api/v1/tts"
@@ -129,9 +129,9 @@ def tts_node(script: Script, max_workers: int = 4) -> list[bytes]:
         raise ValueError("Script contains no lines to process")
 
     # Validate required environment variables before starting TTS
-    if not os.getenv("VOLCENGINE_TTS_APPID") or not os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN"):
+    if not os.getenv("TTS_APP_ID") or not os.getenv("TTS_ACCESS_TOKEN"):
         raise ValueError(
-            "Missing required environment variables: VOLCENGINE_TTS_APPID and VOLCENGINE_TTS_ACCESS_TOKEN must be set"
+            "Missing required environment variables: TTS_APP_ID and TTS_ACCESS_TOKEN must be set"
         )
 
     tasks = [(i, line, total) for i, line in enumerate(script.lines)]
@@ -167,7 +167,7 @@ def tts_node(script: Script, max_workers: int = 4) -> list[bytes]:
     if not audio_chunks:
         raise ValueError(
             f"TTS generation failed for all {total} lines. "
-            "Please check VOLCENGINE_TTS_APPID and VOLCENGINE_TTS_ACCESS_TOKEN environment variables."
+            "Please check TTS_APP_ID and TTS_ACCESS_TOKEN environment variables."
         )
     
     return audio_chunks

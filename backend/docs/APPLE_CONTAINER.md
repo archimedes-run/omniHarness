@@ -110,7 +110,7 @@ Both runtimes use OCI-compatible images. The default image works with both:
 ```yaml
 sandbox:
   use: omniharness.community.aio_sandbox:AioSandboxProvider
-  image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest  # Default image
+  image: ghcr.io/archimedes-run/omni-harness-sandbox:latest  # Default image
 ```
 
 Make sure your images are available for the appropriate architecture:
@@ -139,10 +139,10 @@ This command will:
 
 ```bash
 # Using Apple Container
-container image pull enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+container image pull ghcr.io/archimedes-run/omni-harness-sandbox:latest
 
 # Using Docker
-docker pull enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+docker pull ghcr.io/archimedes-run/omni-harness-sandbox:latest
 ```
 
 If you skip pre-pulling, the image will be automatically pulled on first agent execution, which may take several minutes depending on your network speed.

@@ -2,13 +2,6 @@ export function GET() {
   return Response.json({
     models: [
       {
-        id: "doubao-seed-1.8",
-        name: "doubao-seed-1.8",
-        model: "doubao-seed-1-8",
-        display_name: "Doubao Seed 1.8",
-        supports_thinking: true,
-      },
-      {
         id: "deepseek-v3.2",
         name: "deepseek-v3.2",
         model: "deepseek-chat",

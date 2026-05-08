@@ -126,7 +126,7 @@ services:
       - ~/.kube/config:/root/.kube/config:ro
     environment:
       - K8S_NAMESPACE=omni-harness
-      - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+      - SANDBOX_IMAGE=ghcr.io/archimedes-run/omni-harness-sandbox:latest
       - SKILLS_HOST_PATH=${OMNI_HARNESS_REPO_ROOT}/skills
       - THREADS_HOST_PATH=${OMNI_HARNESS_HOME}/threads
       - KUBECONFIG_PATH=/root/.kube/config

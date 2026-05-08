@@ -56,7 +56,7 @@ logging.basicConfig(
 K8S_NAMESPACE = os.environ.get("K8S_NAMESPACE", "omni-harness")
 SANDBOX_IMAGE = os.environ.get(
     "SANDBOX_IMAGE",
-    "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest",
+    "ghcr.io/archimedes-run/omni-harness-sandbox:latest",
 )
 SKILLS_HOST_PATH = os.environ.get("SKILLS_HOST_PATH", "/skills")
 THREADS_HOST_PATH = os.environ.get("THREADS_HOST_PATH", "/.omni-harness/threads")

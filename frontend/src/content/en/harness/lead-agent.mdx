@@ -101,7 +101,7 @@ The first entry (`my-primary-model`) becomes the default. Any request that does 
 
 ## Thinking mode
 
-If the model supports extended thinking (e.g., DeepSeek Reasoner, Doubao with thinking enabled, Anthropic Claude with thinking), the Lead Agent can run in **thinking mode**. In this mode, the model's internal reasoning steps are visible in the response stream.
+If the model supports extended thinking (e.g., DeepSeek Reasoner, Anthropic Claude with thinking), the Lead Agent can run in **thinking mode**. In this mode, the model's internal reasoning steps are visible in the response stream.
 
 Thinking mode is controlled per-request through the `thinking_enabled` flag. If thinking is enabled but the configured model does not support it, the system falls back gracefully and logs a warning.
 

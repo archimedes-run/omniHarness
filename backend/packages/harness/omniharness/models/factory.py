@@ -135,7 +135,7 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     # Ensure stream_usage is enabled so that token usage metadata is available
     # in streaming responses.  LangChain's BaseChatOpenAI only defaults
     # stream_usage=True when no custom base_url/api_base is set, so models
-    # hitting third-party endpoints (e.g. doubao, deepseek) silently lose
+    # hitting third-party endpoints (e.g. deepseek) silently lose
     # usage data.  We default it to True unless explicitly configured.
     if "stream_usage" not in model_settings_from_config and "stream_usage" not in kwargs:
         if "stream_usage" in getattr(model_class, "model_fields", {}):
