@@ -9,4 +9,4 @@ Currently, we have two branches to maintain:
 
 ## Reporting a Vulnerability
 
-Please go to https://github.com/bytedance/omni-harness/security to report the vulnerability you find.
+Please go to https://github.com/archimedes-run/omni-harness/security to report the vulnerability you find.

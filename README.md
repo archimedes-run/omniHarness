@@ -1,4 +1,4 @@
-#  OmniHarness - 2.0
+# 🦌 OmniHarness - 2.0
 
 English | [中文](./README_zh.md) | [日本語](./README_ja.md) | [Français](./README_fr.md) | [Русский](./README_ru.md)
 
@@ -6,7 +6,7 @@ English | [中文](./README_zh.md) | [日本語](./README_ja.md) | [Français](.
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](./Makefile)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-<a href="https://trendshift.io/repositories/14699" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14699" alt="archimedes%2Fomni-harness | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/14699" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14699" alt="archimedes-run%2Fomni-harness | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 > On February 28th, 2026, OmniHarness claimed the 🏆 #1 spot on GitHub Trending following the launch of version 2. Thanks a million to our incredible community — you made this happen! 💪🔥
 
 OmniHarness (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is an open-source **super agent harness** that orchestrates **sub-agents**, **memory**, and **sandboxes** to do almost anything — powered by **extensible skills**.
@@ -14,21 +14,21 @@ OmniHarness (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) i
 https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 
 > [!NOTE]
-> **OmniHarness 2.0 is a ground-up rewrite.** It shares no code with v1. If you're looking for the original Deep Research framework, it's maintained on the [`1.x` branch](https://github.com/archimedes/omni-harness/tree/main-1.x) — contributions there are still welcome. Active development has moved to 2.0.
+> **OmniHarness 2.0 is a ground-up rewrite.** It shares no code with v1. If you're looking for the original Deep Research framework, it's maintained on the [`1.x` branch](https://github.com/archimedes-run/omni-harness/tree/main-1.x) — contributions there are still welcome. Active development has moved to 2.0.
 
 ## Official Website
 
-[<img width="2880" height="1600" alt="image" src="https://github.com/user-attachments/assets/a598c49f-3b2f-41ea-a052-05e21349188a" />](https://OmniHarness.tech)
+[<img width="2880" height="1600" alt="image" src="https://github.com/user-attachments/assets/a598c49f-3b2f-41ea-a052-05e21349188a" />](https://omniharness.tech)
 
-Learn more and see **real demos** on our [**official website**](https://OmniHarness.tech).
+Learn more and see **real demos** on our [**official website**](https://omniharness.tech).
 
-## Coding Plan from archimedes Volcengine
+## Coding Plan from ByteDance Volcengine
 
 <img width="4808" height="2400" alt="英文方舟" src="https://github.com/user-attachments/assets/2ecc7b9d-50be-4185-b1f7-5542d222fb2d" />
 
 - We strongly recommend using Doubao-Seed-2.0-Code, DeepSeek v3.2 and Kimi 2.5 to run OmniHarness
-- [Learn more](https://www.byteplus.com/en/activity/codingplan?utm_campaign=omni_harness&utm_content=omni_harness&utm_medium=devrel&utm_source=OWO&utm_term=omni_harness)
-- [中国大陆地区的开发者请点击这里](https://www.volcengine.com/activity/codingplan?utm_campaign=omni_harness&utm_content=omni_harness&utm_medium=devrel&utm_source=OWO&utm_term=omni_harness)
+- [Learn more](https://www.byteplus.com/en/activity/codingplan?utm_campaign=deer_flow&utm_content=deer_flow&utm_medium=devrel&utm_source=OWO&utm_term=deer_flow)
+- [中国大陆地区的开发者请点击这里](https://www.volcengine.com/activity/codingplan?utm_campaign=deer_flow&utm_content=deer_flow&utm_medium=devrel&utm_source=OWO&utm_term=deer_flow)
 
 ## InfoQuest
 
@@ -44,9 +44,9 @@ OmniHarness has newly integrated the intelligent search and crawling toolset ind
 
 ## Table of Contents
 
-- [ OmniHarness - 2.0](#-OmniHarness---20)
+- [🦌 OmniHarness - 2.0](#-omniharness---20)
   - [Official Website](#official-website)
-  - [Coding Plan from archimedes Volcengine](#coding-plan-from-archimedes-volcengine)
+  - [Coding Plan from ByteDance Volcengine](#coding-plan-from-archimedes-run-volcengine)
   - [InfoQuest](#infoquest)
   - [Table of Contents](#table-of-contents)
   - [One-Line Agent Setup](#one-line-agent-setup)
@@ -88,7 +88,7 @@ OmniHarness has newly integrated the intelligent search and crawling toolset ind
 If you use Claude Code, Codex, Cursor, Windsurf, or another coding agent, you can hand it the setup instructions in one sentence:
 
 ```text
-Help me clone OmniHarness if needed, then bootstrap it for local development by following https://raw.githubusercontent.com/archimedes/omni-harness/main/Install.md
+Help me clone OmniHarness if needed, then bootstrap it for local development by following https://raw.githubusercontent.com/archimedes-run/omni-harness/main/Install.md
 ```
 
 That prompt is intended for coding agents. It tells the agent to clone the repo if needed, choose Docker when available, and stop with the exact next command plus any missing config the user still needs to provide.
@@ -100,7 +100,7 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
 1. **Clone the OmniHarness repository**
 
    ```bash
-   git clone https://github.com/archimedes/omni-harness.git
+   git clone https://github.com/archimedes-run/omni-harness.git
    cd omni-harness
    ```
 
@@ -148,7 +148,7 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
 
      - name: qwen3-32b-vllm
        display_name: Qwen3 32B (vLLM)
-       use: OmniHarness.models.vllm_provider:VllmChatModel
+       use: omniharness.models.vllm_provider:VllmChatModel
        model: Qwen/Qwen3-32B
        api_key: $VLLM_API_KEY
        base_url: http://localhost:8000/v1
@@ -163,7 +163,7 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
 
    To route OpenAI models through `/v1/responses`, keep using `langchain_openai:ChatOpenAI` and set `use_responses_api: true` with `output_version: responses/v1`.
 
-   For vLLM 0.19.0, use `OmniHarness.models.vllm_provider:VllmChatModel`. For Qwen-style reasoning models, OmniHarness toggles reasoning with `extra_body.chat_template_kwargs.enable_thinking` and preserves vLLM's non-standard `reasoning` field across multi-turn tool-call conversations. Legacy `thinking` configs are normalized automatically for backward compatibility. Reasoning models may also require the server to be started with `--reasoning-parser ...`. If your local vLLM deployment accepts any non-empty API key, you can still set `VLLM_API_KEY` to a placeholder value.
+   For vLLM 0.19.0, use `omniharness.models.vllm_provider:VllmChatModel`. For Qwen-style reasoning models, OmniHarness toggles reasoning with `extra_body.chat_template_kwargs.enable_thinking` and preserves vLLM's non-standard `reasoning` field across multi-turn tool-call conversations. Legacy `thinking` configs are normalized automatically for backward compatibility. Reasoning models may also require the server to be started with `--reasoning-parser ...`. If your local vLLM deployment accepts any non-empty API key, you can still set `VLLM_API_KEY` to a placeholder value.
 
    CLI-backed provider examples:
 
@@ -171,14 +171,14 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
    models:
      - name: gpt-5.4
        display_name: GPT-5.4 (Codex CLI)
-       use: OmniHarness.models.openai_codex_provider:CodexChatModel
+       use: omniharness.models.openai_codex_provider:CodexChatModel
        model: gpt-5.4
        supports_thinking: true
        supports_reasoning_effort: true
 
      - name: claude-sonnet-4.6
        display_name: Claude Sonnet 4.6 (Claude Code OAuth)
-       use: OmniHarness.models.claude_provider:ClaudeChatModel
+       use: omniharness.models.claude_provider:ClaudeChatModel
        model: claude-sonnet-4-6
        max_tokens: 4096
        supports_thinking: true
@@ -227,7 +227,7 @@ make docker-init    # Pull sandbox image (only once or when image updates)
 make docker-start   # Start services (auto-detects sandbox mode from config.yaml)
 ```
 
-`make docker-start` starts `provisioner` only when `config.yaml` uses provisioner mode (`sandbox.use: OmniHarness.community.aio_sandbox:AioSandboxProvider` with `provisioner_url`).
+`make docker-start` starts `provisioner` only when `config.yaml` uses provisioner mode (`sandbox.use: omniharness.community.aio_sandbox:AioSandboxProvider` with `provisioner_url`).
 
 Docker builds use the upstream `uv` registry by default. If you need faster mirrors in restricted networks, export `UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` and `NPM_REGISTRY=https://registry.npmmirror.com` before running `make docker-init` or `make docker-start`.
 
@@ -595,15 +595,15 @@ Gateway-generated follow-up suggestions now normalize both plain-string model ou
 
 #### Claude Code Integration
 
-The `claude-to-OmniHarness` skill lets you interact with a running OmniHarness instance directly from [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Send research tasks, check status, manage threads — all without leaving the terminal.
+The `claude-to-omniharness` skill lets you interact with a running OmniHarness instance directly from [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Send research tasks, check status, manage threads — all without leaving the terminal.
 
 **Install the skill**:
 
 ```bash
-npx skills add https://github.com/archimedes/omni-harness --skill claude-to-OmniHarness
+npx skills add https://github.com/archimedes-run/omni-harness --skill claude-to-omniharness
 ```
 
-Then make sure OmniHarness is running (default at `http://localhost:2026`) and use the `/claude-to-OmniHarness` command in Claude Code.
+Then make sure OmniHarness is running (default at `http://localhost:2026`) and use the `/claude-to-omniharness` command in Claude Code.
 
 **What you can do**:
 - Send messages to OmniHarness and get streaming responses
@@ -615,12 +615,12 @@ Then make sure OmniHarness is running (default at `http://localhost:2026`) and u
 **Environment variables** (optional, for custom endpoints):
 
 ```bash
-OmniHarness_URL=http://localhost:2026            # Unified proxy base URL
-OmniHarness_GATEWAY_URL=http://localhost:2026    # Gateway API
-OmniHarness_LANGGRAPH_URL=http://localhost:2026/api/langgraph  # LangGraph API
+DEERFLOW_URL=http://localhost:2026            # Unified proxy base URL
+DEERFLOW_GATEWAY_URL=http://localhost:2026    # Gateway API
+DEERFLOW_LANGGRAPH_URL=http://localhost:2026/api/langgraph  # LangGraph API
 ```
 
-See [`skills/public/claude-to-OmniHarness/SKILL.md`](skills/public/claude-to-OmniHarness/SKILL.md) for the full API reference.
+See [`skills/public/claude-to-omniharness/SKILL.md`](skills/public/claude-to-omniharness/SKILL.md) for the full API reference.
 
 ### Sub-Agents
 
@@ -678,7 +678,7 @@ OmniHarness is model-agnostic — it works with any LLM that implements the Open
 OmniHarness can be used as an embedded Python library without running the full HTTP services. The `OmniHarnessClient` provides direct in-process access to all agent and Gateway capabilities, returning the same response schemas as the HTTP Gateway API. The HTTP Gateway also exposes `DELETE /api/threads/{thread_id}` to remove OmniHarness-managed local thread data after the LangGraph thread itself has been deleted:
 
 ```python
-from omniharness.client import omniharnessClient
+from omniharness.client import OmniHarnessClient
 
 client = OmniHarnessClient()
 
@@ -697,7 +697,7 @@ client.update_skill("web-search", enabled=True)
 client.upload_files("thread-1", ["./report.pdf"])  # {"success": True, "files": [...]}
 ```
 
-All dict-returning methods are validated against Gateway Pydantic response models in CI (`TestGatewayConformance`), ensuring the embedded client stays in sync with the HTTP API schemas. See `backend/packages/harness/OmniHarness/client.py` for full API documentation.
+All dict-returning methods are validated against Gateway Pydantic response models in CI (`TestGatewayConformance`), ensuring the embedded client stays in sync with the HTTP API schemas. See `backend/packages/harness/omniharness/client.py` for full API documentation.
 
 ## Documentation
 
@@ -757,4 +757,4 @@ Your unwavering commitment and expertise have been the driving force behind Omni
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=archimedes/omni-harness&type=Date)](https://star-history.com/#archimedes/omni-harness&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=archimedes-run/omni-harness&type=Date)](https://star-history.com/#archimedes-run/omni-harness&Date)

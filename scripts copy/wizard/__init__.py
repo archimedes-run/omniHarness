@@ -1,1 +1,0 @@
-# OmniHarness Setup Wizard package
