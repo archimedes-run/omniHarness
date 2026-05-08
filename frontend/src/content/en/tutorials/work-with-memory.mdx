@@ -1,0 +1,71 @@
+---
+title: Work with Memory
+description: This tutorial shows you how to enable and use OmniHarness's memory system so the agent remembers important information about you across multiple sessions.
+---
+
+import { Callout } from "nextra/components";
+
+# Work with Memory
+
+This tutorial shows you how to enable and use OmniHarness's memory system so the agent remembers important information about you across multiple sessions.
+
+## Enable memory
+
+In `config.yaml`:
+
+```yaml
+memory:
+  enabled: true
+  injection_enabled: true
+  max_injection_tokens: 2000
+  debounce_seconds: 30
+```
+
+## How memory works
+
+Memory works automatically through `MemoryMiddleware`:
+
+1. **First conversation**: tell the agent about your preferences, project, or background.
+2. **Automatic learning**: the agent extracts and saves important facts in the background.
+3. **Future conversations**: memory facts are automatically injected into the system prompt — the agent does not need you to repeat context.
+
+## Example
+
+**First conversation:**
+
+```
+I am a Python backend developer primarily using FastAPI and PostgreSQL.
+My team follows PEP 8 and prefers type annotations everywhere.
+Please remember this for future code suggestions.
+```
+
+**Later conversation** (no need to repeat background):
+
+```
+Help me write a user authentication module
+```
+
+The agent will automatically produce FastAPI-style code with type annotations.
+
+## Inspect memory
+
+Memory is stored in `backend/.omni-harness/memory.json`:
+
+```bash
+cat backend/.omni-harness/memory.json
+```
+
+## Per-agent memory
+
+When a custom agent is active, it maintains its own memory file at:
+
+```
+backend/.omni-harness/agents/{agent_name}/memory.json
+```
+
+This keeps each agent's learned knowledge separate.
+
+## Next steps
+
+- [Deploy Your Own OmniHarness](/docs/tutorials/deploy-your-own-omniharness)
+- [Memory System Reference](/docs/harness/memory)
