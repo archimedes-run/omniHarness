@@ -1,6 +1,7 @@
 import { Footer } from "@/components/landing/footer";
 import { Header } from "@/components/landing/header";
 import { Hero } from "@/components/landing/hero";
+import { AgentSkillsSection } from "@/components/landing/sections/agent-skills-section";
 import { FeaturesSection } from "@/components/landing/sections/features-section";
 
 export default function LandingPage() {
@@ -9,6 +10,7 @@ export default function LandingPage() {
       <Header />
       <main className="flex w-full flex-col">
         <Hero />
+        <AgentSkillsSection />
         <FeaturesSection />
       </main>
       <Footer />

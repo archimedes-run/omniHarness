@@ -14,10 +14,15 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](
 
 - [What it does](#what-it-does)
 - [Quick Start](#quick-start)
+  - [Prerequisites](#prerequisites)
   - [Configuration](#configuration)
-  - [Running the Application](#running-the-application)
-    - [Option 1: Docker (Recommended)](#option-1-docker-recommended)
-    - [Option 2: Local Development](#option-2-local-development)
+  - [Running with Docker](#running-with-docker)
+    - [1. Pull the sandbox image](#1-pull-the-sandbox-image)
+    - [2. Start all services](#2-start-all-services)
+    - [3. How it works under the hood](#3-how-it-works-under-the-hood)
+    - [4. Management commands](#4-management-commands)
+    - [5. Troubleshooting sandbox issues](#5-troubleshooting-sandbox-issues)
+  - [Production deployment](#production-deployment)
   - [Advanced](#advanced)
     - [Sandbox Mode](#sandbox-mode)
     - [MCP Servers](#mcp-servers)
@@ -50,6 +55,20 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](
 ---
 
 ## Quick Start
+
+Docker is the only supported way to run OmniHarness. It handles all service wiring, sandbox isolation, and path mappings automatically.
+
+### Prerequisites
+
+| Requirement | Minimum | Notes |
+|-------------|---------|-------|
+| [Docker Desktop](https://www.docker.com/products/docker-desktop/) | 4.x+ | macOS, Windows, Linux. [OrbStack](https://orbstack.dev) also works on macOS. |
+| Docker Compose | v2 | Bundled with Docker Desktop |
+| Disk space | 12 GB free | ~9 GB for the sandbox image + build artefacts |
+| RAM | 8 GB | 16 GB recommended for parallel sub-agents |
+| CPU | 4 vCPU | 8 vCPU recommended |
+
+> **Linux users**: add your user to the `docker` group (`sudo usermod -aG docker $USER`) so you can run Docker commands without `sudo`.
 
 ### Configuration
 
@@ -136,54 +155,218 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](
 
    </details>
 
-### Running the Application
+3. **Set the repository root in `.env`**
 
-#### Deployment Sizing
+   The Docker sandbox uses bind mounts to give each agent thread an isolated filesystem on the host. It needs to know the absolute path to this repository:
+
+   ```bash
+   # .env
+   OMNI_HARNESS_ROOT=/absolute/path/to/omni-harness
+   ```
+
+   On macOS/Linux you can generate this automatically:
+
+   ```bash
+   echo "OMNI_HARNESS_ROOT=$(pwd)" >> .env
+   ```
+
+   > This is the most common reason sandbox tools (`bash`, `write_file`, `execute_python`) silently fail. If agent output looks like it's running but files never appear, check this value first.
+
+### Running with Docker
+
+#### 1. Pull the sandbox image
+
+```bash
+make docker-init
+```
+
+This pulls the [AIO Sandbox](https://github.com/agent-infra/sandbox) container image (~9 GB) and tags it locally as `omni-harness-sandbox:latest`. The AIO Sandbox is a pre-built, isolated execution environment with Python 3, Node.js, bash, and common system tools — one container is spawned per agent thread and automatically cleaned up after 10 minutes of idle time.
+
+You only need to run this once, or again after an image update. The download can take several minutes depending on your connection.
+
+**Verifying the image is ready:**
+
+```bash
+docker images | grep omni-harness-sandbox
+# omni-harness-sandbox   latest   <id>   <date>   9.35GB
+```
+
+**Manual tag** (if `make docker-init` fails or you already have the image under a different name):
+
+```bash
+docker tag <your-existing-image> omni-harness-sandbox:latest
+```
+
+Then confirm `config.yaml` has the image name set:
+
+```yaml
+sandbox:
+  use: omniharness.community.aio_sandbox:AioSandboxProvider
+  image: omni-harness-sandbox:latest
+```
+
+#### 2. Start all services
+
+```bash
+make docker-start
+```
+
+Access: **http://localhost:2026**
+
+This starts three containers:
+
+| Container | Role | Internal port |
+|-----------|------|---------------|
+| `omni-harness-nginx` | Reverse proxy — single entry point | 2026 |
+| `omni-harness-gateway` | Backend API + LangGraph agent runtime | 8001 |
+| `omni-harness-frontend` | Next.js web UI (hot-reload in dev) | 3000 |
+
+Source code is mounted directly into the containers (`backend/` and `frontend/src/`), so code changes are reflected without a rebuild.
+
+**Stop services:**
+
+```bash
+make docker-stop
+```
+
+**Restart after a config change:**
+
+```bash
+make docker-stop && make docker-start
+```
+
+> `config.yaml` changes (models, skills, tools) are hot-reloaded automatically by the gateway — no restart needed for those. A restart is only required when adding new environment variables to `.env`.
+
+#### 3. How it works under the hood
+
+Understanding this architecture helps diagnose issues quickly.
+
+```
+Your browser
+    │
+    ▼
+nginx (port 2026)
+    ├── /api/langgraph/* → gateway:8001  (agent runtime / LangGraph)
+    ├── /api/*          → gateway:8001  (REST API)
+    └── /*              → frontend:3000 (Next.js UI)
+
+gateway container
+    ├── Reads config.yaml (hot-reload on mtime change)
+    ├── Mounts /var/run/docker.sock  ← can run Docker commands on the host
+    ├── On each agent thread:
+    │     docker run omni-harness-sandbox:latest  (spawns on HOST daemon)
+    │         bind-mount: $OMNI_HARNESS_ROOT/backend/.omni-harness/
+    │                     users/{user}/threads/{thread}/user-data/
+    │     Sandbox is reachable at host.docker.internal:{port}
+    └── Sandbox containers auto-removed after 10 min idle (--rm + idle GC)
+```
+
+**Key environment variables set automatically by docker-compose:**
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `OMNI_HARNESS_ROOT` | from `.env` | Root of the repo on the host — required for bind mounts |
+| `OMNI_HARNESS_HOST_BASE_DIR` | `$OMNI_HARNESS_ROOT/backend/.omni-harness` | Host path prefix for thread directories |
+| `OMNI_HARNESS_SANDBOX_HOST` | `host.docker.internal` | Hostname to reach sandbox containers from inside the gateway |
+| `OMNI_HARNESS_HOST_SKILLS_PATH` | `$OMNI_HARNESS_ROOT/skills` | Host path for skills directory mount |
+
+#### 4. Management commands
+
+```bash
+make docker-start       # Start all services (dev mode, hot-reload)
+make docker-stop        # Stop all services
+make docker-restart     # Stop then start
+make docker-logs        # Tail logs from all containers
+make docker-status      # Show container status
+make docker-init        # Pull / re-tag sandbox image (run once)
+```
+
+View logs for a specific service:
+
+```bash
+docker logs -f omni-harness-gateway    # backend + agent logs
+docker logs -f omni-harness-frontend   # Next.js build / page logs
+docker logs -f omni-harness-nginx      # proxy access logs
+```
+
+List active sandbox containers (spawned per agent thread):
+
+```bash
+docker ps --filter "name=omni-harness-sandbox"
+```
+
+#### 5. Troubleshooting sandbox issues
+
+The sandbox is what gives agents the ability to run `bash`, write files, and execute Python. If those tools silently fail or return errors, work through this checklist:
+
+**Sandbox containers never start**
+
+Check that the image exists and the tag matches `config.yaml`:
+
+```bash
+docker images | grep omni-harness-sandbox
+# Expected: omni-harness-sandbox   latest   <id>
+```
+
+If missing, re-run `make docker-init` or tag an existing image manually (see [step 1](#1-pull-the-sandbox-image)).
+
+**`bind source path does not exist` errors in gateway logs**
+
+`OMNI_HARNESS_ROOT` is unset or wrong. The gateway uses it to build host-side bind-mount paths. Fix:
+
+```bash
+# In your .env file at the project root:
+OMNI_HARNESS_ROOT=/absolute/path/to/omni-harness
+```
+
+Then restart: `make docker-stop && make docker-start`.
+
+**Sandbox starts but agent can't reach it**
+
+The gateway connects to sandbox containers via `host.docker.internal`. Verify it resolves:
+
+```bash
+docker exec omni-harness-gateway ping -c 1 host.docker.internal
+```
+
+On Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to the gateway service in `docker/docker-compose-dev.yaml` if it doesn't resolve.
+
+**Port conflicts on startup**
+
+Port 2026 is the default entry point. If it's in use:
+
+```bash
+lsof -i :2026
+# Change the port in docker/docker-compose-dev.yaml:
+#   ports: ["YOUR_PORT:2026"]
+```
+
+**Checking the gateway picked up your `config.yaml` changes**
+
+```bash
+docker exec omni-harness-gateway /app/backend/.venv/bin/python3 -c "
+from omniharness.config.app_config import get_app_config
+cfg = get_app_config()
+print('sandbox.image:', cfg.sandbox.image)
+print('models:', [m.name for m in cfg.models])
+"
+```
+
+### Production deployment
+
+For a stable, persistent server (pre-built images, no source mounts):
+
+```bash
+make up      # Build images and start all services
+make down    # Stop and remove containers
+```
 
 | Target | Minimum | Recommended |
 |--------|---------|-------------|
-| Local dev / `make dev` | 4 vCPU, 8 GB RAM | 8 vCPU, 16 GB RAM |
-| Docker dev / `make docker-start` | 4 vCPU, 8 GB RAM | 8 vCPU, 16 GB RAM |
-| Persistent server / `make up` | 8 vCPU, 16 GB RAM | 16 vCPU, 32 GB RAM |
+| Docker dev (`make docker-start`) | 4 vCPU, 8 GB RAM | 8 vCPU, 16 GB RAM |
+| Production (`make up`) | 8 vCPU, 16 GB RAM | 16 vCPU, 32 GB RAM |
 
-#### Option 1: Docker (Recommended)
-
-**Development** (hot-reload, source mounts):
-
-```bash
-make docker-init    # Pull sandbox image — run once, or after image updates
-make docker-start   # Start all services
-```
-
-Access: **http://localhost:2026**
-
-**Production** (pre-built images):
-
-```bash
-make up     # Build images and start all services
-make down   # Stop and remove containers
-```
-
-#### Option 2: Local Development
-
-```bash
-make check    # Verify prerequisites: Node.js 22+, pnpm, uv, nginx
-make install  # Install backend + frontend dependencies
-make dev      # Start all services with hot-reload
-```
-
-Access: **http://localhost:2026**
-
-#### All Startup Modes
-
-| | **Foreground** | **Daemon** | **Docker Dev** | **Docker Prod** |
-|---|---|---|---|---|
-| **Dev** | `make dev` | `make dev-daemon` | `make docker-start` | — |
-| **Prod** | `make start` | `make start-daemon` | — | `make up` |
-
-| Action | Local | Docker Dev | Docker Prod |
-|---|---|---|---|
-| **Stop** | `make stop` | `make docker-stop` | `make down` |
+---
 
 ### Advanced
 
@@ -191,11 +374,22 @@ Access: **http://localhost:2026**
 
 OmniHarness supports three sandbox execution modes:
 
+- **Docker** (recommended) — each thread gets an isolated container with a full filesystem, powered by [AIO Sandbox](https://github.com/agent-infra/sandbox)
 - **Local** — file tools mapped to per-thread host directories; host `bash` disabled by default
-- **Docker** — each thread gets an isolated container with a full filesystem
 - **Kubernetes** — containers provisioned as Pods via the optional provisioner service
 
-See [Configuration Guide](backend/docs/CONFIGURATION.md#sandbox) for setup.
+`config.yaml` sandbox section:
+
+```yaml
+sandbox:
+  use: omniharness.community.aio_sandbox:AioSandboxProvider
+  image: omni-harness-sandbox:latest     # local tag — see docker-init
+  bash_output_max_chars: 20000
+  read_file_output_max_chars: 50000
+  ls_output_max_chars: 20000
+```
+
+See [Configuration Guide](backend/docs/CONFIGURATION.md#sandbox) for all options including idle timeout, replica count, and Kubernetes provisioner setup.
 
 #### MCP Servers
 
@@ -211,7 +405,6 @@ OmniHarness can receive tasks from messaging apps. Channels auto-start when conf
 |---------|-----------|
 | Telegram | Bot API long-polling |
 | Slack | Socket Mode |
-| Discord | Gateway WebSocket |
 
 **Configuration in `config.yaml`:**
 
@@ -319,7 +512,7 @@ Up to 3 sub-agents run concurrently by default (configurable).
 
 ### Sandbox & File System
 
-Each task gets a per-thread execution environment with a filesystem the agent can read, write, and execute inside.
+Each task gets a per-thread execution environment powered by [AIO Sandbox](https://github.com/agent-infra/sandbox) — an isolated Docker container with a full filesystem the agent can read, write, and execute inside.
 
 ```
 /mnt/user-data/
@@ -328,7 +521,7 @@ Each task gets a per-thread execution environment with a filesystem the agent ca
 └── outputs/     ← final deliverables
 ```
 
-With `AioSandboxProvider`, shell execution runs in isolated Docker containers. With `LocalSandboxProvider`, file tools map to per-thread host directories — host `bash` is disabled by default.
+Containers are spawned on demand, bind-mounted to a per-thread directory on the host, and removed automatically after 10 minutes of idle time. With `LocalSandboxProvider`, file tools map to per-thread host directories instead — host `bash` is disabled by default in that mode.
 
 ### Long-Term Memory
 
@@ -398,6 +591,23 @@ If you expose it to a network, apply appropriate controls:
 
 ---
 
+<<<<<<< Updated upstream
+=======
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and workflow.
+
+For local (non-Docker) development:
+
+```bash
+make check    # Verify prerequisites: Node.js 22+, pnpm, uv, nginx
+make install  # Install backend + frontend dependencies
+make dev      # Start all services with hot-reload (http://localhost:2026)
+```
+
+---
+
+>>>>>>> Stashed changes
 ## License
 
 MIT — see [LICENSE](./LICENSE).
@@ -410,5 +620,6 @@ OmniHarness is built on the work of the open-source community. Special thanks to
 
 - **[LangGraph](https://github.com/langchain-ai/langgraph)** — multi-agent orchestration runtime
 - **[LangChain](https://github.com/langchain-ai/langchain)** — LLM integration framework
+- **[AIO Sandbox](https://github.com/agent-infra/sandbox)** — isolated per-thread execution containers
 - **[Shadcn UI](https://ui.shadcn.com/)** — frontend component system
 - **[Next.js](https://nextjs.org/)** — frontend framework

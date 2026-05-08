@@ -87,7 +87,7 @@ setup-sandbox:
 	@echo ""
 	@IMAGE=$$(grep -A 20 "# sandbox:" config.yaml 2>/dev/null | grep "image:" | awk '{print $$2}' | head -1); \
 	if [ -z "$$IMAGE" ]; then \
-		IMAGE="enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest"; \
+		IMAGE="omni-harness-sandbox:latest"; \
 		echo "Using default image: $$IMAGE"; \
 	else \
 		echo "Using configured image: $$IMAGE"; \

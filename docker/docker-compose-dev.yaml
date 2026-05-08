@@ -28,7 +28,7 @@ services:
       - ~/.kube/config:/root/.kube/config:ro
     environment:
       - K8S_NAMESPACE=omni-harness
-      - SANDBOX_IMAGE=ghcr.io/archimedes-run/omni-harness-sandbox:latest
+      - SANDBOX_IMAGE=omni-harness-sandbox:latest
       # Host paths for K8s HostPath volumes (must be absolute paths accessible by K8s node)
       # On Docker Desktop/OrbStack, use your actual host paths like /Users/username/...
       # Set these in your shell before running docker-compose:
