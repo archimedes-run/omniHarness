@@ -398,12 +398,6 @@ If you expose it to a network, apply appropriate controls:
 
 ---
 
-## Contributing
-
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and workflow.
-
----
-
 ## License
 
 MIT — see [LICENSE](./LICENSE).
