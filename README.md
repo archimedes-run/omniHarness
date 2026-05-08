@@ -589,10 +589,6 @@ If you expose it to a network, apply appropriate controls:
 - **Network isolation** — place the service and trusted clients on a dedicated VLAN where possible.
 - **TLS** — terminate HTTPS at the reverse proxy for any non-localhost deployment.
 
----
-
-<<<<<<< Updated upstream
-=======
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and workflow.
@@ -605,9 +601,6 @@ make install  # Install backend + frontend dependencies
 make dev      # Start all services with hot-reload (http://localhost:2026)
 ```
 
----
-
->>>>>>> Stashed changes
 ## License
 
 MIT — see [LICENSE](./LICENSE).
