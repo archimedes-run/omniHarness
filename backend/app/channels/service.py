@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 # Channel name → import path for lazy loading
 _CHANNEL_REGISTRY: dict[str, str] = {
     "discord": "app.channels.discord:DiscordChannel",
+    "openclaw": "app.channels.openclaw:OpenClawChannel",
     "slack": "app.channels.slack:SlackChannel",
     "telegram": "app.channels.telegram:TelegramChannel",
 }
@@ -26,6 +27,7 @@ _CHANNEL_REGISTRY: dict[str, str] = {
 # Keys that indicate a user has configured credentials for a channel.
 _CHANNEL_CREDENTIAL_KEYS: dict[str, list[str]] = {
     "discord": ["bot_token"],
+    "openclaw": ["bearer_token"],
     "slack": ["bot_token", "app_token"],
     "telegram": ["bot_token"],
 }

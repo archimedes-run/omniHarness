@@ -21,6 +21,7 @@ from app.gateway.routers import (
     mcp,
     memory,
     models,
+    openclaw_webhook,
     runs,
     skills,
     suggestions,
@@ -357,6 +358,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Channels API is mounted at /api/channels
     app.include_router(channels.router)
+
+    # OpenClaw webhook receiver at /api/channels/openclaw/webhook
+    app.include_router(openclaw_webhook.router)
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)

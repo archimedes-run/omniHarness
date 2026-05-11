@@ -50,6 +50,10 @@ import { cn } from "@/lib/utils";
 import { CopyButton } from "../copy-button";
 
 import { MarkdownContent } from "./markdown-content";
+import {
+  TruncationBadge,
+  extractTruncationInfo,
+} from "./truncated-tool-message";
 
 function FeedbackButtons({
   threadId,
@@ -295,6 +299,25 @@ function MessageContent_({
           <ReasoningTrigger />
           <ReasoningContent>{reasoningContent}</ReasoningContent>
         </Reasoning>
+      </AIElementMessageContent>
+    );
+  }
+
+  // Tool messages: render content with truncation badge when the middleware trimmed output.
+  if (message.type === "tool") {
+    const { cleanContent, truncatedChars } = extractTruncationInfo(contentToDisplay);
+    return (
+      <AIElementMessageContent className={className}>
+        <MarkdownContent
+          content={cleanContent}
+          isLoading={isLoading}
+          rehypePlugins={rehypePlugins}
+          className="my-3"
+          components={components}
+        />
+        {truncatedChars !== null && (
+          <TruncationBadge truncatedChars={truncatedChars} className="mt-1" />
+        )}
       </AIElementMessageContent>
     );
   }
