@@ -130,7 +130,7 @@ export function groupMessages<T>(
 ): T[] {
   return getMessageGroups(messages)
     .map(mapper)
-    .filter((result) => result !== undefined && result !== null) as T[];
+    .filter((result) => result !== undefined && result !== null);
 }
 
 export function getAssistantTurnUsageMessages(groups: MessageGroup[]) {

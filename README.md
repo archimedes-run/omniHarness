@@ -184,7 +184,9 @@ Docker is the only supported way to run OmniHarness. It handles all service wiri
 make docker-init
 ```
 
-This pulls the [AIO Sandbox](https://github.com/agent-infra/sandbox) container image (~9 GB) and tags it locally as `omni-harness-sandbox:latest`. The AIO Sandbox is a pre-built, isolated execution environment with Python 3, Node.js, bash, and common system tools — one container is spawned per agent thread and automatically cleaned up after 10 minutes of idle time.
+This pulls the default [AIO Sandbox](https://github.com/agent-infra/sandbox) container image (`ghcr.io/archimedes-run/omni-harness-sandbox:latest`, ~9 GB). The AIO Sandbox is a pre-built, isolated execution environment with Python 3, Node.js, bash, and common system tools — one container is spawned per agent thread and automatically cleaned up after 10 minutes of idle time.
+
+Override the image for private mirrors or local builds by setting `SANDBOX_IMAGE` before running `make docker-init` or `make docker-start`.
 
 You only need to run this once, or again after an image update. The download can take several minutes depending on your connection.
 
@@ -192,21 +194,22 @@ You only need to run this once, or again after an image update. The download can
 
 ```bash
 docker images | grep omni-harness-sandbox
-# omni-harness-sandbox   latest   <id>   <date>   9.35GB
+# ghcr.io/archimedes-run/omni-harness-sandbox   latest   <id>   <date>   ~9GB
 ```
 
-**Manual tag** (if `make docker-init` fails or you already have the image under a different name):
+**Manual override** (if you use a private mirror or custom sandbox image):
 
 ```bash
-docker tag <your-existing-image> omni-harness-sandbox:latest
+SANDBOX_IMAGE=registry.example.com/omni-harness-sandbox:latest make docker-init
+SANDBOX_IMAGE=registry.example.com/omni-harness-sandbox:latest make docker-start
 ```
 
-Then confirm `config.yaml` has the image name set:
+Then confirm `config.yaml` uses the same image, or omit `image` to use the default:
 
 ```yaml
 sandbox:
   use: omniharness.community.aio_sandbox:AioSandboxProvider
-  image: omni-harness-sandbox:latest
+  image: ghcr.io/archimedes-run/omni-harness-sandbox:latest
 ```
 
 #### 2. Start all services
@@ -216,6 +219,8 @@ make docker-start
 ```
 
 Access: **http://localhost:2026**
+
+On first run, `make docker-start` creates missing `.env` and `frontend/.env` files from their examples. If `config.yaml` is also missing, it creates one from `config.example.yaml` and stops so you can add API keys and model settings before starting containers.
 
 This starts three containers:
 
@@ -258,7 +263,7 @@ gateway container
     ├── Reads config.yaml (hot-reload on mtime change)
     ├── Mounts /var/run/docker.sock  ← can run Docker commands on the host
     ├── On each agent thread:
-    │     docker run omni-harness-sandbox:latest  (spawns on HOST daemon)
+    │     docker run ghcr.io/archimedes-run/omni-harness-sandbox:latest  (spawns on HOST daemon)
     │         bind-mount: $OMNI_HARNESS_ROOT/backend/.omni-harness/
     │                     users/{user}/threads/{thread}/user-data/
     │     Sandbox is reachable at host.docker.internal:{port}
@@ -273,6 +278,7 @@ gateway container
 | `OMNI_HARNESS_HOST_BASE_DIR` | `$OMNI_HARNESS_ROOT/backend/.omni-harness` | Host path prefix for thread directories |
 | `OMNI_HARNESS_SANDBOX_HOST` | `host.docker.internal` | Hostname to reach sandbox containers from inside the gateway |
 | `OMNI_HARNESS_HOST_SKILLS_PATH` | `$OMNI_HARNESS_ROOT/skills` | Host path for skills directory mount |
+| `SANDBOX_IMAGE` | `ghcr.io/archimedes-run/omni-harness-sandbox:latest` | Sandbox container image; override for mirrors or custom builds |
 
 #### 4. Management commands
 
@@ -282,7 +288,7 @@ make docker-stop        # Stop all services
 make docker-restart     # Stop then start
 make docker-logs        # Tail logs from all containers
 make docker-status      # Show container status
-make docker-init        # Pull / re-tag sandbox image (run once)
+make docker-init        # Pull the configured/default sandbox image (run once)
 ```
 
 View logs for a specific service:
@@ -387,7 +393,7 @@ OmniHarness supports three sandbox execution modes:
 ```yaml
 sandbox:
   use: omniharness.community.aio_sandbox:AioSandboxProvider
-  image: omni-harness-sandbox:latest     # local tag — see docker-init
+  image: ghcr.io/archimedes-run/omni-harness-sandbox:latest
   bash_output_max_chars: 20000
   read_file_output_max_chars: 50000
   ls_output_max_chars: 20000

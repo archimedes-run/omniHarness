@@ -169,7 +169,7 @@ export function MessageGroup({
 
     return (
       <ChainOfThoughtStep
-        key={`token-debug-${messageId}`}
+        key={`token-debug-${messageId}-${stepIndex}`}
         icon={CoinsIcon}
         label={
           <DebugStepLabel
@@ -209,7 +209,7 @@ export function MessageGroup({
 
     return (
       <ToolCall
-        key={step.id}
+        key={step.renderKey}
         {...step}
         isLast={options?.isLast}
         isLoading={isLoading}
@@ -265,7 +265,7 @@ export function MessageGroup({
                 return [
                   renderDebugSummary(step.messageId, stepIndex),
                   <ChainOfThoughtStep
-                    key={step.id}
+                    key={step.renderKey}
                     label={
                       <MarkdownContent
                         content={step.reasoning ?? ""}
@@ -287,7 +287,7 @@ export function MessageGroup({
             steps.indexOf(lastToolCallStep),
           )}
           {lastToolCallStep && (
-            <FlipDisplay uniqueKey={lastToolCallStep.id ?? ""}>
+            <FlipDisplay uniqueKey={lastToolCallStep.renderKey}>
               {renderToolCall(lastToolCallStep, { isLast: true })}
             </FlipDisplay>
           )}
@@ -300,7 +300,7 @@ export function MessageGroup({
             steps.indexOf(lastReasoningStep),
           )}
           <Button
-            key={lastReasoningStep.id}
+            key={lastReasoningStep.renderKey}
             className="w-full items-start justify-start text-left"
             variant="ghost"
             onClick={() => setShowLastThinking(!showLastThinking)}
@@ -339,7 +339,7 @@ export function MessageGroup({
           {showLastThinking && (
             <ChainOfThoughtContent className="px-4 pb-2">
               <ChainOfThoughtStep
-                key={lastReasoningStep.id}
+                key={`${lastReasoningStep.renderKey}-content`}
                 label={
                   <MarkdownContent
                     content={lastReasoningStep.reasoning ?? ""}
@@ -424,7 +424,7 @@ function ToolCall({
   messageId?: string;
   name: string;
   args: Record<string, unknown>;
-  result?: string | Record<string, unknown>;
+  result?: string | Record<string, unknown> | unknown[];
   isLast?: boolean;
   isLoading?: boolean;
   tokenDebugStep?: TokenDebugStep;
@@ -447,16 +447,15 @@ function ToolCall({
     if (typeof args.query === "string") {
       label = t.toolCalls.searchOnWebFor(args.query);
     }
+    const searchResults = Array.isArray(result)
+      ? (result as Array<{ title: string; url: string }>)
+      : undefined;
     return (
-      <ChainOfThoughtStep
-        key={id}
-        label={resolveLabel(label)}
-        icon={SearchIcon}
-      >
-        {Array.isArray(result) && (
+      <ChainOfThoughtStep label={resolveLabel(label)} icon={SearchIcon}>
+        {searchResults && (
           <ChainOfThoughtSearchResults>
-            {result.map((item) => (
-              <ChainOfThoughtSearchResult key={item.url}>
+            {searchResults.map((item, index) => (
+              <ChainOfThoughtSearchResult key={`${item.url}-${index}`}>
                 <a href={item.url} target="_blank" rel="noopener noreferrer">
                   {item.title}
                 </a>
@@ -482,16 +481,15 @@ function ToolCall({
       }
     )?.results;
     return (
-      <ChainOfThoughtStep
-        key={id}
-        label={resolveLabel(label)}
-        icon={SearchIcon}
-      >
+      <ChainOfThoughtStep label={resolveLabel(label)} icon={SearchIcon}>
         {Array.isArray(results) && (
           <ChainOfThoughtSearchResults>
             {Array.isArray(results) &&
-              results.map((item) => (
-                <Tooltip key={item.image_url} content={item.title}>
+              results.map((item, index) => (
+                <Tooltip
+                  key={`${item.image_url}-${index}`}
+                  content={item.title}
+                >
                   <a
                     className="size-24 overflow-hidden rounded-lg object-cover"
                     href={item.source_url}
@@ -525,7 +523,6 @@ function ToolCall({
     }
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(t.toolCalls.viewWebPage)}
         icon={GlobeIcon}
       >
@@ -552,7 +549,6 @@ function ToolCall({
     const path: string | undefined = (args as { path: string })?.path;
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(description)}
         icon={FolderOpenIcon}
       >
@@ -572,7 +568,6 @@ function ToolCall({
     const { path } = args as { path: string; content: string };
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(description)}
         icon={BookOpenTextIcon}
       >
@@ -605,7 +600,6 @@ function ToolCall({
 
     return (
       <ChainOfThoughtStep
-        key={id}
         className="cursor-pointer"
         label={resolveLabel(description)}
         icon={NotebookPenIcon}
@@ -631,7 +625,6 @@ function ToolCall({
     if (!description) {
       return (
         <ChainOfThoughtStep
-          key={id}
           label={resolveLabel(t.toolCalls.executeCommand)}
           icon={SquareTerminalIcon}
         />
@@ -640,7 +633,6 @@ function ToolCall({
     const command: string | undefined = (args as { command: string })?.command;
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(description)}
         icon={SquareTerminalIcon}
       >
@@ -657,7 +649,6 @@ function ToolCall({
   } else if (name === "ask_clarification") {
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(t.toolCalls.needYourHelp)}
         icon={MessageCircleQuestionMarkIcon}
       ></ChainOfThoughtStep>
@@ -665,7 +656,6 @@ function ToolCall({
   } else if (name === "write_todos") {
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(t.toolCalls.writeTodos)}
         icon={ListTodoIcon}
       ></ChainOfThoughtStep>
@@ -675,7 +665,6 @@ function ToolCall({
       ?.description;
     return (
       <ChainOfThoughtStep
-        key={id}
         label={resolveLabel(description ?? t.toolCalls.useTool(name))}
         icon={WrenchIcon}
       ></ChainOfThoughtStep>
@@ -686,6 +675,7 @@ function ToolCall({
 interface GenericCoTStep<T extends string = string> {
   id?: string;
   messageId?: string;
+  renderKey: string;
   type: T;
 }
 
@@ -696,51 +686,64 @@ interface CoTReasoningStep extends GenericCoTStep<"reasoning"> {
 interface CoTToolCallStep extends GenericCoTStep<"toolCall"> {
   name: string;
   args: Record<string, unknown>;
-  result?: string;
+  result?: string | Record<string, unknown> | unknown[];
 }
 
 type CoTStep = CoTReasoningStep | CoTToolCallStep;
 
 function convertToSteps(messages: Message[]): CoTStep[] {
   const steps: CoTStep[] = [];
-  for (const message of messages) {
-    if (message.type === "ai") {
-      const reasoning = extractReasoningContentFromMessage(message);
-      if (reasoning) {
-        const step: CoTReasoningStep = {
-          id: message.id,
-          messageId: message.id,
-          type: "reasoning",
-          reasoning,
-        };
-        steps.push(step);
+
+  messages.forEach((message, messageIndex) => {
+    const messageKey = message.id ?? `message-${messageIndex}`;
+
+    if (message.type !== "ai") {
+      return;
+    }
+
+    const reasoning = extractReasoningContentFromMessage(message);
+    if (reasoning) {
+      const step: CoTReasoningStep = {
+        id: message.id,
+        messageId: message.id,
+        renderKey: `reasoning:${messageKey}:${steps.length}`,
+        type: "reasoning",
+        reasoning,
+      };
+      steps.push(step);
+    }
+
+    (message.tool_calls ?? []).forEach((tool_call, toolCallIndex) => {
+      if (tool_call.name === "task") {
+        return;
       }
-      for (const tool_call of message.tool_calls ?? []) {
-        if (tool_call.name === "task") {
-          continue;
-        }
-        const step: CoTToolCallStep = {
-          id: tool_call.id,
-          messageId: message.id,
-          type: "toolCall",
-          name: tool_call.name,
-          args: tool_call.args,
-        };
-        const toolCallId = tool_call.id;
-        if (toolCallId) {
-          const toolCallResult = findToolCallResult(toolCallId, messages);
-          if (toolCallResult) {
-            try {
-              const json = JSON.parse(toolCallResult);
-              step.result = json;
-            } catch {
-              step.result = toolCallResult;
-            }
+
+      const toolCallKey = tool_call.id ?? `tool-call-${toolCallIndex}`;
+      const step: CoTToolCallStep = {
+        id: tool_call.id,
+        messageId: message.id,
+        renderKey: `tool-call:${messageKey}:${toolCallKey}:${steps.length}`,
+        type: "toolCall",
+        name: tool_call.name,
+        args: tool_call.args,
+      };
+
+      const toolCallId = tool_call.id;
+      if (toolCallId) {
+        const toolCallResult = findToolCallResult(toolCallId, messages);
+        if (toolCallResult) {
+          try {
+            const json = JSON.parse(toolCallResult);
+            step.result = json;
+          } catch {
+            step.result = toolCallResult;
           }
         }
-        steps.push(step);
       }
-    }
-  }
+
+      steps.push(step);
+    });
+  });
+
   return steps;
 }

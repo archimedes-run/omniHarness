@@ -14,6 +14,7 @@ DOCKER_DIR="$PROJECT_ROOT/docker"
 
 # Docker Compose command with project name
 COMPOSE_CMD="docker compose -p omni-harness-dev -f docker-compose-dev.yaml"
+DEFAULT_SANDBOX_IMAGE="ghcr.io/archimedes-run/omni-harness-sandbox:latest"
 
 detect_sandbox_mode() {
     local config_file="$PROJECT_ROOT/config.yaml"
@@ -91,7 +92,7 @@ init() {
     echo "=========================================="
     echo ""
 
-    SANDBOX_IMAGE="enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest"
+    SANDBOX_IMAGE="${SANDBOX_IMAGE:-$DEFAULT_SANDBOX_IMAGE}"
 
     # Detect sandbox mode from config.yaml
     local sandbox_mode
@@ -186,6 +187,26 @@ start() {
         echo ""
     fi
     
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        if [ -f "$PROJECT_ROOT/.env.example" ]; then
+            cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+            echo -e "${BLUE}Created .env from .env.example${NC}"
+        else
+            touch "$PROJECT_ROOT/.env"
+            echo -e "${BLUE}Created empty .env${NC}"
+        fi
+    fi
+
+    if [ ! -f "$PROJECT_ROOT/frontend/.env" ]; then
+        if [ -f "$PROJECT_ROOT/frontend/.env.example" ]; then
+            cp "$PROJECT_ROOT/frontend/.env.example" "$PROJECT_ROOT/frontend/.env"
+            echo -e "${BLUE}Created frontend/.env from frontend/.env.example${NC}"
+        else
+            touch "$PROJECT_ROOT/frontend/.env"
+            echo -e "${BLUE}Created empty frontend/.env${NC}"
+        fi
+    fi
+
     # Ensure config.yaml exists before starting.
     if [ ! -f "$PROJECT_ROOT/config.yaml" ]; then
         if [ -f "$PROJECT_ROOT/config.example.yaml" ]; then
@@ -193,8 +214,8 @@ start() {
             echo ""
             echo -e "${YELLOW}============================================================${NC}"
             echo -e "${YELLOW}  config.yaml has been created from config.example.yaml.${NC}"
-            echo -e "${YELLOW}  Please edit config.yaml to set your API keys and model   ${NC}"
-            echo -e "${YELLOW}  configuration before starting OmniHarness.                  ${NC}"
+            echo -e "${YELLOW}  Containers were not started. Please edit config.yaml ${NC}"
+            echo -e "${YELLOW}  to set your API keys and model configuration.       ${NC}"
             echo -e "${YELLOW}============================================================${NC}"
             echo ""
             echo -e "${YELLOW}  Recommended: run 'make setup' before starting Docker.    ${NC}"

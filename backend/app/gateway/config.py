@@ -19,11 +19,11 @@ def get_gateway_config() -> GatewayConfig:
     """Get gateway config, loading from environment if available."""
     global _gateway_config
     if _gateway_config is None:
-        cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+        cors_origins_str = os.getenv("GATEWAY_CORS_ORIGINS") or os.getenv("CORS_ORIGINS", "http://localhost:3000")
         _gateway_config = GatewayConfig(
             host=os.getenv("GATEWAY_HOST", "0.0.0.0"),
             port=int(os.getenv("GATEWAY_PORT", "8001")),
-            cors_origins=cors_origins_str.split(","),
+            cors_origins=[origin.strip() for origin in cors_origins_str.split(",") if origin.strip()],
             enable_docs=os.getenv("GATEWAY_ENABLE_DOCS", "true").lower() == "true",
         )
     return _gateway_config

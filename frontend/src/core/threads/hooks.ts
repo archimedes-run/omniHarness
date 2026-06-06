@@ -305,6 +305,8 @@ export function useThreadStream({
     prevHumanMsgCountRef.current = thread.messages.filter(
       (m) => m.type === "human",
     ).length;
+    setOptimisticMessages([]);
+    setIsUploading(false);
   }, [threadId]);
 
   // Clear optimistic when server messages arrive.
@@ -640,7 +642,7 @@ export function useThreads(
       if (maxResults !== undefined && maxResults <= 0) {
         const response =
           await apiClient.threads.search<AgentThreadState>(params);
-        return response as AgentThread[];
+        return response;
       }
 
       const pageSize =

@@ -96,7 +96,8 @@ def _normalize_origin(origin: str) -> str | None:
 def _configured_cors_origins() -> set[str]:
     """Return explicit configured browser origins that may call auth routes."""
     origins = set()
-    for raw_origin in os.environ.get("GATEWAY_CORS_ORIGINS", "").split(","):
+    cors_origins = os.environ.get("GATEWAY_CORS_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
+    for raw_origin in cors_origins.split(","):
         origin = raw_origin.strip()
         if not origin or origin == "*":
             continue

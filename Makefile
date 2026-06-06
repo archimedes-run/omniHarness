@@ -47,6 +47,7 @@ help:
 ## Setup & Diagnosis
 setup:
 	@$(BACKEND_UV_RUN) python ../scripts/setup_wizard.py
+	
 
 doctor:
 	@$(BACKEND_UV_RUN) python ../scripts/doctor.py
@@ -87,7 +88,7 @@ setup-sandbox:
 	@echo ""
 	@IMAGE=$$(grep -A 20 "# sandbox:" config.yaml 2>/dev/null | grep "image:" | awk '{print $$2}' | head -1); \
 	if [ -z "$$IMAGE" ]; then \
-		IMAGE="omni-harness-sandbox:latest"; \
+		IMAGE="ghcr.io/archimedes-run/omni-harness-sandbox:latest"; \
 		echo "Using default image: $$IMAGE"; \
 	else \
 		echo "Using configured image: $$IMAGE"; \

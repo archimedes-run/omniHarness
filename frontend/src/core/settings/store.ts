@@ -58,7 +58,7 @@ function mergeSettingsSection<K extends keyof LocalSettings>(
       ...settings[key],
       ...value,
     },
-  } as LocalSettings;
+  };
 }
 
 function handleStorage(event: StorageEvent) {

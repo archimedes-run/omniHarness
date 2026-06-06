@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+
 import { cn } from "@/lib/utils";
 
 // ── Architecture SVG ──────────────────────────────────────────────────────────
@@ -208,9 +209,36 @@ function AgentHarnessDiagram() {
       ))}
 
       {/* Artifacts — stacked doc rectangles */}
-      <rect x="414" y="106" width="20" height="24" rx="2" fill="#e7e5e4" stroke="#d6d3d1" strokeWidth="1" />
-      <rect x="411" y="110" width="20" height="24" rx="2" fill="#f5f5f4" stroke="#a8a29e" strokeWidth="1" />
-      <rect x="408" y="114" width="20" height="24" rx="2" fill="white" stroke="#1c1917" strokeWidth="1.5" />
+      <rect
+        x="414"
+        y="106"
+        width="20"
+        height="24"
+        rx="2"
+        fill="#e7e5e4"
+        stroke="#d6d3d1"
+        strokeWidth="1"
+      />
+      <rect
+        x="411"
+        y="110"
+        width="20"
+        height="24"
+        rx="2"
+        fill="#f5f5f4"
+        stroke="#a8a29e"
+        strokeWidth="1"
+      />
+      <rect
+        x="408"
+        y="114"
+        width="20"
+        height="24"
+        rx="2"
+        fill="white"
+        stroke="#1c1917"
+        strokeWidth="1.5"
+      />
     </svg>
   );
 }
@@ -230,7 +258,7 @@ const LOG_LINES: LogLine[] = [
     type: "cmd",
   },
   {
-    text: "    generate investor brief with visualisations\"",
+    text: '    generate investor brief with visualisations"',
     delay: 0,
     type: "cmd",
   },
@@ -389,7 +417,7 @@ export function AgentSkillsSection({ className }: { className?: string }) {
   return (
     <section className={cn("mx-auto w-full max-w-5xl px-6 py-24", className)}>
       <div className="mb-14 flex flex-col items-center gap-3 text-center">
-        <p className="text-xs font-semibold uppercase tracking-widest text-stone-400">
+        <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
           Agent Skills
         </p>
         <h2 className="max-w-2xl text-4xl font-bold tracking-tight text-stone-900 md:text-5xl">
@@ -405,7 +433,7 @@ export function AgentSkillsSection({ className }: { className?: string }) {
       <div className="grid items-start gap-6 lg:grid-cols-2">
         {/* Architecture diagram in a light card */}
         <div className="flex flex-col gap-2 rounded-2xl border border-stone-200 bg-white p-6">
-          <p className="text-xs font-medium uppercase tracking-widest text-stone-400">
+          <p className="text-xs font-medium tracking-widest text-stone-400 uppercase">
             How the harness orchestrates
           </p>
           <AgentHarnessDiagram />

@@ -310,7 +310,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # CORS: when GATEWAY_CORS_ORIGINS is set (dev without nginx), add CORS middleware.
     # In production, nginx handles CORS and no middleware is needed.
-    cors_origins_env = os.environ.get("GATEWAY_CORS_ORIGINS", "")
+    cors_origins_env = os.environ.get("GATEWAY_CORS_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
     if cors_origins_env:
         cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
         # Validate: wildcard origin with credentials is a security misconfiguration

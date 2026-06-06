@@ -12,7 +12,7 @@ export function extractTruncationInfo(content: string): {
   if (!match) return { cleanContent: content, truncatedChars: null };
   return {
     cleanContent: content.slice(0, match.index).trimEnd(),
-    truncatedChars: parseInt(match[1], 10),
+    truncatedChars: parseInt(match[1] ?? "0", 10),
   };
 }
 
@@ -28,7 +28,7 @@ export function TruncationBadge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded px-1.5 py-0.5",
-        "bg-stone-800 text-stone-400 text-[10px] font-mono",
+        "bg-stone-800 font-mono text-[10px] text-stone-400",
         className,
       )}
       title={`${truncatedChars.toLocaleString()} characters were removed to stay within the model context window`}

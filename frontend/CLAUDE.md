@@ -76,7 +76,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 
 ## Code Style
 
-- **Imports**: Enforced ordering (builtin → external → internal → parent → sibling), alphabetized, newlines between groups. Use inline type imports: `import { type Foo }`.
+- **Imports**: Enforced ordering (builtin → external → internal → parent → sibling), alphabetized, newlines between groups. Use inline type imports: `import { type Foo }`. The ESLint config registers `eslint-plugin-import` for this rule.
 - **Unused variables**: Prefix with `_`.
 - **Class names**: Use `cn()` from `@/lib/utils` for conditional Tailwind classes.
 - **Path alias**: `@/*` maps to `src/*`.
@@ -87,8 +87,13 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 Backend API URLs are optional; an nginx proxy is used by default:
 
 ```
+# Browser/client overrides; leave unset to use nginx defaults.
 NEXT_PUBLIC_BACKEND_BASE_URL=http://localhost:8001
-NEXT_PUBLIC_LANGGRAPH_BASE_URL=http://localhost:2024
+NEXT_PUBLIC_LANGGRAPH_BASE_URL=http://localhost:2026/api/langgraph
+
+# Server-side Next route handlers and SSR should use the internal Gateway URL in Docker.
+OMNI_HARNESS_INTERNAL_GATEWAY_BASE_URL=http://gateway:8001
+OMNI_HARNESS_TRUSTED_ORIGINS=http://localhost:3000,http://localhost:2026
 ```
 
 Requires Node.js 22+ and pnpm 10.26.2+.

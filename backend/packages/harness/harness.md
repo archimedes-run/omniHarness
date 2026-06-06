@@ -2508,7 +2508,7 @@ sandbox:
   allow_host_bash: false
   # For AioSandboxProvider:
   # use: omniharness.community.aio_sandbox:AioSandboxProvider
-  image: omni-harness-sandbox:latest
+  image: ghcr.io/archimedes-run/omni-harness-sandbox:latest
   port: 8080
   replicas: 3
   container_prefix: omni-harness-sandbox
