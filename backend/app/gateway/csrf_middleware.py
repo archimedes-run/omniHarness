@@ -39,6 +39,12 @@ def should_check_csrf(request: Request) -> bool:
         return False
 
     path = request.url.path.rstrip("/")
+
+    # Exempt OpenClaw inbound webhook.
+    # OpenClaw uses Bearer-token auth only and does not send CSRF/session cookies.
+    if path == "/api/channels/openclaw/webhook":
+        return False
+
     # Exempt /api/v1/auth/me endpoint
     if path == "/api/v1/auth/me":
         return False

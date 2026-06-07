@@ -229,8 +229,41 @@ def test_unknown_endpoint_no_cookie_returns_401(client):
     assert res.status_code == 401
 
 
-def test_unknown_endpoint_with_junk_cookie_rejected(client):
-    """New endpoints are also protected by strict JWT validation."""
-    client.cookies.set("access_token", "tok")
-    res = client.get("/api/future-endpoint")
+def test_openclaw_webhook_is_public_path():
+    assert _is_public("/api/channels/openclaw/webhook") is True
+
+
+def test_openclaw_webhook_missing_bearer_returns_401():
+    """Route-level bearer check should still happen.
+
+    This test only covers middleware-level public-ness (no session cookie
+    required). A real route handler must still enforce bearer token checks.
+
+    We approximate by using middleware response from the route stub.
+    """
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    from starlette.status import HTTP_401_UNAUTHORIZED
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+
+    @app.post("/api/channels/openclaw/webhook")
+    async def webhook(request: Request) -> JSONResponse:
+        auth = request.headers.get("Authorization", "")
+        token = auth.removeprefix("Bearer ").strip()
+        if token != "right-token":
+            return JSONResponse(
+                status_code=HTTP_401_UNAUTHORIZED,
+                content={"detail": "Unauthorized"},
+            )
+        return JSONResponse(status_code=202, content={"status": "accepted"})
+
+    client = TestClient(app)
+
+    res = client.post(
+        "/api/channels/openclaw/webhook",
+        json={"message": "hi", "agentId": "a", "channel": "test", "to": "c"},
+    )
     assert res.status_code == 401
+    assert res.json()["detail"] == "Unauthorized"

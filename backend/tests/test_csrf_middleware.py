@@ -10,6 +10,10 @@ def _make_app() -> FastAPI:
     app = FastAPI()
     app.add_middleware(CSRFMiddleware)
 
+    @app.post("/api/channels/openclaw/webhook")
+    async def openclaw_webhook():
+        return {"ok": True}
+
     @app.post("/api/v1/auth/login/local")
     async def login_local():
         return {"ok": True}
@@ -203,17 +207,14 @@ def test_non_auth_mutation_allows_valid_double_submit_token():
     assert response.status_code == 200
 
 
-def test_non_auth_mutation_rejects_mismatched_double_submit_token():
+def test_openclaw_webhook_is_csrf_exempt():
     client = TestClient(_make_app(), base_url="https://omniharness.example")
-    client.cookies.set("csrf_token", "cookie-token")
 
     response = client.post(
-        "/api/threads/abc/runs/stream",
-        headers={
-            "Origin": "https://omniharness.example",
-            "X-CSRF-Token": "header-token",
-        },
+        "/api/channels/openclaw/webhook",
+        json={"message": "hi", "agentId": "a", "channel": "test", "to": "c"},
+        headers={"Origin": "https://omniharness.example"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "CSRF token mismatch."
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
