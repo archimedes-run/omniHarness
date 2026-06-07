@@ -13,7 +13,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOCKER_DIR="$PROJECT_ROOT/docker"
 
 # Docker Compose command with project name
-COMPOSE_CMD="docker compose -p omni-harness-dev -f docker-compose-dev.yaml"
+COMPOSE_CMD="docker compose --env-file \"$PROJECT_ROOT/.env\" -p omni-harness-dev -f docker-compose-dev.yaml"
 DEFAULT_SANDBOX_IMAGE="ghcr.io/archimedes-run/omni-harness-sandbox:latest"
 
 detect_sandbox_mode() {
@@ -115,6 +115,12 @@ init() {
         fi
 
         return 0
+    fi
+
+    if ! docker_available; then
+        echo -e "${YELLOW}Docker is required for AIO/provisioner sandbox mode but is not available.${NC}"
+        echo "Install/start Docker, or switch config.yaml to LocalSandboxProvider."
+        return 1
     fi
 
     if ! docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${SANDBOX_IMAGE}$"; then

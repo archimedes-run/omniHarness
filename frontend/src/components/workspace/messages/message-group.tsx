@@ -706,7 +706,7 @@ function convertToSteps(messages: Message[]): CoTStep[] {
       const step: CoTReasoningStep = {
         id: message.id,
         messageId: message.id,
-        renderKey: `reasoning:${messageKey}:${steps.length}`,
+        renderKey: `reasoning:${messageKey}`,
         type: "reasoning",
         reasoning,
       };
@@ -722,7 +722,7 @@ function convertToSteps(messages: Message[]): CoTStep[] {
       const step: CoTToolCallStep = {
         id: tool_call.id,
         messageId: message.id,
-        renderKey: `tool-call:${messageKey}:${toolCallKey}:${steps.length}`,
+        renderKey: `tool-call:${messageKey}:${toolCallKey}`,
         type: "toolCall",
         name: tool_call.name,
         args: tool_call.args,

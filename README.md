@@ -186,6 +186,8 @@ make docker-init
 
 This pulls the default [AIO Sandbox](https://github.com/agent-infra/sandbox) container image (`ghcr.io/archimedes-run/omni-harness-sandbox:latest`, ~9 GB). The AIO Sandbox is a pre-built, isolated execution environment with Python 3, Node.js, bash, and common system tools — one container is spawned per agent thread and automatically cleaned up after 10 minutes of idle time.
 
+**Expected:** `ghcr.io/archimedes-run/omni-harness-sandbox:latest`
+
 Override the image for private mirrors or local builds by setting `SANDBOX_IMAGE` before running `make docker-init` or `make docker-start`.
 
 You only need to run this once, or again after an image update. The download can take several minutes depending on your connection.
@@ -315,10 +317,17 @@ Check that the image exists and the tag matches `config.yaml`:
 
 ```bash
 docker images | grep omni-harness-sandbox
-# Expected: omni-harness-sandbox   latest   <id>
+# Expected: ghcr.io/archimedes-run/omni-harness-sandbox   latest   <id>
 ```
 
-If missing, re-run `make docker-init` or tag an existing image manually (see [step 1](#1-pull-the-sandbox-image)).
+If missing, re-run `make docker-init`.
+
+**Manual override** (if you use a private mirror or custom sandbox image):
+
+```bash
+SANDBOX_IMAGE=your-registry/your-image:tag make docker-init
+SANDBOX_IMAGE=your-registry/your-image:tag make docker-start
+```
 
 **`bind source path does not exist` errors in gateway logs**
 

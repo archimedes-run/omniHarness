@@ -47,7 +47,6 @@ help:
 ## Setup & Diagnosis
 setup:
 	@$(BACKEND_UV_RUN) python ../scripts/setup_wizard.py
-	
 
 doctor:
 	@$(BACKEND_UV_RUN) python ../scripts/doctor.py
@@ -154,8 +153,8 @@ docker-init:
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh init
 
 # Start Docker development environment
-docker-start:
-	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh start
+runtime-check:
+	@$(PYTHON) ./scripts/runtime_check.py
 
 # Stop Docker development environment
 docker-stop:
