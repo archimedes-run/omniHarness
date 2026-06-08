@@ -41,6 +41,37 @@ def _detect_mode_with_config(config_content: str) -> str:
         return output
 
 
+def _detect_image_with_config(config_content: str, *, env_image: str | None = None) -> str:
+    """Write config content into a temp project root and execute detect_sandbox_image."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_root = Path(tmpdir)
+        (tmp_root / "config.yaml").write_text(config_content, encoding="utf-8")
+
+        env_prefix = f"SANDBOX_IMAGE='{env_image}' " if env_image else ""
+        command = f"source '{SCRIPT_PATH}' && PROJECT_ROOT='{tmp_root}' && {env_prefix}detect_sandbox_image"
+
+        output = subprocess.check_output(
+            [BASH_EXECUTABLE, "-lc", command],
+            text=True,
+            encoding="utf-8",
+        ).strip()
+
+        return output
+
+
+def _detect_image_without_config() -> str:
+    """Execute detect_sandbox_image in a temp project without config.yaml."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        command = f"source '{SCRIPT_PATH}' && PROJECT_ROOT='{tmpdir}' && detect_sandbox_image"
+        output = subprocess.check_output(
+            [BASH_EXECUTABLE, "-lc", command],
+            text=True,
+            encoding="utf-8",
+        ).strip()
+
+        return output
+
+
 def test_detect_mode_defaults_to_local_when_config_missing():
     """No config file should default to local mode."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -62,6 +93,54 @@ sandbox:
 """.strip()
 
     assert _detect_mode_with_config(config) == "local"
+
+
+def test_detect_sandbox_image_reads_configured_aio_image():
+    """A configured sandbox.image should be used by docker-init."""
+    config = """
+sandbox:
+  use: omniharness.community.aio_sandbox:AioSandboxProvider
+  image: omni-harness-sandbox:latest
+""".strip()
+
+    assert _detect_image_with_config(config) == "omni-harness-sandbox:latest"
+
+
+def test_detect_sandbox_image_env_overrides_config():
+    """SANDBOX_IMAGE should keep highest precedence for custom mirrors."""
+    config = """
+sandbox:
+  use: omniharness.community.aio_sandbox:AioSandboxProvider
+  image: omni-harness-sandbox:latest
+""".strip()
+
+    assert _detect_image_with_config(config, env_image="registry.example/sandbox:test") == "registry.example/sandbox:test"
+
+
+def test_detect_sandbox_image_defaults_when_missing():
+    """Missing sandbox.image should fall back to the repository default image."""
+    config = """
+sandbox:
+  use: omniharness.community.aio_sandbox:AioSandboxProvider
+""".strip()
+
+    assert _detect_image_with_config(config) == "ghcr.io/archimedes-run/omni-harness-sandbox:latest"
+
+
+def test_detect_sandbox_image_defaults_without_config():
+    """No config file should use the repository default image."""
+    assert _detect_image_without_config() == "ghcr.io/archimedes-run/omni-harness-sandbox:latest"
+
+
+def test_detect_sandbox_image_ignores_commented_image():
+    """Commented image lines should not be treated as configuration."""
+    config = """
+sandbox:
+  use: omniharness.community.aio_sandbox:AioSandboxProvider
+  # image: omni-harness-sandbox:latest
+""".strip()
+
+    assert _detect_image_with_config(config) == "ghcr.io/archimedes-run/omni-harness-sandbox:latest"
 
 
 def test_detect_mode_aio_without_provisioner_url():

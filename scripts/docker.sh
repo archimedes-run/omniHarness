@@ -12,8 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOCKER_DIR="$PROJECT_ROOT/docker"
 
-# Docker Compose command with project name
-COMPOSE_CMD="docker compose --env-file \"$PROJECT_ROOT/.env\" -p omni-harness-dev -f docker-compose-dev.yaml"
+# Docker Compose command with project name. Keep this as an array so quoted
+# paths survive `cd "$DOCKER_DIR"` without becoming literal quote characters.
+COMPOSE_CMD=(docker compose --env-file "$PROJECT_ROOT/.env" -p omni-harness-dev -f docker-compose-dev.yaml)
 DEFAULT_SANDBOX_IMAGE="ghcr.io/archimedes-run/omni-harness-sandbox:latest"
 
 detect_sandbox_mode() {
@@ -61,6 +62,34 @@ detect_sandbox_mode() {
     fi
 }
 
+detect_sandbox_image() {
+    local config_file="$PROJECT_ROOT/config.yaml"
+    local sandbox_image=""
+
+    if [ -f "$config_file" ]; then
+        sandbox_image=$(awk '
+            /^[[:space:]]*sandbox:[[:space:]]*$/ { in_sandbox=1; next }
+            in_sandbox && /^[^[:space:]#]/ { in_sandbox=0 }
+            in_sandbox && /^[[:space:]]*image:[[:space:]]*/ {
+                line=$0
+                sub(/^[[:space:]]*image:[[:space:]]*/, "", line)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+                gsub(/^["'\'']|["'\'']$/, "", line)
+                print line
+                exit
+            }
+        ' "$config_file")
+    fi
+
+    if [ -n "${SANDBOX_IMAGE:-}" ]; then
+        echo "$SANDBOX_IMAGE"
+    elif [ -n "$sandbox_image" ]; then
+        echo "$sandbox_image"
+    else
+        echo "$DEFAULT_SANDBOX_IMAGE"
+    fi
+}
+
 # Cleanup function for Ctrl+C
 cleanup() {
     echo ""
@@ -92,7 +121,7 @@ init() {
     echo "=========================================="
     echo ""
 
-    SANDBOX_IMAGE="${SANDBOX_IMAGE:-$DEFAULT_SANDBOX_IMAGE}"
+    SANDBOX_IMAGE="$(detect_sandbox_image)"
 
     # Detect sandbox mode from config.yaml
     local sandbox_mode
@@ -248,7 +277,7 @@ start() {
     fi
 
     echo "Building and starting containers..."
-    cd "$DOCKER_DIR" && $COMPOSE_CMD up --build -d --remove-orphans $services
+    cd "$DOCKER_DIR" && "${COMPOSE_CMD[@]}" up --build -d --remove-orphans $services
     echo ""
     echo "=========================================="
     echo "  OmniHarness Docker is starting!"
@@ -295,7 +324,7 @@ logs() {
             ;;
     esac
     
-    cd "$DOCKER_DIR" && $COMPOSE_CMD logs -f $service
+    cd "$DOCKER_DIR" && "${COMPOSE_CMD[@]}" logs -f $service
 }
 
 # Stop Docker development environment
@@ -306,7 +335,7 @@ stop() {
         export OMNI_HARNESS_ROOT="$PROJECT_ROOT"
     fi
     echo "Stopping Docker development services..."
-    cd "$DOCKER_DIR" && $COMPOSE_CMD down
+    cd "$DOCKER_DIR" && "${COMPOSE_CMD[@]}" down
     echo "Cleaning up sandbox containers..."
     "$SCRIPT_DIR/cleanup-containers.sh" omni-harness-sandbox 2>/dev/null || true
     echo -e "${GREEN}✓ Docker services stopped${NC}"
@@ -319,7 +348,7 @@ restart() {
     echo "========================================"
     echo ""
     echo -e "${BLUE}Restarting containers...${NC}"
-    cd "$DOCKER_DIR" && $COMPOSE_CMD restart
+    cd "$DOCKER_DIR" && "${COMPOSE_CMD[@]}" restart
     echo ""
     echo -e "${GREEN}✓ Docker services restarted${NC}"
     echo ""
