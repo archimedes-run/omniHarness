@@ -30,7 +30,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CodeEditor } from "@/components/workspace/code-editor";
 import { useArtifactContent } from "@/core/artifacts/hooks";
-import { urlOfArtifact } from "@/core/artifacts/utils";
+import { urlOfArtifact, urlOfArtifactPreview } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
 import { installSkill } from "@/core/skills/api";
 import { streamdownPlugins } from "@/core/streamdown";
@@ -88,12 +88,18 @@ export function ArtifactFileDetail({
     filepath: filepathFromProps,
     enabled: isCodeFile && !isWriteFile,
   });
+  const { isMock } = useThread();
 
   const displayContent = content ?? "";
+  const previewUrl = useMemo(() => {
+    if (isWriteFile || language !== "html") {
+      return undefined;
+    }
+    return urlOfArtifactPreview({ filepath, threadId, isMock });
+  }, [filepath, isMock, isWriteFile, language, threadId]);
 
   const [viewMode, setViewMode] = useState<"code" | "preview">("code");
   const [isInstalling, setIsInstalling] = useState(false);
-  const { isMock } = useThread();
   useEffect(() => {
     if (isSupportPreview) {
       setViewMode("preview");
@@ -255,6 +261,7 @@ export function ArtifactFileDetail({
             <ArtifactFilePreview
               content={displayContent}
               language={language ?? "text"}
+              previewUrl={previewUrl}
             />
           )}
         {isCodeFile && viewMode === "code" && (
@@ -278,26 +285,29 @@ export function ArtifactFileDetail({
 export function ArtifactFilePreview({
   content,
   language,
+  previewUrl,
 }: {
   content: string;
   language: string;
+  previewUrl?: string;
 }) {
-  const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string>();
+  const [fallbackHtmlPreviewUrl, setFallbackHtmlPreviewUrl] =
+    useState<string>();
 
   useEffect(() => {
-    if (language !== "html") {
-      setHtmlPreviewUrl(undefined);
+    if (language !== "html" || previewUrl) {
+      setFallbackHtmlPreviewUrl(undefined);
       return;
     }
 
     const blob = new Blob([content ?? ""], { type: "text/html" });
     const url = URL.createObjectURL(blob);
-    setHtmlPreviewUrl(url);
+    setFallbackHtmlPreviewUrl(url);
 
     return () => {
       URL.revokeObjectURL(url);
     };
-  }, [content, language]);
+  }, [content, language, previewUrl]);
 
   if (language === "markdown") {
     return (
@@ -318,7 +328,7 @@ export function ArtifactFilePreview({
         className="size-full"
         title="Artifact preview"
         sandbox="allow-scripts allow-forms"
-        src={htmlPreviewUrl}
+        src={previewUrl ?? fallbackHtmlPreviewUrl}
       />
     );
   }

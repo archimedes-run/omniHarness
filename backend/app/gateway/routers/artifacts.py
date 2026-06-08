@@ -9,6 +9,8 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 
 from app.gateway.authz import require_permission
 from app.gateway.path_utils import resolve_thread_virtual_path
+from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
+from omniharness.runtime.user_context import get_effective_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,39 @@ ACTIVE_CONTENT_MIME_TYPES = {
     "text/html",
     "application/xhtml+xml",
     "image/svg+xml",
+}
+
+PREVIEW_MIME_TYPES = {
+    "text/html",
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/svg+xml",
+    "image/webp",
+}
+
+PREVIEW_SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "media-src 'self' data: blob:; "
+        "frame-ancestors 'self'; "
+        "base-uri 'none'; "
+        "form-action 'none'"
+    ),
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
 }
 
 
@@ -31,6 +66,56 @@ def _build_attachment_headers(filename: str, extra_headers: dict[str, str] | Non
     if extra_headers:
         headers.update(extra_headers)
     return headers
+
+
+def _build_inline_headers(filename: str, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
+    headers = {"Content-Disposition": _build_content_disposition("inline", filename)}
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
+def _normalize_preview_virtual_path(path: str) -> str:
+    stripped = path.lstrip("/")
+    outputs_prefix = f"{VIRTUAL_PATH_PREFIX.lstrip('/')}/outputs"
+
+    if stripped == outputs_prefix or stripped.startswith(outputs_prefix + "/"):
+        return f"/{stripped}"
+
+    if stripped == "outputs" or stripped.startswith("outputs/"):
+        return f"{VIRTUAL_PATH_PREFIX}/{stripped}"
+
+    raise HTTPException(status_code=403, detail="Preview path must be under /mnt/user-data/outputs")
+
+
+def _resolve_preview_path(thread_id: str, artifact_path: str) -> Path:
+    virtual_path = _normalize_preview_virtual_path(artifact_path)
+    user_id = get_effective_user_id()
+    paths = get_paths()
+
+    try:
+        actual_path = paths.resolve_virtual_path(thread_id, virtual_path, user_id=user_id)
+    except ValueError as e:
+        status = 403 if "traversal" in str(e) else 400
+        raise HTTPException(status_code=status, detail=str(e))
+
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id).resolve()
+
+    try:
+        actual_path.relative_to(outputs_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Preview path must stay inside thread outputs")
+
+    return actual_path
+
+
+def _preview_media_type(path: Path) -> str | None:
+    mime_type, _ = mimetypes.guess_type(path)
+    if mime_type == "application/x-javascript":
+        return "application/javascript"
+    if mime_type in PREVIEW_MIME_TYPES:
+        return mime_type
+    return None
 
 
 def is_text_file_by_content(path: Path, sample_size: int = 8192) -> bool:
@@ -75,6 +160,46 @@ def _extract_file_from_skill_archive(zip_path: Path, internal_path: str) -> byte
             return None
     except (zipfile.BadZipFile, KeyError):
         return None
+
+
+@router.get(
+    "/threads/{thread_id}/artifacts/preview/{artifact_path:path}",
+    summary="Preview Artifact File",
+    description="Safely preview static artifact files from a thread's outputs directory in an iframe.",
+)
+@require_permission("threads", "read", owner_check=True)
+async def preview_artifact(thread_id: str, artifact_path: str, request: Request) -> Response:
+    """Preview an artifact from the current user's thread outputs directory.
+
+    This route is intentionally separate from the download/view artifact route:
+    it only serves files under ``/mnt/user-data/outputs`` and allows a narrow
+    set of static web asset types inline with iframe-oriented security headers.
+    """
+    actual_path = _resolve_preview_path(thread_id, artifact_path)
+
+    logger.info(
+        "Resolving artifact preview path: thread_id=%s, requested_path=%s, actual_path=%s",
+        thread_id,
+        artifact_path,
+        actual_path,
+    )
+
+    if not actual_path.exists():
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_path}")
+
+    if not actual_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {artifact_path}")
+
+    media_type = _preview_media_type(actual_path)
+    if media_type is None:
+        raise HTTPException(status_code=415, detail="Artifact type is not supported for preview")
+
+    return FileResponse(
+        path=actual_path,
+        filename=actual_path.name,
+        media_type=media_type,
+        headers=_build_inline_headers(actual_path.name, PREVIEW_SECURITY_HEADERS),
+    )
 
 
 @router.get(

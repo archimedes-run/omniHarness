@@ -18,6 +18,21 @@ export function urlOfArtifact({
   return `${getBackendBaseURL()}/api/threads/${threadId}/artifacts${filepath}${download ? "?download=true" : ""}`;
 }
 
+export function urlOfArtifactPreview({
+  filepath,
+  threadId,
+  isMock = false,
+}: {
+  filepath: string;
+  threadId: string;
+  isMock?: boolean;
+}) {
+  if (isMock) {
+    return `${getBackendBaseURL()}/mock/api/threads/${threadId}/artifacts/preview${filepath}`;
+  }
+  return `${getBackendBaseURL()}/api/threads/${threadId}/artifacts/preview${filepath}`;
+}
+
 export function extractArtifactsFromThread(thread: AgentThread) {
   return thread.values.artifacts ?? [];
 }
