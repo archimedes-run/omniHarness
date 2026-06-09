@@ -169,6 +169,28 @@ export async function restartPreviewSession({
   return response.json() as Promise<PreviewSession>;
 }
 
+export async function createPreviewSessionFromManifest({
+  threadId,
+  artifactId,
+}: {
+  threadId: string;
+  artifactId: string;
+}): Promise<PreviewSession> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/artifacts/manifests/${artifactId}/preview`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({
+      detail: `Failed to create preview session: ${response.status}`,
+    }));
+    throw new Error(error.detail ?? "Failed to create preview session");
+  }
+  return response.json() as Promise<PreviewSession>;
+}
+
 export async function loadPreviewSessionLogs({
   threadId,
   previewId,

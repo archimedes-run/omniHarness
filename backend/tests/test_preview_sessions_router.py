@@ -1,3 +1,4 @@
+import json
 import uuid
 from typing import Any
 
@@ -6,6 +7,7 @@ from _router_auth_helpers import make_authed_test_app
 from fastapi.testclient import TestClient
 
 import app.gateway.preview_sessions as preview_sessions
+import app.gateway.routers.artifacts as artifacts_router
 from app.gateway.auth.models import User
 from app.gateway.preview_sessions import PreviewSessionManager
 from app.gateway.routers import previews as previews_router
@@ -280,5 +282,99 @@ def test_preview_session_rejects_wrong_user(preview_test_context) -> None:
 
     with TestClient(other_app) as client:
         response = client.get(f"/api/threads/thread-1/previews/{preview_id}")
+
+    assert response.status_code == 404
+
+
+def test_create_preview_from_manifest(preview_test_context, monkeypatch) -> None:
+    user = preview_test_context["user"]
+    paths = preview_test_context["paths"]
+    thread_id = preview_test_context["thread_id"]
+
+    # Write a valid web_app manifest in the outputs directory
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=str(user.id))
+    app_dir = outputs_dir / "dynamic-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    manifest_data = {
+        "id": "dynamic-app",
+        "title": "Dynamic App",
+        "type": "web_app",
+        "root": ".",
+        "source_path": "/mnt/user-data/workspace/dynamic-app",
+        "preview": {
+            "mode": "dev_server",
+            "command": "npm run dev -- --hostname 0.0.0.0",
+            "port": 3000,
+        },
+        "created_by": "agent",
+    }
+    (app_dir / "artifact_manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+
+    app = _make_preview_app(
+        user=user,
+        manager=preview_test_context["manager"],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/threads/{thread_id}/artifacts/manifests/dynamic-app/preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artifact_id"] == "dynamic-app"
+    assert body["status"] in ("starting", "running")
+    assert body["command"] == "npm run dev -- --hostname 0.0.0.0"
+
+
+def test_create_preview_from_manifest_rejects_static_site(preview_test_context, monkeypatch) -> None:
+    user = preview_test_context["user"]
+    paths = preview_test_context["paths"]
+    thread_id = preview_test_context["thread_id"]
+
+    # Write a static_site manifest (should be rejected)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=str(user.id))
+    site_dir = outputs_dir / "my-site"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    manifest_data = {
+        "id": "my-site",
+        "title": "Static Site",
+        "type": "static_site",
+        "entrypoint": "index.html",
+        "root": ".",
+        "preview": {"mode": "static"},
+        "created_by": "agent",
+    }
+    (site_dir / "artifact_manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+
+    app = _make_preview_app(
+        user=user,
+        manager=preview_test_context["manager"],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/threads/{thread_id}/artifacts/manifests/my-site/preview")
+
+    assert response.status_code == 422
+    assert "web_app" in response.json()["detail"]
+
+
+def test_create_preview_from_manifest_missing(preview_test_context, monkeypatch) -> None:
+    user = preview_test_context["user"]
+    paths = preview_test_context["paths"]
+    thread_id = preview_test_context["thread_id"]
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+
+    app = _make_preview_app(
+        user=user,
+        manager=preview_test_context["manager"],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/threads/{thread_id}/artifacts/manifests/nonexistent/preview")
 
     assert response.status_code == 404

@@ -5,6 +5,7 @@ import { useThread } from "@/components/workspace/messages/context";
 
 import {
   createPreviewSession,
+  createPreviewSessionFromManifest,
   loadArtifactManifests,
   loadPreviewSessionLogs,
   loadPreviewSessions,
@@ -99,6 +100,22 @@ export function useCreatePreviewSession({ threadId }: { threadId: string }) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: createPreviewSession,
+    onSuccess() {
+      void queryClient.invalidateQueries({
+        queryKey: ["preview-sessions", threadId],
+      });
+    },
+  });
+}
+
+export function useCreatePreviewFromManifest({
+  threadId,
+}: {
+  threadId: string;
+}) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createPreviewSessionFromManifest,
     onSuccess() {
       void queryClient.invalidateQueries({
         queryKey: ["preview-sessions", threadId],

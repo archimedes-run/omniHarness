@@ -322,6 +322,21 @@ def _get_outputs_dir(thread_id: str, *, user_id: str | None = None) -> Path:
     return get_paths().sandbox_outputs_dir(thread_id, user_id=user_id or get_effective_user_id()).resolve()
 
 
+def get_artifact_manifest_for_preview(
+    thread_id: str,
+    artifact_id: str,
+    *,
+    user_id: str,
+) -> ArtifactManifestResponse:
+    """Load and validate a manifest by artifact_id; used by the preview session router."""
+    outputs_dir = _get_outputs_dir(thread_id, user_id=user_id)
+    for manifest_path in _iter_manifest_paths(outputs_dir):
+        if not _manifest_matches_artifact_id(manifest_path, artifact_id):
+            continue
+        return _load_artifact_manifest(manifest_path, outputs_dir=outputs_dir)
+    raise HTTPException(status_code=404, detail=f"Artifact manifest not found: {artifact_id}")
+
+
 def _preview_virtual_parent(path: str) -> str:
     virtual_path = _normalize_preview_virtual_path(path)
     parent = virtual_path.rsplit("/", 1)[0]

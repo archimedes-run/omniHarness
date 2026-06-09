@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from app.gateway.authz import get_auth_context, require_permission
@@ -10,6 +10,7 @@ from app.gateway.preview_sessions import (
     PreviewSessionLogsResponse,
     PreviewSessionResponse,
 )
+from app.gateway.routers.artifacts import get_artifact_manifest_for_preview
 
 router = APIRouter(prefix="/api/threads", tags=["previews"])
 
@@ -112,4 +113,37 @@ async def proxy_preview_session(
         preview_id=preview_id,
         request=request,
         path=path,
+    )
+
+
+@router.post("/{thread_id}/artifacts/manifests/{artifact_id}/preview", response_model=PreviewSessionResponse)
+@require_permission("threads", "write", owner_check=True, require_existing=True)
+async def create_preview_from_manifest(
+    thread_id: str,
+    artifact_id: str,
+    request: Request,
+) -> PreviewSessionResponse:
+    """Create or reuse a preview session from a server-validated web_app manifest.
+
+    The browser does not need to supply command, root_path, or port — all values
+    come from the manifest file on disk, which is validated server-side.
+    """
+    user_id = _current_user_id(request)
+    manifest = get_artifact_manifest_for_preview(thread_id, artifact_id, user_id=user_id)
+    if manifest.type != "web_app":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Manifest type '{manifest.type}' does not support live preview; only web_app manifests do",
+        )
+    body = PreviewSessionCreateRequest(
+        artifact_id=manifest.id,
+        root_path=manifest.source_path,  # guaranteed non-None by manifest validator
+        command=manifest.preview.command,  # guaranteed non-None for dev_server by manifest validator
+        port=manifest.preview.port,
+    )
+    manager = get_preview_session_manager(request)
+    return await manager.create_session(
+        user_id=user_id,
+        thread_id=thread_id,
+        body=body,
     )

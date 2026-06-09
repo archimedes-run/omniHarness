@@ -12,7 +12,14 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Component,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { Streamdown } from "streamdown";
 
@@ -25,6 +32,7 @@ import {
   ArtifactTitle,
 } from "@/components/ai-elements/artifact";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Select, SelectItem } from "@/components/ui/select";
 import {
   SelectContent,
@@ -38,7 +46,7 @@ import type { ArtifactManifest } from "@/core/artifacts/api";
 import {
   useArtifactContent,
   useArtifactManifests,
-  useCreatePreviewSession,
+  useCreatePreviewFromManifest,
   usePreviewSessionLogs,
   usePreviewSessions,
   useRestartPreviewSession,
@@ -64,7 +72,39 @@ import { Tooltip } from "../tooltip";
 
 import { useArtifacts } from "./context";
 
-export function ArtifactFileDetail({
+class ArtifactErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Artifact>
+          <ArtifactContent className="flex items-center justify-center p-6 text-center">
+            <div className="text-muted-foreground max-w-sm text-sm">
+              Failed to render artifact.{" "}
+              <span className="text-destructive font-mono text-xs">
+                {this.state.error.message}
+              </span>
+            </div>
+          </ArtifactContent>
+        </Artifact>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function ArtifactFileDetailInner({
   className,
   filepath: filepathFromProps,
   threadId,
@@ -90,12 +130,7 @@ export function ArtifactFileDetail({
   const isWriteFile = useMemo(() => {
     return filepathFromProps.startsWith("write-file:");
   }, [filepathFromProps]);
-  const dynamicPreviewConfig = useMemo(() => {
-    return manifest?.preview.mode === "dev_server"
-      ? manifest.preview
-      : undefined;
-  }, [manifest]);
-  const isDynamicManifest = dynamicPreviewConfig !== undefined;
+  const isDynamicManifest = manifest?.preview.mode === "dev_server";
   const filepath = useMemo(() => {
     if (manifest) {
       return manifest.entrypoint_path ?? manifest.manifest_path;
@@ -140,7 +175,7 @@ export function ArtifactFileDetail({
     threadId,
     enabled: Boolean(isDynamicManifest),
   });
-  const createPreview = useCreatePreviewSession({ threadId });
+  const createPreviewFromManifest = useCreatePreviewFromManifest({ threadId });
   const stopPreview = useStopPreviewSession({ threadId });
   const restartPreview = useRestartPreviewSession({ threadId });
   const previewSession = useMemo(() => {
@@ -177,6 +212,10 @@ export function ArtifactFileDetail({
   const [viewMode, setViewMode] = useState<"code" | "preview" | "logs">("code");
   const [isInstalling, setIsInstalling] = useState(false);
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  const [previewCreateError, setPreviewCreateError] = useState<string | null>(
+    null,
+  );
+
   useEffect(() => {
     if (isDynamicManifest) {
       setViewMode("preview");
@@ -189,40 +228,10 @@ export function ArtifactFileDetail({
     }
   }, [isDynamicManifest, isSupportPreview]);
 
+  // Clear inline create error when switching to a different artifact
   useEffect(() => {
-    if (
-      !manifestId ||
-      !manifest ||
-      !dynamicPreviewConfig ||
-      previewSession ||
-      createPreview.isPending
-    ) {
-      return;
-    }
-
-    createPreview
-      .mutateAsync({
-        threadId,
-        artifactId: manifestId,
-        rootPath: manifest.source_path ?? "",
-        command: dynamicPreviewConfig.command,
-        port: dynamicPreviewConfig.port,
-      })
-      .catch((error) => {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : "Failed to start live preview session",
-        );
-      });
-  }, [
-    createPreview,
-    dynamicPreviewConfig,
-    manifest,
-    manifestId,
-    previewSession,
-    threadId,
-  ]);
+    setPreviewCreateError(null);
+  }, [manifestId]);
 
   const handleInstallSkill = useCallback(async () => {
     if (isInstalling) return;
@@ -247,25 +256,22 @@ export function ArtifactFileDetail({
   }, [threadId, filepath, isInstalling]);
 
   const handleRestartPreview = useCallback(async () => {
+    setPreviewCreateError(null);
     if (!previewSession) {
-      if (!manifestId || !manifest || !dynamicPreviewConfig) {
-        return;
-      }
+      if (!manifestId) return;
       try {
-        await createPreview.mutateAsync({
+        await createPreviewFromManifest.mutateAsync({
           threadId,
           artifactId: manifestId,
-          rootPath: manifest.source_path ?? "",
-          command: dynamicPreviewConfig.command,
-          port: dynamicPreviewConfig.port,
         });
         setPreviewReloadKey((value) => value + 1);
       } catch (error) {
-        toast.error(
+        const message =
           error instanceof Error
             ? error.message
-            : "Failed to start live preview session",
-        );
+            : "Failed to start live preview session";
+        setPreviewCreateError(message);
+        toast.error(message);
       }
       return;
     }
@@ -277,16 +283,15 @@ export function ArtifactFileDetail({
       });
       setPreviewReloadKey((value) => value + 1);
     } catch (error) {
-      toast.error(
+      const message =
         error instanceof Error
           ? error.message
-          : "Failed to restart live preview session",
-      );
+          : "Failed to restart live preview session";
+      setPreviewCreateError(message);
+      toast.error(message);
     }
   }, [
-    createPreview,
-    dynamicPreviewConfig,
-    manifest,
+    createPreviewFromManifest,
     manifestId,
     previewSession,
     restartPreview,
@@ -310,6 +315,7 @@ export function ArtifactFileDetail({
       );
     }
   }, [previewSession, stopPreview, threadId]);
+
   return (
     <Artifact className={cn(className)}>
       <ArtifactHeader className="px-2">
@@ -337,7 +343,10 @@ export function ArtifactFileDetail({
           {isDynamicManifest && (
             <Badge variant="secondary" className="rounded text-[10px]">
               <ActivityIcon className="mr-1 size-3" />
-              {previewSession?.status ?? "starting"}
+              {previewSession?.status ??
+                (createPreviewFromManifest.isPending
+                  ? "starting"
+                  : "not running")}
             </Badge>
           )}
         </div>
@@ -429,7 +438,10 @@ export function ArtifactFileDetail({
                   icon={previewSession ? RotateCcwIcon : PlayIcon}
                   label={previewSession ? "Restart preview" : "Start preview"}
                   tooltip={previewSession ? "Restart preview" : "Start preview"}
-                  disabled={createPreview.isPending || restartPreview.isPending}
+                  disabled={
+                    createPreviewFromManifest.isPending ||
+                    restartPreview.isPending
+                  }
                   onClick={() => {
                     void handleRestartPreview();
                   }}
@@ -499,9 +511,14 @@ export function ArtifactFileDetail({
             previewUrl={previewUrl}
             previewStatus={previewSession?.status}
             previewError={previewSession?.error}
+            previewCreateError={previewCreateError}
+            isCreating={createPreviewFromManifest.isPending}
             logs={previewLogs?.logs ?? ""}
             logsStatus={previewLogs?.status ?? previewSession?.status}
             viewMode={viewMode}
+            onStartPreview={() => {
+              void handleRestartPreview();
+            }}
           />
         )}
         {!isDynamicManifest &&
@@ -532,22 +549,48 @@ export function ArtifactFileDetail({
   );
 }
 
+export function ArtifactFileDetail({
+  className,
+  filepath,
+  threadId,
+}: {
+  className?: string;
+  filepath: string;
+  threadId: string;
+}) {
+  return (
+    <ArtifactErrorBoundary>
+      <ArtifactFileDetailInner
+        className={className}
+        filepath={filepath}
+        threadId={threadId}
+      />
+    </ArtifactErrorBoundary>
+  );
+}
+
 function DynamicArtifactPreviewPanel({
   manifest,
   previewUrl,
   previewStatus,
   previewError,
+  previewCreateError,
+  isCreating,
   logs,
   logsStatus,
   viewMode,
+  onStartPreview,
 }: {
   manifest: ArtifactManifest;
   previewUrl?: string;
   previewStatus?: "starting" | "running" | "failed" | "stopped";
   previewError?: string | null;
+  previewCreateError?: string | null;
+  isCreating?: boolean;
   logs: string;
   logsStatus?: "starting" | "running" | "failed" | "stopped";
   viewMode: "code" | "preview" | "logs";
+  onStartPreview: () => void;
 }) {
   if (viewMode === "logs") {
     return (
@@ -555,7 +598,7 @@ function DynamicArtifactPreviewPanel({
         <div className="border-border/60 flex items-center justify-between border-b px-4 py-2">
           <div className="text-sm font-medium">Preview Logs</div>
           <Badge variant="secondary" className="rounded text-[10px]">
-            {logsStatus ?? previewStatus ?? "starting"}
+            {logsStatus ?? previewStatus ?? "not running"}
           </Badge>
         </div>
         <pre className="bg-muted/20 text-foreground size-full overflow-auto p-4 font-mono text-xs whitespace-pre-wrap">
@@ -565,28 +608,62 @@ function DynamicArtifactPreviewPanel({
     );
   }
 
-  if (!previewUrl) {
+  // Only show the live preview iframe when the server is confirmed running
+  if (previewStatus === "running" && previewUrl) {
     return (
-      <div className="flex size-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <Badge variant="secondary" className="rounded text-[10px]">
-          {previewStatus ?? "starting"}
-        </Badge>
-        <div className="text-sm font-medium">{manifest.title}</div>
-        <div className="text-muted-foreground max-w-md text-sm">
-          {previewError ??
-            "Starting the live preview session. Switch to Logs to watch the dev server come up."}
-        </div>
-      </div>
+      <iframe
+        key={previewUrl}
+        className="size-full"
+        src={previewUrl}
+        title={manifest.title}
+      />
     );
   }
 
+  const errorMessage =
+    previewCreateError ?? (previewStatus === "failed" ? previewError : null);
+  const canStart =
+    !previewStatus || previewStatus === "stopped" || previewStatus === "failed";
+
   return (
-    <iframe
-      key={previewUrl}
-      className="size-full"
-      src={previewUrl}
-      title={manifest.title}
-    />
+    <div className="flex size-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="text-sm font-medium">{manifest.title}</div>
+      <Badge variant="secondary" className="rounded text-[10px]">
+        {isCreating ? "starting" : (previewStatus ?? "not running")}
+      </Badge>
+
+      {previewStatus === "starting" && !isCreating && (
+        <div className="text-muted-foreground max-w-md text-sm">
+          Dev server is starting. Switch to Logs to watch the output.
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-destructive/10 border-destructive/20 text-destructive max-w-md rounded border p-3 text-left font-mono text-xs break-all whitespace-pre-wrap">
+          {errorMessage}
+        </div>
+      )}
+
+      {canStart && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={isCreating}
+          onClick={onStartPreview}
+        >
+          {isCreating ? (
+            <>
+              <LoaderIcon className="animate-spin" />
+              Starting...
+            </>
+          ) : previewStatus ? (
+            "Restart Preview"
+          ) : (
+            "Start Preview"
+          )}
+        </Button>
+      )}
+    </div>
   );
 }
 
