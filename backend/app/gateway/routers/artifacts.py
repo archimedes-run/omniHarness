@@ -138,6 +138,14 @@ class ArtifactManifest(BaseModel):
         if isinstance(preview, dict) and "source_path" not in data and "cwd" in preview:
             data = {**data, "source_path": preview["cwd"]}
 
+        # Infer source_path from workspace convention as a last resort.
+        # Agents may omit source_path entirely when the project follows the
+        # standard layout: /mnt/user-data/workspace/<artifact_id>.
+        if not data.get("source_path"):
+            artifact_id = data.get("id", "")
+            if artifact_id and _MANIFEST_ID_RE.fullmatch(str(artifact_id)):
+                data = {**data, "source_path": f"/mnt/user-data/workspace/{artifact_id}"}
+
         return data
 
     @field_validator("id")

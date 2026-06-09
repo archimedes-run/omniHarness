@@ -54,6 +54,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   const { manifests } = useArtifactManifests({ threadId });
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
+  const prevArtifactsSignatureRef = useRef("");
   const visibleArtifacts = useMemo(() => {
     const files = new Set(thread.values.artifacts ?? []);
     for (const message of thread.values.messages ?? []) {
@@ -82,8 +83,14 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
       deselect();
     }
 
-    // Update artifacts from the current thread
-    setArtifacts(normalizedVisibleArtifacts);
+    // Update artifacts only when content changes to avoid a render loop.
+    // normalizedVisibleArtifacts is always a new array reference, so comparing
+    // the joined string prevents calling setArtifacts on every render.
+    const signature = normalizedVisibleArtifacts.join("\0");
+    if (signature !== prevArtifactsSignatureRef.current) {
+      prevArtifactsSignatureRef.current = signature;
+      setArtifacts(normalizedVisibleArtifacts);
+    }
 
     // DO NOT automatically deselect the artifact when switching threads, because the artifacts auto discovering is not work now.
     // if (
@@ -110,7 +117,6 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     selectArtifact,
     selectedArtifact,
     setArtifacts,
-    visibleArtifacts,
   ]);
 
   const artifactPanelOpen = useMemo(() => {

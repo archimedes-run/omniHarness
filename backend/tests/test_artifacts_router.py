@@ -596,6 +596,36 @@ def test_artifact_manifest_normalizes_name_and_cwd_combined(tmp_path, monkeypatc
     assert manifest["source_path"] == "/mnt/user-data/workspace/my-dynamic-app"
 
 
+def test_artifact_manifest_infers_source_path_from_workspace_convention(tmp_path, monkeypatch) -> None:
+    """When source_path and preview.cwd are both absent, infer /mnt/user-data/workspace/<id>."""
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    app_dir = outputs_dir / "my-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "my-app",
+                "title": "My App",
+                "type": "web_app",
+                "root": ".",
+                # source_path completely absent, no preview.cwd either
+                "preview": {
+                    "mode": "dev_server",
+                    "command": "npm run dev -- --hostname 0.0.0.0",
+                    "port": 3000,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/my-app")
+
+    assert response.status_code == 200
+    assert response.json()["source_path"] == "/mnt/user-data/workspace/my-app"
+
+
 def test_artifact_manifest_explicit_title_takes_precedence_over_name(tmp_path, monkeypatch) -> None:
     """When both 'title' and 'name' are present, 'title' wins."""
     client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
