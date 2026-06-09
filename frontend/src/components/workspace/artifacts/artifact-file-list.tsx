@@ -19,7 +19,9 @@ import {
 import { useArtifactManifests } from "@/core/artifacts/hooks";
 import {
   artifactDisplayName,
+  artifactManifestValue,
   normalizeArtifactEntries,
+  normalizeArtifactPath,
   parseArtifactManifestValue,
   urlOfArtifact,
 } from "@/core/artifacts/utils";
@@ -94,7 +96,23 @@ export function ArtifactFileList({
     <ul className={cn("flex w-full flex-col gap-4", className)}>
       {normalizedFiles.map((file) => {
         const manifestId = parseArtifactManifestValue(file);
-        const manifest = manifestId ? manifestsById.get(manifestId) : null;
+        let manifest = manifestId ? manifestsById.get(manifestId) : null;
+        // When a raw file path (e.g. from present_files) matches a known manifest,
+        // treat it as the project card so the user sees a "Live App" / "Static Site"
+        // card instead of a raw JSON file.
+        if (!manifest) {
+          const normalizedFile = normalizeArtifactPath(file);
+          manifest =
+            manifests.find(
+              (m) =>
+                normalizeArtifactPath(m.manifest_path) === normalizedFile ||
+                (m.entrypoint_path &&
+                  normalizeArtifactPath(m.entrypoint_path) === normalizedFile),
+            ) ?? null;
+        }
+        // When promoted via path-matching, click opens the project card view
+        const clickTarget =
+          manifest && !manifestId ? artifactManifestValue(manifest) : file;
         const downloadPath =
           manifest?.entrypoint_path ?? manifest?.manifest_path ?? file;
         const manifestBadge =
@@ -103,12 +121,12 @@ export function ArtifactFileList({
           <Card
             key={file}
             className="relative cursor-pointer p-3"
-            onClick={() => handleClick(file)}
+            onClick={() => handleClick(clickTarget)}
           >
             <CardHeader className="grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 pr-2 pl-1">
               <CardTitle className="relative min-w-0 pl-8 leading-tight [overflow-wrap:anywhere] break-words">
                 <div className="min-w-0">
-                  {artifactDisplayName(file, manifests, getFileName)}
+                  {artifactDisplayName(clickTarget, manifests, getFileName)}
                 </div>
                 <div className="absolute top-2 -left-0.5">
                   {manifest ? (

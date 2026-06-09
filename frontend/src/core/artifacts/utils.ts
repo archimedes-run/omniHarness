@@ -76,7 +76,7 @@ export function normalizeArtifactEntries(entries: string[]) {
   return normalized;
 }
 
-function normalizeArtifactPath(path: string) {
+export function normalizeArtifactPath(path: string) {
   return path.replace(/\/+/g, "/").replace(/\/$/, "");
 }
 
