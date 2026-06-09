@@ -11,6 +11,8 @@ from app.gateway.auth_middleware import AuthMiddleware
 from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CSRFMiddleware
 from app.gateway.deps import langgraph_runtime
+from app.gateway.logging_filters import install_preview_token_log_filter
+from app.gateway.preview_sessions import PreviewSessionManager
 from app.gateway.routers import (
     agents,
     artifacts,
@@ -22,6 +24,7 @@ from app.gateway.routers import (
     memory,
     models,
     openclaw_webhook,
+    previews,
     runs,
     skills,
     suggestions,
@@ -41,6 +44,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+install_preview_token_log_filter()
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +182,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize LangGraph runtime components (StreamBridge, RunManager, checkpointer, store)
     async with langgraph_runtime(app):
         logger.info("LangGraph runtime initialised")
+        app.state.preview_session_manager = PreviewSessionManager()
+        app.state.preview_session_manager.start()
 
         # Ensure admin user exists (auto-create on first boot)
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration
@@ -209,6 +215,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
         except Exception:
             logger.exception("Failed to stop channel service")
+
+        preview_session_manager = getattr(app.state, "preview_session_manager", None)
+        if preview_session_manager is not None:
+            try:
+                await asyncio.wait_for(
+                    preview_session_manager.close(),
+                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Preview session manager shutdown exceeded %.1fs; proceeding with worker exit.",
+                    _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                logger.exception("Failed to stop preview session manager")
 
     logger.info("Shutting down API Gateway")
 
@@ -343,6 +364,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)
+
+    # Preview sessions API is mounted at /api/threads/{thread_id}/previews
+    app.include_router(previews.router)
 
     # Uploads API is mounted at /api/threads/{thread_id}/uploads
     app.include_router(uploads.router)

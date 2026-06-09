@@ -198,6 +198,14 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
     """
     from app.gateway.deps import get_thread_store
 
+    # Stop any live preview sessions before cleaning up thread data.
+    preview_session_manager = getattr(request.app.state, "preview_session_manager", None)
+    if preview_session_manager is not None:
+        try:
+            await preview_session_manager.stop_thread_sessions(thread_id=thread_id)
+        except Exception:
+            logger.debug("Could not stop preview sessions for %s (not critical)", sanitize_log_param(thread_id))
+
     # Clean local filesystem
     response = _delete_thread_data(thread_id, user_id=get_effective_user_id())
 

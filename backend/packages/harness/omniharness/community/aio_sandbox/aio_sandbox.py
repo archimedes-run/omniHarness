@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import shlex
 import threading
@@ -53,6 +54,7 @@ class AioSandbox(Sandbox):
     # output are not prematurely terminated by the sandbox's built-in 120 s
     # default.
     _DEFAULT_NO_CHANGE_TIMEOUT = 600
+    _DEFAULT_PREVIEW_FETCH_TIMEOUT = 30
 
     def execute_command(self, command: str) -> str:
         """Execute a shell command in the sandbox.
@@ -236,3 +238,147 @@ class AioSandbox(Sandbox):
             except Exception as e:
                 logger.error(f"Failed to update file in sandbox: {e}")
                 raise
+
+    def create_shell_session(
+        self,
+        *,
+        session_id: str,
+        exec_dir: str,
+        no_change_timeout: int = 24 * 60 * 60,
+        preserve_symlinks: bool = True,
+    ) -> str:
+        """Create or reconnect to a dedicated shell session."""
+        result = self._client.shell.create_session(
+            id=session_id,
+            exec_dir=exec_dir,
+            no_change_timeout=no_change_timeout,
+            preserve_symlinks=preserve_symlinks,
+        )
+        if not result.data:
+            raise RuntimeError("Failed to create sandbox shell session")
+        return result.data.session_id
+
+    def start_shell_command(
+        self,
+        *,
+        session_id: str,
+        command: str,
+        exec_dir: str,
+        no_change_timeout: int = 24 * 60 * 60,
+        hard_timeout: float | None = None,
+    ) -> dict:
+        """Start a long-running command in an existing shell session."""
+        result = self._client.shell.exec_command(
+            id=session_id,
+            command=command,
+            exec_dir=exec_dir,
+            async_mode=True,
+            no_change_timeout=no_change_timeout,
+            hard_timeout=hard_timeout,
+            preserve_symlinks=True,
+            truncate=False,
+        )
+        if not result.data:
+            raise RuntimeError("Sandbox did not return shell command status")
+        return {
+            "session_id": result.data.session_id,
+            "status": result.data.status,
+            "output": result.data.output or "",
+            "exit_code": result.data.exit_code,
+            "command": result.data.command,
+        }
+
+    def view_shell_session(self, session_id: str) -> dict:
+        """Return the current output and status of a shell session."""
+        result = self._client.shell.view(id=session_id)
+        if not result.data:
+            raise RuntimeError("Sandbox did not return shell session output")
+        return {
+            "session_id": result.data.session_id,
+            "status": result.data.status,
+            "output": result.data.output,
+            "exit_code": result.data.exit_code,
+            "command": result.data.command,
+        }
+
+    def kill_shell_session(self, session_id: str) -> None:
+        """Terminate the process attached to a shell session, if any."""
+        self._client.shell.kill_process(id=session_id)
+
+    def cleanup_shell_session(self, session_id: str) -> None:
+        """Remove a shell session from the sandbox runtime."""
+        self._client.shell.cleanup_session(session_id)
+
+    def fetch_local_url(
+        self,
+        *,
+        port: int,
+        path: str,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = _DEFAULT_PREVIEW_FETCH_TIMEOUT,
+    ) -> dict:
+        """Fetch a localhost HTTP endpoint from inside the sandbox.
+
+        This is used by preview-session proxying for dev servers that only bind
+        inside the sandbox container.
+        """
+        request_payload = {
+            "url": f"http://127.0.0.1:{port}{path}",
+            "method": method,
+            "headers": headers or {},
+            "bodyBase64": base64.b64encode(body).decode("ascii") if body else "",
+        }
+        encoded_payload = base64.b64encode(json.dumps(request_payload, separators=(",", ":")).encode("utf-8")).decode("ascii")
+        code = f"""
+const payload = JSON.parse(Buffer.from("{encoded_payload}", "base64").toString("utf8"));
+const body = payload.bodyBase64 ? Buffer.from(payload.bodyBase64, "base64") : undefined;
+try {{
+  const response = await fetch(payload.url, {{
+    method: payload.method,
+    headers: payload.headers,
+    body,
+    redirect: "manual",
+  }});
+  const headers = {{}};
+  response.headers.forEach((value, key) => {{
+    headers[key] = value;
+  }});
+  const buffer = Buffer.from(await response.arrayBuffer());
+  process.stdout.write(JSON.stringify({{
+    ok: true,
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    bodyBase64: buffer.toString("base64"),
+  }}));
+}} catch (error) {{
+  process.stdout.write(JSON.stringify({{
+    ok: false,
+    error: error instanceof Error ? error.message : String(error),
+  }}));
+}}
+""".strip()
+        result = self._client.nodejs.execute_code(
+            code=code,
+            timeout=timeout,
+        )
+        data = result.data
+        if data is None:
+            raise RuntimeError("Sandbox returned no response for local fetch")
+        if data.status != "ok":
+            raise RuntimeError(data.stderr or data.stdout or "Sandbox local fetch failed")
+        stdout = (data.stdout or "").strip()
+        if not stdout:
+            raise RuntimeError("Sandbox local fetch returned empty output")
+        payload = json.loads(stdout)
+        if not payload.get("ok"):
+            raise RuntimeError(str(payload.get("error") or "Sandbox local fetch failed"))
+        body_base64 = payload.get("bodyBase64", "")
+        return {
+            "status": int(payload["status"]),
+            "status_text": payload.get("statusText") or "",
+            "headers": payload.get("headers") or {},
+            "body": base64.b64decode(body_base64) if body_base64 else b"",
+        }

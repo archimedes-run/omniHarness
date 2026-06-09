@@ -1,12 +1,20 @@
+import json
 import logging
 import mimetypes
+import posixpath
+import re
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote
 
+import jwt
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from app.gateway.auth.config import get_auth_config
 from app.gateway.authz import require_permission
 from app.gateway.path_utils import resolve_thread_virtual_path
 from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
@@ -46,7 +54,7 @@ PREVIEW_SECURITY_HEADERS = {
         "connect-src 'self'; "
         "media-src 'self' data: blob:; "
         "frame-ancestors 'self'; "
-        "base-uri 'none'; "
+        "base-uri 'self'; "
         "form-action 'none'"
     ),
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -54,6 +62,116 @@ PREVIEW_SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
 }
+
+PREVIEW_TOKEN_ASSET_HEADERS = {
+    "Cache-Control": "no-store",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+}
+
+PREVIEW_TOKEN_TYPE = "artifact_preview"
+PREVIEW_TOKEN_TTL_SECONDS = 10 * 60
+MANIFEST_FILENAME = "artifact_manifest.json"
+
+_HEAD_TAG_RE = re.compile(r"<head(?P<attrs>[^>]*)>", re.IGNORECASE)
+_MANIFEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_ROOT_RELATIVE_ATTR_RE = re.compile(
+    r"(?P<prefix>\b(?:href|src|poster)\s*=\s*[\"'])(?P<url>/(?!/)[^\"']*)(?P<suffix>[\"'])",
+    re.IGNORECASE,
+)
+
+
+class ArtifactManifestPreview(BaseModel):
+    mode: Literal["static", "dev_server"] = "static"
+    command: str | None = None
+    port: int | None = None
+
+    @model_validator(mode="after")
+    def validate_preview(self):
+        if self.mode == "static":
+            return self
+        if not self.command or not self.command.strip():
+            raise ValueError("preview.command is required for dev_server previews")
+        if self.port is not None and not (1 <= self.port <= 65535):
+            raise ValueError("preview.port must be between 1 and 65535")
+        return self
+
+
+class ArtifactManifest(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=200)
+    type: Literal["static_site", "web_app"]
+    entrypoint: str | None = Field(default=None, min_length=1, max_length=512)
+    root: str = Field(default=".", min_length=1, max_length=512)
+    source_path: str | None = None
+    preview: ArtifactManifestPreview = Field(default_factory=ArtifactManifestPreview)
+    created_by: str | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if not _MANIFEST_ID_RE.fullmatch(value):
+            raise ValueError("id must be a safe artifact identifier")
+        return value
+
+    @field_validator("root")
+    @classmethod
+    def validate_root(cls, value: str) -> str:
+        return _validate_relative_manifest_path(value, field_name="root", allow_dot=True)
+
+    @field_validator("entrypoint")
+    @classmethod
+    def validate_entrypoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_relative_manifest_path(value, field_name="entrypoint", allow_dot=False)
+
+    @model_validator(mode="after")
+    def validate_manifest(self):
+        if self.type == "static_site":
+            if self.preview.mode != "static":
+                raise ValueError("static_site manifests must use preview.mode=static")
+            if not self.entrypoint:
+                raise ValueError("entrypoint is required for static_site manifests")
+        else:
+            if self.preview.mode != "dev_server":
+                raise ValueError("web_app manifests must use preview.mode=dev_server")
+            if not self.source_path:
+                raise ValueError("source_path is required for web_app manifests")
+        return self
+
+
+class ArtifactManifestResponse(ArtifactManifest):
+    manifest_path: str
+    root_path: str
+    entrypoint_path: str | None = None
+
+
+class ArtifactManifestListResponse(BaseModel):
+    manifests: list[ArtifactManifestResponse]
+
+
+def _validate_relative_manifest_path(value: str, *, field_name: str, allow_dot: bool) -> str:
+    if "\x00" in value or "\\" in value:
+        raise ValueError(f"{field_name} must be a POSIX relative path")
+    if value.startswith("/"):
+        raise ValueError(f"{field_name} must be relative")
+    raw_parts = value.split("/")
+    if any(part in ("", "..") or (part == "." and value != ".") for part in raw_parts):
+        raise ValueError(f"{field_name} must not contain traversal segments")
+
+    normalized = posixpath.normpath(value)
+    if normalized == ".":
+        if allow_dot:
+            return "."
+        raise ValueError(f"{field_name} must reference a file")
+
+    parts = normalized.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"{field_name} must not contain traversal segments")
+
+    return normalized
 
 
 def _build_content_disposition(disposition_type: str, filename: str) -> str:
@@ -88,9 +206,9 @@ def _normalize_preview_virtual_path(path: str) -> str:
     raise HTTPException(status_code=403, detail="Preview path must be under /mnt/user-data/outputs")
 
 
-def _resolve_preview_path(thread_id: str, artifact_path: str) -> Path:
+def _resolve_preview_path(thread_id: str, artifact_path: str, *, user_id: str | None = None) -> Path:
     virtual_path = _normalize_preview_virtual_path(artifact_path)
-    user_id = get_effective_user_id()
+    user_id = user_id or get_effective_user_id()
     paths = get_paths()
 
     try:
@@ -109,6 +227,187 @@ def _resolve_preview_path(thread_id: str, artifact_path: str) -> Path:
     return actual_path
 
 
+def _ensure_path_inside(path: Path, root: Path, *, detail: str) -> None:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail=detail)
+
+
+def _virtual_outputs_path(outputs_dir: Path, actual_path: Path) -> str:
+    relative = actual_path.relative_to(outputs_dir).as_posix()
+    return f"{VIRTUAL_PATH_PREFIX}/outputs/{relative}"
+
+
+def _read_manifest_data(manifest_path: Path) -> dict:
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid artifact manifest JSON: {e.msg}")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Artifact manifest must be a JSON object")
+    return data
+
+
+def _manifest_validation_error(exc: ValidationError) -> HTTPException:
+    details = "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())
+    return HTTPException(status_code=422, detail=f"Invalid artifact manifest: {details}")
+
+
+def _load_artifact_manifest(manifest_path: Path, *, outputs_dir: Path) -> ArtifactManifestResponse:
+    outputs_dir = outputs_dir.resolve()
+    resolved_manifest_path = manifest_path.resolve()
+    _ensure_path_inside(
+        resolved_manifest_path,
+        outputs_dir,
+        detail="Artifact manifest must stay inside thread outputs",
+    )
+    if not resolved_manifest_path.is_file():
+        raise HTTPException(status_code=422, detail="Artifact manifest path is not a file")
+
+    data = _read_manifest_data(resolved_manifest_path)
+    try:
+        manifest = ArtifactManifest.model_validate(data)
+    except ValidationError as exc:
+        raise _manifest_validation_error(exc)
+
+    manifest_dir = resolved_manifest_path.parent
+    root_path = (manifest_dir / manifest.root).resolve()
+    _ensure_path_inside(root_path, outputs_dir, detail="Artifact manifest root must stay inside thread outputs")
+    if not root_path.is_dir():
+        raise HTTPException(status_code=422, detail="Artifact manifest root is not a directory")
+
+    entrypoint_path: Path | None = None
+    if manifest.entrypoint is not None:
+        entrypoint_path = (root_path / manifest.entrypoint).resolve()
+        _ensure_path_inside(
+            entrypoint_path,
+            outputs_dir,
+            detail="Artifact manifest entrypoint must stay inside thread outputs",
+        )
+        _ensure_path_inside(
+            entrypoint_path,
+            root_path,
+            detail="Artifact manifest entrypoint must stay inside manifest root",
+        )
+        if not entrypoint_path.is_file():
+            raise HTTPException(status_code=422, detail="Artifact manifest entrypoint is not a file")
+
+    return ArtifactManifestResponse(
+        **manifest.model_dump(),
+        manifest_path=_virtual_outputs_path(outputs_dir, resolved_manifest_path),
+        root_path=_virtual_outputs_path(outputs_dir, root_path),
+        entrypoint_path=_virtual_outputs_path(outputs_dir, entrypoint_path) if entrypoint_path is not None else None,
+    )
+
+
+def _iter_manifest_paths(outputs_dir: Path):
+    if not outputs_dir.exists():
+        return
+    yield from outputs_dir.rglob(MANIFEST_FILENAME)
+
+
+def _manifest_matches_artifact_id(manifest_path: Path, artifact_id: str) -> bool:
+    if manifest_path.parent.name == artifact_id:
+        return True
+    try:
+        data = _read_manifest_data(manifest_path.resolve())
+    except HTTPException:
+        return False
+    return data.get("id") == artifact_id
+
+
+def _get_outputs_dir(thread_id: str, *, user_id: str | None = None) -> Path:
+    return get_paths().sandbox_outputs_dir(thread_id, user_id=user_id or get_effective_user_id()).resolve()
+
+
+def _preview_virtual_parent(path: str) -> str:
+    virtual_path = _normalize_preview_virtual_path(path)
+    parent = virtual_path.rsplit("/", 1)[0]
+    return parent if parent else f"{VIRTUAL_PATH_PREFIX}/outputs"
+
+
+def _is_preview_path_inside_root(path: str, root: str) -> bool:
+    normalized_path = _normalize_preview_virtual_path(path).rstrip("/")
+    normalized_root = _normalize_preview_virtual_path(root).rstrip("/")
+    return normalized_path == normalized_root or normalized_path.startswith(normalized_root + "/")
+
+
+def _preview_token_path(thread_id: str, token: str, virtual_path: str) -> str:
+    return f"/api/threads/{quote(thread_id, safe='')}/artifacts/preview-token/{quote(token, safe='')}{virtual_path}"
+
+
+def _create_preview_token(thread_id: str, user_id: str, root_virtual_path: str) -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "typ": PREVIEW_TOKEN_TYPE,
+        "sub": user_id,
+        "tid": thread_id,
+        "root": _normalize_preview_virtual_path(root_virtual_path).rstrip("/"),
+        "iat": now,
+        "exp": now + timedelta(seconds=PREVIEW_TOKEN_TTL_SECONDS),
+    }
+    return jwt.encode(payload, get_auth_config().jwt_secret, algorithm="HS256")
+
+
+def _decode_preview_token(token: str) -> dict[str, str]:
+    try:
+        payload = jwt.decode(token, get_auth_config().jwt_secret, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Preview token expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid preview token")
+
+    if payload.get("typ") != PREVIEW_TOKEN_TYPE:
+        raise HTTPException(status_code=401, detail="Invalid preview token")
+
+    user_id = payload.get("sub")
+    thread_id = payload.get("tid")
+    root = payload.get("root")
+    if not isinstance(user_id, str) or not isinstance(thread_id, str) or not isinstance(root, str):
+        raise HTTPException(status_code=401, detail="Invalid preview token")
+
+    return {
+        "user_id": user_id,
+        "thread_id": thread_id,
+        "root": _normalize_preview_virtual_path(root).rstrip("/"),
+    }
+
+
+def _rewrite_root_relative_preview_url(match: re.Match[str], *, thread_id: str, token: str, root_virtual_path: str) -> str:
+    url = match.group("url")
+    target_virtual_path = f"{root_virtual_path.rstrip('/')}{url}"
+    return f"{match.group('prefix')}{_preview_token_path(thread_id, token, target_virtual_path)}{match.group('suffix')}"
+
+
+def _rewrite_preview_html(
+    html: str,
+    *,
+    thread_id: str,
+    token: str,
+    current_virtual_dir: str,
+    root_virtual_path: str,
+) -> str:
+    base_href = _preview_token_path(thread_id, token, current_virtual_dir.rstrip("/") + "/")
+    base_tag = f'<base href="{base_href}">'
+
+    rewritten = _ROOT_RELATIVE_ATTR_RE.sub(
+        lambda match: _rewrite_root_relative_preview_url(
+            match,
+            thread_id=thread_id,
+            token=token,
+            root_virtual_path=root_virtual_path,
+        ),
+        html,
+    )
+
+    if _HEAD_TAG_RE.search(rewritten):
+        return _HEAD_TAG_RE.sub(lambda match: f"{match.group(0)}{base_tag}", rewritten, count=1)
+
+    return f"{base_tag}{rewritten}"
+
+
 def _preview_media_type(path: Path) -> str | None:
     mime_type, _ = mimetypes.guess_type(path)
     if mime_type == "application/x-javascript":
@@ -116,6 +415,63 @@ def _preview_media_type(path: Path) -> str | None:
     if mime_type in PREVIEW_MIME_TYPES:
         return mime_type
     return None
+
+
+def _preview_headers_for(filename: str, media_type: str, *, is_token_route: bool) -> dict[str, str]:
+    if is_token_route and media_type != "text/html":
+        return _build_inline_headers(filename, PREVIEW_TOKEN_ASSET_HEADERS)
+    return _build_inline_headers(filename, PREVIEW_SECURITY_HEADERS)
+
+
+def _build_preview_response(
+    thread_id: str,
+    artifact_path: str,
+    request: Request,
+    *,
+    user_id: str,
+    preview_token: str | None = None,
+    preview_root: str | None = None,
+) -> Response:
+    actual_path = _resolve_preview_path(thread_id, artifact_path, user_id=user_id)
+
+    logger.info(
+        "Resolving artifact preview path: thread_id=%s, requested_path=%s, actual_path=%s",
+        thread_id,
+        artifact_path,
+        actual_path,
+    )
+
+    if not actual_path.exists():
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_path}")
+
+    if not actual_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {artifact_path}")
+
+    media_type = _preview_media_type(actual_path)
+    if media_type is None:
+        raise HTTPException(status_code=415, detail="Artifact type is not supported for preview")
+
+    headers = _preview_headers_for(actual_path.name, media_type, is_token_route=preview_token is not None)
+
+    if media_type == "text/html":
+        root_virtual_path = preview_root or _preview_virtual_parent(artifact_path)
+        token = preview_token or _create_preview_token(thread_id, user_id, root_virtual_path)
+        html = actual_path.read_text(encoding="utf-8", errors="replace")
+        rewritten_html = _rewrite_preview_html(
+            html,
+            thread_id=thread_id,
+            token=token,
+            current_virtual_dir=_preview_virtual_parent(artifact_path),
+            root_virtual_path=root_virtual_path,
+        )
+        return Response(content=rewritten_html, media_type=media_type, headers=headers)
+
+    return FileResponse(
+        path=actual_path,
+        filename=actual_path.name,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 def is_text_file_by_content(path: Path, sample_size: int = 8192) -> bool:
@@ -175,31 +531,76 @@ async def preview_artifact(thread_id: str, artifact_path: str, request: Request)
     it only serves files under ``/mnt/user-data/outputs`` and allows a narrow
     set of static web asset types inline with iframe-oriented security headers.
     """
-    actual_path = _resolve_preview_path(thread_id, artifact_path)
-
-    logger.info(
-        "Resolving artifact preview path: thread_id=%s, requested_path=%s, actual_path=%s",
+    return _build_preview_response(
         thread_id,
         artifact_path,
-        actual_path,
+        request,
+        user_id=get_effective_user_id(),
     )
 
-    if not actual_path.exists():
-        raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_path}")
 
-    if not actual_path.is_file():
-        raise HTTPException(status_code=400, detail=f"Path is not a file: {artifact_path}")
+@router.get(
+    "/threads/{thread_id}/artifacts/preview-token/{token}/{artifact_path:path}",
+    summary="Preview Artifact File With Token",
+    description="Serve nested static preview assets using a short-lived token minted by the main preview route.",
+)
+async def preview_artifact_with_token(thread_id: str, token: str, artifact_path: str, request: Request) -> Response:
+    payload = _decode_preview_token(token)
+    if payload["thread_id"] != thread_id:
+        raise HTTPException(status_code=403, detail="Preview token does not match thread")
 
-    media_type = _preview_media_type(actual_path)
-    if media_type is None:
-        raise HTTPException(status_code=415, detail="Artifact type is not supported for preview")
+    if not _is_preview_path_inside_root(artifact_path, payload["root"]):
+        raise HTTPException(status_code=403, detail="Preview token does not allow this path")
 
-    return FileResponse(
-        path=actual_path,
-        filename=actual_path.name,
-        media_type=media_type,
-        headers=_build_inline_headers(actual_path.name, PREVIEW_SECURITY_HEADERS),
+    return _build_preview_response(
+        thread_id,
+        artifact_path,
+        request,
+        user_id=payload["user_id"],
+        preview_token=token,
+        preview_root=payload["root"],
     )
+
+
+@router.get(
+    "/threads/{thread_id}/artifacts/manifests",
+    summary="List Artifact Manifests",
+    description="List validated project artifact manifests under a thread's outputs directory.",
+)
+@require_permission("threads", "read", owner_check=True)
+async def list_artifact_manifests(thread_id: str, request: Request) -> ArtifactManifestListResponse:
+    outputs_dir = _get_outputs_dir(thread_id)
+    manifests: list[ArtifactManifestResponse] = []
+    for manifest_path in _iter_manifest_paths(outputs_dir):
+        try:
+            manifests.append(_load_artifact_manifest(manifest_path, outputs_dir=outputs_dir))
+        except HTTPException as exc:
+            logger.warning(
+                "Skipping invalid artifact manifest: thread_id=%s, manifest_path=%s, status=%s, detail=%s",
+                thread_id,
+                manifest_path,
+                exc.status_code,
+                exc.detail,
+            )
+
+    manifests.sort(key=lambda manifest: manifest.title.casefold())
+    return ArtifactManifestListResponse(manifests=manifests)
+
+
+@router.get(
+    "/threads/{thread_id}/artifacts/manifests/{artifact_id}",
+    summary="Get Artifact Manifest",
+    description="Get a validated project artifact manifest by id.",
+)
+@require_permission("threads", "read", owner_check=True)
+async def get_artifact_manifest(thread_id: str, artifact_id: str, request: Request) -> ArtifactManifestResponse:
+    outputs_dir = _get_outputs_dir(thread_id)
+    for manifest_path in _iter_manifest_paths(outputs_dir):
+        if not _manifest_matches_artifact_id(manifest_path, artifact_id):
+            continue
+        return _load_artifact_manifest(manifest_path, outputs_dir=outputs_dir)
+
+    raise HTTPException(status_code=404, detail=f"Artifact manifest not found: {artifact_id}")
 
 
 @router.get(

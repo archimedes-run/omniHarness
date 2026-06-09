@@ -29,3 +29,17 @@ def test_bundled_skill_frontmatter_is_valid(skill_dir: Path) -> None:
 
 def test_skills_public_dir_has_skills() -> None:
     assert BUNDLED_SKILL_DIRS, f"no SKILL.md found under {SKILLS_PUBLIC_DIR}"
+
+
+def test_web_app_builder_skill_is_bundled_and_manifest_aware() -> None:
+    skill_dir = SKILLS_PUBLIC_DIR / "web-app-builder"
+    valid, msg, name = _validate_skill_frontmatter(skill_dir)
+
+    assert valid, msg
+    assert name == "web-app-builder"
+    content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert "artifact_manifest.json" in content
+    assert "/mnt/user-data/outputs/<artifact_id>" in content
+    assert "Artifact Canvas" in content
+    assert "preview.mode" in content
+    assert "dev_server" in content

@@ -1,0 +1,668 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Literal
+
+from fastapi import HTTPException, Request
+from fastapi.responses import Response
+from pydantic import BaseModel, Field, field_validator
+
+from omniharness.community.aio_sandbox.aio_sandbox import AioSandbox
+from omniharness.community.aio_sandbox.aio_sandbox_provider import (
+    AioSandboxProvider,
+)
+from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
+from omniharness.sandbox.sandbox_provider import get_sandbox_provider
+
+logger = logging.getLogger(__name__)
+
+PreviewSessionStatus = Literal["starting", "running", "failed", "stopped"]
+
+_ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_HTML_HEAD_RE = re.compile(r"<head(?P<attrs>[^>]*)>", re.IGNORECASE)
+_HTML_ROOT_RELATIVE_ATTR_RE = re.compile(
+    r"(?P<prefix>\b(?:href|src|poster|action)\s*=\s*[\"'])(?P<url>/(?!/)[^\"']*)(?P<suffix>[\"'])",
+    re.IGNORECASE,
+)
+_PORT_PATTERNS = (
+    re.compile(r"https?://(?:127\.0\.0\.1|0\.0\.0\.0|localhost):(?P<port>\d{2,5})", re.IGNORECASE),
+    re.compile(r"\b(?:ready on|listening on|local:|network:)\D+(?P<port>\d{2,5})", re.IGNORECASE),
+)
+
+_WORKSPACE_PREFIX = f"{VIRTUAL_PATH_PREFIX}/workspace"
+_DEFAULT_IDLE_TIMEOUT_SECONDS = 15 * 60
+_CLEANUP_INTERVAL_SECONDS = 30
+_MIN_ALLOWED_PORT = 1024
+_MAX_ALLOWED_PORT = 65535
+_NO_CHANGE_TIMEOUT_SECONDS = 24 * 60 * 60
+_HOP_BY_HOP_REQUEST_HEADERS = {
+    "accept-encoding",
+    "connection",
+    "content-length",
+    "cookie",
+    "host",
+    "transfer-encoding",
+}
+_HOP_BY_HOP_RESPONSE_HEADERS = {
+    "connection",
+    "content-encoding",
+    "content-length",
+    "set-cookie",
+    "transfer-encoding",
+}
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def _isoformat(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _normalize_workspace_virtual_path(path: str) -> str:
+    stripped = path.strip().rstrip("/")
+    if not stripped:
+        raise HTTPException(status_code=422, detail="root_path is required")
+
+    normalized = stripped
+    if normalized.startswith("/"):
+        normalized = normalized
+    elif normalized == "workspace" or normalized.startswith("workspace/"):
+        normalized = f"{VIRTUAL_PATH_PREFIX}/{normalized}"
+    elif normalized == _WORKSPACE_PREFIX.lstrip("/") or normalized.startswith(_WORKSPACE_PREFIX.lstrip("/") + "/"):
+        normalized = f"/{normalized}"
+
+    if normalized != _WORKSPACE_PREFIX and not normalized.startswith(_WORKSPACE_PREFIX + "/"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"root_path must stay under {_WORKSPACE_PREFIX}",
+        )
+
+    return normalized
+
+
+def _ensure_workspace_root(
+    *,
+    thread_id: str,
+    user_id: str,
+    virtual_path: str,
+) -> Path:
+    paths = get_paths()
+    actual_path = paths.resolve_virtual_path(thread_id, virtual_path, user_id=user_id)
+    workspace_root = paths.sandbox_work_dir(thread_id, user_id=user_id).resolve()
+
+    try:
+        actual_path.relative_to(workspace_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"root_path must stay under {_WORKSPACE_PREFIX}",
+        ) from exc
+
+    if not actual_path.exists() or not actual_path.is_dir():
+        raise HTTPException(status_code=422, detail="root_path must reference an existing directory")
+
+    return actual_path
+
+
+def _validate_command(command: str) -> str:
+    normalized = command.strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="command is required")
+    if "\x00" in normalized:
+        raise HTTPException(status_code=422, detail="command contains invalid characters")
+    return normalized
+
+
+def _validate_port(port: int | None) -> int:
+    if port is None:
+        return 0
+    if not (_MIN_ALLOWED_PORT <= port <= _MAX_ALLOWED_PORT):
+        raise HTTPException(
+            status_code=422,
+            detail=f"port must be between {_MIN_ALLOWED_PORT} and {_MAX_ALLOWED_PORT}",
+        )
+    return port
+
+
+def _detect_port(output: str) -> int | None:
+    for pattern in _PORT_PATTERNS:
+        match = pattern.search(output)
+        if not match:
+            continue
+        try:
+            port = int(match.group("port"))
+        except (TypeError, ValueError):
+            continue
+        if _MIN_ALLOWED_PORT <= port <= _MAX_ALLOWED_PORT:
+            return port
+    return None
+
+
+def _rewrite_proxy_location(location: str, proxy_root: str, port: int) -> str:
+    for prefix in (
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
+        f"http://0.0.0.0:{port}",
+        f"https://127.0.0.1:{port}",
+        f"https://localhost:{port}",
+        f"https://0.0.0.0:{port}",
+    ):
+        if location.startswith(prefix):
+            suffix = location[len(prefix) :]
+            return f"{proxy_root}{suffix or '/'}"
+    if location.startswith("/"):
+        return f"{proxy_root}{location}"
+    return location
+
+
+def _rewrite_root_relative_html_urls(html: str, proxy_root: str) -> str:
+    return _HTML_ROOT_RELATIVE_ATTR_RE.sub(
+        lambda match: f"{match.group('prefix')}{proxy_root}{match.group('url')}{match.group('suffix')}",
+        html,
+    )
+
+
+def _preview_html_shim(proxy_root: str) -> str:
+    proxy_root_json = json.dumps(proxy_root)
+    return (
+        "<script>"
+        "(function(){"
+        f"const proxyRoot={proxy_root_json};"
+        "const rewrite=function(value){"
+        "if(typeof value!=='string'||!value||value.startsWith('//')||!value.startsWith('/')) return value;"
+        "if(value===proxyRoot||value.startsWith(proxyRoot+'/')) return value;"
+        "return proxyRoot+value;"
+        "};"
+        "const originalFetch=window.fetch.bind(window);"
+        "window.fetch=function(input,init){"
+        "if(typeof input==='string'){return originalFetch(rewrite(input),init);}"
+        "if(input instanceof URL){return originalFetch(new URL(rewrite(input.pathname+input.search+input.hash),window.location.origin),init);}"
+        "if(input instanceof Request){const url=new URL(input.url);const rewritten=rewrite(url.pathname+url.search+url.hash);if(rewritten!==url.pathname+url.search+url.hash){input=new Request(window.location.origin+rewritten,input);}}"
+        "return originalFetch(input,init);"
+        "};"
+        "const originalOpen=XMLHttpRequest.prototype.open;"
+        "XMLHttpRequest.prototype.open=function(method,url){if(typeof url==='string'){arguments[1]=rewrite(url);}return originalOpen.apply(this,arguments);};"
+        "const patchHistory=function(name){const original=history[name].bind(history);history[name]=function(state,title,url){if(typeof url==='string'){url=rewrite(url);}return original(state,title,url);};};"
+        "patchHistory('pushState');"
+        "patchHistory('replaceState');"
+        "window.__OMNI_HARNESS_PREVIEW_PROXY_ROOT__=proxyRoot;"
+        "})();"
+        "</script>"
+    )
+
+
+def _inject_preview_shim(html: str, proxy_root: str) -> str:
+    base_tag = f'<base href="{proxy_root}/">'
+    shim = _preview_html_shim(proxy_root)
+    rewritten = _rewrite_root_relative_html_urls(html, proxy_root)
+    if _HTML_HEAD_RE.search(rewritten):
+        return _HTML_HEAD_RE.sub(lambda match: f"{match.group(0)}{base_tag}{shim}", rewritten, count=1)
+    return f"{base_tag}{shim}{rewritten}"
+
+
+def _sanitize_proxy_request_headers(request: Request) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for key, value in request.headers.items():
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_REQUEST_HEADERS or lowered.startswith("x-forwarded-"):
+            continue
+        headers[key] = value
+    return headers
+
+
+def _sanitize_proxy_response_headers(headers: dict[str, str], *, proxy_root: str, port: int) -> dict[str, str]:
+    sanitized: dict[str, str] = {}
+    for key, value in headers.items():
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_RESPONSE_HEADERS:
+            continue
+        if lowered == "location":
+            sanitized[key] = _rewrite_proxy_location(value, proxy_root, port)
+            continue
+        sanitized[key] = value
+    return sanitized
+
+
+class PreviewSessionCreateRequest(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=128)
+    root_path: str = Field(min_length=1, max_length=512)
+    command: str = Field(min_length=1, max_length=4096)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+    @field_validator("artifact_id")
+    @classmethod
+    def validate_artifact_id(cls, value: str) -> str:
+        if not _ARTIFACT_ID_RE.fullmatch(value):
+            raise ValueError("artifact_id must be a safe artifact identifier")
+        return value
+
+
+class PreviewSessionResponse(BaseModel):
+    id: str
+    user_id: str
+    thread_id: str
+    artifact_id: str
+    root_path: str
+    command: str
+    port: int | None = None
+    status: PreviewSessionStatus
+    proxy_url: str
+    logs_url: str
+    created_at: str
+    updated_at: str
+    expires_at: str
+    exit_code: int | None = None
+    error: str | None = None
+
+
+class PreviewSessionLogsResponse(BaseModel):
+    preview_id: str
+    thread_id: str
+    status: PreviewSessionStatus
+    logs: str
+    exit_code: int | None = None
+    error: str | None = None
+
+
+@dataclass
+class _PreviewSessionRecord:
+    id: str
+    user_id: str
+    thread_id: str
+    artifact_id: str
+    root_path: str
+    command: str
+    port: int
+    sandbox_id: str
+    shell_session_id: str
+    status: PreviewSessionStatus
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime
+    exit_code: int | None = None
+    error: str | None = None
+
+    def proxy_url(self) -> str:
+        return f"/api/threads/{self.thread_id}/previews/{self.id}/proxy"
+
+    def logs_url(self) -> str:
+        return f"/api/threads/{self.thread_id}/previews/{self.id}/logs"
+
+    def to_response(self) -> PreviewSessionResponse:
+        return PreviewSessionResponse(
+            id=self.id,
+            user_id=self.user_id,
+            thread_id=self.thread_id,
+            artifact_id=self.artifact_id,
+            root_path=self.root_path,
+            command=self.command,
+            port=self.port or None,
+            status=self.status,
+            proxy_url=self.proxy_url(),
+            logs_url=self.logs_url(),
+            created_at=_isoformat(self.created_at),
+            updated_at=_isoformat(self.updated_at),
+            expires_at=_isoformat(self.expires_at),
+            exit_code=self.exit_code,
+            error=self.error,
+        )
+
+
+class PreviewSessionManager:
+    def __init__(self, *, idle_timeout_seconds: int = _DEFAULT_IDLE_TIMEOUT_SECONDS) -> None:
+        self._idle_timeout_seconds = idle_timeout_seconds
+        self._sessions: dict[str, _PreviewSessionRecord] = {}
+        self._cleanup_task: asyncio.Task[None] | None = None
+        self._closed = False
+
+    def start(self) -> None:
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+
+    async def close(self) -> None:
+        self._closed = True
+        task = self._cleanup_task
+        self._cleanup_task = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        session_ids = list(self._sessions)
+        for session_id in session_ids:
+            with contextlib.suppress(Exception):
+                await self._stop_and_cleanup_session(session_id)
+
+    async def _cleanup_loop(self) -> None:
+        try:
+            while not self._closed:
+                await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
+                await self.cleanup_expired_sessions()
+        except asyncio.CancelledError:
+            raise
+
+    async def cleanup_expired_sessions(self) -> None:
+        now = _now_utc()
+        expired_ids = [session.id for session in self._sessions.values() if session.expires_at <= now]
+        for session_id in expired_ids:
+            with contextlib.suppress(Exception):
+                await self._stop_and_cleanup_session(session_id)
+
+    async def list_sessions(self, *, user_id: str, thread_id: str) -> list[PreviewSessionResponse]:
+        await self.cleanup_expired_sessions()
+        responses: list[PreviewSessionResponse] = []
+        for session in self._sessions.values():
+            if session.user_id != user_id or session.thread_id != thread_id:
+                continue
+            await self._refresh_session(session, touch=False)
+            responses.append(session.to_response())
+        responses.sort(key=lambda item: item.created_at)
+        return responses
+
+    async def create_session(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        body: PreviewSessionCreateRequest,
+    ) -> PreviewSessionResponse:
+        root_path = _normalize_workspace_virtual_path(body.root_path)
+        _ensure_workspace_root(thread_id=thread_id, user_id=user_id, virtual_path=root_path)
+        command = _validate_command(body.command)
+        port = _validate_port(body.port)
+
+        existing = next(
+            (session for session in self._sessions.values() if session.user_id == user_id and session.thread_id == thread_id and session.artifact_id == body.artifact_id),
+            None,
+        )
+        if existing is not None and existing.status in {"running", "starting"}:
+            await self._refresh_session(existing)
+            return existing.to_response()
+
+        session = existing or self._new_session(
+            user_id=user_id,
+            thread_id=thread_id,
+            artifact_id=body.artifact_id,
+            root_path=root_path,
+            command=command,
+            port=port,
+        )
+        session.root_path = root_path
+        session.command = command
+        session.port = port
+        session.error = None
+        session.exit_code = None
+        self._sessions[session.id] = session
+
+        await self._start_session(session)
+        return session.to_response()
+
+    async def get_session(self, *, user_id: str, thread_id: str, preview_id: str) -> PreviewSessionResponse:
+        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        await self._refresh_session(session)
+        return session.to_response()
+
+    async def get_logs(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        preview_id: str,
+    ) -> PreviewSessionLogsResponse:
+        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        logs = await self._refresh_session(session)
+        return PreviewSessionLogsResponse(
+            preview_id=session.id,
+            thread_id=session.thread_id,
+            status=session.status,
+            logs=logs,
+            exit_code=session.exit_code,
+            error=session.error,
+        )
+
+    async def stop_session(self, *, user_id: str, thread_id: str, preview_id: str) -> PreviewSessionResponse:
+        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        sandbox = await self._get_sandbox_for_existing_session(session)
+        await asyncio.to_thread(sandbox.kill_shell_session, session.shell_session_id)
+        await self._refresh_session(session)
+        if session.status == "failed":
+            session.status = "stopped"
+            session.error = None
+            session.updated_at = _now_utc()
+        return session.to_response()
+
+    async def restart_session(self, *, user_id: str, thread_id: str, preview_id: str) -> PreviewSessionResponse:
+        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        await self._restart_session(session)
+        return session.to_response()
+
+    async def stop_thread_sessions(self, *, thread_id: str) -> None:
+        matching_ids = [session.id for session in self._sessions.values() if session.thread_id == thread_id]
+        for session_id in matching_ids:
+            with contextlib.suppress(Exception):
+                await self._stop_and_cleanup_session(session_id)
+
+    async def proxy_request(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        preview_id: str,
+        request: Request,
+        path: str,
+    ) -> Response:
+        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        await self._refresh_session(session)
+        if session.status == "stopped":
+            raise HTTPException(status_code=409, detail="Preview session is stopped")
+        if session.status == "failed":
+            raise HTTPException(status_code=502, detail=session.error or "Preview session failed")
+        if session.port == 0:
+            raise HTTPException(status_code=409, detail="Preview session has not exposed a port yet")
+
+        sandbox = await self._get_sandbox_for_existing_session(session)
+        proxy_path = f"/{path.lstrip('/')}" if path else "/"
+        if request.url.query:
+            proxy_path = f"{proxy_path}?{request.url.query}"
+        body = await request.body()
+        forwarded = await asyncio.to_thread(
+            sandbox.fetch_local_url,
+            port=session.port,
+            path=proxy_path,
+            method=request.method,
+            headers=_sanitize_proxy_request_headers(request),
+            body=body or None,
+        )
+
+        session.updated_at = _now_utc()
+        session.expires_at = session.updated_at + timedelta(seconds=self._idle_timeout_seconds)
+        proxy_root = session.proxy_url()
+        headers = _sanitize_proxy_response_headers(
+            dict(forwarded["headers"]),
+            proxy_root=proxy_root,
+            port=session.port,
+        )
+        payload = forwarded["body"]
+        content_type = headers.get("content-type", "")
+        if "text/html" in content_type:
+            html = payload.decode("utf-8", errors="replace")
+            payload = _inject_preview_shim(html, proxy_root).encode("utf-8")
+
+        return Response(
+            content=payload,
+            status_code=int(forwarded["status"]),
+            headers=headers,
+            media_type=None,
+        )
+
+    def _new_session(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        artifact_id: str,
+        root_path: str,
+        command: str,
+        port: int,
+    ) -> _PreviewSessionRecord:
+        now = _now_utc()
+        session_id = f"preview_{thread_id}_{artifact_id}_{now.strftime('%H%M%S%f')}"
+        return _PreviewSessionRecord(
+            id=session_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            artifact_id=artifact_id,
+            root_path=root_path,
+            command=command,
+            port=port,
+            sandbox_id="",
+            shell_session_id=session_id,
+            status="starting",
+            created_at=now,
+            updated_at=now,
+            expires_at=now + timedelta(seconds=self._idle_timeout_seconds),
+        )
+
+    def _require_session(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        preview_id: str,
+    ) -> _PreviewSessionRecord:
+        session = self._sessions.get(preview_id)
+        if session is None or session.user_id != user_id or session.thread_id != thread_id:
+            raise HTTPException(status_code=404, detail=f"Preview session not found: {preview_id}")
+        return session
+
+    async def _start_session(self, session: _PreviewSessionRecord) -> None:
+        sandbox_id, sandbox = await self._get_or_create_sandbox(thread_id=session.thread_id)
+        session.sandbox_id = sandbox_id
+        await asyncio.to_thread(
+            sandbox.create_shell_session,
+            session_id=session.shell_session_id,
+            exec_dir=session.root_path,
+            no_change_timeout=_NO_CHANGE_TIMEOUT_SECONDS,
+        )
+        result = await asyncio.to_thread(
+            sandbox.start_shell_command,
+            session_id=session.shell_session_id,
+            command=session.command,
+            exec_dir=session.root_path,
+            no_change_timeout=_NO_CHANGE_TIMEOUT_SECONDS,
+        )
+        session.status = "starting" if result["status"] == "running" else "failed"
+        session.updated_at = _now_utc()
+        session.expires_at = session.updated_at + timedelta(seconds=self._idle_timeout_seconds)
+        session.exit_code = result.get("exit_code")
+        if result["status"] != "running":
+            session.error = result.get("output") or "Preview command failed to start"
+        await self._refresh_session(session, touch=False)
+
+    async def _restart_session(self, session: _PreviewSessionRecord) -> None:
+        sandbox = await self._get_sandbox_for_existing_session(session)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(sandbox.kill_shell_session, session.shell_session_id)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(sandbox.cleanup_shell_session, session.shell_session_id)
+        await self._start_session(session)
+
+    async def _stop_and_cleanup_session(self, preview_id: str) -> None:
+        session = self._sessions.get(preview_id)
+        if session is None:
+            return
+        try:
+            sandbox = await self._get_sandbox_for_existing_session(session)
+        except Exception:
+            self._sessions.pop(preview_id, None)
+            return
+        try:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(sandbox.kill_shell_session, session.shell_session_id)
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(sandbox.cleanup_shell_session, session.shell_session_id)
+        finally:
+            self._sessions.pop(preview_id, None)
+
+    async def _refresh_session(self, session: _PreviewSessionRecord, *, touch: bool = True) -> str:
+        sandbox = await self._get_sandbox_for_existing_session(session)
+        view = await asyncio.to_thread(sandbox.view_shell_session, session.shell_session_id)
+        output = view.get("output") or ""
+        now = _now_utc()
+        session.updated_at = now
+        if touch:
+            session.expires_at = now + timedelta(seconds=self._idle_timeout_seconds)
+        exit_code = view.get("exit_code")
+        if isinstance(exit_code, int):
+            session.exit_code = exit_code
+        if session.port == 0:
+            detected_port = _detect_port(output)
+            if detected_port is not None:
+                session.port = detected_port
+
+        shell_status = str(view.get("status") or "")
+        if shell_status == "running":
+            session.status = "running" if await self._probe_session(session, sandbox) else "starting"
+            session.error = None
+        elif shell_status == "completed":
+            session.status = "stopped" if session.exit_code in (None, 0) else "failed"
+            session.error = None if session.status == "stopped" else output[-4000:] or "Preview process exited with an error"
+        elif shell_status == "terminated":
+            session.status = "stopped"
+            session.error = None
+        else:
+            session.status = "failed"
+            session.error = output[-4000:] or f"Preview process ended with status {shell_status}"
+
+        return output
+
+    async def _probe_session(self, session: _PreviewSessionRecord, sandbox: AioSandbox) -> bool:
+        if session.port == 0:
+            return False
+        try:
+            result = await asyncio.to_thread(
+                sandbox.fetch_local_url,
+                port=session.port,
+                path="/",
+                method="GET",
+                headers={"accept": "text/html,*/*"},
+                body=None,
+                timeout=10,
+            )
+        except Exception:
+            return False
+        return int(result["status"]) < 500
+
+    async def _get_or_create_sandbox(self, *, thread_id: str) -> tuple[str, AioSandbox]:
+        return await asyncio.to_thread(self._get_or_create_sandbox_sync, thread_id)
+
+    def _get_or_create_sandbox_sync(self, thread_id: str) -> tuple[str, AioSandbox]:
+        provider = get_sandbox_provider()
+        if not isinstance(provider, AioSandboxProvider):
+            raise HTTPException(status_code=501, detail="Preview sessions currently require the AIO sandbox provider")
+        sandbox_id = provider.acquire(thread_id)
+        sandbox = provider.get(sandbox_id)
+        if not isinstance(sandbox, AioSandbox):
+            raise HTTPException(status_code=500, detail="Failed to acquire AIO sandbox")
+        return sandbox_id, sandbox
+
+    async def _get_sandbox_for_existing_session(self, session: _PreviewSessionRecord) -> AioSandbox:
+        return await asyncio.to_thread(self._get_sandbox_for_existing_session_sync, session)
+
+    def _get_sandbox_for_existing_session_sync(self, session: _PreviewSessionRecord) -> AioSandbox:
+        provider = get_sandbox_provider()
+        if not isinstance(provider, AioSandboxProvider):
+            raise HTTPException(status_code=501, detail="Preview sessions currently require the AIO sandbox provider")
+        sandbox = provider.get(session.sandbox_id)
+        if not isinstance(sandbox, AioSandbox):
+            raise HTTPException(status_code=404, detail="Preview sandbox is no longer available")
+        return sandbox

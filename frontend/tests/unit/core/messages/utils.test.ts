@@ -2,6 +2,7 @@ import type { Message } from "@langchain/langgraph-sdk";
 import { expect, test } from "vitest";
 
 import {
+  extractPresentFilesFromMessage,
   getAssistantTurnUsageMessages,
   getMessageGroups,
 } from "@/core/messages/utils";
@@ -62,4 +63,32 @@ test("aggregates token usage messages once per assistant turn", () => {
       (groupMessages) => groupMessages?.map((message) => message.id) ?? null,
     ),
   ).toEqual([null, null, ["ai-1", "ai-2"], null, ["ai-3"]]);
+});
+
+test("extractPresentFilesFromMessage drops blank and duplicate artifact entries", () => {
+  const message = {
+    id: "ai-present-files",
+    type: "ai",
+    content: "Presenting files",
+    tool_calls: [
+      {
+        id: "tool-1",
+        name: "present_files",
+        args: {
+          filepaths: [
+            " /mnt/user-data/outputs/site/index.html ",
+            "",
+            "   ",
+            "/mnt/user-data/outputs/site/index.html",
+            "/mnt/user-data/outputs/site/readme.md",
+          ],
+        },
+      },
+    ],
+  } as Message;
+
+  expect(extractPresentFilesFromMessage(message)).toEqual([
+    "/mnt/user-data/outputs/site/index.html",
+    "/mnt/user-data/outputs/site/readme.md",
+  ]);
 });

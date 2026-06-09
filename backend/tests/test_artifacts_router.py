@@ -1,8 +1,11 @@
 import asyncio
+import json
 import os
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import jwt
 import pytest
 from _router_auth_helpers import call_unwrapped, make_authed_test_app
 from fastapi.testclient import TestClient
@@ -35,6 +38,22 @@ def _make_preview_test_app(tmp_path, monkeypatch, *, owner_check_passes: bool = 
     app = make_authed_test_app(owner_check_passes=owner_check_passes)
     app.include_router(artifacts_router.router)
     return TestClient(app), paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+
+
+def _write_manifest(site_dir: Path, **overrides) -> None:
+    site_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "id": site_dir.name,
+        "title": "OmniHarness Next.js Marketing Site",
+        "type": "static_site",
+        "entrypoint": "index.html",
+        "root": ".",
+        "source_path": f"/mnt/user-data/workspace/{site_dir.name}",
+        "preview": {"mode": "static"},
+        "created_by": "agent",
+    }
+    manifest.update(overrides)
+    (site_dir / "artifact_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_get_artifact_reads_utf8_text_file_on_windows_locale(tmp_path, monkeypatch) -> None:
@@ -124,7 +143,7 @@ def test_preview_artifact_serves_html_inline_with_security_headers(tmp_path, mon
     client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
     html_path = outputs_dir / "site" / "index.html"
     html_path.parent.mkdir(parents=True, exist_ok=True)
-    html_path.write_text("<!doctype html><script src='./assets/app.js'></script>", encoding="utf-8")
+    html_path.write_text("<!doctype html><html><head></head><body><script src='./assets/app.js'></script></body></html>", encoding="utf-8")
 
     with client:
         response = client.get("/api/threads/thread-1/artifacts/preview/mnt/user-data/outputs/site/index.html")
@@ -136,6 +155,257 @@ def test_preview_artifact_serves_html_inline_with_security_headers(tmp_path, mon
     assert response.headers.get("x-content-type-options") == "nosniff"
     assert response.headers.get("content-disposition", "").startswith("inline;")
     assert response.text.startswith("<!doctype html>")
+    assert '<base href="/api/threads/thread-1/artifacts/preview-token/' in response.text
+    assert "/mnt/user-data/outputs/site/" in response.text
+
+
+def test_artifact_manifests_lists_valid_static_site_manifest(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "omniharness-next-site"
+    (site_dir / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html>site</html>", encoding="utf-8")
+    _write_manifest(site_dir, id="omniharness-next-site")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["manifests"]) == 1
+    manifest = body["manifests"][0]
+    assert manifest["id"] == "omniharness-next-site"
+    assert manifest["title"] == "OmniHarness Next.js Marketing Site"
+    assert manifest["type"] == "static_site"
+    assert manifest["entrypoint_path"] == "/mnt/user-data/outputs/omniharness-next-site/index.html"
+    assert manifest["manifest_path"] == "/mnt/user-data/outputs/omniharness-next-site/artifact_manifest.json"
+
+
+def test_artifact_manifests_lists_valid_dynamic_web_app_manifest(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    app_dir = outputs_dir / "omniharness-dynamic-next-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "omniharness-dynamic-next-app",
+                "title": "OmniHarness Dynamic Next App",
+                "type": "web_app",
+                "root": ".",
+                "source_path": "/mnt/user-data/workspace/omniharness-dynamic-next-app",
+                "preview": {
+                    "mode": "dev_server",
+                    "command": "npm run dev -- --hostname 0.0.0.0",
+                    "port": 3000,
+                },
+                "created_by": "agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["manifests"]) == 1
+    manifest = body["manifests"][0]
+    assert manifest["id"] == "omniharness-dynamic-next-app"
+    assert manifest["type"] == "web_app"
+    assert manifest["preview"]["mode"] == "dev_server"
+    assert manifest["entrypoint_path"] is None
+    assert manifest["root_path"] == "/mnt/user-data/outputs/omniharness-dynamic-next-app"
+
+
+def test_artifact_manifest_invalid_manifest_is_rejected(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "invalid-site"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html>site</html>", encoding="utf-8")
+    (site_dir / "artifact_manifest.json").write_text(
+        json.dumps({"id": "invalid-site", "type": "static_site", "entrypoint": "index.html", "root": "."}),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/invalid-site")
+
+    assert response.status_code == 422
+    assert "title" in response.json()["detail"]
+
+
+def test_artifact_manifest_rejects_traversal_in_root(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "bad-root"
+    (site_dir / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html>site</html>", encoding="utf-8")
+    _write_manifest(site_dir, id="bad-root", root="../bad-root")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/bad-root")
+
+    assert response.status_code == 422
+    assert "root" in response.json()["detail"]
+
+
+def test_artifact_manifest_rejects_traversal_in_entrypoint(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "bad-entrypoint"
+    (site_dir / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html>site</html>", encoding="utf-8")
+    _write_manifest(site_dir, id="bad-entrypoint", entrypoint="../index.html")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/bad-entrypoint")
+
+    assert response.status_code == 422
+    assert "entrypoint" in response.json()["detail"]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink not supported on this platform")
+def test_artifact_manifest_rejects_symlink_root_escape(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    outside_dir = tmp_path / "outside-site"
+    outside_dir.mkdir(parents=True)
+    (outside_dir / "index.html").write_text("<html>outside</html>", encoding="utf-8")
+
+    site_dir = outputs_dir / "symlink-site"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    symlink = site_dir / "dist"
+    try:
+        symlink.symlink_to(outside_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation failed: {exc}")
+    _write_manifest(site_dir, id="symlink-site", root="dist")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/symlink-site")
+
+    assert response.status_code == 403
+
+
+def test_artifact_manifest_entrypoint_path_opens_preview(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "nested-site"
+    entrypoint = site_dir / "dist" / "nested" / "index.html"
+    entrypoint.parent.mkdir(parents=True, exist_ok=True)
+    entrypoint.write_text("<html><body>manifest-preview-ok</body></html>", encoding="utf-8")
+    _write_manifest(site_dir, id="nested-site", root="dist", entrypoint="nested/index.html")
+
+    with client:
+        manifest_response = client.get("/api/threads/thread-1/artifacts/manifests/nested-site")
+        preview_response = client.get(f"/api/threads/thread-1/artifacts/preview{manifest_response.json()['entrypoint_path']}")
+
+    assert manifest_response.status_code == 200
+    assert preview_response.status_code == 200
+    assert "manifest-preview-ok" in preview_response.text
+
+
+@pytest.mark.parametrize(
+    ("asset_path", "content", "expected_content_type"),
+    [
+        ("_next/static/chunks/app.js", "console.log('next-ok')", "javascript"),
+        ("_next/static/css/app.css", "body { color: rebeccapurple; }", "text/css"),
+    ],
+)
+def test_preview_artifact_token_route_serves_static_assets_without_session_cookie(
+    tmp_path,
+    monkeypatch,
+    asset_path: str,
+    content: str,
+    expected_content_type: str,
+) -> None:
+    thread_id = "thread-1"
+    user_id = "user-1"
+    paths = Paths(tmp_path)
+    paths.ensure_thread_dirs(thread_id, user_id=user_id)
+    target = paths.sandbox_outputs_dir(thread_id, user_id=user_id) / "site" / asset_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+    token = artifacts_router._create_preview_token(thread_id, user_id, "/mnt/user-data/outputs/site")
+
+    from fastapi import FastAPI
+
+    from app.gateway.auth_middleware import AuthMiddleware
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.include_router(artifacts_router.router)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/threads/{thread_id}/artifacts/preview-token/{token}/mnt/user-data/outputs/site/{asset_path}")
+
+    assert response.status_code == 200
+    assert expected_content_type in response.headers["content-type"]
+    assert response.headers.get("cross-origin-resource-policy") == "cross-origin"
+    assert "cross-origin-embedder-policy" not in response.headers
+    assert "content-security-policy" not in response.headers
+    assert "x-frame-options" not in response.headers
+    assert response.text == content
+
+
+def test_preview_artifact_token_route_stays_inside_token_root(tmp_path, monkeypatch) -> None:
+    thread_id = "thread-1"
+    user_id = "user-1"
+    paths = Paths(tmp_path)
+    paths.ensure_thread_dirs(thread_id, user_id=user_id)
+    outside_path = paths.sandbox_outputs_dir(thread_id, user_id=user_id) / "other" / "app.js"
+    outside_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_path.write_text("console.log('outside')", encoding="utf-8")
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+    token = artifacts_router._create_preview_token(thread_id, user_id, "/mnt/user-data/outputs/site")
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(artifacts_router.router)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/threads/{thread_id}/artifacts/preview-token/{token}/mnt/user-data/outputs/other/app.js")
+
+    assert response.status_code == 403
+
+
+def test_preview_artifact_token_route_rejects_expired_token(tmp_path, monkeypatch) -> None:
+    thread_id = "thread-1"
+    user_id = "user-1"
+    paths = Paths(tmp_path)
+    paths.ensure_thread_dirs(thread_id, user_id=user_id)
+    target = paths.sandbox_outputs_dir(thread_id, user_id=user_id) / "site" / "app.js"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("console.log('expired')", encoding="utf-8")
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+
+    from app.gateway.auth.config import get_auth_config
+
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "typ": artifacts_router.PREVIEW_TOKEN_TYPE,
+            "sub": user_id,
+            "tid": thread_id,
+            "root": "/mnt/user-data/outputs/site",
+            "iat": now - timedelta(minutes=20),
+            "exp": now - timedelta(minutes=10),
+        },
+        get_auth_config().jwt_secret,
+        algorithm="HS256",
+    )
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(artifacts_router.router)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/threads/{thread_id}/artifacts/preview-token/{token}/mnt/user-data/outputs/site/app.js")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Preview token expired"
 
 
 @pytest.mark.parametrize(

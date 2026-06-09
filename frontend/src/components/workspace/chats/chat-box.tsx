@@ -10,6 +10,16 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { useArtifactManifests } from "@/core/artifacts/hooks";
+import {
+  artifactManifestValue,
+  normalizeArtifactEntries,
+  suppressManifestDuplicateFiles,
+} from "@/core/artifacts/utils";
+import {
+  extractPresentFilesFromMessage,
+  hasPresentFiles,
+} from "@/core/messages/utils";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -41,8 +51,31 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     deselect,
     selectedArtifact,
   } = useArtifacts();
+  const { manifests } = useArtifactManifests({ threadId });
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
+  const visibleArtifacts = useMemo(() => {
+    const files = new Set(thread.values.artifacts ?? []);
+    for (const message of thread.values.messages ?? []) {
+      if (hasPresentFiles(message)) {
+        for (const file of extractPresentFilesFromMessage(message)) {
+          files.add(file);
+        }
+      }
+    }
+    const fileArtifacts = suppressManifestDuplicateFiles(
+      Array.from(files),
+      manifests,
+    );
+    return [
+      ...manifests.map((manifest) => artifactManifestValue(manifest)),
+      ...fileArtifacts,
+    ];
+  }, [manifests, thread.values.artifacts, thread.values.messages]);
+  const normalizedVisibleArtifacts = useMemo(() => {
+    return normalizeArtifactEntries(visibleArtifacts);
+  }, [visibleArtifacts]);
+
   useEffect(() => {
     if (threadIdRef.current !== threadId) {
       threadIdRef.current = threadId;
@@ -50,7 +83,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     }
 
     // Update artifacts from the current thread
-    setArtifacts(thread.values.artifacts);
+    setArtifacts(normalizedVisibleArtifacts);
 
     // DO NOT automatically deselect the artifact when switching threads, because the artifacts auto discovering is not work now.
     // if (
@@ -64,19 +97,20 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
       env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" &&
       autoSelectFirstArtifact
     ) {
-      if (thread?.values?.artifacts?.length > 0) {
+      if (normalizedVisibleArtifacts.length > 0) {
         setAutoSelectFirstArtifact(false);
-        selectArtifact(thread.values.artifacts[0]!);
+        selectArtifact(normalizedVisibleArtifacts[0]!);
       }
     }
   }, [
     threadId,
     autoSelectFirstArtifact,
     deselect,
+    normalizedVisibleArtifacts,
     selectArtifact,
     selectedArtifact,
     setArtifacts,
-    thread.values.artifacts,
+    visibleArtifacts,
   ]);
 
   const artifactPanelOpen = useMemo(() => {
@@ -149,7 +183,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
                   <XIcon />
                 </Button>
               </div>
-              {thread.values.artifacts?.length === 0 ? (
+              {normalizedVisibleArtifacts.length === 0 ? (
                 <ConversationEmptyState
                   icon={<FilesIcon />}
                   title="No artifact selected"
@@ -163,7 +197,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
                   <main className="min-h-0 grow">
                     <ArtifactFileList
                       className="max-w-(--container-width-sm) p-4 pt-12"
-                      files={thread.values.artifacts ?? []}
+                      files={normalizedVisibleArtifacts}
                       threadId={threadId}
                     />
                   </main>

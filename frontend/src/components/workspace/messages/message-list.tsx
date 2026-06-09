@@ -8,6 +8,7 @@ import {
   ConversationContent,
 } from "@/components/ai-elements/conversation";
 import { Button } from "@/components/ui/button";
+import { normalizeArtifactEntries } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   buildTokenDebugSteps,
@@ -24,7 +25,7 @@ import {
   hasPresentFiles,
   hasReasoning,
 } from "@/core/messages/utils";
-import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
+import { rehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
 import { useUpdateSubtask } from "@/core/tasks/context";
 import type { AgentThreadState } from "@/core/threads";
@@ -174,7 +175,6 @@ export function MessageList({
   isHistoryLoading?: boolean;
 }) {
   const { t } = useI18n();
-  const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
   const updateSubtask = useUpdateSubtask();
   const messages = thread.messages;
   const groupedMessages = getMessageGroups(messages);
@@ -212,17 +212,19 @@ export function MessageList({
       turnUsageMessages,
       inlineDebug = true,
       debugMessageIds,
+      isLoading,
     }: {
       messages: Message[];
       turnUsageMessages?: Message[] | null;
       inlineDebug?: boolean;
       debugMessageIds?: string[];
+      isLoading: boolean;
     }) => {
       if (tokenUsageInlineMode === "per_turn") {
         return (
           <MessageTokenUsageList
             enabled={true}
-            isLoading={thread.isLoading}
+            isLoading={isLoading}
             messages={turnUsageMessages ?? []}
           />
         );
@@ -239,7 +241,7 @@ export function MessageList({
         return (
           <MessageTokenUsageDebugList
             enabled={true}
-            isLoading={thread.isLoading}
+            isLoading={isLoading}
             steps={tokenDebugSteps.filter((step) =>
               messageIds.has(step.messageId),
             )}
@@ -249,7 +251,7 @@ export function MessageList({
 
       return null;
     },
-    [thread.isLoading, tokenDebugSteps, tokenUsageInlineMode],
+    [tokenDebugSteps, tokenUsageInlineMode],
   );
 
   if (thread.isThreadLoading && messages.length === 0) {
@@ -267,23 +269,29 @@ export function MessageList({
           loadMore={loadMoreHistory}
         />
         {groupedMessages.map((group, groupIndex) => {
+          const groupKey = `${group.type}-${group.id ?? "group"}-${groupIndex}`;
           const turnUsageMessages = turnUsageMessagesByGroupIndex[groupIndex];
+          const isStreamingGroup =
+            thread.isLoading && groupIndex === groupedMessages.length - 1;
+          const groupRehypePlugins = isStreamingGroup
+            ? [rehypeSplitWordsIntoSpans]
+            : [];
 
           if (group.type === "human" || group.type === "assistant") {
             return (
               <div
-                key={`${group.id ?? groupIndex}-${group.type}`}
+                key={groupKey}
                 className={cn(
                   "w-full",
                   group.type === "assistant" && "group/assistant-turn",
                 )}
               >
-                {group.messages.map((msg) => {
+                {group.messages.map((msg, messageIndex) => {
                   return (
                     <MessageListItem
-                      key={`${group.id}/${msg.id}`}
+                      key={`${groupKey}-${msg.id ?? "message"}-${messageIndex}`}
                       message={msg}
-                      isLoading={thread.isLoading}
+                      isLoading={isStreamingGroup}
                       threadId={threadId}
                       showCopyButton={group.type !== "assistant"}
                     />
@@ -292,6 +300,7 @@ export function MessageList({
                 {renderTokenUsage({
                   messages: group.messages,
                   turnUsageMessages,
+                  isLoading: isStreamingGroup,
                 })}
                 {group.type === "assistant" &&
                   renderAssistantCopyButton(group.messages)}
@@ -301,15 +310,16 @@ export function MessageList({
             const message = group.messages[0];
             if (message && hasContent(message)) {
               return (
-                <div key={`${group.id ?? groupIndex}-${group.type}`} className="w-full">
+                <div key={groupKey} className="w-full">
                   <MarkdownContent
                     content={extractContentFromMessage(message)}
-                    isLoading={thread.isLoading}
-                    rehypePlugins={rehypePlugins}
+                    isLoading={isStreamingGroup}
+                    rehypePlugins={groupRehypePlugins}
                   />
                   {renderTokenUsage({
                     messages: group.messages,
                     turnUsageMessages,
+                    isLoading: isStreamingGroup,
                   })}
                 </div>
               );
@@ -324,19 +334,23 @@ export function MessageList({
               }
             }
             return (
-              <div className="w-full" key={`${group.id ?? groupIndex}-${group.type}`}>
+              <div className="w-full" key={groupKey}>
                 {group.messages[0] && hasContent(group.messages[0]) && (
                   <MarkdownContent
                     content={extractContentFromMessage(group.messages[0])}
-                    isLoading={thread.isLoading}
-                    rehypePlugins={rehypePlugins}
+                    isLoading={isStreamingGroup}
+                    rehypePlugins={groupRehypePlugins}
                     className="mb-4"
                   />
                 )}
-                <ArtifactFileList files={files} threadId={threadId} />
+                <ArtifactFileList
+                  files={normalizeArtifactEntries(files)}
+                  threadId={threadId}
+                />
                 {renderTokenUsage({
                   messages: group.messages,
                   turnUsageMessages,
+                  isLoading: isStreamingGroup,
                 })}
               </div>
             );
@@ -411,7 +425,7 @@ export function MessageList({
                   <MessageGroup
                     key={"thinking-group-" + message.id}
                     messages={[message]}
-                    isLoading={thread.isLoading}
+                    isLoading={isStreamingGroup}
                     tokenDebugSteps={tokenDebugSteps.filter(
                       (step) => step.messageId === message.id,
                     )}
@@ -431,30 +445,28 @@ export function MessageList({
                   <SubtaskCard
                     key={"task-group-" + taskId}
                     taskId={taskId!}
-                    isLoading={thread.isLoading}
+                    isLoading={isStreamingGroup}
                   />,
                 );
               }
             }
             return (
-              <div
-                key={"subtask-group-" + group.id}
-                className="relative z-1 flex flex-col gap-2"
-              >
+              <div key={groupKey} className="relative z-1 flex flex-col gap-2">
                 {results}
                 {renderTokenUsage({
                   messages: group.messages,
                   turnUsageMessages,
                   debugMessageIds: subagentDebugMessageIds,
+                  isLoading: isStreamingGroup,
                 })}
               </div>
             );
           }
           return (
-            <div key={"group-" + group.id} className="w-full">
+            <div key={groupKey} className="w-full">
               <MessageGroup
                 messages={group.messages}
-                isLoading={thread.isLoading}
+                isLoading={isStreamingGroup}
                 tokenDebugSteps={tokenDebugSteps.filter((step) =>
                   group.messages.some(
                     (message) => message.id === step.messageId,
@@ -466,6 +478,7 @@ export function MessageList({
                 messages: group.messages,
                 turnUsageMessages,
                 inlineDebug: false,
+                isLoading: isStreamingGroup,
               })}
             </div>
           );

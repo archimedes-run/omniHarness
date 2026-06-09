@@ -333,12 +333,20 @@ export function extractPresentFilesFromMessage(message: Message) {
     return [];
   }
   const files: string[] = [];
+  const seen = new Set<string>();
   for (const toolCall of message.tool_calls ?? []) {
     if (
       toolCall.name === "present_files" &&
       Array.isArray(toolCall.args.filepaths)
     ) {
-      files.push(...(toolCall.args.filepaths as string[]));
+      for (const filepath of toolCall.args.filepaths as string[]) {
+        const normalized = filepath.trim();
+        if (!normalized || seen.has(normalized)) {
+          continue;
+        }
+        seen.add(normalized);
+        files.push(normalized);
+      }
     }
   }
   return files;

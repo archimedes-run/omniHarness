@@ -9,6 +9,7 @@ owner filtering works automatically via the sentinel pattern.
 Fine-grained permission checks remain in authz.py decorators.
 """
 
+import re
 from collections.abc import Callable
 
 from fastapi import HTTPException, Request, Response
@@ -42,10 +43,14 @@ _PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
     }
 )
 
+_PUBLIC_ARTIFACT_PREVIEW_TOKEN_RE = re.compile(r"^/api/threads/[A-Za-z0-9_-]+/artifacts/preview-token/[^/]+(?:/.*)?$")
+
 
 def _is_public(path: str) -> bool:
     stripped = path.rstrip("/")
     if stripped in _PUBLIC_EXACT_PATHS:
+        return True
+    if _PUBLIC_ARTIFACT_PREVIEW_TOKEN_RE.match(stripped):
         return True
     return any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES)
 
