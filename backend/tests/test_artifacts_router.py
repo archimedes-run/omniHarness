@@ -499,3 +499,126 @@ def test_preview_artifact_rejects_wrong_user(tmp_path, monkeypatch) -> None:
         response = client.get("/api/threads/thread-1/artifacts/preview/mnt/user-data/outputs/index.html")
 
     assert response.status_code == 404
+
+
+# --- Manifest field normalization tests ---
+
+
+def test_artifact_manifest_normalizes_name_to_title(tmp_path, monkeypatch) -> None:
+    """Agents sometimes write 'name' instead of 'title'; backend should accept both."""
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "my-site"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html>site</html>", encoding="utf-8")
+    (site_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "my-site",
+                "name": "My Awesome Site",  # agent wrote "name" instead of "title"
+                "type": "static_site",
+                "entrypoint": "index.html",
+                "root": ".",
+                "preview": {"mode": "static"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/my-site")
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "My Awesome Site"
+
+
+def test_artifact_manifest_normalizes_preview_cwd_to_source_path(tmp_path, monkeypatch) -> None:
+    """Agents sometimes put the workspace path as preview.cwd instead of top-level source_path."""
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    app_dir = outputs_dir / "dynamic-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "dynamic-app",
+                "title": "Dynamic App",
+                "type": "web_app",
+                "root": ".",
+                # source_path absent; cwd nested inside preview instead
+                "preview": {
+                    "mode": "dev_server",
+                    "command": "npm run dev -- --hostname 0.0.0.0",
+                    "port": 3000,
+                    "cwd": "/mnt/user-data/workspace/dynamic-app",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/dynamic-app")
+
+    assert response.status_code == 200
+    manifest = response.json()
+    assert manifest["type"] == "web_app"
+    assert manifest["source_path"] == "/mnt/user-data/workspace/dynamic-app"
+
+
+def test_artifact_manifest_normalizes_name_and_cwd_combined(tmp_path, monkeypatch) -> None:
+    """All agent-generated field aliases can be normalized in a single manifest."""
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    app_dir = outputs_dir / "my-dynamic-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "my-dynamic-app",
+                "name": "My Dynamic App",  # alias for title
+                "type": "web_app",
+                "root": ".",
+                "preview": {
+                    "mode": "dev_server",
+                    "command": "npm run dev -- --hostname 0.0.0.0",
+                    "port": 3000,
+                    "cwd": "/mnt/user-data/workspace/my-dynamic-app",  # alias for source_path
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/my-dynamic-app")
+
+    assert response.status_code == 200
+    manifest = response.json()
+    assert manifest["title"] == "My Dynamic App"
+    assert manifest["source_path"] == "/mnt/user-data/workspace/my-dynamic-app"
+
+
+def test_artifact_manifest_explicit_title_takes_precedence_over_name(tmp_path, monkeypatch) -> None:
+    """When both 'title' and 'name' are present, 'title' wins."""
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    site_dir = outputs_dir / "titled-site"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    (site_dir / "index.html").write_text("<html>site</html>", encoding="utf-8")
+    (site_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "titled-site",
+                "title": "Correct Title",
+                "name": "Wrong Name",
+                "type": "static_site",
+                "entrypoint": "index.html",
+                "root": ".",
+                "preview": {"mode": "static"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/manifests/titled-site")
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Correct Title"

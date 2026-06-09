@@ -6,7 +6,7 @@ import re
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 import jwt
@@ -107,6 +107,38 @@ class ArtifactManifest(BaseModel):
     source_path: str | None = None
     preview: ArtifactManifestPreview = Field(default_factory=ArtifactManifestPreview)
     created_by: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_agent_fields(cls, data: Any) -> Any:
+        """Normalize common agent-generated field name variants before validation.
+
+        Agents sometimes write ``name`` instead of ``title``, omit ``id`` (relying
+        on the folder name), or nest the workspace path as ``preview.cwd`` rather
+        than the top-level ``source_path``.  This normalizer accepts those shapes
+        so validation can still succeed.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        # Accept "name" as alias for "title"
+        if "title" not in data and "name" in data:
+            data = {**data, "title": data["name"]}
+
+        # Derive a safe "id" from "name" when "id" is missing
+        if "id" not in data and "name" in data:
+            raw = str(data["name"]).strip()
+            slug = re.sub(r"[^A-Za-z0-9._-]", "-", raw)
+            slug = re.sub(r"-{2,}", "-", slug).strip("-")[:128]
+            if slug and _MANIFEST_ID_RE.fullmatch(slug):
+                data = {**data, "id": slug}
+
+        # Hoist preview.cwd to source_path when source_path is absent
+        preview = data.get("preview")
+        if isinstance(preview, dict) and "source_path" not in data and "cwd" in preview:
+            data = {**data, "source_path": preview["cwd"]}
+
+        return data
 
     @field_validator("id")
     @classmethod

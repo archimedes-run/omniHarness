@@ -37,13 +37,24 @@ Create this file in the output root for static sites:
 }
 ```
 
-Rules:
+**Field reference — use exactly these key names:**
+
+| Field | Required | Notes |
+|---|---|---|
+| `id` | yes | Lowercase kebab-case. Must match the output folder name. |
+| `title` | yes | Human-readable display name. **NOT `name`** — use `title`. |
+| `type` | yes | `"static_site"` or `"web_app"`. |
+| `root` | yes | Relative path to the served root. Use `"."` for the output folder itself. |
+| `entrypoint` | static only | Path to `index.html` relative to `root`. Required for `static_site`. |
+| `source_path` | web_app only | Absolute workspace path of the project. **Top-level field, NOT inside `preview`.** |
+| `preview.mode` | yes | `"static"` for static sites, `"dev_server"` for dynamic apps. |
+| `preview.command` | web_app only | Dev-server start command, e.g. `"npm run dev -- --hostname 0.0.0.0"`. |
+| `preview.port` | web_app only | Port the dev server binds on, e.g. `3000`. |
+| `created_by` | no | Set to `"agent"`. |
+
+Other rules:
 
 - `id` must match the output folder name whenever possible.
-- `title` should describe the generated project, not just the file.
-- `type` is `static_site` for exported builds and `web_app` for live preview projects.
-- `root` is relative to the manifest file. Use `"."` for normal exports.
-- `entrypoint` is relative to `root`. Required for `static_site`.
 - Do not use `..`, absolute paths, symlinks, or paths outside `/mnt/user-data/outputs`.
 
 For dynamic apps, use:
