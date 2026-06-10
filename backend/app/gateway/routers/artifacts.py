@@ -722,6 +722,26 @@ def _resolve_project_root(thread_id: str, manifest: ArtifactManifestResponse, *,
     return root
 
 
+def _list_files_in_dir(root: Path) -> list[ProjectFileEntry]:
+    files: list[ProjectFileEntry] = []
+    for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False, topdown=True):
+        dir_path = Path(dirpath)
+        rel_dir = dir_path.relative_to(root)
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
+        for filename in sorted(filenames):
+            if filename == MANIFEST_FILENAME and str(rel_dir) == ".":
+                continue
+            rel_path = filename if str(rel_dir) == "." else f"{rel_dir.as_posix()}/{filename}"
+            try:
+                size = (dir_path / filename).stat().st_size
+            except Exception:
+                size = None
+            files.append(ProjectFileEntry(path=rel_path, type="file", size=size))
+            if len(files) >= _MAX_PROJECT_FILES:
+                return files
+    return files
+
+
 @router.get(
     "/threads/{thread_id}/projects/{artifact_id}/files",
     summary="List Project Files",
@@ -733,28 +753,7 @@ async def list_project_files(thread_id: str, artifact_id: str, request: Request)
     manifest = get_artifact_manifest_for_preview(thread_id, artifact_id, user_id=user_id)
     root = _resolve_project_root(thread_id, manifest, user_id=user_id)
 
-    files: list[ProjectFileEntry] = []
-    for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False, topdown=True):
-        dir_path = Path(dirpath)
-        rel_dir = dir_path.relative_to(root)
-
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
-
-        for filename in sorted(filenames):
-            if filename == MANIFEST_FILENAME and str(rel_dir) == ".":
-                continue
-            rel_path = filename if str(rel_dir) == "." else f"{rel_dir.as_posix()}/{filename}"
-            try:
-                size = (dir_path / filename).stat().st_size
-            except Exception:
-                size = None
-            files.append(ProjectFileEntry(path=rel_path, type="file", size=size))
-            if len(files) >= _MAX_PROJECT_FILES:
-                break
-
-        if len(files) >= _MAX_PROJECT_FILES:
-            break
-
+    files = _list_files_in_dir(root)
     return ProjectFilesResponse(
         artifact_id=artifact_id,
         root=manifest.source_path or manifest.root_path,
@@ -792,6 +791,87 @@ async def get_project_file_content(thread_id: str, artifact_id: str, request: Re
     if not file_path.is_file():
         raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
 
+    if file_path.stat().st_size > _MAX_FILE_CONTENT_BYTES:
+        raise HTTPException(status_code=413, detail="File too large for inline viewing (max 512 KB)")
+
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
+
+    return PlainTextResponse(content=content)
+
+
+@router.get(
+    "/threads/{thread_id}/workspace/files",
+    summary="List Workspace Files",
+    description="List files in a workspace project directory (no manifest required).",
+)
+@require_permission("threads", "read", owner_check=True)
+async def list_workspace_files(thread_id: str, request: Request, root: str) -> ProjectFilesResponse:
+    # Validate: no null bytes, no backslashes, no traversal, not absolute
+    clean = root.replace("\\", "/").strip("/")
+    if not clean or "\x00" in clean:
+        raise HTTPException(status_code=400, detail="Invalid workspace root")
+    parts = clean.split("/")
+    if any(p in ("", "..") for p in parts):
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    user_id = get_effective_user_id()
+    paths = get_paths()
+    try:
+        workspace_path = paths.resolve_virtual_path(thread_id, f"/mnt/user-data/workspace/{clean}", user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    if not workspace_path.is_dir():
+        raise HTTPException(status_code=404, detail=f"Workspace directory not found: {root}")
+
+    files = _list_files_in_dir(workspace_path)
+    return ProjectFilesResponse(artifact_id=clean, root=f"/mnt/user-data/workspace/{clean}", files=files)
+
+
+@router.get(
+    "/threads/{thread_id}/workspace/files/content",
+    summary="Get Workspace File Content",
+    description="Read a source file from a workspace project directory.",
+)
+@require_permission("threads", "read", owner_check=True)
+async def get_workspace_file_content(thread_id: str, request: Request, root: str, path: str) -> Response:
+    # Validate root
+    clean_root = root.replace("\\", "/").strip("/")
+    if not clean_root or "\x00" in clean_root:
+        raise HTTPException(status_code=400, detail="Invalid workspace root")
+    root_parts = clean_root.split("/")
+    if any(p in ("", "..") for p in root_parts):
+        raise HTTPException(status_code=400, detail="Path traversal in root is not allowed")
+
+    # Validate path (same as get_project_file_content)
+    if not path or "\x00" in path or "\\" in path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Path must be relative")
+    path_parts = path.split("/")
+    if any(part in ("", "..") for part in path_parts):
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    user_id = get_effective_user_id()
+    paths = get_paths()
+    try:
+        workspace_root = paths.resolve_virtual_path(thread_id, f"/mnt/user-data/workspace/{clean_root}", user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    file_path = (workspace_root / path).resolve()
+    try:
+        file_path.relative_to(workspace_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path escapes workspace root")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not file_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
     if file_path.stat().st_size > _MAX_FILE_CONTENT_BYTES:
         raise HTTPException(status_code=413, detail="File too large for inline viewing (max 512 KB)")
 

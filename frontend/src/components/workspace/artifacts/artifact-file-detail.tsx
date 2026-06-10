@@ -59,6 +59,8 @@ import {
   useProjectFiles,
   useRestartPreviewSession,
   useStopPreviewSession,
+  useWorkspaceFileContent,
+  useWorkspaceFiles,
 } from "@/core/artifacts/hooks";
 import {
   artifactDisplayName,
@@ -169,6 +171,22 @@ function ArtifactFileDetailInner({
       !isDynamicManifest && (language === "html" || language === "markdown")
     );
   }, [isDynamicManifest, language]);
+
+  // Extract workspace project root from write-file paths like /mnt/user-data/workspace/project-name/...
+  const workspaceProjectRoot = useMemo(() => {
+    if (!isWriteFile) return null;
+    try {
+      const url = new URL(filepathFromProps);
+      const filePath = decodeURIComponent(url.pathname);
+      const match = /^\/mnt\/user-data\/workspace\/([^/]+)/.exec(filePath);
+      return match?.[1] ?? null;
+    } catch {
+      return null;
+    }
+  }, [isWriteFile, filepathFromProps]);
+
+  // Determine if this artifact has a project tree (manifest or workspace)
+  const hasProjectTree = Boolean(manifest ?? workspaceProjectRoot);
   const { content } = useArtifactContent({
     threadId,
     filepath: manifest?.entrypoint_path ?? filepathFromProps,
@@ -227,8 +245,8 @@ function ArtifactFileDetailInner({
   );
 
   useEffect(() => {
-    if (isDynamicManifest) {
-      setViewMode("preview");
+    if (hasProjectTree) {
+      setViewMode("files");
       return;
     }
     if (isSupportPreview) {
@@ -236,7 +254,7 @@ function ArtifactFileDetailInner({
     } else {
       setViewMode("code");
     }
-  }, [isDynamicManifest, isSupportPreview]);
+  }, [hasProjectTree, isSupportPreview]);
 
   // Clear inline create error when switching to a different artifact
   useEffect(() => {
@@ -345,14 +363,16 @@ function ArtifactFileDetailInner({
 
   return (
     <Artifact className={cn(className)}>
-      <ArtifactHeader className="px-2">
-        <div className="flex items-center gap-2">
-          <ArtifactTitle>
+      <ArtifactHeader className="gap-1 px-2">
+        <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
+          <ArtifactTitle className="min-w-0 overflow-hidden">
             {isWriteFile ? (
-              <div className="px-2">{getFileName(filepath)}</div>
+              <div className="truncate px-2 text-sm">
+                {getFileName(filepath)}
+              </div>
             ) : (
               <Select value={filepathFromProps} onValueChange={select}>
-                <SelectTrigger className="border-none bg-transparent! shadow-none select-none focus:outline-0 active:outline-0">
+                <SelectTrigger className="max-w-40 min-w-0 truncate border-none bg-transparent! shadow-none select-none focus:outline-0 active:outline-0">
                   <SelectValue placeholder="Select a file" />
                 </SelectTrigger>
                 <SelectContent className="select-none">
@@ -368,7 +388,10 @@ function ArtifactFileDetailInner({
             )}
           </ArtifactTitle>
           {isDynamicManifest && (
-            <Badge variant="secondary" className="rounded text-[10px]">
+            <Badge
+              variant="secondary"
+              className="hidden shrink-0 rounded text-[10px] sm:flex"
+            >
               <ActivityIcon className="mr-1 size-3" />
               {previewSession?.status ??
                 (createPreviewFromManifest.isPending
@@ -377,7 +400,7 @@ function ArtifactFileDetailInner({
             </Badge>
           )}
         </div>
-        <div className="flex min-w-0 grow items-center justify-center">
+        <div className="flex shrink-0 items-center justify-center">
           {isDynamicManifest && (
             <ToggleGroup
               className="mx-auto"
@@ -402,7 +425,7 @@ function ArtifactFileDetailInner({
               </ToggleGroupItem>
             </ToggleGroup>
           )}
-          {!isDynamicManifest && isSupportPreview && (
+          {!isDynamicManifest && (isSupportPreview || manifest) && (
             <ToggleGroup
               className="mx-auto"
               type="single"
@@ -411,20 +434,50 @@ function ArtifactFileDetailInner({
               value={viewMode}
               onValueChange={(value) => {
                 if (value) {
-                  setViewMode(value as "code" | "preview");
+                  setViewMode(value as "code" | "preview" | "files");
+                }
+              }}
+            >
+              {isCodeFile && (
+                <ToggleGroupItem value="code">
+                  <Code2Icon />
+                </ToggleGroupItem>
+              )}
+              {isSupportPreview && (
+                <ToggleGroupItem value="preview">
+                  <EyeIcon />
+                </ToggleGroupItem>
+              )}
+              {manifest && (
+                <ToggleGroupItem value="files">
+                  <FolderTreeIcon />
+                </ToggleGroupItem>
+              )}
+            </ToggleGroup>
+          )}
+          {isWriteFile && workspaceProjectRoot && (
+            <ToggleGroup
+              className="mx-auto"
+              type="single"
+              variant="outline"
+              size="sm"
+              value={viewMode}
+              onValueChange={(value) => {
+                if (value) {
+                  setViewMode(value as "code" | "files");
                 }
               }}
             >
               <ToggleGroupItem value="code">
                 <Code2Icon />
               </ToggleGroupItem>
-              <ToggleGroupItem value="preview">
-                <EyeIcon />
+              <ToggleGroupItem value="files">
+                <FolderTreeIcon />
               </ToggleGroupItem>
             </ToggleGroup>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-0.5">
           <ArtifactActions>
             {!isWriteFile && filepath.endsWith(".skill") && (
               <Tooltip content={t.toolCalls.skillInstallTooltip}>
@@ -535,7 +588,7 @@ function ArtifactFileDetailInner({
       </ArtifactHeader>
       <ArtifactContent className="p-0">
         {isDynamicManifest && manifest && viewMode === "files" && (
-          <ProjectFilesPanel manifest={manifest} threadId={threadId} />
+          <ProjectFilesPanel artifactId={manifest.id} threadId={threadId} />
         )}
         {isDynamicManifest && manifest && viewMode !== "files" && (
           <DynamicArtifactPreviewPanel
@@ -554,6 +607,18 @@ function ArtifactFileDetailInner({
             }}
           />
         )}
+        {!isDynamicManifest && viewMode === "files" && manifest && (
+          <ProjectFilesPanel artifactId={manifest.id} threadId={threadId} />
+        )}
+        {isWriteFile &&
+          viewMode === "files" &&
+          workspaceProjectRoot &&
+          !manifest && (
+            <ProjectFilesPanel
+              threadId={threadId}
+              workspaceRoot={workspaceProjectRoot}
+            />
+          )}
         {!isDynamicManifest &&
           isSupportPreview &&
           viewMode === "preview" &&
@@ -808,37 +873,63 @@ function FileTreeNodeItem({
 }
 
 function ProjectFilesPanel({
-  manifest,
   threadId,
+  artifactId,
+  workspaceRoot,
 }: {
-  manifest: ArtifactManifest;
   threadId: string;
+  artifactId?: string;
+  workspaceRoot?: string;
 }) {
-  const { files, isLoading: isFilesLoading } = useProjectFiles({
+  const useWorkspace = !artifactId && Boolean(workspaceRoot);
+
+  const manifestFiles = useProjectFiles({
     threadId,
-    artifactId: manifest.id,
+    artifactId: artifactId ?? "",
+    enabled: !useWorkspace,
   });
+
+  const wsFiles = useWorkspaceFiles({
+    threadId,
+    root: workspaceRoot ?? "",
+    enabled: useWorkspace,
+  });
+
+  const { files, isLoading } = useWorkspace ? wsFiles : manifestFiles;
+
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const { content, isLoading: isContentLoading } = useProjectFileContent({
+
+  const manifestContent = useProjectFileContent({
     threadId,
-    artifactId: manifest.id,
+    artifactId: artifactId ?? "",
     path: selectedFile ?? undefined,
-    enabled: Boolean(selectedFile),
+    enabled: !useWorkspace && Boolean(selectedFile),
   });
+
+  const wsContent = useWorkspaceFileContent({
+    threadId,
+    root: workspaceRoot ?? "",
+    path: selectedFile ?? undefined,
+    enabled: useWorkspace && Boolean(selectedFile),
+  });
+
+  const { content, isLoading: isContentLoading } = useWorkspace
+    ? wsContent
+    : manifestContent;
 
   const tree = useMemo(() => buildFileTree(files), [files]);
 
   return (
     <div className="flex size-full overflow-hidden">
-      <div className="border-border/60 flex w-52 shrink-0 flex-col overflow-y-auto border-r p-1">
-        {isFilesLoading ? (
+      <div className="border-border/60 flex w-48 shrink-0 flex-col overflow-y-auto border-r p-1">
+        {isLoading && !files.length ? (
           <div className="text-muted-foreground flex items-center gap-2 px-2 py-2 text-xs">
             <LoaderIcon className="size-3 animate-spin" />
-            Loading files…
+            Loading…
           </div>
         ) : tree.length === 0 ? (
           <div className="text-muted-foreground px-2 py-2 text-xs">
-            No files found
+            No files yet
           </div>
         ) : (
           tree.map((node) => (

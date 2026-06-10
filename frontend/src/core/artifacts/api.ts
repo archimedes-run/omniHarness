@@ -252,3 +252,37 @@ export async function loadProjectFileContent({
   }
   return response.text();
 }
+
+export async function loadWorkspaceFiles({
+  threadId,
+  root,
+}: {
+  threadId: string;
+  root: string;
+}): Promise<ProjectFilesResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/workspace/files?root=${encodeURIComponent(root)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load workspace files: ${response.status}`);
+  }
+  return response.json() as Promise<ProjectFilesResponse>;
+}
+
+export async function loadWorkspaceFileContent({
+  threadId,
+  root,
+  path,
+}: {
+  threadId: string;
+  root: string;
+  path: string;
+}): Promise<string> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/workspace/files/content?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load file content: ${response.status}`);
+  }
+  return response.text();
+}

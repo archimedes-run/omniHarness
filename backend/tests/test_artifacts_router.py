@@ -811,3 +811,55 @@ def test_project_files_content_rejects_symlink_escape(tmp_path, monkeypatch) -> 
         response = client.get("/api/threads/thread-1/projects/test-app/files/content?path=evil.txt")
 
     assert response.status_code == 403
+
+
+# --- Workspace file tree tests (no manifest required) ---
+
+
+def test_workspace_files_lists_files(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    ws_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/my-app", user_id=user_id)
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    (ws_dir / "index.ts").write_text("export {};", encoding="utf-8")
+    (ws_dir / "node_modules").mkdir()
+
+    with client:
+        response = client.get("/api/threads/thread-1/workspace/files?root=my-app")
+
+    assert response.status_code == 200
+    listed = [f["path"] for f in response.json()["files"]]
+    assert "index.ts" in listed
+    assert not any("node_modules" in p for p in listed)
+
+
+def test_workspace_files_rejects_traversal(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+
+    with client:
+        response = client.get("/api/threads/thread-1/workspace/files?root=../secret")
+
+    assert response.status_code == 400
+
+
+def test_workspace_file_content_reads_file(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    ws_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/my-app", user_id=user_id)
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    (ws_dir / "hello.ts").write_text("console.log('hi');", encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/workspace/files/content?root=my-app&path=hello.ts")
+
+    assert response.status_code == 200
+    assert "console.log" in response.text
+
+
+def test_workspace_file_content_rejects_traversal(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    ws_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/my-app", user_id=user_id)
+    ws_dir.mkdir(parents=True, exist_ok=True)
+
+    with client:
+        response = client.get("/api/threads/thread-1/workspace/files/content?root=my-app&path=../secret")
+
+    assert response.status_code == 400
