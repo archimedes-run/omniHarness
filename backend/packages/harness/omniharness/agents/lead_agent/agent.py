@@ -303,6 +303,15 @@ def _build_middlewares(
     if loop_detection_config.enabled:
         middlewares.append(LoopDetectionMiddleware.from_config(loop_detection_config))
 
+    # Add PreviewVerificationMiddleware when a PreviewController is active.
+    # Must run before ClarificationMiddleware so the gate fires before the final exit.
+    from omniharness.preview.preview_controller import get_preview_controller
+
+    if get_preview_controller() is not None:
+        from omniharness.agents.middlewares.preview_verification_middleware import PreviewVerificationMiddleware
+
+        middlewares.append(PreviewVerificationMiddleware())
+
     # Inject custom middlewares before ClarificationMiddleware
     if custom_middlewares:
         middlewares.extend(custom_middlewares)

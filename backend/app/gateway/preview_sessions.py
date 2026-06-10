@@ -7,6 +7,7 @@ import logging
 import re
 import shlex
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -330,6 +331,28 @@ def _preview_html_shim(proxy_root: str) -> str:
         "_pp(HTMLVideoElement.prototype,'src');"
         "_pp(HTMLSourceElement.prototype,'src');"
         "window.__OMNI_HARNESS_PREVIEW_PROXY_ROOT__=proxyRoot;"
+        # Feature 3: capture client-side JS errors and POST them to the reserved intercept path.
+        "const _reportErr=function(type,msg){"
+        "try{"
+        "const payload=JSON.stringify({type:type,message:String(msg).slice(0,2000)});"
+        "if(navigator.sendBeacon){"
+        "navigator.sendBeacon(proxyRoot+'/__omni_preview__/client-error',new Blob([payload],{type:'application/json'}));"
+        "}else{"
+        "fetch(proxyRoot+'/__omni_preview__/client-error',{method:'POST',body:payload,headers:{'content-type':'application/json'},keepalive:true}).catch(function(){});"
+        "}"
+        "}catch(e){}"
+        "};"
+        "window.addEventListener('error',function(ev){"
+        "_reportErr('error',(ev.error&&ev.error.message)||ev.message||String(ev.error));"
+        "});"
+        "window.addEventListener('unhandledrejection',function(ev){"
+        "_reportErr('unhandledrejection',ev.reason&&ev.reason.message?ev.reason.message:String(ev.reason));"
+        "});"
+        "var _origCE=console.error.bind(console);"
+        "console.error=function(){"
+        "_origCE.apply(console,arguments);"
+        "try{_reportErr('console.error',Array.from(arguments).map(function(a){return typeof a==='object'?JSON.stringify(a):String(a);}).join(' '));}catch(e){}"
+        "};"
         "})();"
         "</script>"
     )
@@ -425,6 +448,7 @@ class _PreviewSessionRecord:
     expires_at: datetime
     exit_code: int | None = None
     error: str | None = None
+    client_errors: list[dict] = dataclasses_field(default_factory=list)
 
     def proxy_url(self) -> str:
         return f"/api/threads/{self.thread_id}/previews/{self.id}/proxy"
@@ -672,6 +696,23 @@ class PreviewSessionManager:
         proxy_path = f"/{path.lstrip('/')}" if path else "/"
         if request.url.query:
             proxy_path = f"{proxy_path}?{request.url.query}"
+
+        # Feature 3: intercept client-error reports from the preview shim.
+        # The path is reserved and never forwarded to the sandbox.
+        _CLIENT_ERROR_PATH = "/__omni_preview__/client-error"
+        if proxy_path == _CLIENT_ERROR_PATH or proxy_path.split("?")[0] == _CLIENT_ERROR_PATH:
+            body = await request.body()
+            if body:
+                try:
+                    error_data = json.loads(body.decode("utf-8", errors="replace"))
+                    if isinstance(error_data, dict):
+                        session.client_errors.append(error_data)
+                        if len(session.client_errors) > 100:
+                            session.client_errors = session.client_errors[-100:]
+                except Exception:
+                    pass
+            return Response(status_code=204)
+
         body = await request.body()
         try:
             forwarded = await asyncio.to_thread(

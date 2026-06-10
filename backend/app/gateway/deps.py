@@ -143,6 +143,7 @@ def get_run_context(request: Request) -> RunContext:
     Returns a *base* context with infrastructure dependencies.
     """
     config = get_config(request)
+    preview_controller = getattr(request.app.state, "preview_controller", None)
     return RunContext(
         checkpointer=get_checkpointer(request),
         store=get_store(request),
@@ -150,6 +151,7 @@ def get_run_context(request: Request) -> RunContext:
         run_events_config=getattr(config, "run_events", None),
         thread_store=get_thread_store(request),
         app_config=config,
+        preview_controller=preview_controller,
     )
 
 

@@ -184,6 +184,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("LangGraph runtime initialised")
         app.state.preview_session_manager = PreviewSessionManager()
         app.state.preview_session_manager.start()
+        from app.gateway.preview_controller_adapter import GatewayPreviewController
+        from omniharness.preview.preview_controller import set_preview_controller
+
+        preview_ctrl = GatewayPreviewController(app.state.preview_session_manager)
+        app.state.preview_controller = preview_ctrl
+        set_preview_controller(preview_ctrl)
 
         # Ensure admin user exists (auto-create on first boot)
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration

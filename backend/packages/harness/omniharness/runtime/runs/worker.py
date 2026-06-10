@@ -83,6 +83,8 @@ class RunContext:
     run_events_config: Any | None = field(default=None)
     thread_store: Any | None = field(default=None)
     app_config: AppConfig | None = field(default=None)
+    preview_controller: Any | None = field(default=None)
+    """Optional PreviewController for Feature 1a auto-start after run completes."""
 
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:
@@ -146,6 +148,9 @@ async def run_agent(
     pre_run_checkpoint_id: str | None = None
     pre_run_snapshot: dict[str, Any] | None = None
     snapshot_capture_failed = False
+    # Initialise before the try block so the finally clause can access it safely
+    # even if an exception is raised before _build_runtime_context is called.
+    runtime_ctx: dict[str, Any] = {}
 
     journal = None
 
@@ -387,6 +392,20 @@ async def run_agent(
                 await thread_store.update_status(thread_id, final_status)
             except Exception:
                 logger.debug("Failed to update thread_meta status for %s (non-fatal)", thread_id)
+
+        # Feature 1a: server-side auto-start preview after a successful run.
+        # Triggered here (not via the frontend manifest-poll path) so that
+        # previews start during autonomous runs before the client ever polls.
+        if ctx.preview_controller is not None and record.status == RunStatus.success:
+            auto_start_user_id: str | None = runtime_ctx.get("user_id") if runtime_ctx else None
+            if auto_start_user_id:
+                try:
+                    await ctx.preview_controller.request_preview(
+                        thread_id=thread_id,
+                        user_id=auto_start_user_id,
+                    )
+                except Exception:
+                    logger.debug("Auto-start preview for thread %s failed (non-fatal)", thread_id, exc_info=True)
 
         await bridge.publish_end(run_id)
         asyncio.create_task(bridge.cleanup(run_id, delay=60))

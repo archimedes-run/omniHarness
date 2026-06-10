@@ -6,7 +6,7 @@ from omniharness.config import get_app_config
 from omniharness.config.app_config import AppConfig
 from omniharness.reflection import resolve_variable
 from omniharness.sandbox.security import is_host_bash_allowed
-from omniharness.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, view_image_tool
+from omniharness.tools.builtins import ask_clarification_tool, present_file_tool, preview_tool, task_tool, view_image_tool
 from omniharness.tools.builtins.tool_search import reset_deferred_registry
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,12 @@ def get_available_tools(
         from omniharness.tools.skill_manage_tool import skill_manage_tool
 
         builtin_tools.append(skill_manage_tool)
+
+    # Add preview tool only when a PreviewController is registered (gateway mode).
+    from omniharness.preview.preview_controller import get_preview_controller
+
+    if get_preview_controller() is not None:
+        builtin_tools.append(preview_tool)
 
     # Add subagent tools only if enabled via runtime parameter
     if subagent_enabled:

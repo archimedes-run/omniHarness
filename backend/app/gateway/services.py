@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 from langchain_core.messages import HumanMessage
 
-from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
+from app.gateway.deps import get_current_user, get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.utils import sanitize_log_param
 from omniharness.runtime import (
     END_SENTINEL,
@@ -288,6 +288,16 @@ async def start_run(
     # that carries agent configuration (model_name, thinking_enabled, etc.).
     # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
     merge_run_context_overrides(config, getattr(body, "context", None))
+
+    # Thread the authenticated user_id explicitly into the runtime context so
+    # middlewares and tools running in background worker threads can read it
+    # from runtime.context["user_id"] without relying on the get_effective_user_id()
+    # contextvar, which may not be set in those threads.
+    user_id = await get_current_user(request)
+    if user_id:
+        ctx_dict = config.setdefault("context", {})
+        if isinstance(ctx_dict, dict):
+            ctx_dict.setdefault("user_id", user_id)
 
     stream_modes = normalize_stream_modes(body.stream_mode)
 
