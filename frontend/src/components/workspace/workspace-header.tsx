@@ -15,6 +15,8 @@ import { useI18n } from "@/core/i18n/hooks";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
+import { OmniBrandMark } from "./omni-brand-mark";
+
 export function WorkspaceHeader({ className }: { className?: string }) {
   const { t } = useI18n();
   const { state } = useSidebar();
@@ -29,20 +31,25 @@ export function WorkspaceHeader({ className }: { className?: string }) {
       >
         {state === "collapsed" ? (
           <div className="group-has-data-[collapsible=icon]/sidebar-wrapper:-translate-y flex w-full cursor-pointer items-center justify-center">
-            <div className="text-primary block pt-1 font-serif group-hover/workspace-header:hidden">
-              DF
+            <div className="block group-hover/workspace-header:hidden">
+              <OmniBrandMark animated size="lg" />
             </div>
             <SidebarTrigger className="hidden pl-2 group-hover/workspace-header:block" />
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
             {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ? (
-              <Link href="/" className="text-primary ml-2 font-serif">
-                OmniHarness
+              <Link
+                href="/"
+                className="ml-2 flex items-center gap-2 text-[0.95rem] font-medium tracking-[0.02em] text-black"
+              >
+                <OmniBrandMark size="sm" />
+                <span>OmniHarness</span>
               </Link>
             ) : (
-              <div className="text-primary ml-2 cursor-default font-serif">
-                OmniHarness
+              <div className="ml-2 flex cursor-default items-center gap-2 text-[0.95rem] font-medium tracking-[0.02em] text-black">
+                <OmniBrandMark size="sm" />
+                <span>OmniHarness</span>
               </div>
             )}
             <SidebarTrigger />
@@ -55,7 +62,7 @@ export function WorkspaceHeader({ className }: { className?: string }) {
             isActive={pathname === "/workspace/chats/new"}
             asChild
           >
-            <Link className="text-muted-foreground" href="/workspace/chats/new">
+            <Link className="text-inherit" href="/workspace/chats/new">
               <MessageSquarePlus size={16} />
               <span>{t.sidebar.newChat}</span>
             </Link>

@@ -529,21 +529,27 @@ export function InputBox({
               >
                 <PromptInputActionMenuTrigger className="gap-1! px-2!">
                   <div>
-                    {context.mode === "flash" && <ZapIcon className="size-3" />}
+                    {context.mode === "flash" && (
+                      <ZapIcon className="size-3 text-emerald-500" />
+                    )}
                     {context.mode === "thinking" && (
-                      <LightbulbIcon className="size-3" />
+                      <LightbulbIcon className="size-3 text-yellow-400" />
                     )}
                     {context.mode === "pro" && (
-                      <GraduationCapIcon className="size-3" />
+                      <GraduationCapIcon className="size-3 text-orange-500" />
                     )}
                     {context.mode === "ultra" && (
-                      <RocketIcon className="size-3 text-[#dabb5e]" />
+                      <RocketIcon className="size-3 text-red-500 [filter:drop-shadow(0_0_5px_rgb(239_68_68/0.85))]" />
                     )}
                   </div>
                   <div
                     className={cn(
                       "text-xs font-normal",
-                      context.mode === "ultra" ? "golden-text" : "",
+                      context.mode === "flash" && "text-emerald-600",
+                      context.mode === "thinking" && "text-yellow-500",
+                      context.mode === "pro" && "text-orange-500",
+                      context.mode === "ultra" &&
+                        "text-red-500 [text-shadow:0_0_8px_rgb(239_68_68/0.55)]",
                     )}
                   >
                     {(context.mode === "flash" && t.inputBox.flashMode) ||
@@ -563,7 +569,7 @@ export function InputBox({
                     <PromptInputActionMenuItem
                       className={cn(
                         context.mode === "flash"
-                          ? "text-accent-foreground"
+                          ? "text-emerald-700"
                           : "text-muted-foreground/65",
                       )}
                       onSelect={() => handleModeSelect("flash")}
@@ -573,8 +579,9 @@ export function InputBox({
                           <ZapIcon
                             className={cn(
                               "mr-2 size-4",
-                              context.mode === "flash" &&
-                                "text-accent-foreground",
+                              context.mode === "flash"
+                                ? "text-emerald-500"
+                                : "text-muted-foreground/60",
                             )}
                           />
                           {t.inputBox.flashMode}
@@ -593,7 +600,7 @@ export function InputBox({
                       <PromptInputActionMenuItem
                         className={cn(
                           context.mode === "thinking"
-                            ? "text-accent-foreground"
+                            ? "text-yellow-600"
                             : "text-muted-foreground/65",
                         )}
                         onSelect={() => handleModeSelect("thinking")}
@@ -603,8 +610,9 @@ export function InputBox({
                             <LightbulbIcon
                               className={cn(
                                 "mr-2 size-4",
-                                context.mode === "thinking" &&
-                                  "text-accent-foreground",
+                                context.mode === "thinking"
+                                  ? "text-yellow-400"
+                                  : "text-muted-foreground",
                               )}
                             />
                             {t.inputBox.reasoningMode}
@@ -623,7 +631,7 @@ export function InputBox({
                     <PromptInputActionMenuItem
                       className={cn(
                         context.mode === "pro"
-                          ? "text-accent-foreground"
+                          ? "text-orange-600"
                           : "text-muted-foreground/65",
                       )}
                       onSelect={() => handleModeSelect("pro")}
@@ -633,8 +641,9 @@ export function InputBox({
                           <GraduationCapIcon
                             className={cn(
                               "mr-2 size-4",
-                              context.mode === "pro" &&
-                                "text-accent-foreground",
+                              context.mode === "pro"
+                                ? "text-orange-500"
+                                : "text-muted-foreground/60",
                             )}
                           />
                           {t.inputBox.proMode}
@@ -652,7 +661,7 @@ export function InputBox({
                     <PromptInputActionMenuItem
                       className={cn(
                         context.mode === "ultra"
-                          ? "text-accent-foreground"
+                          ? "text-red-600"
                           : "text-muted-foreground/65",
                       )}
                       onSelect={() => handleModeSelect("ultra")}
@@ -662,12 +671,15 @@ export function InputBox({
                           <RocketIcon
                             className={cn(
                               "mr-2 size-4",
-                              context.mode === "ultra" && "text-[#dabb5e]",
+                              context.mode === "ultra"
+                                ? "text-red-500 [filter:drop-shadow(0_0_7px_rgb(239_68_68/0.9))]"
+                                : "text-muted-foreground/60",
                             )}
                           />
                           <div
                             className={cn(
-                              context.mode === "ultra" && "golden-text",
+                              context.mode === "ultra" &&
+                                "text-red-500 [text-shadow:0_0_10px_rgb(239_68_68/0.6)]",
                             )}
                           >
                             {t.inputBox.ultraMode}
@@ -810,7 +822,8 @@ export function InputBox({
               onOpenChange={setModelDialogOpen}
             >
               <ModelSelectorTrigger asChild>
-                <PromptInputButton>
+                <PromptInputButton className="gap-1.5!">
+                  <div className="size-1.5 shrink-0 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 opacity-75" />
                   <div className="flex min-w-0 flex-col items-start text-left">
                     <ModelSelectorName className="text-xs font-normal">
                       {selectedModel?.display_name}
@@ -913,7 +926,7 @@ function SuggestionList() {
   return (
     <Suggestions className="min-h-16 w-fit items-start">
       <ConfettiButton
-        className="text-muted-foreground cursor-pointer rounded-full px-4 text-xs font-normal"
+        className="border-foreground/15 text-foreground/60 hover:border-foreground/30 hover:bg-foreground/[0.05] hover:text-foreground cursor-pointer rounded-full bg-transparent px-4 text-xs font-normal shadow-none"
         variant="outline"
         size="sm"
         onClick={() => handleSuggestionClick(t.inputBox.surpriseMePrompt)}

@@ -184,7 +184,7 @@ export function RecentChatList() {
                     <SidebarMenuButton isActive={isActive} asChild>
                       <div>
                         <Link
-                          className="text-muted-foreground block w-full whitespace-nowrap group-hover/side-menu-item:overflow-hidden"
+                          className="block w-full whitespace-nowrap text-inherit group-hover/side-menu-item:overflow-hidden"
                           href={pathOfThread(thread)}
                         >
                           {titleOfThread(thread)}
@@ -194,7 +194,7 @@ export function RecentChatList() {
                             <DropdownMenuTrigger asChild>
                               <SidebarMenuAction
                                 showOnHover
-                                className="bg-background/50 hover:bg-background"
+                                className="hover:bg-sidebar-accent hover:text-sidebar-accent-foreground bg-transparent"
                               >
                                 <MoreHorizontal />
                                 <span className="sr-only">{t.common.more}</span>
@@ -213,18 +213,18 @@ export function RecentChatList() {
                                   )
                                 }
                               >
-                                <Pencil className="text-muted-foreground" />
+                                <Pencil className="text-current" />
                                 <span>{t.common.rename}</span>
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onSelect={() => handleShare(thread)}
                               >
-                                <Share2 className="text-muted-foreground" />
+                                <Share2 className="text-current" />
                                 <span>{t.common.share}</span>
                               </DropdownMenuItem>
                               <DropdownMenuSub>
                                 <DropdownMenuSubTrigger>
-                                  <Download className="text-muted-foreground" />
+                                  <Download className="text-current" />
                                   <span>{t.common.export}</span>
                                 </DropdownMenuSubTrigger>
                                 <DropdownMenuSubContent>
@@ -233,7 +233,7 @@ export function RecentChatList() {
                                       handleExport(thread, "markdown")
                                     }
                                   >
-                                    <FileText className="text-muted-foreground" />
+                                    <FileText className="text-current" />
                                     <span>{t.common.exportAsMarkdown}</span>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
@@ -241,7 +241,7 @@ export function RecentChatList() {
                                       handleExport(thread, "json")
                                     }
                                   >
-                                    <FileJson className="text-muted-foreground" />
+                                    <FileJson className="text-current" />
                                     <span>{t.common.exportAsJSON}</span>
                                   </DropdownMenuItem>
                                 </DropdownMenuSubContent>
@@ -250,7 +250,7 @@ export function RecentChatList() {
                               <DropdownMenuItem
                                 onSelect={() => handleDelete(thread.thread_id)}
                               >
-                                <Trash2 className="text-muted-foreground" />
+                                <Trash2 className="text-current" />
                                 <span>{t.common.delete}</span>
                               </DropdownMenuItem>
                             </DropdownMenuContent>
