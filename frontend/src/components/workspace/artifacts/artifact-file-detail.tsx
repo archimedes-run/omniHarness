@@ -178,7 +178,7 @@ function ArtifactFileDetailInner({
     try {
       const url = new URL(filepathFromProps);
       const filePath = decodeURIComponent(url.pathname);
-      const match = /^\/mnt\/user-data\/workspace\/([^/]+)/.exec(filePath);
+      const match = /^\/mnt\/user-data\/workspace\/([^/]+)\//.exec(filePath);
       return match?.[1] ?? null;
     } catch {
       return null;

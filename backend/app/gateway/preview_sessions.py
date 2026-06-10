@@ -49,6 +49,31 @@ _PORT_PATTERNS = (
 )
 
 _WORKSPACE_PREFIX = f"{VIRTUAL_PATH_PREFIX}/workspace"
+
+# Patterns for package-manager script runners that need deps installed first.
+_NPM_RUN_RE = re.compile(r"\bnpm\s+(?:run|start)\b")
+_PNPM_RUN_RE = re.compile(r"\bpnpm\s+(?:run\s+)?\S")
+_YARN_RUN_RE = re.compile(r"\byarn\s+(?:run\s+)?\S")
+_BUN_RUN_RE = re.compile(r"\bbun\s+(?:run\s+)?\S")
+
+
+def _maybe_prepend_install(command: str) -> str:
+    """Prepend a conditional dependency-install step for package-manager script runners.
+
+    Only installs if node_modules is absent, so repeat starts are fast.
+    Handles npm, pnpm, yarn, and bun.
+    """
+    if _NPM_RUN_RE.search(command):
+        return f"([ -d node_modules ] || npm install --no-fund --no-audit 2>&1) && {command}"
+    if _PNPM_RUN_RE.search(command):
+        return f"([ -d node_modules ] || pnpm install 2>&1) && {command}"
+    if _YARN_RUN_RE.search(command):
+        return f"([ -d node_modules ] || yarn install 2>&1) && {command}"
+    if _BUN_RUN_RE.search(command):
+        return f"([ -d node_modules ] || bun install 2>&1) && {command}"
+    return command
+
+
 _OUTPUTS_PREFIX = f"{VIRTUAL_PATH_PREFIX}/outputs"
 _DEFAULT_IDLE_TIMEOUT_SECONDS = 15 * 60
 _CLEANUP_INTERVAL_SECONDS = 30
@@ -784,7 +809,7 @@ class PreviewSessionManager:
         # project root. The exec_dir param is silently ignored in async mode
         # (falls back to session CWD = /home/gem), so we embed the cd in the
         # command itself as a reliable alternative.
-        effective_command = f"cd {shlex.quote(session.root_path)} && {session.command}"
+        effective_command = f"cd {shlex.quote(session.root_path)} && {_maybe_prepend_install(session.command)}"
         result = await asyncio.to_thread(
             sandbox.start_shell_command,
             session_id=session.shell_session_id,

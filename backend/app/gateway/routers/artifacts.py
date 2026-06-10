@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import mimetypes
@@ -753,7 +754,7 @@ async def list_project_files(thread_id: str, artifact_id: str, request: Request)
     manifest = get_artifact_manifest_for_preview(thread_id, artifact_id, user_id=user_id)
     root = _resolve_project_root(thread_id, manifest, user_id=user_id)
 
-    files = _list_files_in_dir(root)
+    files = await asyncio.to_thread(_list_files_in_dir, root)
     return ProjectFilesResponse(
         artifact_id=artifact_id,
         root=manifest.source_path or manifest.root_path,
@@ -827,7 +828,7 @@ async def list_workspace_files(thread_id: str, request: Request, root: str) -> P
     if not workspace_path.is_dir():
         raise HTTPException(status_code=404, detail=f"Workspace directory not found: {root}")
 
-    files = _list_files_in_dir(workspace_path)
+    files = await asyncio.to_thread(_list_files_in_dir, workspace_path)
     return ProjectFilesResponse(artifact_id=clean, root=f"/mnt/user-data/workspace/{clean}", files=files)
 
 

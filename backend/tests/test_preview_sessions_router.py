@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import app.gateway.preview_sessions as preview_sessions
 import app.gateway.routers.artifacts as artifacts_router
 from app.gateway.auth.models import User
-from app.gateway.preview_sessions import PreviewSessionManager
+from app.gateway.preview_sessions import PreviewSessionManager, _maybe_prepend_install
 from app.gateway.routers import previews as previews_router
 from omniharness.config.paths import Paths
 
@@ -572,3 +572,40 @@ def test_create_preview_from_manifest_missing(preview_test_context, monkeypatch)
         response = client.post(f"/api/threads/{thread_id}/artifacts/manifests/nonexistent/preview")
 
     assert response.status_code == 404
+
+
+def test_maybe_prepend_install_npm() -> None:
+    result = _maybe_prepend_install("npm run dev")
+    assert "([ -d node_modules ] || npm install" in result
+    assert result.endswith("&& npm run dev")
+
+
+def test_maybe_prepend_install_npm_start() -> None:
+    result = _maybe_prepend_install("npm start")
+    assert "([ -d node_modules ] || npm install" in result
+    assert result.endswith("&& npm start")
+
+
+def test_maybe_prepend_install_pnpm() -> None:
+    result = _maybe_prepend_install("pnpm run dev")
+    assert "([ -d node_modules ] || pnpm install" in result
+
+
+def test_maybe_prepend_install_yarn() -> None:
+    result = _maybe_prepend_install("yarn dev")
+    assert "([ -d node_modules ] || yarn install" in result
+
+
+def test_maybe_prepend_install_bun() -> None:
+    result = _maybe_prepend_install("bun run dev")
+    assert "([ -d node_modules ] || bun install" in result
+
+
+def test_maybe_prepend_install_non_package_manager() -> None:
+    cmd = "python -m http.server 3000"
+    assert _maybe_prepend_install(cmd) == cmd
+
+
+def test_maybe_prepend_install_idempotent_fast_path() -> None:
+    result = _maybe_prepend_install("npm run dev")
+    assert result.count("npm install") == 1

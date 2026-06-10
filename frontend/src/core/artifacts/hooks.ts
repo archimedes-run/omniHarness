@@ -166,7 +166,13 @@ export function usePreviewSessionLogs({
     queryKey: ["preview-session-logs", threadId, previewId],
     queryFn: () => loadPreviewSessionLogs({ threadId, previewId: previewId! }),
     enabled: enabled && !isMock && Boolean(previewId),
-    refetchInterval: 3000,
+    retry: false,
+    refetchInterval: (query) => {
+      if (query.state.error) return false;
+      const status = query.state.data?.status;
+      if (status === "stopped" || status === "failed") return false;
+      return 3000;
+    },
   });
 
   return {
