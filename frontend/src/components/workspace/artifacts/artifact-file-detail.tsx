@@ -287,6 +287,23 @@ function ArtifactFileDetailInner({
         error instanceof Error
           ? error.message
           : "Failed to restart live preview session";
+      // Session or sandbox no longer exists (e.g. server restarted) — create a fresh one
+      const isGone =
+        message.includes("404") ||
+        message.toLowerCase().includes("not found") ||
+        message.toLowerCase().includes("no longer available");
+      if (manifestId && isGone) {
+        try {
+          await createPreviewFromManifest.mutateAsync({
+            threadId,
+            artifactId: manifestId,
+          });
+          setPreviewReloadKey((v) => v + 1);
+          return;
+        } catch {
+          // fall through and show the original restart error
+        }
+      }
       setPreviewCreateError(message);
       toast.error(message);
     }

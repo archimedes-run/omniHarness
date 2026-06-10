@@ -11,6 +11,7 @@ from app.gateway.preview_sessions import (
     PreviewSessionResponse,
 )
 from app.gateway.routers.artifacts import get_artifact_manifest_for_preview
+from omniharness.config.paths import get_paths
 
 router = APIRouter(prefix="/api/threads", tags=["previews"])
 
@@ -117,7 +118,7 @@ async def proxy_preview_session(
 
 
 @router.post("/{thread_id}/artifacts/manifests/{artifact_id}/preview", response_model=PreviewSessionResponse)
-@require_permission("threads", "write", owner_check=True, require_existing=True)
+@require_permission("threads", "write", owner_check=True)
 async def create_preview_from_manifest(
     thread_id: str,
     artifact_id: str,
@@ -135,14 +136,26 @@ async def create_preview_from_manifest(
             status_code=422,
             detail=f"Manifest type '{manifest.type}' does not support live preview; only web_app manifests do",
         )
+    # Use source_path (where agent put the code) when the directory exists.
+    # Fall back to root_path (manifest's physical location in outputs) when
+    # source_path was wrongly inferred as workspace but the code is actually in outputs.
+    effective_root = manifest.root_path
+    if manifest.source_path:
+        try:
+            resolved = get_paths().resolve_virtual_path(thread_id, manifest.source_path, user_id=user_id)
+            if resolved.is_dir():
+                effective_root = manifest.source_path
+        except Exception:
+            pass
+
     body = PreviewSessionCreateRequest(
         artifact_id=manifest.id,
-        root_path=manifest.source_path,  # guaranteed non-None by manifest validator
+        root_path=effective_root,
         command=manifest.preview.command,  # guaranteed non-None for dev_server by manifest validator
         port=manifest.preview.port,
     )
     manager = get_preview_session_manager(request)
-    return await manager.create_session(
+    return await manager.create_session_from_manifest(
         user_id=user_id,
         thread_id=thread_id,
         body=body,
