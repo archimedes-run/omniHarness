@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import re
+import shlex
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,12 +32,24 @@ _HTML_ROOT_RELATIVE_ATTR_RE = re.compile(
     r"(?P<prefix>\b(?:href|src|poster|action)\s*=\s*[\"'])(?P<url>/(?!/)[^\"']*)(?P<suffix>[\"'])",
     re.IGNORECASE,
 )
+_CSS_ROOT_RELATIVE_URL_RE = re.compile(
+    r"url\(\s*(?P<q>[\"']?)(?P<url>/(?!/)[^)\"'\s]*)(?P=q)\s*\)",
+    re.IGNORECASE,
+)
+_JS_ROOT_RELATIVE_IMPORT_RE = re.compile(
+    r"""(?P<prefix>\b(?:from|import)\s*\(?\s*["'])(?P<url>/(?!/)[^"'\s]*)(?P<suffix>["'])""",
+)
+_HTML_INLINE_MODULE_SCRIPT_RE = re.compile(
+    r"(<script\b[^>]*\btype\s*=\s*[\"']module[\"'][^>]*>)(.*?)(</script\s*>)",
+    re.IGNORECASE | re.DOTALL,
+)
 _PORT_PATTERNS = (
     re.compile(r"https?://(?:127\.0\.0\.1|0\.0\.0\.0|localhost):(?P<port>\d{2,5})", re.IGNORECASE),
     re.compile(r"\b(?:ready on|listening on|local:|network:)\D+(?P<port>\d{2,5})", re.IGNORECASE),
 )
 
 _WORKSPACE_PREFIX = f"{VIRTUAL_PATH_PREFIX}/workspace"
+_OUTPUTS_PREFIX = f"{VIRTUAL_PATH_PREFIX}/outputs"
 _DEFAULT_IDLE_TIMEOUT_SECONDS = 15 * 60
 _CLEANUP_INTERVAL_SECONDS = 30
 _MIN_ALLOWED_PORT = 1024
@@ -113,6 +126,64 @@ def _ensure_workspace_root(
     return actual_path
 
 
+def _normalize_workspace_or_outputs_virtual_path(path: str) -> str:
+    """Like _normalize_workspace_virtual_path but also accepts /mnt/user-data/outputs paths.
+
+    Used for manifest-based previews where agents may place projects in outputs instead of workspace.
+    Both locations are scoped to the user's thread data, so the security boundary is maintained.
+    """
+    stripped = path.strip().rstrip("/")
+    if not stripped:
+        raise HTTPException(status_code=422, detail="root_path is required")
+
+    normalized = stripped
+    if not normalized.startswith("/"):
+        for prefix in (_WORKSPACE_PREFIX.lstrip("/"), _OUTPUTS_PREFIX.lstrip("/")):
+            if normalized == prefix or normalized.startswith(prefix + "/"):
+                normalized = f"/{normalized}"
+                break
+        else:
+            for short in ("workspace", "outputs"):
+                if normalized == short or normalized.startswith(short + "/"):
+                    normalized = f"{VIRTUAL_PATH_PREFIX}/{normalized}"
+                    break
+
+    is_workspace = normalized == _WORKSPACE_PREFIX or normalized.startswith(_WORKSPACE_PREFIX + "/")
+    is_outputs = normalized == _OUTPUTS_PREFIX or normalized.startswith(_OUTPUTS_PREFIX + "/")
+    if not is_workspace and not is_outputs:
+        raise HTTPException(
+            status_code=422,
+            detail=f"root_path must stay under {_WORKSPACE_PREFIX} or {_OUTPUTS_PREFIX}",
+        )
+
+    return normalized
+
+
+def _ensure_workspace_or_outputs_root(
+    *,
+    thread_id: str,
+    user_id: str,
+    virtual_path: str,
+) -> Path:
+    """Validate root_path for manifest-based previews; accepts workspace or outputs directories."""
+    paths = get_paths()
+    actual_path = paths.resolve_virtual_path(thread_id, virtual_path, user_id=user_id)
+    user_data_root = paths.sandbox_user_data_dir(thread_id, user_id=user_id).resolve()
+
+    try:
+        actual_path.relative_to(user_data_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"root_path must stay under {VIRTUAL_PATH_PREFIX}",
+        ) from exc
+
+    if not actual_path.exists() or not actual_path.is_dir():
+        raise HTTPException(status_code=422, detail="root_path must reference an existing directory")
+
+    return actual_path
+
+
 def _validate_command(command: str) -> str:
     normalized = command.strip()
     if not normalized:
@@ -165,9 +236,30 @@ def _rewrite_proxy_location(location: str, proxy_root: str, port: int) -> str:
 
 
 def _rewrite_root_relative_html_urls(html: str, proxy_root: str) -> str:
-    return _HTML_ROOT_RELATIVE_ATTR_RE.sub(
+    rewritten = _HTML_ROOT_RELATIVE_ATTR_RE.sub(
         lambda match: f"{match.group('prefix')}{proxy_root}{match.group('url')}{match.group('suffix')}",
         html,
+    )
+    # Rewrite root-relative ES module import paths inside inline <script type="module"> blocks.
+    # Static import statements are resolved by the JS engine before any fetch/XHR shim runs,
+    # so they must be textually rewritten at the HTML level.
+    return _HTML_INLINE_MODULE_SCRIPT_RE.sub(
+        lambda m: f"{m.group(1)}{_rewrite_root_relative_js_imports(m.group(2), proxy_root)}{m.group(3)}",
+        rewritten,
+    )
+
+
+def _rewrite_root_relative_css_urls(css: str, proxy_root: str) -> str:
+    return _CSS_ROOT_RELATIVE_URL_RE.sub(
+        lambda m: f"url({m.group('q')}{proxy_root}{m.group('url')}{m.group('q')})",
+        css,
+    )
+
+
+def _rewrite_root_relative_js_imports(js: str, proxy_root: str) -> str:
+    return _JS_ROOT_RELATIVE_IMPORT_RE.sub(
+        lambda m: f"{m.group('prefix')}{proxy_root}{m.group('url')}{m.group('suffix')}",
+        js,
     )
 
 
@@ -194,6 +286,23 @@ def _preview_html_shim(proxy_root: str) -> str:
         "const patchHistory=function(name){const original=history[name].bind(history);history[name]=function(state,title,url){if(typeof url==='string'){url=rewrite(url);}return original(state,title,url);};};"
         "patchHistory('pushState');"
         "patchHistory('replaceState');"
+        # Intercept setAttribute so React's DOM reconciler doesn't slip root-relative paths past us
+        "const _origSetAttr=Element.prototype.setAttribute;"
+        "Element.prototype.setAttribute=function(name,value){"
+        "if(typeof value==='string'&&(name==='href'||name==='src'||name==='action'||name==='poster')){value=rewrite(value);}"
+        "return _origSetAttr.call(this,name,value);};"
+        # Intercept the IDL property setters (e.g. link.href=...) used by React's preload() hint system
+        "const _pp=function(proto,prop){"
+        "if(!proto)return;"
+        "const d=Object.getOwnPropertyDescriptor(proto,prop);"
+        "if(d&&d.set){Object.defineProperty(proto,prop,Object.assign({},d,{set:function(v){d.set.call(this,typeof v==='string'?rewrite(v):v);}}));}};"
+        "_pp(HTMLLinkElement.prototype,'href');"
+        "_pp(HTMLAnchorElement.prototype,'href');"
+        "_pp(HTMLScriptElement.prototype,'src');"
+        "_pp(HTMLImageElement.prototype,'src');"
+        "_pp(HTMLIFrameElement.prototype,'src');"
+        "_pp(HTMLVideoElement.prototype,'src');"
+        "_pp(HTMLSourceElement.prototype,'src');"
         "window.__OMNI_HARNESS_PREVIEW_PROXY_ROOT__=proxyRoot;"
         "})();"
         "</script>"
@@ -360,10 +469,11 @@ class PreviewSessionManager:
     async def list_sessions(self, *, user_id: str, thread_id: str) -> list[PreviewSessionResponse]:
         await self.cleanup_expired_sessions()
         responses: list[PreviewSessionResponse] = []
-        for session in self._sessions.values():
+        for session in list(self._sessions.values()):
             if session.user_id != user_id or session.thread_id != thread_id:
                 continue
-            await self._refresh_session(session, touch=False)
+            with contextlib.suppress(Exception):
+                await self._refresh_session(session, touch=False)
             responses.append(session.to_response())
         responses.sort(key=lambda item: item.created_at)
         return responses
@@ -386,7 +496,55 @@ class PreviewSessionManager:
         )
         if existing is not None and existing.status in {"running", "starting"}:
             await self._refresh_session(existing)
-            return existing.to_response()
+            if existing.status in {"running", "starting"}:
+                return existing.to_response()
+            # Sandbox or process is gone — fall through to restart the session below
+
+        session = existing or self._new_session(
+            user_id=user_id,
+            thread_id=thread_id,
+            artifact_id=body.artifact_id,
+            root_path=root_path,
+            command=command,
+            port=port,
+        )
+        session.root_path = root_path
+        session.command = command
+        session.port = port
+        session.error = None
+        session.exit_code = None
+        self._sessions[session.id] = session
+
+        await self._start_session(session)
+        return session.to_response()
+
+    async def create_session_from_manifest(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        body: PreviewSessionCreateRequest,
+    ) -> PreviewSessionResponse:
+        """Like create_session but accepts workspace OR outputs as root_path.
+
+        Used by manifest-based preview endpoints where agents may place the project
+        in /mnt/user-data/outputs instead of /mnt/user-data/workspace. Both are
+        scoped to the user's thread data so the security boundary is maintained.
+        """
+        root_path = _normalize_workspace_or_outputs_virtual_path(body.root_path)
+        _ensure_workspace_or_outputs_root(thread_id=thread_id, user_id=user_id, virtual_path=root_path)
+        command = _validate_command(body.command)
+        port = _validate_port(body.port)
+
+        existing = next(
+            (session for session in self._sessions.values() if session.user_id == user_id and session.thread_id == thread_id and session.artifact_id == body.artifact_id),
+            None,
+        )
+        if existing is not None and existing.status in {"running", "starting"}:
+            await self._refresh_session(existing)
+            if existing.status in {"running", "starting"}:
+                return existing.to_response()
+            # Sandbox or process is gone — fall through to restart the session below
 
         session = existing or self._new_session(
             user_id=user_id,
@@ -431,7 +589,14 @@ class PreviewSessionManager:
 
     async def stop_session(self, *, user_id: str, thread_id: str, preview_id: str) -> PreviewSessionResponse:
         session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
-        sandbox = await self._get_sandbox_for_existing_session(session)
+        try:
+            sandbox = await self._get_sandbox_for_existing_session(session)
+        except Exception:
+            # Sandbox is gone — session is already effectively stopped
+            session.status = "stopped"
+            session.error = None
+            session.updated_at = _now_utc()
+            return session.to_response()
         await asyncio.to_thread(sandbox.kill_shell_session, session.shell_session_id)
         await self._refresh_session(session)
         if session.status == "failed":
@@ -461,7 +626,15 @@ class PreviewSessionManager:
         path: str,
     ) -> Response:
         session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
-        await self._refresh_session(session)
+        # Skip the expensive per-request refresh for already-running sessions.
+        # The status-polling endpoint (GET /previews and GET /previews/{id}/logs)
+        # refreshes status every ~3 s via background polling. Probing on every
+        # proxied asset request (HTML, JS chunks, CSS, images) runs concurrent
+        # nodejs.execute_code calls inside the shared container and overloads the
+        # sandbox executor, causing probe failures that flip the status back to
+        # "starting" and 409s for all subsequent asset requests.
+        if session.status != "running":
+            await self._refresh_session(session)
         if session.status == "stopped":
             raise HTTPException(status_code=409, detail="Preview session is stopped")
         if session.status == "failed":
@@ -474,14 +647,20 @@ class PreviewSessionManager:
         if request.url.query:
             proxy_path = f"{proxy_path}?{request.url.query}"
         body = await request.body()
-        forwarded = await asyncio.to_thread(
-            sandbox.fetch_local_url,
-            port=session.port,
-            path=proxy_path,
-            method=request.method,
-            headers=_sanitize_proxy_request_headers(request),
-            body=body or None,
-        )
+        try:
+            forwarded = await asyncio.to_thread(
+                sandbox.fetch_local_url,
+                port=session.port,
+                path=proxy_path,
+                method=request.method,
+                headers=_sanitize_proxy_request_headers(request),
+                body=body or None,
+            )
+        except Exception as exc:
+            # Forward failed — refresh to detect any process exit, then surface a 502
+            with contextlib.suppress(Exception):
+                await self._refresh_session(session, touch=False)
+            raise HTTPException(status_code=502, detail=f"Preview request failed: {exc}") from exc
 
         session.updated_at = _now_utc()
         session.expires_at = session.updated_at + timedelta(seconds=self._idle_timeout_seconds)
@@ -496,6 +675,12 @@ class PreviewSessionManager:
         if "text/html" in content_type:
             html = payload.decode("utf-8", errors="replace")
             payload = _inject_preview_shim(html, proxy_root).encode("utf-8")
+        elif "text/css" in content_type:
+            css = payload.decode("utf-8", errors="replace")
+            payload = _rewrite_root_relative_css_urls(css, proxy_root).encode("utf-8")
+        elif "javascript" in content_type or "application/x-typescript" in content_type:
+            js = payload.decode("utf-8", errors="replace")
+            payload = _rewrite_root_relative_js_imports(js, proxy_root).encode("utf-8")
 
         return Response(
             content=payload,
@@ -547,16 +732,63 @@ class PreviewSessionManager:
     async def _start_session(self, session: _PreviewSessionRecord) -> None:
         sandbox_id, sandbox = await self._get_or_create_sandbox(thread_id=session.thread_id)
         session.sandbox_id = sandbox_id
+
+        # Clean up any existing shell session with the same ID before (re)creating it.
+        # On the restart path, create_session_from_manifest reuses the existing session
+        # object (same shell_session_id), so the old completed/terminated shell session
+        # must be removed first. For brand-new sessions the ID doesn't exist yet so
+        # these are harmless no-ops.
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(sandbox.kill_shell_session, session.shell_session_id)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(sandbox.cleanup_shell_session, session.shell_session_id)
+
+        # Kill any other running sessions for this thread that bind the same port so we
+        # don't hit EADDRINUSE when the container is shared across multiple artifacts.
+        if session.port != 0:
+            for other in list(self._sessions.values()):
+                if other.id != session.id and other.thread_id == session.thread_id and other.port == session.port and other.status in {"running", "starting"}:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(sandbox.kill_shell_session, other.shell_session_id)
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(sandbox.cleanup_shell_session, other.shell_session_id)
+                    other.status = "stopped"
+                    other.error = None
+                    other.updated_at = _now_utc()
+                    logger.debug("stopped conflicting preview session %s (port %d) for thread %s", other.id, other.port, other.thread_id)
+
+        # Verify the project root actually exists inside the sandbox container before
+        # trying to start the dev server. The manifest router's host-side is_dir() check
+        # can return True while the container doesn't see the directory (e.g. if the
+        # agent put files in a different location, or the sandbox was recreated with a
+        # fresh ephemeral layer). Catching this here produces a clear error instead of
+        # the opaque "bash: cd: No such file or directory" that bubbles up otherwise.
+        dir_check = await asyncio.to_thread(
+            sandbox.execute_command,
+            f"test -d {shlex.quote(session.root_path)} && echo __dir_ok__ || echo __dir_missing__",
+        )
+        if "__dir_ok__" not in (dir_check or ""):
+            session.status = "failed"
+            session.error = f"Project directory not found inside the sandbox: {session.root_path}. Ask the agent to recreate the project files in the workspace."
+            session.updated_at = _now_utc()
+            session.expires_at = session.updated_at + timedelta(seconds=self._idle_timeout_seconds)
+            return
+
         await asyncio.to_thread(
             sandbox.create_shell_session,
             session_id=session.shell_session_id,
             exec_dir=session.root_path,
             no_change_timeout=_NO_CHANGE_TIMEOUT_SECONDS,
         )
+        # Prefix with an explicit cd so the dev server always runs from the
+        # project root. The exec_dir param is silently ignored in async mode
+        # (falls back to session CWD = /home/gem), so we embed the cd in the
+        # command itself as a reliable alternative.
+        effective_command = f"cd {shlex.quote(session.root_path)} && {session.command}"
         result = await asyncio.to_thread(
             sandbox.start_shell_command,
             session_id=session.shell_session_id,
-            command=session.command,
+            command=effective_command,
             exec_dir=session.root_path,
             no_change_timeout=_NO_CHANGE_TIMEOUT_SECONDS,
         )
@@ -594,8 +826,27 @@ class PreviewSessionManager:
             self._sessions.pop(preview_id, None)
 
     async def _refresh_session(self, session: _PreviewSessionRecord, *, touch: bool = True) -> str:
-        sandbox = await self._get_sandbox_for_existing_session(session)
-        view = await asyncio.to_thread(sandbox.view_shell_session, session.shell_session_id)
+        try:
+            sandbox = await self._get_sandbox_for_existing_session(session)
+        except Exception as exc:
+            # Sandbox is gone (container restarted, provider changed, etc.).
+            # Mark as failed so callers can decide whether to recreate rather than propagating a 404.
+            detail = getattr(exc, "detail", None) or str(exc)
+            session.status = "failed"
+            session.error = str(detail)
+            session.updated_at = _now_utc()
+            logger.debug("sandbox lookup failed for %s: %s", session.id, exc)
+            return session.error
+        try:
+            view = await asyncio.to_thread(sandbox.view_shell_session, session.shell_session_id)
+        except Exception as exc:
+            # Shell session is gone (sandbox restarted, session cleaned up, etc.).
+            # Mark as failed with the reason rather than propagating a 500.
+            session.status = "failed"
+            session.error = f"Sandbox session unavailable: {exc}"
+            session.updated_at = _now_utc()
+            logger.debug("view_shell_session failed for %s: %s", session.id, exc)
+            return session.error
         output = view.get("output") or ""
         now = _now_utc()
         session.updated_at = now
@@ -662,7 +913,16 @@ class PreviewSessionManager:
         provider = get_sandbox_provider()
         if not isinstance(provider, AioSandboxProvider):
             raise HTTPException(status_code=501, detail="Preview sessions currently require the AIO sandbox provider")
-        sandbox = provider.get(session.sandbox_id)
+        # Use acquire() so the sandbox is reclaimed from the warm pool if the agent
+        # released it after its last run — get() alone would return None and falsely
+        # report the sandbox as gone.
+        try:
+            acquired_id = provider.acquire(session.thread_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Preview sandbox is no longer available") from exc
+        if acquired_id != session.sandbox_id:
+            session.sandbox_id = acquired_id
+        sandbox = provider.get(acquired_id)
         if not isinstance(sandbox, AioSandbox):
             raise HTTPException(status_code=404, detail="Preview sandbox is no longer available")
         return sandbox

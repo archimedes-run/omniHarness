@@ -80,6 +80,12 @@ class _FakeAioSandbox:
     def cleanup_shell_session(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
 
+    def execute_command(self, command: str) -> str:
+        # Simulate the project directory always existing in the fake sandbox.
+        if command.startswith("test -d"):
+            return "__dir_ok__"
+        return ""
+
     def fetch_local_url(
         self,
         *,
@@ -106,12 +112,20 @@ class _FakeAioSandbox:
 class _FakeAioSandboxProvider:
     def __init__(self, sandbox: _FakeAioSandbox) -> None:
         self._sandbox = sandbox
+        # Tracks whether the sandbox is "active" (acquired) vs "released" (warm pool).
+        # Mimics the real provider: get() returns None when released, acquire() re-activates.
+        self._active = True
 
     def acquire(self, thread_id: str | None = None) -> str:
+        self._active = True
         return "sandbox-1"
 
     def get(self, sandbox_id: str):
-        return self._sandbox
+        return self._sandbox if self._active else None
+
+    def release(self) -> None:
+        """Simulate the agent releasing the sandbox after a run."""
+        self._active = False
 
 
 def _make_user(email: str, raw_id: str) -> User:
@@ -327,6 +341,51 @@ def test_create_preview_from_manifest(preview_test_context, monkeypatch) -> None
     assert body["command"] == "npm run dev -- --hostname 0.0.0.0"
 
 
+def test_create_preview_from_manifest_accepts_outputs_path(preview_test_context, monkeypatch) -> None:
+    """Manifest-based preview endpoint should accept source_path under outputs, not just workspace.
+
+    Agents often place the project in /mnt/user-data/outputs instead of /mnt/user-data/workspace.
+    The manifest endpoint must accept both locations since both are scoped to the user's thread.
+    """
+    user = preview_test_context["user"]
+    paths = preview_test_context["paths"]
+    thread_id = preview_test_context["thread_id"]
+
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=str(user.id))
+    app_dir = outputs_dir / "my-next-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    manifest_data = {
+        "id": "my-next-app",
+        "title": "My Next App",
+        "type": "web_app",
+        "root": ".",
+        "source_path": "/mnt/user-data/outputs/my-next-app",
+        "preview": {
+            "mode": "dev_server",
+            "command": "npm run dev -- --hostname 0.0.0.0",
+            "port": 3000,
+        },
+        "created_by": "agent",
+    }
+    (app_dir / "artifact_manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+
+    app = _make_preview_app(
+        user=user,
+        manager=preview_test_context["manager"],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/threads/{thread_id}/artifacts/manifests/my-next-app/preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artifact_id"] == "my-next-app"
+    assert body["status"] in ("starting", "running")
+    assert body["command"] == "npm run dev -- --hostname 0.0.0.0"
+
+
 def test_create_preview_from_manifest_rejects_static_site(preview_test_context, monkeypatch) -> None:
     user = preview_test_context["user"]
     paths = preview_test_context["paths"]
@@ -360,6 +419,141 @@ def test_create_preview_from_manifest_rejects_static_site(preview_test_context, 
 
     assert response.status_code == 422
     assert "web_app" in response.json()["detail"]
+
+
+def test_preview_session_survives_sandbox_release(preview_test_context) -> None:
+    """Preview session polling must survive the agent releasing the sandbox after a run.
+
+    The real provider's get() returns None once the sandbox is released to the warm pool.
+    _get_sandbox_for_existing_session must call acquire() instead, which reclaims it.
+    """
+    user = preview_test_context["user"]
+    provider = preview_test_context["provider"]
+    manager = preview_test_context["manager"]
+
+    app = _make_preview_app(user=user, manager=manager)
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/threads/thread-1/previews",
+            json={
+                "artifact_id": "dynamic-app",
+                "root_path": "/mnt/user-data/workspace/dynamic-app",
+                "command": "npm run dev -- --hostname 0.0.0.0",
+                "port": 3000,
+            },
+        )
+        assert create_response.status_code == 200
+        preview_id = create_response.json()["id"]
+
+        # Simulate the agent releasing the sandbox after its run ends
+        provider.release()
+
+        # Preview polling must still work (acquire() reclaims the sandbox)
+        list_response = client.get("/api/threads/thread-1/previews")
+        assert list_response.status_code == 200
+        sessions = list_response.json()
+        assert len(sessions) == 1
+        assert sessions[0]["id"] == preview_id
+        assert sessions[0]["status"] in ("starting", "running")
+
+        # Logs must also work
+        logs_response = client.get(f"/api/threads/thread-1/previews/{preview_id}/logs")
+        assert logs_response.status_code == 200
+
+
+def test_create_preview_recreates_session_when_sandbox_gone(preview_test_context, monkeypatch) -> None:
+    """When the sandbox disappears (e.g. Docker restart), create_session_from_manifest must
+    transparently replace the stale "starting" session with a fresh one instead of 404-ing."""
+    user = preview_test_context["user"]
+    paths = preview_test_context["paths"]
+    thread_id = preview_test_context["thread_id"]
+    sandbox = preview_test_context["sandbox"]
+    manager = preview_test_context["manager"]
+
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=str(user.id))
+    app_dir = outputs_dir / "dynamic-app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    manifest_data = {
+        "id": "dynamic-app",
+        "title": "Dynamic App",
+        "type": "web_app",
+        "root": ".",
+        "source_path": "/mnt/user-data/workspace/dynamic-app",
+        "preview": {"mode": "dev_server", "command": "npm run dev -- --hostname 0.0.0.0", "port": 3000},
+        "created_by": "agent",
+    }
+    (app_dir / "artifact_manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+
+    app = _make_preview_app(user=user, manager=manager)
+
+    with TestClient(app) as client:
+        # First create — session starts normally
+        r1 = client.post(f"/api/threads/{thread_id}/artifacts/manifests/dynamic-app/preview")
+        assert r1.status_code == 200
+        first_id = r1.json()["id"]
+
+        # Simulate sandbox disappearing: old sandbox_id returns non-AioSandbox; new sandbox is available.
+        # Must also patch AioSandboxProvider so isinstance() passes for the new provider.
+        class _GoneSandboxProvider(_FakeAioSandboxProvider):
+            def acquire(self, thread_id=None):
+                return "sandbox-new"
+
+            def get(self, sandbox_id: str):
+                if sandbox_id == "sandbox-1":
+                    return None  # old sandbox gone
+                return self._sandbox  # new sandbox available
+
+        gone_provider = _GoneSandboxProvider(sandbox)
+        monkeypatch.setattr(preview_sessions, "get_sandbox_provider", lambda: gone_provider)
+        monkeypatch.setattr(preview_sessions, "AioSandboxProvider", _GoneSandboxProvider)
+
+        # Second create — must recreate instead of 404-ing
+        r2 = client.post(f"/api/threads/{thread_id}/artifacts/manifests/dynamic-app/preview")
+
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["artifact_id"] == "dynamic-app"
+    assert body2["status"] in ("starting", "running")
+    # Session record is reused (same ID) but restarted with new sandbox
+    assert body2["id"] == first_id
+
+
+def test_stop_session_succeeds_when_sandbox_gone(preview_test_context, monkeypatch) -> None:
+    """Stopping a preview session whose sandbox has disappeared should return stopped, not 404."""
+    user = preview_test_context["user"]
+    sandbox = preview_test_context["sandbox"]
+    manager = preview_test_context["manager"]
+
+    app = _make_preview_app(user=user, manager=manager)
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/threads/thread-1/previews",
+            json={
+                "artifact_id": "dynamic-app",
+                "root_path": "/mnt/user-data/workspace/dynamic-app",
+                "command": "npm run dev -- --hostname 0.0.0.0",
+                "port": 3000,
+            },
+        )
+        assert create_response.status_code == 200
+        preview_id = create_response.json()["id"]
+
+        # Simulate sandbox disappearing
+        class _GoneSandboxProvider(_FakeAioSandboxProvider):
+            def get(self, sandbox_id: str):
+                return None
+
+        gone_provider = _GoneSandboxProvider(sandbox)
+        monkeypatch.setattr(preview_sessions, "get_sandbox_provider", lambda: gone_provider)
+        monkeypatch.setattr(preview_sessions, "AioSandboxProvider", _GoneSandboxProvider)
+
+        stop_response = client.post(f"/api/threads/thread-1/previews/{preview_id}/stop")
+
+    assert stop_response.status_code == 200
+    assert stop_response.json()["status"] == "stopped"
 
 
 def test_create_preview_from_manifest_missing(preview_test_context, monkeypatch) -> None:
