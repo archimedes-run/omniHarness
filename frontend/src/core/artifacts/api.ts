@@ -206,3 +206,49 @@ export async function loadPreviewSessionLogs({
   }
   return response.json() as Promise<PreviewSessionLogsResponse>;
 }
+
+export interface ProjectFileEntry {
+  path: string;
+  type: "file" | "dir";
+  size?: number | null;
+}
+
+export interface ProjectFilesResponse {
+  artifact_id: string;
+  root: string;
+  files: ProjectFileEntry[];
+}
+
+export async function loadProjectFiles({
+  threadId,
+  artifactId,
+}: {
+  threadId: string;
+  artifactId: string;
+}): Promise<ProjectFilesResponse> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/projects/${artifactId}/files`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load project files: ${response.status}`);
+  }
+  return response.json() as Promise<ProjectFilesResponse>;
+}
+
+export async function loadProjectFileContent({
+  threadId,
+  artifactId,
+  path,
+}: {
+  threadId: string;
+  artifactId: string;
+  path: string;
+}): Promise<string> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/projects/${artifactId}/files/content?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load file content: ${response.status}`);
+  }
+  return response.text();
+}

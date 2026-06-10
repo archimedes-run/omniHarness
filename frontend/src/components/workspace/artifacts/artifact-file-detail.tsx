@@ -1,9 +1,15 @@
 import {
   ActivityIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   Code2Icon,
   CopyIcon,
   DownloadIcon,
   EyeIcon,
+  FileIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  FolderTreeIcon,
   LoaderIcon,
   PackageIcon,
   PlayIcon,
@@ -42,13 +48,15 @@ import {
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CodeEditor } from "@/components/workspace/code-editor";
-import type { ArtifactManifest } from "@/core/artifacts/api";
+import type { ArtifactManifest, ProjectFileEntry } from "@/core/artifacts/api";
 import {
   useArtifactContent,
   useArtifactManifests,
   useCreatePreviewFromManifest,
   usePreviewSessionLogs,
   usePreviewSessions,
+  useProjectFileContent,
+  useProjectFiles,
   useRestartPreviewSession,
   useStopPreviewSession,
 } from "@/core/artifacts/hooks";
@@ -209,7 +217,9 @@ function ArtifactFileDetailInner({
     threadId,
   ]);
 
-  const [viewMode, setViewMode] = useState<"code" | "preview" | "logs">("code");
+  const [viewMode, setViewMode] = useState<
+    "code" | "preview" | "logs" | "files"
+  >("code");
   const [isInstalling, setIsInstalling] = useState(false);
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
   const [previewCreateError, setPreviewCreateError] = useState<string | null>(
@@ -377,7 +387,7 @@ function ArtifactFileDetailInner({
               value={viewMode}
               onValueChange={(value) => {
                 if (value) {
-                  setViewMode(value as "preview" | "logs");
+                  setViewMode(value as "preview" | "logs" | "files");
                 }
               }}
             >
@@ -386,6 +396,9 @@ function ArtifactFileDetailInner({
               </ToggleGroupItem>
               <ToggleGroupItem value="logs">
                 <ActivityIcon />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="files">
+                <FolderTreeIcon />
               </ToggleGroupItem>
             </ToggleGroup>
           )}
@@ -521,7 +534,10 @@ function ArtifactFileDetailInner({
         </div>
       </ArtifactHeader>
       <ArtifactContent className="p-0">
-        {isDynamicManifest && manifest && (
+        {isDynamicManifest && manifest && viewMode === "files" && (
+          <ProjectFilesPanel manifest={manifest} threadId={threadId} />
+        )}
+        {isDynamicManifest && manifest && viewMode !== "files" && (
           <DynamicArtifactPreviewPanel
             key={`${previewSession?.id ?? "preview"}-${previewReloadKey}`}
             manifest={manifest}
@@ -680,6 +696,181 @@ function DynamicArtifactPreviewPanel({
           )}
         </Button>
       )}
+    </div>
+  );
+}
+
+type FileTreeNode = {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  children: FileTreeNode[];
+  size?: number | null;
+};
+
+function buildFileTree(files: ProjectFileEntry[]): FileTreeNode[] {
+  const root: FileTreeNode[] = [];
+  const dirMap = new Map<string, FileTreeNode>();
+
+  const ensureDir = (parts: string[], depth: number): FileTreeNode[] => {
+    if (depth === 0) return root;
+    const path = parts.slice(0, depth).join("/");
+    const existing = dirMap.get(path);
+    if (existing) return existing.children;
+    const parentChildren = ensureDir(parts, depth - 1);
+    const node: FileTreeNode = {
+      name: parts[depth - 1] ?? "",
+      path,
+      type: "dir",
+      children: [],
+    };
+    dirMap.set(path, node);
+    parentChildren.push(node);
+    return node.children;
+  };
+
+  for (const file of files) {
+    const parts = file.path.split("/");
+    const parentChildren = ensureDir(parts, parts.length - 1);
+    parentChildren.push({
+      name: parts[parts.length - 1] ?? file.path,
+      path: file.path,
+      type: file.type,
+      children: [],
+      size: file.size,
+    });
+  }
+
+  return root;
+}
+
+function FileTreeNodeItem({
+  node,
+  selectedPath,
+  onSelect,
+  depth,
+}: {
+  node: FileTreeNode;
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
+  depth: number;
+}) {
+  const [isOpen, setIsOpen] = useState(true);
+  const indent = depth * 12;
+
+  if (node.type === "dir") {
+    return (
+      <div>
+        <button
+          className="hover:bg-muted/50 flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs"
+          style={{ paddingLeft: `${indent + 4}px` }}
+          onClick={() => setIsOpen((v) => !v)}
+        >
+          {isOpen ? (
+            <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+          ) : (
+            <ChevronRightIcon className="size-3 shrink-0 opacity-50" />
+          )}
+          {isOpen ? (
+            <FolderOpenIcon className="text-muted-foreground size-3 shrink-0" />
+          ) : (
+            <FolderIcon className="text-muted-foreground size-3 shrink-0" />
+          )}
+          <span className="truncate">{node.name}</span>
+        </button>
+        {isOpen &&
+          node.children.map((child) => (
+            <FileTreeNodeItem
+              key={child.path}
+              node={child}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+              depth={depth + 1}
+            />
+          ))}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className={cn(
+        "hover:bg-muted/50 flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs",
+        selectedPath === node.path && "bg-muted",
+      )}
+      style={{ paddingLeft: `${indent + 20}px` }}
+      onClick={() => onSelect(node.path)}
+    >
+      <FileIcon className="text-muted-foreground size-3 shrink-0" />
+      <span className="truncate">{node.name}</span>
+    </button>
+  );
+}
+
+function ProjectFilesPanel({
+  manifest,
+  threadId,
+}: {
+  manifest: ArtifactManifest;
+  threadId: string;
+}) {
+  const { files, isLoading: isFilesLoading } = useProjectFiles({
+    threadId,
+    artifactId: manifest.id,
+  });
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const { content, isLoading: isContentLoading } = useProjectFileContent({
+    threadId,
+    artifactId: manifest.id,
+    path: selectedFile ?? undefined,
+    enabled: Boolean(selectedFile),
+  });
+
+  const tree = useMemo(() => buildFileTree(files), [files]);
+
+  return (
+    <div className="flex size-full overflow-hidden">
+      <div className="border-border/60 flex w-52 shrink-0 flex-col overflow-y-auto border-r p-1">
+        {isFilesLoading ? (
+          <div className="text-muted-foreground flex items-center gap-2 px-2 py-2 text-xs">
+            <LoaderIcon className="size-3 animate-spin" />
+            Loading files…
+          </div>
+        ) : tree.length === 0 ? (
+          <div className="text-muted-foreground px-2 py-2 text-xs">
+            No files found
+          </div>
+        ) : (
+          tree.map((node) => (
+            <FileTreeNodeItem
+              key={node.path}
+              node={node}
+              selectedPath={selectedFile}
+              onSelect={setSelectedFile}
+              depth={0}
+            />
+          ))
+        )}
+      </div>
+      <div className="min-w-0 flex-1 overflow-hidden">
+        {selectedFile ? (
+          isContentLoading ? (
+            <div className="flex size-full items-center justify-center">
+              <LoaderIcon className="size-4 animate-spin" />
+            </div>
+          ) : (
+            <CodeEditor
+              className="size-full resize-none rounded-none border-none"
+              value={content ?? ""}
+              readonly
+            />
+          )
+        ) : (
+          <div className="text-muted-foreground flex size-full items-center justify-center text-sm">
+            Select a file to view its content
+          </div>
+        )}
+      </div>
     </div>
   );
 }

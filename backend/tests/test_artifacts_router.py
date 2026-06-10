@@ -652,3 +652,162 @@ def test_artifact_manifest_explicit_title_takes_precedence_over_name(tmp_path, m
 
     assert response.status_code == 200
     assert response.json()["title"] == "Correct Title"
+
+
+# --- Project workspace file tree tests ---
+
+
+def _make_project_test_app(tmp_path, monkeypatch, *, owner_check_passes: bool = True):
+    thread_id = "thread-1"
+    user_id = "user-1"
+    paths = Paths(tmp_path)
+    paths.ensure_thread_dirs(thread_id, user_id=user_id)
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+    monkeypatch.setattr(artifacts_router, "get_effective_user_id", lambda: user_id)
+    app = make_authed_test_app(owner_check_passes=owner_check_passes)
+    app.include_router(artifacts_router.router)
+    return TestClient(app), paths, thread_id, user_id
+
+
+def _write_web_app_manifest(outputs_dir: Path, app_id: str) -> None:
+    app_dir = outputs_dir / app_id
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "id": app_id,
+                "title": "Test Web App",
+                "type": "web_app",
+                "root": ".",
+                "source_path": f"/mnt/user-data/workspace/{app_id}",
+                "preview": {"mode": "dev_server", "command": "npm run dev", "port": 3000},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_project_files_lists_workspace_source_files(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    _write_web_app_manifest(outputs_dir, "test-app")
+
+    source_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/test-app", user_id=user_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "src").mkdir()
+    (source_dir / "src" / "App.tsx").write_text("export default function App() {}", encoding="utf-8")
+    (source_dir / "package.json").write_text('{"name":"test-app"}', encoding="utf-8")
+    # node_modules should be excluded
+    (source_dir / "node_modules").mkdir()
+    (source_dir / "node_modules" / "react").mkdir()
+    (source_dir / "node_modules" / "react" / "index.js").write_text("module.exports = {};", encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files")
+
+    assert response.status_code == 200
+    body = response.json()
+    listed = [f["path"] for f in body["files"]]
+    assert "src/App.tsx" in listed
+    assert "package.json" in listed
+    assert not any("node_modules" in p for p in listed)
+
+
+def test_project_files_manifest_hidden_from_listing(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    _write_web_app_manifest(outputs_dir, "test-app")
+
+    source_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/test-app", user_id=user_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "index.ts").write_text("export {};", encoding="utf-8")
+    # Put a manifest file at root to verify it's hidden
+    (source_dir / "artifact_manifest.json").write_text("{}", encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files")
+
+    assert response.status_code == 200
+    listed = [f["path"] for f in response.json()["files"]]
+    assert "artifact_manifest.json" not in listed
+    assert "index.ts" in listed
+
+
+def test_project_files_falls_back_to_outputs_when_no_workspace(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    # source_path points to workspace which doesn't exist → should fall back to outputs root_path
+    _write_web_app_manifest(outputs_dir, "test-app")
+    (outputs_dir / "test-app" / "main.ts").write_text("console.log('hello');", encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files")
+
+    assert response.status_code == 200
+    listed = [f["path"] for f in response.json()["files"]]
+    assert "main.ts" in listed
+
+
+def test_project_files_content_reads_file(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    _write_web_app_manifest(outputs_dir, "test-app")
+
+    source_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/test-app", user_id=user_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "src").mkdir()
+    (source_dir / "src" / "App.tsx").write_text("export default function App() { return null; }", encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files/content?path=src/App.tsx")
+
+    assert response.status_code == 200
+    assert "App()" in response.text
+
+
+def test_project_files_content_rejects_traversal(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    _write_web_app_manifest(outputs_dir, "test-app")
+    source_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/test-app", user_id=user_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files/content?path=../secret.txt")
+
+    assert response.status_code == 400
+
+
+def test_project_files_content_rejects_absolute_path(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    _write_web_app_manifest(outputs_dir, "test-app")
+    source_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/test-app", user_id=user_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files/content?path=/etc/passwd")
+
+    assert response.status_code == 400
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink not supported on this platform")
+def test_project_files_content_rejects_symlink_escape(tmp_path, monkeypatch) -> None:
+    client, paths, thread_id, user_id = _make_project_test_app(tmp_path, monkeypatch)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=user_id)
+    _write_web_app_manifest(outputs_dir, "test-app")
+    source_dir = paths.resolve_virtual_path(thread_id, "/mnt/user-data/workspace/test-app", user_id=user_id)
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    outside_file = tmp_path / "secret.txt"
+    outside_file.write_text("secret", encoding="utf-8")
+    symlink = source_dir / "evil.txt"
+    try:
+        symlink.symlink_to(outside_file)
+    except OSError as exc:
+        pytest.skip(f"symlink creation failed: {exc}")
+
+    with client:
+        response = client.get("/api/threads/thread-1/projects/test-app/files/content?path=evil.txt")
+
+    assert response.status_code == 403

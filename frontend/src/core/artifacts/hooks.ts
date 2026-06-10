@@ -9,6 +9,8 @@ import {
   loadArtifactManifests,
   loadPreviewSessionLogs,
   loadPreviewSessions,
+  loadProjectFileContent,
+  loadProjectFiles,
   restartPreviewSession,
   stopPreviewSession,
 } from "./api";
@@ -167,6 +169,58 @@ export function usePreviewSessionLogs({
 
   return {
     logs: data,
+    isLoading,
+    error,
+  };
+}
+
+export function useProjectFiles({
+  threadId,
+  artifactId,
+  enabled = true,
+}: {
+  threadId: string;
+  artifactId: string;
+  enabled?: boolean;
+}) {
+  const { isMock } = useThread();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["project-files", threadId, artifactId],
+    queryFn: () => loadProjectFiles({ threadId, artifactId }),
+    enabled: enabled && !isMock,
+    staleTime: 30 * 1000,
+  });
+
+  return {
+    files: data?.files ?? [],
+    root: data?.root,
+    isLoading,
+    error,
+  };
+}
+
+export function useProjectFileContent({
+  threadId,
+  artifactId,
+  path,
+  enabled = true,
+}: {
+  threadId: string;
+  artifactId: string;
+  path?: string;
+  enabled?: boolean;
+}) {
+  const { isMock } = useThread();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["project-file-content", threadId, artifactId, path],
+    queryFn: () =>
+      loadProjectFileContent({ threadId, artifactId, path: path! }),
+    enabled: enabled && !isMock && Boolean(path),
+    staleTime: 30 * 1000,
+  });
+
+  return {
+    content: data,
     isLoading,
     error,
   };

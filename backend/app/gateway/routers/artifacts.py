@@ -1,6 +1,7 @@
 import json
 import logging
 import mimetypes
+import os
 import posixpath
 import re
 import zipfile
@@ -190,6 +191,41 @@ class ArtifactManifestResponse(ArtifactManifest):
 
 class ArtifactManifestListResponse(BaseModel):
     manifests: list[ArtifactManifestResponse]
+
+
+_SKIP_DIRS: frozenset[str] = frozenset(
+    {
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".venv",
+        "dist",
+        ".next",
+        "build",
+        ".nuxt",
+        ".svelte-kit",
+        "coverage",
+        ".cache",
+        ".parcel-cache",
+        "out",
+        ".turbo",
+        ".vercel",
+    }
+)
+_MAX_FILE_CONTENT_BYTES = 512 * 1024
+_MAX_PROJECT_FILES = 2000
+
+
+class ProjectFileEntry(BaseModel):
+    path: str
+    type: Literal["file", "dir"]
+    size: int | None = None
+
+
+class ProjectFilesResponse(BaseModel):
+    artifact_id: str
+    root: str
+    files: list[ProjectFileEntry]
 
 
 def _validate_relative_manifest_path(value: str, *, field_name: str, allow_dot: bool) -> str:
@@ -656,6 +692,115 @@ async def get_artifact_manifest(thread_id: str, artifact_id: str, request: Reque
         return _load_artifact_manifest(manifest_path, outputs_dir=outputs_dir)
 
     raise HTTPException(status_code=404, detail=f"Artifact manifest not found: {artifact_id}")
+
+
+def _resolve_project_root(thread_id: str, manifest: ArtifactManifestResponse, *, user_id: str) -> Path:
+    """Resolve the filesystem root for a project's source files.
+
+    Prefers source_path (workspace) over root_path (outputs manifest dir).
+    """
+    paths = get_paths()
+
+    if manifest.source_path:
+        try:
+            candidate = paths.resolve_virtual_path(thread_id, manifest.source_path, user_id=user_id)
+            if candidate.is_dir():
+                return candidate
+        except Exception:
+            pass
+
+    try:
+        root = paths.resolve_virtual_path(thread_id, manifest.root_path, user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Project root not accessible: {exc}")
+
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail="Project root directory not found")
+
+    return root
+
+
+@router.get(
+    "/threads/{thread_id}/projects/{artifact_id}/files",
+    summary="List Project Files",
+    description="List source files in a project artifact's root directory.",
+)
+@require_permission("threads", "read", owner_check=True)
+async def list_project_files(thread_id: str, artifact_id: str, request: Request) -> ProjectFilesResponse:
+    user_id = get_effective_user_id()
+    manifest = get_artifact_manifest_for_preview(thread_id, artifact_id, user_id=user_id)
+    root = _resolve_project_root(thread_id, manifest, user_id=user_id)
+
+    files: list[ProjectFileEntry] = []
+    for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False, topdown=True):
+        dir_path = Path(dirpath)
+        rel_dir = dir_path.relative_to(root)
+
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
+
+        for filename in sorted(filenames):
+            if filename == MANIFEST_FILENAME and str(rel_dir) == ".":
+                continue
+            rel_path = filename if str(rel_dir) == "." else f"{rel_dir.as_posix()}/{filename}"
+            try:
+                size = (dir_path / filename).stat().st_size
+            except Exception:
+                size = None
+            files.append(ProjectFileEntry(path=rel_path, type="file", size=size))
+            if len(files) >= _MAX_PROJECT_FILES:
+                break
+
+        if len(files) >= _MAX_PROJECT_FILES:
+            break
+
+    return ProjectFilesResponse(
+        artifact_id=artifact_id,
+        root=manifest.source_path or manifest.root_path,
+        files=files,
+    )
+
+
+@router.get(
+    "/threads/{thread_id}/projects/{artifact_id}/files/content",
+    summary="Get Project File Content",
+    description="Read a source file from a project artifact.",
+)
+@require_permission("threads", "read", owner_check=True)
+async def get_project_file_content(thread_id: str, artifact_id: str, request: Request, path: str) -> Response:
+    if not path or "\x00" in path or "\\" in path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Path must be relative")
+    parts = path.split("/")
+    if any(part in ("", "..") for part in parts):
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    user_id = get_effective_user_id()
+    manifest = get_artifact_manifest_for_preview(thread_id, artifact_id, user_id=user_id)
+    root = _resolve_project_root(thread_id, manifest, user_id=user_id)
+
+    file_path = (root / path).resolve()
+    try:
+        file_path.relative_to(root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path escapes project root")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not file_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
+
+    if file_path.stat().st_size > _MAX_FILE_CONTENT_BYTES:
+        raise HTTPException(status_code=413, detail="File too large for inline viewing (max 512 KB)")
+
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
+
+    return PlainTextResponse(content=content)
 
 
 @router.get(
