@@ -454,9 +454,22 @@ class AioSandboxProvider(SandboxProvider):
                 if thread_id in self._thread_sandboxes:
                     existing_id = self._thread_sandboxes[thread_id]
                     if existing_id in self._sandboxes:
-                        logger.info(f"Reusing in-process sandbox {existing_id} for thread {thread_id}")
-                        self._last_activity[existing_id] = time.time()
-                        return existing_id
+                        existing_info = self._sandbox_infos.get(existing_id)
+                        # Check whether the underlying container is still running.
+                        # Containers can die (OOM, manual stop, host restart) while
+                        # the in-process cache still holds a reference. Evict here so
+                        # the caller falls through to create a fresh container instead
+                        # of hitting repeated "Connection refused" errors.
+                        if existing_info is None or self._backend.is_alive(existing_info):
+                            logger.info(f"Reusing in-process sandbox {existing_id} for thread {thread_id}")
+                            self._last_activity[existing_id] = time.time()
+                            return existing_id
+                        # Container is dead — evict and fall through to recreate.
+                        logger.warning(f"Sandbox {existing_id} container is dead; evicting and recreating for thread {thread_id}")
+                        del self._thread_sandboxes[thread_id]
+                        self._sandboxes.pop(existing_id, None)
+                        self._sandbox_infos.pop(existing_id, None)
+                        self._last_activity.pop(existing_id, None)
                     else:
                         del self._thread_sandboxes[thread_id]
 
