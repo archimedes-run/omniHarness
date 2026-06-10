@@ -60,17 +60,18 @@ _BUN_RUN_RE = re.compile(r"\bbun\s+(?:run\s+)?\S")
 def _maybe_prepend_install(command: str) -> str:
     """Prepend a conditional dependency-install step for package-manager script runners.
 
-    Only installs if node_modules is absent, so repeat starts are fast.
-    Handles npm, pnpm, yarn, and bun.
+    Checks node_modules/.bin (not node_modules) so that a partial/interrupted
+    install — which may leave node_modules present but .bin missing — still
+    triggers a fresh install. Handles npm, pnpm, yarn, and bun.
     """
     if _NPM_RUN_RE.search(command):
-        return f"([ -d node_modules ] || npm install --no-fund --no-audit 2>&1) && {command}"
+        return f"([ -d node_modules/.bin ] || npm install --no-fund --no-audit 2>&1) && {command}"
     if _PNPM_RUN_RE.search(command):
-        return f"([ -d node_modules ] || pnpm install 2>&1) && {command}"
+        return f"([ -d node_modules/.bin ] || pnpm install 2>&1) && {command}"
     if _YARN_RUN_RE.search(command):
-        return f"([ -d node_modules ] || yarn install 2>&1) && {command}"
+        return f"([ -d node_modules/.bin ] || yarn install 2>&1) && {command}"
     if _BUN_RUN_RE.search(command):
-        return f"([ -d node_modules ] || bun install 2>&1) && {command}"
+        return f"([ -d node_modules/.bin ] || bun install 2>&1) && {command}"
     return command
 
 
@@ -500,7 +501,7 @@ class PreviewSessionManager:
             with contextlib.suppress(Exception):
                 await self._refresh_session(session, touch=False)
             responses.append(session.to_response())
-        responses.sort(key=lambda item: item.created_at)
+        responses.sort(key=lambda item: item.created_at, reverse=True)
         return responses
 
     async def create_session(

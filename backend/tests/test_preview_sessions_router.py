@@ -576,29 +576,29 @@ def test_create_preview_from_manifest_missing(preview_test_context, monkeypatch)
 
 def test_maybe_prepend_install_npm() -> None:
     result = _maybe_prepend_install("npm run dev")
-    assert "([ -d node_modules ] || npm install" in result
+    assert "([ -d node_modules/.bin ] || npm install" in result
     assert result.endswith("&& npm run dev")
 
 
 def test_maybe_prepend_install_npm_start() -> None:
     result = _maybe_prepend_install("npm start")
-    assert "([ -d node_modules ] || npm install" in result
+    assert "([ -d node_modules/.bin ] || npm install" in result
     assert result.endswith("&& npm start")
 
 
 def test_maybe_prepend_install_pnpm() -> None:
     result = _maybe_prepend_install("pnpm run dev")
-    assert "([ -d node_modules ] || pnpm install" in result
+    assert "([ -d node_modules/.bin ] || pnpm install" in result
 
 
 def test_maybe_prepend_install_yarn() -> None:
     result = _maybe_prepend_install("yarn dev")
-    assert "([ -d node_modules ] || yarn install" in result
+    assert "([ -d node_modules/.bin ] || yarn install" in result
 
 
 def test_maybe_prepend_install_bun() -> None:
     result = _maybe_prepend_install("bun run dev")
-    assert "([ -d node_modules ] || bun install" in result
+    assert "([ -d node_modules/.bin ] || bun install" in result
 
 
 def test_maybe_prepend_install_non_package_manager() -> None:

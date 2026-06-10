@@ -148,6 +148,10 @@ export function useRestartPreviewSession({ threadId }: { threadId: string }) {
       void queryClient.invalidateQueries({
         queryKey: ["preview-sessions", threadId],
       });
+      // Clear stale "failed" logs so they refetch immediately after restart
+      void queryClient.invalidateQueries({
+        queryKey: ["preview-session-logs", threadId],
+      });
     },
   });
 }
@@ -169,8 +173,7 @@ export function usePreviewSessionLogs({
     retry: false,
     refetchInterval: (query) => {
       if (query.state.error) return false;
-      const status = query.state.data?.status;
-      if (status === "stopped" || status === "failed") return false;
+      if (query.state.data?.status === "stopped") return false;
       return 3000;
     },
   });
