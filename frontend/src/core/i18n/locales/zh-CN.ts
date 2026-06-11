@@ -62,7 +62,7 @@ export const zhCN: Translations = {
   welcome: {
     greeting: "你好，欢迎回来！",
     description:
-      "欢迎使用 🦌 OmniHarness，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nOmniHarness 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
+      "欢迎使用 OmniHarness — 一个自我扩展的智能体平台，可在真实沙箱中研究、编码和创作，具备记忆、子智能体和技能能力。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:

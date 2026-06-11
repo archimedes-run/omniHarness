@@ -1,4 +1,4 @@
-# 🦌 [About OmniHarness 2.0](https://github.com/archimedes-run/omni-harness)
+# [About OmniHarness](https://github.com/archimedes-run/omni-harness)
 
 > **From Open Source, Back to Open Source**
 

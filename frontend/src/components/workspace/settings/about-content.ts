@@ -2,66 +2,43 @@
  * About OmniHarness markdown content. Inlined to avoid raw-loader dependency
  * (Turbopack cannot resolve raw-loader for .md imports).
  */
-export const aboutMarkdown = `# 🦌 [About OmniHarness 2.0](https://github.com/archimedes-run/omni-harness)
+export const aboutMarkdown = `# [OmniHarness](https://github.com/archimedes-run/omni-harness)
 
-> **From Open Source, Back to Open Source**
+> A self-extending agent platform — the agent builds, registers, and verifies its own capabilities at runtime.
 
-OmniHarness (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is an open-source **super agent harness** that orchestrates **sub-agents**, **memory**, and **sandboxes** to do almost anything — powered by **extensible skills**.
-
----
-
-## 🚀 Core Features
-
-* **Skills & Tools**: With built-in and extensible skills and tools, OmniHarness can do almost anything.
-* **Sub-Agents**: Sub-Agents help the main agent to do the tasks that are too complex to be done by the main agent.
-* **Sandbox & File System**: Safely execute code and manipulate files in the sandbox.
-* **Context Engineering**: Isolated sub-agent context, summarization to keep the context window sharp.
-* **Long-Term Memory**: Keep recording the user's profile, top of mind, and conversation history.
+OmniHarness is a long-horizon agent harness for tasks that take minutes to hours: it researches, codes, and creates inside real sandboxes, with memory, subagents, skills, and a multi-channel gateway. The defining bet: the *capability layer itself* is authored by the agent and hot-loaded — and the agent closes its own build-run-fix loops instead of handing you errors to relay back.
 
 ---
 
-## 🌟 GitHub Repository
+## What's live
 
-![Star History Chart](https://api.star-history.com/svg?repos=archimedes-run/omni-harness&type=Date)
+**Live preview** — the agent builds a web app and the preview runs inside the sandbox, proxied straight to your browser. Preview auto-starts when the agent produces a web artifact; a verification gate keeps the agent iterating until the build is clean. You stop being the courier who copy-pastes errors back.
 
-Explore OmniHarness on GitHub: [github.com/archimedes-run/omni-harness](https://github.com/archimedes-run/omni-harness)
-
-## 🌐 Official Website
-
-Visit the official website of OmniHarness: [omniharness.tech](https://omniharness.tech/)
-
-## 📧 Support
-
-If you have any questions or need help, please contact us at [support@omniharness.tech](mailto:support@omniharness.tech).
+**The harness** — sandboxed execution, subagents, persistent memory, skills, multi-channel gateway (Slack, Telegram, Feishu, DingTalk), MCP client + OAuth.
 
 ---
 
-## 📜 License
+## What's next
 
-OmniHarness is proudly open source and distributed under the **MIT License**.
+Agent-authored connectors and MCP servers built and registered at runtime. Hot skill installation. Workflow triggers. A sandboxed execution model where secrets are scoped per-capability and never readable back by the model.
 
 ---
 
-## 🙌 Acknowledgments
+## Links
 
-We extend our heartfelt gratitude to the open source projects and contributors who have made OmniHarness a reality. We truly stand on the shoulders of giants.
+[GitHub](https://github.com/archimedes-run/omni-harness) · [omniharness.tech](https://omniharness.tech/) · [support@omniharness.tech](mailto:support@omniharness.tech)
 
-### Core Frameworks
-- **[LangChain](https://github.com/langchain-ai/langchain)**: A phenomenal framework that powers our LLM interactions and chains.
-- **[LangGraph](https://github.com/langchain-ai/langgraph)**: Enabling sophisticated multi-agent orchestration.
-- **[Next.js](https://nextjs.org/)**: A cutting-edge framework for building web applications.
+---
 
-### UI Libraries
-- **[Shadcn](https://ui.shadcn.com/)**: Minimalistic components that power our UI.
-- **[SToneX](https://github.com/stonexer)**: For his invaluable contribution to token-by-token visual effects.
+## License & Attribution
 
-These outstanding projects form the backbone of OmniHarness and exemplify the transformative power of open source collaboration.
+MIT License · [View on GitHub](https://github.com/archimedes-run/omni-harness/blob/main/LICENSE)
 
-### Special Thanks
-Finally, we want to express our heartfelt gratitude to the core authors of OmniHarness 1.0 and 2.0:
+OmniHarness is a derivative work of [**DeerFlow**](https://github.com/bytedance/deer-flow) by ByteDance (MIT), forked and evolved into an independent project with its own thesis and roadmap. OmniHarness is not affiliated with or endorsed by ByteDance.
 
-- **[Daniel Walnut](https://github.com/hetaoBackend/)**
-- **[Henry Li](https://github.com/magiccube/)**
+**Original copyright notices retained per MIT terms:**
+© 2025 Bytedance Ltd. and/or its affiliates
+© 2025–2026 DeerFlow Authors (Daniel Walnut, Henry Li)
 
-Without their vision, passion and dedication, \`OmniHarness\` would not be what it is today.
+Built on [LangChain](https://github.com/langchain-ai/langchain) · [LangGraph](https://github.com/langchain-ai/langgraph) · [Next.js](https://nextjs.org/) · [Shadcn](https://ui.shadcn.com/)
 `;
