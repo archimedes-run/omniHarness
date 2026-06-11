@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -18,17 +19,20 @@ class McpServerRepository:
 
     @staticmethod
     def _row_to_dict(row: McpServerRow) -> dict[str, Any]:
-        d = {
+        return {
             "id": row.id,
+            "owner_id": row.owner_id,
             "name": row.name,
             "language": row.language,
             "description": row.description,
             "status": row.status,
             "detected_secrets": row.detected_secrets or [],
+            "approved": bool(row.approved),
+            "egress_hosts": row.egress_hosts or [],
+            "source_code": row.source_code,
             "created_at": row.created_at.isoformat() if isinstance(row.created_at, datetime) else row.created_at,
             "updated_at": row.updated_at.isoformat() if isinstance(row.updated_at, datetime) else row.updated_at,
         }
-        return d
 
     async def list_servers(
         self,
@@ -73,3 +77,63 @@ class McpServerRepository:
         if resolved_user_id is not None and row.owner_id != resolved_user_id:
             return None
         return self._row_to_dict(row)
+
+    async def create(
+        self,
+        *,
+        name: str,
+        owner_id: str,
+        language: str | None = None,
+        description: str | None = None,
+        egress_hosts: list[str] | None = None,
+        source_code: str | None = None,
+    ) -> dict[str, Any]:
+        """Insert a new MCP server record owned by *owner_id*."""
+        row = McpServerRow(
+            id=uuid.uuid4().hex,
+            owner_id=owner_id,
+            name=name,
+            language=language,
+            description=description,
+            status="not_running",
+            detected_secrets=[],
+            approved=False,
+            egress_hosts=egress_hosts or [],
+            source_code=source_code,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        async with self._sf() as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+        return self._row_to_dict(row)
+
+    async def update_status(self, server_id: str, status: str, *, user_id: str) -> bool:
+        """Update the status field for a server the caller owns.
+
+        Returns True if the row was found and updated, False if not found or
+        the caller does not own it.
+        """
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.status = status
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
+
+    async def set_approved(self, server_id: str, approved: bool, *, user_id: str) -> bool:
+        """Set the approval flag for a server the caller owns.
+
+        Returns True if updated, False if not found / not owner.
+        """
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.approved = approved
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True

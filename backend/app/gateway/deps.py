@@ -76,12 +76,30 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.run_store = RunRepository(sf)
             app.state.feedback_repo = FeedbackRepository(sf)
             app.state.mcp_server_repo = McpServerRepository(sf)
+
+            # Phase 2: vault + manager — only when mcp_builder.enabled=True.
+            # make_vault_key() raises RuntimeError loudly if key is missing in
+            # non-dev mode, intentionally failing startup rather than silently
+            # storing secrets with no encryption key.
+            mcp_builder_config = getattr(config, "mcp_builder", None)
+            if mcp_builder_config and mcp_builder_config.enabled:
+                from app.gateway.mcp_secrets import McpSecretsVault, make_vault_key
+                from app.gateway.mcp_server_manager import MCPServerManager
+
+                vault = McpSecretsVault(make_vault_key(mcp_builder_config), sf)
+                app.state.mcp_secrets_vault = vault
+                app.state.mcp_server_manager = MCPServerManager(app.state.mcp_server_repo, vault)
+            else:
+                app.state.mcp_secrets_vault = None
+                app.state.mcp_server_manager = None
         else:
             from omniharness.runtime.runs.store.memory import MemoryRunStore
 
             app.state.run_store = MemoryRunStore()
             app.state.feedback_repo = None
             app.state.mcp_server_repo = None
+            app.state.mcp_secrets_vault = None
+            app.state.mcp_server_manager = None
 
         from omniharness.persistence.thread_meta import make_thread_store
 
@@ -126,6 +144,8 @@ get_feedback_repo: Callable[[Request], FeedbackRepository] = _require("feedback_
 get_run_store: Callable[[Request], RunStore] = _require("run_store", "Run store")
 get_preview_session_manager = _require("preview_session_manager", "Preview session manager")
 get_mcp_server_repo = _require("mcp_server_repo", "MCP server repository")
+get_mcp_server_manager = _require("mcp_server_manager", "MCP server manager")
+get_mcp_secrets_vault = _require("mcp_secrets_vault", "MCP secrets vault")
 
 
 def get_store(request: Request):

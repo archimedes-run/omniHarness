@@ -15,10 +15,11 @@ there is no matching entity directory.
 """
 
 from omniharness.persistence.feedback.model import FeedbackRow
+from omniharness.persistence.mcp_secrets.model import McpSecretRow
 from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
 from omniharness.persistence.thread_meta.model import ThreadMetaRow
 from omniharness.persistence.user.model import UserRow
 
-__all__ = ["FeedbackRow", "McpServerRow", "RunEventRow", "RunRow", "ThreadMetaRow", "UserRow"]
+__all__ = ["FeedbackRow", "McpSecretRow", "McpServerRow", "RunEventRow", "RunRow", "ThreadMetaRow", "UserRow"]

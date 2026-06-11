@@ -192,6 +192,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.preview_controller = preview_ctrl
         set_preview_controller(preview_ctrl)
 
+        # MCP build controller — only when mcp_server_manager was wired in langgraph_runtime
+        mcp_mgr = getattr(app.state, "mcp_server_manager", None)
+        if mcp_mgr is not None:
+            await mcp_mgr.start()
+            from app.gateway.mcp_build_controller_adapter import GatewayMCPBuildController
+            from omniharness.runtime.mcp.controller import set_mcp_build_controller
+
+            mcp_ctrl = GatewayMCPBuildController(mcp_mgr)
+            app.state.mcp_build_controller = mcp_ctrl
+            set_mcp_build_controller(mcp_ctrl)
+
         # Ensure admin user exists (auto-create on first boot)
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration
         await _ensure_admin_user(app)
@@ -222,6 +233,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
         except Exception:
             logger.exception("Failed to stop channel service")
+
+        mcp_server_manager = getattr(app.state, "mcp_server_manager", None)
+        if mcp_server_manager is not None:
+            try:
+                await asyncio.wait_for(
+                    mcp_server_manager.close(),
+                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "MCP server manager shutdown exceeded %.1fs; proceeding with worker exit.",
+                    _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                logger.exception("Failed to stop MCP server manager")
 
         preview_session_manager = getattr(app.state, "preview_session_manager", None)
         if preview_session_manager is not None:
