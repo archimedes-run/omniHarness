@@ -1,60 +1,79 @@
 # OmniHarness
 
-
-[![Star History Chart](https://api.star-history.com/svg?repos=archimedes-run/omniHarness&type=Date)](https://star-history.com/#archimedes-run/omniHarness&Date)
-
-
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](./backend/pyproject.toml)
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](./Makefile)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-OmniHarness is an open-source **super agent harness** that orchestrates **sub-agents**, **persistent memory**, and **sandboxed execution** to handle tasks that take minutes to hours — powered by extensible skills and MCP tools.
+**A self-extending agent platform — the agent builds, registers, and verifies its own capabilities at runtime, instead of you wiring them up and restarting the stack.**
+
+OmniHarness is a long-horizon agent harness for tasks that take minutes to hours: it researches, codes, and creates inside real sandboxes, with memory, subagents, skills, and a multi-channel gateway. What makes it different is the bet underneath it — that the *capability layer itself* should be authored by the agent and hot-loaded, and that the agent should close its own build-run-fix loops instead of handing you errors to relay back.
 
 Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](https://github.com/langchain-ai/langchain). Works with any OpenAI-compatible LLM.
 
 ---
 
+## Why OmniHarness?
+
+> **Relationship to DeerFlow:** OmniHarness began as a fork of [DeerFlow 2.0](https://github.com/bytedance/deer-flow) (ByteDance, MIT) and owes it a real debt — see [Acknowledgements](#acknowledgments). It has since diverged into an independent project with its own thesis and roadmap. OmniHarness is **not affiliated with or endorsed by ByteDance**.
+
+DeerFlow is an excellent, fast-moving SuperAgent harness. If you want the best-supported research/coding agent with the broadest community, use DeerFlow — it's backed by a large team.
+
+OmniHarness exists for a different goal: **removing the human from the inner loop entirely.**
+
+1. **The agent closes its own loops.** It doesn't just write code and stop — it runs the result, sees what breaks, fixes it, and confirms it's clean before handing anything back. Live preview is the first concrete instance of this.
+2. **The agent extends the platform itself.** New connectors, MCP servers, skills, and workflows are things the agent *builds and registers at runtime* — not things you hand-wire and `docker restart` to install.
+
+If that direction is what you're after, OmniHarness is the bet. If you need the broadest community and production mileage today, DeerFlow is the safer pick — and we'll say so honestly.
+
+---
+
+## Available now
+
+### Live preview for web app development
+
+The agent builds a web app and the preview runs **inside the sandbox** with the gateway proxying it straight to your browser — no separate setup. For static pages and dev-server projects (anything with an `index.html` or a `package.json` dev script), the preview just comes up.
+
+**The self-verifying loop:** preview **auto-starts** when the agent produces a web artifact, and a verification gate stops the agent from declaring victory while the build is broken — it reads the dev-server/build error, fixes its own code, and re-checks until the preview runs clean. You stop being the courier who copy-pastes errors back to the agent.
+
+### The harness foundation
+
+- **Sandboxed execution** for code, shell, and file work — isolated Docker containers per thread
+- **Subagents** for decomposing long-horizon tasks and running them in parallel
+- **Persistent memory** across sessions
+- **Skills** — structured, domain-specific capability bundles, hot-loaded on demand
+- **Multi-channel gateway** — drive the agent from Slack, Telegram, Feishu, DingTalk, or the web UI
+- **MCP client + OAuth** for connecting external tools
+
+---
+
+## Roadmap
+
+These are **in development**, not done — listed so you know where OmniHarness is going.
+
+- **Agent-authored connectors, bring-your-own-key.** Describe an integration; the agent writes the connector code and wires it up. Your API keys are scoped per-connector and never readable back by the model.
+- **Agent-built MCP servers.** The agent scaffolds, builds, and registers MCP servers at runtime.
+- **Hot skill installation.** Add or update a skill live — no container restart.
+- **Workflows + triggers.** Multi-step automations fired on schedules, webhooks, or channel events.
+
+> **On safety:** because OmniHarness lets the agent write and run code with your credentials, the guardrails *are* the product. Agent-authored code runs sandboxed off the control plane, secrets are scoped per-capability and never exposed back to the model, and first execution of any agent-built capability passes a human approval gate.
+
+---
+
 ## Table of Contents
 
-- [What it does](#what-it-does)
 - [Quick Start](#quick-start)
   - [Prerequisites](#prerequisites)
   - [Configuration](#configuration)
   - [Running with Docker](#running-with-docker)
-    - [1. Pull the sandbox image](#1-pull-the-sandbox-image)
-    - [2. Start all services](#2-start-all-services)
-    - [3. How it works under the hood](#3-how-it-works-under-the-hood)
-    - [4. Management commands](#4-management-commands)
-    - [5. Troubleshooting sandbox issues](#5-troubleshooting-sandbox-issues)
   - [Production deployment](#production-deployment)
   - [Advanced](#advanced)
-    - [Sandbox Mode](#sandbox-mode)
-    - [MCP Servers](#mcp-servers)
-    - [IM Channels](#im-channels)
-    - [Observability](#observability)
 - [Core Features](#core-features)
-  - [Skills & Tools](#skills--tools)
-  - [Sub-Agents](#sub-agents)
-  - [Sandbox & File System](#sandbox--file-system)
-  - [Long-Term Memory](#long-term-memory)
-  - [Context Engineering](#context-engineering)
 - [Recommended Models](#recommended-models)
 - [Embedded Python Client](#embedded-python-client)
 - [Security Notice](#security-notice)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
-
----
-
-## What it does
-
-- **Research & report generation** — web search, fetch, multi-source synthesis, structured output
-- **Code execution** — sandboxed Python and shell in isolated per-thread containers
-- **File operations** — read, write, generate documents, slides, websites, data visualisations
-- **Sub-agent delegation** — fan out to specialised agents running in parallel, collect results
-- **Persistent memory** — remembers preferences, context, and facts across sessions
-- **MCP tool integration** — connect any Model Context Protocol server as a first-class toolset
 
 ---
 
@@ -628,7 +647,15 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Acknowledgments
 
-OmniHarness is built on the work of the open-source community. Special thanks to:
+OmniHarness stands on the shoulders of [**DeerFlow**](https://github.com/bytedance/deer-flow) by ByteDance, from which it was forked. The harness architecture, sandbox model, and gateway design all started there. DeerFlow is MIT-licensed; so is OmniHarness.
+
+**Original copyright notices retained per MIT terms:**
+- © 2025 Bytedance Ltd. and/or its affiliates
+- © 2025–2026 DeerFlow Authors — [Daniel Walnut](https://github.com/hetaoBackend/), [Henry Li](https://github.com/magiccube/)
+
+OmniHarness is an independent project and is not affiliated with, sponsored by, or endorsed by ByteDance.
+
+DeerFlow itself builds on the open-source community, and those debts carry through:
 
 - **[LangGraph](https://github.com/langchain-ai/langgraph)** — multi-agent orchestration runtime
 - **[LangChain](https://github.com/langchain-ai/langchain)** — LLM integration framework
