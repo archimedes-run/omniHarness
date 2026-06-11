@@ -21,7 +21,7 @@ export function CommunitySection() {
       <div className="flex justify-center">
         <Button className="text-xl" size="lg" asChild>
           <Link
-            href="https://github.com/archimedes-run/omni-harness"
+            href="https://github.com/archimedes-run/omniHarness"
             target="_blank"
             rel="noopener noreferrer"
           >

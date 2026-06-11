@@ -79,7 +79,7 @@ function AsciiBackground() {
     <pre
       ref={preRef}
       aria-hidden
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre font-mono text-[9px] leading-[13px] tracking-[0.01em] text-stone-900/[0.07] select-none"
+      className="pointer-events-none absolute inset-0 overflow-hidden font-mono text-[9px] leading-[13px] tracking-[0.01em] whitespace-pre text-stone-900/[0.07] select-none"
     />
   );
 }
@@ -114,7 +114,7 @@ export function Hero({ className }: { className?: string }) {
         </div>
 
         {/* Headline */}
-        <h1 className="text-5xl font-bold leading-[1.08] tracking-tight text-stone-900 md:text-[4.5rem]">
+        <h1 className="text-5xl leading-[1.08] font-bold tracking-tight text-stone-900 md:text-[4.5rem]">
           Research, code &amp; create
           <br />
           <span className="text-stone-400">with one super&#8209;agent.</span>
@@ -123,8 +123,9 @@ export function Hero({ className }: { className?: string }) {
         {/* Description */}
         <p className="max-w-xl text-base leading-relaxed text-stone-500 md:text-lg">
           OmniHarness is an open&#8209;source AI agent harness with sandboxed
-          code execution, persistent memory, composable skills, and sub&#8209;agent
-          delegation — built to handle tasks that take minutes to hours.
+          code execution, persistent memory, composable skills, and
+          sub&#8209;agent delegation — built to handle tasks that take minutes
+          to hours.
         </p>
 
         {/* CTAs */}
@@ -136,7 +137,7 @@ export function Hero({ className }: { className?: string }) {
             </span>
           </Link>
           <a
-            href="https://github.com/archimedes-run/omni-harness"
+            href="https://github.com/archimedes-run/omniHarness"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex h-11 items-center gap-2 rounded-lg border border-stone-300 bg-transparent px-7 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-stone-100/60"
@@ -148,17 +149,17 @@ export function Hero({ className }: { className?: string }) {
 
         {/* Trust line */}
         <p className="text-xs text-stone-400">
-          No account required &nbsp;·&nbsp; Deploy on your own infra &nbsp;·&nbsp; Apache&nbsp;2.0
+          No account required &nbsp;·&nbsp; Deploy on your own infra
+          &nbsp;·&nbsp; Apache&nbsp;2.0
         </p>
       </div>
 
       {/* Bottom fade into page */}
       <div
         aria-hidden
-        className="pointer-events-none absolute bottom-0 left-0 right-0 h-40"
+        className="pointer-events-none absolute right-0 bottom-0 left-0 h-40"
         style={{
-          background:
-            "linear-gradient(to bottom, transparent, #F5F0E8)",
+          background: "linear-gradient(to bottom, transparent, #F5F0E8)",
         }}
       />
     </section>

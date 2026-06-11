@@ -109,7 +109,7 @@ export function WorkspaceNavMenu() {
                     </DropdownMenuItem>
                   </a>
                   <a
-                    href="https://github.com/archimedes-run/omni-harness"
+                    href="https://github.com/archimedes-run/omniHarness"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -120,7 +120,7 @@ export function WorkspaceNavMenu() {
                   </a>
                   <DropdownMenuSeparator />
                   <a
-                    href="https://github.com/archimedes-run/omni-harness/issues"
+                    href="https://github.com/archimedes-run/omniHarness/issues"
                     target="_blank"
                     rel="noopener noreferrer"
                   >

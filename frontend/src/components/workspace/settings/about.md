@@ -1,4 +1,4 @@
-# [About OmniHarness](https://github.com/archimedes-run/omni-harness)
+# [About OmniHarness](https://github.com/archimedes-run/omniHarness)
 
 > **From Open Source, Back to Open Source**
 
@@ -10,7 +10,7 @@ different levels of tasks that could take minutes to hours.
 
 ## 🌟 GitHub Repository
 
-Explore OmniHarness on GitHub: [github.com/archimedes-run/omni-harness](https://github.com/archimedes-run/omni-harness)
+Explore OmniHarness on GitHub: [github.com/archimedes-run/omni-harness](https://github.com/archimedes-run/omniHarness)
 
 ## 🌐 Official Website
 

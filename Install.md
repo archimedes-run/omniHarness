@@ -1,6 +1,6 @@
 # OmniHarness Install
 
-This file is for coding agents. If the OmniHarness repository is not already cloned and open, clone `https://github.com/archimedes-run/omni-harness.git` first, then continue from the repository root.
+This file is for coding agents. If the OmniHarness repository is not already cloned and open, clone `https://github.com/archimedes-run/omniHarness.git` first, then continue from the repository root.
 
 ## Goal
 
@@ -35,7 +35,7 @@ Consider the setup successful when all of the following are true:
 
 ## Steps
 
-- If the current directory is not the OmniHarness repository root, clone `https://github.com/archimedes-run/omni-harness.git` if needed, then change into the repository root.
+- If the current directory is not the OmniHarness repository root, clone `https://github.com/archimedes-run/omniHarness.git` if needed, then change into the repository root.
 - Confirm the current directory is the OmniHarness repository root by checking that `Makefile`, `backend/`, `frontend/`, and `config.example.yaml` exist.
 - Detect whether `config.yaml` already exists.
 - If `config.yaml` does not exist, run `make config`.

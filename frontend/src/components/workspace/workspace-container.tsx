@@ -93,7 +93,7 @@ export function WorkspaceHeader({
       <div className="pr-4">
         <Tooltip content={t.workspace.githubTooltip}>
           <a
-            href="https://github.com/archimedes-run/omni-harness"
+            href="https://github.com/archimedes-run/omniHarness"
             target="_blank"
             rel="noopener noreferrer"
             className="opacity-75 transition hover:opacity-100"

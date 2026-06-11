@@ -2,7 +2,7 @@
  * About OmniHarness markdown content. Inlined to avoid raw-loader dependency
  * (Turbopack cannot resolve raw-loader for .md imports).
  */
-export const aboutMarkdown = `# [OmniHarness](https://github.com/archimedes-run/omni-harness)
+export const aboutMarkdown = `# [OmniHarness](https://github.com/archimedes-run/omniHarness)
 
 > A self-extending agent platform — the agent builds, registers, and verifies its own capabilities at runtime.
 
@@ -26,13 +26,13 @@ Agent-authored connectors and MCP servers built and registered at runtime. Hot s
 
 ## Links
 
-[GitHub](https://github.com/archimedes-run/omni-harness) · [omniharness.tech](https://omniharness.tech/) · [support@omniharness.tech](mailto:support@omniharness.tech)
+[GitHub](https://github.com/archimedes-run/omniHarness) · [omniharness.tech](https://omniharness.tech/) · [support@omniharness.tech](mailto:support@omniharness.tech)
 
 ---
 
 ## License & Attribution
 
-MIT License · [View on GitHub](https://github.com/archimedes-run/omni-harness/blob/main/LICENSE)
+MIT License · [View on GitHub](https://github.com/archimedes-run/omniHarness/blob/main/LICENSE)
 
 OmniHarness is a derivative work of [**DeerFlow**](https://github.com/bytedance/deer-flow) by ByteDance (MIT), forked and evolved into an independent project with its own thesis and roadmap. OmniHarness is not affiliated with or endorsed by ByteDance.
 

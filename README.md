@@ -98,7 +98,7 @@ Docker is the only supported way to run OmniHarness. It handles all service wiri
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/archimedes-run/omni-harness.git
+   git clone https://github.com/archimedes-run/omniHarness.git
    cd omni-harness
    ```
 
