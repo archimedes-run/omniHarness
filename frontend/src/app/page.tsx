@@ -3,6 +3,7 @@ import { Header } from "@/components/landing/header";
 import { Hero } from "@/components/landing/hero";
 import { AgentSkillsSection } from "@/components/landing/sections/agent-skills-section";
 import { FeaturesSection } from "@/components/landing/sections/features-section";
+import { LivePreviewDemoSection } from "@/components/landing/sections/live-preview-demo-section";
 
 export default function LandingPage() {
   return (
@@ -11,6 +12,7 @@ export default function LandingPage() {
       <main className="flex w-full flex-col">
         <Hero />
         <AgentSkillsSection />
+        <LivePreviewDemoSection />
         <FeaturesSection />
       </main>
       <Footer />
