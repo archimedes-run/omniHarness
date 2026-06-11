@@ -16,7 +16,7 @@ const buttonVariants = cva(
           "cursor-pointer border border-black bg-black text-white shadow-xs hover:bg-black/90 hover:text-white dark:border-black dark:bg-black",
         secondary: "cursor-pointer bg-black text-white hover:bg-black/90",
         ghost:
-          "cursor-pointer text-black hover:bg-black hover:text-white dark:text-black dark:hover:bg-black dark:hover:text-white",
+          "cursor-pointer hover:bg-stone-100 hover:text-stone-900 dark:hover:bg-stone-800 dark:hover:text-stone-100",
         link: "cursor-pointer text-black underline-offset-4 hover:underline",
       },
       size: {

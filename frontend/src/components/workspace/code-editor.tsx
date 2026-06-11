@@ -19,10 +19,11 @@ import { cn } from "@/lib/utils";
 import { useThread } from "./messages/context";
 const customDarkTheme = monokaiInit({
   settings: {
-    background: "transparent",
-    gutterBackground: "transparent",
-    gutterForeground: "#555",
-    gutterActiveForeground: "#fff",
+    background: "#000000",
+    gutterBackground: "#000000",
+    gutterForeground: "#4a4a4a",
+    gutterActiveForeground: "#aaaaaa",
+    gutterBorder: "transparent",
     fontSize: "var(--text-sm)",
   },
 });
@@ -103,7 +104,7 @@ export function CodeEditor({
             highlightActiveLine: false,
             highlightActiveLineGutter: false,
             lineNumbers:
-              (settings as { lineNumbers?: boolean })?.lineNumbers ?? false,
+              (settings as { lineNumbers?: boolean })?.lineNumbers ?? true,
           }}
           autoFocus={autoFocus}
           value={value}

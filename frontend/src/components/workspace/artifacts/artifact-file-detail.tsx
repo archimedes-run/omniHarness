@@ -80,6 +80,23 @@ import { ArtifactLink } from "../citations/artifact-link";
 import { useThread } from "../messages/context";
 import { Tooltip } from "../tooltip";
 
+type PreviewStatus = "starting" | "running" | "failed" | "stopped";
+
+function statusBadgeClass(status: PreviewStatus | "not running" | undefined) {
+  switch (status) {
+    case "running":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "starting":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "failed":
+      return "border-red-200 bg-red-50 text-red-700";
+    case "stopped":
+    case "not running":
+    default:
+      return "border-purple-200 bg-purple-50 text-purple-700";
+  }
+}
+
 import { useArtifacts } from "./context";
 
 class ArtifactErrorBoundary extends Component<
@@ -389,8 +406,16 @@ function ArtifactFileDetailInner({
           </ArtifactTitle>
           {isDynamicManifest && (
             <Badge
-              variant="secondary"
-              className="hidden shrink-0 rounded text-[10px] sm:flex"
+              variant="outline"
+              className={cn(
+                "hidden shrink-0 rounded text-[10px] sm:flex",
+                statusBadgeClass(
+                  previewSession?.status ??
+                    (createPreviewFromManifest.isPending
+                      ? "starting"
+                      : "not running"),
+                ),
+              )}
             >
               <ActivityIcon className="mr-1 size-3" />
               {previewSession?.status ??
@@ -695,7 +720,13 @@ function DynamicArtifactPreviewPanel({
       <div className="bg-background flex size-full flex-col">
         <div className="border-border/60 flex items-center justify-between border-b px-4 py-2">
           <div className="text-sm font-medium">Preview Logs</div>
-          <Badge variant="secondary" className="rounded text-[10px]">
+          <Badge
+            variant="outline"
+            className={cn(
+              "rounded text-[10px]",
+              statusBadgeClass(logsStatus ?? previewStatus ?? "not running"),
+            )}
+          >
             {logsStatus ?? previewStatus ?? "not running"}
           </Badge>
         </div>
@@ -726,7 +757,15 @@ function DynamicArtifactPreviewPanel({
   return (
     <div className="flex size-full flex-col items-center justify-center gap-4 px-6 text-center">
       <div className="text-sm font-medium">{manifest.title}</div>
-      <Badge variant="secondary" className="rounded text-[10px]">
+      <Badge
+        variant="outline"
+        className={cn(
+          "rounded text-[10px]",
+          statusBadgeClass(
+            isCreating ? "starting" : (previewStatus ?? "not running"),
+          ),
+        )}
+      >
         {isCreating ? "starting" : (previewStatus ?? "not running")}
       </Badge>
 
@@ -827,19 +866,19 @@ function FileTreeNodeItem({
     return (
       <div>
         <button
-          className="hover:bg-muted/50 flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs"
+          className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs text-[#cccccc] hover:bg-[#2a2d2e]"
           style={{ paddingLeft: `${indent + 4}px` }}
           onClick={() => setIsOpen((v) => !v)}
         >
           {isOpen ? (
-            <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+            <ChevronDownIcon className="size-3 shrink-0 text-[#888]" />
           ) : (
-            <ChevronRightIcon className="size-3 shrink-0 opacity-50" />
+            <ChevronRightIcon className="size-3 shrink-0 text-[#888]" />
           )}
           {isOpen ? (
-            <FolderOpenIcon className="text-muted-foreground size-3 shrink-0" />
+            <FolderOpenIcon className="size-3 shrink-0 text-[#e8c17a]" />
           ) : (
-            <FolderIcon className="text-muted-foreground size-3 shrink-0" />
+            <FolderIcon className="size-3 shrink-0 text-[#e8c17a]" />
           )}
           <span className="truncate">{node.name}</span>
         </button>
@@ -860,13 +899,13 @@ function FileTreeNodeItem({
   return (
     <button
       className={cn(
-        "hover:bg-muted/50 flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs",
-        selectedPath === node.path && "bg-muted",
+        "flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs text-[#cccccc] hover:bg-[#2a2d2e]",
+        selectedPath === node.path && "bg-[#37373d] text-white",
       )}
       style={{ paddingLeft: `${indent + 20}px` }}
       onClick={() => onSelect(node.path)}
     >
-      <FileIcon className="text-muted-foreground size-3 shrink-0" />
+      <FileIcon className="size-3 shrink-0 text-[#75beff]" />
       <span className="truncate">{node.name}</span>
     </button>
   );
@@ -921,16 +960,14 @@ function ProjectFilesPanel({
 
   return (
     <div className="flex size-full overflow-hidden">
-      <div className="border-border/60 flex w-48 shrink-0 flex-col overflow-y-auto border-r p-1">
+      <div className="flex w-48 shrink-0 flex-col overflow-y-auto border-r border-[#3c3c3c] bg-[#1e1e1e] p-1">
         {isLoading && !files.length ? (
-          <div className="text-muted-foreground flex items-center gap-2 px-2 py-2 text-xs">
+          <div className="flex items-center gap-2 px-2 py-2 text-xs text-[#888]">
             <LoaderIcon className="size-3 animate-spin" />
             Loading…
           </div>
         ) : tree.length === 0 ? (
-          <div className="text-muted-foreground px-2 py-2 text-xs">
-            No files yet
-          </div>
+          <div className="px-2 py-2 text-xs text-[#888]">No files yet</div>
         ) : (
           tree.map((node) => (
             <FileTreeNodeItem
@@ -943,11 +980,11 @@ function ProjectFilesPanel({
           ))
         )}
       </div>
-      <div className="min-w-0 flex-1 overflow-hidden">
+      <div className="min-w-0 flex-1 overflow-hidden bg-[#000000]">
         {selectedFile ? (
           isContentLoading ? (
             <div className="flex size-full items-center justify-center">
-              <LoaderIcon className="size-4 animate-spin" />
+              <LoaderIcon className="size-4 animate-spin text-[#888]" />
             </div>
           ) : (
             <CodeEditor
@@ -957,7 +994,7 @@ function ProjectFilesPanel({
             />
           )
         ) : (
-          <div className="text-muted-foreground flex size-full items-center justify-center text-sm">
+          <div className="flex size-full items-center justify-center text-sm text-[#666]">
             Select a file to view its content
           </div>
         )}
