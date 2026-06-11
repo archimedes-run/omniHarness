@@ -16,6 +16,7 @@ from omniharness.config.database_config import DatabaseConfig
 from omniharness.config.extensions_config import ExtensionsConfig
 from omniharness.config.guardrails_config import GuardrailsConfig, load_guardrails_config_from_dict
 from omniharness.config.loop_detection_config import LoopDetectionConfig
+from omniharness.config.mcp_builder_config import McpBuilderConfig
 from omniharness.config.memory_config import MemoryConfig, load_memory_config_from_dict
 from omniharness.config.model_config import ModelConfig
 from omniharness.config.run_events_config import RunEventsConfig
@@ -91,6 +92,7 @@ class AppConfig(BaseModel):
     tool_groups: list[ToolGroupConfig] = Field(default_factory=list, description="Available tool groups")
     skills: SkillsConfig = Field(default_factory=SkillsConfig, description="Skills configuration")
     skill_evolution: SkillEvolutionConfig = Field(default_factory=SkillEvolutionConfig, description="Agent-managed skill evolution configuration")
+    mcp_builder: McpBuilderConfig = Field(default_factory=McpBuilderConfig, description="MCP builder feature flag and configuration")
     extensions: ExtensionsConfig = Field(default_factory=ExtensionsConfig, description="Extensions configuration (MCP servers and skills state)")
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig, description="Tool search / deferred loading configuration")
     title: TitleConfig = Field(default_factory=TitleConfig, description="Automatic title generation configuration")

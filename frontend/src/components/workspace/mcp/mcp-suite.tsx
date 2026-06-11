@@ -10,11 +10,10 @@ import {
   PlusIcon,
   SearchIcon,
   Share2Icon,
-  ShieldCheckIcon,
   Trash2Icon,
   ZapIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,18 +21,17 @@ import { cn } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type McpStatus = "deployed" | "starting" | "failed" | "stopped";
+type McpStatus = "deployed" | "starting" | "failed" | "stopped" | "not_running";
 
 type MyMcp = {
   id: string;
   name: string;
-  description: string;
-  tag: string;
-  tagColor: string;
+  description: string | null;
+  language: string | null;
   status: McpStatus;
-  createdAt: string;
-  updatedAt: string;
-  role: "owner" | "member";
+  detected_secrets: string[];
+  created_at: string;
+  updated_at: string;
 };
 
 type CatalogMcp = {
@@ -42,60 +40,10 @@ type CatalogMcp = {
   description: string;
   category: string;
   icon: string;
-  installs: string;
   tags: string[];
 };
 
-// ── Mock data ─────────────────────────────────────────────────────────────────
-
-const MY_MCPS: MyMcp[] = [
-  {
-    id: "1",
-    name: "GitHub Integration",
-    description:
-      "Full GitHub API access — repos, issues, PRs, actions and more.",
-    tag: "TypeScript",
-    tagColor: "bg-blue-50 text-blue-700 border-blue-200",
-    status: "deployed",
-    createdAt: "Jun 4, 2026",
-    updatedAt: "Jun 9, 2026",
-    role: "owner",
-  },
-  {
-    id: "2",
-    name: "Slack Messenger",
-    description: "Post messages, read channels, and manage Slack workspaces.",
-    tag: "Python",
-    tagColor: "bg-yellow-50 text-yellow-700 border-yellow-200",
-    status: "deployed",
-    createdAt: "May 28, 2026",
-    updatedAt: "Jun 8, 2026",
-    role: "owner",
-  },
-  {
-    id: "3",
-    name: "PostgreSQL Query",
-    description:
-      "Execute read-only SQL queries against your Postgres database.",
-    tag: "Python",
-    tagColor: "bg-yellow-50 text-yellow-700 border-yellow-200",
-    status: "starting",
-    createdAt: "Jun 10, 2026",
-    updatedAt: "Jun 10, 2026",
-    role: "member",
-  },
-  {
-    id: "4",
-    name: "Notion Workspace",
-    description: "Read and write Notion pages, databases, and blocks.",
-    tag: "TypeScript",
-    tagColor: "bg-blue-50 text-blue-700 border-blue-200",
-    status: "failed",
-    createdAt: "Jun 1, 2026",
-    updatedAt: "Jun 5, 2026",
-    role: "owner",
-  },
-];
+// ── Catalog data (static, curated) ────────────────────────────────────────────
 
 const CATALOG: CatalogMcp[] = [
   {
@@ -105,7 +53,6 @@ const CATALOG: CatalogMcp[] = [
       "Real-time web search with Brave, Tavily, or Exa as the backend.",
     category: "Research",
     icon: "🌐",
-    installs: "12k",
     tags: ["Search", "Research"],
   },
   {
@@ -115,7 +62,6 @@ const CATALOG: CatalogMcp[] = [
       "Read, write, and manage files within a scoped sandbox directory.",
     category: "Storage",
     icon: "📁",
-    installs: "9.4k",
     tags: ["Files", "Storage"],
   },
   {
@@ -125,7 +71,6 @@ const CATALOG: CatalogMcp[] = [
       "Manage issues, projects, and cycles in your Linear workspace.",
     category: "Project Mgmt",
     icon: "⚡",
-    installs: "7.1k",
     tags: ["Issues", "PM"],
   },
   {
@@ -135,7 +80,6 @@ const CATALOG: CatalogMcp[] = [
       "Query customers, invoices, charges, and subscriptions via Stripe.",
     category: "Payments",
     icon: "💳",
-    installs: "6.8k",
     tags: ["Payments", "Finance"],
   },
   {
@@ -144,7 +88,6 @@ const CATALOG: CatalogMcp[] = [
     description: "Create and update Jira tickets, sprints, and project boards.",
     category: "Project Mgmt",
     icon: "📋",
-    installs: "5.9k",
     tags: ["Issues", "PM"],
   },
   {
@@ -154,7 +97,6 @@ const CATALOG: CatalogMcp[] = [
       "List, upload, and download objects from S3-compatible stores.",
     category: "Cloud",
     icon: "☁️",
-    installs: "5.2k",
     tags: ["Cloud", "Storage"],
   },
   {
@@ -164,7 +106,6 @@ const CATALOG: CatalogMcp[] = [
       "Inspect frames, components, and design tokens from Figma files.",
     category: "Design",
     icon: "🎨",
-    installs: "4.8k",
     tags: ["Design", "Assets"],
   },
   {
@@ -174,7 +115,6 @@ const CATALOG: CatalogMcp[] = [
       "Read and create Google Calendar events and availability slots.",
     category: "Productivity",
     icon: "📅",
-    installs: "4.3k",
     tags: ["Calendar", "Productivity"],
   },
   {
@@ -184,7 +124,6 @@ const CATALOG: CatalogMcp[] = [
       "Fetch errors, issues, and performance data from Sentry projects.",
     category: "Monitoring",
     icon: "🛡️",
-    installs: "3.7k",
     tags: ["Errors", "Monitoring"],
   },
 ];
@@ -201,6 +140,19 @@ const CATEGORIES = [
   "Payments",
 ];
 
+// ── Language tag color helper ─────────────────────────────────────────────────
+
+function langTagClass(language: string | null): string {
+  switch ((language ?? "").toLowerCase()) {
+    case "typescript":
+      return "bg-blue-50 text-blue-700 border-blue-200";
+    case "python":
+      return "bg-yellow-50 text-yellow-700 border-yellow-200";
+    default:
+      return "bg-stone-50 text-stone-600 border-stone-200";
+  }
+}
+
 // ── Status helpers ────────────────────────────────────────────────────────────
 
 function statusBadgeClass(status: McpStatus | string) {
@@ -211,13 +163,12 @@ function statusBadgeClass(status: McpStatus | string) {
       return "border-amber-200 bg-amber-50 text-amber-700";
     case "failed":
       return "border-red-200 bg-red-50 text-red-700";
-    case "stopped":
     default:
       return "border-purple-200 bg-purple-50 text-purple-700";
   }
 }
 
-function statusDot(status: McpStatus) {
+function statusDot(status: McpStatus | string) {
   switch (status) {
     case "deployed":
       return "bg-emerald-500";
@@ -230,9 +181,26 @@ function statusDot(status: McpStatus) {
   }
 }
 
+function statusLabel(status: McpStatus | string): string {
+  if (status === "not_running") return "Not running";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: McpStatus }) {
+function StatusBadge({ status }: { status: McpStatus | string }) {
   return (
     <Badge
       variant="outline"
@@ -244,29 +212,8 @@ function StatusBadge({ status }: { status: McpStatus }) {
       <span
         className={cn("inline-block size-1.5 rounded-full", statusDot(status))}
       />
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+      {statusLabel(status)}
     </Badge>
-  );
-}
-
-function RoleBadge({ role }: { role: "owner" | "member" }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
-        role === "owner"
-          ? "border-stone-200 bg-stone-50 text-stone-600"
-          : "border-blue-100 bg-blue-50 text-blue-600",
-      )}
-    >
-      <span
-        className={cn(
-          "size-1.5 rounded-full",
-          role === "owner" ? "bg-stone-400" : "bg-blue-400",
-        )}
-      />
-      {role === "owner" ? "Owner" : "Member"}
-    </span>
   );
 }
 
@@ -275,14 +222,39 @@ function RoleBadge({ role }: { role: "owner" | "member" }) {
 function MyMcpsTab() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<McpStatus | "all">("all");
+  const [servers, setServers] = useState<MyMcp[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = MY_MCPS.filter((m) => {
-    const matchSearch =
-      m.name.toLowerCase().includes(search.toLowerCase()) ||
-      m.description.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "all" || m.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+
+    fetch(`/api/mcp-studio/servers?${params.toString()}`, {
+      credentials: "include",
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 503) {
+            setServers([]);
+            return;
+          }
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+        const data = (await res.json()) as { servers: MyMcp[]; total: number };
+        setServers(data.servers);
+      })
+      .catch((err: unknown) => {
+        setError(
+          err instanceof Error ? err.message : "Failed to load MCP servers",
+        );
+      })
+      .finally(() => setLoading(false));
+  }, [search, statusFilter]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -308,6 +280,7 @@ function MyMcpsTab() {
           <option value="starting">Starting</option>
           <option value="failed">Failed</option>
           <option value="stopped">Stopped</option>
+          <option value="not_running">Not Running</option>
         </select>
       </div>
 
@@ -323,10 +296,10 @@ function MyMcpsTab() {
                 Status
               </th>
               <th className="hidden px-5 py-3 text-left text-xs font-medium tracking-wide text-stone-500 md:table-cell">
-                Created At
+                Created
               </th>
               <th className="hidden px-5 py-3 text-left text-xs font-medium tracking-wide text-stone-500 lg:table-cell">
-                Updated At
+                Updated
               </th>
               <th className="px-5 py-3 text-right text-xs font-medium tracking-wide text-stone-500">
                 Actions
@@ -334,17 +307,37 @@ function MyMcpsTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-100">
-            {filtered.length === 0 ? (
+            {loading ? (
               <tr>
                 <td
                   colSpan={5}
                   className="px-5 py-12 text-center text-sm text-stone-400"
                 >
-                  No MCPs match your search.
+                  Loading…
+                </td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-5 py-12 text-center text-sm text-red-400"
+                >
+                  {error}
+                </td>
+              </tr>
+            ) : servers.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-5 py-12 text-center text-sm text-stone-400"
+                >
+                  {search || statusFilter !== "all"
+                    ? "No MCPs match your search."
+                    : "No MCP servers yet. Create one to get started."}
                 </td>
               </tr>
             ) : (
-              filtered.map((mcp) => (
+              servers.map((mcp) => (
                 <tr key={mcp.id} className="group hover:bg-stone-50/60">
                   <td className="px-5 py-4">
                     <div className="flex flex-col gap-1.5">
@@ -352,32 +345,32 @@ function MyMcpsTab() {
                         <span className="text-sm font-medium text-stone-900">
                           {mcp.name}
                         </span>
-                        <span
-                          className={cn(
-                            "rounded border px-1.5 py-0.5 text-[10px] font-medium",
-                            mcp.tagColor,
-                          )}
-                        >
-                          {mcp.tag}
-                        </span>
+                        {mcp.language && (
+                          <span
+                            className={cn(
+                              "rounded border px-1.5 py-0.5 text-[10px] font-medium",
+                              langTagClass(mcp.language),
+                            )}
+                          >
+                            {mcp.language}
+                          </span>
+                        )}
                       </div>
-                      <p className="max-w-xs text-xs leading-relaxed text-stone-500">
-                        {mcp.description}
-                      </p>
-                      <div className="flex items-center gap-1.5 text-[10px] text-stone-400">
-                        <span>Created {mcp.createdAt}</span>
-                        <RoleBadge role={mcp.role} />
-                      </div>
+                      {mcp.description && (
+                        <p className="max-w-xs text-xs leading-relaxed text-stone-500">
+                          {mcp.description}
+                        </p>
+                      )}
                     </div>
                   </td>
                   <td className="px-5 py-4">
                     <StatusBadge status={mcp.status} />
                   </td>
                   <td className="hidden px-5 py-4 text-sm text-stone-500 md:table-cell">
-                    {mcp.createdAt}
+                    {formatDate(mcp.created_at)}
                   </td>
                   <td className="hidden px-5 py-4 text-sm text-stone-500 lg:table-cell">
-                    {mcp.updatedAt}
+                    {formatDate(mcp.updated_at)}
                   </td>
                   <td className="px-5 py-4">
                     <div className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -472,9 +465,6 @@ function McpCatalogTab() {
                   <p className="text-sm font-semibold text-stone-900">
                     {mcp.name}
                   </p>
-                  <span className="text-[10px] text-stone-400">
-                    {mcp.installs} installs
-                  </span>
                 </div>
               </div>
               <span className="rounded-full border border-stone-100 bg-stone-50 px-2 py-0.5 text-[10px] text-stone-500">
@@ -539,14 +529,14 @@ export function McpSuite() {
       <div className="flex items-stretch border-b border-stone-100 bg-white">
         {[
           {
-            value: "50+",
-            label: "Pre-built Integrations",
+            value: "Agent-built",
+            label: "MCP Servers",
             icon: PackageIcon,
           },
           {
-            value: "Enterprise",
-            label: "Security & Compliance",
-            icon: ShieldCheckIcon,
+            value: "Sandboxed",
+            label: "Isolated Execution",
+            icon: Globe2Icon,
           },
           {
             value: "1-Click",
@@ -570,34 +560,6 @@ export function McpSuite() {
             </div>
           </div>
         ))}
-      </div>
-
-      {/* Docker security strip */}
-      <div className="flex items-center justify-between border-b border-stone-900 bg-stone-950 px-6 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-500">
-            <Globe2Icon className="size-4 text-white" />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-white">Secured by Docker</p>
-            <p className="text-xs text-stone-400">
-              MCP servers run in isolated containers with scoped permissions
-            </p>
-          </div>
-        </div>
-        <div className="hidden items-center gap-2 sm:flex">
-          {["SBOMs", "Provenance", "Signed Images", "Learn about MCP"].map(
-            (label) => (
-              <button
-                key={label}
-                className="flex items-center gap-1 rounded-md border border-stone-700 px-2.5 py-1 text-xs text-stone-300 transition-colors hover:border-stone-500 hover:text-white"
-              >
-                {label}
-                <ExternalLinkIcon className="size-3" />
-              </button>
-            ),
-          )}
-        </div>
       </div>
 
       {/* Tab bar */}

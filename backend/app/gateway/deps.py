@@ -70,15 +70,18 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         sf = get_session_factory()
         if sf is not None:
             from omniharness.persistence.feedback import FeedbackRepository
+            from omniharness.persistence.mcp_server import McpServerRepository
             from omniharness.persistence.run import RunRepository
 
             app.state.run_store = RunRepository(sf)
             app.state.feedback_repo = FeedbackRepository(sf)
+            app.state.mcp_server_repo = McpServerRepository(sf)
         else:
             from omniharness.runtime.runs.store.memory import MemoryRunStore
 
             app.state.run_store = MemoryRunStore()
             app.state.feedback_repo = None
+            app.state.mcp_server_repo = None
 
         from omniharness.persistence.thread_meta import make_thread_store
 
@@ -122,6 +125,7 @@ get_run_event_store: Callable[[Request], RunEventStore] = _require("run_event_st
 get_feedback_repo: Callable[[Request], FeedbackRepository] = _require("feedback_repo", "Feedback")
 get_run_store: Callable[[Request], RunStore] = _require("run_store", "Run store")
 get_preview_session_manager = _require("preview_session_manager", "Preview session manager")
+get_mcp_server_repo = _require("mcp_server_repo", "MCP server repository")
 
 
 def get_store(request: Request):

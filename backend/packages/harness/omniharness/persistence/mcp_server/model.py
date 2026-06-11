@@ -1,0 +1,30 @@
+"""ORM model for user-owned MCP server records."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from sqlalchemy import JSON, DateTime, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from omniharness.persistence.base import Base
+
+
+class McpServerRow(Base):
+    __tablename__ = "mcp_servers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    language: Mapped[str | None] = mapped_column(String(64))
+    description: Mapped[str | None] = mapped_column(String(1024))
+    # "not_running" | "starting" | "deployed" | "failed" | "stopped"
+    status: Mapped[str] = mapped_column(String(32), default="not_running")
+    # List of env-var *names* only — values are never stored here.
+    detected_secrets: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

@@ -21,6 +21,7 @@ from app.gateway.routers import (
     channels,
     feedback,
     mcp,
+    mcp_studio,
     memory,
     models,
     openclaw_webhook,
@@ -361,6 +362,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # MCP API is mounted at /api/mcp
     app.include_router(mcp.router)
+
+    # MCP Studio API is mounted at /api/mcp-studio
+    app.include_router(mcp_studio.router)
 
     # Memory API is mounted at /api/memory
     app.include_router(memory.router)
