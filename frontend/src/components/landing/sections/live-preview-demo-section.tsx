@@ -690,27 +690,29 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
 
   return (
     <section
+      id="workbench"
       ref={sectionRef}
-      className={cn("mx-auto w-full max-w-6xl px-6 py-24", className)}
+      className={cn(
+        "mx-auto w-full max-w-6xl px-4 py-20 sm:px-6 sm:py-24",
+        className,
+      )}
     >
-      {/* Heading */}
       <div className="mb-12 flex flex-col items-center gap-3 text-center">
         <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
-          Live Preview
+          Project Workbench
         </p>
-        <h2 className="max-w-2xl text-4xl font-bold tracking-tight text-stone-900 md:text-5xl">
-          Watch it build,{" "}
-          <span className="text-stone-400">run, and verify itself</span>
+        <h2 className="max-w-3xl text-4xl font-bold tracking-tight text-balance text-stone-900 md:text-5xl">
+          Build, preview, inspect,
+          <span className="text-stone-400"> and repair live outputs</span>
         </h2>
-        <p className="max-w-lg text-base leading-relaxed text-stone-500">
-          The agent codes, the preview auto-starts, and the loop closes — no
-          copy-paste relay required.
+        <p className="max-w-2xl text-base leading-relaxed text-pretty text-stone-500">
+          Harnesses do not stop at code generation. OmniHarness starts preview
+          sessions, streams logs, exposes files and artifacts, and keeps the
+          workbench attached to the capability the agent built.
         </p>
       </div>
 
-      {/* Browser window mockup */}
       <div className="overflow-hidden rounded-2xl border border-stone-200 shadow-2xl shadow-stone-200/60">
-        {/* Browser chrome */}
         <div className="flex items-center gap-3 border-b border-stone-200 bg-stone-50 px-4 py-2.5">
           <div className="flex gap-1.5">
             <div className="size-2.5 rounded-full bg-red-400" />
@@ -727,10 +729,8 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
           </div>
         </div>
 
-        {/* App shell */}
-        <div className="flex h-[500px] bg-white">
-          {/* Narrow sidebar */}
-          <div className="flex w-10 shrink-0 flex-col items-center gap-4 border-r border-stone-100 bg-stone-50 py-4">
+        <div className="flex min-h-[900px] flex-col bg-white lg:h-[500px] lg:min-h-0 lg:flex-row">
+          <div className="hidden w-10 shrink-0 flex-col items-center gap-4 border-r border-stone-100 bg-stone-50 py-4 lg:flex">
             <div className="flex size-5 items-center justify-center rounded-full bg-stone-900 text-[8px] font-bold text-white">
               O
             </div>
@@ -820,14 +820,12 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
             ]}
           </div>
 
-          {/* Chat panel */}
-          <div className="flex w-[44%] shrink-0 flex-col border-r border-stone-100">
-            {/* Chat header */}
-            <div className="flex items-center justify-between border-b border-stone-100 px-4 py-2.5">
+          <div className="flex w-full flex-col border-b border-stone-100 lg:w-[44%] lg:shrink-0 lg:border-r lg:border-b-0">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 px-4 py-2.5">
               <span className="text-[11px] font-medium text-stone-700">
                 Analytics Dashboard
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-stone-400 hover:bg-stone-50">
                   <DownloadIcon /> Export
                 </button>
@@ -1045,10 +1043,8 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
             </div>
           </div>
 
-          {/* Artifact panel */}
-          <div className="flex flex-1 flex-col bg-white">
-            {/* Panel header */}
-            <div className="flex items-center gap-2 border-b border-stone-100 px-3 py-2">
+          <div className="flex min-h-[360px] flex-1 flex-col bg-white lg:min-h-0">
+            <div className="flex flex-wrap items-center gap-2 border-b border-stone-100 px-3 py-2">
               <span className="truncate text-[11px] font-medium text-stone-700">
                 Analytics Dashboard
               </span>
@@ -1089,7 +1085,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 )}
               </div>
 
-              <div className="ml-auto flex items-center gap-0.5">
+              <div className="flex items-center gap-0.5 sm:ml-auto">
                 {[
                   { icon: <EyeIcon />, active: true },
                   { icon: <ChartIcon />, active: false },
@@ -1134,9 +1130,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
               </div>
             </div>
 
-            {/* Panel body */}
             <div className="relative flex-1 overflow-hidden">
-              {/* Code editor */}
               <div
                 className={cn(
                   "absolute inset-0 transition-opacity duration-300",
@@ -1146,7 +1140,6 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 <CodeEditor visibleLines={showCode ? visibleCodeLines : 0} />
               </div>
 
-              {/* File tree view */}
               <div
                 className={cn(
                   "absolute inset-0 transition-opacity duration-300",
@@ -1158,7 +1151,6 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 <FileTreeView />
               </div>
 
-              {/* Live preview */}
               <div
                 className={cn(
                   "absolute inset-0 transition-opacity duration-500",

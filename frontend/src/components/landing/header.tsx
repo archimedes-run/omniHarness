@@ -12,11 +12,16 @@ export type HeaderProps = {
 };
 
 export function Header({ className, homeURL }: HeaderProps) {
+  const links = [
+    { href: "#what-is", label: "Platform" },
+    { href: "#orchestration", label: "Orchestration" },
+    { href: "#platform", label: "Suite" },
+    { href: "#workbench", label: "Workbench" },
+  ];
+
   return (
     <header className={cn("fixed inset-x-0 top-0 z-50 px-4 pt-4", className)}>
-      {/* Floating pill navbar */}
-      <nav className="mx-auto flex max-w-4xl items-center justify-between rounded-2xl border border-stone-200/80 bg-[#F5F0E8]/80 px-5 py-2.5 shadow-sm backdrop-blur-md">
-        {/* Logo */}
+      <nav className="mx-auto flex max-w-5xl items-center justify-between rounded-2xl border border-stone-200 bg-white/92 px-4 py-2.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur-md sm:px-5">
         <Link
           href={homeURL ?? "/"}
           className="flex items-center gap-2 text-stone-900"
@@ -29,40 +34,23 @@ export function Header({ className, homeURL }: HeaderProps) {
           </span>
         </Link>
 
-        {/* Centre nav links */}
-        <div className="hidden items-center gap-7 text-sm font-medium text-stone-500 sm:flex">
-          <a
-            href="https://github.com/archimedes-run/omniHarness#readme"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-colors hover:text-stone-800"
-          >
-            Docs
-          </a>
-          <a
-            href="https://github.com/archimedes-run/omniHarness/releases"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-colors hover:text-stone-800"
-          >
-            Changelog
-          </a>
-          <a
-            href="https://github.com/archimedes-run/omniHarness/issues"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-colors hover:text-stone-800"
-          >
-            Community
-          </a>
+        <div className="hidden items-center gap-6 text-sm font-medium text-stone-500 md:flex">
+          {links.map((link) => (
+            <a
+              key={link.href}
+              href={link.href}
+              className="transition-colors hover:text-stone-900"
+            >
+              {link.label}
+            </a>
+          ))}
         </div>
 
-        {/* CTA */}
         <a
           href="https://github.com/archimedes-run/omniHarness"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white/60 px-3.5 py-1.5 text-xs font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-white/80"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-stone-950 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-stone-800 sm:px-3.5"
         >
           <GitHubLogoIcon className="size-3.5" />
           GitHub

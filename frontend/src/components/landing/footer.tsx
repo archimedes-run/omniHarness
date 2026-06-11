@@ -9,10 +9,15 @@ const year = new Date().getFullYear();
 export function Footer({ className }: FooterProps) {
   return (
     <footer
-      className={cn("w-full border-t border-stone-200 px-6 py-8", className)}
+      className={cn(
+        "w-full border-t border-stone-200 bg-white px-4 py-8 sm:px-6",
+        className,
+      )}
     >
-      <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-stone-400 sm:flex-row">
-        <span>&copy; {year} OmniHarness &mdash; MIT License</span>
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 text-center text-xs text-stone-400 sm:flex-row sm:text-left">
+        <span>
+          &copy; {year} OmniHarness · Open-source control plane for AI harnesses
+        </span>
         <nav className="flex items-center gap-5">
           <a
             href="https://github.com/archimedes-run/omniHarness"

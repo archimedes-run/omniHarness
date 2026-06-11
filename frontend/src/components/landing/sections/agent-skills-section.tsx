@@ -4,47 +4,57 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
-// ── Architecture SVG ──────────────────────────────────────────────────────────
-
 function AgentHarnessDiagram() {
-  const p = {
-    taskToLead: "M220,38 L220,85",
-    skillsToLead: "M95,78 C148,78 186,97 187,108",
-    memoryToLead: "M95,194 C148,194 186,141 187,128",
-    leadToSub1: "M248,104 C298,88 316,74 333,74",
-    leadToSub2: "M250,118 L333,118",
-    leadToSub3: "M248,132 C298,148 316,162 333,162",
-    sub1ToArt: "M377,74 C398,74 404,110 408,118",
-    sub2ToArt: "M377,118 L408,118",
-    sub3ToArt: "M377,162 C398,162 404,126 408,118",
+  const paths = {
+    taskToCore: "M360,40 L360,88",
+    skillsToCore: "M116,88 C176,88 214,114 248,134",
+    mcpToCore: "M116,144 C174,144 210,148 248,152",
+    memoryToCore: "M116,200 C174,200 210,184 248,170",
+    flowsToCore: "M360,248 L360,222",
+    coreToSubA: "M472,144 C520,122 556,102 596,88",
+    coreToSubB: "M472,154 L596,154",
+    coreToSubC: "M472,164 C520,186 556,206 596,220",
+    coreToSandbox: "M360,198 L360,242",
+    coreToOutputs: "M632,154 L690,154",
   };
 
   const particles: Array<{ path: string; dur: string; begin: string }> = [
-    { path: p.taskToLead, dur: "1.1s", begin: "0s" },
-    { path: p.skillsToLead, dur: "1.6s", begin: "0.4s" },
-    { path: p.memoryToLead, dur: "1.6s", begin: "1.0s" },
-    { path: p.leadToSub1, dur: "1.2s", begin: "0.2s" },
-    { path: p.leadToSub2, dur: "1.0s", begin: "0.6s" },
-    { path: p.leadToSub3, dur: "1.2s", begin: "1.1s" },
-    { path: p.sub1ToArt, dur: "1.1s", begin: "0.3s" },
-    { path: p.sub2ToArt, dur: "0.8s", begin: "0.8s" },
-    { path: p.sub3ToArt, dur: "1.1s", begin: "1.3s" },
+    { path: paths.taskToCore, dur: "1.1s", begin: "0s" },
+    { path: paths.skillsToCore, dur: "1.4s", begin: "0.3s" },
+    { path: paths.mcpToCore, dur: "1.4s", begin: "0.6s" },
+    { path: paths.memoryToCore, dur: "1.4s", begin: "0.9s" },
+    { path: paths.flowsToCore, dur: "0.9s", begin: "1.2s" },
+    { path: paths.coreToSubA, dur: "1.1s", begin: "0.4s" },
+    { path: paths.coreToSubB, dur: "0.9s", begin: "0.8s" },
+    { path: paths.coreToSubC, dur: "1.1s", begin: "1.1s" },
+    { path: paths.coreToOutputs, dur: "0.8s", begin: "1.3s" },
+    { path: paths.coreToSandbox, dur: "0.9s", begin: "1.5s" },
+  ];
+
+  const leftNodes = [
+    { x: 24, y: 68, label: "Skills" },
+    { x: 24, y: 124, label: "MCP Tools" },
+    { x: 24, y: 180, label: "Memory" },
+  ];
+
+  const subAgents = [
+    { cx: 620, cy: 88, label: "01" },
+    { cx: 620, cy: 154, label: "02" },
+    { cx: 620, cy: 220, label: "03" },
   ];
 
   return (
     <svg
-      viewBox="0 0 440 248"
+      viewBox="0 0 760 320"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className="w-full"
       aria-hidden
     >
-      {/* Connection lines */}
-      {Object.entries(p).map(([k, d]) => (
-        <path key={k} d={d} stroke="#e7e5e4" strokeWidth="1.5" />
+      {Object.entries(paths).map(([key, d]) => (
+        <path key={key} d={d} stroke="#e7e5e4" strokeWidth="1.5" />
       ))}
 
-      {/* Flowing particles */}
       {particles.map(({ path, dur, begin }, i) => (
         <circle key={i} r="2.5" cx="0" cy="0" fill="#a8a29e">
           <animateMotion
@@ -56,138 +66,152 @@ function AgentHarnessDiagram() {
         </circle>
       ))}
 
-      {/* Task input */}
-      <rect x="165" y="8" width="110" height="30" rx="15" fill="#1c1917" />
+      <rect x="286" y="14" width="148" height="34" rx="17" fill="#111827" />
       <text
-        x="220"
-        y="27"
+        x="360"
+        y="35"
         textAnchor="middle"
         dominantBaseline="middle"
         fill="white"
-        fontSize="9.5"
+        fontSize="10"
         fontFamily="ui-sans-serif,system-ui,sans-serif"
         fontWeight="500"
       >
         User Task
       </text>
 
-      {/* Lead Agent */}
-      <circle cx="220" cy="118" r="33" fill="#1c1917" />
-      <circle
-        cx="220"
-        cy="118"
-        r="33"
+      <rect x="248" y="116" width="224" height="84" rx="24" fill="#111827" />
+      <rect
+        x="248"
+        y="116"
+        width="224"
+        height="84"
+        rx="24"
         fill="none"
-        stroke="#78716c"
+        stroke="#9ca3af"
         strokeWidth="1"
       >
         <animate
-          attributeName="r"
-          values="33;41;33"
-          dur="2.8s"
-          repeatCount="indefinite"
-        />
-        <animate
           attributeName="stroke-opacity"
-          values="0.5;0;0.5"
-          dur="2.8s"
+          values="0.5;0.12;0.5"
+          dur="2.4s"
           repeatCount="indefinite"
         />
-      </circle>
+      </rect>
       <text
-        x="220"
-        y="113"
+        x="360"
+        y="150"
         textAnchor="middle"
         dominantBaseline="middle"
         fill="white"
-        fontSize="9"
+        fontSize="13"
         fontFamily="ui-sans-serif,system-ui,sans-serif"
+        fontWeight="600"
       >
-        Lead
+        Harness Control Plane
       </text>
       <text
-        x="220"
-        y="125"
+        x="360"
+        y="170"
         textAnchor="middle"
         dominantBaseline="middle"
-        fill="#a8a29e"
-        fontSize="8"
+        fill="#cbd5e1"
+        fontSize="10"
         fontFamily="ui-sans-serif,system-ui,sans-serif"
       >
-        Agent
+        Agent runtime · routing · policy · execution
       </text>
 
-      {/* Skills pill */}
-      <rect
-        x="15"
-        y="64"
-        width="80"
-        height="28"
-        rx="14"
-        fill="#f5f5f4"
-        stroke="#1c1917"
-        strokeWidth="1.5"
-      />
-      <text
-        x="55"
-        y="81"
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fill="#1c1917"
-        fontSize="9"
-        fontFamily="ui-sans-serif,system-ui,sans-serif"
-        fontWeight="500"
-      >
-        Skills
-      </text>
-
-      {/* Memory pill */}
-      <rect
-        x="15"
-        y="180"
-        width="80"
-        height="28"
-        rx="14"
-        fill="#f5f5f4"
-        stroke="#1c1917"
-        strokeWidth="1.5"
-      />
-      <text
-        x="55"
-        y="197"
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fill="#1c1917"
-        fontSize="9"
-        fontFamily="ui-sans-serif,system-ui,sans-serif"
-        fontWeight="500"
-      >
-        Memory
-      </text>
-
-      {/* Sub-agents */}
-      {(
-        [
-          { cx: 355, cy: 74, label: "01" },
-          { cx: 355, cy: 118, label: "02" },
-          { cx: 355, cy: 162, label: "03" },
-        ] as const
-      ).map(({ cx, cy, label }) => (
+      {leftNodes.map(({ x, y, label }) => (
         <g key={label}>
-          <circle
-            cx={cx}
-            cy={cy}
-            r="22"
+          <circle cx={x + 38} cy={y + 16} r="3" fill="#111827" />
+          <rect
+            x={x}
+            y={y}
+            width="92"
+            height="32"
+            rx="16"
             fill="#f5f5f4"
             stroke="#1c1917"
             strokeWidth="1.5"
           />
           <text
-            x={cx}
-            y={cy - 5}
+            x={x + 46}
+            y={y + 19}
             textAnchor="middle"
             dominantBaseline="middle"
-            fill="#a8a29e"
+            fill="#111827"
+            fontSize="10"
+            fontFamily="ui-sans-serif,system-ui,sans-serif"
+            fontWeight="500"
+          >
+            {label}
+          </text>
+        </g>
+      ))}
+
+      <rect
+        x="302"
+        y="248"
+        width="116"
+        height="38"
+        rx="19"
+        fill="#f5f5f4"
+        stroke="#1c1917"
+        strokeWidth="1.5"
+      />
+      <text
+        x="360"
+        y="270"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="#111827"
+        fontSize="10"
+        fontFamily="ui-sans-serif,system-ui,sans-serif"
+        fontWeight="500"
+      >
+        Workflows
+      </text>
+
+      <rect
+        x="512"
+        y="138"
+        width="92"
+        height="32"
+        rx="16"
+        fill="#f5f5f4"
+        stroke="#1c1917"
+        strokeWidth="1.5"
+      />
+      <text
+        x="558"
+        y="157"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="#111827"
+        fontSize="10"
+        fontFamily="ui-sans-serif,system-ui,sans-serif"
+        fontWeight="500"
+      >
+        Sub-agents
+      </text>
+
+      {subAgents.map(({ cx, cy, label }) => (
+        <g key={label}>
+          <circle
+            cx={cx}
+            cy={cy}
+            r="20"
+            fill="#ffffff"
+            stroke="#1c1917"
+            strokeWidth="1.5"
+          />
+          <text
+            x={cx}
+            y={cy - 4}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fill="#94a3b8"
             fontSize="7"
             fontFamily="ui-sans-serif,system-ui,sans-serif"
           >
@@ -195,10 +219,10 @@ function AgentHarnessDiagram() {
           </text>
           <text
             x={cx}
-            y={cy + 7}
+            y={cy + 8}
             textAnchor="middle"
             dominantBaseline="middle"
-            fill="#1c1917"
+            fill="#111827"
             fontSize="9"
             fontFamily="ui-monospace,monospace"
             fontWeight="600"
@@ -208,42 +232,90 @@ function AgentHarnessDiagram() {
         </g>
       ))}
 
-      {/* Artifacts — stacked doc rectangles */}
-      <rect
-        x="414"
-        y="106"
-        width="20"
-        height="24"
-        rx="2"
-        fill="#e7e5e4"
-        stroke="#d6d3d1"
-        strokeWidth="1"
-      />
-      <rect
-        x="411"
-        y="110"
-        width="20"
-        height="24"
-        rx="2"
-        fill="#f5f5f4"
-        stroke="#a8a29e"
-        strokeWidth="1"
-      />
-      <rect
-        x="408"
-        y="114"
-        width="20"
-        height="24"
-        rx="2"
+      <rect x="690" y="110" width="52" height="32" rx="12" fill="#111827" />
+      <text
+        x="716"
+        y="129"
+        textAnchor="middle"
+        dominantBaseline="middle"
         fill="white"
+        fontSize="8.5"
+        fontFamily="ui-sans-serif,system-ui,sans-serif"
+        fontWeight="600"
+      >
+        Preview
+      </text>
+
+      <rect
+        x="690"
+        y="150"
+        width="52"
+        height="32"
+        rx="12"
+        fill="#f5f5f4"
         stroke="#1c1917"
         strokeWidth="1.5"
       />
+      <text
+        x="716"
+        y="169"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="#111827"
+        fontSize="8.5"
+        fontFamily="ui-sans-serif,system-ui,sans-serif"
+        fontWeight="600"
+      >
+        Logs
+      </text>
+
+      <rect
+        x="690"
+        y="190"
+        width="52"
+        height="32"
+        rx="12"
+        fill="#f5f5f4"
+        stroke="#1c1917"
+        strokeWidth="1.5"
+      />
+      <text
+        x="716"
+        y="209"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="#111827"
+        fontSize="8.5"
+        fontFamily="ui-sans-serif,system-ui,sans-serif"
+        fontWeight="600"
+      >
+        Artifacts
+      </text>
+
+      <rect
+        x="302"
+        y="278"
+        width="116"
+        height="28"
+        rx="14"
+        fill="#ffffff"
+        stroke="#d6d3d1"
+        strokeWidth="1.25"
+      />
+      <text
+        x="360"
+        y="294"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="#6b7280"
+        fontSize="9"
+        fontFamily="ui-sans-serif,system-ui,sans-serif"
+      >
+        Sandboxed execution
+      </text>
     </svg>
   );
 }
-
-// ── Agent Log Terminal ────────────────────────────────────────────────────────
 
 type LogLine = {
   text: string;
@@ -253,61 +325,74 @@ type LogLine = {
 
 const LOG_LINES: LogLine[] = [
   {
-    text: '$ omniharness run "Research CRISPR delivery advances,',
-    delay: 0,
-    type: "cmd",
-  },
-  {
-    text: '    generate investor brief with visualisations"',
+    text: '$ omniharness run "Build a retention dashboard harness"',
     delay: 0,
     type: "cmd",
   },
   { text: "", delay: 500, type: "blank" },
-  { text: "✦ Lead agent initialised", delay: 900, type: "info" },
-  { text: "✦ Scanning skill library...", delay: 1300, type: "info" },
-  { text: "  └─ research/SKILL.md", delay: 1700 },
-  { text: "  └─ chart-visualization/SKILL.md", delay: 2100 },
-  { text: "  └─ report-generation/SKILL.md", delay: 2500 },
+  {
+    text: "1. task understood -> analytics workbench",
+    delay: 900,
+    type: "info",
+  },
+  {
+    text: "2. loading skills: codegen, charts, deployment",
+    delay: 1300,
+    type: "info",
+  },
+  {
+    text: "3. connecting MCP tools: postgres, slack, github",
+    delay: 1800,
+    type: "tool",
+  },
   { text: "", delay: 2900, type: "blank" },
-  { text: "✦ Spawning 2 sub-agents in parallel", delay: 3200, type: "info" },
-  { text: "  ├─ [agent:01] literature + patent search", delay: 3600 },
-  { text: "  └─ [agent:02] data visualisation", delay: 3900 },
+  { text: "4. spawning 3 sub-agents in parallel", delay: 3200, type: "info" },
+  { text: "   [agent:01] schema + data contracts", delay: 3500 },
+  { text: "   [agent:02] charts + dashboard UI", delay: 3800 },
+  { text: "   [agent:03] alert workflow + reporting", delay: 4100 },
   { text: "", delay: 4200, type: "blank" },
   {
-    text: '  tool_call: web_search("CRISPR LNP delivery mechanisms 2025")',
+    text: "5. write_file('/workspace/retention-app/app/page.tsx')",
     delay: 4500,
     type: "tool",
   },
   {
-    text: '  tool_call: web_fetch("nature.com/articles/s41587-025...")',
+    text: "6. starting sandbox preview session on port 3000",
     delay: 5100,
     type: "tool",
   },
   {
-    text: '  tool_call: execute_python("plot_trial_outcomes.py")',
+    text: "7. preview healthcheck failed -> repairing import path",
     delay: 5700,
     type: "tool",
   },
   { text: "", delay: 6200, type: "blank" },
   {
-    text: "  [agent:01] 18 papers indexed, 4 patents found",
+    text: "8. live preview reachable at /artifacts/retention-app",
     delay: 6500,
     type: "result",
   },
   {
-    text: "  [agent:02] trial_outcomes.png generated",
-    delay: 6900,
+    text: "9. logs + artifacts attached to the harness",
+    delay: 7000,
     type: "result",
   },
   { text: "", delay: 7200, type: "blank" },
-  { text: "✦ Synthesising, drafting brief...", delay: 7500, type: "info" },
-  { text: "  write_file('investor_brief.md') ✓", delay: 8000, type: "ok" },
-  { text: "  write_file('trial_outcomes.png') ✓", delay: 8300, type: "ok" },
-  { text: "", delay: 8600, type: "blank" },
-  { text: "✓ Complete — 3 artifacts ready", delay: 9000, type: "ok" },
   {
-    text: "  investor_brief.md  ·  trial_outcomes.png  ·  sources.json",
-    delay: 9400,
+    text: "10. packaging harness for reuse + scheduled refresh",
+    delay: 7600,
+    type: "info",
+  },
+  {
+    text: "   retention-app/  preview.log  workflow.yaml",
+    delay: 8200,
+    type: "ok",
+  },
+  { text: "", delay: 8600, type: "blank" },
+  {
+    text: "Harness ready - preview, inspect, reuse, automate",
+    delay: 9000,
+    type: "ok",
   },
 ];
 
@@ -361,7 +446,6 @@ function AgentLogWindow() {
 
   return (
     <div className="flex flex-col overflow-hidden rounded-2xl border border-stone-800 bg-stone-950 shadow-xl shadow-stone-900/10">
-      {/* Window chrome */}
       <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3">
         <div className="flex gap-1.5">
           <div className="h-2.5 w-2.5 rounded-full bg-stone-700" />
@@ -385,10 +469,9 @@ function AgentLogWindow() {
           {running ? "pause" : "replay"}
         </button>
       </div>
-      {/* Log output */}
       <div
         ref={scrollRef}
-        className="h-80 overflow-y-auto p-4 font-mono text-xs leading-5 [scrollbar-width:none]"
+        className="h-80 overflow-y-auto p-4 font-mono text-xs leading-5 [scrollbar-width:none] sm:h-96"
       >
         {LOG_LINES.slice(0, visible).map((line, i) => (
           <div
@@ -411,36 +494,54 @@ function AgentLogWindow() {
   );
 }
 
-// ── Section export ────────────────────────────────────────────────────────────
+const HARNESS_STEPS = [
+  "Understand the task",
+  "Select the right skills and tools",
+  "Delegate to sub-agents",
+  "Write and run code in a sandbox",
+  "Connect MCP tools",
+  "Create project artifacts",
+  "Preview live apps",
+  "Inspect logs and files",
+  "Repair failures",
+  "Package, reuse, or schedule the result",
+];
 
 export function AgentSkillsSection({ className }: { className?: string }) {
   return (
-    <section className={cn("mx-auto w-full max-w-5xl px-6 py-24", className)}>
+    <section
+      id="orchestration"
+      className={cn(
+        "mx-auto w-full max-w-6xl px-4 py-20 sm:px-6 sm:py-24",
+        className,
+      )}
+    >
       <div className="mb-14 flex flex-col items-center gap-3 text-center">
         <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
-          Agent Skills
+          From chat to capability
         </p>
-        <h2 className="max-w-2xl text-4xl font-bold tracking-tight text-stone-900 md:text-5xl">
-          The right capability,{" "}
-          <span className="text-stone-400">right when it&apos;s needed</span>
+        <h2 className="max-w-3xl text-4xl font-bold tracking-tight text-balance text-stone-950 md:text-5xl">
+          Chat is the interface.{" "}
+          <span className="text-stone-400">Harnesses are the output.</span>
         </h2>
-        <p className="max-w-lg text-base leading-relaxed text-stone-500">
-          Skills load progressively — scoped to the task, not the session.
-          Extend the built-in library with your own or the community&apos;s.
+        <p className="max-w-3xl text-base leading-relaxed text-pretty text-stone-500">
+          Ask OmniHarness to build or operate something. It can route work
+          across skills, MCP tools, sub-agents, workflows, memory, sandboxes,
+          logs, and live previews without collapsing everything into a single
+          response.
         </p>
       </div>
 
-      <div className="grid items-start gap-6 lg:grid-cols-2">
-        {/* Architecture diagram in a light card */}
-        <div className="flex flex-col gap-2 rounded-2xl border border-stone-200 bg-white p-6">
+      <div className="grid items-start gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="flex flex-col gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-[0_16px_40px_rgba(15,23,42,0.04)] sm:p-6">
           <p className="text-xs font-medium tracking-widest text-stone-400 uppercase">
             How the harness orchestrates
           </p>
           <AgentHarnessDiagram />
-          <div className="mt-2 flex flex-wrap gap-4 text-xs text-stone-400">
+          <div className="mt-1 flex flex-wrap gap-4 text-xs text-stone-400">
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-2 w-2 rounded-full bg-stone-900" />
-              Lead Agent
+              Control plane
             </span>
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-2 w-2 rounded-full border border-stone-400" />
@@ -453,8 +554,21 @@ export function AgentSkillsSection({ className }: { className?: string }) {
           </div>
         </div>
 
-        {/* Live agent log */}
         <AgentLogWindow />
+      </div>
+
+      <div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {HARNESS_STEPS.map((step, index) => (
+          <div
+            key={step}
+            className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3 text-sm text-stone-700"
+          >
+            <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full bg-stone-900 text-[11px] font-semibold text-white">
+              {index + 1}
+            </span>
+            <p className="leading-relaxed">{step}</p>
+          </div>
+        ))}
       </div>
     </section>
   );

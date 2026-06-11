@@ -6,7 +6,6 @@ import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
-// Characters ordered light → dense. More spaces = more whitespace = lighter feel.
 const CHARS = "      ..··:::;;;+++===***???%%%##@";
 
 function AsciiBackground() {
@@ -23,7 +22,6 @@ function AsciiBackground() {
       const el = preRef.current;
       if (!el) return;
       const { width, height } = el.getBoundingClientRect();
-      // At font-size 9px in a typical monospace font, chars are ~5.4 px wide × 13 px tall
       colsRef.current = Math.max(1, Math.floor(width / 5.5));
       rowsRef.current = Math.max(1, Math.floor(height / 13));
     }
@@ -50,13 +48,11 @@ function AsciiBackground() {
           const fx = (x / cols) * Math.PI * 9;
           const fy = (y / rows) * Math.PI * 7;
 
-          // Multi-frequency wave interference — organic, ever-shifting
           const v =
             Math.sin(fx + t * 0.65) * Math.cos(fy + t * 0.42) * 0.48 +
             Math.sin(fx * 0.55 - fy * 0.85 + t * 1.05) * 0.3 +
             Math.cos((fx + fy) * 0.5 + t * 0.33) * 0.22;
 
-          // Map [-1, 1] → [0, 1)
           const norm = Math.max(0, Math.min(0.999, (v + 1) * 0.5));
           line += CHARS[Math.floor(norm * CHARS.length)];
         }
@@ -79,7 +75,7 @@ function AsciiBackground() {
     <pre
       ref={preRef}
       aria-hidden
-      className="pointer-events-none absolute inset-0 overflow-hidden font-mono text-[9px] leading-[13px] tracking-[0.01em] whitespace-pre text-stone-900/[0.07] select-none"
+      className="pointer-events-none absolute inset-0 overflow-hidden font-mono text-[9px] leading-[13px] tracking-[0.01em] whitespace-pre text-stone-900/[0.045] select-none"
     />
   );
 }
@@ -88,51 +84,48 @@ export function Hero({ className }: { className?: string }) {
   return (
     <section
       className={cn(
-        "relative flex min-h-screen items-center justify-center overflow-hidden px-6",
+        "relative flex min-h-[100svh] items-center justify-center overflow-hidden px-4 pt-28 pb-18 sm:px-6 sm:pt-32 sm:pb-24",
         className,
       )}
     >
-      {/* ASCII wave animation fills the entire viewport */}
       <AsciiBackground />
 
-      {/* Soft radial vignette so the centre text reads cleanly */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 55% 52% at 50% 48%, #F5F0E8 0%, rgba(245,240,232,0.82) 45%, rgba(245,240,232,0.25) 75%, transparent 100%)",
+            "radial-gradient(ellipse 56% 54% at 50% 42%, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.88) 42%, rgba(255,255,255,0.46) 72%, transparent 100%)",
         }}
       />
 
-      {/* ── Content ─────────────────────────────────────────────────── */}
-      <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-7 text-center">
-        {/* Badge */}
-        <div className="inline-flex items-center gap-2 rounded-full border border-stone-300/70 bg-stone-100/70 px-4 py-1.5 text-xs font-medium text-stone-500 backdrop-blur-sm">
-          <span className="size-1.5 rounded-full bg-emerald-500" />
-          Open source · MIT · Self-hostable in minutes
+      <div className="relative z-10 mx-auto flex max-w-6xl flex-col items-center gap-8 text-center">
+        <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white/90 px-4 py-1.5 text-xs font-medium text-stone-500 shadow-sm backdrop-blur-sm">
+          <span className="size-1.5 rounded-full bg-stone-900" />
+          Autonomous AI workers on your infrastructure
         </div>
 
-        {/* Headline */}
-        <h1 className="text-5xl leading-[1.08] font-bold tracking-tight text-stone-900 md:text-[4.5rem]">
-          Research, code &amp; create
-          <br />
-          <span className="text-stone-400">with one super&#8209;agent.</span>
+        <h1 className="max-w-5xl text-4xl leading-[1.04] font-bold tracking-tight text-balance text-stone-950 sm:text-5xl lg:text-[4.6rem]">
+          Build autonomous AI workers that run, inspect, and repair real
+          workflows.
         </h1>
 
-        {/* Description */}
-        <p className="max-w-xl text-base leading-relaxed text-stone-500 md:text-lg">
-          OmniHarness is an open&#8209;source AI agent harness with sandboxed
-          code execution, persistent memory, composable skills, and
-          sub&#8209;agent delegation — built to handle tasks that take minutes
-          to hours.
+        <p className="max-w-3xl text-base leading-relaxed text-pretty text-stone-600 sm:text-lg">
+          OmniHarness packages agents, MCP tools, memory, workflows, and
+          sandboxed execution into durable harnesses you can run, inspect,
+          reuse, and govern.
         </p>
 
-        {/* CTAs */}
+        <p className="max-w-3xl text-sm leading-relaxed text-pretty text-stone-500 sm:text-base">
+          Ship research workers, coding workbenches, approval-driven
+          automations, dashboard generators, and live project previews from one
+          self-hosted workspace.
+        </p>
+
         <div className="mt-1 flex flex-col items-center gap-3 sm:flex-row">
           <Link href="/workspace">
-            <span className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg bg-stone-900 px-7 text-sm font-semibold text-white transition-colors hover:bg-stone-700">
-              Start for free
+            <span className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg bg-stone-950 px-7 text-sm font-semibold text-white transition-colors hover:bg-stone-800">
+              Start building
               <ArrowRightIcon className="size-4" />
             </span>
           </Link>
@@ -140,26 +133,23 @@ export function Hero({ className }: { className?: string }) {
             href="https://github.com/archimedes-run/omniHarness"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-11 items-center gap-2 rounded-lg border border-stone-300 bg-transparent px-7 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-stone-100/60"
+            className="inline-flex h-11 items-center gap-2 rounded-lg border border-stone-300 bg-white/90 px-7 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-stone-50"
           >
             <GitHubLogoIcon className="size-4" />
             View on GitHub
           </a>
         </div>
 
-        {/* Trust line */}
-        <p className="text-xs text-stone-400">
-          No account required &nbsp;·&nbsp; Deploy on your own infra
-          &nbsp;·&nbsp; Apache&nbsp;2.0
+        <p className="text-xs font-medium tracking-[0.18em] text-stone-400 uppercase">
+          Open source · Self-hosted · Sandbox-native · MCP-ready
         </p>
       </div>
 
-      {/* Bottom fade into page */}
       <div
         aria-hidden
         className="pointer-events-none absolute right-0 bottom-0 left-0 h-40"
         style={{
-          background: "linear-gradient(to bottom, transparent, #F5F0E8)",
+          background: "linear-gradient(to bottom, transparent, white)",
         }}
       />
     </section>
