@@ -10,7 +10,7 @@ import { LivePreviewDemoSection } from "@/components/landing/sections/live-previ
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-white text-stone-950">
+    <div className="min-h-screen w-full overflow-x-clip bg-white text-stone-950">
       <Header />
       <main className="flex w-full flex-col">
         <Hero />

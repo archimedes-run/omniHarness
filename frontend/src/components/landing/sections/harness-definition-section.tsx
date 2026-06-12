@@ -51,7 +51,7 @@ export function HarnessDefinitionSection({
     const el = sectionRef.current;
     if (!el) return;
 
-    function tick() {
+    function update() {
       const scrolled = -el!.getBoundingClientRect().top;
       const clamped = Math.max(0, scrolled);
       const next = Math.min(
@@ -62,11 +62,25 @@ export function HarnessDefinitionSection({
         prevIndex.current = next;
         setActiveIndex(next);
       }
+    }
+
+    // Poll every frame AND on scroll/resize for instant response
+    function tick() {
+      update();
       rafRef.current = requestAnimationFrame(tick);
     }
 
     rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
+
+    // Catch scroll on window AND any scrollable ancestor (capture phase)
+    window.addEventListener("scroll", update, { passive: true, capture: true });
+    window.addEventListener("resize", update, { passive: true });
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      window.removeEventListener("scroll", update, { capture: true });
+      window.removeEventListener("resize", update);
+    };
   }, []);
 
   return (
