@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet
@@ -50,8 +51,22 @@ def make_vault_key(config: McpBuilderConfig) -> bytes:
             'mcp_builder.vault_key is required when dev_mode is False. Generate a key with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" and set it in config.yaml under mcp_builder.vault_key.'
         )
 
+    keyfile = Path(".omni-harness/dev_vault.key")
+    if keyfile.exists():
+        try:
+            key = keyfile.read_bytes().strip()
+            logger.info("MCP secrets vault: loaded dev key from %s", keyfile)
+            return key
+        except Exception as exc:
+            logger.warning("MCP secrets vault: failed to read %s (%s) — generating a new key", keyfile, exc)
+
     key = Fernet.generate_key()
-    logger.warning("MCP secrets vault: using an EPHEMERAL Fernet key (dev_mode=True, vault_key not set). All encrypted secrets will be LOST when the process restarts. Set mcp_builder.vault_key in config.yaml for persistent secrets.")
+    try:
+        keyfile.parent.mkdir(parents=True, exist_ok=True)
+        keyfile.write_bytes(key)
+        logger.warning("MCP secrets vault: persisted new dev Fernet key to %s (dev_mode=True). Set mcp_builder.vault_key in config.yaml for production.", keyfile)
+    except Exception as exc:
+        logger.warning("MCP secrets vault: could not persist key to %s (%s) — using ephemeral key; secrets will be lost on restart.", keyfile, exc)
     return key
 
 

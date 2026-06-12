@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -42,6 +43,20 @@ from omniharness.persistence.mcp_server.sql import McpServerRepository
 from omniharness.skills.code_scanner import scan_python_code, scan_python_code_static
 
 logger = logging.getLogger(__name__)
+
+# Extracts hostnames from https?:// URL string literals in generated source.
+# Used to auto-populate egress_hosts when the build flow didn't set them explicitly.
+_HTTPS_HOST_RE = re.compile(
+    r"""https?://([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)+)""",
+)
+
+# Patterns that indicate a 401/403 or authentication failure in tool-call output.
+# A tool that returns an auth error is still callable — the key is just not valid.
+_AUTH_ERROR_RE = re.compile(
+    r"\b(401|403|unauthorized|forbidden|invalid[\s_\-]?(key|token|api|credential)|"
+    r"authentication[\s_\-]?(fail|required|error)|api[\s_\-]?key|access[\s_\-]?denied)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -75,6 +90,10 @@ class MCPServerManager:
         # In-memory phase tracking: server_id → MCPBuildRecord
         self._records: dict[str, MCPBuildRecord] = {}
         self._lock = asyncio.Lock()
+        # Per-server in-flight test locks: server_id → asyncio.Lock
+        # Ensures only one test_server call runs at a time per server; concurrent
+        # callers wait for the in-flight test to finish and return its result.
+        self._test_locks: dict[str, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -127,6 +146,25 @@ class MCPServerManager:
                 text = text.replace(val, "[REDACTED]")
         return text
 
+    @staticmethod
+    def _is_auth_error(msg: str) -> bool:
+        """Return True if msg looks like a 401/403 / authentication failure.
+
+        A tool that raises an auth-style error is still callable — the placeholder
+        key is just not valid. This counts as ok=True in test-call results.
+        """
+        return bool(_AUTH_ERROR_RE.search(msg))
+
+    @staticmethod
+    def _extract_egress_hosts(source: str) -> list[str]:
+        """Extract unique API hostnames from https?:// URL literals in source.
+
+        Used as a fallback when the build flow didn't explicitly populate
+        egress_hosts. Gives the LLM scanner the allowlist it needs to approve a
+        normal API connector without flagging standard Bearer-auth as exfiltration.
+        """
+        return sorted(set(_HTTPS_HOST_RE.findall(source)))
+
     async def _run_server_sandbox_test(
         self,
         *,
@@ -134,25 +172,32 @@ class MCPServerManager:
         user_id: str,
         source_code: str,
     ) -> tuple[list[dict], list[dict]]:
-        """Start server as subprocess, connect MCP client, discover and test tools.
+        """Two-phase sandbox test: discovery (no secrets) then test-calls (placeholders).
 
-        Security invariants:
-        - Subprocess receives PLACEHOLDER values, not real vault secrets.
-          Real-secret injection is deferred to Phase 4 where the container
-          enforces the egress_hosts allowlist. A bare subprocess cannot be
-          network-restricted, so injecting real keys here would allow
-          exfiltration to arbitrary hosts bypassing the egress gate.
-        - No gateway env vars leak in (clean env only).
-        - Agent-generated code NEVER runs in the gateway process.
+        Phase 1 — Discovery (no secrets injected):
+          Start the server with a clean environment, connect the MCP client, and
+          call list_tools. Tool registration must not require any secret — secrets
+          are read inside tool handlers at call time, not at startup. If the server
+          crashes at startup with no secrets, that is a generation defect.
 
+        Phase 2 — Test-calls (placeholder secrets only):
+          Restart with placeholder env vars, call each discovered tool with empty
+          args. A 401/403 or auth-style exception means the tool is callable and
+          the key is merely not valid → ok: True. Only a crash, timeout, or
+          unrelated error counts as ok: False. Phase 2 never blocks 'verified'.
+
+        Real secrets are NEVER injected here.
         Returns (tools_discovered, test_results) — neither contains real secret values.
         """
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        # Placeholder values only — real secrets stay in the vault until Phase 4.
-        key_names = await self._vault.list_key_names(server_id=server_id, owner_id=user_id)
-        placeholder_env: dict[str, str] = {k: f"placeholder_for_{k}" for k in key_names}
+        site_packages = str(Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+        base_env: dict[str, str] = {
+            "PYTHONPATH": site_packages,
+            "HOME": str(Path.home()),
+            "PATH": "/usr/bin:/bin",
+        }
 
         tools_discovered: list[dict] = []
         test_results: list[dict] = []
@@ -161,27 +206,18 @@ class MCPServerManager:
             server_file = Path(tmpdir) / "server.py"
             server_file.write_text(source_code)
 
-            # Clean env: placeholder secrets + minimal system paths, no gateway env
-            clean_env: dict[str, str] = {
-                "PYTHONPATH": str(Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"),
-                "HOME": str(Path.home()),
-                "PATH": "/usr/bin:/bin",
-                **placeholder_env,
-            }
-
-            server_params = StdioServerParameters(
+            # ── Phase 1: Discovery — no secrets, validates clean startup ─────
+            discovery_params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(server_file)],
-                env=clean_env,
+                env=base_env,
             )
-
             try:
                 async with asyncio.timeout(30):
-                    async with stdio_client(server_params) as (read, write):
+                    async with stdio_client(discovery_params) as (read, write):
                         async with ClientSession(read, write) as session:
                             await session.initialize()
                             tools_resp = await session.list_tools()
-
                             for t in tools_resp.tools:
                                 tools_discovered.append(
                                     {
@@ -189,22 +225,50 @@ class MCPServerManager:
                                         "description": (t.description or "")[:300],
                                     }
                                 )
+            except TimeoutError:
+                raise RuntimeError("MCP server discovery timed out (30s)")
+            # Other startup/connection exceptions propagate to caller
 
-                            for t in tools_resp.tools:
+            if not tools_discovered:
+                return [], []
+
+            # ── Phase 2: Test-calls — placeholder secrets, auth errors are ok ─
+            key_names = await self._vault.list_key_names(server_id=server_id, owner_id=user_id)
+            placeholder_env: dict[str, str] = {k: f"placeholder_for_{k}" for k in key_names}
+
+            test_params = StdioServerParameters(
+                command=sys.executable,
+                args=[str(server_file)],
+                env={**base_env, **placeholder_env},
+            )
+            try:
+                async with asyncio.timeout(30):
+                    async with stdio_client(test_params) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            for t in tools_discovered:
                                 try:
                                     result = await asyncio.wait_for(
-                                        session.call_tool(t.name, {}),
+                                        session.call_tool(t["name"], {}),
                                         timeout=10,
                                     )
                                     output = ""
                                     if result.content:
-                                        output = str(result.content[0].text if hasattr(result.content[0], "text") else result.content[0])[:200]
-                                    test_results.append({"tool": t.name, "ok": True, "output": output})
+                                        item = result.content[0]
+                                        output = str(getattr(item, "text", None) or item)[:200]
+                                    test_results.append({"tool": t["name"], "ok": True, "output": output})
                                 except Exception as exc:
-                                    test_results.append({"tool": t.name, "ok": False, "error": str(exc)[:200]})
-
-            except TimeoutError:
-                raise RuntimeError("MCP server sandbox test timed out (30s)")
+                                    exc_msg = str(exc)[:200]
+                                    ok = self._is_auth_error(exc_msg)
+                                    entry: dict = {"tool": t["name"], "ok": ok}
+                                    if ok:
+                                        entry["output"] = exc_msg
+                                    else:
+                                        entry["error"] = exc_msg
+                                    test_results.append(entry)
+            except Exception as exc:
+                # Test-call phase failure never blocks 'verified' — tools were already discovered.
+                logger.warning("MCP test-call phase failed for %s: %s", server_id, exc)
 
         return tools_discovered, test_results
 
@@ -218,123 +282,151 @@ class MCPServerManager:
         return await self.test_server(server_id=server_id, user_id=user_id)
 
     async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Run the full test pipeline: static scan → secrets check → LLM scan → sandbox execution.
+        """Run the full test pipeline: static scan → LLM scan → sandbox execution.
 
         Ownership is verified at the top. Agent-generated code never runs in the
-        gateway process — it is launched as a subprocess with only the required
-        secrets injected from the vault.
+        gateway process — it is launched as a subprocess via _run_server_sandbox_test.
+
+        Missing secrets are no longer a blocker. Secrets are read at tool-call time;
+        the server starts and registers its tools regardless of whether keys are stored.
+        required_key_names is still detected and returned for informational display.
+
+        Concurrent /test calls for the same server are serialised: the second caller
+        waits for the first to finish, then returns the cached record instead of
+        launching a duplicate sandbox process.
         """
-        server = await self._load_and_verify(server_id, user_id)
+        # Ownership gate before acquiring the per-server lock so a bad caller fails fast.
+        await self._load_and_verify(server_id, user_id)
 
-        source = server.get("source_code") or ""
+        async with self._lock:
+            if server_id not in self._test_locks:
+                self._test_locks[server_id] = asyncio.Lock()
+        per_server_lock = self._test_locks[server_id]
 
-        # Stage 1: static scan (immediate, no LLM) — blocks obvious threats
-        if source:
-            static_result = scan_python_code_static(source)
-            if static_result is not None:
-                await self._repo.update_status(server_id, "failed", user_id=user_id)
-                record = MCPBuildRecord(
-                    server_id=server_id,
-                    phase="failed",
-                    owner_id=user_id,
-                    error=static_result.reason,
-                )
-                async with self._lock:
-                    self._records[server_id] = record
-                return record
+        if per_server_lock.locked():
+            # Another test is already in flight — wait for it, then return cached result.
+            async with per_server_lock:
+                pass
+            async with self._lock:
+                cached = self._records.get(server_id)
+            if cached is not None:
+                return cached
 
-        # Stage 2: extract required env-var names (static, pure) and check secrets
-        required_key_names = self._vault.scan_for_required_keys(source) if source else []
-        stored_names = await self._vault.list_key_names(server_id=server_id, owner_id=user_id)
-        missing = [k for k in required_key_names if k not in stored_names]
-        if missing:
-            await self._repo.update_status(server_id, "failed", user_id=user_id)
+        async with per_server_lock:
+            server = await self._load_and_verify(server_id, user_id)
+
+            source = server.get("source_code") or ""
+            egress_hosts = server.get("egress_hosts") or []
+
+            # Stage 1: static scan (immediate, no LLM) — hard-blocks dangerous patterns.
+            if source:
+                static_result = scan_python_code_static(source)
+                if static_result is not None:
+                    await self._repo.update_status(server_id, "failed", user_id=user_id)
+                    record = MCPBuildRecord(
+                        server_id=server_id,
+                        phase="failed",
+                        owner_id=user_id,
+                        error=static_result.reason,
+                    )
+                    async with self._lock:
+                        self._records[server_id] = record
+                    return record
+
+            # Stage 2: detect required env-var key names (informational — never a blocker).
+            # Secrets are read inside tool handlers at call time, not at startup. A server
+            # that crashes at startup without its keys has a generation defect, not a missing
+            # secret — discovery (Phase 1 of the sandbox test) catches that separately.
+            required_key_names = self._vault.scan_for_required_keys(source) if source else []
+
+            # Auto-populate egress_hosts from URL literals when the build flow didn't set
+            # them explicitly. Without this, the LLM scanner has no declared allowlist and
+            # treats standard Bearer-auth to the server's own API as potential exfiltration.
+            if source and not egress_hosts:
+                egress_hosts = self._extract_egress_hosts(source)
+                if egress_hosts:
+                    logger.debug("Auto-extracted egress hosts for %s: %s", server_id, egress_hosts)
+
+            # Stage 3: LLM scan for intent-level threats. egress_hosts are passed so the
+            # reviewer can distinguish a normal API connector (sending its key to its own
+            # declared endpoint) from exfiltration to undeclared hosts.
+            if source:
+                scan_result = await scan_python_code(source, location=f"mcp:{server_id}", egress_hosts=egress_hosts)
+                if scan_result.decision == "block":
+                    await self._repo.update_status(server_id, "failed", user_id=user_id)
+                    # Persist detected secrets even on scan failure so the UI can show
+                    # which keys are needed before the user fixes and re-tests.
+                    if required_key_names:
+                        await self._repo.update_detected_secrets(server_id, required_key_names, user_id=user_id)
+                    record = MCPBuildRecord(
+                        server_id=server_id,
+                        phase="failed",
+                        owner_id=user_id,
+                        required_key_names=required_key_names,
+                        error=scan_result.reason,
+                    )
+                    async with self._lock:
+                        self._records[server_id] = record
+                    return record
+
+            # Stage 4: validate egress rules structure
+            build_egress_rules(egress_hosts)
+
+            # Stage 5: two-phase sandbox test (discovery: no secrets; test-calls: placeholder).
+            # "verified" = scan gates passed AND server started cleanly AND tools discovered.
+            # Test-call auth errors (401/403) never block 'verified'.
+            # Real secrets are never injected here.
+            tools_discovered: list[dict] = []
+            test_results: list[dict] = []
+
+            if source:
+                try:
+                    tools_discovered, test_results = await self._run_server_sandbox_test(
+                        server_id=server_id,
+                        user_id=user_id,
+                        source_code=source,
+                    )
+                except Exception as exc:
+                    logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
+                    test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})
+
+            # Defense-in-depth scrub: decrypt real values once, replace any exact matches
+            # in test_results output/error fields, then immediately discard the values.
+            # Real secrets were never injected (placeholder env), but this closes any
+            # unexpected path that could surface a real value through tool output.
+            if required_key_names and test_results:
+                try:
+                    real_secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+                    secret_vals = frozenset(v for v in real_secrets.values() if v)
+                    del real_secrets  # discard plaintext values immediately
+                    for tr in test_results:
+                        for field_name in ("output", "error"):
+                            if field_name in tr and tr[field_name]:
+                                tr[field_name] = self._scrub_output(str(tr[field_name]), secret_vals)
+                except Exception:
+                    pass  # scrub failure is non-fatal; placeholder env means real values aren't present
+
+            # "verified" = scan gates passed AND server connected AND at least one tool found.
+            # "testing"  = scan gates passed but server didn't connect or no tools found.
+            # Only "verified" servers can be approved.
+            phase = "verified" if tools_discovered else "testing"
+            verified_at = datetime.now(UTC).isoformat()
+
+            await self._repo.update_status(server_id, phase, user_id=user_id)
+            await self._repo.update_detected_secrets(server_id, required_key_names, user_id=user_id)
+
             record = MCPBuildRecord(
                 server_id=server_id,
-                phase="failed",
+                phase=phase,
                 owner_id=user_id,
                 required_key_names=required_key_names,
-                error=f"Missing required secrets: {missing}",
+                tools_discovered=tools_discovered,
+                test_results=test_results,
+                last_verified_at=verified_at,
             )
             async with self._lock:
                 self._records[server_id] = record
             return record
-
-        # Stage 3: LLM scan for borderline cases (only if all secrets present)
-        if source:
-            scan_result = await scan_python_code(source, location=f"mcp:{server_id}")
-            if scan_result.decision == "block":
-                await self._repo.update_status(server_id, "failed", user_id=user_id)
-                record = MCPBuildRecord(
-                    server_id=server_id,
-                    phase="failed",
-                    owner_id=user_id,
-                    required_key_names=required_key_names,
-                    error=scan_result.reason,
-                )
-                async with self._lock:
-                    self._records[server_id] = record
-                return record
-
-        # Stage 4: validate egress rules structure
-        egress_hosts = server.get("egress_hosts") or []
-        build_egress_rules(egress_hosts)
-
-        # Stage 5: run server in subprocess with placeholder secrets, discover tools.
-        # phase="verified" when tools are discovered (server started, MCP protocol OK).
-        # phase="testing" when sandbox failed to start or no tools found (not approvable).
-        # Real secrets are never injected here — Phase 4 handles that in a container.
-        tools_discovered: list[dict] = []
-        test_results: list[dict] = []
-
-        if source:
-            try:
-                tools_discovered, test_results = await self._run_server_sandbox_test(
-                    server_id=server_id,
-                    user_id=user_id,
-                    source_code=source,
-                )
-            except Exception as exc:
-                logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
-                test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})
-
-        # Defense-in-depth scrub: decrypt real values once, replace any exact matches
-        # in test_results output/error fields, then immediately discard the values.
-        # Real secrets were never injected (placeholder env), but this closes any
-        # unexpected path that could surface a real value through tool output.
-        if required_key_names and test_results:
-            try:
-                real_secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
-                secret_vals = frozenset(v for v in real_secrets.values() if v)
-                del real_secrets  # discard plaintext values immediately
-                for tr in test_results:
-                    for field_name in ("output", "error"):
-                        if field_name in tr and tr[field_name]:
-                            tr[field_name] = self._scrub_output(str(tr[field_name]), secret_vals)
-            except Exception:
-                pass  # scrub failure is non-fatal; placeholder env means real values aren't present
-
-        # "verified" = scan gates passed AND server connected AND at least one tool found.
-        # "testing"  = scan gates passed but server didn't connect or no tools found.
-        # Only "verified" servers can be approved.
-        phase = "verified" if tools_discovered else "testing"
-        verified_at = datetime.now(UTC).isoformat()
-
-        await self._repo.update_status(server_id, phase, user_id=user_id)
-        await self._repo.update_detected_secrets(server_id, required_key_names, user_id=user_id)
-
-        record = MCPBuildRecord(
-            server_id=server_id,
-            phase=phase,
-            owner_id=user_id,
-            required_key_names=required_key_names,
-            tools_discovered=tools_discovered,
-            test_results=test_results,
-            last_verified_at=verified_at,
-        )
-        async with self._lock:
-            self._records[server_id] = record
-        return record
 
     async def approve(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Mark a server as approved.

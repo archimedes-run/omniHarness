@@ -60,6 +60,9 @@ if __name__ == "__main__":
 | `from mcp.server.fastmcp import FastMCP` | Only import — never raw `mcp.Server` |
 | `if __name__ == "__main__": mcp.run()` | Entrypoint must be guarded |
 | Secrets via `os.getenv("KEY_NAME")` only | Values are injected from the vault; never hardcode them |
+| **Never raise or crash at startup when a secret is missing** | The server is first started with NO secrets to discover its tools. A server that raises at import or module level when `os.getenv` returns `None` will register 0 tools and can never be verified. Check for missing keys inside the tool handler, return a structured error, don't raise. |
+| **Never import `subprocess`, `os.system`, `os.popen`, `eval`, `exec`, `pickle`, or `ctypes`** | These are hard-blocked by the static security scanner and will permanently fail verification |
+| Use the `_ensure_api_key()` guard pattern for missing keys | Return a JSON error dict, don't raise — see template below |
 | Every tool has a one-sentence docstring | Exposes to the MCP client for tool discovery |
 | Typed parameters on every tool function | Required for the MCP schema to be generated correctly |
 | No `asyncio.run()` or custom event loops | FastMCP manages the loop |
@@ -69,7 +72,12 @@ if __name__ == "__main__":
 
 Use when the server wraps a REST/HTTP API (e.g. weather, search, GitHub, Stripe).
 
+**Critical pattern**: `os.getenv` at module level is fine — the value will be `None` during tool
+discovery (the server is started with no secrets first). The `_ensure_api_key()` helper catches this
+and returns a structured JSON error from the tool handler. Never raise at module level.
+
 ```python
+import json
 import os
 
 import httpx
@@ -78,31 +86,50 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("my-api-wrapper")
 
 BASE_URL = "https://api.example.com"
+# Read at module level — will be None during discovery; checked inside tool handlers
 API_KEY = os.getenv("EXAMPLE_API_KEY")
+
+
+def _ensure_api_key() -> str | None:
+    """Return a JSON error string if the API key is missing, else None."""
+    if not API_KEY:
+        return json.dumps({
+            "error": "Missing EXAMPLE_API_KEY secret. Add it in Settings → Secrets.",
+            "missing_secret": "EXAMPLE_API_KEY",
+        })
+    return None
 
 
 @mcp.tool()
 def search(query: str) -> str:
     """Search the Example API and return up to 5 results as JSON."""
+    missing = _ensure_api_key()
+    if missing:
+        return missing
     resp = httpx.get(
         f"{BASE_URL}/search",
         headers={"Authorization": f"Bearer {API_KEY}"},
         params={"q": query, "limit": 5},
         timeout=15,
     )
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        return json.dumps({"error": f"API error {resp.status_code}", "details": resp.text})
     return resp.text
 
 
 @mcp.tool()
 def get_item(item_id: str) -> str:
     """Fetch a single item by ID and return its JSON representation."""
+    missing = _ensure_api_key()
+    if missing:
+        return missing
     resp = httpx.get(
         f"{BASE_URL}/items/{item_id}",
         headers={"Authorization": f"Bearer {API_KEY}"},
         timeout=15,
     )
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        return json.dumps({"error": f"API error {resp.status_code}", "details": resp.text})
     return resp.text
 
 

@@ -12,6 +12,7 @@ works without modification.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Literal
 
@@ -73,6 +74,14 @@ class RunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _safe_kwargs(kwargs: dict) -> dict:
+    """Return a JSON-serializable copy of kwargs, replacing non-serializable values with None."""
+    try:
+        return json.loads(json.dumps(kwargs, default=lambda _: None))
+    except Exception:
+        return {}
+
+
 def _record_to_response(record: RunRecord) -> RunResponse:
     return RunResponse(
         run_id=record.run_id,
@@ -80,7 +89,7 @@ def _record_to_response(record: RunRecord) -> RunResponse:
         assistant_id=record.assistant_id,
         status=record.status.value,
         metadata=record.metadata,
-        kwargs=record.kwargs,
+        kwargs=_safe_kwargs(record.kwargs),
         multitask_strategy=record.multitask_strategy,
         created_at=record.created_at,
         updated_at=record.updated_at,

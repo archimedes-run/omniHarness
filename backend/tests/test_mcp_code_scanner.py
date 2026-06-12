@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from omniharness.skills.code_scanner import ScanResult, extract_env_keys, scan_python_code
+from omniharness.skills.code_scanner import ScanResult, extract_env_keys, scan_python_code, scan_python_code_static
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,6 +111,20 @@ def test_extract_env_keys_lowercase_ignored() -> None:
 # ---------------------------------------------------------------------------
 
 
+_STATIC_REASONS = frozenset(
+    {
+        "subprocess usage is not permitted in MCP server code",
+        "os shell execution is not permitted",
+        "eval() usage is not permitted",
+        "exec() usage is not permitted",
+        "__import__() usage is not permitted",
+        "pickle deserialization is not permitted",
+        "ctypes usage is not permitted",
+        "base64-decode-then-execute pattern detected",
+    }
+)
+
+
 @pytest.mark.anyio
 async def test_clean_code_passes_static_stage() -> None:
     """A simple HTTP request has no static-block matches; decision depends on LLM.
@@ -123,14 +137,35 @@ async def test_clean_code_passes_static_stage() -> None:
     # The static stage would set reason to one of the known patterns; if we get
     # 'Security scan unavailable' that means the static stage passed and the LLM
     # stage failed-closed correctly.
-    static_reasons = {
-        "subprocess usage is not permitted in MCP server code",
-        "os shell execution is not permitted",
-        "eval() usage is not permitted",
-        "exec() usage is not permitted",
-        "__import__() usage is not permitted",
-        "pickle deserialization is not permitted",
-        "ctypes usage is not permitted",
-        "base64-decode-then-execute pattern detected",
-    }
-    assert result.reason not in static_reasons
+    assert result.reason not in _STATIC_REASONS
+
+
+@pytest.mark.anyio
+async def test_egress_hosts_parameter_accepted() -> None:
+    """egress_hosts can be passed without errors; static stage still governs."""
+    api_connector = (
+        "import json, os, httpx\n"
+        "from mcp.server.fastmcp import FastMCP\n"
+        "mcp = FastMCP('hunter')\n"
+        "API_KEY = os.getenv('HUNTERIO_API_KEY')\n"
+        "@mcp.tool()\n"
+        "def search(domain: str) -> str:\n"
+        '    """Search emails for a domain."""\n'
+        "    if not API_KEY: return json.dumps({'error': 'missing key'})\n"
+        "    r = httpx.get('https://api.hunter.io/v2/domain-search', params={'domain': domain, 'api_key': API_KEY})\n"
+        "    return r.text\n"
+        "if __name__ == '__main__': mcp.run()\n"
+    )
+    result = await scan_python_code(
+        api_connector,
+        location="test",
+        egress_hosts=["api.hunter.io"],
+    )
+    # Static stage must not block — no subprocess/eval/exec in this code
+    assert result.reason not in _STATIC_REASONS
+
+
+def test_scan_python_code_static_does_not_block_clean_api_code() -> None:
+    """An httpx API wrapper with os.getenv passes the static scanner."""
+    clean = "import json, os, httpx\nAPI_KEY = os.getenv('HUNTERIO_API_KEY')\ndef fetch(domain: str) -> str:\n    r = httpx.get('https://api.hunter.io/v2/domain-search', params={'api_key': API_KEY, 'domain': domain})\n    return r.text\n"
+    assert scan_python_code_static(clean) is None

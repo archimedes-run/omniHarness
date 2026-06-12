@@ -159,3 +159,16 @@ class McpServerRepository:
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return True
+
+    async def delete(self, server_id: str, *, user_id: str) -> bool:
+        """Hard-delete a server record owned by *user_id*.
+
+        Returns True if the row was found and deleted, False otherwise.
+        """
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            await session.delete(row)
+            await session.commit()
+        return True

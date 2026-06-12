@@ -13,10 +13,13 @@ import {
   Trash2Icon,
   ZapIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import React, { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { fetch as apiFetch } from "@/core/api/fetcher";
 import { cn } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -220,11 +223,14 @@ function StatusBadge({ status }: { status: McpStatus | string }) {
 // ── My MCPs tab ───────────────────────────────────────────────────────────────
 
 function MyMcpsTab() {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<McpStatus | "all">("all");
   const [servers, setServers] = useState<MyMcp[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -255,6 +261,23 @@ function MyMcpsTab() {
       })
       .finally(() => setLoading(false));
   }, [search, statusFilter]);
+
+  const handleDelete = async (id: string) => {
+    setDeletingId(id);
+    setConfirmDeleteId(null);
+    try {
+      const res = await apiFetch(`/api/mcp-studio/servers/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok || res.status === 204) {
+        setServers((prev) => prev.filter((s) => s.id !== id));
+      }
+    } catch {
+      // silently ignore — server might be unreachable
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -338,7 +361,11 @@ function MyMcpsTab() {
               </tr>
             ) : (
               servers.map((mcp) => (
-                <tr key={mcp.id} className="group hover:bg-stone-50/60">
+                <tr
+                  key={mcp.id}
+                  className="group cursor-pointer hover:bg-stone-50/60"
+                  onClick={() => router.push(`/workspace/mcp/${mcp.id}`)}
+                >
                   <td className="px-5 py-4">
                     <div className="flex flex-col gap-1.5">
                       <div className="flex items-center gap-2">
@@ -372,25 +399,53 @@ function MyMcpsTab() {
                   <td className="hidden px-5 py-4 text-sm text-stone-500 lg:table-cell">
                     {formatDate(mcp.updated_at)}
                   </td>
-                  <td className="px-5 py-4">
+                  <td
+                    className="px-5 py-4"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <div className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                      {[
-                        { icon: EditIcon, label: "Edit" },
-                        { icon: CopyIcon, label: "Duplicate" },
-                        { icon: Share2Icon, label: "Share" },
-                        { icon: Trash2Icon, label: "Delete" },
-                      ].map(({ icon: Icon, label }) => (
+                      {(
+                        [
+                          { icon: EditIcon, label: "Edit" },
+                          { icon: CopyIcon, label: "Duplicate" },
+                          { icon: Share2Icon, label: "Share" },
+                        ] as Array<{ icon: React.ElementType; label: string }>
+                      ).map(({ icon: Icon, label }) => (
                         <button
                           key={label}
                           title={label}
-                          className={cn(
-                            "rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700",
-                            label === "Delete" && "hover:text-red-500",
-                          )}
+                          className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
                         >
                           <Icon className="size-3.5" />
                         </button>
                       ))}
+                      {confirmDeleteId === mcp.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            title="Confirm delete"
+                            onClick={() => void handleDelete(mcp.id)}
+                            disabled={deletingId === mcp.id}
+                            className="rounded px-2 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50"
+                          >
+                            {deletingId === mcp.id ? "…" : "Delete?"}
+                          </button>
+                          <button
+                            title="Cancel"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="rounded p-1.5 text-stone-400 hover:bg-stone-100"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          title="Delete"
+                          onClick={() => setConfirmDeleteId(mcp.id)}
+                          className="rounded p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                        >
+                          <Trash2Icon className="size-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -519,9 +574,11 @@ export function McpSuite() {
             capabilities at runtime.
           </p>
         </div>
-        <Button>
-          <PlusIcon className="size-4" />
-          Create MCP
+        <Button asChild>
+          <Link href="/workspace/mcp/new">
+            <PlusIcon className="size-4" />
+            Create MCP
+          </Link>
         </Button>
       </div>
 

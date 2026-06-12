@@ -6,11 +6,13 @@ Covers:
 - Unapproved server cannot register
 - Approved server can register
 - test_server with blocked source code → failed phase
-- test_server with missing secrets → failed phase
+- test_server with missing secrets → informational, not a blocker (A1 change)
 - stop() requires ownership
 - Secret values are scrubbed from test_results output (never stored or surfaced)
 - approve() is gated on phase=="verified"
 - Phase taxonomy: testing vs verified
+- egress_hosts forwarded to LLM scan (A2 change)
+- _is_auth_error: 401/403 treated as ok=True in test-calls
 """
 
 from __future__ import annotations
@@ -111,7 +113,7 @@ async def test_approved_server_can_register() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_server — scanner blocks bad code
+# test_server — scanner blocks bad code (static blocker unchanged)
 # ---------------------------------------------------------------------------
 
 
@@ -127,32 +129,84 @@ async def test_server_scanner_blocks_subprocess() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_server — missing required secrets cause failure
+# test_server — missing secrets are informational, not a blocker (A1)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_server_fails_when_required_secrets_missing() -> None:
-    """Scanner returns 'allow' (mocked) so we reach the secrets-check gate."""
+async def test_server_missing_secrets_are_informational_not_blocker() -> None:
+    """Missing required secrets no longer fail the test — they are recorded in
+    required_key_names for display but the server proceeds to the sandbox stage."""
     manager, repo, _, engine = await _make_manager()
     row = await repo.create(name="srv", owner_id="user_a", source_code="import os\nkey = os.getenv('API_KEY')")
     allow = AsyncMock(return_value=ScanResult("allow", "ok"))
     with patch("app.gateway.mcp_server_manager.scan_python_code", allow):
-        record = await manager.test_server(server_id=row["id"], user_id="user_a")
-    assert record.phase == "failed"
-    assert "API_KEY" in (record.error or "")
+        with patch.object(manager, "_run_server_sandbox_test", return_value=([], [])):
+            record = await manager.test_server(server_id=row["id"], user_id="user_a")
+    # No longer "failed" — missing secrets are informational
+    assert record.phase == "testing"  # sandbox ran but no tools found
+    assert record.error is None
+    assert "API_KEY" in record.required_key_names
+    await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_server_verified_with_no_secrets_when_tools_discovered() -> None:
+    """A server with no required secrets that discovers tools reaches 'verified'."""
+    manager, repo, _, engine = await _make_manager()
+    row = await repo.create(name="srv", owner_id="user_a", source_code="from mcp.server.fastmcp import FastMCP\nmcp=FastMCP('t')\n@mcp.tool()\ndef ping()->str:\n    return 'pong'\nif __name__=='__main__':mcp.run()")
+    allow = AsyncMock(return_value=ScanResult("allow", "ok"))
+    fake_tools = [{"name": "ping", "description": "returns pong"}]
+    with patch("app.gateway.mcp_server_manager.scan_python_code", allow):
+        with patch.object(manager, "_run_server_sandbox_test", return_value=(fake_tools, [])):
+            record = await manager.test_server(server_id=row["id"], user_id="user_a")
+    assert record.phase == "verified"
+    assert record.tools_discovered == fake_tools
+    assert record.error is None
+    await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_server_verified_with_missing_secrets_when_tools_discovered() -> None:
+    """Even when a secret is missing, if tools are discovered the server is 'verified'.
+    The user will see required_key_names to know they should add keys for live calls."""
+    manager, repo, _, engine = await _make_manager()
+    src = (
+        "import os\nfrom mcp.server.fastmcp import FastMCP\n"
+        "API_KEY=os.getenv('API_KEY')\nmcp=FastMCP('t')\n"
+        "@mcp.tool()\ndef fetch()->str:\n"
+        '    if not API_KEY: return \'{"error":"missing key"}\'\n'
+        "    return 'ok'\n"
+        "if __name__=='__main__':mcp.run()"
+    )
+    row = await repo.create(
+        name="srv",
+        owner_id="user_a",
+        source_code=src,
+    )
+    # No secret stored — key missing
+    allow = AsyncMock(return_value=ScanResult("allow", "ok"))
+    fake_tools = [{"name": "fetch", "description": "fetches data"}]
+    fake_results = [{"tool": "fetch", "ok": True, "output": '{"error":"missing key"}'}]
+    with patch("app.gateway.mcp_server_manager.scan_python_code", allow):
+        with patch.object(manager, "_run_server_sandbox_test", return_value=(fake_tools, fake_results)):
+            record = await manager.test_server(server_id=row["id"], user_id="user_a")
+    assert record.phase == "verified"
+    assert "API_KEY" in record.required_key_names
+    assert record.error is None
     await engine.dispose()
 
 
 @pytest.mark.anyio
 async def test_server_passes_when_required_secrets_present() -> None:
-    """Scanner returns 'allow' (mocked) so we reach the testing phase."""
+    """When secrets are present the server still reaches testing/verified phase."""
     manager, repo, vault, engine = await _make_manager()
     row = await repo.create(name="srv", owner_id="user_a", source_code="import os\nkey = os.getenv('API_KEY')")
     await vault.store(server_id=row["id"], owner_id="user_a", key_name="API_KEY", plaintext_value="test-value")
     allow = AsyncMock(return_value=ScanResult("allow", "ok"))
     with patch("app.gateway.mcp_server_manager.scan_python_code", allow):
-        record = await manager.test_server(server_id=row["id"], user_id="user_a")
+        with patch.object(manager, "_run_server_sandbox_test", return_value=([], [])):
+            record = await manager.test_server(server_id=row["id"], user_id="user_a")
     assert record.phase == "testing"
     assert record.error is None
     assert "API_KEY" in record.required_key_names
@@ -172,7 +226,8 @@ async def test_build_record_contains_key_names_not_values() -> None:
     await vault.store(server_id=row["id"], owner_id="user_a", key_name="SECRET", plaintext_value="hunter2")
     allow = AsyncMock(return_value=ScanResult("allow", "ok"))
     with patch("app.gateway.mcp_server_manager.scan_python_code", allow):
-        record = await manager.test_server(server_id=row["id"], user_id="user_a")
+        with patch.object(manager, "_run_server_sandbox_test", return_value=([], [])):
+            record = await manager.test_server(server_id=row["id"], user_id="user_a")
     assert "hunter2" not in str(record)
     assert "SECRET" in record.required_key_names
     await engine.dispose()
@@ -303,3 +358,80 @@ async def test_approve_succeeds_when_phase_is_verified() -> None:
     assert server is not None
     assert server["approved"] is True
     await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# egress_hosts forwarded to LLM scan (A2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_egress_hosts_forwarded_to_llm_scan() -> None:
+    """egress_hosts declared on the server are forwarded to scan_python_code."""
+    manager, repo, _, engine = await _make_manager()
+    row = await repo.create(
+        name="srv",
+        owner_id="user_a",
+        source_code="import httpx\nfrom mcp.server.fastmcp import FastMCP\nmcp=FastMCP('t')\n@mcp.tool()\ndef fetch()->str:\n    return httpx.get('https://api.hunter.io').text\nif __name__=='__main__':mcp.run()",
+        egress_hosts=["api.hunter.io"],
+    )
+
+    captured: dict = {}
+
+    async def capture_scan(source, *, location="<generated>", egress_hosts=None, app_config=None):
+        captured["egress_hosts"] = egress_hosts
+        return ScanResult("allow", "ok")
+
+    with patch("app.gateway.mcp_server_manager.scan_python_code", capture_scan):
+        with patch.object(manager, "_run_server_sandbox_test", return_value=([], [])):
+            await manager.test_server(server_id=row["id"], user_id="user_a")
+
+    assert captured.get("egress_hosts") == ["api.hunter.io"]
+    await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# _is_auth_error — 401/403 treated as ok=True in test-calls (A1)
+# ---------------------------------------------------------------------------
+
+
+def test_is_auth_error_detects_401() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert MCPServerManager._is_auth_error("HTTP 401 Unauthorized")
+
+
+def test_is_auth_error_detects_403() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert MCPServerManager._is_auth_error("HTTP 403 Forbidden")
+
+
+def test_is_auth_error_detects_invalid_api_key() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert MCPServerManager._is_auth_error("Invalid API key provided")
+
+
+def test_is_auth_error_detects_unauthorized_text() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert MCPServerManager._is_auth_error("Request failed: unauthorized")
+
+
+def test_is_auth_error_does_not_match_normal_error() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert not MCPServerManager._is_auth_error("Connection refused to host")
+
+
+def test_is_auth_error_does_not_match_timeout() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert not MCPServerManager._is_auth_error("Operation timed out after 10 seconds")
+
+
+def test_is_auth_error_does_not_match_generic_exception() -> None:
+    from app.gateway.mcp_server_manager import MCPServerManager
+
+    assert not MCPServerManager._is_auth_error("AttributeError: 'NoneType' object has no attribute 'get'")

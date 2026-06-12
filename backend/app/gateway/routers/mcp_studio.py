@@ -80,6 +80,8 @@ class McpServerResponse(BaseModel):
     approved: bool
     detected_secrets: list[str]
     egress_hosts: list[str]
+    source_code: str | None
+    files: dict[str, str] | None
     created_at: str
     updated_at: str
 
@@ -129,6 +131,10 @@ class McpSecretsWriteResponse(BaseModel):
 
 
 def _server_to_response(server: dict, phase: str = "idle") -> McpServerResponse:
+    source_code = server.get("source_code")
+    files: dict[str, str] | None = None
+    if source_code:
+        files = server.get("files") or {"server.py": source_code}
     return McpServerResponse(
         id=server["id"],
         name=server["name"],
@@ -139,6 +145,8 @@ def _server_to_response(server: dict, phase: str = "idle") -> McpServerResponse:
         approved=bool(server.get("approved", False)),
         detected_secrets=server.get("detected_secrets") or [],
         egress_hosts=server.get("egress_hosts") or [],
+        source_code=source_code,
+        files=files,
         created_at=server["created_at"],
         updated_at=server["updated_at"],
     )
@@ -452,3 +460,30 @@ async def stop_mcp_server(server_id: str, request: Request) -> McpServerResponse
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return _server_to_response(server, record.phase)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /servers/{id}
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/servers/{server_id}", status_code=204)
+@require_permission("threads", "write")
+async def delete_mcp_server(server_id: str, request: Request) -> None:
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    repo = get_mcp_server_repo(request)
+
+    # Best-effort: stop the server if it is running.
+    manager = getattr(request.app.state, "mcp_server_manager", None)
+    if manager is not None:
+        try:
+            await manager.stop(server_id=server_id, user_id=user_id)
+        except Exception:
+            pass
+        # Remove the in-memory record regardless of stop outcome.
+        manager._records.pop(server_id, None)
+
+    deleted = await repo.delete(server_id, user_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="MCP server not found")
