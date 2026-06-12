@@ -54,7 +54,7 @@ class MCPBuildRecord:
     """
 
     server_id: str
-    phase: Literal["idle", "building", "testing", "ready", "failed", "stopped"]
+    phase: Literal["idle", "building", "testing", "verified", "ready", "failed", "stopped"]
     owner_id: str
     required_key_names: list[str] = field(default_factory=list)
     tools_discovered: list[dict] = field(default_factory=list)
@@ -114,6 +114,19 @@ class MCPServerManager:
                 self._records[server_id] = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
             return self._records[server_id]
 
+    @staticmethod
+    def _scrub_output(text: str, secret_values: frozenset[str]) -> str:
+        """Replace exact secret value substrings in text with [REDACTED].
+
+        Defense-in-depth: real secrets are never injected into the subprocess env
+        (placeholder values are used), but this closes any unexpected leak path.
+        Called after collecting test_results; the frozenset is immediately discarded.
+        """
+        for val in secret_values:
+            if val and val in text:
+                text = text.replace(val, "[REDACTED]")
+        return text
+
     async def _run_server_sandbox_test(
         self,
         *,
@@ -123,16 +136,23 @@ class MCPServerManager:
     ) -> tuple[list[dict], list[dict]]:
         """Start server as subprocess, connect MCP client, discover and test tools.
 
-        Security: subprocess receives a clean environment — only the required
-        secrets from the vault are injected as env vars. No gateway env vars leak in.
-        Agent-generated code NEVER runs in the gateway process.
+        Security invariants:
+        - Subprocess receives PLACEHOLDER values, not real vault secrets.
+          Real-secret injection is deferred to Phase 4 where the container
+          enforces the egress_hosts allowlist. A bare subprocess cannot be
+          network-restricted, so injecting real keys here would allow
+          exfiltration to arbitrary hosts bypassing the egress gate.
+        - No gateway env vars leak in (clean env only).
+        - Agent-generated code NEVER runs in the gateway process.
 
-        Returns (tools_discovered, test_results) — neither contains secret values.
+        Returns (tools_discovered, test_results) — neither contains real secret values.
         """
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+        # Placeholder values only — real secrets stay in the vault until Phase 4.
+        key_names = await self._vault.list_key_names(server_id=server_id, owner_id=user_id)
+        placeholder_env: dict[str, str] = {k: f"placeholder_for_{k}" for k in key_names}
 
         tools_discovered: list[dict] = []
         test_results: list[dict] = []
@@ -141,12 +161,12 @@ class MCPServerManager:
             server_file = Path(tmpdir) / "server.py"
             server_file.write_text(source_code)
 
-            # Clean env: only injected secrets, not gateway process env
+            # Clean env: placeholder secrets + minimal system paths, no gateway env
             clean_env: dict[str, str] = {
                 "PYTHONPATH": str(Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"),
                 "HOME": str(Path.home()),
                 "PATH": "/usr/bin:/bin",
-                **secrets,
+                **placeholder_env,
             }
 
             server_params = StdioServerParameters(
@@ -260,10 +280,10 @@ class MCPServerManager:
         egress_hosts = server.get("egress_hosts") or []
         build_egress_rules(egress_hosts)
 
-        # Stage 5: run server in subprocess, connect MCP client, discover tools.
-        # Sandbox execution failures are non-fatal — static/LLM scans are the
-        # security gates. Execution errors are recorded in test_results so the
-        # agent/user can iterate, but do not block the "testing" phase.
+        # Stage 5: run server in subprocess with placeholder secrets, discover tools.
+        # phase="verified" when tools are discovered (server started, MCP protocol OK).
+        # phase="testing" when sandbox failed to start or no tools found (not approvable).
+        # Real secrets are never injected here — Phase 4 handles that in a container.
         tools_discovered: list[dict] = []
         test_results: list[dict] = []
 
@@ -278,7 +298,26 @@ class MCPServerManager:
                 logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
                 test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})
 
-        phase = "testing"
+        # Defense-in-depth scrub: decrypt real values once, replace any exact matches
+        # in test_results output/error fields, then immediately discard the values.
+        # Real secrets were never injected (placeholder env), but this closes any
+        # unexpected path that could surface a real value through tool output.
+        if required_key_names and test_results:
+            try:
+                real_secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+                secret_vals = frozenset(v for v in real_secrets.values() if v)
+                del real_secrets  # discard plaintext values immediately
+                for tr in test_results:
+                    for field_name in ("output", "error"):
+                        if field_name in tr and tr[field_name]:
+                            tr[field_name] = self._scrub_output(str(tr[field_name]), secret_vals)
+            except Exception:
+                pass  # scrub failure is non-fatal; placeholder env means real values aren't present
+
+        # "verified" = scan gates passed AND server connected AND at least one tool found.
+        # "testing"  = scan gates passed but server didn't connect or no tools found.
+        # Only "verified" servers can be approved.
+        phase = "verified" if tools_discovered else "testing"
         verified_at = datetime.now(UTC).isoformat()
 
         await self._repo.update_status(server_id, phase, user_id=user_id)
@@ -298,8 +337,18 @@ class MCPServerManager:
         return record
 
     async def approve(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Mark a server as approved. Requires ownership check."""
+        """Mark a server as approved.
+
+        Requires phase=="verified": the server must have completed the sandbox
+        test and discovered at least one tool. Servers in "testing" (sandbox
+        failed or no tools found) or any other phase cannot be approved.
+        """
         await self._load_and_verify(server_id, user_id)
+        async with self._lock:
+            current = self._records.get(server_id)
+        current_phase = current.phase if current is not None else "unknown"
+        if current_phase != "verified":
+            raise PermissionError(f"MCP server {server_id!r} cannot be approved from phase {current_phase!r}. Run POST /test first; the server must reach 'verified' (sandbox connected + tools discovered) before it can be approved.")
         await self._repo.set_approved(server_id, True, user_id=user_id)
         record = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
         async with self._lock:

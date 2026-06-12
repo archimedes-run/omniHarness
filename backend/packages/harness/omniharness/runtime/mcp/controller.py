@@ -23,7 +23,7 @@ class MCPBuildStatus:
     """
 
     server_id: str
-    phase: Literal["idle", "building", "testing", "ready", "failed", "stopped"]
+    phase: Literal["idle", "building", "testing", "verified", "ready", "failed", "stopped"]
     error: str | None = None
     required_key_names: list[str] = field(default_factory=list)
     tools_discovered: list[dict] = field(default_factory=list)
