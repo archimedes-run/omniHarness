@@ -6,7 +6,7 @@ from omniharness.config import get_app_config
 from omniharness.config.app_config import AppConfig
 from omniharness.reflection import resolve_variable
 from omniharness.sandbox.security import is_host_bash_allowed
-from omniharness.tools.builtins import ask_clarification_tool, present_file_tool, preview_tool, task_tool, view_image_tool
+from omniharness.tools.builtins import ask_clarification_tool, mcp_build_tool, present_file_tool, preview_tool, task_tool, view_image_tool
 from omniharness.tools.builtins.tool_search import reset_deferred_registry
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,12 @@ def get_available_tools(
 
     if get_preview_controller() is not None:
         builtin_tools.append(preview_tool)
+
+    # Add mcp_build tool only when an MCPBuildController is registered (gateway mode).
+    from omniharness.runtime.mcp.controller import get_mcp_build_controller
+
+    if get_mcp_build_controller() is not None:
+        builtin_tools.append(mcp_build_tool)
 
     # Add subagent tools only if enabled via runtime parameter
     if subagent_enabled:

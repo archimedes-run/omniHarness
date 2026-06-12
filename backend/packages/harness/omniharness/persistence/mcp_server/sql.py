@@ -124,6 +124,28 @@ class McpServerRepository:
             await session.commit()
         return True
 
+    async def update_source_code(self, server_id: str, source_code: str, *, user_id: str) -> bool:
+        """Persist the agent-generated source code for a server the caller owns."""
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.source_code = source_code
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
+
+    async def update_detected_secrets(self, server_id: str, key_names: list[str], *, user_id: str) -> bool:
+        """Persist the detected env-var key names (names only, never values)."""
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.detected_secrets = key_names
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
+
     async def set_approved(self, server_id: str, approved: bool, *, user_id: str) -> bool:
         """Set the approval flag for a server the caller owns.
 

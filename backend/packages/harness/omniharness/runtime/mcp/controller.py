@@ -19,12 +19,16 @@ class MCPBuildStatus:
 
     Contains phase and error only — never secret values or env-var contents.
     Key names (not values) may appear in required_key_names for UI display.
+    tools_discovered and test_results hold tool schemas and test outcomes, not secret values.
     """
 
     server_id: str
     phase: Literal["idle", "building", "testing", "ready", "failed", "stopped"]
     error: str | None = None
     required_key_names: list[str] = field(default_factory=list)
+    tools_discovered: list[dict] = field(default_factory=list)
+    test_results: list[dict] = field(default_factory=list)
+    last_verified_at: str | None = None
 
 
 @runtime_checkable
@@ -46,6 +50,10 @@ class MCPBuildController(Protocol):
 
     async def register(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
         """Register an approved server for agent use. Raises if not approved."""
+        ...
+
+    async def submit_source_and_test(self, *, server_id: str, user_id: str, source_code: str) -> MCPBuildStatus:
+        """Save source_code for server_id and run the full test pipeline."""
         ...
 
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildStatus:

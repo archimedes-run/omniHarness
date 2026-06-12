@@ -20,6 +20,9 @@ def _to_status(record: MCPBuildRecord) -> MCPBuildStatus:
         phase=record.phase,
         error=record.error,
         required_key_names=record.required_key_names,
+        tools_discovered=record.tools_discovered,
+        test_results=record.test_results,
+        last_verified_at=record.last_verified_at,
     )
 
 
@@ -43,6 +46,10 @@ class GatewayMCPBuildController:
 
     async def register(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
         record = await self._manager.register(server_id=server_id, user_id=user_id)
+        return _to_status(record)
+
+    async def submit_source_and_test(self, *, server_id: str, user_id: str, source_code: str) -> MCPBuildStatus:
+        record = await self._manager.submit_source_and_test(server_id=server_id, user_id=user_id, source_code=source_code)
         return _to_status(record)
 
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildStatus:

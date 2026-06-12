@@ -20,15 +20,20 @@ Security invariants (enforced at the top of every mutating method)
    ``_current_user`` from a ContextVar. Managers may run in background tasks
    where the ContextVar is not set.
 
-4. No agent code is executed in Phase 2. ``test_server`` runs the scanner and
-   secrets check only; the actual sandbox launch is deferred to Phase 4.
+4. Agent-generated code NEVER runs in the gateway process. ``_run_server_sandbox_test``
+   launches it as a subprocess with a clean, constrained environment (only the
+   required secrets from the vault; no gateway env vars leak in).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
+import tempfile
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from app.gateway.mcp_egress import build_egress_rules
@@ -43,15 +48,19 @@ logger = logging.getLogger(__name__)
 class MCPBuildRecord:
     """Runtime record for a single MCP server's current build/test phase.
 
-    Contains phase, key NAMES (never values), and error only.
+    Contains phase, key NAMES (never values), and test results only.
     No ciphertext, no plaintext secrets, no env-var values appear here.
+    tools_discovered and test_results contain names/descriptions/boolean outcomes only.
     """
 
     server_id: str
     phase: Literal["idle", "building", "testing", "ready", "failed", "stopped"]
     owner_id: str
     required_key_names: list[str] = field(default_factory=list)
+    tools_discovered: list[dict] = field(default_factory=list)
+    test_results: list[dict] = field(default_factory=list)
     error: str | None = None
+    last_verified_at: str | None = None
 
 
 class MCPServerManager:
@@ -105,11 +114,95 @@ class MCPServerManager:
                 self._records[server_id] = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
             return self._records[server_id]
 
-    async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Run scanner + secrets check + egress validation.
+    async def _run_server_sandbox_test(
+        self,
+        *,
+        server_id: str,
+        user_id: str,
+        source_code: str,
+    ) -> tuple[list[dict], list[dict]]:
+        """Start server as subprocess, connect MCP client, discover and test tools.
 
-        Phase 2: no container execution. The sandbox launch is gated in
-        Phase 4 after the approval workflow is complete.
+        Security: subprocess receives a clean environment — only the required
+        secrets from the vault are injected as env vars. No gateway env vars leak in.
+        Agent-generated code NEVER runs in the gateway process.
+
+        Returns (tools_discovered, test_results) — neither contains secret values.
+        """
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+
+        tools_discovered: list[dict] = []
+        test_results: list[dict] = []
+
+        with tempfile.TemporaryDirectory(prefix="omni_mcp_test_") as tmpdir:
+            server_file = Path(tmpdir) / "server.py"
+            server_file.write_text(source_code)
+
+            # Clean env: only injected secrets, not gateway process env
+            clean_env: dict[str, str] = {
+                "PYTHONPATH": str(Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"),
+                "HOME": str(Path.home()),
+                "PATH": "/usr/bin:/bin",
+                **secrets,
+            }
+
+            server_params = StdioServerParameters(
+                command=sys.executable,
+                args=[str(server_file)],
+                env=clean_env,
+            )
+
+            try:
+                async with asyncio.timeout(30):
+                    async with stdio_client(server_params) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            tools_resp = await session.list_tools()
+
+                            for t in tools_resp.tools:
+                                tools_discovered.append(
+                                    {
+                                        "name": t.name,
+                                        "description": (t.description or "")[:300],
+                                    }
+                                )
+
+                            for t in tools_resp.tools:
+                                try:
+                                    result = await asyncio.wait_for(
+                                        session.call_tool(t.name, {}),
+                                        timeout=10,
+                                    )
+                                    output = ""
+                                    if result.content:
+                                        output = str(result.content[0].text if hasattr(result.content[0], "text") else result.content[0])[:200]
+                                    test_results.append({"tool": t.name, "ok": True, "output": output})
+                                except Exception as exc:
+                                    test_results.append({"tool": t.name, "ok": False, "error": str(exc)[:200]})
+
+            except TimeoutError:
+                raise RuntimeError("MCP server sandbox test timed out (30s)")
+
+        return tools_discovered, test_results
+
+    async def submit_source_and_test(self, *, server_id: str, user_id: str, source_code: str) -> MCPBuildRecord:
+        """Save source_code then run the full test pipeline.
+
+        Ownership gate is at the top — identical to every other mutating method.
+        """
+        await self._load_and_verify(server_id, user_id)
+        await self._repo.update_source_code(server_id, source_code, user_id=user_id)
+        return await self.test_server(server_id=server_id, user_id=user_id)
+
+    async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
+        """Run the full test pipeline: static scan → secrets check → LLM scan → sandbox execution.
+
+        Ownership is verified at the top. Agent-generated code never runs in the
+        gateway process — it is launched as a subprocess with only the required
+        secrets injected from the vault.
         """
         server = await self._load_and_verify(server_id, user_id)
 
@@ -163,20 +256,42 @@ class MCPServerManager:
                     self._records[server_id] = record
                 return record
 
-        # Stage 4: validate egress rules structure (no execution)
+        # Stage 4: validate egress rules structure
         egress_hosts = server.get("egress_hosts") or []
-        build_egress_rules(egress_hosts)  # validates structure; result used in Phase 4
+        build_egress_rules(egress_hosts)
+
+        # Stage 5: run server in subprocess, connect MCP client, discover tools.
+        # Sandbox execution failures are non-fatal — static/LLM scans are the
+        # security gates. Execution errors are recorded in test_results so the
+        # agent/user can iterate, but do not block the "testing" phase.
+        tools_discovered: list[dict] = []
+        test_results: list[dict] = []
+
+        if source:
+            try:
+                tools_discovered, test_results = await self._run_server_sandbox_test(
+                    server_id=server_id,
+                    user_id=user_id,
+                    source_code=source,
+                )
+            except Exception as exc:
+                logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
+                test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})
 
         phase = "testing"
-        error = None
+        verified_at = datetime.now(UTC).isoformat()
 
         await self._repo.update_status(server_id, phase, user_id=user_id)
+        await self._repo.update_detected_secrets(server_id, required_key_names, user_id=user_id)
+
         record = MCPBuildRecord(
             server_id=server_id,
             phase=phase,
             owner_id=user_id,
             required_key_names=required_key_names,
-            error=error,
+            tools_discovered=tools_discovered,
+            test_results=test_results,
+            last_verified_at=verified_at,
         )
         async with self._lock:
             self._records[server_id] = record
