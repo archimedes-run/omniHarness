@@ -159,7 +159,12 @@ async def scan_python_code(
             [{"role": "system", "content": rubric}, {"role": "user", "content": prompt}],
             config={"run_name": "mcp_security_scan"},
         )
-        parsed = _extract_json_object(str(getattr(response, "content", "") or ""))
+        raw = getattr(response, "content", "") or ""
+        # Reasoning models (e.g. via Responses API) return content as a list of typed
+        # blocks; str() on a list yields Python repr, not valid JSON.
+        if isinstance(raw, list):
+            raw = " ".join(b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text").strip()
+        parsed = _extract_json_object(str(raw))
         if parsed and parsed.get("decision") in {"allow", "warn", "block"}:
             return ScanResult(parsed["decision"], str(parsed.get("reason") or "No reason provided."))
     except Exception:

@@ -66,5 +66,5 @@ async def scan_skill_content(content: str, *, executable: bool = False, location
         logger.warning("Skill security scan model call failed; using conservative fallback", exc_info=True)
 
     if executable:
-        return ScanResult("block", "Security scan unavailable for executable content; manual review required.")
-    return ScanResult("block", "Security scan unavailable for skill content; manual review required.")
+        return ScanResult("block", "Security scan blocked: moderation model call failed or returned unparseable content. Set skill_evolution.moderation_model_name in config.yaml to a working model, then retry.")
+    return ScanResult("block", "Security scan blocked: moderation model call failed or returned unparseable content. Set skill_evolution.moderation_model_name in config.yaml to a working model, then retry.")

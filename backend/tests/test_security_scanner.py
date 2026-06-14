@@ -35,4 +35,4 @@ async def test_scan_skill_content_blocks_when_model_unavailable(monkeypatch):
     result = await scan_skill_content("---\nname: demo-skill\ndescription: demo\n---\n", executable=False)
 
     assert result.decision == "block"
-    assert "manual review required" in result.reason
+    assert "moderation model call failed" in result.reason

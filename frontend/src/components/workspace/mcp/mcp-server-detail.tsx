@@ -1,10 +1,16 @@
 "use client";
 
+import { css } from "@codemirror/lang-css";
+import { html } from "@codemirror/lang-html";
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
+import { python } from "@codemirror/lang-python";
 import type { Message } from "@langchain/langgraph-sdk";
 import { useStream } from "@langchain/langgraph-sdk/react";
+import { monokaiInit } from "@uiw/codemirror-theme-monokai";
+import CodeMirror from "@uiw/react-codemirror";
 import {
   ArrowLeftIcon,
-  ArrowUpRightIcon,
   BoxIcon,
   CheckCircle2Icon,
   CheckIcon,
@@ -16,6 +22,7 @@ import {
   FileIcon,
   FolderIcon,
   FolderOpenIcon,
+  InfoIcon,
   KeyIcon,
   Loader2Icon,
   LockIcon,
@@ -25,6 +32,7 @@ import {
   SendIcon,
   ShieldAlertIcon,
   ShieldXIcon,
+  SparklesIcon,
   TerminalIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -32,11 +40,52 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { getAPIClient } from "@/core/api";
 import { fetch as apiFetch } from "@/core/api/fetcher";
+import { streamdownPlugins } from "@/core/streamdown";
 import type { AgentThreadState } from "@/core/threads/types";
 import { cn } from "@/lib/utils";
+
+// ── CodeMirror dark theme ──────────────────────────────────────────────────────
+const cmDarkTheme = monokaiInit({
+  settings: {
+    background: "#13141a",
+    gutterBackground: "#13141a",
+    gutterForeground: "#4a5060",
+    gutterActiveForeground: "#9CA3AF",
+    gutterBorder: "transparent",
+    caret: "#7C79F0",
+    selection: "rgba(91,87,224,0.25)",
+  },
+});
+
+function getLanguageExtension(filename: string) {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const name = filename.toLowerCase();
+  if (name === "dockerfile") return [];
+  switch (ext) {
+    case "py":
+      return [python()];
+    case "ts":
+      return [javascript({ typescript: true })];
+    case "tsx":
+      return [javascript({ typescript: true, jsx: true })];
+    case "js":
+      return [javascript()];
+    case "jsx":
+      return [javascript({ jsx: true })];
+    case "css":
+      return [css()];
+    case "html":
+      return [html()];
+    case "json":
+      return [json()];
+    default:
+      return [];
+  }
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -106,7 +155,7 @@ const TERMINAL_PHASES: McpPhase[] = [
   "stopped",
 ];
 
-const GENERATING_PHASES: McpPhase[] = ["idle", "building"];
+const GENERATING_PHASES: McpPhase[] = ["building"];
 
 const MAX_POLL = 120;
 
@@ -310,16 +359,16 @@ function FileTreeNode({
           style={{ paddingLeft: `${8 + depth * 12}px` }}
         >
           {open ? (
-            <FolderOpenIcon className="size-3.5 shrink-0 text-amber-500" />
+            <FolderOpenIcon className="size-3.5 shrink-0 text-[#7C79F0]" />
           ) : (
-            <FolderIcon className="size-3.5 shrink-0 text-amber-500" />
+            <FolderIcon className="size-3.5 shrink-0 text-[#7C79F0]" />
           )}
           {open ? (
             <ChevronDownIcon className="size-3 shrink-0 text-stone-400" />
           ) : (
             <ChevronRightIcon className="size-3 shrink-0 text-stone-400" />
           )}
-          <span className="truncate text-stone-700">{node.name}</span>
+          <span className="truncate text-stone-500">{node.name}</span>
         </button>
         {open &&
           node.children?.map((child) => (
@@ -342,15 +391,15 @@ function FileTreeNode({
       className={cn(
         "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm",
         isSelected
-          ? "bg-stone-800 text-white"
-          : "text-stone-600 hover:bg-stone-100",
+          ? "bg-indigo-50 text-stone-900"
+          : "text-stone-500 hover:bg-stone-100 hover:text-stone-700",
       )}
       style={{ paddingLeft: `${8 + depth * 12}px` }}
     >
       <FileIcon
         className={cn(
           "size-3.5 shrink-0",
-          isSelected ? "text-stone-300" : "text-stone-400",
+          isSelected ? "text-[#7C79F0]" : "text-stone-400",
         )}
       />
       <span className="truncate">{node.name}</span>
@@ -359,8 +408,8 @@ function FileTreeNode({
           className={cn(
             "ml-auto rounded px-1 py-0.5 text-[9px] font-medium",
             isSelected
-              ? "bg-stone-600 text-stone-200"
-              : "bg-stone-100 text-stone-500",
+              ? "bg-indigo-100 text-[#7C79F0]"
+              : "bg-stone-100 text-stone-400",
           )}
         >
           entry
@@ -384,7 +433,7 @@ function FileTreePanel({
   return (
     <div className="flex min-h-0 flex-col">
       <div className="flex items-center justify-between border-b border-stone-200 px-3 py-2">
-        <span className="text-xs font-semibold tracking-wider text-stone-500 uppercase">
+        <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
           Files ({Object.keys(files).length})
         </span>
       </div>
@@ -405,9 +454,15 @@ function FileTreePanel({
 
 // ── Code viewer ────────────────────────────────────────────────────────────────
 
-function CodeViewer({ filename, code }: { filename: string; code: string }) {
+function SyntaxCodeViewer({
+  filename,
+  code,
+}: {
+  filename: string;
+  code: string;
+}) {
   const [copied, setCopied] = useState(false);
-  const lines = code.split("\n");
+  const extensions = useMemo(() => getLanguageExtension(filename), [filename]);
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(code).then(() => {
@@ -417,19 +472,19 @@ function CodeViewer({ filename, code }: { filename: string; code: string }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-stone-950">
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      style={{ background: "#13141a" }}
+    >
       {/* tab bar */}
-      <div className="flex items-center gap-0 border-b border-stone-800">
-        <div className="flex items-center gap-2 border-r border-stone-800 px-3 py-2">
-          <span className="text-xs text-stone-300">{filename}</span>
-          <span
-            className="size-1.5 rounded-full bg-amber-500"
-            title="modified"
-          />
+      <div className="flex items-center gap-0 border-b border-stone-200 bg-white">
+        <div className="flex items-center gap-2 border-r border-stone-200 px-3 py-2">
+          <span className="text-xs text-stone-600">{filename}</span>
+          <span className="size-1.5 rounded-full bg-[#5B57E0]" />
         </div>
         <button
           onClick={handleCopy}
-          className="mr-3 ml-auto flex items-center gap-1 text-xs text-stone-500 hover:text-stone-200"
+          className="mr-3 ml-auto flex items-center gap-1 text-xs text-stone-400 transition-colors hover:text-stone-700"
         >
           {copied ? (
             <CheckIcon className="size-3 text-emerald-400" />
@@ -439,21 +494,35 @@ function CodeViewer({ filename, code }: { filename: string; code: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      {/* code */}
-      <div className="flex min-h-0 flex-1 overflow-auto">
-        {/* line numbers */}
-        <div
-          className="border-r border-stone-800 py-4 pr-3 pl-4 text-right font-mono text-xs leading-6 text-stone-600 select-none"
-          aria-hidden
-        >
-          {lines.map((_, i) => (
-            <div key={i}>{i + 1}</div>
-          ))}
-        </div>
-        {/* code */}
-        <pre className="flex-1 overflow-auto py-4 pr-4 pl-4 font-mono text-xs leading-6 text-stone-200">
-          <code>{code}</code>
-        </pre>
+      {/* CodeMirror editor */}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <CodeMirror
+          value={code}
+          extensions={extensions}
+          theme={cmDarkTheme}
+          readOnly
+          editable={false}
+          basicSetup={{
+            lineNumbers: true,
+            highlightActiveLineGutter: false,
+            highlightActiveLine: false,
+            foldGutter: false,
+            dropCursor: false,
+            allowMultipleSelections: false,
+            indentOnInput: false,
+            syntaxHighlighting: true,
+            bracketMatching: false,
+            closeBrackets: false,
+            autocompletion: false,
+            rectangularSelection: false,
+            crosshairCursor: false,
+            searchKeymap: false,
+            completionKeymap: false,
+            lintKeymap: false,
+          }}
+          style={{ fontSize: "12px", height: "100%" }}
+          className="h-full"
+        />
       </div>
     </div>
   );
@@ -464,12 +533,12 @@ function CodePlaceholder({ phase }: { phase: McpPhase }) {
   return (
     <div
       className={cn(
-        "flex flex-1 flex-col items-center justify-center gap-3 bg-stone-950",
-        isGenerating ? "text-stone-400" : "text-stone-600",
+        "flex flex-1 flex-col items-center justify-center gap-3 bg-white",
+        isGenerating ? "text-stone-400" : "text-stone-300",
       )}
     >
       {isGenerating ? (
-        <Loader2Icon className="size-8 animate-spin text-amber-500" />
+        <Loader2Icon className="size-8 animate-spin text-stone-400" />
       ) : (
         <TerminalIcon className="size-8" />
       )}
@@ -599,12 +668,10 @@ function BuildActivityFeed({
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll on new messages or loading state change
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isLoading]);
 
-  // Build tool_call_id → {name, resultText} lookup from tool messages
   const toolResults = useMemo(() => {
     const map = new Map<string, { name: string; text: string }>();
     for (const msg of messages) {
@@ -625,11 +692,10 @@ function BuildActivityFeed({
     return map;
   }, [messages]);
 
-  // Filter to displayable messages (skip empty, skip summarization internals)
   const displayMessages = useMemo(() => {
     return messages.filter((msg) => {
       if ((msg as { name?: string }).name === "summary") return false;
-      if (msg.type === "tool") return false; // handled via toolResults map
+      if (msg.type === "tool") return false;
       if (msg.type === "ai") {
         const toolCalls =
           (msg as { tool_calls?: StreamToolCall[] }).tool_calls ?? [];
@@ -643,6 +709,18 @@ function BuildActivityFeed({
       return true;
     });
   }, [messages]);
+
+  // Index of the last AI message (for streaming cursor)
+  const lastAiMsgIdx = useMemo(() => {
+    let idx = -1;
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i]?.type === "ai") {
+        idx = i;
+        break;
+      }
+    }
+    return idx;
+  }, [displayMessages]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -662,74 +740,118 @@ function BuildActivityFeed({
   const hasContent = displayMessages.length > 0;
 
   return (
-    <div className="flex h-full flex-col bg-white">
-      {/* activity feed */}
-      <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
+    <div className="flex h-full flex-col bg-[#F6F5F1]">
+      {/* header strip */}
+      <div className="flex items-center justify-between border-b border-[#E4E2DB] px-4 py-2.5">
+        <span className="text-[10px] font-semibold tracking-widest text-[#6C6F79] uppercase">
+          Build Activity
+        </span>
+        {isLoading && (
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-[#5B57E0]">
+            <span className="size-1.5 animate-pulse rounded-full bg-[#5B57E0]" />
+            Agent working
+          </span>
+        )}
+      </div>
+
+      {/* feed */}
+      <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {!hasContent && isLoading && (
-          <div className="flex flex-col items-center gap-2 py-10 text-center">
-            <Loader2Icon className="size-6 animate-spin text-amber-500" />
-            <p className="text-sm text-stone-500">
+          <div className="flex flex-col items-center gap-3 py-16 text-center">
+            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
+              <Loader2Icon className="size-4 animate-spin text-[#5B57E0]" />
+            </div>
+            <p className="text-sm font-medium text-[#1B1D23]">
               Agent is writing your server…
+            </p>
+            <p className="text-xs text-[#6C6F79]">
+              This usually takes 30–60 seconds
             </p>
           </div>
         )}
         {!hasContent && !isLoading && (
-          <div className="flex flex-col items-center gap-2 py-10 text-center">
-            <TerminalIcon className="size-6 text-stone-300" />
-            <p className="text-sm text-stone-400">No activity yet.</p>
-            <p className="text-xs text-stone-400">
-              Ask the agent to add tools, fix errors, or explain what it wrote.
+          <div className="flex flex-col items-center gap-2 py-16 text-center">
+            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
+              <SparklesIcon className="size-4 text-[#5B57E0]" />
+            </div>
+            <p className="text-sm font-medium text-[#6C6F79]">
+              No activity yet
+            </p>
+            <p className="text-xs text-[#6C6F79]">
+              Ask the agent to fix, extend, or explain its code.
             </p>
           </div>
         )}
 
         {displayMessages.map((msg, _msgIdx) => {
           const id = (msg as { id?: string }).id ?? `msg-${_msgIdx}`;
+          const isLastAi = _msgIdx === lastAiMsgIdx;
 
-          // Human message
           if (msg.type === "human") {
             const text = extractContentText(msg.content);
             if (!text) return null;
             return (
               <div key={id} className="flex justify-end">
-                <div className="max-w-[85%] rounded-xl bg-stone-800 px-3 py-2 text-sm leading-relaxed text-white">
+                <div className="max-w-[82%] rounded-2xl rounded-br-sm border border-[#E4E2DB] bg-[#EFEEE8] px-3.5 py-2.5 text-sm leading-relaxed text-[#1B1D23] shadow-sm">
                   {text}
                 </div>
               </div>
             );
           }
 
-          // AI message: thinking + text + tool calls
           if (msg.type === "ai") {
             const toolCalls =
               (msg as { tool_calls?: StreamToolCall[] }).tool_calls ?? [];
             const text = extractContentText(msg.content);
             const thinking = extractThinkingText(msg);
+            const isStreaming = isLoading && isLastAi;
+
             return (
-              <div key={id} className="space-y-1.5">
+              <div key={id} className="space-y-2">
                 {/* Thinking disclosure */}
                 {thinking && (
                   <details className="group">
-                    <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-stone-400 select-none hover:text-stone-600">
+                    <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] text-[#6C6F79] select-none hover:text-[#1B1D23]">
                       <ChevronRightIcon className="size-3 transition-transform group-open:rotate-90" />
-                      Thinking…
+                      Thinking
                     </summary>
-                    <div className="mt-1 ml-4 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap text-stone-500">
+                    <div className="mt-1.5 ml-4 rounded-lg border border-[#E4E2DB] bg-[#EFEEE8] px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap text-[#6C6F79]">
                       {thinking}
                     </div>
                   </details>
                 )}
+
                 {/* AI text bubble */}
-                {text && (
-                  <div className="flex items-start gap-2">
-                    <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-stone-800 text-[9px] font-bold text-white">
-                      AI
+                {(text || isStreaming) && (
+                  <div className="flex items-start gap-2.5">
+                    <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[#5B57E0]">
+                      <SparklesIcon className="size-3 text-white" />
                     </div>
-                    <div className="max-w-[85%] rounded-xl bg-stone-100 px-3 py-2 text-sm leading-relaxed text-stone-800">
-                      {text}
+                    <div className="max-w-[82%] min-w-0 rounded-2xl rounded-tl-sm border border-[#E4E2DB] bg-[#FCFBF8] px-3.5 py-2.5 shadow-sm">
+                      {text ? (
+                        <>
+                          <MessageResponse
+                            remarkPlugins={streamdownPlugins.remarkPlugins}
+                            rehypePlugins={streamdownPlugins.rehypePlugins}
+                            className="text-sm leading-relaxed text-[#33363E] [&_a]:text-[#5B57E0] [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-l-2 [&_blockquote]:border-[#E4E2DB] [&_blockquote]:pl-3 [&_blockquote]:text-[#6C6F79] [&_code]:rounded [&_code]:border [&_code]:border-[#E4E2DB] [&_code]:bg-white [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-[#1B1D23] [&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-[#1B1D23] [&_h2]:mb-1.5 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-[#1B1D23] [&_h3]:text-sm [&_h3]:font-medium [&_h3]:text-[#1B1D23] [&_li]:mb-0.5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:mb-1.5 [&_p:last-child]:mb-0 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#E4E2DB] [&_pre]:bg-[#131519] [&_pre]:p-3 [&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:text-[#E9EBF0] [&_strong]:font-semibold [&_strong]:text-[#1B1D23] [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4"
+                          >
+                            {text}
+                          </MessageResponse>
+                          {isStreaming && (
+                            <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-sm bg-[#5B57E0] align-middle" />
+                          )}
+                        </>
+                      ) : (
+                        <span className="flex items-center gap-1 py-0.5">
+                          <span className="size-1.5 animate-bounce rounded-full bg-[#5B57E0] opacity-60 [animation-delay:0ms]" />
+                          <span className="size-1.5 animate-bounce rounded-full bg-[#5B57E0] opacity-60 [animation-delay:150ms]" />
+                          <span className="size-1.5 animate-bounce rounded-full bg-[#5B57E0] opacity-60 [animation-delay:300ms]" />
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
+
                 {/* Tool call rows */}
                 {toolCalls.map((tc) => {
                   const { label, detail } = toolCallLabel(tc.name, tc.args);
@@ -738,28 +860,42 @@ function BuildActivityFeed({
                   return (
                     <div
                       key={tc.id ?? tc.name}
-                      className="flex items-start gap-2 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2"
-                    >
-                      {isDone ? (
-                        <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
-                      ) : (
-                        <Loader2Icon className="mt-0.5 size-3.5 shrink-0 animate-spin text-amber-500" />
+                      className={cn(
+                        "flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition-colors",
+                        isDone
+                          ? "border-[#E4E2DB] bg-[#FCFBF8]"
+                          : "border-[#E4E2DB] bg-[#EFEEE8]",
                       )}
+                    >
+                      <div
+                        className={cn(
+                          "mt-0.5 size-1.5 shrink-0 rounded-full",
+                          isDone ? "bg-[#5B57E0]" : "bg-[#C4C3E8]",
+                        )}
+                      />
                       <div className="min-w-0 flex-1">
-                        <span className="text-xs font-medium text-stone-700">
+                        <span
+                          className={cn(
+                            "text-xs font-medium",
+                            isDone ? "text-[#1B1D23]" : "text-[#6C6F79]",
+                          )}
+                        >
                           {label}
                         </span>
                         {detail && (
-                          <span className="ml-2 truncate font-mono text-[10px] text-stone-400">
+                          <span className="ml-2 truncate font-mono text-[10px] text-[#6C6F79]">
                             {detail}
                           </span>
                         )}
                         {isDone && result && (
-                          <p className="mt-0.5 text-[10px] leading-relaxed text-stone-500">
+                          <p className="mt-0.5 text-[10px] leading-relaxed text-[#6C6F79]">
                             {toolResultSummary(result.name, result.text)}
                           </p>
                         )}
                       </div>
+                      {!isDone && (
+                        <Loader2Icon className="mt-0.5 size-3 shrink-0 animate-spin text-[#5B57E0]" />
+                      )}
                     </div>
                   );
                 })}
@@ -770,19 +906,12 @@ function BuildActivityFeed({
           return null;
         })}
 
-        {/* "Agent is working" trailing spinner when loading and there are already some messages */}
-        {isLoading && hasContent && (
-          <div className="flex items-center gap-2 px-3 py-1.5">
-            <Loader2Icon className="size-3.5 animate-spin text-amber-500" />
-            <span className="text-xs text-stone-400">Working…</span>
-          </div>
-        )}
         <div ref={bottomRef} />
       </div>
 
-      {/* follow-up input */}
-      <div className="border-t border-stone-100 p-3">
-        <div className="flex items-end gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 focus-within:border-stone-400 focus-within:bg-white">
+      {/* input */}
+      <div className="border-t border-[#E4E2DB] p-3">
+        <div className="flex items-end gap-2 rounded-xl border border-[#E4E2DB] bg-[#FCFBF8] px-3 py-2 shadow-sm transition-all focus-within:border-[#5B57E0] focus-within:shadow-[0_0_0_3px_rgba(91,87,224,0.1)]">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -790,12 +919,12 @@ function BuildActivityFeed({
             placeholder="Ask the agent to fix, extend, or explain…"
             rows={2}
             disabled={isLoading}
-            className="flex-1 resize-none bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none disabled:opacity-50"
+            className="flex-1 resize-none bg-transparent text-sm text-[#1B1D23] placeholder:text-[#A8ABB3] focus:outline-none disabled:opacity-50"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
-            className="mb-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-stone-800 text-white transition-colors hover:bg-stone-700 disabled:opacity-40"
+            className="mb-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#5B57E0] text-white transition-colors hover:bg-[#4A46D0] disabled:opacity-30"
           >
             {isLoading ? (
               <Loader2Icon className="size-3.5 animate-spin" />
@@ -804,7 +933,7 @@ function BuildActivityFeed({
             )}
           </button>
         </div>
-        <p className="mt-1 text-center text-[10px] text-stone-400">
+        <p className="mt-1.5 text-center text-[10px] text-[#A8ABB3]">
           Enter to send · Shift+Enter for newline
         </p>
       </div>
@@ -812,7 +941,7 @@ function BuildActivityFeed({
   );
 }
 
-// ── Generating view (Image 1 style) ───────────────────────────────────────────
+// ── Generating view ────────────────────────────────────────────────────────────
 
 function GeneratingView({
   server,
@@ -836,7 +965,6 @@ function GeneratingView({
       : "",
   );
 
-  // Live stream of the build thread
   const stream = useStream<AgentThreadState>({
     client: getAPIClient(),
     assistantId: "lead_agent",
@@ -845,7 +973,6 @@ function GeneratingView({
     fetchStateHistory: threadId ? { limit: 1 } : undefined,
   });
 
-  // Extract the most-recently-seen source_code arg from mcp_build tool calls
   const liveCode = useMemo<string | null>(() => {
     const msgs = stream.messages;
     if (!msgs?.length) return null;
@@ -883,9 +1010,9 @@ function GeneratingView({
   const [toolsExpanded, setToolsExpanded] = useState(false);
 
   return (
-    <div className="flex h-full min-h-0 gap-0 overflow-hidden">
-      {/* LEFT: build activity feed */}
-      <div className="flex w-[38%] shrink-0 flex-col border-r border-stone-200">
+    <div className="flex h-full min-h-0 overflow-hidden">
+      {/* LEFT: activity feed — 50% */}
+      <div className="flex w-1/2 shrink-0 flex-col border-r border-[#E4E2DB]">
         {threadId ? (
           <BuildActivityFeed
             messages={stream.messages ?? []}
@@ -894,27 +1021,31 @@ function GeneratingView({
             onBuildUpdated={onBuildUpdated}
           />
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-white p-6 text-center">
-            <TerminalIcon className="size-8 text-stone-300" />
-            <p className="text-sm text-stone-500">No chat session linked.</p>
-            <p className="text-xs text-stone-400">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#F6F5F1] p-6 text-center">
+            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
+              <TerminalIcon className="size-4 text-[#6C6F79]" />
+            </div>
+            <p className="text-sm font-medium text-[#1B1D23]">
+              No chat session linked
+            </p>
+            <p className="text-xs text-[#6C6F79]">
               Create a new server from the Start tab to get an embedded chat.
             </p>
           </div>
         )}
       </div>
 
-      {/* RIGHT: server info + tools + code */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-stone-50">
+      {/* RIGHT: code panel — 50% */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
         {/* server info card */}
-        <div className="border-b border-stone-200 bg-white px-5 py-4">
-          <div className="flex items-start gap-3">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-stone-800 text-white">
-              <TerminalIcon className="size-5" />
+        <div className="border-b border-stone-200 bg-white px-5 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-stone-50">
+              <TerminalIcon className="size-4 text-[#7C79F0]" />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h2 className="truncate text-base font-semibold text-stone-900">
+                <h2 className="truncate text-sm font-semibold text-stone-900">
                   {server.name}
                 </h2>
                 {server.language && (
@@ -930,29 +1061,20 @@ function GeneratingView({
                 )}
               </div>
               {server.description && (
-                <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-stone-500">
+                <p className="mt-0.5 line-clamp-1 text-[11px] leading-relaxed text-stone-400">
                   {server.description}
                 </p>
               )}
             </div>
-            {threadId && (
-              <Link
-                href={`/workspace/chats/${threadId}`}
-                className="flex items-center gap-1 text-xs text-stone-400 hover:text-stone-700"
-                target="_blank"
-              >
-                Chat <ArrowUpRightIcon className="size-3" />
-              </Link>
-            )}
           </div>
         </div>
 
         {/* detected tools */}
         {tools_discovered.length > 0 && (
-          <div className="border-b border-stone-200 bg-white px-5 py-3">
+          <div className="border-b border-stone-200 bg-white px-5 py-2.5">
             <button
               onClick={() => setToolsExpanded((v) => !v)}
-              className="flex items-center gap-2 text-xs font-semibold tracking-wider text-stone-500 uppercase hover:text-stone-700"
+              className="flex items-center gap-2 text-[10px] font-semibold tracking-wider text-stone-400 uppercase hover:text-stone-600"
             >
               <ChevronRightIcon
                 className={cn(
@@ -960,16 +1082,15 @@ function GeneratingView({
                   toolsExpanded && "rotate-90",
                 )}
               />
-              Detected tools ({tools_discovered.length}) — Click to expand
+              Detected tools ({tools_discovered.length})
             </button>
             {toolsExpanded && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {tools_discovered.map((t) => (
                   <span
                     key={t.name}
-                    className="flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 font-mono text-xs text-stone-700"
+                    className="flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 font-mono text-[10px] text-stone-600"
                   >
-                    <ChevronRightIcon className="size-3 text-stone-400" />
                     {t.name}
                   </span>
                 ))}
@@ -980,11 +1101,11 @@ function GeneratingView({
 
         {/* errors banner */}
         {errors.length > 0 && phase !== "building" && (
-          <div className="border-b border-red-200 bg-red-50 px-5 py-2">
+          <div className="border-b border-red-900/30 bg-red-950/50 px-5 py-2">
             {errors.map((e, i) => (
               <p
                 key={i}
-                className="flex items-center gap-1.5 text-xs text-red-700"
+                className="flex items-center gap-1.5 text-xs text-red-400"
               >
                 <ShieldAlertIcon className="size-3 shrink-0" /> {e}
               </p>
@@ -996,7 +1117,6 @@ function GeneratingView({
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {files ? (
             <>
-              {/* file tree (white) */}
               <div className="w-44 shrink-0 border-r border-stone-200 bg-white">
                 <FileTreePanel
                   files={files}
@@ -1004,22 +1124,21 @@ function GeneratingView({
                   onSelect={setSelectedFile}
                 />
               </div>
-              {/* code editor (dark) */}
               <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                 {files[selectedFile] !== undefined ? (
-                  <CodeViewer
+                  <SyntaxCodeViewer
                     filename={selectedFile}
                     code={files[selectedFile]}
                   />
                 ) : liveCode ? (
                   <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
                     {stream.isLoading && (
-                      <div className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded border border-amber-200 bg-amber-900/80 px-2 py-0.5 text-[10px] text-amber-300">
+                      <div className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded border border-stone-200 bg-white/90 px-2 py-0.5 text-[10px] text-[#7C79F0]">
                         <Loader2Icon className="size-2.5 animate-spin" />{" "}
-                        streaming…
+                        streaming
                       </div>
                     )}
-                    <CodeViewer filename="server.py" code={liveCode} />
+                    <SyntaxCodeViewer filename="server.py" code={liveCode} />
                   </div>
                 ) : (
                   <CodePlaceholder phase={phase} />
@@ -1029,11 +1148,11 @@ function GeneratingView({
           ) : liveCode ? (
             <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
               {stream.isLoading && (
-                <div className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded border border-amber-200 bg-amber-900/80 px-2 py-0.5 text-[10px] text-amber-300">
-                  <Loader2Icon className="size-2.5 animate-spin" /> streaming…
+                <div className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded border border-stone-200 bg-white/90 px-2 py-0.5 text-[10px] text-[#7C79F0]">
+                  <Loader2Icon className="size-2.5 animate-spin" /> streaming
                 </div>
               )}
-              <CodeViewer filename="server.py" code={liveCode} />
+              <SyntaxCodeViewer filename="server.py" code={liveCode} />
             </div>
           ) : (
             <CodePlaceholder phase={phase} />
@@ -1044,7 +1163,7 @@ function GeneratingView({
   );
 }
 
-// ── Secrets panel (inspect sidebar) ───────────────────────────────────────────
+// ── Secrets panel ──────────────────────────────────────────────────────────────
 
 function SecretsSection({
   serverId,
@@ -1087,32 +1206,15 @@ function SecretsSection({
   };
 
   return (
-    <div className="mt-4">
-      <div className="flex items-center gap-2 px-4 pb-2">
-        <KeyIcon className="size-3.5 text-stone-500" />
-        <h3 className="text-sm font-semibold text-stone-800">
-          Secrets &amp; Environment
-        </h3>
-        {secretNames.some((k) => !storedKeys.has(k)) && (
-          <span className="ml-auto flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-600">
-            <span className="size-1.5 rounded-full bg-red-500" />
-            {secretNames.filter((k) => !storedKeys.has(k)).length} required
-          </span>
-        )}
-      </div>
-      <div className="space-y-3 px-4 pb-4">
-        <p className="text-[11px] leading-relaxed text-stone-500">
-          Configure the secrets your MCP server needs. Values are encrypted at
-          rest and auto-detected from code.
-        </p>
-        <p className="flex items-center gap-1 text-[10px] text-stone-400">
-          <span className="inline-block size-1.5 rounded-full bg-stone-400" />{" "}
-          Detected from code
+    <div>
+      <div className="space-y-3">
+        <p className="text-[11px] leading-relaxed text-stone-400">
+          Encrypted at rest · auto-detected from code · never logged.
         </p>
         {secretNames.map((key) => (
           <div
             key={key}
-            className="rounded-lg border border-stone-200 bg-white p-3"
+            className="rounded-xl border border-stone-200 bg-stone-50 p-3"
           >
             <div className="mb-1.5 flex items-center justify-between">
               <code className="font-mono text-xs font-semibold text-stone-700">
@@ -1137,7 +1239,7 @@ function SecretsSection({
                 onChange={(e) =>
                   setValues((prev) => ({ ...prev, [key]: e.target.value }))
                 }
-                className="flex-1 rounded border border-stone-200 bg-stone-50 px-2 py-1.5 text-xs text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:bg-white focus:outline-none"
+                className="flex-1 rounded-lg border border-stone-200 bg-white px-2 py-1.5 font-mono text-xs text-stone-900 placeholder:text-stone-300 focus:border-[#5B57E0] focus:shadow-[0_0_0_2px_rgba(91,87,224,0.15)] focus:outline-none"
               />
               <button
                 type="button"
@@ -1157,11 +1259,11 @@ function SecretsSection({
           </div>
         ))}
 
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && <p className="text-xs text-red-400">{error}</p>}
 
         <Button
           size="sm"
-          className="w-full"
+          className="w-full bg-stone-900 text-white hover:bg-stone-700"
           disabled={saving || !hasUnsaved}
           onClick={() => void handleSave()}
         >
@@ -1180,161 +1282,6 @@ function SecretsSection({
   );
 }
 
-// ── Inspect sidebar ────────────────────────────────────────────────────────────
-
-function InspectSidebar({
-  server,
-  buildStatus,
-  storedKeys,
-  onStored,
-}: {
-  server: McpServerResponse;
-  buildStatus: McpBuildStatus;
-  storedKeys: Set<string>;
-  onStored: (keys: string[]) => void;
-}) {
-  const { phase, errors, detected_secret_names } = buildStatus;
-  const dp = getDisplayPhase(phase, errors);
-  const needsRetest = dp === "needs_secrets";
-
-  return (
-    <div className="flex h-full flex-col overflow-y-auto bg-white">
-      {/* server details */}
-      <div className="border-b border-stone-100 p-4">
-        <h3 className="mb-3 text-xs font-semibold tracking-wider text-stone-500 uppercase">
-          Server Details
-        </h3>
-        <div className="space-y-2">
-          <div>
-            <label className="text-[10px] font-medium tracking-wider text-stone-500 uppercase">
-              Name
-            </label>
-            <div className="mt-1 rounded border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm text-stone-800">
-              {server.name}
-            </div>
-          </div>
-          {server.description && (
-            <div>
-              <label className="text-[10px] font-medium tracking-wider text-stone-500 uppercase">
-                Description
-              </label>
-              <p className="mt-1 text-xs leading-relaxed text-stone-600">
-                {server.description}
-              </p>
-            </div>
-          )}
-          <div className="flex items-center gap-2 pt-1">
-            {server.language && (
-              <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-500">
-                {server.language}
-              </span>
-            )}
-            <span className="text-[10px] text-stone-400">
-              {new Date(server.created_at).toLocaleDateString()}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* secrets */}
-      <div className="border-b border-stone-100">
-        <SecretsSection
-          serverId={server.id}
-          secretNames={detected_secret_names}
-          storedKeys={storedKeys}
-          onStored={onStored}
-          needsRetest={needsRetest}
-        />
-      </div>
-
-      {/* actions */}
-      <div className="space-y-2 p-4">
-        <h3 className="mb-3 text-xs font-semibold tracking-wider text-stone-500 uppercase">
-          Actions
-        </h3>
-        <ApproveButton
-          serverId={server.id}
-          phase={phase}
-          errors={errors}
-          approved={server.approved}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ── Approve button ─────────────────────────────────────────────────────────────
-
-function ApproveButton({
-  serverId,
-  phase,
-  errors,
-  approved,
-}: {
-  serverId: string;
-  phase: McpPhase;
-  errors: string[];
-  approved: boolean;
-}) {
-  const [approving, setApproving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const dp = getDisplayPhase(phase, errors);
-  const canApprove = dp === "verified" && !approved;
-
-  const handle = async () => {
-    setApproving(true);
-    setErr(null);
-    try {
-      await apiApprove(serverId);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed");
-    } finally {
-      setApproving(false);
-    }
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <Button
-        size="sm"
-        className="w-full"
-        disabled={!canApprove || approving}
-        onClick={canApprove ? () => void handle() : undefined}
-      >
-        {approving ? (
-          <>
-            <Loader2Icon className="size-3.5 animate-spin" /> Approving…
-          </>
-        ) : approved ? (
-          <>
-            <CheckCircle2Icon className="size-3.5" /> Approved
-          </>
-        ) : (
-          "Approve"
-        )}
-      </Button>
-      {!canApprove && !approved && (
-        <p className="text-[10px] text-stone-400">
-          Requires <span className="font-medium">Verified in sandbox</span>{" "}
-          first.
-        </p>
-      )}
-      {err && <p className="text-xs text-red-500">{err}</p>}
-
-      <button
-        disabled
-        className="mt-2 flex w-full cursor-not-allowed items-center gap-2 rounded-md border border-dashed border-stone-200 px-3 py-2 text-xs text-stone-400"
-      >
-        <PlayIcon className="size-3.5 shrink-0" />
-        <span>Build &amp; run (Docker)</span>
-        <span className="ml-auto rounded bg-stone-100 px-1.5 py-0.5 text-[10px]">
-          Phase 4
-        </span>
-      </button>
-    </div>
-  );
-}
-
 // ── MCP Tools view ─────────────────────────────────────────────────────────────
 
 function ToolCard({
@@ -1349,7 +1296,7 @@ function ToolCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="rounded-lg border border-stone-200 bg-white">
+    <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm transition-colors hover:border-stone-300">
       <button
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
@@ -1362,10 +1309,10 @@ function ToolCard({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <code className="text-sm font-semibold text-stone-900">
+            <code className="font-mono text-sm font-semibold text-stone-900">
               {tool.name}
             </code>
-            <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-500">
+            <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-400">
               async
             </span>
             {testResult && (
@@ -1373,8 +1320,8 @@ function ToolCard({
                 className={cn(
                   "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
                   testResult.ok
-                    ? "bg-emerald-50 text-emerald-700"
-                    : "bg-red-50 text-red-600",
+                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border border-red-200 bg-red-50 text-red-600",
                 )}
               >
                 {testResult.ok ? "pass" : "fail"}
@@ -1382,7 +1329,7 @@ function ToolCard({
             )}
           </div>
           {!expanded && tool.description && (
-            <p className="mt-0.5 line-clamp-1 text-xs text-stone-500">
+            <p className="mt-0.5 line-clamp-1 text-xs text-stone-400">
               {tool.description}
             </p>
           )}
@@ -1393,7 +1340,7 @@ function ToolCard({
               e.stopPropagation();
               onRetest();
             }}
-            className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+            className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-600"
             title="Re-test"
           >
             <RefreshCwIcon className="size-3.5" />
@@ -1401,19 +1348,19 @@ function ToolCard({
         )}
       </button>
       {expanded && (
-        <div className="space-y-2 border-t border-stone-100 px-4 py-3">
+        <div className="space-y-2 border-t border-stone-200 px-4 py-3">
           {tool.description && (
-            <p className="text-sm leading-relaxed text-stone-600">
+            <p className="text-sm leading-relaxed text-stone-500">
               {tool.description}
             </p>
           )}
           {testResult?.error && (
-            <div className="rounded bg-red-50 px-3 py-2 font-mono text-xs text-red-600">
+            <div className="rounded-lg border border-[#E4E2DB] bg-[#FCFBF8] px-3 py-2 font-mono text-xs text-red-600">
               {testResult.error}
             </div>
           )}
           {testResult?.output && (
-            <div className="rounded bg-stone-800 px-3 py-2 font-mono text-xs text-stone-200">
+            <div className="rounded-lg border border-[#E4E2DB] bg-[#FCFBF8] px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-[#1B1D23]">
               {testResult.output}
             </div>
           )}
@@ -1424,16 +1371,29 @@ function ToolCard({
 }
 
 function ToolsView({
+  server,
   serverId,
   buildStatus,
+  storedKeys,
+  onStored,
   onRetested,
 }: {
+  server: McpServerResponse;
   serverId: string;
   buildStatus: McpBuildStatus;
+  storedKeys: Set<string>;
+  onStored: (keys: string[]) => void;
   onRetested: (s: McpBuildStatus) => void;
 }) {
-  const { phase, errors, tools_discovered, test_results } = buildStatus;
+  const {
+    phase,
+    errors,
+    tools_discovered,
+    test_results,
+    detected_secret_names,
+  } = buildStatus;
   const dp = getDisplayPhase(phase, errors);
+  const needsRetest = dp === "needs_secrets";
   const [retesting, setRetesting] = useState(false);
 
   const handleRetest = async () => {
@@ -1447,31 +1407,41 @@ function ToolsView({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {/* header */}
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      {/* header — MCP name + re-test controls */}
       <div className="flex items-center gap-3 border-b border-stone-200 bg-white px-5 py-3">
-        <span className="text-sm font-medium text-stone-700">
-          {tools_discovered.length} tool
-          {tools_discovered.length !== 1 ? "s" : ""} discovered
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="rounded-md border border-stone-200 bg-white px-2.5 py-1 text-xs text-stone-500">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-stone-50">
+            <BoxIcon className="size-3.5 text-[#7C79F0]" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-stone-900">
+              {server.name}
+            </p>
+            <p className="text-[10px] text-stone-400">
+              {tools_discovered.length} tool
+              {tools_discovered.length !== 1 ? "s" : ""} discovered
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-lg border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs text-stone-500">
             Sandbox
           </span>
           {errors.length > 0 ? (
-            <span className="flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs text-red-600">
+            <span className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs text-red-600">
               <XCircleIcon className="size-3" /> {errors.length} error
               {errors.length !== 1 ? "s" : ""}
             </span>
           ) : (
-            <span className="flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+            <span className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
               <CheckCircle2Icon className="size-3" /> 0 errors
             </span>
           )}
           <button
             onClick={() => void handleRetest()}
             disabled={retesting}
-            className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+            className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-600"
             title="Re-test all"
           >
             <RotateCcwIcon
@@ -1481,46 +1451,220 @@ function ToolsView({
         </div>
       </div>
 
-      {/* status banner */}
+      {/* status banners */}
       {dp === "verified" && (
-        <div className="flex items-center gap-2 border-b border-emerald-200 bg-emerald-600 px-5 py-2.5">
-          <CheckCircle2Icon className="size-4 text-white" />
+        <div className="flex items-center gap-2.5 border-b border-emerald-200 bg-emerald-600 px-5 py-2.5">
+          <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
+            <CheckCircle2Icon className="size-3.5 text-white" />
+          </div>
           <span className="text-sm font-medium text-white">
-            SANDBOX VERIFIED — All tools tested successfully
+            Sandbox verified — all tools tested successfully
           </span>
         </div>
       )}
       {dp === "needs_secrets" && (
-        <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-500 px-5 py-2.5">
-          <KeyIcon className="size-4 text-white" />
+        <div className="flex items-center gap-2.5 border-b border-amber-200 bg-amber-500 px-5 py-2.5">
+          <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
+            <KeyIcon className="size-3.5 text-white" />
+          </div>
           <span className="text-sm font-medium text-white">
-            NEEDS SECRETS — Provide API keys in the sidebar and re-test
+            Needs secrets — add API keys below and re-test
           </span>
         </div>
       )}
       {dp === "failed" && (
-        <div className="flex items-center gap-2 border-b border-red-200 bg-red-600 px-5 py-2.5">
-          <ShieldXIcon className="size-4 text-white" />
-          <span className="text-sm font-medium text-white">
-            BLOCKED BY SECURITY SCAN — See errors below
+        <div className="flex items-center gap-3 border-b border-red-900/20 bg-red-700 px-5 py-3">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/15">
+            <ShieldXIcon className="size-4 text-white" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-white">
+              Blocked by Security Scan
+            </p>
+            <p className="text-[11px] text-red-200">
+              {errors.length} {errors.length === 1 ? "issue" : "issues"}{" "}
+              prevented execution
+            </p>
+          </div>
+          <span className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-white ring-1 ring-white/20">
+            <XCircleIcon className="size-3" />
+            {errors.length} {errors.length === 1 ? "error" : "errors"}
           </span>
         </div>
       )}
       {dp === "testing" && (
-        <div className="flex items-center gap-2 border-b border-orange-200 bg-orange-500 px-5 py-2.5">
-          <ShieldAlertIcon className="size-4 text-white" />
+        <div className="flex items-center gap-2.5 border-b border-orange-200 bg-orange-500 px-5 py-2.5">
+          <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
+            <ShieldAlertIcon className="size-3.5 text-white" />
+          </div>
           <span className="text-sm font-medium text-white">
-            COULDN&apos;T VERIFY — Server started but no tools found
+            Couldn&apos;t verify — server started but no tools found
           </span>
         </div>
       )}
 
-      {/* tool list */}
-      <div className="flex-1 space-y-2 overflow-y-auto p-4">
-        {tools_discovered.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-12 text-center">
-            <BoxIcon className="size-8 text-stone-300" />
-            <p className="text-sm text-stone-400">No tools discovered yet.</p>
+      {/* tool list / error details */}
+      <div className="flex-1 space-y-4 overflow-y-auto bg-stone-50 p-4">
+        {/* Secrets panel — always shown when secrets are detected */}
+        {detected_secret_names.length > 0 && (
+          <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
+            <div className="flex items-center gap-2 border-b border-stone-200 px-4 py-3">
+              <KeyIcon className="size-3.5 text-[#7C79F0]" />
+              <h3 className="text-xs font-semibold text-stone-700">
+                API Secrets
+              </h3>
+              {detected_secret_names.some((k) => !storedKeys.has(k)) && (
+                <span className="ml-auto flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-600">
+                  <span className="size-1.5 rounded-full bg-red-500" />
+                  {
+                    detected_secret_names.filter((k) => !storedKeys.has(k))
+                      .length
+                  }{" "}
+                  missing
+                </span>
+              )}
+              {detected_secret_names.every((k) => storedKeys.has(k)) && (
+                <span className="ml-auto flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                  <CheckCircle2Icon className="size-2.5" /> All set
+                </span>
+              )}
+            </div>
+            <div className="p-4">
+              <SecretsSection
+                serverId={serverId}
+                secretNames={detected_secret_names}
+                storedKeys={storedKeys}
+                onStored={onStored}
+                needsRetest={needsRetest}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* tools section label */}
+        {tools_discovered.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
+              Tools
+            </span>
+            <div className="h-px flex-1 bg-stone-200" />
+            <span className="font-mono text-[10px] text-[#5B57E0]">
+              {tools_discovered.length}
+            </span>
+          </div>
+        )}
+
+        {dp === "failed" && errors.length > 0 ? (
+          <div className="flex flex-col gap-4">
+            {/* blocked illustration */}
+            <div className="flex flex-col items-center gap-3 pt-6 pb-2 text-center">
+              <div className="relative flex size-16 items-center justify-center rounded-2xl border border-red-900/40 bg-red-950/30">
+                <ShieldXIcon className="size-8 text-red-400" />
+                <span className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white ring-2 ring-stone-50">
+                  {errors.length}
+                </span>
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-stone-900">
+                  Server blocked by security scan
+                </h3>
+                <p className="mt-0.5 text-sm text-stone-500">
+                  {errors.length === 1 ? "1 issue" : `${errors.length} issues`}{" "}
+                  prevented sandbox execution
+                </p>
+              </div>
+            </div>
+
+            {/* error cards */}
+            {errors.map((error, i) => {
+              const isModelCfgError = error
+                .toLowerCase()
+                .includes("moderation model");
+              return (
+                <div
+                  key={i}
+                  className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm"
+                >
+                  <div className="flex items-center gap-2.5 border-b border-stone-200 bg-red-50 px-4 py-2.5">
+                    <ShieldAlertIcon className="size-3.5 shrink-0 text-red-500" />
+                    <span className="text-[11px] font-semibold tracking-wider text-red-600 uppercase">
+                      {isModelCfgError
+                        ? "Configuration Error"
+                        : "Security Block"}
+                    </span>
+                    <span className="ml-auto rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-600 ring-1 ring-red-200">
+                      #{i + 1}
+                    </span>
+                  </div>
+                  <div className="px-4 py-3.5">
+                    <p className="text-sm leading-relaxed text-stone-600">
+                      {error}
+                    </p>
+                    {isModelCfgError && (
+                      <div className="mt-3.5 rounded-xl border border-amber-900/30 bg-amber-950/20 px-3.5 py-3">
+                        <p className="mb-2 text-xs font-semibold text-amber-400">
+                          How to fix
+                        </p>
+                        <ul className="space-y-1.5 text-xs leading-relaxed text-amber-500/80">
+                          <li className="flex items-start gap-1.5">
+                            <span className="mt-0.5 shrink-0 font-bold">
+                              1.
+                            </span>
+                            <span>
+                              Open{" "}
+                              <code className="rounded bg-amber-950/40 px-1 py-0.5 font-mono text-[11px] text-amber-400">
+                                config.yaml
+                              </code>{" "}
+                              and set{" "}
+                              <code className="rounded bg-amber-950/40 px-1 py-0.5 font-mono text-[11px] text-amber-400">
+                                skill_evolution.moderation_model_name
+                              </code>{" "}
+                              to a valid model name.
+                            </span>
+                          </li>
+                          <li className="flex items-start gap-1.5">
+                            <span className="mt-0.5 shrink-0 font-bold">
+                              2.
+                            </span>
+                            <span>
+                              Verify the model&apos;s API key is set and the
+                              model is accessible.
+                            </span>
+                          </li>
+                          <li className="flex items-start gap-1.5">
+                            <span className="mt-0.5 shrink-0 font-bold">
+                              3.
+                            </span>
+                            <span>Re-test once the model is configured.</span>
+                          </li>
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* re-test CTA */}
+            <button
+              onClick={() => void handleRetest()}
+              disabled={retesting}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-medium text-stone-700 shadow-sm transition-all hover:border-stone-300 hover:bg-stone-50 disabled:opacity-50"
+            >
+              <RotateCcwIcon
+                className={cn("size-4", retesting && "animate-spin")}
+              />
+              {retesting ? "Re-testing…" : "Re-test after fixing"}
+            </button>
+          </div>
+        ) : tools_discovered.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-16 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full border border-stone-200 bg-stone-50">
+              <BoxIcon className="size-5 text-stone-400" />
+            </div>
+            <p className="text-sm font-medium text-stone-500">
+              No tools discovered yet
+            </p>
             {dp !== "verified" && (
               <p className="text-xs text-stone-400">
                 Run re-test to discover tools.
@@ -1528,13 +1672,15 @@ function ToolsView({
             )}
           </div>
         ) : (
-          tools_discovered.map((tool) => (
-            <ToolCard
-              key={tool.name}
-              tool={tool}
-              testResult={test_results.find((r) => r.tool === tool.name)}
-            />
-          ))
+          <div className="space-y-2">
+            {tools_discovered.map((tool) => (
+              <ToolCard
+                key={tool.name}
+                tool={tool}
+                testResult={test_results.find((r) => r.tool === tool.name)}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -1557,16 +1703,15 @@ function EditorView({ server }: { server: McpServerResponse }) {
 
   if (!files) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-stone-950">
-        <TerminalIcon className="size-8 text-stone-600" />
-        <p className="text-sm text-stone-500">No code available</p>
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-white">
+        <TerminalIcon className="size-8 text-stone-300" />
+        <p className="text-sm text-stone-400">No code available</p>
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* file tree */}
       <div className="w-48 shrink-0 border-r border-stone-200 bg-white">
         <FileTreePanel
           files={files}
@@ -1574,13 +1719,15 @@ function EditorView({ server }: { server: McpServerResponse }) {
           onSelect={setSelectedFile}
         />
       </div>
-      {/* code viewer */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {files[selectedFile] !== undefined ? (
-          <CodeViewer filename={selectedFile} code={files[selectedFile]} />
+          <SyntaxCodeViewer
+            filename={selectedFile}
+            code={files[selectedFile]}
+          />
         ) : (
-          <div className="flex flex-1 items-center justify-center bg-stone-950">
-            <p className="text-sm text-stone-500">Select a file</p>
+          <div className="flex flex-1 items-center justify-center bg-white">
+            <p className="text-sm text-stone-400">Select a file</p>
           </div>
         )}
       </div>
@@ -1588,7 +1735,7 @@ function EditorView({ server }: { server: McpServerResponse }) {
   );
 }
 
-// ── Inspect view (Image 2/3 style) ────────────────────────────────────────────
+// ── Inspect view ──────────────────────────────────────────────────────────────
 
 function InspectView({
   server,
@@ -1604,30 +1751,85 @@ function InspectView({
   const [subTab, setSubTab] = useState<InspectSubTab>("tools");
   const [storedKeys, setStoredKeys] = useState<Set<string>>(new Set());
 
+  const stream = useStream<AgentThreadState>({
+    client: getAPIClient(),
+    assistantId: "lead_agent",
+    threadId: threadId ?? "",
+    reconnectOnMount: true,
+    fetchStateHistory: threadId ? { limit: 1 } : undefined,
+  });
+
+  const handleSubmit = useCallback(
+    (text: string) => {
+      void stream.submit({
+        messages: [{ role: "user", content: text } as unknown as Message],
+      });
+    },
+    [stream],
+  );
+
   const handleStored = (keys: string[]) => {
     setStoredKeys((prev) => new Set([...prev, ...keys]));
-    // After saving secrets, trigger re-test if needs_secrets
     void apiRetest(server.id)
       .then(onRetested)
       .catch(() => undefined);
   };
 
+  // Auto-refresh: detect completed mcp_build / write_file / str_replace tool calls
+  const seenToolCallIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!stream.messages?.length) return;
+    let needsRefresh = false;
+    for (const msg of stream.messages) {
+      if (msg.type === "tool") {
+        const tm = msg as { tool_call_id?: string; name?: string };
+        if (
+          tm.tool_call_id &&
+          !seenToolCallIds.current.has(tm.tool_call_id) &&
+          (tm.name === "mcp_build" ||
+            tm.name === "write_file" ||
+            tm.name === "str_replace")
+        ) {
+          seenToolCallIds.current.add(tm.tool_call_id);
+          needsRefresh = true;
+        }
+      }
+    }
+    if (needsRefresh) {
+      void apiGetBuild(server.id).then((build) => {
+        if (build) onRetested(build);
+      });
+    }
+  }, [stream.messages, server.id, onRetested]);
+
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* LEFT: sidebar */}
-      <div className="w-72 shrink-0 overflow-y-auto border-r border-stone-200">
-        <InspectSidebar
-          server={server}
-          buildStatus={buildStatus}
-          storedKeys={storedKeys}
-          onStored={handleStored}
-        />
+      {/* LEFT: persistent chat feed — 50% */}
+      <div className="flex w-1/2 shrink-0 flex-col border-r border-[#E4E2DB]">
+        {threadId ? (
+          <BuildActivityFeed
+            messages={stream.messages ?? []}
+            isLoading={stream.isLoading}
+            onSubmit={handleSubmit}
+          />
+        ) : (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#F6F5F1] p-6 text-center">
+            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
+              <TerminalIcon className="size-4 text-[#6C6F79]" />
+            </div>
+            <p className="text-sm font-medium text-[#1B1D23]">
+              No chat session linked
+            </p>
+            <p className="text-xs text-[#6C6F79]">
+              Create a new server from the Start tab to get an embedded chat.
+            </p>
+          </div>
+        )}
       </div>
 
-      {/* RIGHT: main */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-stone-50">
-        {/* sub-tab bar */}
-        <div className="flex items-center gap-1 border-b border-stone-200 bg-white px-5 pt-3">
+      {/* RIGHT: white panel with tabs */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
+        <div className="flex items-center gap-0 border-b border-stone-200 bg-white px-5 pt-3">
           {[
             { id: "tools" as InspectSubTab, label: "MCP Tools", icon: BoxIcon },
             {
@@ -1640,32 +1842,26 @@ function InspectView({
               key={id}
               onClick={() => setSubTab(id)}
               className={cn(
-                "flex items-center gap-1.5 rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors",
+                "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors",
                 subTab === id
-                  ? "border-b-2 border-stone-900 text-stone-900"
-                  : "text-stone-500 hover:text-stone-700",
+                  ? "border-b-2 border-[#7C79F0] text-stone-900"
+                  : "text-stone-400 hover:text-stone-700",
               )}
             >
               <Icon className="size-3.5" />
               {label}
             </button>
           ))}
-          {threadId && (
-            <Link
-              href={`/workspace/chats/${threadId}`}
-              className="mb-1 ml-auto flex items-center gap-1 rounded border border-stone-200 bg-white px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50"
-            >
-              Open chat <ArrowUpRightIcon className="size-3" />
-            </Link>
-          )}
         </div>
 
-        {/* content */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {subTab === "tools" && (
             <ToolsView
+              server={server}
               serverId={server.id}
               buildStatus={buildStatus}
+              storedKeys={storedKeys}
+              onStored={handleStored}
               onRetested={onRetested}
             />
           )}
@@ -1727,7 +1923,7 @@ function StartTab({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. GitHub Issues Connector"
-            className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none"
+            className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 shadow-sm placeholder:text-stone-400 focus:border-stone-400 focus:ring-2 focus:ring-stone-900/5 focus:outline-none"
           />
         </div>
 
@@ -1740,7 +1936,7 @@ function StartTab({
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe what this server should do, what APIs it connects to, and what tools it should expose…"
             rows={4}
-            className="w-full resize-none rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none"
+            className="w-full resize-none rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 shadow-sm placeholder:text-stone-400 focus:border-stone-400 focus:ring-2 focus:ring-stone-900/5 focus:outline-none"
           />
         </div>
 
@@ -1752,10 +1948,10 @@ function StartTab({
                 key={t.id}
                 onClick={() => setTemplate(t.id)}
                 className={cn(
-                  "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                  "rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
                   template === t.id
-                    ? "border-stone-900 bg-stone-900 text-white"
-                    : "border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50",
+                    ? "border-stone-900 bg-stone-900 text-white shadow-sm"
+                    : "border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:shadow-sm",
                 )}
               >
                 {t.label}
@@ -1765,7 +1961,7 @@ function StartTab({
         </div>
 
         {error && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
             {error}
           </p>
         )}
@@ -1773,7 +1969,7 @@ function StartTab({
         <Button
           onClick={() => void doCreate()}
           disabled={!name.trim() || creating}
-          className="w-full"
+          className="w-full bg-stone-900 text-white shadow-sm hover:bg-stone-700"
         >
           {creating ? (
             <>
@@ -1810,6 +2006,34 @@ export function McpServerDetail({
   const [isPolling, setIsPolling] = useState(false);
   const pollCountRef = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Thread persistence: URL param wins; fall back to localStorage
+  const [threadId, setThreadId] = useState<string | undefined>(() => {
+    if (propThreadId) return propThreadId;
+    if (typeof window !== "undefined" && !isNew) {
+      return localStorage.getItem(`mcp_thread_${serverId}`) ?? undefined;
+    }
+    return undefined;
+  });
+
+  useEffect(() => {
+    if (isNew) return;
+    if (propThreadId) {
+      setThreadId(propThreadId);
+      try {
+        localStorage.setItem(`mcp_thread_${serverId}`, propThreadId);
+      } catch {
+        /* ignore */
+      }
+    } else if (!threadId) {
+      try {
+        const stored = localStorage.getItem(`mcp_thread_${serverId}`);
+        if (stored) setThreadId(stored);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [propThreadId, serverId, isNew, threadId]);
 
   // Initial load
   useEffect(() => {
@@ -1900,7 +2124,7 @@ export function McpServerDetail({
   if (!isNew && loading) {
     return (
       <div className="flex size-full items-center justify-center">
-        <Loader2Icon className="size-6 animate-spin text-stone-400" />
+        <Loader2Icon className="size-5 animate-spin text-stone-400" />
       </div>
     );
   }
@@ -1921,17 +2145,17 @@ export function McpServerDetail({
   }
 
   return (
-    <div className="flex size-full flex-col overflow-hidden">
+    <div className="flex size-full flex-col overflow-hidden bg-white">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-stone-200 bg-white px-5 py-3.5">
         <Link
           href="/workspace/mcp"
-          className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+          className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
         >
           <ArrowLeftIcon className="size-4" />
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-semibold tracking-wider text-stone-400 uppercase">
+          <p className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
             MCP Studio
           </p>
           <h1 className="truncate text-base font-semibold text-stone-900">
@@ -1939,30 +2163,22 @@ export function McpServerDetail({
           </h1>
         </div>
         {!isNew && <PhasePill phase={phase} errors={errors} />}
-        {!isNew && propThreadId && (
-          <Link
-            href={`/workspace/chats/${propThreadId}`}
-            className="flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50"
-          >
-            Chat <ArrowUpRightIcon className="size-3.5" />
-          </Link>
-        )}
       </div>
 
       {/* Lifecycle tab bar */}
-      <div className="flex items-center gap-1 border-b border-stone-200 bg-white px-5 pt-3">
+      <div className="flex items-center gap-0 border-b border-stone-200 bg-white px-5 pt-3">
         {LIFECYCLE_TABS.map(({ id, label, disabled }) => (
           <button
             key={id}
             onClick={() => !disabled && setActiveTab(id)}
             disabled={disabled}
             className={cn(
-              "flex items-center gap-1.5 rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors",
+              "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors",
               disabled
                 ? "cursor-not-allowed text-stone-300"
                 : activeTab === id
                   ? "border-b-2 border-stone-900 text-stone-900"
-                  : "text-stone-500 hover:text-stone-700",
+                  : "text-stone-400 hover:text-stone-700",
             )}
           >
             {label}
@@ -1982,7 +2198,11 @@ export function McpServerDetail({
               <p className="text-sm text-stone-500">
                 This server was already created.
               </p>
-              <Button size="sm" onClick={() => setActiveTab("build")}>
+              <Button
+                size="sm"
+                className="bg-stone-900 text-white hover:bg-stone-700"
+                onClick={() => setActiveTab("build")}
+              >
                 View Build →
               </Button>
             </div>
@@ -1996,14 +2216,14 @@ export function McpServerDetail({
             <GeneratingView
               server={server}
               buildStatus={buildStatus}
-              threadId={propThreadId}
+              threadId={threadId}
               onBuildUpdated={refreshBuild}
             />
           ) : (
             <InspectView
               server={server}
               buildStatus={buildStatus}
-              threadId={propThreadId}
+              threadId={threadId}
               onRetested={handleRetested}
             />
           ))}
@@ -2016,8 +2236,10 @@ export function McpServerDetail({
             </div>
           )}
         {(activeTab === "deploy" || activeTab === "connect") && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-stone-50">
-            <LockIcon className="size-8 text-stone-300" />
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-stone-50">
+            <div className="flex size-12 items-center justify-center rounded-full border border-stone-200 bg-white">
+              <LockIcon className="size-5 text-stone-300" />
+            </div>
             <p className="text-sm text-stone-400">
               {activeTab === "deploy" ? "Deploy" : "Connect"} is available in
               Phase 4

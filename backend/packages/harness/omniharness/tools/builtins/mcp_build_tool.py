@@ -29,7 +29,12 @@ def _get_user_id(runtime: ToolRuntime[ContextT, ThreadState]) -> str:
         "and discovers + test-calls each tool. "
         "Returns phase, tools_discovered, detected_secret_names, errors, and test_results. "
         "Call this after writing the complete server.py source code. "
-        "Pass the server_id from the task and the full source_code string."
+        "Pass the server_id from the task and the full source_code string. "
+        "IMPORTANT — available packages in the sandbox: the `mcp` SDK is installed; "
+        "always use `from mcp.server.fastmcp import FastMCP` (NOT `from fastmcp import FastMCP` — "
+        "the standalone fastmcp package is NOT available). "
+        "`httpx` is available for HTTP. Do NOT use any other third-party packages "
+        "unless they are part of the Python standard library."
     ),
 )
 async def mcp_build_tool(

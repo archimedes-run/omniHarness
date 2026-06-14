@@ -153,7 +153,42 @@ async def init_engine(
         else:
             raise
 
+    # Additive column migrations for existing tables (create_all only creates
+    # new tables; it does not add new columns to existing ones).
+    await _run_additive_migrations(backend)
+
     logger.info("Persistence engine initialized: backend=%s", backend)
+
+
+async def _run_additive_migrations(backend: str) -> None:
+    """Add new columns to existing tables without dropping data.
+
+    Safe to run on every startup — each ALTER is skipped silently if the
+    column already exists (sqlite: catches OperationalError; postgres: uses
+    ADD COLUMN IF NOT EXISTS).
+    """
+    if _engine is None:
+        return
+
+    from sqlalchemy import text
+
+    # Columns added after initial schema release — (table, column, sql_type, default)
+    _NEW_COLUMNS = [
+        ("mcp_servers", "tools_discovered", "JSON", "NULL"),
+        ("mcp_servers", "test_results", "JSON", "NULL"),
+        ("mcp_servers", "last_verified_at", "VARCHAR(64)", "NULL"),
+    ]
+
+    async with _engine.begin() as conn:
+        for table, column, sql_type, default in _NEW_COLUMNS:
+            try:
+                if backend == "postgres":
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type} DEFAULT {default}"))
+                else:  # sqlite
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type} DEFAULT {default}"))
+            except Exception:
+                # Column already exists (sqlite raises OperationalError); skip silently.
+                pass
 
 
 async def init_engine_from_config(config) -> None:

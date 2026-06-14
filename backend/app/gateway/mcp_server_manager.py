@@ -126,11 +126,38 @@ class MCPServerManager:
     # ------------------------------------------------------------------
 
     async def get_status(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Return the current build record, creating an idle one if absent."""
-        await self._load_and_verify(server_id, user_id)
+        """Return the current build record.
+
+        In-memory record takes priority (hot path during a live test run).
+        On cache miss the persisted build result is loaded from the DB so
+        tools_discovered and test_results survive backend restarts.
+        """
+        server = await self._load_and_verify(server_id, user_id)
         async with self._lock:
-            if server_id not in self._records:
-                self._records[server_id] = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
+            if server_id in self._records:
+                return self._records[server_id]
+
+        # Cache miss — load persisted result from DB.
+        row = await self._repo.get(server_id)
+        if row and (row.get("tools_discovered") or row.get("status") not in (None, "not_running")):
+            phase = row.get("status") or "idle"
+            # Map DB status back to MCPBuildRecord phase names.
+            if phase not in ("idle", "building", "testing", "verified", "failed", "ready", "stopped"):
+                phase = "idle"
+            record = MCPBuildRecord(
+                server_id=server_id,
+                phase=phase,
+                owner_id=user_id,
+                required_key_names=server.get("detected_secrets") or [],
+                tools_discovered=row.get("tools_discovered") or [],
+                test_results=row.get("test_results") or [],
+                last_verified_at=row.get("last_verified_at"),
+            )
+        else:
+            record = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
+
+        async with self._lock:
+            self._records.setdefault(server_id, record)
             return self._records[server_id]
 
     @staticmethod
@@ -412,7 +439,14 @@ class MCPServerManager:
             phase = "verified" if tools_discovered else "testing"
             verified_at = datetime.now(UTC).isoformat()
 
-            await self._repo.update_status(server_id, phase, user_id=user_id)
+            await self._repo.update_build_result(
+                server_id,
+                phase=phase,
+                tools_discovered=tools_discovered,
+                test_results=test_results,
+                last_verified_at=verified_at,
+                user_id=user_id,
+            )
             await self._repo.update_detected_secrets(server_id, required_key_names, user_id=user_id)
 
             record = MCPBuildRecord(

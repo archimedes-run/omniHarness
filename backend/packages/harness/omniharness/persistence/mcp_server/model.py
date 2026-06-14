@@ -29,6 +29,10 @@ class McpServerRow(Base):
     egress_hosts: Mapped[list] = mapped_column(JSON, default=list)
     # Agent-generated source code stored for security scanning.
     source_code: Mapped[str | None] = mapped_column(Text)
+    # Build result persisted so tool discovery survives backend restarts.
+    tools_discovered: Mapped[list] = mapped_column(JSON, default=list)
+    test_results: Mapped[list] = mapped_column(JSON, default=list)
+    last_verified_at: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

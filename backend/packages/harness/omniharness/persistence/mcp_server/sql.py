@@ -30,6 +30,9 @@ class McpServerRepository:
             "approved": bool(row.approved),
             "egress_hosts": row.egress_hosts or [],
             "source_code": row.source_code,
+            "tools_discovered": row.tools_discovered or [],
+            "test_results": row.test_results or [],
+            "last_verified_at": row.last_verified_at,
             "created_at": row.created_at.isoformat() if isinstance(row.created_at, datetime) else row.created_at,
             "updated_at": row.updated_at.isoformat() if isinstance(row.updated_at, datetime) else row.updated_at,
         }
@@ -142,6 +145,29 @@ class McpServerRepository:
             if row is None or row.owner_id != user_id:
                 return False
             row.detected_secrets = key_names
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
+
+    async def update_build_result(
+        self,
+        server_id: str,
+        *,
+        phase: str,
+        tools_discovered: list,
+        test_results: list,
+        last_verified_at: str | None,
+        user_id: str,
+    ) -> bool:
+        """Persist sandbox test results so they survive backend restarts."""
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.status = phase
+            row.tools_discovered = tools_discovered
+            row.test_results = test_results
+            row.last_verified_at = last_verified_at
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return True
