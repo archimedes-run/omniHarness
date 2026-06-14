@@ -274,6 +274,15 @@ async function apiApprove(id: string): Promise<McpServerResponse> {
   return r.json() as Promise<McpServerResponse>;
 }
 
+async function apiRegister(id: string): Promise<McpServerResponse> {
+  const r = await apiFetch(`/api/mcp-studio/servers/${id}/register`, {
+    method: "POST",
+  });
+  if (!r.ok)
+    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
+  return r.json() as Promise<McpServerResponse>;
+}
+
 async function apiRetest(id: string): Promise<McpBuildStatus> {
   const r = await apiFetch(`/api/mcp-studio/servers/${id}/test`, {
     method: "POST",
@@ -1929,11 +1938,13 @@ function InspectView({
   buildStatus,
   threadId,
   onRetested,
+  onAllSecretsStored,
 }: {
   server: McpServerResponse;
   buildStatus: McpBuildStatus;
   threadId?: string;
   onRetested: (s: McpBuildStatus) => void;
+  onAllSecretsStored?: () => void;
 }) {
   const [subTab, setSubTab] = useState<InspectSubTab>("tools");
   const [storedInfo, setStoredInfo] = useState<StoredInfo>(new Map());
@@ -1966,6 +1977,11 @@ function InspectView({
     setStoredInfo((prev) => {
       const next = new Map(prev);
       for (const [k, h] of Object.entries(hints)) next.set(k, h);
+      // Notify the page if all required secrets are now stored
+      const required = buildStatus.detected_secret_names;
+      if (required.length > 0 && required.every((k) => next.has(k))) {
+        onAllSecretsStored?.();
+      }
       return next;
     });
   };
@@ -2179,6 +2195,149 @@ function StartTab({
   );
 }
 
+// ── Deploy tab ─────────────────────────────────────────────────────────────────
+
+function DeployView({
+  server,
+  buildStatus,
+  allSecretsStored,
+  onDeployed,
+}: {
+  server: McpServerResponse;
+  buildStatus: McpBuildStatus | null;
+  allSecretsStored: boolean;
+  onDeployed: (srv: McpServerResponse) => void;
+}) {
+  const [deploying, setDeploying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const phase = buildStatus?.phase ?? server.phase ?? "idle";
+  const isVerified = phase === "verified";
+  const isAlreadyDeployed = server.approved || phase === "ready";
+  const toolCount = buildStatus?.tools_discovered.length ?? 0;
+  const secretCount = buildStatus?.detected_secret_names.length ?? 0;
+
+  const canDeploy = allSecretsStored && (isVerified || isAlreadyDeployed);
+
+  const handleDeploy = async () => {
+    setDeploying(true);
+    setError(null);
+    try {
+      if (!server.approved) await apiApprove(server.id);
+      const registered = await apiRegister(server.id);
+      onDeployed(registered);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deploy failed");
+    } finally {
+      setDeploying(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-stone-50 p-8">
+      {/* Server card */}
+      <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+        <div className="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-stone-200 bg-stone-50">
+            <BoxIcon className="size-4 text-[#7C79F0]" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-stone-900">
+              {server.name}
+            </p>
+            <p className="text-[10px] text-stone-400">MCP Server</p>
+          </div>
+          {isAlreadyDeployed && (
+            <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700">
+              <CheckCircle2Icon className="size-3" /> Deployed
+            </span>
+          )}
+        </div>
+
+        {/* Checklist */}
+        <div className="divide-y divide-stone-100 px-5">
+          <div className="flex items-center gap-3 py-3">
+            {isVerified || isAlreadyDeployed ? (
+              <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
+            ) : (
+              <div className="size-4 shrink-0 rounded-full border-2 border-stone-200" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-stone-700">
+                Sandbox verified
+              </p>
+              <p className="text-[10px] text-stone-400">
+                {toolCount} tool{toolCount !== 1 ? "s" : ""} discovered &amp;
+                tested
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 py-3">
+            {allSecretsStored ? (
+              <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
+            ) : (
+              <div className="size-4 shrink-0 rounded-full border-2 border-amber-300" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-stone-700">
+                API secrets stored
+              </p>
+              <p className="text-[10px] text-stone-400">
+                {secretCount === 0
+                  ? "No secrets required"
+                  : allSecretsStored
+                    ? `${secretCount} key${secretCount !== 1 ? "s" : ""} encrypted in vault`
+                    : `Add missing keys on the Build tab`}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Deploy button */}
+      <div className="flex w-full max-w-sm flex-col gap-2">
+        <Button
+          className={cn(
+            "w-full py-3 text-sm font-semibold transition-all",
+            canDeploy && !isAlreadyDeployed
+              ? "bg-stone-900 text-white hover:bg-stone-700"
+              : isAlreadyDeployed
+                ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                : "cursor-not-allowed bg-stone-100 text-stone-300",
+          )}
+          disabled={deploying || (!canDeploy && !isAlreadyDeployed)}
+          onClick={() => void handleDeploy()}
+        >
+          {deploying ? (
+            <>
+              <Loader2Icon className="size-4 animate-spin" /> Deploying…
+            </>
+          ) : isAlreadyDeployed ? (
+            <>
+              <CheckCircle2Icon className="size-4" /> Re-deploy
+            </>
+          ) : (
+            "Deploy"
+          )}
+        </Button>
+
+        {!allSecretsStored && !isAlreadyDeployed && (
+          <p className="text-center text-[11px] text-stone-400">
+            Add your API secrets on the Build tab to enable deploy
+          </p>
+        )}
+        {allSecretsStored && !isVerified && !isAlreadyDeployed && (
+          <p className="text-center text-[11px] text-stone-400">
+            Run the sandbox test on the Build tab to reach verified phase
+          </p>
+        )}
+        {error && <p className="text-center text-xs text-red-500">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function McpServerDetail({
@@ -2199,6 +2358,9 @@ export function McpServerDetail({
     isNew ? "start" : "build",
   );
   const [isPolling, setIsPolling] = useState(false);
+  // True when every detected_secret_name has a value stored in the vault.
+  // Drives the Deploy tab enabled state and the Deploy button.
+  const [allSecretsStored, setAllSecretsStored] = useState(false);
   const pollCountRef = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -2249,6 +2411,20 @@ export function McpServerDetail({
       .catch(() => setLoadError("Failed to load server"))
       .finally(() => setLoading(false));
   }, [serverId, isNew]);
+
+  // Recompute allSecretsStored whenever buildStatus changes (detected secrets may update).
+  useEffect(() => {
+    if (isNew) return;
+    const required = buildStatus?.detected_secret_names ?? [];
+    if (required.length === 0) {
+      setAllSecretsStored(true);
+      return;
+    }
+    void apiGetSecretsInfo(serverId).then(({ keys }) => {
+      const stored = new Set(keys.map((k) => k.key_name));
+      setAllSecretsStored(required.every((k) => stored.has(k)));
+    });
+  }, [serverId, isNew, buildStatus]);
 
   // Poll while generating
   useEffect(() => {
@@ -2301,6 +2477,12 @@ export function McpServerDetail({
     [serverId],
   );
 
+  const handleDeployed = useCallback((srv: McpServerResponse) => {
+    setServer(srv);
+    // After deploy the server is "ready" — no further polling needed
+    setBuildStatus((prev) => (prev ? { ...prev, phase: "ready" } : prev));
+  }, []);
+
   const phase: McpPhase = buildStatus?.phase ?? server?.phase ?? "idle";
   const errors = buildStatus?.errors ?? [];
   const isGenerating = GENERATING_PHASES.includes(phase);
@@ -2312,7 +2494,7 @@ export function McpServerDetail({
   }> = [
     { id: "start", label: "Start" },
     { id: "build", label: "Build", disabled: isNew },
-    { id: "deploy", label: "Deploy", disabled: true },
+    { id: "deploy", label: "Deploy", disabled: isNew || !allSecretsStored },
     { id: "connect", label: "Connect", disabled: true },
   ];
 
@@ -2420,6 +2602,7 @@ export function McpServerDetail({
               buildStatus={buildStatus}
               threadId={threadId}
               onRetested={handleRetested}
+              onAllSecretsStored={() => setAllSecretsStored(true)}
             />
           ))}
         {activeTab === "build" &&
@@ -2430,14 +2613,21 @@ export function McpServerDetail({
               <p className="text-sm text-stone-400">No build data yet.</p>
             </div>
           )}
-        {(activeTab === "deploy" || activeTab === "connect") && (
+        {activeTab === "deploy" && !isNew && server && (
+          <DeployView
+            server={server}
+            buildStatus={buildStatus}
+            allSecretsStored={allSecretsStored}
+            onDeployed={handleDeployed}
+          />
+        )}
+        {activeTab === "connect" && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-stone-50">
             <div className="flex size-12 items-center justify-center rounded-full border border-stone-200 bg-white">
               <LockIcon className="size-5 text-stone-300" />
             </div>
             <p className="text-sm text-stone-400">
-              {activeTab === "deploy" ? "Deploy" : "Connect"} is available in
-              Phase 4
+              Connect is available in Phase 4
             </p>
           </div>
         )}
