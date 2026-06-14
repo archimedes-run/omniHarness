@@ -524,7 +524,20 @@ class MCPServerManager:
         if current_phase != "verified":
             raise PermissionError(f"MCP server {server_id!r} cannot be approved from phase {current_phase!r}. Run POST /test first; the server must reach 'verified' (sandbox connected + tools discovered) before it can be approved.")
         await self._repo.set_approved(server_id, True, user_id=user_id)
-        record = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
+        # Preserve all build data — only the phase changes on approve/register/stop.
+        # Creating a blank MCPBuildRecord here would wipe tools_discovered / test_results,
+        # causing the MCP Tools panel to show "0 tools discovered" after deploy.
+        async with self._lock:
+            existing = self._records.get(server_id)
+        record = MCPBuildRecord(
+            server_id=server_id,
+            phase="idle",
+            owner_id=user_id,
+            required_key_names=existing.required_key_names if existing else [],
+            tools_discovered=existing.tools_discovered if existing else [],
+            test_results=existing.test_results if existing else [],
+            last_verified_at=existing.last_verified_at if existing else None,
+        )
         async with self._lock:
             self._records[server_id] = record
         return record
@@ -540,7 +553,17 @@ class MCPServerManager:
             raise PermissionError(f"MCP server {server_id!r} has not been approved for registration")
 
         await self._repo.update_status(server_id, "deployed", user_id=user_id)
-        record = MCPBuildRecord(server_id=server_id, phase="ready", owner_id=user_id)
+        async with self._lock:
+            existing = self._records.get(server_id)
+        record = MCPBuildRecord(
+            server_id=server_id,
+            phase="ready",
+            owner_id=user_id,
+            required_key_names=existing.required_key_names if existing else [],
+            tools_discovered=existing.tools_discovered if existing else [],
+            test_results=existing.test_results if existing else [],
+            last_verified_at=existing.last_verified_at if existing else None,
+        )
         async with self._lock:
             self._records[server_id] = record
         return record
@@ -549,7 +572,17 @@ class MCPServerManager:
         """Stop a running server."""
         await self._load_and_verify(server_id, user_id)
         await self._repo.update_status(server_id, "stopped", user_id=user_id)
-        record = MCPBuildRecord(server_id=server_id, phase="stopped", owner_id=user_id)
+        async with self._lock:
+            existing = self._records.get(server_id)
+        record = MCPBuildRecord(
+            server_id=server_id,
+            phase="stopped",
+            owner_id=user_id,
+            required_key_names=existing.required_key_names if existing else [],
+            tools_discovered=existing.tools_discovered if existing else [],
+            test_results=existing.test_results if existing else [],
+            last_verified_at=existing.last_verified_at if existing else None,
+        )
         async with self._lock:
             self._records[server_id] = record
         return record
