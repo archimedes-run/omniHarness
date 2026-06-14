@@ -112,6 +112,13 @@ class McpBuildStatusResponse(BaseModel):
     errors: list[str]
     test_results: list[dict[str, Any]]
     last_verified_at: str | None
+    container_id: str | None = None
+    container_port: int | None = None
+
+
+class McpConnectResponse(BaseModel):
+    sse_url: str
+    server_name: str
 
 
 class McpSecretsWriteRequest(BaseModel):
@@ -335,6 +342,8 @@ async def get_mcp_build_status(server_id: str, request: Request) -> McpBuildStat
         errors=[record.error] if record.error else [],
         test_results=record.test_results,
         last_verified_at=record.last_verified_at,
+        container_id=record.container_id,
+        container_port=record.container_port,
     )
 
 
@@ -456,6 +465,8 @@ async def trigger_mcp_test(server_id: str, request: Request) -> McpBuildStatusRe
         errors=[record.error] if record.error else [],
         test_results=record.test_results,
         last_verified_at=record.last_verified_at,
+        container_id=record.container_id,
+        container_port=record.container_port,
     )
 
 
@@ -529,6 +540,106 @@ async def stop_mcp_server(server_id: str, request: Request) -> McpServerResponse
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return _server_to_response(server, record.phase)
+
+
+# ---------------------------------------------------------------------------
+# POST /servers/{id}/deploy   — Docker build + run
+# ---------------------------------------------------------------------------
+
+
+@router.post("/servers/{server_id}/deploy", response_model=McpBuildStatusResponse)
+@require_permission("threads", "write")
+async def deploy_mcp_server(server_id: str, request: Request) -> McpBuildStatusResponse:
+    """Build a Docker image and start the MCP server as a persistent container.
+
+    Requires Docker to be installed and running on the host. Injects the stored
+    secrets as container env vars (they are never logged). Returns the updated
+    build status with container_id and container_port on success.
+    """
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    manager = get_mcp_server_manager(request)
+
+    try:
+        record = await manager.deploy(server_id=server_id, user_id=user_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return McpBuildStatusResponse(
+        server_id=record.server_id,
+        phase=record.phase,
+        tools_discovered=record.tools_discovered,
+        detected_secret_names=record.required_key_names,
+        errors=[record.error] if record.error else [],
+        test_results=record.test_results,
+        last_verified_at=record.last_verified_at,
+        container_id=record.container_id,
+        container_port=record.container_port,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /servers/{id}/undeploy  — Docker stop + rm
+# ---------------------------------------------------------------------------
+
+
+@router.post("/servers/{server_id}/undeploy", response_model=McpBuildStatusResponse)
+@require_permission("threads", "write")
+async def undeploy_mcp_server(server_id: str, request: Request) -> McpBuildStatusResponse:
+    """Stop and remove the Docker container for this MCP server."""
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    manager = get_mcp_server_manager(request)
+
+    try:
+        record = await manager.undeploy(server_id=server_id, user_id=user_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return McpBuildStatusResponse(
+        server_id=record.server_id,
+        phase=record.phase,
+        tools_discovered=record.tools_discovered,
+        detected_secret_names=record.required_key_names,
+        errors=[record.error] if record.error else [],
+        test_results=record.test_results,
+        last_verified_at=record.last_verified_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /servers/{id}/connect  — write SSE URL into extensions_config.json
+# ---------------------------------------------------------------------------
+
+
+@router.post("/servers/{server_id}/connect", response_model=McpConnectResponse)
+@require_permission("threads", "write")
+async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResponse:
+    """Register the deployed MCP server's SSE URL into extensions_config.json.
+
+    The config file's mtime change triggers hot-reload in the agent runtime so
+    the new server's tools become available immediately without a restart.
+    """
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    manager = get_mcp_server_manager(request)
+
+    try:
+        result = await manager.connect(server_id=server_id, user_id=user_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return McpConnectResponse(**result)
 
 
 # ---------------------------------------------------------------------------

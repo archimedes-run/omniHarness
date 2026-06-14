@@ -178,6 +178,8 @@ async def _run_additive_migrations(backend: str) -> None:
         ("mcp_servers", "test_results", "JSON", "NULL"),
         ("mcp_servers", "last_verified_at", "VARCHAR(64)", "NULL"),
         ("mcp_secrets", "key_hint", "VARCHAR(8)", "NULL"),
+        ("mcp_servers", "container_id", "VARCHAR(128)", "NULL"),
+        ("mcp_servers", "container_port", "INTEGER", "NULL"),
     ]
 
     async with _engine.begin() as conn:

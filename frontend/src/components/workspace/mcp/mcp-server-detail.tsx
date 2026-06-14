@@ -17,22 +17,24 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClipboardIcon,
+  CopyIcon,
   EyeIcon,
   EyeOffIcon,
   FileIcon,
   FolderIcon,
   FolderOpenIcon,
-  InfoIcon,
   KeyIcon,
   Loader2Icon,
   LockIcon,
-  PlayIcon,
+  PlugIcon,
+  PlugZapIcon,
   RefreshCwIcon,
   RotateCcwIcon,
   SendIcon,
   ShieldAlertIcon,
   ShieldXIcon,
   SparklesIcon,
+  SquareIcon,
   TerminalIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -96,7 +98,9 @@ type McpPhase =
   | "verified"
   | "failed"
   | "ready"
-  | "stopped";
+  | "stopped"
+  | "deploying"
+  | "deployed";
 
 type McpBuildStatus = {
   server_id: string;
@@ -111,6 +115,8 @@ type McpBuildStatus = {
     error?: string;
   }>;
   last_verified_at: string | null;
+  container_id?: string | null;
+  container_port?: number | null;
 };
 
 type McpServerResponse = {
@@ -153,6 +159,7 @@ const TERMINAL_PHASES: McpPhase[] = [
   "failed",
   "ready",
   "stopped",
+  "deployed",
 ];
 
 const GENERATING_PHASES: McpPhase[] = ["building"];
@@ -197,6 +204,17 @@ const PHASE_CONFIG: Record<
   },
   ready: {
     label: "Running",
+    pill: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    dotCls: "bg-emerald-500",
+  },
+  deploying: {
+    label: "Deploying…",
+    pill: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    dotCls: "bg-indigo-500",
+    spin: true,
+  },
+  deployed: {
+    label: "Deployed",
     pill: "border-emerald-200 bg-emerald-50 text-emerald-700",
     dotCls: "bg-emerald-500",
   },
@@ -265,24 +283,6 @@ async function apiCreateServer(body: {
   return r.json() as Promise<{ server_id: string; thread_id: string }>;
 }
 
-async function apiApprove(id: string): Promise<McpServerResponse> {
-  const r = await apiFetch(`/api/mcp-studio/servers/${id}/approve`, {
-    method: "POST",
-  });
-  if (!r.ok)
-    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
-  return r.json() as Promise<McpServerResponse>;
-}
-
-async function apiRegister(id: string): Promise<McpServerResponse> {
-  const r = await apiFetch(`/api/mcp-studio/servers/${id}/register`, {
-    method: "POST",
-  });
-  if (!r.ok)
-    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
-  return r.json() as Promise<McpServerResponse>;
-}
-
 async function apiRetest(id: string): Promise<McpBuildStatus> {
   const r = await apiFetch(`/api/mcp-studio/servers/${id}/test`, {
     method: "POST",
@@ -326,6 +326,35 @@ async function apiRevealSecrets(
   if (!r.ok)
     throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
   return r.json() as Promise<{ values: Record<string, string> }>;
+}
+
+async function apiDeploy(id: string): Promise<McpBuildStatus> {
+  const r = await apiFetch(`/api/mcp-studio/servers/${id}/deploy`, {
+    method: "POST",
+  });
+  if (!r.ok)
+    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
+  return r.json() as Promise<McpBuildStatus>;
+}
+
+async function apiUndeploy(id: string): Promise<McpBuildStatus> {
+  const r = await apiFetch(`/api/mcp-studio/servers/${id}/undeploy`, {
+    method: "POST",
+  });
+  if (!r.ok)
+    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
+  return r.json() as Promise<McpBuildStatus>;
+}
+
+async function apiConnect(
+  id: string,
+): Promise<{ sse_url: string; server_name: string }> {
+  const r = await apiFetch(`/api/mcp-studio/servers/${id}/connect`, {
+    method: "POST",
+  });
+  if (!r.ok)
+    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
+  return r.json() as Promise<{ sse_url: string; server_name: string }>;
 }
 
 // ── File tree ──────────────────────────────────────────────────────────────────
@@ -2201,36 +2230,62 @@ function DeployView({
   server,
   buildStatus,
   allSecretsStored,
-  onDeployed,
+  onBuildStatusChanged,
 }: {
   server: McpServerResponse;
   buildStatus: McpBuildStatus | null;
   allSecretsStored: boolean;
-  onDeployed: (srv: McpServerResponse) => void;
+  onBuildStatusChanged: (s: McpBuildStatus) => void;
 }) {
   const [deploying, setDeploying] = useState(false);
+  const [undeploying, setUndeploying] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const phase = buildStatus?.phase ?? server.phase ?? "idle";
   const isVerified = phase === "verified";
-  const isAlreadyDeployed = server.approved || phase === "ready";
+  const isDeployed = phase === "deployed";
+  const isDeploying = phase === "deploying";
   const toolCount = buildStatus?.tools_discovered.length ?? 0;
   const secretCount = buildStatus?.detected_secret_names.length ?? 0;
+  const containerPort = buildStatus?.container_port;
+  const sseUrl = containerPort ? `http://localhost:${containerPort}/sse` : null;
 
-  const canDeploy = allSecretsStored && (isVerified || isAlreadyDeployed);
+  const canDeploy =
+    allSecretsStored && (isVerified || isDeployed) && !isDeploying;
 
   const handleDeploy = async () => {
     setDeploying(true);
     setError(null);
     try {
-      if (!server.approved) await apiApprove(server.id);
-      const registered = await apiRegister(server.id);
-      onDeployed(registered);
+      const result = await apiDeploy(server.id);
+      onBuildStatusChanged(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deploy failed");
     } finally {
       setDeploying(false);
     }
+  };
+
+  const handleUndeploy = async () => {
+    setUndeploying(true);
+    setError(null);
+    try {
+      const result = await apiUndeploy(server.id);
+      onBuildStatusChanged(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Undeploy failed");
+    } finally {
+      setUndeploying(false);
+    }
+  };
+
+  const copyUrl = () => {
+    if (!sseUrl) return;
+    void navigator.clipboard.writeText(sseUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (
@@ -2247,9 +2302,14 @@ function DeployView({
             </p>
             <p className="text-[10px] text-stone-400">MCP Server</p>
           </div>
-          {isAlreadyDeployed && (
+          {isDeployed && (
             <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700">
-              <CheckCircle2Icon className="size-3" /> Deployed
+              <CheckCircle2Icon className="size-3" /> Live
+            </span>
+          )}
+          {isDeploying && (
+            <span className="flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[10px] font-medium text-indigo-700">
+              <Loader2Icon className="size-3 animate-spin" /> Deploying
             </span>
           )}
         </div>
@@ -2257,7 +2317,7 @@ function DeployView({
         {/* Checklist */}
         <div className="divide-y divide-stone-100 px-5">
           <div className="flex items-center gap-3 py-3">
-            {isVerified || isAlreadyDeployed ? (
+            {isVerified || isDeployed ? (
               <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
             ) : (
               <div className="size-4 shrink-0 rounded-full border-2 border-stone-200" />
@@ -2288,52 +2348,301 @@ function DeployView({
                   ? "No secrets required"
                   : allSecretsStored
                     ? `${secretCount} key${secretCount !== 1 ? "s" : ""} encrypted in vault`
-                    : `Add missing keys on the Build tab`}
+                    : "Add missing keys on the Build tab"}
               </p>
             </div>
           </div>
+
+          {isDeployed && containerPort && (
+            <div className="flex items-center gap-3 py-3">
+              <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-stone-700">
+                  Running on port {containerPort}
+                </p>
+                <p className="text-[10px] text-stone-400">
+                  Docker container · SSE transport
+                </p>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* SSE URL */}
+        {isDeployed && sseUrl && (
+          <div className="border-t border-stone-100 px-5 py-3">
+            <p className="mb-1.5 text-[10px] font-semibold tracking-wider text-stone-400 uppercase">
+              SSE endpoint
+            </p>
+            <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
+              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-700">
+                {sseUrl}
+              </code>
+              <button
+                onClick={copyUrl}
+                className="shrink-0 text-stone-400 hover:text-stone-600"
+                title="Copy URL"
+              >
+                {copied ? (
+                  <CheckIcon className="size-3.5 text-emerald-500" />
+                ) : (
+                  <CopyIcon className="size-3.5" />
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Deploy button */}
+      {/* Action buttons */}
       <div className="flex w-full max-w-sm flex-col gap-2">
-        <Button
-          className={cn(
-            "w-full py-3 text-sm font-semibold transition-all",
-            canDeploy && !isAlreadyDeployed
-              ? "bg-stone-900 text-white hover:bg-stone-700"
-              : isAlreadyDeployed
-                ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+        {!isDeployed ? (
+          <Button
+            className={cn(
+              "w-full py-3 text-sm font-semibold transition-all",
+              canDeploy
+                ? "bg-stone-900 text-white hover:bg-stone-700"
                 : "cursor-not-allowed bg-stone-100 text-stone-300",
-          )}
-          disabled={deploying || (!canDeploy && !isAlreadyDeployed)}
-          onClick={() => void handleDeploy()}
-        >
-          {deploying ? (
-            <>
-              <Loader2Icon className="size-4 animate-spin" /> Deploying…
-            </>
-          ) : isAlreadyDeployed ? (
-            <>
-              <CheckCircle2Icon className="size-4" /> Re-deploy
-            </>
-          ) : (
-            "Deploy"
-          )}
-        </Button>
+            )}
+            disabled={deploying || !canDeploy}
+            onClick={() => void handleDeploy()}
+          >
+            {deploying ? (
+              <>
+                <Loader2Icon className="size-4 animate-spin" /> Building &amp;
+                starting container…
+              </>
+            ) : (
+              "Deploy to Docker"
+            )}
+          </Button>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Button
+              className="w-full border border-stone-200 bg-white py-3 text-sm font-semibold text-stone-700 shadow-sm hover:bg-stone-50"
+              disabled={deploying}
+              onClick={() => void handleDeploy()}
+            >
+              {deploying ? (
+                <>
+                  <Loader2Icon className="size-4 animate-spin" /> Re-deploying…
+                </>
+              ) : (
+                "Re-deploy"
+              )}
+            </Button>
+            <Button
+              className="w-full border border-red-200 bg-red-50 py-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+              disabled={undeploying}
+              onClick={() => void handleUndeploy()}
+            >
+              {undeploying ? (
+                <>
+                  <Loader2Icon className="size-4 animate-spin" /> Stopping
+                  container…
+                </>
+              ) : (
+                <>
+                  <SquareIcon className="size-4" /> Undeploy
+                </>
+              )}
+            </Button>
+          </div>
+        )}
 
-        {!allSecretsStored && !isAlreadyDeployed && (
+        {!allSecretsStored && !isDeployed && (
           <p className="text-center text-[11px] text-stone-400">
             Add your API secrets on the Build tab to enable deploy
           </p>
         )}
-        {allSecretsStored && !isVerified && !isAlreadyDeployed && (
+        {allSecretsStored && !isVerified && !isDeployed && (
           <p className="text-center text-[11px] text-stone-400">
             Run the sandbox test on the Build tab to reach verified phase
           </p>
         )}
+        {isDeployed && (
+          <p className="text-center text-[11px] text-stone-400">
+            Go to the Connect tab to wire this server into the agent
+          </p>
+        )}
         {error && <p className="text-center text-xs text-red-500">{error}</p>}
       </div>
+
+      {/* Docker note */}
+      <p className="max-w-sm text-center text-[10px] leading-relaxed text-stone-400">
+        Requires Docker installed and running on this host. Secrets are injected
+        as container env vars and are never written to disk or logs.
+      </p>
+    </div>
+  );
+}
+
+// ── Connect tab ────────────────────────────────────────────────────────────────
+
+function ConnectView({
+  server,
+  buildStatus,
+  onConnected,
+}: {
+  server: McpServerResponse;
+  buildStatus: McpBuildStatus | null;
+  onConnected: () => void;
+}) {
+  const [connecting, setConnecting] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [connectedName, setConnectedName] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const phase = buildStatus?.phase ?? server.phase ?? "idle";
+  const isDeployed = phase === "deployed";
+  const containerPort = buildStatus?.container_port;
+  const sseUrl = containerPort ? `http://localhost:${containerPort}/sse` : null;
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    setError(null);
+    try {
+      const result = await apiConnect(server.id);
+      setConnected(true);
+      setConnectedName(result.server_name);
+      onConnected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Connect failed");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const copyUrl = () => {
+    if (!sseUrl) return;
+    void navigator.clipboard.writeText(sseUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  if (!isDeployed) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-stone-50 p-8">
+        <div className="flex size-14 items-center justify-center rounded-2xl border border-stone-200 bg-white shadow-sm">
+          <PlugIcon className="size-6 text-stone-300" />
+        </div>
+        <div className="space-y-1 text-center">
+          <p className="text-sm font-medium text-stone-700">
+            Deploy first to connect
+          </p>
+          <p className="text-xs text-stone-400">
+            The server needs to be running in Docker before it can be wired into
+            the agent.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-stone-50 p-8">
+      <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+        {/* Header */}
+        <div className="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-stone-200 bg-stone-50">
+            <PlugZapIcon className="size-4 text-[#7C79F0]" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-stone-900">
+              {server.name}
+            </p>
+            <p className="text-[10px] text-stone-400">
+              Running · port {containerPort}
+            </p>
+          </div>
+          {connected && (
+            <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700">
+              <CheckCircle2Icon className="size-3" /> Wired in
+            </span>
+          )}
+        </div>
+
+        {/* SSE URL row */}
+        {sseUrl && (
+          <div className="px-5 py-3">
+            <p className="mb-1.5 text-[10px] font-semibold tracking-wider text-stone-400 uppercase">
+              SSE endpoint
+            </p>
+            <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
+              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-700">
+                {sseUrl}
+              </code>
+              <button
+                onClick={copyUrl}
+                className="shrink-0 text-stone-400 hover:text-stone-600"
+                title="Copy"
+              >
+                {copied ? (
+                  <CheckIcon className="size-3.5 text-emerald-500" />
+                ) : (
+                  <CopyIcon className="size-3.5" />
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* After connect: show what was registered */}
+        {connected && connectedName && (
+          <div className="border-t border-stone-100 px-5 py-3">
+            <p className="text-[10px] leading-relaxed text-stone-500">
+              Added{" "}
+              <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[10px] text-stone-700">
+                {connectedName}
+              </code>{" "}
+              to{" "}
+              <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[10px] text-stone-700">
+                extensions_config.json
+              </code>
+              . The agent hot-reloads this file automatically — the new tools
+              are available immediately.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Connect button */}
+      <div className="flex w-full max-w-sm flex-col gap-2">
+        <Button
+          className={cn(
+            "w-full py-3 text-sm font-semibold transition-all",
+            connected
+              ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              : "bg-stone-900 text-white hover:bg-stone-700",
+          )}
+          disabled={connecting}
+          onClick={() => void handleConnect()}
+        >
+          {connecting ? (
+            <>
+              <Loader2Icon className="size-4 animate-spin" /> Connecting…
+            </>
+          ) : connected ? (
+            <>
+              <CheckCircle2Icon className="size-4" /> Re-connect
+            </>
+          ) : (
+            <>
+              <PlugZapIcon className="size-4" /> Connect to Agent
+            </>
+          )}
+        </Button>
+
+        {error && <p className="text-center text-xs text-red-500">{error}</p>}
+      </div>
+
+      <p className="max-w-sm text-center text-[10px] leading-relaxed text-stone-400">
+        Writes the SSE URL into{" "}
+        <code className="font-mono">extensions_config.json</code>. The agent
+        picks it up via mtime hot-reload — no restart needed.
+      </p>
     </div>
   );
 }
@@ -2477,11 +2786,16 @@ export function McpServerDetail({
     [serverId],
   );
 
-  const handleDeployed = useCallback((srv: McpServerResponse) => {
-    setServer(srv);
-    // After deploy the server is "ready" — no further polling needed
-    setBuildStatus((prev) => (prev ? { ...prev, phase: "ready" } : prev));
-  }, []);
+  const handleBuildStatusChanged = useCallback(
+    (status: McpBuildStatus) => {
+      setBuildStatus(status);
+      if (!TERMINAL_PHASES.includes(status.phase)) setIsPolling(true);
+      void apiGetServer(serverId).then((srv) => {
+        if (srv) setServer(srv);
+      });
+    },
+    [serverId],
+  );
 
   const phase: McpPhase = buildStatus?.phase ?? server?.phase ?? "idle";
   const errors = buildStatus?.errors ?? [];
@@ -2495,7 +2809,11 @@ export function McpServerDetail({
     { id: "start", label: "Start" },
     { id: "build", label: "Build", disabled: isNew },
     { id: "deploy", label: "Deploy", disabled: isNew || !allSecretsStored },
-    { id: "connect", label: "Connect", disabled: true },
+    {
+      id: "connect",
+      label: "Connect",
+      disabled: isNew || phase !== "deployed",
+    },
   ];
 
   if (!isNew && loading) {
@@ -2618,18 +2936,19 @@ export function McpServerDetail({
             server={server}
             buildStatus={buildStatus}
             allSecretsStored={allSecretsStored}
-            onDeployed={handleDeployed}
+            onBuildStatusChanged={handleBuildStatusChanged}
           />
         )}
-        {activeTab === "connect" && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-stone-50">
-            <div className="flex size-12 items-center justify-center rounded-full border border-stone-200 bg-white">
-              <LockIcon className="size-5 text-stone-300" />
-            </div>
-            <p className="text-sm text-stone-400">
-              Connect is available in Phase 4
-            </p>
-          </div>
+        {activeTab === "connect" && !isNew && server && (
+          <ConnectView
+            server={server}
+            buildStatus={buildStatus}
+            onConnected={() => {
+              void apiGetServer(serverId).then((srv) => {
+                if (srv) setServer(srv);
+              });
+            }}
+          />
         )}
       </div>
     </div>

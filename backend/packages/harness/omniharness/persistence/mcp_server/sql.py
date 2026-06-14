@@ -33,6 +33,8 @@ class McpServerRepository:
             "tools_discovered": row.tools_discovered or [],
             "test_results": row.test_results or [],
             "last_verified_at": row.last_verified_at,
+            "container_id": row.container_id,
+            "container_port": row.container_port,
             "created_at": row.created_at.isoformat() if isinstance(row.created_at, datetime) else row.created_at,
             "updated_at": row.updated_at.isoformat() if isinstance(row.updated_at, datetime) else row.updated_at,
         }
@@ -182,6 +184,27 @@ class McpServerRepository:
             if row is None or row.owner_id != user_id:
                 return False
             row.approved = approved
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
+
+    async def update_container_info(
+        self,
+        server_id: str,
+        *,
+        container_id: str | None,
+        container_port: int | None,
+        status: str,
+        user_id: str,
+    ) -> bool:
+        """Persist Docker container ID + host port after deployment."""
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.container_id = container_id
+            row.container_port = container_port
+            row.status = status
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return True

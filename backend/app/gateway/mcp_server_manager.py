@@ -28,8 +28,10 @@ Security invariants (enforced at the top of every mutating method)
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import socket
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -88,6 +90,41 @@ def _classify_output(text: str) -> str:
     return "pass"
 
 
+_DOCKER_MAIN_RE = re.compile(
+    r"if\s+__name__\s*==\s*['\"]__main__['\"]\s*:\s*\n(    mcp\.run\(\))",
+)
+_DOCKER_MAIN_NEW = (
+    'if __name__ == "__main__":\n'
+    '    _transport = os.environ.get("MCP_TRANSPORT", "stdio")\n'
+    '    if _transport == "sse":\n'
+    '        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))\n'
+    "    else:\n"
+    "        mcp.run()\n"
+)
+_DOCKERFILE_TEMPLATE = """\
+FROM python:3.12-slim
+WORKDIR /app
+COPY server.py .
+RUN pip install --no-cache-dir mcp httpx
+ENV MCP_TRANSPORT=sse
+ENV MCP_PORT=8080
+EXPOSE 8080
+CMD ["python", "server.py"]
+"""
+_DEPLOY_PORT_BASE = 18100
+
+
+def _patch_main_for_sse(source: str) -> str:
+    """Ensure the server.py __main__ block supports both stdio and SSE transports.
+
+    Only rewrites the simple ``mcp.run()`` form — if MCP_TRANSPORT is already
+    present the file is returned unchanged.
+    """
+    if "MCP_TRANSPORT" in source:
+        return source
+    return _DOCKER_MAIN_RE.sub(_DOCKER_MAIN_NEW.rstrip(), source)
+
+
 @dataclass
 class MCPBuildRecord:
     """Runtime record for a single MCP server's current build/test phase.
@@ -98,13 +135,15 @@ class MCPBuildRecord:
     """
 
     server_id: str
-    phase: Literal["idle", "building", "testing", "verified", "ready", "failed", "stopped"]
+    phase: Literal["idle", "building", "testing", "verified", "ready", "failed", "stopped", "deploying", "deployed"]
     owner_id: str
     required_key_names: list[str] = field(default_factory=list)
     tools_discovered: list[dict] = field(default_factory=list)
     test_results: list[dict] = field(default_factory=list)
     error: str | None = None
     last_verified_at: str | None = None
+    container_id: str | None = None
+    container_port: int | None = None
 
 
 class MCPServerManager:
@@ -181,6 +220,8 @@ class MCPServerManager:
                 tools_discovered=row.get("tools_discovered") or [],
                 test_results=row.get("test_results") or [],
                 last_verified_at=row.get("last_verified_at"),
+                container_id=row.get("container_id"),
+                container_port=row.get("container_port"),
             )
         else:
             record = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
@@ -586,3 +627,215 @@ class MCPServerManager:
         async with self._lock:
             self._records[server_id] = record
         return record
+
+    # ------------------------------------------------------------------
+    # Docker deploy / undeploy / connect
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_free_port(start: int = _DEPLOY_PORT_BASE) -> int:
+        for port in range(start, start + 100):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind(("", port))
+                    return port
+                except OSError:
+                    continue
+        raise RuntimeError(f"No free port found in range {start}–{start + 100}")
+
+    @staticmethod
+    async def _docker_run(args: list[str], *, timeout: float = 120.0) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return proc.returncode or 0, (out or b"").decode(), (err or b"").decode()
+
+    async def deploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
+        """Build a Docker image from the server's source code and start a container.
+
+        Flow:
+          1. Patch server.py's ``__main__`` for dual-transport (stdio / SSE).
+          2. Write server.py + Dockerfile to a temp dir.
+          3. ``docker build -t omni-mcp-<id> .``
+          4. ``docker rm -f omni-mcp-<id>`` (stop any previous run)
+          5. ``docker run -d --name ... -p <port>:8080 -e KEY=val ... image``
+          6. Persist container_id + port in DB; return "deployed" record.
+
+        Raises ``PermissionError`` on ownership failure, ``RuntimeError`` on
+        Docker errors. Secrets are injected as env vars and NOT logged.
+        """
+        server = await self._load_and_verify(server_id, user_id)
+        source = server.get("source_code") or ""
+        if not source:
+            raise ValueError("No source code — build the server first")
+
+        patched = _patch_main_for_sse(source)
+        image_tag = f"omni-mcp-{server_id[:12]}"
+        container_name = f"omni-mcp-{server_id[:12]}"
+
+        # Mark as deploying in memory before the slow Docker steps
+        async with self._lock:
+            existing = self._records.get(server_id)
+        deploying = MCPBuildRecord(
+            server_id=server_id,
+            phase="deploying",
+            owner_id=user_id,
+            required_key_names=existing.required_key_names if existing else [],
+            tools_discovered=existing.tools_discovered if existing else [],
+            test_results=existing.test_results if existing else [],
+            last_verified_at=existing.last_verified_at if existing else None,
+        )
+        async with self._lock:
+            self._records[server_id] = deploying
+
+        def _make_record(phase: str, **kwargs: object) -> MCPBuildRecord:
+            return MCPBuildRecord(
+                server_id=server_id,
+                phase=phase,  # type: ignore[arg-type]
+                owner_id=user_id,
+                required_key_names=existing.required_key_names if existing else [],
+                tools_discovered=existing.tools_discovered if existing else [],
+                test_results=existing.test_results if existing else [],
+                last_verified_at=existing.last_verified_at if existing else None,
+                **kwargs,  # type: ignore[arg-type]
+            )
+
+        with tempfile.TemporaryDirectory(prefix="omni_mcp_build_") as tmpdir:
+            build_dir = Path(tmpdir)
+            (build_dir / "server.py").write_text(patched)
+            (build_dir / "Dockerfile").write_text(_DOCKERFILE_TEMPLATE)
+
+            rc, _, err = await self._docker_run(
+                ["docker", "build", "-t", image_tag, "."],
+                timeout=180.0,
+            )
+            if rc != 0:
+                record = _make_record("failed", error=f"docker build failed: {err[:400]}")
+                async with self._lock:
+                    self._records[server_id] = record
+                return record
+
+        # Remove any previous container with the same name (non-fatal)
+        await self._docker_run(["docker", "rm", "-f", container_name], timeout=15.0)
+
+        host_port = self._find_free_port()
+
+        # Decrypt real secrets — injected as env vars, NOT logged
+        real_env: dict[str, str] = {}
+        try:
+            real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+        except Exception:
+            pass
+
+        run_args: list[str] = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "-p",
+            f"{host_port}:8080",
+            "--restart",
+            "unless-stopped",
+        ]
+        for k, v in real_env.items():
+            run_args += ["-e", f"{k}={v}"]
+        run_args.append(image_tag)
+
+        rc, out, err = await self._docker_run(run_args, timeout=30.0)
+        if rc != 0:
+            record = _make_record("failed", error=f"docker run failed: {err[:400]}")
+            async with self._lock:
+                self._records[server_id] = record
+            return record
+
+        container_id = out.strip()[:128]
+        await self._repo.update_container_info(
+            server_id,
+            container_id=container_id,
+            container_port=host_port,
+            status="deployed",
+            user_id=user_id,
+        )
+        await self._repo.set_approved(server_id, True, user_id=user_id)
+
+        record = _make_record("deployed", container_id=container_id, container_port=host_port)
+        async with self._lock:
+            self._records[server_id] = record
+        return record
+
+    async def undeploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
+        """Stop and remove the Docker container for this server."""
+        server = await self._load_and_verify(server_id, user_id)
+        container_name = server.get("container_id") or f"omni-mcp-{server_id[:12]}"
+
+        await self._docker_run(["docker", "rm", "-f", container_name], timeout=30.0)
+
+        await self._repo.update_container_info(
+            server_id,
+            container_id=None,
+            container_port=None,
+            status="stopped",
+            user_id=user_id,
+        )
+        async with self._lock:
+            existing = self._records.get(server_id)
+        record = MCPBuildRecord(
+            server_id=server_id,
+            phase="stopped",
+            owner_id=user_id,
+            required_key_names=existing.required_key_names if existing else [],
+            tools_discovered=existing.tools_discovered if existing else [],
+            test_results=existing.test_results if existing else [],
+            last_verified_at=existing.last_verified_at if existing else None,
+        )
+        async with self._lock:
+            self._records[server_id] = record
+        return record
+
+    async def connect(self, *, server_id: str, user_id: str) -> dict[str, str]:
+        """Register the deployed container's SSE URL into extensions_config.json.
+
+        Reads the container port from the in-memory record (or DB), constructs
+        the SSE URL, and upserts the server entry in extensions_config.json.
+        The config file's mtime change triggers automatic hot-reload in the agent.
+
+        Returns {"sse_url": ..., "server_name": ...}.
+        """
+        from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
+
+        db_server = await self._load_and_verify(server_id, user_id)
+        async with self._lock:
+            record = self._records.get(server_id)
+
+        container_port = (record.container_port if record else None) or db_server.get("container_port")
+        if not container_port:
+            raise ValueError("Server is not deployed — run deploy first")
+
+        sse_url = f"http://localhost:{container_port}/sse"
+        server_name = re.sub(r"[^a-z0-9\-]", "-", db_server["name"].lower()).strip("-")
+
+        config_path = ExtensionsConfig.resolve_config_path()
+        if config_path is None:
+            config_path = Path.cwd().parent / "extensions_config.json"
+
+        current_cfg = get_extensions_config()
+        config_data: dict = {
+            "mcpServers": {n: s.model_dump() for n, s in current_cfg.mcp_servers.items()},
+            "skills": {n: {"enabled": sk.enabled} for n, sk in current_cfg.skills.items()},
+        }
+        config_data["mcpServers"][server_name] = {
+            "enabled": True,
+            "type": "sse",
+            "url": sse_url,
+            "description": db_server.get("description") or f"MCP server: {db_server['name']}",
+        }
+        with open(config_path, "w", encoding="utf-8") as fh:
+            json.dump(config_data, fh, indent=2)
+
+        reload_extensions_config()
+        logger.info("MCP server %r connected at %s (extensions_config updated)", server_name, sse_url)
+        return {"sse_url": sse_url, "server_name": server_name}

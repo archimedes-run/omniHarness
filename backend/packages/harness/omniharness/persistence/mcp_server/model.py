@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from omniharness.persistence.base import Base
@@ -33,6 +33,9 @@ class McpServerRow(Base):
     tools_discovered: Mapped[list] = mapped_column(JSON, default=list)
     test_results: Mapped[list] = mapped_column(JSON, default=list)
     last_verified_at: Mapped[str | None] = mapped_column(String(64))
+    # Docker deployment: container ID and mapped host port (null when not deployed)
+    container_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    container_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

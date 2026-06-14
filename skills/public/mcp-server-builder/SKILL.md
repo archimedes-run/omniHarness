@@ -50,7 +50,11 @@ def tool_name(param: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    _transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if _transport == "sse":
+        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+    else:
+        mcp.run()
 ```
 
 **Rules that must be followed in every generated server:**
@@ -58,7 +62,7 @@ if __name__ == "__main__":
 | Rule | Why |
 |---|---|
 | `from mcp.server.fastmcp import FastMCP` | Only import — never raw `mcp.Server` |
-| `if __name__ == "__main__": mcp.run()` | Entrypoint must be guarded |
+| `if __name__ == "__main__": ...` with `MCP_TRANSPORT` check (see templates) | Supports both stdio (sandbox) and SSE (Docker deploy) |
 | Secrets via `os.getenv("KEY_NAME")` only | Values are injected from the vault; never hardcode them |
 | **Never raise or crash at startup when a secret is missing** | The server is first started with NO secrets to discover its tools. A server that raises at import or module level when `os.getenv` returns `None` will register 0 tools and can never be verified. Check for missing keys inside the tool handler, return a structured error, don't raise. |
 | **Never import `subprocess`, `os.system`, `os.popen`, `eval`, `exec`, `pickle`, or `ctypes`** | These are hard-blocked by the static security scanner and will permanently fail verification |
@@ -134,7 +138,11 @@ def get_item(item_id: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    _transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if _transport == "sse":
+        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+    else:
+        mcp.run()
 ```
 
 ## Template: Database Connector
@@ -178,7 +186,11 @@ def list_tables() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    _transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if _transport == "sse":
+        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+    else:
+        mcp.run()
 ```
 
 ## Template: Custom Tool
@@ -211,7 +223,11 @@ def status() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    _transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if _transport == "sse":
+        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+    else:
+        mcp.run()
 ```
 
 ## Calling `mcp_build`
