@@ -21,8 +21,8 @@ Security invariants (enforced at the top of every mutating method)
    where the ContextVar is not set.
 
 4. Agent-generated code NEVER runs in the gateway process. ``_run_server_sandbox_test``
-   launches it as a subprocess with a clean, constrained environment (only the
-   required secrets from the vault; no gateway env vars leak in).
+   launches it as a subprocess with a clean, constrained environment (only the owner's
+   decrypted secrets + PYTHONPATH/HOME/PATH; no gateway env vars leak in).
 """
 
 from __future__ import annotations
@@ -236,14 +236,16 @@ class MCPServerManager:
           are read inside tool handlers at call time, not at startup. If the server
           crashes at startup with no secrets, that is a generation defect.
 
-        Phase 2 — Test-calls (placeholder secrets only):
-          Restart with placeholder env vars, call each discovered tool with empty
-          args. A 401/403 or auth-style exception means the tool is callable and
-          the key is merely not valid → ok: True. Only a crash, timeout, or
-          unrelated error counts as ok: False. Phase 2 never blocks 'verified'.
+        Phase 2 — Test-calls (real secrets injected):
+          Restart with the owner's actual decrypted credentials, call each discovered
+          tool with empty args. Tools with zero required args (whoami, rate_limit,
+          health checks) make genuine API calls — green "pass" means the key works.
+          Tools with required args (owner, repo) return validation errors → "args" badge.
+          Auth failures (401/403) with non-functional keys → "401" badge.
+          Only a crash or timeout counts as ok: False. Phase 2 never blocks 'verified'.
+          Output is scrubbed for real secret values before being stored.
 
-        Real secrets are NEVER injected here.
-        Returns (tools_discovered, test_results) — neither contains real secret values.
+        Returns (tools_discovered, test_results) — output/error fields are scrubbed.
         """
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
@@ -288,14 +290,23 @@ class MCPServerManager:
             if not tools_discovered:
                 return [], []
 
-            # ── Phase 2: Test-calls — placeholder secrets, auth errors are ok ─
-            key_names = await self._vault.list_key_names(server_id=server_id, owner_id=user_id)
-            placeholder_env: dict[str, str] = {k: f"placeholder_for_{k}" for k in key_names}
+            # ── Phase 2: Test-calls — real secrets, validates live connectivity ─
+            # The code scanner has already approved the server. Real credentials let
+            # tools with zero required args (whoami, rate_limit, health checks, etc.)
+            # make genuine API calls so the user can verify their keys work.
+            # Tools that require arguments (owner, repo, id) get Pydantic/validation
+            # errors with empty {}, which the "args" badge explains in the UI.
+            # The output-scrub step below redacts any credential that leaks into output.
+            real_env: dict[str, str] = {}
+            try:
+                real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+            except Exception:
+                pass  # No secrets stored yet — test still runs, tools that need keys will fail
 
             test_params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(server_file)],
-                env={**base_env, **placeholder_env},
+                env={**base_env, **real_env},
             )
             try:
                 async with asyncio.timeout(30):
@@ -437,10 +448,9 @@ class MCPServerManager:
             # Stage 4: validate egress rules structure
             build_egress_rules(egress_hosts)
 
-            # Stage 5: two-phase sandbox test (discovery: no secrets; test-calls: placeholder).
+            # Stage 5: two-phase sandbox test (discovery: no secrets; test-calls: real secrets).
             # "verified" = scan gates passed AND server started cleanly AND tools discovered.
-            # Test-call auth errors (401/403) never block 'verified'.
-            # Real secrets are never injected here.
+            # Test-call auth/args errors never block 'verified' — they're classified by badge.
             tools_discovered: list[dict] = []
             test_results: list[dict] = []
 
@@ -455,10 +465,10 @@ class MCPServerManager:
                     logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
                     test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})
 
-            # Defense-in-depth scrub: decrypt real values once, replace any exact matches
-            # in test_results output/error fields, then immediately discard the values.
-            # Real secrets were never injected (placeholder env), but this closes any
-            # unexpected path that could surface a real value through tool output.
+            # Defense-in-depth scrub: replace any exact secret value substrings in
+            # test_results output/error fields with [REDACTED], then discard the values.
+            # Real secrets are now injected into the test subprocess, so this scrub
+            # is important — a tool that echoes its own env vars would leak here without it.
             if required_key_names and test_results:
                 try:
                     real_secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
@@ -469,7 +479,7 @@ class MCPServerManager:
                             if field_name in tr and tr[field_name]:
                                 tr[field_name] = self._scrub_output(str(tr[field_name]), secret_vals)
                 except Exception:
-                    pass  # scrub failure is non-fatal; placeholder env means real values aren't present
+                    pass  # scrub failure is non-fatal
 
             # "verified" = scan gates passed AND server connected AND at least one tool found.
             # "testing"  = scan gates passed but server didn't connect or no tools found.
