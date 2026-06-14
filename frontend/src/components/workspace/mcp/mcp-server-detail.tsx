@@ -286,7 +286,7 @@ async function apiRetest(id: string): Promise<McpBuildStatus> {
 async function apiWriteSecrets(
   id: string,
   secrets: Record<string, string>,
-): Promise<{ stored: string[] }> {
+): Promise<{ stored: string[]; hints: Record<string, string | null> }> {
   const r = await apiFetch(`/api/mcp-studio/servers/${id}/secrets`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -294,7 +294,29 @@ async function apiWriteSecrets(
   });
   if (!r.ok)
     throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
-  return r.json() as Promise<{ stored: string[] }>;
+  return r.json() as Promise<{
+    stored: string[];
+    hints: Record<string, string | null>;
+  }>;
+}
+
+async function apiGetSecretsInfo(
+  id: string,
+): Promise<{ keys: { key_name: string; key_hint: string | null }[] }> {
+  const r = await apiFetch(`/api/mcp-studio/servers/${id}/secrets/info`);
+  if (!r.ok) return { keys: [] };
+  return r.json() as Promise<{
+    keys: { key_name: string; key_hint: string | null }[];
+  }>;
+}
+
+async function apiRevealSecrets(
+  id: string,
+): Promise<{ values: Record<string, string> }> {
+  const r = await apiFetch(`/api/mcp-studio/servers/${id}/secrets/reveal`);
+  if (!r.ok)
+    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
+  return r.json() as Promise<{ values: Record<string, string> }>;
 }
 
 // ── File tree ──────────────────────────────────────────────────────────────────
@@ -1165,27 +1187,149 @@ function GeneratingView({
 
 // ── Secrets panel ──────────────────────────────────────────────────────────────
 
+// storedInfo: key_name → hint string (last 5 chars) or null (stored but no hint available)
+// undefined = not stored at all
+type StoredInfo = Map<string, string | null>;
+
+function SecretRow({
+  keyName,
+  hint,
+  serverId,
+  value,
+  onChange,
+}: {
+  keyName: string;
+  hint: string | null | undefined; // undefined = not stored
+  serverId: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const isStored = hint !== undefined;
+  const [showReveal, setShowReveal] = useState(false);
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
+
+  // When user starts typing a new value, hide any revealed value
+  const handleChange = (v: string) => {
+    if (v) {
+      setRevealed(null);
+      setShowReveal(false);
+    }
+    onChange(v);
+  };
+
+  const handleEye = async () => {
+    // If user is typing a new value, just toggle visibility of what they're typing
+    if (value) {
+      setShowReveal((p) => !p);
+      return;
+    }
+    // If a stored value is revealed, hide it
+    if (revealed !== null) {
+      setRevealed(null);
+      setShowReveal(false);
+      return;
+    }
+    // Reveal from server
+    if (!isStored) return;
+    setRevealing(true);
+    try {
+      const resp = await apiRevealSecrets(serverId);
+      const plaintext = resp.values[keyName];
+      if (plaintext !== undefined) {
+        setRevealed(plaintext);
+        setShowReveal(true);
+      }
+    } catch {
+      // silently ignore; user can try again
+    } finally {
+      setRevealing(false);
+    }
+  };
+
+  // Determine what to display in the input
+  const displayValue = revealed ?? value;
+  const inputType = showReveal ? "text" : "password";
+
+  // Placeholder: show hint if stored, otherwise prompt
+  let placeholder = "Enter value…";
+  if (isStored) {
+    const tail = hint ?? "";
+    placeholder = `•••••${tail} — click 🔓 to reveal or type to update`;
+  }
+
+  return (
+    <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+      <div className="mb-1.5 flex items-center justify-between">
+        <code className="font-mono text-xs font-semibold text-stone-700">
+          {keyName}
+        </code>
+        {isStored ? (
+          <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600">
+            <CheckCircle2Icon className="size-3" />
+            {hint ? <span className="font-mono">•••{hint}</span> : "Stored"}
+          </span>
+        ) : (
+          <span className="text-[10px] text-stone-400">Not set</span>
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        <input
+          type={inputType}
+          autoComplete="new-password"
+          placeholder={placeholder}
+          value={displayValue}
+          onChange={(e) => handleChange(e.target.value)}
+          className="flex-1 rounded-lg border border-stone-200 bg-white px-2 py-1.5 font-mono text-xs text-stone-900 placeholder:text-stone-300 focus:border-[#5B57E0] focus:shadow-[0_0_0_2px_rgba(91,87,224,0.15)] focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => void handleEye()}
+          disabled={revealing || (!isStored && !value)}
+          className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-600 disabled:opacity-30"
+          title={
+            revealing
+              ? "Revealing…"
+              : showReveal || revealed !== null
+                ? "Hide"
+                : isStored
+                  ? "Reveal stored value"
+                  : "Show"
+          }
+        >
+          {revealing ? (
+            <Loader2Icon className="size-3.5 animate-spin" />
+          ) : showReveal || revealed !== null ? (
+            <EyeOffIcon className="size-3.5" />
+          ) : (
+            <EyeIcon className="size-3.5" />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SecretsSection({
   serverId,
   secretNames,
-  storedKeys,
+  storedInfo,
   onStored,
-  needsRetest,
 }: {
   serverId: string;
   secretNames: string[];
-  storedKeys: Set<string>;
-  onStored: (keys: string[]) => void;
-  needsRetest: boolean;
+  storedInfo: StoredInfo;
+  onStored: (hints: Record<string, string | null>) => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retesting, setRetesting] = useState(false);
 
   if (secretNames.length === 0) return null;
 
   const hasUnsaved = Object.values(values).some((v) => v.trim());
+  const allStored = secretNames.every((k) => storedInfo.has(k));
 
   const handleSave = async () => {
     const toSave = Object.fromEntries(
@@ -1196,8 +1340,17 @@ function SecretsSection({
     setError(null);
     try {
       const result = await apiWriteSecrets(serverId, toSave);
-      onStored(result.stored);
+      onStored(result.hints);
       setValues({});
+      // Auto re-test after saving so the user sees real test results
+      setRetesting(true);
+      try {
+        await apiRetest(serverId);
+      } catch {
+        // re-test failure is non-fatal; user can trigger manually
+      } finally {
+        setRetesting(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -1209,54 +1362,19 @@ function SecretsSection({
     <div>
       <div className="space-y-3">
         <p className="text-[11px] leading-relaxed text-stone-400">
-          Encrypted at rest · auto-detected from code · never logged.
+          Encrypted at rest · auto-detected from code · never sent to AI.
         </p>
         {secretNames.map((key) => (
-          <div
+          <SecretRow
             key={key}
-            className="rounded-xl border border-stone-200 bg-stone-50 p-3"
-          >
-            <div className="mb-1.5 flex items-center justify-between">
-              <code className="font-mono text-xs font-semibold text-stone-700">
-                {key}
-              </code>
-              {storedKeys.has(key) ? (
-                <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600">
-                  <CheckCircle2Icon className="size-3" /> Stored
-                </span>
-              ) : (
-                <span className="text-[10px] text-stone-400">Not set</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              <input
-                type={visible[key] ? "text" : "password"}
-                autoComplete="new-password"
-                placeholder={
-                  storedKeys.has(key) ? "•••••••• (update)" : "Enter value…"
-                }
-                value={values[key] ?? ""}
-                onChange={(e) =>
-                  setValues((prev) => ({ ...prev, [key]: e.target.value }))
-                }
-                className="flex-1 rounded-lg border border-stone-200 bg-white px-2 py-1.5 font-mono text-xs text-stone-900 placeholder:text-stone-300 focus:border-[#5B57E0] focus:shadow-[0_0_0_2px_rgba(91,87,224,0.15)] focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() =>
-                  setVisible((prev) => ({ ...prev, [key]: !prev[key] }))
-                }
-                className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-600"
-                title={visible[key] ? "Hide" : "Show"}
-              >
-                {visible[key] ? (
-                  <EyeOffIcon className="size-3.5" />
-                ) : (
-                  <EyeIcon className="size-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
+            keyName={key}
+            hint={
+              storedInfo.has(key) ? (storedInfo.get(key) ?? null) : undefined
+            }
+            serverId={serverId}
+            value={values[key] ?? ""}
+            onChange={(v) => setValues((prev) => ({ ...prev, [key]: v }))}
+          />
         ))}
 
         {error && <p className="text-xs text-red-400">{error}</p>}
@@ -1264,17 +1382,21 @@ function SecretsSection({
         <Button
           size="sm"
           className="w-full bg-stone-900 text-white hover:bg-stone-700"
-          disabled={saving || !hasUnsaved}
+          disabled={saving || retesting || !hasUnsaved}
           onClick={() => void handleSave()}
         >
           {saving ? (
             <>
               <Loader2Icon className="size-3.5 animate-spin" /> Saving…
             </>
-          ) : needsRetest ? (
-            "Save & Re-test"
+          ) : retesting ? (
+            <>
+              <Loader2Icon className="size-3.5 animate-spin" /> Re-testing…
+            </>
+          ) : allStored ? (
+            "Update secrets & Re-test"
           ) : (
-            "Save secrets"
+            "Save secrets & Re-test"
           )}
         </Button>
       </div>
@@ -1290,10 +1412,49 @@ function ToolCard({
   onRetest,
 }: {
   tool: { name: string; description: string };
-  testResult?: { ok: boolean; output?: string; error?: string };
+  testResult?: {
+    ok: boolean;
+    output_type?: string;
+    output?: string;
+    error?: string;
+  };
   onRetest?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+
+  // Derive badge label + colour from output_type (new) falling back to ok (legacy)
+  const badgeInfo = (() => {
+    if (!testResult) return null;
+    const ot = testResult.output_type;
+    if (
+      ot === "pass" ||
+      (!ot && testResult.ok && !testResult.output && !testResult.error)
+    )
+      return {
+        label: "pass",
+        cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      };
+    if (ot === "auth" || (!ot && testResult.ok))
+      return {
+        label: "401",
+        cls: "border-amber-200 bg-amber-50 text-amber-700",
+        title:
+          "Callable — placeholder credentials returned 401 (expected during sandbox testing)",
+      };
+    if (ot === "args")
+      return {
+        label: "args",
+        cls: "border-blue-200 bg-blue-50 text-blue-600",
+        title:
+          "Callable — requires arguments not supplied in automated testing",
+      };
+    if (ot === "error" || !testResult.ok)
+      return { label: "fail", cls: "border-red-200 bg-red-50 text-red-600" };
+    return {
+      label: "pass",
+      cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  })();
 
   return (
     <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm transition-colors hover:border-stone-300">
@@ -1315,16 +1476,15 @@ function ToolCard({
             <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-400">
               async
             </span>
-            {testResult && (
+            {badgeInfo && (
               <span
                 className={cn(
-                  "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                  testResult.ok
-                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border border-red-200 bg-red-50 text-red-600",
+                  "rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+                  badgeInfo.cls,
                 )}
+                title={badgeInfo.title}
               >
-                {testResult.ok ? "pass" : "fail"}
+                {badgeInfo.label}
               </span>
             )}
           </div>
@@ -1374,15 +1534,15 @@ function ToolsView({
   server,
   serverId,
   buildStatus,
-  storedKeys,
+  storedInfo,
   onStored,
   onRetested,
 }: {
   server: McpServerResponse;
   serverId: string;
   buildStatus: McpBuildStatus;
-  storedKeys: Set<string>;
-  onStored: (keys: string[]) => void;
+  storedInfo: StoredInfo;
+  onStored: (hints: Record<string, string | null>) => void;
   onRetested: (s: McpBuildStatus) => void;
 }) {
   const {
@@ -1393,7 +1553,6 @@ function ToolsView({
     detected_secret_names,
   } = buildStatus;
   const dp = getDisplayPhase(phase, errors);
-  const needsRetest = dp === "needs_secrets";
   const [retesting, setRetesting] = useState(false);
 
   const handleRetest = async () => {
@@ -1513,17 +1672,17 @@ function ToolsView({
               <h3 className="text-xs font-semibold text-stone-700">
                 API Secrets
               </h3>
-              {detected_secret_names.some((k) => !storedKeys.has(k)) && (
+              {detected_secret_names.some((k) => !storedInfo.has(k)) && (
                 <span className="ml-auto flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-600">
                   <span className="size-1.5 rounded-full bg-red-500" />
                   {
-                    detected_secret_names.filter((k) => !storedKeys.has(k))
+                    detected_secret_names.filter((k) => !storedInfo.has(k))
                       .length
                   }{" "}
                   missing
                 </span>
               )}
-              {detected_secret_names.every((k) => storedKeys.has(k)) && (
+              {detected_secret_names.every((k) => storedInfo.has(k)) && (
                 <span className="ml-auto flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
                   <CheckCircle2Icon className="size-2.5" /> All set
                 </span>
@@ -1533,9 +1692,8 @@ function ToolsView({
               <SecretsSection
                 serverId={serverId}
                 secretNames={detected_secret_names}
-                storedKeys={storedKeys}
+                storedInfo={storedInfo}
                 onStored={onStored}
-                needsRetest={needsRetest}
               />
             </div>
           </div>
@@ -1543,14 +1701,43 @@ function ToolsView({
 
         {/* tools section label */}
         {tools_discovered.length > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
-              Tools
-            </span>
-            <div className="h-px flex-1 bg-stone-200" />
-            <span className="font-mono text-[10px] text-[#5B57E0]">
-              {tools_discovered.length}
-            </span>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
+                Tools
+              </span>
+              <div className="h-px flex-1 bg-stone-200" />
+              <span className="font-mono text-[10px] text-[#5B57E0]">
+                {tools_discovered.length}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
+              <span className="text-[10px] text-stone-500">
+                Sandbox uses placeholder credentials —
+              </span>
+              <span className="flex items-center gap-1 text-[10px]">
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                  pass
+                </span>
+                <span className="text-stone-400">real response</span>
+              </span>
+              <span className="flex items-center gap-1 text-[10px]">
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                  401
+                </span>
+                <span className="text-stone-400">
+                  callable, real key used at runtime
+                </span>
+              </span>
+              <span className="flex items-center gap-1 text-[10px]">
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
+                  args
+                </span>
+                <span className="text-stone-400">
+                  callable, needs arguments
+                </span>
+              </span>
+            </div>
           </div>
         )}
 
@@ -1749,7 +1936,14 @@ function InspectView({
   onRetested: (s: McpBuildStatus) => void;
 }) {
   const [subTab, setSubTab] = useState<InspectSubTab>("tools");
-  const [storedKeys, setStoredKeys] = useState<Set<string>>(new Set());
+  const [storedInfo, setStoredInfo] = useState<StoredInfo>(new Map());
+
+  // Load stored key names + hints from DB on mount so state persists across refreshes
+  useEffect(() => {
+    void apiGetSecretsInfo(server.id).then(({ keys }) => {
+      setStoredInfo(new Map(keys.map((k) => [k.key_name, k.key_hint])));
+    });
+  }, [server.id]);
 
   const stream = useStream<AgentThreadState>({
     client: getAPIClient(),
@@ -1768,11 +1962,12 @@ function InspectView({
     [stream],
   );
 
-  const handleStored = (keys: string[]) => {
-    setStoredKeys((prev) => new Set([...prev, ...keys]));
-    void apiRetest(server.id)
-      .then(onRetested)
-      .catch(() => undefined);
+  const handleStored = (hints: Record<string, string | null>) => {
+    setStoredInfo((prev) => {
+      const next = new Map(prev);
+      for (const [k, h] of Object.entries(hints)) next.set(k, h);
+      return next;
+    });
   };
 
   // Auto-refresh: detect completed mcp_build / write_file / str_replace tool calls
@@ -1860,7 +2055,7 @@ function InspectView({
               server={server}
               serverId={server.id}
               buildStatus={buildStatus}
-              storedKeys={storedKeys}
+              storedInfo={storedInfo}
               onStored={handleStored}
               onRetested={onRetested}
             />

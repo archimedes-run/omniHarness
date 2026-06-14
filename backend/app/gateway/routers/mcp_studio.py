@@ -123,6 +123,20 @@ class McpSecretsWriteRequest(BaseModel):
 
 class McpSecretsWriteResponse(BaseModel):
     stored: list[str]
+    hints: dict[str, str | None] = Field(default_factory=dict, description="Map of key_name → last-5-char hint (None for short values)")
+
+
+class McpSecretsInfoItem(BaseModel):
+    key_name: str
+    key_hint: str | None
+
+
+class McpSecretsInfoResponse(BaseModel):
+    keys: list[McpSecretsInfoItem]
+
+
+class McpSecretsRevealResponse(BaseModel):
+    values: dict[str, str]
 
 
 # ---------------------------------------------------------------------------
@@ -348,16 +362,71 @@ async def write_mcp_secrets(
 
     vault = get_mcp_secrets_vault(request)
     stored: list[str] = []
+    hints: dict[str, str | None] = {}
     for key_name, plaintext_value in body.secrets.items():
-        await vault.store(
+        hint = await vault.store(
             server_id=server_id,
             owner_id=user_id,
             key_name=key_name,
             plaintext_value=plaintext_value,
         )
         stored.append(key_name)
+        hints[key_name] = hint
 
-    return McpSecretsWriteResponse(stored=stored)
+    return McpSecretsWriteResponse(stored=stored, hints=hints)
+
+
+# ---------------------------------------------------------------------------
+# GET /servers/{id}/secrets/info
+# ---------------------------------------------------------------------------
+
+
+@router.get("/servers/{server_id}/secrets/info", response_model=McpSecretsInfoResponse)
+@require_permission("threads", "read")
+async def get_mcp_secrets_info(server_id: str, request: Request) -> McpSecretsInfoResponse:
+    """Return key names and last-5-char hints for all stored secrets.
+
+    Values (ciphertext or plaintext) are never included. Safe to call on page load
+    to restore the stored-keys state across sessions.
+    """
+    _check_flag(request)
+    user_id = _get_user_id(request)
+
+    repo = get_mcp_server_repo(request)
+    server = await repo.get(server_id)
+    if server is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+
+    vault = get_mcp_secrets_vault(request)
+    items = await vault.list_key_info(server_id=server_id, owner_id=user_id)
+    return McpSecretsInfoResponse(keys=[McpSecretsInfoItem(**item) for item in items])
+
+
+# ---------------------------------------------------------------------------
+# GET /servers/{id}/secrets/reveal
+# ---------------------------------------------------------------------------
+
+
+@router.get("/servers/{server_id}/secrets/reveal", response_model=McpSecretsRevealResponse)
+@require_permission("threads", "write")
+async def reveal_mcp_secrets(server_id: str, request: Request) -> McpSecretsRevealResponse:
+    """Decrypt and return all secrets for the authenticated owner.
+
+    Requires write permission (same level as storing secrets). The caller is the
+    human owner who stored the values; this endpoint lets them verify what is
+    stored. Returned values MUST NOT be forwarded to agent or model context.
+    """
+    _check_flag(request)
+    user_id = _get_user_id(request)
+
+    repo = get_mcp_server_repo(request)
+    server = await repo.get(server_id)
+    if server is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+
+    vault = get_mcp_secrets_vault(request)
+    values = await vault.reveal(server_id=server_id, owner_id=user_id)
+    return McpSecretsRevealResponse(values=values)
 
 
 # ---------------------------------------------------------------------------

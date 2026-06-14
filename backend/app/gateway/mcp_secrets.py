@@ -85,13 +85,17 @@ class McpSecretsVault:
     # Write operations
     # ------------------------------------------------------------------
 
-    async def store(self, *, server_id: str, owner_id: str, key_name: str, plaintext_value: str) -> None:
+    async def store(self, *, server_id: str, owner_id: str, key_name: str, plaintext_value: str) -> str | None:
         """Encrypt and upsert a single secret.
 
         ``owner_id`` MUST be the verified requesting user — never derived from
         the server row itself. Plaintext is discarded after encryption.
+
+        Returns the key_hint (last 5 chars) so the caller can include it in the
+        response without a second DB read.
         """
         ciphertext: bytes = self._fernet.encrypt(plaintext_value.encode())
+        key_hint: str | None = plaintext_value[-5:] if len(plaintext_value) >= 5 else None
 
         async with self._sf() as session:
             result = await session.execute(
@@ -104,6 +108,7 @@ class McpSecretsVault:
             existing = result.scalar_one_or_none()
             if existing is not None:
                 existing.ciphertext = ciphertext
+                existing.key_hint = key_hint
             else:
                 session.add(
                     McpSecretRow(
@@ -112,9 +117,11 @@ class McpSecretsVault:
                         owner_id=owner_id,
                         key_name=key_name,
                         ciphertext=ciphertext,
+                        key_hint=key_hint,
                     )
                 )
             await session.commit()
+        return key_hint
 
     async def delete(self, *, server_id: str, owner_id: str, key_name: str) -> bool:
         """Remove a specific secret. Returns True if a row was deleted."""
@@ -159,6 +166,41 @@ class McpSecretsVault:
         async with self._sf() as session:
             result = await session.execute(stmt)
             return [row[0] for row in result.fetchall()]
+
+    async def list_key_info(self, *, server_id: str, owner_id: str) -> list[dict]:
+        """Return key names and their non-sensitive hints.
+
+        Returns a list of ``{"key_name": str, "key_hint": str | None}`` dicts.
+        The ``key_hint`` is the last 5 chars of the plaintext, stored at write
+        time. Values (ciphertext or plaintext) are NEVER included.
+        """
+        stmt = (
+            select(McpSecretRow.key_name, McpSecretRow.key_hint)
+            .where(
+                McpSecretRow.server_id == server_id,
+                McpSecretRow.owner_id == owner_id,
+            )
+            .order_by(McpSecretRow.key_name)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return [{"key_name": row[0], "key_hint": row[1]} for row in result.fetchall()]
+
+    async def reveal(self, *, server_id: str, owner_id: str) -> dict[str, str]:
+        """Decrypt all secrets for the owner and return {key_name: plaintext}.
+
+        This is the only public decrypt path. It is guarded at the router level
+        by ownership verification + write permission (same as PUT /secrets).
+        The caller MUST NOT log or forward this mapping to agent/model context.
+        """
+        stmt = select(McpSecretRow).where(
+            McpSecretRow.server_id == server_id,
+            McpSecretRow.owner_id == owner_id,
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+        return {row.key_name: self._fernet.decrypt(row.ciphertext).decode() for row in rows}
 
     # ------------------------------------------------------------------
     # Internal decrypt — only called by MCPServerManager for sandbox injection

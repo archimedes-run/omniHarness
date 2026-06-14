@@ -30,4 +30,8 @@ class McpSecretRow(Base):
     owner_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     key_name: Mapped[str] = mapped_column(String(256), nullable=False)
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Last 5 chars of the plaintext value — safe to store unencrypted (low entropy,
+    # not usable to reconstruct the key). Shown in the UI as "•••••XXXXX" so the
+    # user can recognize which key they stored without revealing the full value.
+    key_hint: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=lambda: datetime.now(UTC))

@@ -58,6 +58,35 @@ _AUTH_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Patterns indicating the tool requires arguments we didn't supply in the automated test.
+# These are expected for tools that mandate owner/repo/id-style inputs.
+_MISSING_ARGS_RE = re.compile(
+    r"(Field required|validation error|missing.*required|required.*missing|"
+    r"InputValidationError|argument.*required|required.*argument)",
+    re.IGNORECASE,
+)
+
+
+def _classify_output(text: str) -> str:
+    """Return a label for the output/error text of a test-call result.
+
+    ``"pass"``  — no recognisable error pattern (tool actually returned a useful result)
+    ``"auth"``  — 401/403/auth failure (callable; placeholder credentials used in tests)
+    ``"args"``  — missing required arguments (callable; no default args supplied in tests)
+    ``"error"`` — other error
+    """
+    if not text:
+        return "pass"
+    if _AUTH_ERROR_RE.search(text):
+        return "auth"
+    if _MISSING_ARGS_RE.search(text):
+        return "args"
+    # Any non-empty error-like text that doesn't fit the above patterns
+    lower = text.lower()
+    if "error" in lower or "exception" in lower or "failed" in lower or "traceback" in lower:
+        return "error"
+    return "pass"
+
 
 @dataclass
 class MCPBuildRecord:
@@ -283,12 +312,21 @@ class MCPServerManager:
                                     if result.content:
                                         item = result.content[0]
                                         output = str(getattr(item, "text", None) or item)[:200]
-                                    test_results.append({"tool": t["name"], "ok": True, "output": output})
+                                    # Classify result even on the success path — the tool may have
+                                    # returned an error payload (auth failure, missing args) rather
+                                    # than raising a Python exception. We label these so the UI can
+                                    # show the right badge instead of a misleading green "pass".
+                                    output_type = _classify_output(output)
+                                    entry: dict = {"tool": t["name"], "ok": True, "output_type": output_type}
+                                    if output:
+                                        entry["output"] = output
+                                    test_results.append(entry)
                                 except Exception as exc:
                                     exc_msg = str(exc)[:200]
-                                    ok = self._is_auth_error(exc_msg)
-                                    entry: dict = {"tool": t["name"], "ok": ok}
-                                    if ok:
+                                    is_auth = self._is_auth_error(exc_msg)
+                                    output_type = "auth" if is_auth else _classify_output(exc_msg)
+                                    entry = {"tool": t["name"], "ok": is_auth, "output_type": output_type}
+                                    if is_auth:
                                         entry["output"] = exc_msg
                                     else:
                                         entry["error"] = exc_msg
