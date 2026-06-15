@@ -117,6 +117,12 @@ type McpBuildStatus = {
   last_verified_at: string | null;
   container_id?: string | null;
   container_port?: number | null;
+  deploy_steps?: Array<{
+    key: string;
+    label: string;
+    status: "pending" | "running" | "done" | "failed";
+    detail: string | null;
+  }>;
 };
 
 type McpServerResponse = {
@@ -2006,13 +2012,16 @@ function InspectView({
     setStoredInfo((prev) => {
       const next = new Map(prev);
       for (const [k, h] of Object.entries(hints)) next.set(k, h);
-      // Notify the page if all required secrets are now stored
-      const required = buildStatus.detected_secret_names;
-      if (required.length > 0 && required.every((k) => next.has(k))) {
-        onAllSecretsStored?.();
-      }
       return next;
     });
+    // Check outside the updater — calling parent setState inside an updater is illegal in React
+    const required = buildStatus.detected_secret_names;
+    const allStored =
+      required.length > 0 &&
+      required.every((k) => storedInfo.has(k) || k in hints);
+    if (allStored) {
+      onAllSecretsStored?.();
+    }
   };
 
   // Auto-refresh: detect completed mcp_build / write_file / str_replace tool calls
@@ -2226,6 +2235,155 @@ function StartTab({
 
 // ── Deploy tab ─────────────────────────────────────────────────────────────────
 
+type DeployStep = {
+  key: string;
+  label: string;
+  status: "pending" | "running" | "done" | "failed";
+  detail: string | null;
+};
+
+function deployProgress(steps: DeployStep[]): number {
+  if (steps.length === 0) return 0;
+  const doneCount = steps.filter((s) => s.status === "done").length;
+  // Non-linear weights: "building" (index 1) takes most of the time
+  const thresholds = [5, 20, 80, 95, 100];
+  return thresholds[doneCount] ?? 100;
+}
+
+function DeployTimeline({
+  serverName,
+  steps,
+}: {
+  serverName: string;
+  steps: DeployStep[];
+}) {
+  const progress = deployProgress(steps);
+  const current = steps.find((s) => s.status === "running");
+  const failed = steps.find((s) => s.status === "failed");
+
+  // SVG ring
+  const r = 44;
+  const circ = 2 * Math.PI * r;
+  const offset = circ * (1 - progress / 100);
+
+  return (
+    <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+      {/* Header */}
+      <div className="border-b border-stone-100 px-5 py-4 text-center">
+        <p className="text-sm font-semibold text-stone-900">
+          Deploying {serverName}
+        </p>
+        <p className="mt-0.5 text-[11px] text-stone-400">
+          {failed
+            ? (failed.detail ?? "Deployment failed")
+            : (current?.detail ?? "Please wait…")}
+        </p>
+      </div>
+
+      {/* Circular progress */}
+      <div className="flex flex-col items-center gap-3 px-5 pt-5 pb-3">
+        <svg width="110" height="110" viewBox="0 0 110 110">
+          <circle
+            cx="55"
+            cy="55"
+            r={r}
+            fill="none"
+            stroke="#e7e5e4"
+            strokeWidth="7"
+          />
+          <circle
+            cx="55"
+            cy="55"
+            r={r}
+            fill="none"
+            stroke={failed ? "#ef4444" : "#7C79F0"}
+            strokeWidth="7"
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+            transform="rotate(-90 55 55)"
+            style={{ transition: "stroke-dashoffset 0.6s ease" }}
+          />
+          <text
+            x="55"
+            y="55"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize="18"
+            fontWeight="700"
+            fill={failed ? "#ef4444" : "#1c1917"}
+          >
+            {progress}%
+          </text>
+        </svg>
+
+        {/* Thin progress bar */}
+        <div className="h-1 w-full overflow-hidden rounded-full bg-stone-100">
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{
+              width: `${progress}%`,
+              backgroundColor: failed ? "#ef4444" : "#7C79F0",
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Step list */}
+      <div className="flex flex-col gap-1 px-4 pb-4">
+        {steps.map((step) => (
+          <div
+            key={step.key}
+            className={cn(
+              "flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors",
+              step.status === "running" && "bg-violet-50",
+              step.status === "done" && "bg-emerald-50/60",
+              step.status === "failed" && "bg-red-50",
+              step.status === "pending" && "bg-transparent",
+            )}
+          >
+            <div className="shrink-0">
+              {step.status === "done" && (
+                <CheckCircle2Icon className="size-4 text-emerald-500" />
+              )}
+              {step.status === "running" && (
+                <Loader2Icon className="size-4 animate-spin text-[#7C79F0]" />
+              )}
+              {step.status === "failed" && (
+                <XCircleIcon className="size-4 text-red-500" />
+              )}
+              {step.status === "pending" && (
+                <div className="size-4 rounded-full border-2 border-stone-200" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p
+                className={cn(
+                  "text-xs font-medium",
+                  step.status === "running" && "text-[#7C79F0]",
+                  step.status === "done" && "text-emerald-700",
+                  step.status === "failed" && "text-red-600",
+                  step.status === "pending" && "text-stone-400",
+                )}
+              >
+                {step.label}
+              </p>
+              {step.status === "running" && step.detail && (
+                <p className="text-[10px] text-stone-400">{step.detail}</p>
+              )}
+              {step.status === "failed" && step.detail && (
+                <p className="truncate text-[10px] text-red-400">
+                  {step.detail}
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeployView({
   server,
   buildStatus,
@@ -2237,7 +2395,6 @@ function DeployView({
   allSecretsStored: boolean;
   onBuildStatusChanged: (s: McpBuildStatus) => void;
 }) {
-  const [deploying, setDeploying] = useState(false);
   const [undeploying, setUndeploying] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2246,24 +2403,24 @@ function DeployView({
   const isVerified = phase === "verified";
   const isDeployed = phase === "deployed";
   const isDeploying = phase === "deploying";
+  const isFailed = phase === "failed";
   const toolCount = buildStatus?.tools_discovered.length ?? 0;
   const secretCount = buildStatus?.detected_secret_names.length ?? 0;
   const containerPort = buildStatus?.container_port;
   const sseUrl = containerPort ? `http://localhost:${containerPort}/sse` : null;
+  const deploySteps = (buildStatus?.deploy_steps ?? []) as DeployStep[];
+  const hasTimeline = isDeploying || (isFailed && deploySteps.length > 0);
 
   const canDeploy =
     allSecretsStored && (isVerified || isDeployed) && !isDeploying;
 
   const handleDeploy = async () => {
-    setDeploying(true);
     setError(null);
     try {
       const result = await apiDeploy(server.id);
       onBuildStatusChanged(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deploy failed");
-    } finally {
-      setDeploying(false);
     }
   };
 
@@ -2288,6 +2445,28 @@ function DeployView({
     });
   };
 
+  // ── Deploying: show live timeline instead of the checklist ─────────────────
+  if (hasTimeline) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-stone-50 p-8">
+        <DeployTimeline serverName={server.name} steps={deploySteps} />
+        {isFailed && (
+          <Button
+            className="w-full max-w-sm bg-stone-900 py-3 text-sm font-semibold text-white hover:bg-stone-700"
+            onClick={() => void handleDeploy()}
+          >
+            Retry deploy
+          </Button>
+        )}
+        <p className="max-w-sm text-center text-[10px] leading-relaxed text-stone-400">
+          Secrets are injected as container env vars and are never written to
+          disk or logs.
+        </p>
+      </div>
+    );
+  }
+
+  // ── Idle / verified / deployed: show the checklist card ────────────────────
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-stone-50 p-8">
       {/* Server card */}
@@ -2305,11 +2484,6 @@ function DeployView({
           {isDeployed && (
             <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700">
               <CheckCircle2Icon className="size-3" /> Live
-            </span>
-          )}
-          {isDeploying && (
-            <span className="flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[10px] font-medium text-indigo-700">
-              <Loader2Icon className="size-3 animate-spin" /> Deploying
             </span>
           )}
         </div>
@@ -2404,32 +2578,18 @@ function DeployView({
                 ? "bg-stone-900 text-white hover:bg-stone-700"
                 : "cursor-not-allowed bg-stone-100 text-stone-300",
             )}
-            disabled={deploying || !canDeploy}
+            disabled={!canDeploy}
             onClick={() => void handleDeploy()}
           >
-            {deploying ? (
-              <>
-                <Loader2Icon className="size-4 animate-spin" /> Building &amp;
-                starting container…
-              </>
-            ) : (
-              "Deploy to Docker"
-            )}
+            Deploy to Docker
           </Button>
         ) : (
           <div className="flex flex-col gap-2">
             <Button
               className="w-full border border-stone-200 bg-white py-3 text-sm font-semibold text-stone-700 shadow-sm hover:bg-stone-50"
-              disabled={deploying}
               onClick={() => void handleDeploy()}
             >
-              {deploying ? (
-                <>
-                  <Loader2Icon className="size-4 animate-spin" /> Re-deploying…
-                </>
-              ) : (
-                "Re-deploy"
-              )}
+              Re-deploy
             </Button>
             <Button
               className="w-full border border-red-200 bg-red-50 py-3 text-sm font-semibold text-red-600 hover:bg-red-100"

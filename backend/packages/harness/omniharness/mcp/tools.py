@@ -117,10 +117,17 @@ async def get_mcp_tools() -> list[BaseTool]:
             except Exception as e:
                 logger.warning(f"Failed to load MCP interceptor {interceptor_path}: {e}", exc_info=True)
 
-        client = MultiServerMCPClient(servers_config, tool_interceptors=tool_interceptors, tool_name_prefix=True)
+        # Load tools per-server so one bad server doesn't kill the rest
+        tools: list[BaseTool] = []
+        for server_name, server_params in servers_config.items():
+            try:
+                single_client = MultiServerMCPClient({server_name: server_params}, tool_interceptors=tool_interceptors, tool_name_prefix=True)
+                server_tools = await single_client.get_tools()
+                logger.info(f"Loaded {len(server_tools)} tool(s) from '{server_name}'")
+                tools.extend(server_tools)
+            except Exception as server_err:
+                logger.warning(f"Skipping MCP server '{server_name}': {server_err}")
 
-        # Get all tools from all servers
-        tools = await client.get_tools()
         logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers")
 
         # Patch tools to support sync invocation, as omniharness client streams synchronously

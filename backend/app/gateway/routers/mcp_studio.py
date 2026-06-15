@@ -114,6 +114,7 @@ class McpBuildStatusResponse(BaseModel):
     last_verified_at: str | None
     container_id: str | None = None
     container_port: int | None = None
+    deploy_steps: list[dict[str, Any]] = []
 
 
 class McpConnectResponse(BaseModel):
@@ -344,6 +345,7 @@ async def get_mcp_build_status(server_id: str, request: Request) -> McpBuildStat
         last_verified_at=record.last_verified_at,
         container_id=record.container_id,
         container_port=record.container_port,
+        deploy_steps=record.deploy_steps,
     )
 
 
@@ -467,6 +469,7 @@ async def trigger_mcp_test(server_id: str, request: Request) -> McpBuildStatusRe
         last_verified_at=record.last_verified_at,
         container_id=record.container_id,
         container_port=record.container_port,
+        deploy_steps=record.deploy_steps,
     )
 
 
@@ -579,6 +582,7 @@ async def deploy_mcp_server(server_id: str, request: Request) -> McpBuildStatusR
         last_verified_at=record.last_verified_at,
         container_id=record.container_id,
         container_port=record.container_port,
+        deploy_steps=record.deploy_steps,
     )
 
 

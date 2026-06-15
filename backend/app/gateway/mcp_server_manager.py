@@ -28,6 +28,7 @@ Security invariants (enforced at the top of every mutating method)
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -90,17 +91,29 @@ def _classify_output(text: str) -> str:
     return "pass"
 
 
-_DOCKER_MAIN_RE = re.compile(
-    r"if\s+__name__\s*==\s*['\"]__main__['\"]\s*:\s*\n(    mcp\.run\(\))",
+# Matches the entire __main__ block from "if __name__" to end-of-file.
+# Generated server.py files always end with this block, so replacing to EOF is safe.
+_MAIN_BLOCK_RE = re.compile(
+    r'^if\s+__name__\s*==\s*[\'"]__main__[\'"].*',
+    re.MULTILINE | re.DOTALL,
 )
+# Canonical dual-transport __main__ block written into every Docker image.
+# FastMCP.run() does NOT accept host=/port= kwargs — those must be set on
+# mcp.settings before run(). transport_security is cleared so Docker port-
+# mapping from the host is not blocked by localhost rebinding protection.
 _DOCKER_MAIN_NEW = (
     'if __name__ == "__main__":\n'
     '    _transport = os.environ.get("MCP_TRANSPORT", "stdio")\n'
     '    if _transport == "sse":\n'
-    '        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))\n'
+    '        mcp.settings.host = "0.0.0.0"\n'
+    '        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))\n'
+    "        mcp.settings.transport_security = None\n"
+    '        mcp.run(transport="sse")\n'
     "    else:\n"
     "        mcp.run()\n"
 )
+# MCP_TRANSPORT selects stdio (sandbox) vs sse (Docker). MCP_PORT sets the
+# container's listen port, which is mapped to a dynamic host port by docker run.
 _DOCKERFILE_TEMPLATE = """\
 FROM python:3.12-slim
 WORKDIR /app
@@ -113,16 +126,30 @@ CMD ["python", "server.py"]
 """
 _DEPLOY_PORT_BASE = 18100
 
+# Ordered deploy steps emitted as live timeline data to the frontend.
+_DEPLOY_STEP_DEFS: list[tuple[str, str]] = [
+    ("preparing", "Preparing source"),
+    ("building", "Building Docker image"),
+    ("launching", "Starting container"),
+    ("registering", "Registering deployment"),
+]
+
+
+def _init_deploy_steps() -> list[dict]:
+    """Return the initial step list with the first step 'running', rest 'pending'."""
+    steps = []
+    for i, (key, label) in enumerate(_DEPLOY_STEP_DEFS):
+        steps.append({"key": key, "label": label, "status": "running" if i == 0 else "pending", "detail": None})
+    return steps
+
 
 def _patch_main_for_sse(source: str) -> str:
-    """Ensure the server.py __main__ block supports both stdio and SSE transports.
+    """Replace the __main__ block with the canonical dual-transport form.
 
-    Only rewrites the simple ``mcp.run()`` form — if MCP_TRANSPORT is already
-    present the file is returned unchanged.
+    Always rewrites — handles bare mcp.run(), old bad host=/port= kwargs,
+    and already-patched-but-incorrect blocks in one pass.
     """
-    if "MCP_TRANSPORT" in source:
-        return source
-    return _DOCKER_MAIN_RE.sub(_DOCKER_MAIN_NEW.rstrip(), source)
+    return _MAIN_BLOCK_RE.sub(_DOCKER_MAIN_NEW.rstrip(), source)
 
 
 @dataclass
@@ -144,6 +171,9 @@ class MCPBuildRecord:
     last_verified_at: str | None = None
     container_id: str | None = None
     container_port: int | None = None
+    # Live step list emitted during "deploying" phase so the frontend can render a timeline.
+    # Each dict: {key, label, status: pending|running|done|failed, detail: str|None}
+    deploy_steps: list[dict] = field(default_factory=list)
 
 
 class MCPServerManager:
@@ -632,6 +662,35 @@ class MCPServerManager:
     # Docker deploy / undeploy / connect
     # ------------------------------------------------------------------
 
+    async def _advance_step(self, server_id: str, done_key: str, next_key: str | None, *, detail: str | None = None) -> list[dict]:
+        """Mark `done_key` as done (with optional detail) and `next_key` as running.
+        Returns the updated steps list so the caller can keep a local reference."""
+        async with self._lock:
+            rec = self._records.get(server_id)
+            if rec is None:
+                return []
+            steps = [
+                {
+                    **s,
+                    "status": "done",
+                    "detail": detail if s["key"] == done_key else s.get("detail"),
+                }
+                if s["key"] == done_key
+                else ({**s, "status": "running"} if s["key"] == next_key else s)
+                for s in rec.deploy_steps
+            ]
+            self._records[server_id] = dataclasses.replace(rec, deploy_steps=steps)
+        return steps
+
+    async def _fail_step(self, server_id: str, failed_key: str, error: str) -> None:
+        """Mark `failed_key` as failed and set record to phase=failed."""
+        async with self._lock:
+            rec = self._records.get(server_id)
+            if rec is None:
+                return
+            steps = [{**s, "status": "failed"} if s["key"] == failed_key else s for s in rec.deploy_steps]
+            self._records[server_id] = dataclasses.replace(rec, phase="failed", error=error, deploy_steps=steps)
+
     @staticmethod
     def _find_free_port(start: int = _DEPLOY_PORT_BASE) -> int:
         for port in range(start, start + 100):
@@ -644,39 +703,32 @@ class MCPServerManager:
         raise RuntimeError(f"No free port found in range {start}–{start + 100}")
 
     @staticmethod
-    async def _docker_run(args: list[str], *, timeout: float = 120.0) -> tuple[int, str, str]:
+    async def _docker_run(args: list[str], *, timeout: float = 120.0, cwd: str | None = None) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
         )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode or 0, (out or b"").decode(), (err or b"").decode()
 
     async def deploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Build a Docker image from the server's source code and start a container.
+        """Validate, mark as deploying, fire Docker work in background, return immediately.
 
-        Flow:
-          1. Patch server.py's ``__main__`` for dual-transport (stdio / SSE).
-          2. Write server.py + Dockerfile to a temp dir.
-          3. ``docker build -t omni-mcp-<id> .``
-          4. ``docker rm -f omni-mcp-<id>`` (stop any previous run)
-          5. ``docker run -d --name ... -p <port>:8080 -e KEY=val ... image``
-          6. Persist container_id + port in DB; return "deployed" record.
+        The endpoint returns a ``{phase: "deploying"}`` record right away so the
+        browser is never blocked waiting for ``docker build``. The frontend polls
+        ``GET /build`` which reflects the in-memory record; the background task
+        transitions the record to ``"deployed"`` or ``"failed"`` when done.
 
-        Raises ``PermissionError`` on ownership failure, ``RuntimeError`` on
-        Docker errors. Secrets are injected as env vars and NOT logged.
+        Raises ``PermissionError`` on ownership failure, ``ValueError`` if no
+        source code exists. Secrets are injected as env vars and NOT logged.
         """
         server = await self._load_and_verify(server_id, user_id)
         source = server.get("source_code") or ""
         if not source:
             raise ValueError("No source code — build the server first")
 
-        patched = _patch_main_for_sse(source)
-        image_tag = f"omni-mcp-{server_id[:12]}"
-        container_name = f"omni-mcp-{server_id[:12]}"
-
-        # Mark as deploying in memory before the slow Docker steps
         async with self._lock:
             existing = self._records.get(server_id)
         deploying = MCPBuildRecord(
@@ -687,9 +739,32 @@ class MCPServerManager:
             tools_discovered=existing.tools_discovered if existing else [],
             test_results=existing.test_results if existing else [],
             last_verified_at=existing.last_verified_at if existing else None,
+            deploy_steps=_init_deploy_steps(),
         )
         async with self._lock:
             self._records[server_id] = deploying
+
+        # Fire the slow docker work in the background — caller returns immediately.
+        asyncio.create_task(
+            self._run_docker_deploy(
+                server_id=server_id,
+                user_id=user_id,
+                source=source,
+                existing=existing,
+            ),
+            name=f"mcp-deploy-{server_id[:12]}",
+        )
+        return deploying
+
+    async def _run_docker_deploy(
+        self,
+        *,
+        server_id: str,
+        user_id: str,
+        source: str,
+        existing: MCPBuildRecord | None,
+    ) -> None:
+        """Background task: docker build + docker run, update in-memory record when done."""
 
         def _make_record(phase: str, **kwargs: object) -> MCPBuildRecord:
             return MCPBuildRecord(
@@ -703,69 +778,95 @@ class MCPServerManager:
                 **kwargs,  # type: ignore[arg-type]
             )
 
-        with tempfile.TemporaryDirectory(prefix="omni_mcp_build_") as tmpdir:
-            build_dir = Path(tmpdir)
-            (build_dir / "server.py").write_text(patched)
-            (build_dir / "Dockerfile").write_text(_DOCKERFILE_TEMPLATE)
+        image_tag = f"omni-mcp-{server_id[:12]}"
+        container_name = f"omni-mcp-{server_id[:12]}"
+        patched = _patch_main_for_sse(source)
 
-            rc, _, err = await self._docker_run(
-                ["docker", "build", "-t", image_tag, "."],
-                timeout=180.0,
-            )
-            if rc != 0:
-                record = _make_record("failed", error=f"docker build failed: {err[:400]}")
-                async with self._lock:
-                    self._records[server_id] = record
-                return record
-
-        # Remove any previous container with the same name (non-fatal)
-        await self._docker_run(["docker", "rm", "-f", container_name], timeout=15.0)
-
-        host_port = self._find_free_port()
-
-        # Decrypt real secrets — injected as env vars, NOT logged
-        real_env: dict[str, str] = {}
         try:
-            real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
-        except Exception:
-            pass
+            # ── Step 1: Preparing ──────────────────────────────────────────
+            # (already set to "running" by deploy(); just do the work)
+            with tempfile.TemporaryDirectory(prefix="omni_mcp_build_") as tmpdir:
+                build_dir = Path(tmpdir)
+                (build_dir / "server.py").write_text(patched)
+                (build_dir / "Dockerfile").write_text(_DOCKERFILE_TEMPLATE)
 
-        run_args: list[str] = [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            container_name,
-            "-p",
-            f"{host_port}:8080",
-            "--restart",
-            "unless-stopped",
-        ]
-        for k, v in real_env.items():
-            run_args += ["-e", f"{k}={v}"]
-        run_args.append(image_tag)
+                await self._advance_step(server_id, "preparing", "building", detail="Source patched for SSE transport")
 
-        rc, out, err = await self._docker_run(run_args, timeout=30.0)
-        if rc != 0:
-            record = _make_record("failed", error=f"docker run failed: {err[:400]}")
+                # ── Step 2: Building ──────────────────────────────────────
+                rc, _, err = await self._docker_run(
+                    ["docker", "build", "-t", image_tag, "."],
+                    timeout=300.0,
+                    cwd=str(build_dir),
+                )
+                if rc != 0:
+                    await self._fail_step(server_id, "building", f"docker build failed: {err[:400]}")
+                    return
+
+            await self._advance_step(server_id, "building", "launching", detail="Image built successfully")
+
+            # ── Step 3: Launching ─────────────────────────────────────────
+            # Remove any previous container (non-fatal)
+            await self._docker_run(["docker", "rm", "-f", container_name], timeout=15.0)
+
+            host_port = self._find_free_port()
+
+            # Decrypt real secrets — injected as env vars, NOT logged
+            real_env: dict[str, str] = {}
+            try:
+                real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+            except Exception:
+                pass
+
+            run_args: list[str] = [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                "-p",
+                f"{host_port}:8080",
+                "--restart",
+                "unless-stopped",
+            ]
+            for k, v in real_env.items():
+                run_args += ["-e", f"{k}={v}"]
+            run_args.append(image_tag)
+
+            rc, out, err = await self._docker_run(run_args, timeout=30.0)
+            if rc != 0:
+                await self._fail_step(server_id, "launching", f"docker run failed: {err[:400]}")
+                return
+
+            container_id = out.strip()[:128]
+            await self._advance_step(server_id, "launching", "registering", detail=f"Container started on port {host_port}")
+
+            # ── Step 4: Registering ───────────────────────────────────────
+            await self._repo.update_container_info(
+                server_id,
+                container_id=container_id,
+                container_port=host_port,
+                status="deployed",
+                user_id=user_id,
+            )
+            await self._repo.set_approved(server_id, True, user_id=user_id)
+
+            # Finalize: mark registering done and flip phase to deployed
             async with self._lock:
-                self._records[server_id] = record
-            return record
+                rec = self._records.get(server_id)
+                if rec is not None:
+                    final_steps = [{**s, "status": "done"} if s["key"] == "registering" else s for s in rec.deploy_steps]
+                    self._records[server_id] = dataclasses.replace(
+                        rec,
+                        phase="deployed",
+                        container_id=container_id,
+                        container_port=host_port,
+                        deploy_steps=final_steps,
+                    )
+            logger.info("MCP server %s deployed: container=%s port=%s", server_id[:12], container_id[:12], host_port)
 
-        container_id = out.strip()[:128]
-        await self._repo.update_container_info(
-            server_id,
-            container_id=container_id,
-            container_port=host_port,
-            status="deployed",
-            user_id=user_id,
-        )
-        await self._repo.set_approved(server_id, True, user_id=user_id)
-
-        record = _make_record("deployed", container_id=container_id, container_port=host_port)
-        async with self._lock:
-            self._records[server_id] = record
-        return record
+        except Exception as exc:
+            logger.error("Docker deploy failed for %s: %s", server_id[:12], exc)
+            await self._fail_step(server_id, "launching", f"deploy error: {str(exc)[:400]}")
 
     async def undeploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Stop and remove the Docker container for this server."""
@@ -815,7 +916,16 @@ class MCPServerManager:
         if not container_port:
             raise ValueError("Server is not deployed — run deploy first")
 
-        sse_url = f"http://localhost:{container_port}/sse"
+        # When the gateway runs inside Docker, `localhost` resolves to the
+        # container itself — not the host machine where MCP containers run.
+        # `host.docker.internal` is Docker Desktop's magic hostname for the host.
+        # On a bare host (make dev), `localhost` is correct.
+        _in_docker = Path("/.dockerenv").exists()
+        internal_host = "host.docker.internal" if _in_docker else "localhost"
+        display_host = "localhost"  # always localhost for the user's browser
+
+        internal_url = f"http://{internal_host}:{container_port}/sse"
+        display_url = f"http://{display_host}:{container_port}/sse"
         server_name = re.sub(r"[^a-z0-9\-]", "-", db_server["name"].lower()).strip("-")
 
         config_path = ExtensionsConfig.resolve_config_path()
@@ -830,12 +940,12 @@ class MCPServerManager:
         config_data["mcpServers"][server_name] = {
             "enabled": True,
             "type": "sse",
-            "url": sse_url,
+            "url": internal_url,  # gateway-accessible URL
             "description": db_server.get("description") or f"MCP server: {db_server['name']}",
         }
         with open(config_path, "w", encoding="utf-8") as fh:
             json.dump(config_data, fh, indent=2)
 
         reload_extensions_config()
-        logger.info("MCP server %r connected at %s (extensions_config updated)", server_name, sse_url)
-        return {"sse_url": sse_url, "server_name": server_name}
+        logger.info("MCP server %r connected at %s (extensions_config updated)", server_name, internal_url)
+        return {"sse_url": display_url, "server_name": server_name}

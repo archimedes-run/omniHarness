@@ -52,7 +52,10 @@ def tool_name(param: str) -> str:
 if __name__ == "__main__":
     _transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if _transport == "sse":
-        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))
+        mcp.settings.transport_security = None
+        mcp.run(transport="sse")
     else:
         mcp.run()
 ```
@@ -140,7 +143,10 @@ def get_item(item_id: str) -> str:
 if __name__ == "__main__":
     _transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if _transport == "sse":
-        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))
+        mcp.settings.transport_security = None
+        mcp.run(transport="sse")
     else:
         mcp.run()
 ```
@@ -188,7 +194,10 @@ def list_tables() -> str:
 if __name__ == "__main__":
     _transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if _transport == "sse":
-        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))
+        mcp.settings.transport_security = None
+        mcp.run(transport="sse")
     else:
         mcp.run()
 ```
@@ -225,7 +234,10 @@ def status() -> str:
 if __name__ == "__main__":
     _transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if _transport == "sse":
-        mcp.run(transport="sse", host="0.0.0.0", port=int(os.environ.get("MCP_PORT", "8080")))
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))
+        mcp.settings.transport_security = None
+        mcp.run(transport="sse")
     else:
         mcp.run()
 ```
