@@ -1,12 +1,6 @@
 ---
 name: mcp-server-builder
 description: Scaffold, generate, and test a FastMCP server that can be used as an MCP tool provider. Handles API wrapper, database connector, and custom tool templates.
-allowed-tools:
-  - bash
-  - write_file
-  - read_file
-  - str_replace
-  - mcp_build
 ---
 
 # MCP Server Builder

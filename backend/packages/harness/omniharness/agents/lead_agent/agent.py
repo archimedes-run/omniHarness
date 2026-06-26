@@ -413,12 +413,34 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     skills_for_tool_policy = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config)
 
+    # MCP and ACP tools are dynamically registered and unknown at skill authoring
+    # time, so they must never be dropped by skill allowed-tools policies.
+    def _dynamic_tool_names() -> set[str]:
+        names: set[str] = set()
+        try:
+            from omniharness.mcp.cache import get_cached_mcp_tools
+
+            names.update(t.name for t in (get_cached_mcp_tools() or []))
+        except Exception:
+            pass
+        try:
+            from omniharness.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
+
+            acp_agents = getattr(resolved_app_config, "acp_agents", {}) or {}
+            if acp_agents:
+                names.add(build_invoke_acp_agent_tool(acp_agents).name)
+        except Exception:
+            pass
+        return names
+
+    always_include = _dynamic_tool_names()
+
     if is_bootstrap:
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
         tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config),
-            tools=filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy),
+            tools=filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include),
             middleware=_build_middlewares(config, model_name=model_name, app_config=resolved_app_config),
             system_prompt=apply_prompt_template(
                 subagent_enabled=subagent_enabled,
@@ -436,7 +458,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config),
-        tools=filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy),
+        tools=filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include),
         middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name, app_config=resolved_app_config),
         system_prompt=apply_prompt_template(
             subagent_enabled=subagent_enabled,

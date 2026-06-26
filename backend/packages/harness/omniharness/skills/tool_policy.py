@@ -36,9 +36,19 @@ def allowed_tool_names_for_skills(skills: list[Skill]) -> set[str] | None:
     return allowed
 
 
-def filter_tools_by_skill_allowed_tools[ToolT: NamedTool](tools: list[ToolT], skills: list[Skill]) -> list[ToolT]:
+def filter_tools_by_skill_allowed_tools[ToolT: NamedTool](
+    tools: list[ToolT],
+    skills: list[Skill],
+    always_include: set[str] | None = None,
+) -> list[ToolT]:
+    """Filter tools by the union of skill allowed-tools declarations.
+
+    Tools whose names appear in *always_include* are always kept regardless of
+    skill policy — use this for dynamically-registered tools (MCP, ACP) whose
+    names are not known at skill authoring time.
+    """
     allowed = allowed_tool_names_for_skills(skills)
     if allowed is None:
         return tools
 
-    return [tool for tool in tools if tool.name in allowed]
+    return [tool for tool in tools if tool.name in allowed or bool(always_include and tool.name in always_include)]
