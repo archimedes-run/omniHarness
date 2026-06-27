@@ -3,7 +3,7 @@
 import { GitBranchIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/workspace/status-badge";
 import { fetch } from "@/core/api/fetcher";
 
 interface Workflow {
@@ -14,21 +14,6 @@ interface Workflow {
   status: string;
   created_at: string;
   updated_at: string;
-}
-
-function statusVariant(
-  status: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  switch (status) {
-    case "active":
-      return "default";
-    case "paused":
-      return "secondary";
-    case "archived":
-      return "outline";
-    default:
-      return "secondary";
-  }
 }
 
 function formatDate(iso: string): string {
@@ -202,7 +187,7 @@ export default function WorkflowsPage() {
                     Created {formatDate(wf.created_at)}
                   </p>
                 </div>
-                <Badge variant={statusVariant(wf.status)}>{wf.status}</Badge>
+                <StatusBadge status={wf.status} />
               </div>
             </div>
           ))}

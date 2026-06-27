@@ -72,7 +72,7 @@ class DbRunEventStore(RunEventStore):
         user = get_current_user()
         return str(user.id) if user is not None else None
 
-    async def put(self, *, thread_id, run_id, event_type, category, content="", metadata=None, created_at=None):  # noqa: D401
+    async def put(self, *, thread_id, run_id, event_type, category, content="", metadata=None, created_at=None, source=None):  # noqa: D401
         """Write a single event — low-frequency path only.
 
         This opens a dedicated transaction with a FOR UPDATE lock to
@@ -99,6 +99,7 @@ class DbRunEventStore(RunEventStore):
                     thread_id=thread_id,
                     run_id=run_id,
                     user_id=user_id,
+                    source=source,
                     event_type=event_type,
                     category=category,
                     content=db_content,
@@ -137,6 +138,7 @@ class DbRunEventStore(RunEventStore):
                         thread_id=e["thread_id"],
                         run_id=e["run_id"],
                         user_id=e.get("user_id", user_id),
+                        source=e.get("source"),
                         event_type=e["event_type"],
                         category=category,
                         content=db_content,

@@ -25,6 +25,10 @@ class RunEventRow(Base):
     # "message" | "trace" | "lifecycle"
     content: Mapped[str] = mapped_column(Text, default="")
     event_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Discriminator: which platform subsystem produced this event.
+    # NULL is back-compat for all pre-existing run/agent/chat events (= "run").
+    # Allowed values defined in omniharness.platform.events.EventSource.
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     seq: Mapped[int] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 

@@ -32,11 +32,13 @@ class MemoryRunEventStore(RunEventStore):
         content: str | dict = "",
         metadata: dict | None = None,
         created_at: str | None = None,
+        source: str | None = None,
     ) -> dict:
         seq = self._next_seq(thread_id)
         record = {
             "thread_id": thread_id,
             "run_id": run_id,
+            "source": source,
             "event_type": event_type,
             "category": category,
             "content": content,
@@ -57,6 +59,7 @@ class MemoryRunEventStore(RunEventStore):
         content="",
         metadata=None,
         created_at=None,
+        source=None,
     ):
         return self._put_one(
             thread_id=thread_id,
@@ -66,12 +69,22 @@ class MemoryRunEventStore(RunEventStore):
             content=content,
             metadata=metadata,
             created_at=created_at,
+            source=source,
         )
 
     async def put_batch(self, events):
         results = []
         for ev in events:
-            record = self._put_one(**ev)
+            record = self._put_one(
+                thread_id=ev["thread_id"],
+                run_id=ev["run_id"],
+                event_type=ev["event_type"],
+                category=ev.get("category", "trace"),
+                content=ev.get("content", ""),
+                metadata=ev.get("metadata"),
+                created_at=ev.get("created_at"),
+                source=ev.get("source"),
+            )
             results.append(record)
         return results
 

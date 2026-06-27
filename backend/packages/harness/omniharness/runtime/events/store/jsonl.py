@@ -108,12 +108,13 @@ class JsonlRunEventStore(RunEventStore):
         events.sort(key=lambda e: e.get("seq", 0))
         return events
 
-    async def put(self, *, thread_id, run_id, event_type, category, content="", metadata=None, created_at=None):
+    async def put(self, *, thread_id, run_id, event_type, category, content="", metadata=None, created_at=None, source=None):
         self._ensure_seq_loaded(thread_id)
         seq = self._next_seq(thread_id)
         record = {
             "thread_id": thread_id,
             "run_id": run_id,
+            "source": source,
             "event_type": event_type,
             "category": category,
             "content": content,

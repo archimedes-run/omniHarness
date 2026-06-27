@@ -36,8 +36,14 @@ class RunEventStore(abc.ABC):
         content: str | dict = "",
         metadata: dict | None = None,
         created_at: str | None = None,
+        source: str | None = None,
     ) -> dict:
-        """Write an event, auto-assign seq, return the complete record."""
+        """Write an event, auto-assign seq, return the complete record.
+
+        ``source`` is the platform discriminator (see EventSource in
+        omniharness.platform.events). NULL / None means "run" (back-compat
+        for all existing chat/agent events).
+        """
 
     @abc.abstractmethod
     async def put_batch(self, events: list[dict]) -> list[dict]:
