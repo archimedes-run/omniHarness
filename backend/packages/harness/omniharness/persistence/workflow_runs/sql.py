@@ -17,7 +17,8 @@ from omniharness.persistence.workflow_runs.model import WorkflowRunRow
 #: Legal transitions for WorkflowRun.status.
 #: waiting_approval is reserved for Phase 6; no outgoing transitions defined yet.
 _LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
-    "queued": frozenset({"running", "canceled"}),
+    "queued": frozenset({"running", "canceled", "failed"}),
+    # queued→failed: executor discovered a pre-launch error (no instruction, workflow missing)
     "running": frozenset({"succeeded", "failed", "canceled", "expired"}),
     "waiting_approval": frozenset(),  # Phase 6 — reserved, no transitions yet
     "succeeded": frozenset(),
@@ -130,6 +131,35 @@ class WorkflowRunRepository:
                 row.started_at = now
             if new_status in _TERMINAL_STATUSES:
                 row.completed_at = now
+            await session.commit()
+            await session.refresh(row)
+            return row.to_dict()
+
+    async def set_thread_run(self, workflow_run_id: str, *, thread_id: str, run_id: str) -> dict | None:
+        """Persist thread_id and run_id after the underlying run is launched.
+
+        Called by the executor immediately after launch so the UI can deep-link
+        into the existing run view while the run is still in progress.
+        """
+        async with self._sf() as session:
+            row = await session.get(WorkflowRunRow, workflow_run_id)
+            if row is None:
+                return None
+            row.thread_id = thread_id
+            row.run_id = run_id
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+            await session.refresh(row)
+            return row.to_dict()
+
+    async def set_error_summary(self, workflow_run_id: str, error_summary: str) -> dict | None:
+        """Set a human-readable error_summary without changing status."""
+        async with self._sf() as session:
+            row = await session.get(WorkflowRunRow, workflow_run_id)
+            if row is None:
+                return None
+            row.error_summary = error_summary
+            row.updated_at = datetime.now(UTC)
             await session.commit()
             await session.refresh(row)
             return row.to_dict()

@@ -24,6 +24,7 @@ from omniharness.runtime import (
     HEARTBEAT_SENTINEL,
     ConflictError,
     DisconnectMode,
+    RunContext,
     RunManager,
     RunRecord,
     RunStatus,
@@ -226,6 +227,84 @@ def build_run_config(
 # ---------------------------------------------------------------------------
 
 
+async def launch_agent_run_detached(
+    *,
+    bridge: StreamBridge,
+    run_mgr: RunManager,
+    run_ctx: RunContext,
+    thread_id: str,
+    graph_input: dict,
+    run_config: dict,
+    assistant_id: str | None = None,
+    user_id: str | None = None,
+    metadata: dict | None = None,
+    multitask_strategy: str = "reject",
+    on_disconnect: DisconnectMode = DisconnectMode.continue_,
+    stream_modes: list[str] | str | None = None,
+    stream_subgraphs: bool = False,
+    interrupt_before: Any = None,
+    interrupt_after: Any = None,
+) -> RunRecord:
+    """Core run-launch: create a RunRecord and start the background agent task.
+
+    This is the single point where ``asyncio.create_task(run_agent(...))`` is
+    called.  Both ``start_run()`` (HTTP path) and ``execute_workflow_run()``
+    (workflow executor path) call this function — there is no second launch path.
+
+    Callers are responsible for HTTP-specific concerns (error → HTTP mapping,
+    reading user auth from cookies).
+
+    Raises:
+        ConflictError: when multitask_strategy="reject" and thread has an active run.
+        UnsupportedStrategyError: when the strategy is not implemented.
+    """
+    # Upsert thread metadata so the thread appears in /threads/search.
+    if run_ctx.thread_store is not None:
+        try:
+            existing = await run_ctx.thread_store.get(thread_id)
+            if existing is None:
+                await run_ctx.thread_store.create(
+                    thread_id,
+                    assistant_id=assistant_id,
+                    user_id=user_id,
+                    metadata=metadata,
+                )
+            else:
+                await run_ctx.thread_store.update_status(thread_id, "running")
+        except Exception:
+            logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
+
+    record = await run_mgr.create_or_reject(
+        thread_id,
+        assistant_id,
+        on_disconnect=on_disconnect,
+        metadata=metadata or {},
+        kwargs={"input": graph_input, "config": run_config},
+        multitask_strategy=multitask_strategy,
+    )
+
+    agent_factory = resolve_agent_factory(assistant_id)
+    resolved_modes = normalize_stream_modes(stream_modes)
+
+    task = asyncio.create_task(
+        run_agent(
+            bridge,
+            run_mgr,
+            record,
+            ctx=run_ctx,
+            agent_factory=agent_factory,
+            graph_input=graph_input,
+            config=run_config,
+            stream_modes=resolved_modes,
+            stream_subgraphs=stream_subgraphs,
+            interrupt_before=interrupt_before,
+            interrupt_after=interrupt_after,
+        )
+    )
+    record.task = task
+    return record
+
+
 async def start_run(
     body: Any,
     thread_id: str,
@@ -249,37 +328,6 @@ async def start_run(
 
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
-    try:
-        record = await run_mgr.create_or_reject(
-            thread_id,
-            body.assistant_id,
-            on_disconnect=disconnect,
-            metadata=body.metadata or {},
-            kwargs={"input": body.input, "config": body.config},
-            multitask_strategy=body.multitask_strategy,
-        )
-    except ConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except UnsupportedStrategyError as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
-
-    # Upsert thread metadata so the thread appears in /threads/search,
-    # even for threads that were never explicitly created via POST /threads
-    # (e.g. stateless runs).
-    try:
-        existing = await run_ctx.thread_store.get(thread_id)
-        if existing is None:
-            await run_ctx.thread_store.create(
-                thread_id,
-                assistant_id=body.assistant_id,
-                metadata=body.metadata,
-            )
-        else:
-            await run_ctx.thread_store.update_status(thread_id, "running")
-    except Exception:
-        logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
-
-    agent_factory = resolve_agent_factory(body.assistant_id)
     graph_input = normalize_input(body.input)
     config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
 
@@ -299,24 +347,28 @@ async def start_run(
         if isinstance(ctx_dict, dict):
             ctx_dict.setdefault("user_id", user_id)
 
-    stream_modes = normalize_stream_modes(body.stream_mode)
-
-    task = asyncio.create_task(
-        run_agent(
-            bridge,
-            run_mgr,
-            record,
-            ctx=run_ctx,
-            agent_factory=agent_factory,
+    try:
+        record = await launch_agent_run_detached(
+            bridge=bridge,
+            run_mgr=run_mgr,
+            run_ctx=run_ctx,
+            thread_id=thread_id,
             graph_input=graph_input,
-            config=config,
-            stream_modes=stream_modes,
+            run_config=config,
+            assistant_id=body.assistant_id,
+            user_id=user_id,
+            metadata=body.metadata or {},
+            multitask_strategy=body.multitask_strategy,
+            on_disconnect=disconnect,
+            stream_modes=body.stream_mode,
             stream_subgraphs=body.stream_subgraphs,
             interrupt_before=body.interrupt_before,
             interrupt_after=body.interrupt_after,
         )
-    )
-    record.task = task
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UnsupportedStrategyError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
 
     # Title sync is handled by worker.py's finally block which reads the
     # title from the checkpoint and calls thread_store.update_display_name
