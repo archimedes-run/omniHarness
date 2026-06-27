@@ -180,6 +180,8 @@ async def _run_additive_migrations(backend: str) -> None:
         ("mcp_secrets", "key_hint", "VARCHAR(8)", "NULL"),
         ("mcp_servers", "container_id", "VARCHAR(128)", "NULL"),
         ("mcp_servers", "container_port", "INTEGER", "NULL"),
+        # Phase 1 platform event discriminator (migration 0011)
+        ("run_events", "source", "VARCHAR(32)", "NULL"),
     ]
 
     async with _engine.begin() as conn:
