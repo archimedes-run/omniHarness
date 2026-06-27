@@ -17,7 +17,18 @@ class WorkflowRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
 
-    async def create(self, *, id: str, owner_id: str | None, title: str, description: str | None = None) -> dict:
+    async def create(
+        self,
+        *,
+        id: str,
+        owner_id: str | None,
+        title: str,
+        description: str | None = None,
+        instruction_prompt: str | None = None,
+        trigger_type: str | None = "manual",
+        approval_policy: str | None = "draft_only",
+        created_by: str | None = "user",
+    ) -> dict:
         now = datetime.now(UTC)
         row = WorkflowRow(
             id=id,
@@ -25,6 +36,10 @@ class WorkflowRepository:
             title=title,
             description=description,
             status="draft",
+            instruction_prompt=instruction_prompt,
+            trigger_type=trigger_type,
+            approval_policy=approval_policy,
+            created_by=created_by,
             created_at=now,
             updated_at=now,
         )
@@ -65,6 +80,18 @@ class WorkflowRepository:
                 row.description = description
             if status is not None:
                 row.status = status
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+            await session.refresh(row)
+            return row.to_dict()
+
+    async def set_current_version(self, id: str, version_id: str) -> dict | None:
+        """Set current_version_id on a workflow (called after v1 is created)."""
+        async with self._sf() as session:
+            row = await session.get(WorkflowRow, id)
+            if row is None:
+                return None
+            row.current_version_id = version_id
             row.updated_at = datetime.now(UTC)
             await session.commit()
             await session.refresh(row)

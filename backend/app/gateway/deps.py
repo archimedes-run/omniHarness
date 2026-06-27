@@ -77,9 +77,17 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.feedback_repo = FeedbackRepository(sf)
             app.state.mcp_server_repo = McpServerRepository(sf)
 
+            from omniharness.persistence.workflow_artifact_links import WorkflowArtifactLinkRepository
+            from omniharness.persistence.workflow_runs import WorkflowRunRepository
+            from omniharness.persistence.workflow_step_runs import WorkflowStepRunRepository
+            from omniharness.persistence.workflow_versions import WorkflowVersionRepository
             from omniharness.persistence.workflows.sql import WorkflowRepository
 
             app.state.workflow_repo = WorkflowRepository(sf)
+            app.state.workflow_version_repo = WorkflowVersionRepository(sf)
+            app.state.workflow_run_repo = WorkflowRunRepository(sf)
+            app.state.workflow_step_run_repo = WorkflowStepRunRepository(sf)
+            app.state.workflow_artifact_link_repo = WorkflowArtifactLinkRepository(sf)
 
             # Phase 2: vault + manager — only when mcp_builder.enabled=True.
             # make_vault_key() raises RuntimeError loudly if key is missing in
@@ -105,6 +113,10 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.mcp_secrets_vault = None
             app.state.mcp_server_manager = None
             app.state.workflow_repo = None
+            app.state.workflow_version_repo = None
+            app.state.workflow_run_repo = None
+            app.state.workflow_step_run_repo = None
+            app.state.workflow_artifact_link_repo = None
 
         from omniharness.persistence.thread_meta import make_thread_store
 

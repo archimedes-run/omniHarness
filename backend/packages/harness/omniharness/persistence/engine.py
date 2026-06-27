@@ -182,6 +182,13 @@ async def _run_additive_migrations(backend: str) -> None:
         ("mcp_servers", "container_port", "INTEGER", "NULL"),
         # Phase 1 platform event discriminator (migration 0011)
         ("run_events", "source", "VARCHAR(32)", "NULL"),
+        # Phase 1 Slice 1: additive workflow columns (migration 0012)
+        ("workflows", "instruction_prompt", "TEXT", "NULL"),
+        ("workflows", "trigger_type", "VARCHAR(32)", "NULL"),
+        ("workflows", "approval_policy", "VARCHAR(32)", "NULL"),
+        ("workflows", "created_by", "VARCHAR(16)", "NULL"),
+        ("workflows", "current_version_id", "VARCHAR(64)", "NULL"),
+        ("workflows", "required_capability_ids", "JSON", "NULL"),
     ]
 
     async with _engine.begin() as conn:

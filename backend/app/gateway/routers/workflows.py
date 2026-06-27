@@ -1,7 +1,4 @@
-"""Workflows API router — Phase 0 skeleton.
-
-All endpoints return 404 when the workflows feature flag is disabled.
-"""
+"""Workflows API router — Phase 1 Slice 1."""
 
 from __future__ import annotations
 
@@ -25,6 +22,10 @@ router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 class WorkflowCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
+    instruction_prompt: str | None = None
+    trigger_type: str | None = "manual"  # manual|scheduled|event|api
+    approval_policy: str | None = "draft_only"  # draft_only|approval_required|execute_low_risk
+    created_by: str | None = "user"  # user|agent|import|template
 
 
 class WorkflowPatch(BaseModel):
@@ -39,20 +40,35 @@ class WorkflowResponse(BaseModel):
     title: str
     description: str | None
     status: str
+    instruction_prompt: str | None = None
+    trigger_type: str | None = None
+    approval_policy: str | None = None
+    created_by: str | None = None
+    current_version_id: str | None = None
+    required_capability_ids: list | None = None
     created_at: str
     updated_at: str
 
 
+def _dt(v) -> str:
+    return v.isoformat() if isinstance(v, datetime) else str(v)
+
+
 def _serialize(row: dict) -> WorkflowResponse:
-    """Convert a repository dict to WorkflowResponse, serializing datetimes."""
     return WorkflowResponse(
         id=row["id"],
         owner_id=row.get("owner_id"),
         title=row["title"],
         description=row.get("description"),
         status=row["status"],
-        created_at=row["created_at"].isoformat() if isinstance(row["created_at"], datetime) else row["created_at"],
-        updated_at=row["updated_at"].isoformat() if isinstance(row["updated_at"], datetime) else row["updated_at"],
+        instruction_prompt=row.get("instruction_prompt"),
+        trigger_type=row.get("trigger_type"),
+        approval_policy=row.get("approval_policy"),
+        created_by=row.get("created_by"),
+        current_version_id=row.get("current_version_id"),
+        required_capability_ids=row.get("required_capability_ids"),
+        created_at=_dt(row["created_at"]),
+        updated_at=_dt(row["updated_at"]),
     )
 
 
@@ -69,6 +85,13 @@ def _get_repo(request: Request):
     return repo
 
 
+def _get_version_repo(request: Request):
+    repo = getattr(request.app.state, "workflow_version_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="Workflow version repository not available")
+    return repo
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -76,16 +99,36 @@ def _get_repo(request: Request):
 
 @router.post("", status_code=201, response_model=WorkflowResponse, summary="Create Workflow")
 async def create_workflow(body: WorkflowCreate, request: Request) -> WorkflowResponse:
-    """Create a new workflow in draft status."""
+    """Create a new workflow in draft status. If instruction_prompt is supplied, creates v1."""
     _check_enabled()
     repo = _get_repo(request)
     owner_id = get_effective_user_id()
+    workflow_id = str(uuid.uuid4())
+
     row = await repo.create(
-        id=str(uuid.uuid4()),
+        id=workflow_id,
         owner_id=owner_id,
         title=body.title,
         description=body.description,
+        instruction_prompt=body.instruction_prompt,
+        trigger_type=body.trigger_type,
+        approval_policy=body.approval_policy,
+        created_by=body.created_by,
     )
+
+    # If an instruction_prompt was supplied, create v1 and link it back.
+    if body.instruction_prompt:
+        version_repo = _get_version_repo(request)
+        version_id = str(uuid.uuid4())
+        await version_repo.create(
+            id=version_id,
+            workflow_id=workflow_id,
+            version_number=1,
+            instruction_prompt=body.instruction_prompt,
+            created_by=body.created_by or "user",
+        )
+        row = await repo.set_current_version(workflow_id, version_id) or row
+
     return _serialize(row)
 
 
