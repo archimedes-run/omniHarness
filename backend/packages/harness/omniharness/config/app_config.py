@@ -31,6 +31,7 @@ from omniharness.config.title_config import TitleConfig, load_title_config_from_
 from omniharness.config.token_usage_config import TokenUsageConfig
 from omniharness.config.tool_config import ToolConfig, ToolGroupConfig
 from omniharness.config.tool_search_config import ToolSearchConfig, load_tool_search_config_from_dict
+from omniharness.config.workflows_config import WorkflowsConfig
 
 load_dotenv()
 
@@ -93,6 +94,7 @@ class AppConfig(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig, description="Skills configuration")
     skill_evolution: SkillEvolutionConfig = Field(default_factory=SkillEvolutionConfig, description="Agent-managed skill evolution configuration")
     mcp_builder: McpBuilderConfig = Field(default_factory=McpBuilderConfig, description="MCP builder feature flag and configuration")
+    workflows: WorkflowsConfig = Field(default_factory=WorkflowsConfig, description="Workflows feature flag and configuration")
     extensions: ExtensionsConfig = Field(default_factory=ExtensionsConfig, description="Extensions configuration (MCP servers and skills state)")
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig, description="Tool search / deferred loading configuration")
     title: TitleConfig = Field(default_factory=TitleConfig, description="Automatic title generation configuration")

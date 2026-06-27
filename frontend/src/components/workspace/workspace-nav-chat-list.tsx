@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, BoxIcon, MessagesSquare } from "lucide-react";
+import { BotIcon, BoxIcon, GitBranchIcon, MessagesSquare } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -48,6 +48,19 @@ export function WorkspaceNavChatList() {
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        {process.env.NEXT_PUBLIC_FEATURE_WORKFLOWS === "true" && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={pathname.startsWith("/workspace/workflows")}
+              asChild
+            >
+              <Link className="text-inherit" href="/workspace/workflows">
+                <GitBranchIcon />
+                <span>Workflows</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )}
       </SidebarMenu>
     </SidebarGroup>
   );

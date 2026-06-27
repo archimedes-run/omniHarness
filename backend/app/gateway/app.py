@@ -32,6 +32,7 @@ from app.gateway.routers import (
     thread_runs,
     threads,
     uploads,
+    workflows,
 )
 from omniharness.config import app_config as omniharness_app_config
 from omniharness.config.app_config import apply_logging_level
@@ -436,6 +437,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Stateless Runs API (stream/wait without a pre-existing thread)
     app.include_router(runs.router)
+
+    # Workflows API is mounted at /api/workflows (feature-flagged, returns 404 when disabled)
+    app.include_router(workflows.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

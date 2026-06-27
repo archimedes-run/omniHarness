@@ -21,5 +21,6 @@ from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
 from omniharness.persistence.thread_meta.model import ThreadMetaRow
 from omniharness.persistence.user.model import UserRow
+from omniharness.persistence.workflows.model import WorkflowRow
 
-__all__ = ["FeedbackRow", "McpSecretRow", "McpServerRow", "RunEventRow", "RunRow", "ThreadMetaRow", "UserRow"]
+__all__ = ["FeedbackRow", "McpSecretRow", "McpServerRow", "RunEventRow", "RunRow", "ThreadMetaRow", "UserRow", "WorkflowRow"]

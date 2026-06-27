@@ -934,3 +934,11 @@ run_events:
 #   failure_threshold: 5
 #   # Time in seconds before attempting to recover (default: 60)
 #   recovery_timeout_sec: 60
+
+# ============================================================================
+# Workflows (Phase 0 — experimental, defaults OFF)
+# ============================================================================
+# Enable the Workflows domain. When off, /api/workflows returns 404 and
+# the Workflows nav entry is hidden. Phase 1 will add execution support.
+workflows:
+  enabled: false
