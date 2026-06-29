@@ -22,6 +22,7 @@ import uuid
 from langchain_core.messages import HumanMessage
 
 from app.gateway.services import build_run_config, launch_agent_run_detached
+from app.gateway.workflows.generator import WorkflowSpec
 from omniharness.platform.events import EventSource
 from omniharness.platform.writer import emit_platform_event
 from omniharness.runtime import ConflictError, DisconnectMode, RunContext, RunStatus
@@ -90,6 +91,24 @@ async def _fail_run(
             logger.debug("Failed to emit workflow.run.failed event (non-fatal)", exc_info=True)
 
 
+def _build_workflow_awareness_context(spec: WorkflowSpec) -> str:
+    """Build the autonomy framing block prepended to the HumanMessage for workflow-aware runs."""
+    steps_block = "\n".join(f"{i + 1}. {s.title}: {s.description}" for i, s in enumerate(spec.steps))
+    risks_block = ("\nRISKS TO AVOID:\n" + "\n".join(f"- {r}" for r in spec.risks)) if spec.risks else ""
+    return (
+        "[WORKFLOW EXECUTION CONTEXT]\n"
+        "You are autonomously executing a saved workflow objective. No human is available "
+        "to answer clarifying questions — make reasonable assumptions and proceed. "
+        "At the end, provide a concise summary of what you accomplished, what decisions "
+        "you made, and any assumptions taken.\n\n"
+        f"OBJECTIVE: {spec.title}\n"
+        f"{spec.description}\n\n"
+        f"EXECUTION PLAN:\n{steps_block}"
+        f"{risks_block}\n"
+        "[END WORKFLOW CONTEXT]"
+    )
+
+
 async def execute_workflow_run(workflow_run_id: str, *, app) -> None:
     """Execute a workflow run end-to-end through the existing run pipeline.
 
@@ -142,10 +161,12 @@ async def execute_workflow_run(workflow_run_id: str, *, app) -> None:
 
     version_id = wf.get("current_version_id")
     instruction_prompt: str | None = None
+    spec_json: dict | None = None
     if version_id and wf_version_repo is not None:
         version = await wf_version_repo.get(version_id)
         if version:
             instruction_prompt = version.get("instruction_prompt")
+            spec_json = version.get("spec_json")
 
     if not instruction_prompt:
         await _fail_run(wf_run_repo, event_store, workflow_run_id, workflow_id, "workflow has no runnable instruction")
@@ -190,7 +211,20 @@ async def execute_workflow_run(workflow_run_id: str, *, app) -> None:
 
     # ── 4. Launch the underlying run through the existing pipeline ───────────
     thread_id = str(uuid.uuid4())
-    graph_input = {"messages": [HumanMessage(content=instruction_prompt)]}
+
+    # Inject workflow-awareness context when a spec is available.
+    # Prepended to the HumanMessage — the lead agent's base system prompt is never touched.
+    if spec_json:
+        try:
+            spec = WorkflowSpec.model_validate(spec_json)
+            awareness_ctx = _build_workflow_awareness_context(spec)
+            augmented_content = f"{awareness_ctx}\n\n---\n\n{instruction_prompt}"
+        except Exception:
+            logger.warning("execute_workflow_run: spec_json validation failed for %s, falling back to raw prompt", workflow_run_id, exc_info=True)
+            augmented_content = instruction_prompt
+        graph_input = {"messages": [HumanMessage(content=augmented_content)]}
+    else:
+        graph_input = {"messages": [HumanMessage(content=instruction_prompt)]}
     run_config = build_run_config(thread_id, None, {"workflow_run_id": workflow_run_id})
     if owner_id:
         ctx_dict = run_config.setdefault("context", {})

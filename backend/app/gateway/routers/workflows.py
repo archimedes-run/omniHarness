@@ -139,6 +139,8 @@ class WorkflowRunResponse(BaseModel):
     initiated_by: str | None
     # Lineage: set when this run is a retry of another run (source stored in trigger_payload).
     source_run_id: str | None = None
+    # Populated on GET run-detail when status=succeeded; reads last_ai_message from the underlying run.
+    final_summary: str | None = None
     created_at: str
     updated_at: str
 
@@ -410,7 +412,21 @@ async def get_workflow_run(workflow_id: str, run_id: str, request: Request) -> W
     row = await run_repo.get(run_id)
     if row is None or row.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Workflow run not found")
-    return _serialize_run(row)
+
+    final_summary: str | None = None
+    if row.get("status") == "succeeded" and row.get("run_id"):
+        run_store = getattr(request.app.state, "run_store", None)
+        if run_store is not None:
+            try:
+                underlying = await run_store.get(row["run_id"], user_id=None)
+                if underlying:
+                    final_summary = underlying.get("last_ai_message")
+            except Exception:
+                logger.debug("get_workflow_run: could not fetch final_summary for %s (non-fatal)", run_id, exc_info=True)
+
+    response = _serialize_run(row)
+    response.final_summary = final_summary
+    return response
 
 
 # ---------------------------------------------------------------------------
