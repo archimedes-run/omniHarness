@@ -34,6 +34,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _extract_text_content(message: AnyMessage) -> str:
+    """Return plain text from an AI message, handling str and list content."""
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return " ".join(parts)
+    return ""
+
+
 class RunJournal(BaseCallbackHandler):
     """LangChain callback handler that captures events to RunEventStore."""
 
@@ -213,6 +229,12 @@ class RunJournal(BaseCallbackHandler):
                     "llm_call_index": call_index,
                 },
             )
+
+            # Track last lead-agent text response for workflow final_summary.
+            if caller == "lead_agent":
+                text = _extract_text_content(message)
+                if text:
+                    self._last_ai_msg = text[:2000]
 
             # Token accumulation
             if self._track_tokens:
