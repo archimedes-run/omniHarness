@@ -300,6 +300,9 @@ async def search_threads(body: ThreadSearchRequest, request: Request) -> list[Th
 
     Delegates to the configured ThreadMetaStore implementation
     (SQL-backed for sqlite/postgres, Store-backed for memory mode).
+
+    Workflow-owned threads (metadata.workflow_run_id is set) are excluded from
+    results so they don't clutter the chat sidebar.  Access-by-id is unaffected.
     """
     from app.gateway.deps import get_thread_store
 
@@ -310,6 +313,13 @@ async def search_threads(body: ThreadSearchRequest, request: Request) -> list[Th
         limit=body.limit,
         offset=body.offset,
     )
+
+    # Exclude workflow-owned threads when the workflows feature is enabled.
+    config = getattr(request.app.state, "config", None)
+    workflows_enabled = config is not None and getattr(getattr(config, "workflows", None), "enabled", False)
+    if workflows_enabled:
+        rows = [r for r in rows if not r.get("metadata", {}).get("workflow_run_id")]
+
     return [
         ThreadResponse(
             thread_id=r["thread_id"],

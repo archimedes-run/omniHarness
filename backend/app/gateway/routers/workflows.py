@@ -430,6 +430,61 @@ async def get_workflow_run(workflow_id: str, run_id: str, request: Request) -> W
 
 
 # ---------------------------------------------------------------------------
+# Artifact links (Phase 1 Slice 5b)
+# ---------------------------------------------------------------------------
+
+
+class WorkflowArtifactLinkResponse(BaseModel):
+    id: str
+    workflow_run_id: str
+    artifact_path: str
+    artifact_type: str | None
+    created_at: str
+
+
+def _serialize_artifact_link(row: dict) -> WorkflowArtifactLinkResponse:
+    return WorkflowArtifactLinkResponse(
+        id=row["id"],
+        workflow_run_id=row["workflow_run_id"],
+        artifact_path=row["artifact_path"],
+        artifact_type=row.get("artifact_type"),
+        created_at=_dt(row["created_at"]),
+    )
+
+
+@router.get(
+    "/{workflow_id}/runs/{run_id}/artifacts",
+    response_model=list[WorkflowArtifactLinkResponse],
+    summary="List Workflow Run Artifacts",
+)
+async def list_workflow_run_artifacts(
+    workflow_id: str,
+    run_id: str,
+    request: Request,
+) -> list[WorkflowArtifactLinkResponse]:
+    """List artifact links produced by a workflow run."""
+    _check_enabled()
+    owner_id = get_effective_user_id()
+
+    wf_repo = _get_repo(request)
+    wf = await wf_repo.get(workflow_id, owner_id=owner_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    run_repo = _get_run_repo(request)
+    run_row = await run_repo.get(run_id)
+    if run_row is None or run_row.get("workflow_id") != workflow_id:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+
+    artifact_repo = getattr(request.app.state, "workflow_artifact_link_repo", None)
+    if artifact_repo is None:
+        return []
+
+    rows = await artifact_repo.list_by_run(run_id)
+    return [_serialize_artifact_link(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Cancel / Retry (Phase 1 Slice 3)
 # ---------------------------------------------------------------------------
 

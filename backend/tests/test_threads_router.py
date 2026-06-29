@@ -431,3 +431,90 @@ def test_get_thread_history_returns_iso_for_legacy_checkpoint_metadata() -> None
     assert entries, "expected at least one history entry"
     for entry in entries:
         assert _ISO_TIMESTAMP_RE.match(entry["created_at"]), entry
+
+
+# ---------------------------------------------------------------------------
+# Slice 5b — workflow thread exclusion from /search
+# ---------------------------------------------------------------------------
+
+
+def _build_thread_app_with_config(*, workflows_enabled: bool) -> tuple[FastAPI, InMemoryStore, InMemorySaver]:
+    """Build a thread app whose app.state.config has the workflows flag set."""
+    from omniharness.config.app_config import AppConfig
+    from omniharness.config.database_config import DatabaseConfig
+    from omniharness.config.sandbox_config import SandboxConfig
+    from omniharness.config.workflows_config import WorkflowsConfig
+
+    app_obj, store, checkpointer = _build_thread_app()
+    app_obj.state.config = AppConfig(
+        sandbox=SandboxConfig(use="omniharness.sandbox.local:LocalSandboxProvider"),
+        database=DatabaseConfig(),
+        workflows=WorkflowsConfig(enabled=workflows_enabled),
+    )
+    return app_obj, store, checkpointer
+
+
+def test_search_excludes_workflow_threads_when_enabled() -> None:
+    """Threads with metadata.workflow_run_id must not appear in /search when
+    workflows are enabled — normal threads must still appear.
+    """
+    import asyncio
+
+    app_obj, store, _ckpt = _build_thread_app_with_config(workflows_enabled=True)
+
+    async def _seed() -> None:
+        await store.aput(THREADS_NS, "chat-1", {"thread_id": "chat-1", "status": "idle", "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00", "metadata": {}})
+        await store.aput(THREADS_NS, "wf-thread", {"thread_id": "wf-thread", "status": "idle", "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00", "metadata": {"workflow_run_id": "some-run-id"}})
+
+    asyncio.run(_seed())
+
+    with TestClient(app_obj) as client:
+        response = client.post("/api/threads/search", json={"limit": 50})
+
+    assert response.status_code == 200, response.text
+    ids = {item["thread_id"] for item in response.json()}
+    assert "chat-1" in ids
+    assert "wf-thread" not in ids
+
+
+def test_search_includes_workflow_threads_when_feature_disabled() -> None:
+    """When workflows are disabled, workflow-tagged threads appear normally (flag-off guard)."""
+    import asyncio
+
+    app_obj, store, _ckpt = _build_thread_app_with_config(workflows_enabled=False)
+
+    async def _seed() -> None:
+        await store.aput(THREADS_NS, "wf-thread-off", {"thread_id": "wf-thread-off", "status": "idle", "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00", "metadata": {"workflow_run_id": "run-off"}})
+
+    asyncio.run(_seed())
+
+    with TestClient(app_obj) as client:
+        response = client.post("/api/threads/search", json={"limit": 50})
+
+    assert response.status_code == 200, response.text
+    ids = {item["thread_id"] for item in response.json()}
+    assert "wf-thread-off" in ids
+
+
+def test_get_thread_still_works_for_workflow_thread() -> None:
+    """Access-by-id for workflow-owned threads must remain open."""
+    import asyncio
+
+    from langgraph.checkpoint.base import empty_checkpoint
+
+    app_obj, store, checkpointer = _build_thread_app_with_config(workflows_enabled=True)
+    thread_id = "wf-direct"
+
+    async def _seed() -> None:
+        await store.aput(THREADS_NS, thread_id, {"thread_id": thread_id, "status": "idle", "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00", "metadata": {"workflow_run_id": "run-123"}})
+        await checkpointer.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, empty_checkpoint(), {"step": -1, "source": "input", "writes": None, "parents": {}}, {})
+
+    asyncio.run(_seed())
+
+    with TestClient(app_obj) as client:
+        response = client.get(f"/api/threads/{thread_id}")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["thread_id"] == thread_id
+    assert body["metadata"]["workflow_run_id"] == "run-123"

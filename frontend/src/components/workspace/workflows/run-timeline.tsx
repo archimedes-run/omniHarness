@@ -5,7 +5,9 @@ import {
   ArrowLeftIcon,
   CheckCircleIcon,
   ClockIcon,
+  DownloadIcon,
   ExternalLinkIcon,
+  FileIcon,
   Loader2Icon,
   RotateCcwIcon,
   XCircleIcon,
@@ -17,9 +19,16 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/workspace/status-badge";
+import { urlOfArtifact } from "@/core/artifacts/utils";
 
-import { cancelRun, getRun, getWorkflow, retryRun } from "./api";
-import type { Workflow, WorkflowRun } from "./types";
+import {
+  cancelRun,
+  getRun,
+  getWorkflow,
+  listRunArtifacts,
+  retryRun,
+} from "./api";
+import type { Workflow, WorkflowArtifactLink, WorkflowRun } from "./types";
 import { WorkflowMessages } from "./workflow-messages";
 
 const TERMINAL = new Set(["succeeded", "failed", "canceled", "expired"]);
@@ -56,6 +65,89 @@ function StatusIcon({ status }: { status: string }) {
   if (status === "running" || status === "queued")
     return <Loader2Icon className="h-4 w-4 animate-spin text-blue-500" />;
   return <ClockIcon className="text-muted-foreground h-4 w-4" />;
+}
+
+interface RunArtifactsProps {
+  workflowId: string;
+  runId: string;
+  threadId: string;
+}
+
+function RunArtifacts({ workflowId, runId, threadId }: RunArtifactsProps) {
+  const [artifacts, setArtifacts] = useState<WorkflowArtifactLink[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    listRunArtifacts(workflowId, runId)
+      .then((links) => {
+        if (!cancelled) setArtifacts(links);
+      })
+      .catch(() => {
+        /* non-fatal */
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowId, runId]);
+
+  if (loading) {
+    return (
+      <div className="text-muted-foreground py-2 text-xs">
+        Loading artifacts…
+      </div>
+    );
+  }
+
+  if (artifacts.length === 0) {
+    return (
+      <p className="text-muted-foreground py-2 text-sm">
+        No artifacts produced.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {artifacts.map((link) => {
+        const filename =
+          link.artifact_path.split("/").pop() ?? link.artifact_path;
+        const downloadUrl = urlOfArtifact({
+          filepath: link.artifact_path,
+          threadId,
+          download: true,
+        });
+        const viewUrl = urlOfArtifact({
+          filepath: link.artifact_path,
+          threadId,
+        });
+        return (
+          <div
+            key={link.id}
+            className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+          >
+            <FileIcon className="text-muted-foreground h-4 w-4 shrink-0" />
+            <a
+              href={viewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 flex-1 truncate font-mono text-xs hover:underline"
+            >
+              {filename}
+            </a>
+            <a href={downloadUrl} download={filename}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0">
+                <DownloadIcon className="h-3.5 w-3.5" />
+              </Button>
+            </a>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 interface RunTimelineProps {
@@ -334,6 +426,18 @@ export function RunTimeline({ workflowId, runId }: RunTimelineProps) {
           <p className="text-sm whitespace-pre-wrap text-green-900 dark:text-green-200">
             {run.final_summary}
           </p>
+        </div>
+      ) : null}
+
+      {/* Artifacts */}
+      {run.status === "succeeded" && run.thread_id ? (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold">Artifacts</h2>
+          <RunArtifacts
+            workflowId={workflowId}
+            runId={runId}
+            threadId={run.thread_id}
+          />
         </div>
       ) : null}
 

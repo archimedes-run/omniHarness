@@ -26,6 +26,14 @@ export interface Workflow {
   updated_at: string;
 }
 
+export interface WorkflowArtifactLink {
+  id: string;
+  workflow_run_id: string;
+  artifact_path: string;
+  artifact_type: string | null;
+  created_at: string;
+}
+
 export interface WorkflowRun {
   id: string;
   workflow_id: string;

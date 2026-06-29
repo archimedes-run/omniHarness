@@ -1,8 +1,12 @@
-import type { Message } from "@langchain/langgraph-sdk";
-
 import { fetch } from "@/core/api/fetcher";
+import type { RunMessage } from "@/core/threads/types";
 
-import type { Workflow, WorkflowRun, WorkflowSpec } from "./types";
+import type {
+  Workflow,
+  WorkflowArtifactLink,
+  WorkflowRun,
+  WorkflowSpec,
+} from "./types";
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -112,10 +116,20 @@ export async function retryRun(
   return handleResponse<WorkflowRun>(res);
 }
 
+export async function listRunArtifacts(
+  workflowId: string,
+  runId: string,
+): Promise<WorkflowArtifactLink[]> {
+  const res = await fetch(
+    `/api/workflows/${workflowId}/runs/${runId}/artifacts`,
+  );
+  return handleResponse<WorkflowArtifactLink[]>(res);
+}
+
 export async function getRunMessages(
   threadId: string,
   runId: string,
-): Promise<{ data: Message[]; has_more: boolean }> {
+): Promise<{ data: RunMessage[]; has_more: boolean }> {
   const res = await fetch(`/api/threads/${threadId}/runs/${runId}/messages`);
-  return handleResponse<{ data: Message[]; has_more: boolean }>(res);
+  return handleResponse<{ data: RunMessage[]; has_more: boolean }>(res);
 }

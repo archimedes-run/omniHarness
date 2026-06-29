@@ -125,7 +125,11 @@ export function WorkflowMessages({ threadId, runId }: WorkflowMessagesProps) {
     getRunMessages(threadId, runId)
       .then((result) => {
         if (!cancelled) {
-          setMessages(result.data);
+          setMessages(
+            result.data
+              .filter((ev) => !ev.metadata?.caller?.startsWith("middleware:"))
+              .map((ev) => ev.content),
+          );
         }
       })
       .catch((err) => {
