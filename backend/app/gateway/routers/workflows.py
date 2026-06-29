@@ -1,7 +1,8 @@
-"""Workflows API router — Phase 1 Slice 2."""
+"""Workflows API router — Phase 1 Slice 3."""
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -10,7 +11,17 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from omniharness.config import get_app_config
+from omniharness.persistence.workflow_runs.sql import IllegalStatusTransition
+from omniharness.platform.events import EventSource
+from omniharness.platform.writer import emit_platform_event
 from omniharness.runtime.user_context import get_effective_user_id
+
+logger = logging.getLogger(__name__)
+
+# Statuses from which a user may request retry.
+_RETRYABLE_STATUSES: frozenset[str] = frozenset({"failed", "canceled"})
+# Statuses that represent a completed (terminal) workflow run.
+_TERMINAL_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "canceled", "expired"})
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -122,6 +133,8 @@ class WorkflowRunResponse(BaseModel):
     run_id: str | None
     idempotency_key: str
     initiated_by: str | None
+    # Lineage: set when this run is a retry of another run (source stored in trigger_payload).
+    source_run_id: str | None = None
     created_at: str
     updated_at: str
 
@@ -133,11 +146,12 @@ def _dt_opt(v) -> str | None:
 
 
 def _serialize_run(row: dict) -> WorkflowRunResponse:
+    payload = row.get("trigger_payload") or {}
     return WorkflowRunResponse(
         id=row["id"],
         workflow_id=row["workflow_id"],
         trigger_type=row.get("trigger_type", "manual"),
-        trigger_payload=row.get("trigger_payload"),
+        trigger_payload=payload,
         status=row["status"],
         started_at=_dt_opt(row.get("started_at")),
         completed_at=_dt_opt(row.get("completed_at")),
@@ -146,6 +160,7 @@ def _serialize_run(row: dict) -> WorkflowRunResponse:
         run_id=row.get("run_id"),
         idempotency_key=row.get("idempotency_key", ""),
         initiated_by=row.get("initiated_by"),
+        source_run_id=payload.get("source_run_id"),
         created_at=_dt(row["created_at"]),
         updated_at=_dt(row["updated_at"]),
     )
@@ -329,3 +344,130 @@ async def get_workflow_run(workflow_id: str, run_id: str, request: Request) -> W
     if row is None or row.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     return _serialize_run(row)
+
+
+# ---------------------------------------------------------------------------
+# Cancel / Retry (Phase 1 Slice 3)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{workflow_id}/runs/{run_id}/cancel", response_model=WorkflowRunResponse, summary="Cancel Workflow Run")
+async def cancel_workflow_run(workflow_id: str, run_id: str, request: Request) -> WorkflowRunResponse:
+    """Cancel a queued or running workflow run.
+
+    If the underlying agent run is in flight, cancels it via RunManager before
+    transitioning the workflow_run row to 'canceled'.  Idempotent: returns 409
+    if the run is already in a terminal state.
+    """
+    _check_enabled()
+    owner_id = get_effective_user_id()
+
+    wf_repo = _get_repo(request)
+    wf = await wf_repo.get(workflow_id, owner_id=owner_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    run_repo = _get_run_repo(request)
+    wf_run = await run_repo.get(run_id)
+    if wf_run is None or wf_run.get("workflow_id") != workflow_id:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+
+    if wf_run["status"] in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Workflow run is already terminal (status={wf_run['status']}); cannot cancel",
+        )
+
+    # Set a human-readable note before touching status.
+    await run_repo.set_error_summary(run_id, "Cancelled by user")
+
+    # If the underlying agent run is in flight, cancel it.
+    underlying_run_id = wf_run.get("run_id")
+    if underlying_run_id:
+        run_mgr = getattr(request.app.state, "run_manager", None)
+        if run_mgr is not None:
+            try:
+                await run_mgr.cancel(underlying_run_id)
+            except Exception:
+                logger.warning("Failed to cancel underlying run %s (non-fatal)", underlying_run_id, exc_info=True)
+
+    # Transition the workflow_run row.  If the executor raced us to a terminal
+    # state, IllegalStatusTransition is raised and we surface a 409.
+    try:
+        updated = await run_repo.transition_status(run_id, "canceled")
+    except IllegalStatusTransition as exc:
+        # Executor beat us — fetch the current row and return a 409.
+        current = await run_repo.get(run_id) or wf_run
+        raise HTTPException(
+            status_code=409,
+            detail=f"Run transitioned to {current['status']!r} before cancel could complete: {exc}",
+        ) from exc
+
+    event_store = getattr(request.app.state, "run_event_store", None)
+    if event_store:
+        try:
+            await emit_platform_event(
+                event_store,
+                thread_id=f"plat-workflow-{workflow_id}",
+                event_type="workflow.run.canceled",
+                source=EventSource.WORKFLOW,
+                metadata={"workflow_id": workflow_id, "workflow_run_id": run_id},
+            )
+        except Exception:
+            logger.debug("Failed to emit workflow.run.canceled (non-fatal)", exc_info=True)
+
+    return _serialize_run(updated)
+
+
+@router.post("/{workflow_id}/runs/{run_id}/retry", status_code=202, response_model=WorkflowRunResponse, summary="Retry Workflow Run")
+async def retry_workflow_run(
+    workflow_id: str,
+    run_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> WorkflowRunResponse:
+    """Retry a failed or canceled workflow run by creating a brand-new run.
+
+    The source run is left untouched.  The new run records the source run ID
+    inside its trigger_payload so the lineage is traceable.  Returns 202 with
+    the new WorkflowRunResponse.  Returns 409 if the source run is not in a
+    retryable state (failed or canceled).
+    """
+    _check_enabled()
+    owner_id = get_effective_user_id()
+
+    wf_repo = _get_repo(request)
+    wf = await wf_repo.get(workflow_id, owner_id=owner_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    run_repo = _get_run_repo(request)
+    source_run = await run_repo.get(run_id)
+    if source_run is None or source_run.get("workflow_id") != workflow_id:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+
+    if source_run["status"] not in _RETRYABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry a run with status={source_run['status']!r}; only failed or canceled runs may be retried",
+        )
+
+    # Create a brand-new run — fresh id, fresh unique idempotency key.
+    # Source lineage stored inside trigger_payload; no new column required.
+    new_run_id = str(uuid.uuid4())
+    new_idempotency_key = f"wf:{workflow_id}:retry:{run_id}:{uuid.uuid4()}"
+
+    new_run, _ = await run_repo.create_or_get_by_key(
+        workflow_id=workflow_id,
+        idempotency_key=new_idempotency_key,
+        id=new_run_id,
+        trigger_type="manual",
+        trigger_payload={"source_run_id": run_id},
+        initiated_by=owner_id,
+    )
+
+    from app.gateway.workflows.executor import execute_workflow_run
+
+    background_tasks.add_task(execute_workflow_run, new_run["id"], app=request.app)
+
+    return _serialize_run(new_run)
