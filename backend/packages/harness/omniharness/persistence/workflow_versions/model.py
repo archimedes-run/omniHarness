@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from omniharness.persistence.base import Base
@@ -17,8 +17,8 @@ class WorkflowVersionRow(Base):
     workflow_id: Mapped[str] = mapped_column(String(64), ForeignKey("workflows.id"), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     instruction_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # spec_json lands in Slice 4 (structured generated spec); reserved nullable here.
-    # Phase 4: populate with the generated workflow spec.
+    # Slice 4a: validated structured spec generated from instruction_prompt.
+    spec_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[str] = mapped_column(String(32), default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 

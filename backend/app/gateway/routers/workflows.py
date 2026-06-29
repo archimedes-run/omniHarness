@@ -1,4 +1,4 @@
-"""Workflows API router — Phase 1 Slice 3."""
+"""Workflows API router — Phase 1 Slice 4a."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.gateway.workflows.generator import WorkflowGenerationError, WorkflowSpec, generate_workflow_spec
 from omniharness.config import get_app_config
 from omniharness.persistence.workflow_runs.sql import IllegalStatusTransition
 from omniharness.platform.events import EventSource
@@ -58,6 +59,8 @@ class WorkflowResponse(BaseModel):
     created_by: str | None = None
     current_version_id: str | None = None
     required_capability_ids: list | None = None
+    # Slice 4a: spec generated from instruction_prompt; None until POST /generate is called.
+    spec_json: dict | None = None
     created_at: str
     updated_at: str
 
@@ -66,7 +69,7 @@ def _dt(v) -> str:
     return v.isoformat() if isinstance(v, datetime) else str(v)
 
 
-def _serialize(row: dict) -> WorkflowResponse:
+def _serialize(row: dict, spec_json: dict | None = None) -> WorkflowResponse:
     return WorkflowResponse(
         id=row["id"],
         owner_id=row.get("owner_id"),
@@ -79,6 +82,7 @@ def _serialize(row: dict) -> WorkflowResponse:
         created_by=row.get("created_by"),
         current_version_id=row.get("current_version_id"),
         required_capability_ids=row.get("required_capability_ids"),
+        spec_json=spec_json,
         created_at=_dt(row["created_at"]),
         updated_at=_dt(row["updated_at"]),
     )
@@ -218,14 +222,23 @@ async def list_workflows(request: Request) -> list[WorkflowResponse]:
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse, summary="Get Workflow")
 async def get_workflow(workflow_id: str, request: Request) -> WorkflowResponse:
-    """Get a workflow by ID (scoped to the current user)."""
+    """Get a workflow by ID (scoped to the current user). Includes spec_json when generated."""
     _check_enabled()
     repo = _get_repo(request)
     owner_id = get_effective_user_id()
     row = await repo.get(workflow_id, owner_id=owner_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    return _serialize(row)
+
+    spec_json: dict | None = None
+    version_id = row.get("current_version_id")
+    if version_id:
+        version_repo = _get_version_repo(request)
+        version = await version_repo.get(version_id)
+        if version:
+            spec_json = version.get("spec_json")
+
+    return _serialize(row, spec_json=spec_json)
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse, summary="Patch Workflow")
@@ -256,6 +269,60 @@ async def archive_workflow(workflow_id: str, request: Request) -> WorkflowRespon
     if row is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return _serialize(row)
+
+
+# ---------------------------------------------------------------------------
+# Spec generation (Phase 1 Slice 4a)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{workflow_id}/generate", response_model=WorkflowSpec, summary="Generate Workflow Spec")
+async def generate_workflow(workflow_id: str, request: Request) -> WorkflowSpec:
+    """Generate a structured WorkflowSpec from the workflow's instruction_prompt.
+
+    Makes a single constrained LLM call (with one automatic retry on failure).
+    Validates the output against WorkflowSpec before storing.  Overwrites any
+    prior spec on the current version (regenerate = overwrite, no new version).
+    Returns the validated spec immediately in the response body.
+
+    Does NOT create a thread, run, or sandbox — this is pure planning.
+
+    Returns 409 when the workflow has no current version or empty instruction.
+    Returns 422 when the model cannot produce a valid spec after one retry.
+    Returns 502 on unexpected upstream model errors.
+    """
+    _check_enabled()
+    owner_id = get_effective_user_id()
+
+    wf_repo = _get_repo(request)
+    wf = await wf_repo.get(workflow_id, owner_id=owner_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    version_id = wf.get("current_version_id")
+    if not version_id:
+        raise HTTPException(status_code=409, detail="Workflow has no instruction to generate from")
+
+    version_repo = _get_version_repo(request)
+    version = await version_repo.get(version_id)
+    if version is None:
+        raise HTTPException(status_code=409, detail="Workflow has no instruction to generate from")
+
+    instruction_prompt = (version.get("instruction_prompt") or "").strip()
+    if not instruction_prompt:
+        raise HTTPException(status_code=409, detail="Workflow has no instruction to generate from")
+
+    try:
+        spec = await generate_workflow_spec(instruction_prompt)
+    except WorkflowGenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error during workflow spec generation for %s", workflow_id)
+        raise HTTPException(status_code=502, detail="Upstream model error during spec generation") from exc
+
+    await version_repo.set_spec_json(version_id, spec.model_dump())
+
+    return spec
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,17 @@ class WorkflowVersionRepository:
             row = await session.get(WorkflowVersionRow, id)
             return row.to_dict() if row else None
 
+    async def set_spec_json(self, version_id: str, spec_json: dict) -> dict | None:
+        """Persist a validated spec_json on this version (overwrites on regenerate)."""
+        async with self._sf() as session:
+            row = await session.get(WorkflowVersionRow, version_id)
+            if row is None:
+                return None
+            row.spec_json = spec_json
+            await session.commit()
+            await session.refresh(row)
+            return row.to_dict()
+
     async def list_by_workflow(self, workflow_id: str, *, limit: int = 50) -> list[dict]:
         stmt = select(WorkflowVersionRow).where(WorkflowVersionRow.workflow_id == workflow_id).order_by(WorkflowVersionRow.version_number.asc()).limit(limit)
         async with self._sf() as session:

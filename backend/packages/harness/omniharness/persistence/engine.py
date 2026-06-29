@@ -189,6 +189,8 @@ async def _run_additive_migrations(backend: str) -> None:
         ("workflows", "created_by", "VARCHAR(16)", "NULL"),
         ("workflows", "current_version_id", "VARCHAR(64)", "NULL"),
         ("workflows", "required_capability_ids", "JSON", "NULL"),
+        # Phase 1 Slice 4a: workflow spec generator (migration 0013)
+        ("workflow_versions", "spec_json", "JSON", "NULL"),
     ]
 
     async with _engine.begin() as conn:
