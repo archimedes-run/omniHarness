@@ -67,7 +67,7 @@ class WorkflowRepository:
             result = await session.execute(stmt)
             return [r.to_dict() for r in result.scalars()]
 
-    async def update(self, id: str, *, owner_id: str | None = None, title: str | None = None, description: str | None = None, status: str | None = None) -> dict | None:
+    async def update(self, id: str, *, owner_id: str | None = None, title: str | None = None, description: str | None = None, status: str | None = None, approval_policy: str | None = None) -> dict | None:
         async with self._sf() as session:
             row = await session.get(WorkflowRow, id)
             if row is None:
@@ -80,6 +80,8 @@ class WorkflowRepository:
                 row.description = description
             if status is not None:
                 row.status = status
+            if approval_policy is not None:
+                row.approval_policy = approval_policy
             row.updated_at = datetime.now(UTC)
             await session.commit()
             await session.refresh(row)

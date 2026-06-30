@@ -1,4 +1,4 @@
-"""Workflows API router — Phase 1 Slice 4a."""
+"""Workflows API router — Phase 1 Slice 6."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.workflows.generator import WorkflowGenerationError, WorkflowSpec, generate_workflow_spec
+from app.gateway.workflows.policy import requires_approval as _requires_approval
 from omniharness.config import get_app_config
 from omniharness.persistence.workflow_runs.sql import IllegalStatusTransition
 from omniharness.platform.events import EventSource
@@ -26,6 +27,72 @@ _TERMINAL_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "canceled
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
+# ---------------------------------------------------------------------------
+# Static workflow template catalog (Slice 6)
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_TEMPLATES = [
+    {
+        "id": "tpl-daily-brief",
+        "title": "Daily Brief",
+        "description": "Summarize the day's priorities and updates into a concise brief.",
+        "instruction_prompt": "Review current tasks, notes, and any pending items. Produce a short daily brief (3–5 bullet points) highlighting today's top priorities, any blockers, and what you plan to accomplish by end of day.",
+        "approval_policy": "execute_low_risk",
+        "spec_json": {
+            "title": "Daily Brief",
+            "description": "Produces a concise daily brief summarising priorities, blockers, and goals.",
+            "steps": [
+                {"title": "Gather context", "description": "Review available tasks, notes, and pending items.", "suggested_tools": ["read_file"]},
+                {"title": "Identify top priorities", "description": "Select the 3–5 most important items for today.", "suggested_tools": []},
+                {"title": "Write brief", "description": "Compose a short, scannable brief with bullet points.", "suggested_tools": ["write_file"]},
+            ],
+            "required_capabilities": [],
+            "risks": [],
+            "approval_policy": "execute_low_risk",
+        },
+    },
+    {
+        "id": "tpl-meeting-prep",
+        "title": "Meeting Prep",
+        "description": "Given a meeting topic, assemble context, background, and talking points.",
+        "instruction_prompt": (
+            "Prepare for an upcoming meeting. Research the topic or participants, gather relevant background context, identify key questions to raise, and produce a structured talking-points document ready to use in the meeting."
+        ),
+        "approval_policy": "execute_low_risk",
+        "spec_json": {
+            "title": "Meeting Prep",
+            "description": "Assembles background context and talking points for an upcoming meeting.",
+            "steps": [
+                {"title": "Identify topic and participants", "description": "Clarify the meeting subject and who is involved.", "suggested_tools": []},
+                {"title": "Research context", "description": "Gather background information, prior decisions, and open questions.", "suggested_tools": ["read_file", "web_search"]},
+                {"title": "Draft talking points", "description": "Produce a structured document with agenda items and questions.", "suggested_tools": ["write_file"]},
+            ],
+            "required_capabilities": [],
+            "risks": [],
+            "approval_policy": "execute_low_risk",
+        },
+    },
+    {
+        "id": "tpl-weekly-summary",
+        "title": "Weekly Project Summary",
+        "description": "Summarise the week's project progress into a concise status update.",
+        "instruction_prompt": "Review the week's completed work, any blockers encountered, decisions made, and goals for next week. Produce a structured status update suitable for sharing with stakeholders.",
+        "approval_policy": "execute_low_risk",
+        "spec_json": {
+            "title": "Weekly Project Summary",
+            "description": "Produces a structured weekly status update covering accomplishments, blockers, and next steps.",
+            "steps": [
+                {"title": "Review completed work", "description": "List what was finished or meaningfully progressed this week.", "suggested_tools": ["read_file"]},
+                {"title": "Identify blockers and decisions", "description": "Note any impediments encountered and decisions made.", "suggested_tools": []},
+                {"title": "Write status update", "description": "Compose a stakeholder-ready summary with accomplishments, blockers, and next-week goals.", "suggested_tools": ["write_file"]},
+            ],
+            "required_capabilities": [],
+            "risks": [],
+            "approval_policy": "execute_low_risk",
+        },
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 # Request / response models
@@ -39,12 +106,14 @@ class WorkflowCreate(BaseModel):
     trigger_type: str | None = "manual"  # manual|scheduled|event|api
     approval_policy: str | None = "draft_only"  # draft_only|approval_required|execute_low_risk
     created_by: str | None = "user"  # user|agent|import|template
+    spec_json: dict | None = None
 
 
 class WorkflowPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     status: str | None = None  # draft|active|paused|archived
+    approval_policy: str | None = None
 
 
 class WorkflowResponse(BaseModel):
@@ -122,6 +191,7 @@ def _get_run_repo(request: Request):
 
 class WorkflowRunCreate(BaseModel):
     trigger_payload: dict[str, Any] | None = None
+    confirmed: bool = False
 
 
 class WorkflowRunResponse(BaseModel):
@@ -177,6 +247,22 @@ def _serialize_run(row: dict) -> WorkflowRunResponse:
 # ---------------------------------------------------------------------------
 
 
+class WorkflowTemplateResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    instruction_prompt: str
+    approval_policy: str
+    spec_json: dict | None = None
+
+
+@router.get("/templates", response_model=list[WorkflowTemplateResponse], summary="List Workflow Templates")
+async def list_workflow_templates() -> list[WorkflowTemplateResponse]:
+    """Return the static built-in workflow template catalog. Not user-scoped; no DB access."""
+    _check_enabled()
+    return [WorkflowTemplateResponse(**t) for t in _WORKFLOW_TEMPLATES]
+
+
 @router.post("", status_code=201, response_model=WorkflowResponse, summary="Create Workflow")
 async def create_workflow(body: WorkflowCreate, request: Request) -> WorkflowResponse:
     """Create a new workflow in draft status. If instruction_prompt is supplied, creates v1."""
@@ -207,6 +293,8 @@ async def create_workflow(body: WorkflowCreate, request: Request) -> WorkflowRes
             instruction_prompt=body.instruction_prompt,
             created_by=body.created_by or "user",
         )
+        if body.spec_json:
+            await version_repo.set_spec_json(version_id, body.spec_json)
         row = await repo.set_current_version(workflow_id, version_id) or row
 
     return _serialize(row)
@@ -245,7 +333,7 @@ async def get_workflow(workflow_id: str, request: Request) -> WorkflowResponse:
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse, summary="Patch Workflow")
 async def patch_workflow(workflow_id: str, body: WorkflowPatch, request: Request) -> WorkflowResponse:
-    """Partially update a workflow (title, description, or status)."""
+    """Partially update a workflow (title, description, status, or approval_policy)."""
     _check_enabled()
     repo = _get_repo(request)
     owner_id = get_effective_user_id()
@@ -255,6 +343,7 @@ async def patch_workflow(workflow_id: str, body: WorkflowPatch, request: Request
         title=body.title,
         description=body.description,
         status=body.status,
+        approval_policy=body.approval_policy,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -324,6 +413,9 @@ async def generate_workflow(workflow_id: str, request: Request) -> WorkflowSpec:
 
     await version_repo.set_spec_json(version_id, spec.model_dump())
 
+    # Propagate the spec's suggested approval_policy to the workflow row (suggestion → enforcement).
+    await wf_repo.update(workflow_id, owner_id=owner_id, approval_policy=spec.approval_policy)
+
     return spec
 
 
@@ -355,6 +447,12 @@ async def trigger_workflow_run(
     wf = await wf_repo.get(workflow_id, owner_id=owner_id)
     if wf is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
+
+    if _requires_approval(wf) and not body.confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail="approval_required",
+        )
 
     run_repo = _get_run_repo(request)
 

@@ -56,6 +56,7 @@ export function WorkflowDetail({ workflowId }: WorkflowDetailProps) {
 
   // Run state
   const [triggering, setTriggering] = useState(false);
+  const [showRunConfirm, setShowRunConfirm] = useState(false);
 
   // Generate spec state
   const [generating, setGenerating] = useState(false);
@@ -89,9 +90,25 @@ export function WorkflowDetail({ workflowId }: WorkflowDetailProps) {
 
   const handleRun = async () => {
     if (!workflow || triggering) return;
+    if (workflow.approval_policy === "approval_required") {
+      setShowRunConfirm(true);
+      return;
+    }
     setTriggering(true);
     try {
       const run = await triggerRun(workflowId);
+      router.push(`/workspace/workflows/${workflowId}/runs/${run.id}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to trigger run");
+      setTriggering(false);
+    }
+  };
+
+  const handleConfirmedRun = async () => {
+    if (!workflow) return;
+    setTriggering(true);
+    try {
+      const run = await triggerRun(workflowId, { confirmed: true });
       router.push(`/workspace/workflows/${workflowId}/runs/${run.id}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to trigger run");
@@ -104,7 +121,11 @@ export function WorkflowDetail({ workflowId }: WorkflowDetailProps) {
     setGenerating(true);
     try {
       const spec = await generateSpec(workflowId);
-      setWorkflow((prev) => (prev ? { ...prev, spec_json: spec } : prev));
+      setWorkflow((prev) =>
+        prev
+          ? { ...prev, spec_json: spec, approval_policy: spec.approval_policy }
+          : prev,
+      );
       toast.success("Plan generated");
     } catch (err) {
       const msg =
@@ -148,6 +169,21 @@ export function WorkflowDetail({ workflowId }: WorkflowDetailProps) {
       );
     } finally {
       setSavingTitle(false);
+    }
+  };
+
+  const handlePatchApprovalPolicy = async (policy: string) => {
+    if (!workflow) return;
+    try {
+      const updated = await patchWorkflow(workflowId, {
+        approval_policy: policy,
+      });
+      setWorkflow(updated);
+      toast.success("Approval policy updated");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to update approval policy",
+      );
     }
   };
 
@@ -433,6 +469,28 @@ export function WorkflowDetail({ workflowId }: WorkflowDetailProps) {
             )}
           </div>
 
+          {/* Approval policy */}
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold">Approval policy</h2>
+            <p className="text-muted-foreground text-sm">
+              Controls whether a run requires explicit confirmation before
+              executing.
+            </p>
+            <select
+              className="bg-background focus:ring-ring w-full max-w-xs rounded-md border px-3 py-2 text-sm outline-none focus:ring-2"
+              value={workflow.approval_policy ?? "draft_only"}
+              onChange={(e) => void handlePatchApprovalPolicy(e.target.value)}
+            >
+              <option value="draft_only">Manual only (draft_only)</option>
+              <option value="execute_low_risk">
+                Auto-execute low-risk (execute_low_risk)
+              </option>
+              <option value="approval_required">
+                Require confirmation (approval_required)
+              </option>
+            </select>
+          </div>
+
           {/* Archive */}
           <div className="flex flex-col gap-2">
             <h2 className="text-sm font-semibold">Archive workflow</h2>
@@ -457,6 +515,41 @@ export function WorkflowDetail({ workflowId }: WorkflowDetailProps) {
           </div>
         </div>
       ) : null}
+
+      {/* Run confirmation dialog */}
+      <Dialog
+        open={showRunConfirm}
+        onOpenChange={(v) => !v && setShowRunConfirm(false)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Run workflow?</DialogTitle>
+          </DialogHeader>
+          <p className="text-muted-foreground text-sm">
+            &quot;{workflow.title}&quot; may take irreversible or external
+            actions. Run anyway?
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowRunConfirm(false)}
+              disabled={triggering}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowRunConfirm(false);
+                void handleConfirmedRun();
+              }}
+              disabled={triggering}
+            >
+              Run anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Archive confirmation dialog */}
       <Dialog

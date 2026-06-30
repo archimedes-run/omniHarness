@@ -6,6 +6,7 @@ import type {
   WorkflowArtifactLink,
   WorkflowRun,
   WorkflowSpec,
+  WorkflowTemplate,
 } from "./types";
 
 async function handleResponse<T>(res: Response): Promise<T> {
@@ -36,6 +37,8 @@ export async function createWorkflow(data: {
   title: string;
   description?: string;
   instruction_prompt?: string;
+  approval_policy?: string;
+  spec_json?: WorkflowSpec | null;
 }): Promise<Workflow> {
   const res = await fetch("/api/workflows", {
     method: "POST",
@@ -47,7 +50,12 @@ export async function createWorkflow(data: {
 
 export async function patchWorkflow(
   id: string,
-  data: Partial<{ title: string; description: string; status: string }>,
+  data: Partial<{
+    title: string;
+    description: string;
+    status: string;
+    approval_policy: string;
+  }>,
 ): Promise<Workflow> {
   const res = await fetch(`/api/workflows/${id}`, {
     method: "PATCH",
@@ -55,6 +63,11 @@ export async function patchWorkflow(
     body: JSON.stringify(data),
   });
   return handleResponse<Workflow>(res);
+}
+
+export async function getTemplates(): Promise<WorkflowTemplate[]> {
+  const res = await fetch("/api/workflows/templates");
+  return handleResponse<WorkflowTemplate[]>(res);
 }
 
 export async function archiveWorkflow(id: string): Promise<Workflow> {
@@ -70,11 +83,14 @@ export async function generateSpec(id: string): Promise<WorkflowSpec> {
   return handleResponse<WorkflowSpec>(res);
 }
 
-export async function triggerRun(id: string): Promise<WorkflowRun> {
+export async function triggerRun(
+  id: string,
+  opts?: { confirmed?: boolean },
+): Promise<WorkflowRun> {
   const res = await fetch(`/api/workflows/${id}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ confirmed: opts?.confirmed ?? false }),
   });
   return handleResponse<WorkflowRun>(res);
 }

@@ -22,8 +22,18 @@ export interface Workflow {
   instruction_prompt?: string | null;
   current_version_id: string | null;
   spec_json?: WorkflowSpec | null;
+  approval_policy?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface WorkflowTemplate {
+  id: string;
+  title: string;
+  description: string;
+  instruction_prompt: string;
+  approval_policy: string;
+  spec_json?: WorkflowSpec | null;
 }
 
 export interface WorkflowArtifactLink {
