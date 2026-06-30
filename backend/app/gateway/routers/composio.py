@@ -105,6 +105,51 @@ class ConnectionsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pending-connection sync helper
+# ---------------------------------------------------------------------------
+
+
+async def _sync_if_pending(row, *, client, repo, user_id: str):
+    """Check Composio's live status for a pending DB row and update if changed.
+
+    Returns the (potentially updated) row. No-op for non-pending rows or when
+    the Composio call fails — best-effort only.
+    """
+    if row.get("status") != "pending" or not row.get("composio_connection_id"):
+        return row
+    if client is None:
+        return row
+    try:
+        real_status = await client.get_connection_status(composio_connection_id=row["composio_connection_id"])
+        if real_status == "pending":
+            return row
+        account_display = None
+        if real_status == "active":
+            try:
+                account_display = await client.get_account_display(composio_connection_id=row["composio_connection_id"])
+            except ComposioError:
+                pass
+            try:
+                mcp_url = client.get_mcp_url(toolkit=row["toolkit"], entity_id=user_id)
+                _write_mcp_entry(
+                    toolkit=row["toolkit"],
+                    mcp_url=mcp_url,
+                    description=f"Composio {row['toolkit']} tools (1-click connection)",
+                )
+            except Exception:
+                pass
+        return await repo.upsert(
+            user_id=user_id,
+            toolkit=row["toolkit"],
+            composio_connection_id=row["composio_connection_id"],
+            status=real_status,
+            account_display=account_display,
+        )
+    except Exception:
+        return row  # best-effort; keep stale row on any failure
+
+
+# ---------------------------------------------------------------------------
 # extensions_config.json helpers
 # ---------------------------------------------------------------------------
 
@@ -172,9 +217,13 @@ def _remove_mcp_entry(*, toolkit: str) -> None:
 async def get_catalog(request: Request) -> CatalogResponse:
     user_id = _get_user_id(request)
     repo = get_composio_connection_repo(request)
+    client = get_composio_client(request)
 
     connections = await repo.list_by_user(user_id=user_id)
-    by_toolkit = {c["toolkit"]: c for c in connections}
+    synced = []
+    for row in connections:
+        synced.append(await _sync_if_pending(row, client=client, repo=repo, user_id=user_id))
+    by_toolkit = {c["toolkit"]: c for c in synced}
 
     items: list[ToolkitItem] = []
     for tk in TOOLKIT_CATALOG:
@@ -309,7 +358,11 @@ async def connection_callback(
 async def list_connections(request: Request) -> ConnectionsResponse:
     user_id = _get_user_id(request)
     repo = get_composio_connection_repo(request)
+    client = get_composio_client(request)
     rows = await repo.list_by_user(user_id=user_id)
+    synced = []
+    for row in rows:
+        synced.append(await _sync_if_pending(row, client=client, repo=repo, user_id=user_id))
     return ConnectionsResponse(
         connections=[
             ConnectionItem(
@@ -319,7 +372,7 @@ async def list_connections(request: Request) -> ConnectionsResponse:
                 composio_connection_id=r.get("composio_connection_id"),
                 created_at=r.get("created_at"),
             )
-            for r in rows
+            for r in synced
         ]
     )
 
@@ -335,9 +388,11 @@ async def get_connection(toolkit: str, request: Request):
     user_id = _get_user_id(request)
     toolkit = toolkit.upper()
     repo = get_composio_connection_repo(request)
+    client = get_composio_client(request)
     row = await repo.get_by_user_toolkit(user_id=user_id, toolkit=toolkit)
     if row is None:
         raise HTTPException(status_code=404, detail="Connection not found")
+    row = await _sync_if_pending(row, client=client, repo=repo, user_id=user_id)
     return {
         "status": row["status"],
         "toolkit": row["toolkit"],

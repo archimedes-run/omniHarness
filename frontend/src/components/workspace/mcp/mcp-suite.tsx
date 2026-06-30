@@ -26,6 +26,7 @@ import { fetch as apiFetch } from "@/core/api/fetcher";
 import {
   disconnectComposioToolkit,
   getComposioCatalog,
+  getComposioConnectionStatus,
   initiateComposioConnection,
   listComposioConnections,
 } from "@/core/mcp/api";
@@ -504,12 +505,20 @@ function ConnectionsTab() {
           "width=600,height=700",
         );
 
+        // connect.composio.dev sends Cross-Origin-Opener-Policy headers that
+        // sever the opener-popup link, making popup.closed inaccessible.
+        // Poll our own API instead — it auto-syncs from Composio when pending.
+        const poll = {
+          timer: undefined as ReturnType<typeof setInterval> | undefined,
+        };
+
         const handler = (ev: MessageEvent) => {
           const data = ev.data as { type?: string; toolkit?: string } | null;
           if (
             data?.type === "composio_connected" &&
             data?.toolkit === toolkit
           ) {
+            clearInterval(poll.timer);
             window.removeEventListener("message", handler);
             popup?.close();
             void refreshCatalog();
@@ -517,14 +526,28 @@ function ConnectionsTab() {
         };
         window.addEventListener("message", handler);
 
-        // Fallback: poll while the popup is open in case postMessage is missed.
-        const poll = setInterval(() => {
-          if (popup?.closed) {
-            clearInterval(poll);
-            window.removeEventListener("message", handler);
-            void refreshCatalog();
-          }
-        }, 1500);
+        let pollAttempts = 0;
+        poll.timer = setInterval(() => {
+          pollAttempts++;
+          void (async () => {
+            try {
+              const status = await getComposioConnectionStatus(toolkit);
+              if (status.status === "active" || status.status === "connected") {
+                clearInterval(poll.timer);
+                window.removeEventListener("message", handler);
+                popup?.close();
+                void refreshCatalog();
+                return;
+              }
+            } catch {
+              /* retry on transient error */
+            }
+            if (pollAttempts >= 40) {
+              clearInterval(poll.timer);
+              window.removeEventListener("message", handler);
+            }
+          })();
+        }, 2000);
       } catch (err: unknown) {
         setError(
           err instanceof Error ? err.message : "Failed to start connection",
