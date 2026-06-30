@@ -19,6 +19,7 @@ from app.gateway.routers import (
     assistants_compat,
     auth,
     channels,
+    composio,
     feedback,
     mcp,
     mcp_studio,
@@ -392,6 +393,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # MCP Studio API is mounted at /api/mcp-studio
     app.include_router(mcp_studio.router)
+
+    # Composio 1-click OAuth connector API is mounted at /api/composio
+    app.include_router(composio.router)
 
     # Memory API is mounted at /api/memory
     app.include_router(memory.router)

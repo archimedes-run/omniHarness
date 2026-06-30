@@ -118,6 +118,25 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.workflow_step_run_repo = None
             app.state.workflow_artifact_link_repo = None
 
+        # Composio connections repository (always enabled when DB is available)
+        if sf is not None:
+            from omniharness.persistence.composio_connections import ComposioConnectionRepository
+
+            app.state.composio_connection_repo = ComposioConnectionRepository(sf)
+        else:
+            app.state.composio_connection_repo = None
+
+        # ComposioClient (only when COMPOSIO_API_KEY is set)
+        import os
+
+        composio_api_key = os.environ.get("COMPOSIO_API_KEY")
+        if composio_api_key:
+            from app.gateway.composio_client import ComposioClient
+
+            app.state.composio_client = ComposioClient(composio_api_key)
+        else:
+            app.state.composio_client = None
+
         from omniharness.persistence.thread_meta import make_thread_store
 
         app.state.thread_store = make_thread_store(sf, app.state.store)
@@ -163,6 +182,8 @@ get_preview_session_manager = _require("preview_session_manager", "Preview sessi
 get_mcp_server_repo = _require("mcp_server_repo", "MCP server repository")
 get_mcp_server_manager = _require("mcp_server_manager", "MCP server manager")
 get_mcp_secrets_vault = _require("mcp_secrets_vault", "MCP secrets vault")
+get_composio_connection_repo = _require("composio_connection_repo", "Composio connection repository")
+get_composio_client = _require("composio_client", "Composio client")
 
 
 def get_store(request: Request):
