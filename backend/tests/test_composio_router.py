@@ -244,23 +244,31 @@ async def test_connection_repo_upsert_creates_and_updates():
 
 
 # ---------------------------------------------------------------------------
-# 12. ComposioClient wraps SDK errors
+# 12. ComposioClient raises ComposioError on HTTP failure
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_composio_client_wraps_sdk_errors_as_composio_error():
+async def test_composio_client_raises_on_http_error():
     from app.gateway.composio_client import ComposioClient, ComposioError
 
     client = ComposioClient(api_key="csk_test")
 
-    failing_toolset = MagicMock()
-    failing_toolset.initiate_connection.side_effect = RuntimeError("boom")
-    fake_app = MagicMock()
-    fake_app.GMAIL = "gmail-enum"
+    empty_resp = MagicMock(status_code=200, is_success=True)
+    empty_resp.json.return_value = {"items": []}
 
-    with patch("app.gateway.composio_client.ComposioToolSet", return_value=failing_toolset, create=True), patch("app.gateway.composio_client.App", fake_app, create=True):
-        with pytest.raises(ComposioError):
+    error_resp = MagicMock(status_code=500, is_success=False, text="server error")
+
+    mock_http_client = AsyncMock()
+    mock_http_client.get.return_value = empty_resp
+    mock_http_client.post.return_value = error_resp
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=mock_http_client)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(client, "_http", return_value=cm):
+        with pytest.raises(ComposioError, match="Failed to create auth config"):
             await client.initiate_connection(entity_id="u1", toolkit="GMAIL", redirect_url="http://x")
 
 
