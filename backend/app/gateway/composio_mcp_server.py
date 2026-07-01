@@ -37,6 +37,12 @@ TOOLKIT = os.environ.get("COMPOSIO_TOOLKIT", "").upper()
 CONNECTED_ACCOUNT_ID = os.environ.get("COMPOSIO_CONNECTED_ACCOUNT_ID", "")
 USER_ID = os.environ.get("COMPOSIO_USER_ID", "")
 
+# Expose only Composio's curated "important" tools per toolkit (default on).
+# Toolkits like GitHub have 500+ tools; loading them all blows past LLM tool
+# caps (OpenAI allows max 128 tools per request). Set COMPOSIO_IMPORTANT_ONLY
+# to "false"/"0"/"no" to load the full catalogue for a toolkit instead.
+IMPORTANT_ONLY = os.environ.get("COMPOSIO_IMPORTANT_ONLY", "true").strip().lower() not in ("false", "0", "no")
+
 if not API_KEY:
     sys.exit("COMPOSIO_API_KEY is required")
 if not TOOLKIT:
@@ -49,6 +55,8 @@ _HEADERS = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
 def _fetch_tools_sync() -> list[dict[str, Any]]:
     params: dict[str, str] = {"toolkit_slug": TOOLKIT.lower(), "limit": "100"}
+    if IMPORTANT_ONLY:
+        params["important"] = "true"
     if CONNECTED_ACCOUNT_ID:
         params["connected_account_id"] = CONNECTED_ACCOUNT_ID
     with httpx.Client(headers=_HEADERS, base_url=_BASE, timeout=30.0) as client:
