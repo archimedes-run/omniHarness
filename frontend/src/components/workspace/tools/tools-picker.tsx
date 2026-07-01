@@ -194,33 +194,32 @@ export function ToolsPicker({
       role="dialog"
       aria-label="Tools for this chat"
       className={cn(
-        "absolute left-1/2 z-40 w-[min(42rem,92vw)] -translate-x-1/2",
-        "flex max-h-[62vh] flex-col overflow-hidden rounded-3xl",
-        // Glassmorphism: translucent, blurred, soft highlight + deep shadow.
-        "border border-white/20 bg-white/10 shadow-2xl backdrop-blur-2xl",
-        "supports-[backdrop-filter]:bg-white/10 dark:border-white/10 dark:bg-black/30",
-        "ring-1 ring-white/10",
+        // Full chat-window width (anchored to the composer's relative root).
+        "absolute inset-x-0 z-40",
+        "flex max-h-[62vh] flex-col overflow-hidden rounded-2xl",
+        // Solid surface matching the rest of the app (composer/dialog/card).
+        "bg-background border-border border shadow-xl",
         placement === "bottom"
           ? "animate-in fade-in slide-in-from-top-2 top-full mt-3 origin-top"
           : "animate-in fade-in slide-in-from-bottom-2 bottom-full mb-3 origin-bottom",
       )}
     >
       {/* Header */}
-      <div className="border-b border-white/15 px-5 py-4">
+      <div className="border-border border-b px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <span className="text-sm font-semibold">Tools for this chat</span>
           <div className="flex items-center gap-2">
             {count && (
               <Badge
                 variant={overCap ? "destructive" : "secondary"}
-                className="bg-white/20 tabular-nums backdrop-blur-sm"
+                className="tabular-nums"
               >
                 {count.count} / {count.cap}
               </Badge>
             )}
             <button
               onClick={() => onOpenChange(false)}
-              className="text-muted-foreground rounded-full p-1 transition-colors hover:bg-white/20"
+              className="text-muted-foreground hover:bg-muted rounded-full p-1 transition-colors"
               aria-label="Close"
             >
               <XIcon className="size-4" />
@@ -233,7 +232,7 @@ export function ToolsPicker({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tools…"
-            className="placeholder:text-muted-foreground focus:ring-primary/40 w-full rounded-xl border border-white/20 bg-white/10 py-2 pr-3 pl-9 text-sm outline-none focus:ring-2"
+            className="border-border bg-muted/50 placeholder:text-muted-foreground focus:ring-ring w-full rounded-xl border py-2 pr-3 pl-9 text-sm outline-none focus:ring-2"
           />
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -242,10 +241,10 @@ export function ToolsPicker({
               key={c}
               onClick={() => setActiveCategory(c)}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-xs backdrop-blur-sm transition-colors",
+                "rounded-full border px-2.5 py-1 text-xs transition-colors",
                 activeCategory === c
-                  ? "bg-primary text-primary-foreground border-primary/50"
-                  : "text-muted-foreground border-white/20 bg-white/5 hover:bg-white/15",
+                  ? "border-neutral-900 bg-neutral-900 text-white"
+                  : "text-muted-foreground border-border hover:bg-muted",
               )}
             >
               {c}
@@ -262,7 +261,7 @@ export function ToolsPicker({
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        <div className="divide-y divide-white/10">
+        <div className="divide-border divide-y">
           {loading && (
             <div className="text-muted-foreground flex items-center justify-center gap-2 py-10 text-sm">
               <Loader2Icon className="size-4 animate-spin" /> Loading…
@@ -277,7 +276,7 @@ export function ToolsPicker({
               return (
                 <div
                   key={item.tool_id}
-                  className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-white/10"
+                  className="hover:bg-muted/60 flex items-center gap-3 px-5 py-3 transition-colors"
                 >
                   <span className="text-lg">{itemIcon(item)}</span>
                   <div className="min-w-0 flex-1">
@@ -287,7 +286,7 @@ export function ToolsPicker({
                       </span>
                       <Badge
                         variant="outline"
-                        className="text-muted-foreground shrink-0 border-white/20 bg-white/5 text-[10px]"
+                        className="text-muted-foreground border-border shrink-0 text-[10px]"
                       >
                         {item.category}
                       </Badge>
@@ -304,8 +303,7 @@ export function ToolsPicker({
                   {needsConnect ? (
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="border-white/20 bg-white/10 backdrop-blur-sm hover:bg-white/20"
+                      className="bg-neutral-900 text-white hover:bg-neutral-800"
                       disabled={connecting === item.tool_id}
                       onClick={() => void connect(item)}
                     >
