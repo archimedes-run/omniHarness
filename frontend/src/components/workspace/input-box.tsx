@@ -7,6 +7,7 @@ import {
   LightbulbIcon,
   PaperclipIcon,
   PlusIcon,
+  SlidersHorizontalIcon,
   SparklesIcon,
   RocketIcon,
   XIcon,
@@ -55,6 +56,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { ToolsPicker } from "@/components/workspace/tools/tools-picker";
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
@@ -150,6 +152,7 @@ export function InputBox({
   const { t } = useI18n();
   const searchParams = useSearchParams();
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const { models } = useModels();
   const { thread, isMock } = useThread();
   const { textInput } = usePromptInputController();
@@ -516,6 +519,13 @@ export function InputBox({
             </PromptInputActionMenuContent>
           </PromptInputActionMenu> */}
             <AddAttachmentsButton className="px-2!" />
+            <PromptInputButton
+              className="gap-1.5! px-2!"
+              onClick={() => setToolsOpen(true)}
+              aria-label="Tools for this chat"
+            >
+              <SlidersHorizontalIcon className="size-3.5" />
+            </PromptInputButton>
             <PromptInputActionMenu>
               <ModeHoverGuide
                 mode={
@@ -868,6 +878,14 @@ export function InputBox({
           <div className="bg-background absolute right-0 -bottom-[17px] left-0 z-0 h-4"></div>
         )}
       </PromptInput>
+
+      {threadId && (
+        <ToolsPicker
+          threadId={threadId}
+          open={toolsOpen}
+          onOpenChange={setToolsOpen}
+        />
+      )}
 
       {isWelcomeMode && searchParams.get("mode") !== "skill" && (
         <div className="flex items-center justify-center pt-2">
