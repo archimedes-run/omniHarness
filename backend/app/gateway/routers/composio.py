@@ -130,10 +130,10 @@ async def _sync_if_pending(row, *, client, repo, user_id: str):
             except ComposioError:
                 pass
             try:
-                mcp_url = client.get_mcp_url(toolkit=row["toolkit"], entity_id=user_id)
                 _write_mcp_entry(
                     toolkit=row["toolkit"],
-                    mcp_url=mcp_url,
+                    connected_account_id=row["composio_connection_id"],
+                    entity_id=user_id,
                     description=f"Composio {row['toolkit']} tools (1-click connection)",
                 )
             except Exception:
@@ -158,8 +158,20 @@ def _server_name(toolkit: str) -> str:
     return f"composio-{toolkit.lower()}"
 
 
-def _write_mcp_entry(*, toolkit: str, mcp_url: str, description: str) -> None:
-    """Add/update the Composio MCP SSE entry in extensions_config.json."""
+def _get_api_key() -> str:
+    import os
+
+    return os.environ.get("COMPOSIO_API_KEY", "")
+
+
+def _write_mcp_entry(*, toolkit: str, connected_account_id: str, entity_id: str, description: str) -> None:
+    """Add/update the Composio MCP stdio entry in extensions_config.json.
+
+    Writes a stdio server entry that runs composio_mcp_server.py with the
+    connected account credentials as env vars. The script calls Composio's v3
+    REST API (list + execute) so no SSE URL is needed.
+    """
+    import sys
     from pathlib import Path
 
     from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
@@ -168,6 +180,9 @@ def _write_mcp_entry(*, toolkit: str, mcp_url: str, description: str) -> None:
     if config_path is None:
         config_path = Path.cwd().parent / "extensions_config.json"
 
+    # Derive script path from extensions_config.json location (both Docker + local).
+    script_path = config_path.parent / "backend" / "app" / "gateway" / "composio_mcp_server.py"
+
     current = get_extensions_config()
     data: dict = {
         "mcpServers": {n: s.model_dump() for n, s in current.mcp_servers.items()},
@@ -175,8 +190,15 @@ def _write_mcp_entry(*, toolkit: str, mcp_url: str, description: str) -> None:
     }
     data["mcpServers"][_server_name(toolkit)] = {
         "enabled": True,
-        "type": "sse",
-        "url": mcp_url,
+        "type": "stdio",
+        "command": sys.executable,
+        "args": [str(script_path)],
+        "env": {
+            "COMPOSIO_API_KEY": _get_api_key(),
+            "COMPOSIO_TOOLKIT": toolkit.upper(),
+            "COMPOSIO_CONNECTED_ACCOUNT_ID": connected_account_id,
+            "COMPOSIO_USER_ID": entity_id,
+        },
         "description": description,
     }
     with open(config_path, "w", encoding="utf-8") as fh:
@@ -326,12 +348,12 @@ async def connection_callback(
             status="active",
             account_display=account_display,
         )
-        # Write the per-user MCP Tool Router URL so the agent picks up the tools.
+        # Write the stdio MCP entry so the agent picks up the tools.
         try:
-            mcp_url = client.get_mcp_url(toolkit=toolkit, entity_id=user_id)
             _write_mcp_entry(
                 toolkit=toolkit,
-                mcp_url=mcp_url,
+                connected_account_id=connection_id,
+                entity_id=user_id,
                 description=f"Composio {toolkit} tools (1-click connection)",
             )
         except Exception as exc:  # pragma: no cover - file IO best-effort
