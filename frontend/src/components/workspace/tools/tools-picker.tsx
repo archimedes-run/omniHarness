@@ -1,18 +1,10 @@
 "use client";
 
-import { Loader2Icon, LockIcon, SearchIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Loader2Icon, LockIcon, SearchIcon, XIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import {
   getComposioConnectionStatus,
@@ -49,11 +41,15 @@ export function ToolsPicker({
   threadId,
   open,
   onOpenChange,
+  placement = "top",
 }: {
   threadId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** "bottom" opens beneath the composer (new chat), "top" opens above it. */
+  placement?: "top" | "bottom";
 }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const [items, setItems] = useState<ToolCatalogItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -96,6 +92,25 @@ export function ToolsPicker({
     if (open) void load();
   }, [open, load]);
 
+  // Close on outside click + Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onOpenChange(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onOpenChange(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, onOpenChange]);
+
   const overCap = count != null && count.count > count.cap;
 
   const persist = useCallback(
@@ -106,7 +121,7 @@ export function ToolsPicker({
         setSelected(new Set(saved.sources));
         void refreshCount();
       } catch {
-        void load(); // reload authoritative state on failure
+        void load();
       }
     },
     [threadId, refreshCount, load],
@@ -114,10 +129,10 @@ export function ToolsPicker({
 
   const toggle = useCallback(
     (item: ToolCatalogItem, on: boolean) => {
-      if (pinned.has(item.tool_id)) return; // pinned are non-removable
+      if (pinned.has(item.tool_id)) return;
       const next = new Set(selected);
       if (on) {
-        if (overCap) return; // block enabling past the cap
+        if (overCap) return;
         next.add(item.tool_id);
       } else {
         next.delete(item.tool_id);
@@ -141,12 +156,11 @@ export function ToolsPicker({
             "width=520,height=680",
           );
         }
-        // Poll our own API until the toolkit reports connected.
         for (let i = 0; i < 60; i++) {
           await new Promise((r) => setTimeout(r, 2000));
           const status = await getComposioConnectionStatus(item.toolkit);
           if (status.status === "active" || status.status === "connected") {
-            await load(); // refresh connected flags; tool becomes enable-able
+            await load();
             break;
           }
         }
@@ -170,127 +184,154 @@ export function ToolsPicker({
     });
   }, [items, query, activeCategory]);
 
+  if (!open) return null;
+
   const tabs = ["All", ...categories];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
-        <DialogHeader className="border-b px-5 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <DialogTitle className="text-base">Tools for this chat</DialogTitle>
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label="Tools for this chat"
+      className={cn(
+        "absolute left-1/2 z-40 w-[min(42rem,92vw)] -translate-x-1/2",
+        "flex max-h-[62vh] flex-col overflow-hidden rounded-3xl",
+        // Glassmorphism: translucent, blurred, soft highlight + deep shadow.
+        "border border-white/20 bg-white/10 shadow-2xl backdrop-blur-2xl",
+        "supports-[backdrop-filter]:bg-white/10 dark:border-white/10 dark:bg-black/30",
+        "ring-1 ring-white/10",
+        placement === "bottom"
+          ? "animate-in fade-in slide-in-from-top-2 top-full mt-3 origin-top"
+          : "animate-in fade-in slide-in-from-bottom-2 bottom-full mb-3 origin-bottom",
+      )}
+    >
+      {/* Header */}
+      <div className="border-b border-white/15 px-5 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-sm font-semibold">Tools for this chat</span>
+          <div className="flex items-center gap-2">
             {count && (
               <Badge
                 variant={overCap ? "destructive" : "secondary"}
-                className="tabular-nums"
+                className="bg-white/20 tabular-nums backdrop-blur-sm"
               >
                 {count.count} / {count.cap}
               </Badge>
             )}
+            <button
+              onClick={() => onOpenChange(false)}
+              className="text-muted-foreground rounded-full p-1 transition-colors hover:bg-white/20"
+              aria-label="Close"
+            >
+              <XIcon className="size-4" />
+            </button>
           </div>
-          <div className="relative mt-3">
-            <SearchIcon className="text-muted-foreground absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search tools…"
-              className="pl-9"
-            />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {tabs.map((c) => (
-              <button
-                key={c}
-                onClick={() => setActiveCategory(c)}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                  activeCategory === c
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "hover:bg-muted text-muted-foreground",
-                )}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-          {overCap && (
-            <p className="text-destructive mt-2 text-xs">
-              You&apos;ve reached this model&apos;s {count?.cap}-tool limit.
-              Turn some off to enable others.
-            </p>
-          )}
-        </DialogHeader>
+        </div>
+        <div className="relative mt-3">
+          <SearchIcon className="text-muted-foreground absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search tools…"
+            className="placeholder:text-muted-foreground focus:ring-primary/40 w-full rounded-xl border border-white/20 bg-white/10 py-2 pr-3 pl-9 text-sm outline-none focus:ring-2"
+          />
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {tabs.map((c) => (
+            <button
+              key={c}
+              onClick={() => setActiveCategory(c)}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs backdrop-blur-sm transition-colors",
+                activeCategory === c
+                  ? "bg-primary text-primary-foreground border-primary/50"
+                  : "text-muted-foreground border-white/20 bg-white/5 hover:bg-white/15",
+              )}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+        {overCap && (
+          <p className="text-destructive mt-2 text-xs">
+            You&apos;ve reached this model&apos;s {count?.cap}-tool limit. Turn
+            some off to enable others.
+          </p>
+        )}
+      </div>
 
-        <ScrollArea className="flex-1">
-          <div className="divide-y">
-            {loading && (
-              <div className="text-muted-foreground flex items-center justify-center gap-2 py-10 text-sm">
-                <Loader2Icon className="size-4 animate-spin" /> Loading…
-              </div>
-            )}
-            {!loading &&
-              filtered.map((item) => {
-                const isPinned = pinned.has(item.tool_id);
-                const isOn = selected.has(item.tool_id) || isPinned;
-                const needsConnect =
-                  item.source === "connector" && !item.connected;
-                return (
-                  <div
-                    key={item.tool_id}
-                    className="flex items-center gap-3 px-5 py-3"
-                  >
-                    <span className="text-lg">{itemIcon(item)}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium">
-                          {item.name}
-                        </span>
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground shrink-0 text-[10px]"
-                        >
-                          {item.category}
-                        </Badge>
-                        {isPinned && (
-                          <LockIcon className="text-muted-foreground size-3" />
-                        )}
-                      </div>
-                      {item.description && (
-                        <p className="text-muted-foreground truncate text-xs">
-                          {item.description}
-                        </p>
+      {/* List */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="divide-y divide-white/10">
+          {loading && (
+            <div className="text-muted-foreground flex items-center justify-center gap-2 py-10 text-sm">
+              <Loader2Icon className="size-4 animate-spin" /> Loading…
+            </div>
+          )}
+          {!loading &&
+            filtered.map((item) => {
+              const isPinned = pinned.has(item.tool_id);
+              const isOn = selected.has(item.tool_id) || isPinned;
+              const needsConnect =
+                item.source === "connector" && !item.connected;
+              return (
+                <div
+                  key={item.tool_id}
+                  className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-white/10"
+                >
+                  <span className="text-lg">{itemIcon(item)}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">
+                        {item.name}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className="text-muted-foreground shrink-0 border-white/20 bg-white/5 text-[10px]"
+                      >
+                        {item.category}
+                      </Badge>
+                      {isPinned && (
+                        <LockIcon className="text-muted-foreground size-3" />
                       )}
                     </div>
-                    {needsConnect ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={connecting === item.tool_id}
-                        onClick={() => void connect(item)}
-                      >
-                        {connecting === item.tool_id ? (
-                          <Loader2Icon className="size-3.5 animate-spin" />
-                        ) : (
-                          "Connect"
-                        )}
-                      </Button>
-                    ) : (
-                      <Switch
-                        checked={isOn}
-                        disabled={isPinned || (!isOn && overCap)}
-                        onCheckedChange={(on) => toggle(item, on)}
-                      />
+                    {item.description && (
+                      <p className="text-muted-foreground truncate text-xs">
+                        {item.description}
+                      </p>
                     )}
                   </div>
-                );
-              })}
-            {!loading && filtered.length === 0 && (
-              <div className="text-muted-foreground py-10 text-center text-sm">
-                No tools match &ldquo;{query}&rdquo;.
-              </div>
-            )}
-          </div>
-        </ScrollArea>
-      </DialogContent>
-    </Dialog>
+                  {needsConnect ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-white/20 bg-white/10 backdrop-blur-sm hover:bg-white/20"
+                      disabled={connecting === item.tool_id}
+                      onClick={() => void connect(item)}
+                    >
+                      {connecting === item.tool_id ? (
+                        <Loader2Icon className="size-3.5 animate-spin" />
+                      ) : (
+                        "Connect"
+                      )}
+                    </Button>
+                  ) : (
+                    <Switch
+                      checked={isOn}
+                      disabled={isPinned || (!isOn && overCap)}
+                      onCheckedChange={(on) => toggle(item, on)}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          {!loading && filtered.length === 0 && (
+            <div className="text-muted-foreground py-10 text-center text-sm">
+              No tools match &ldquo;{query}&rdquo;.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

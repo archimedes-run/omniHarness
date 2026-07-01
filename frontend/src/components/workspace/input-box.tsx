@@ -884,6 +884,7 @@ export function InputBox({
           threadId={threadId}
           open={toolsOpen}
           onOpenChange={setToolsOpen}
+          placement={isWelcomeMode ? "bottom" : "top"}
         />
       )}
 
