@@ -21,6 +21,7 @@ from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
 from omniharness.persistence.thread_meta.model import ThreadMetaRow
+from omniharness.persistence.thread_tool_selection.model import ThreadToolSelectionRow
 from omniharness.persistence.user.model import UserRow
 from omniharness.persistence.workflow_artifact_links.model import WorkflowArtifactLinkRow
 from omniharness.persistence.workflow_runs.model import WorkflowRunRow
@@ -36,6 +37,7 @@ __all__ = [
     "RunEventRow",
     "RunRow",
     "ThreadMetaRow",
+    "ThreadToolSelectionRow",
     "UserRow",
     "WorkflowArtifactLinkRow",
     "WorkflowRow",

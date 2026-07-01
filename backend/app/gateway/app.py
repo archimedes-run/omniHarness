@@ -31,6 +31,7 @@ from app.gateway.routers import (
     skills,
     suggestions,
     thread_runs,
+    thread_tools,
     threads,
     uploads,
     workflows,
@@ -396,6 +397,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Composio 1-click OAuth connector API is mounted at /api/composio
     app.include_router(composio.router)
+
+    # Per-conversation tools (catalog + per-thread selection + count/cap)
+    app.include_router(thread_tools.router)
 
     # Memory API is mounted at /api/memory
     app.include_router(memory.router)

@@ -354,6 +354,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # Lazy import to avoid circular dependency
     from omniharness.tools import get_available_tools
     from omniharness.tools.builtins import setup_agent, update_agent
+    from omniharness.tools.tools import resolve_model_tool_cap
 
     cfg = _get_runtime_config(config)
     resolved_app_config = app_config
@@ -454,8 +455,28 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # Custom agents can update their own SOUL.md / config via update_agent.
     # The default agent (no agent_name) does not see this tool.
     extra_tools = [update_agent] if agent_name else []
-    # Default lead agent (unchanged behavior)
-    tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
+
+    # Per-conversation tool selection (namespaced source ids) + owning user, both
+    # threaded through the runtime context by the gateway at launch. When present,
+    # the tool array is assembled as pinned ∪ (selection ∩ user-accessible),
+    # connector tools resolve live per-user, and the provider cap is enforced.
+    # NOTE: connector specs are rebuilt every turn (no per-turn memoization) so
+    # per-user isolation can never be undone by a stale cache.
+    raw_selection = cfg.get("selected_sources")
+    selected_sources = set(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
+    run_user_id = cfg.get("user_id")
+    max_tools = resolve_model_tool_cap(model_config) if selected_sources is not None else None
+
+    # Default lead agent
+    tools = get_available_tools(
+        model_name=model_name,
+        groups=agent_config.tool_groups if agent_config else None,
+        subagent_enabled=subagent_enabled,
+        app_config=resolved_app_config,
+        selected_sources=selected_sources,
+        user_id=run_user_id,
+        max_tools=max_tools,
+    )
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config),
         tools=filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include),

@@ -24,6 +24,31 @@ PINNED_LOCAL_SERVERS: frozenset[str] = frozenset({"filesystem", "postgres"})
 PINNED_LOCAL_SOURCES: frozenset[str] = frozenset(f"local:{s}" for s in PINNED_LOCAL_SERVERS)
 
 
+# Default provider tool-array caps by model-provider class-path fragment.
+# OpenAI hard-limits the tools array to 128. Others are effectively unbounded
+# here; we use a generous sentinel so the cap only bites where it must.
+_PROVIDER_TOOL_CAPS: dict[str, int] = {"openai": 128}
+_DEFAULT_TOOL_CAP = 512
+
+
+def resolve_model_tool_cap(model_config: object | None) -> int:
+    """Resolve the tool-array cap for a model.
+
+    Priority: explicit ``model_config.max_tools`` → provider default (matched
+    against the ``use`` class path) → generous fallback.
+    """
+    if model_config is None:
+        return _DEFAULT_TOOL_CAP
+    explicit = getattr(model_config, "max_tools", None)
+    if explicit:
+        return int(explicit)
+    use_path = str(getattr(model_config, "use", "") or "").lower()
+    for fragment, cap in _PROVIDER_TOOL_CAPS.items():
+        if fragment in use_path:
+            return cap
+    return _DEFAULT_TOOL_CAP
+
+
 class ToolCapExceededError(Exception):
     """Raised when the assembled tool array exceeds the provider's cap.
 

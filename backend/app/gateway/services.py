@@ -347,6 +347,20 @@ async def start_run(
         if isinstance(ctx_dict, dict):
             ctx_dict.setdefault("user_id", user_id)
 
+    # Per-conversation tools: load this thread's stored selection (namespaced
+    # source ids, pinned enforced by the repo) and thread it into the runtime
+    # context so _make_lead_agent assembles from it. Best-effort — a thread with
+    # no stored selection falls back to pinned defaults inside the repo.
+    try:
+        selection_repo = getattr(request.app.state, "thread_tool_selection_repo", None)
+        if selection_repo is not None:
+            selected_sources = await selection_repo.get_sources(thread_id=thread_id)
+            ctx_dict = config.setdefault("context", {})
+            if isinstance(ctx_dict, dict):
+                ctx_dict.setdefault("selected_sources", selected_sources)
+    except Exception:
+        logger.warning("Failed to load thread tool selection for %s (non-fatal)", sanitize_log_param(thread_id))
+
     try:
         record = await launch_agent_run_detached(
             bridge=bridge,

@@ -32,6 +32,10 @@ class ModelConfig(BaseModel):
         description="Extra settings to be passed to the model when thinking is disabled",
     )
     supports_vision: bool = Field(default_factory=lambda: False, description="Whether the model supports vision/image inputs")
+    max_tools: int | None = Field(
+        default=None,
+        description="Max number of tools this model accepts per request. Defaults per provider when unset (OpenAI=128).",
+    )
     thinking: dict | None = Field(
         default_factory=lambda: None,
         description=(
