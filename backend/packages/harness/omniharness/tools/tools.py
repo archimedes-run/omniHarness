@@ -16,6 +16,40 @@ BUILTIN_TOOLS = [
     ask_clarification_tool,
 ]
 
+# Sources are namespaced ids to avoid collisions between a local MCP server and
+# a connector toolkit that share a name (e.g. local "github" vs connector
+# "GITHUB"): local servers are ``local:<server>``, connectors ``connector:<SLUG>``.
+# These two local sources are always available and non-removable in the UI.
+PINNED_LOCAL_SERVERS: frozenset[str] = frozenset({"filesystem", "postgres"})
+PINNED_LOCAL_SOURCES: frozenset[str] = frozenset(f"local:{s}" for s in PINNED_LOCAL_SERVERS)
+
+
+class ToolCapExceededError(Exception):
+    """Raised when the assembled tool array exceeds the provider's cap.
+
+    Carries the structured counts so the API layer can surface "N / cap"
+    to the UI instead of letting the provider return an opaque 400.
+    """
+
+    def __init__(self, count: int, cap: int) -> None:
+        self.count = count
+        self.cap = cap
+        super().__init__(f"Selected tools ({count}) exceed the model's limit of {cap}. Deselect some tools for this conversation.")
+
+
+def _tool_source(tool_name: str, server_names: list[str]) -> str | None:
+    """Return which MCP server a prefixed tool came from (tool_name_prefix=True).
+
+    langchain-mcp-adapters names tools ``<server>_<tool>``. We match against the
+    known server names (longest first) rather than naively splitting on ``_``,
+    since server names can themselves contain underscores.
+    """
+    for server in sorted(server_names, key=len, reverse=True):
+        if tool_name.startswith(f"{server}_"):
+            return server
+    return None
+
+
 SUBAGENT_TOOLS = [
     task_tool,
     # task_status_tool is no longer exposed to LLM (backend handles polling internally)
@@ -40,6 +74,9 @@ def get_available_tools(
     subagent_enabled: bool = False,
     *,
     app_config: AppConfig | None = None,
+    selected_sources: set[str] | None = None,
+    user_id: str | None = None,
+    max_tools: int | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -128,8 +165,34 @@ def get_available_tools(
             from omniharness.mcp.cache import get_cached_mcp_tools
 
             extensions_config = ExtensionsConfig.from_file()
-            if extensions_config.get_enabled_mcp_servers():
+            enabled_servers = extensions_config.get_enabled_mcp_servers()
+            if enabled_servers:
                 mcp_tools = get_cached_mcp_tools()
+
+                # Per-conversation selection: keep only tools from the pinned
+                # local sources plus the sources this thread selected. Connector
+                # servers are NEVER sourced from the file cache — they load live
+                # per-user below — so they're excluded here regardless.
+                if selected_sources is not None:
+                    server_names = list(enabled_servers.keys())
+                    # Allowed local server NAMES = pinned + any selected local:<server>.
+                    allowed_servers = set(PINNED_LOCAL_SERVERS)
+                    for sid in selected_sources:
+                        if sid.startswith("local:"):
+                            allowed_servers.add(sid.split(":", 1)[1])
+                    filtered: list[BaseTool] = []
+                    for t in mcp_tools:
+                        src = _tool_source(t.name, server_names)
+                        # Drop connector-* file entries (superseded by live loader)
+                        # and any local server not pinned/selected.
+                        if src is None:
+                            filtered.append(t)  # unprefixed / unknown — keep
+                        elif src.lower().startswith(("connector-", "composio-")):
+                            continue
+                        elif src in allowed_servers:
+                            filtered.append(t)
+                    mcp_tools = filtered
+
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 
@@ -149,6 +212,21 @@ def get_available_tools(
             logger.warning("MCP module not available. Install 'langchain-mcp-adapters' package to enable MCP tools.")
         except Exception as e:
             logger.error(f"Failed to get cached MCP tools: {e}")
+
+    # Live per-user connector tools (resolved from the user's active
+    # connections, never from the shared config). Only when this thread
+    # selected connector toolkits and we know the user.
+    connector_tools: list[BaseTool] = []
+    if selected_sources and user_id:
+        try:
+            from omniharness.tools.connector_tools import CONNECTOR_SLUGS, load_connector_tools
+
+            wanted_connectors = [sid.split(":", 1)[1].upper() for sid in selected_sources if sid.startswith("connector:") and sid.split(":", 1)[1].upper() in CONNECTOR_SLUGS]
+            if wanted_connectors:
+                connector_tools = load_connector_tools(user_id, wanted_connectors)
+                logger.info(f"Loaded {len(connector_tools)} live connector tool(s) for {len(wanted_connectors)} toolkit(s)")
+        except Exception as e:
+            logger.error(f"Failed to load connector tools: {e}")
 
     # Add invoke_acp_agent tool if any ACP agents are configured
     acp_tools: list[BaseTool] = []
@@ -170,9 +248,9 @@ def get_available_tools(
     logger.info(f"Total tools loaded: {len(loaded_tools)}, built-in tools: {len(builtin_tools)}, MCP tools: {len(mcp_tools)}, ACP tools: {len(acp_tools)}")
 
     # Deduplicate by tool name — config-loaded tools take priority, followed by
-    # built-ins, MCP tools, and ACP tools.  Duplicate names cause the LLM to
-    # receive ambiguous or concatenated function schemas (issue #1803).
-    all_tools = loaded_tools + builtin_tools + mcp_tools + acp_tools
+    # built-ins, MCP tools, connector tools, and ACP tools.  Duplicate names
+    # cause the LLM to receive ambiguous schemas (issue #1803).
+    all_tools = loaded_tools + builtin_tools + mcp_tools + connector_tools + acp_tools
     seen_names: set[str] = set()
     unique_tools: list[BaseTool] = []
     for t in all_tools:
@@ -184,4 +262,10 @@ def get_available_tools(
                 "Duplicate tool name %r detected and skipped — check your config.yaml and MCP server registrations (issue #1803).",
                 t.name,
             )
+
+    # Provider tool-array cap: fail with a structured error the API can turn
+    # into "N / cap" rather than letting the provider return an opaque 400.
+    if max_tools is not None and len(unique_tools) > max_tools:
+        raise ToolCapExceededError(count=len(unique_tools), cap=max_tools)
+
     return unique_tools

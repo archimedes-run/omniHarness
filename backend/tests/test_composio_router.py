@@ -119,19 +119,19 @@ def test_initiate_rejects_unknown_toolkit():
 
 
 def test_callback_marks_active_when_composio_returns_active():
+    # Connector tools are resolved live per-turn from the connections DB — the
+    # callback must NOT write anything into extensions_config.json anymore.
     repo = _make_repo()
     client = MagicMock()
     client.get_connection_status = AsyncMock(return_value="active")
     client.get_account_display = AsyncMock(return_value="me@example.com")
-    client.get_mcp_url = MagicMock(return_value="https://mcp.composio.dev/gmail?apiKey=x&entityId=y")
-    with patch.object(composio, "_write_mcp_entry") as write_entry:
-        resp = _make_client_app(repo=repo, client=client).get("/api/composio/connections/callback?connection_id=conn-1&toolkit=GMAIL")
+    resp = _make_client_app(repo=repo, client=client).get("/api/composio/connections/callback?connection_id=conn-1&toolkit=GMAIL")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "active"
     assert body["toolkit"] == "GMAIL"
     assert body["account_display"] == "me@example.com"
-    write_entry.assert_called_once()
+    assert not hasattr(composio, "_write_mcp_entry")  # connector config baking removed
     # upsert called with active status
     assert repo.upsert.await_args.kwargs["status"] == "active"
 
@@ -140,13 +140,11 @@ def test_callback_returns_pending_when_composio_returns_pending():
     repo = _make_repo()
     client = MagicMock()
     client.get_connection_status = AsyncMock(return_value="pending")
-    with patch.object(composio, "_write_mcp_entry") as write_entry:
-        resp = _make_client_app(repo=repo, client=client).get("/api/composio/connections/callback?connection_id=conn-1&toolkit=GMAIL")
+    resp = _make_client_app(repo=repo, client=client).get("/api/composio/connections/callback?connection_id=conn-1&toolkit=GMAIL")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "pending"
     assert body["account_display"] is None
-    write_entry.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,11 @@
 """Composio 1-click OAuth connector router.
 
 Exposes a catalog of supported toolkits, OAuth initiation/callback handling,
-and connection management. On a successful connection the per-user MCP Tool
-Router SSE URL is written into ``extensions_config.json`` so the agent runtime
-hot-reloads the new toolkit's tools.
+and connection management. Connections are persisted to the connections DB
+only; connector tools are resolved LIVE per-user per-turn by the tool-assembly
+path (``omniharness.tools.connector_tools``) — nothing is written into
+``extensions_config.json`` anymore, so a toolkit connected mid-conversation is
+usable on the next turn with no restart.
 
 Security invariants
 -------------------
@@ -14,7 +16,6 @@ Security invariants
 
 from __future__ import annotations
 
-import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -129,15 +130,11 @@ async def _sync_if_pending(row, *, client, repo, user_id: str):
                 account_display = await client.get_account_display(composio_connection_id=row["composio_connection_id"])
             except ComposioError:
                 pass
-            try:
-                _write_mcp_entry(
-                    toolkit=row["toolkit"],
-                    connected_account_id=row["composio_connection_id"],
-                    entity_id=user_id,
-                    description=f"Composio {row['toolkit']} tools (1-click connection)",
-                )
-            except Exception:
-                pass
+            # NOTE: connector tools are NO LONGER written into extensions_config.json.
+            # They resolve live per-user per-turn from this connections DB via the
+            # tool-assembly path (omniharness.tools.connector_tools). This removes
+            # the global-config account baking, the restart requirement, and the
+            # cross-user isolation bug.
         return await repo.upsert(
             user_id=user_id,
             toolkit=row["toolkit"],
@@ -158,59 +155,15 @@ def _server_name(toolkit: str) -> str:
     return f"composio-{toolkit.lower()}"
 
 
-def _get_api_key() -> str:
-    import os
-
-    return os.environ.get("COMPOSIO_API_KEY", "")
-
-
-def _write_mcp_entry(*, toolkit: str, connected_account_id: str, entity_id: str, description: str) -> None:
-    """Add/update the Composio MCP stdio entry in extensions_config.json.
-
-    Writes a stdio server entry that runs composio_mcp_server.py with the
-    connected account credentials as env vars. The script calls Composio's v3
-    REST API (list + execute) so no SSE URL is needed.
-    """
-    import sys
-    from pathlib import Path
-
-    from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
-
-    config_path = ExtensionsConfig.resolve_config_path()
-    if config_path is None:
-        config_path = Path.cwd().parent / "extensions_config.json"
-
-    # Derive script path from extensions_config.json location (both Docker + local).
-    script_path = config_path.parent / "backend" / "app" / "gateway" / "composio_mcp_server.py"
-
-    current = get_extensions_config()
-    data: dict = {
-        "mcpServers": {n: s.model_dump() for n, s in current.mcp_servers.items()},
-        "skills": {n: {"enabled": sk.enabled} for n, sk in current.skills.items()},
-    }
-    data["mcpServers"][_server_name(toolkit)] = {
-        "enabled": True,
-        "type": "stdio",
-        "command": sys.executable,
-        "args": [str(script_path)],
-        "env": {
-            "COMPOSIO_API_KEY": _get_api_key(),
-            "COMPOSIO_TOOLKIT": toolkit.upper(),
-            "COMPOSIO_CONNECTED_ACCOUNT_ID": connected_account_id,
-            "COMPOSIO_USER_ID": entity_id,
-        },
-        "description": description,
-    }
-    with open(config_path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    reload_extensions_config()
-
-
 def _remove_mcp_entry(*, toolkit: str) -> None:
-    """Remove the Composio MCP SSE entry from extensions_config.json (if present)."""
+    """Remove a legacy connector MCP entry from extensions_config.json if present.
+
+    Connector tools are no longer written to the config, but this cleans up
+    stale ``composio-*`` entries left by older versions on disconnect.
+    """
     from pathlib import Path
 
-    from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
+    from omniharness.config.extensions_config import ExtensionsConfig, atomic_write_json, get_extensions_config, reload_extensions_config
 
     config_path = ExtensionsConfig.resolve_config_path()
     if config_path is None:
@@ -224,8 +177,7 @@ def _remove_mcp_entry(*, toolkit: str) -> None:
         "mcpServers": servers,
         "skills": {n: {"enabled": sk.enabled} for n, sk in current.skills.items()},
     }
-    with open(config_path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+    atomic_write_json(config_path, data)
     reload_extensions_config()
 
 
@@ -348,16 +300,10 @@ async def connection_callback(
             status="active",
             account_display=account_display,
         )
-        # Write the stdio MCP entry so the agent picks up the tools.
-        try:
-            _write_mcp_entry(
-                toolkit=toolkit,
-                connected_account_id=connection_id,
-                entity_id=user_id,
-                description=f"Composio {toolkit} tools (1-click connection)",
-            )
-        except Exception as exc:  # pragma: no cover - file IO best-effort
-            logger.warning("composio.callback failed to write extensions_config: %s", exc)
+        # Connector tools are resolved live per-user per-turn from the
+        # connections DB (see omniharness.tools.connector_tools) — nothing is
+        # written into extensions_config.json, so the toolkit is usable on the
+        # next turn with no restart.
         logger.info("composio.connect user=%s toolkit=%s active", user_id, toolkit)
     else:
         await repo.upsert(

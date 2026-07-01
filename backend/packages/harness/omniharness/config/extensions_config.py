@@ -1,13 +1,49 @@
 """Unified extensions configuration for MCP servers and skills."""
 
 import json
+import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from omniharness.config.runtime_paths import existing_project_file
+
+logger = logging.getLogger(__name__)
+
+# Last-known-good parsed config, keyed by resolved path string. Used as a
+# fail-safe when a subsequent read finds the file mid-write / truncated
+# (e.g. Docker Desktop single-file bind-mount tearing on macOS) so we keep the
+# previously loaded tools instead of dropping ALL of them.
+_last_known_good: dict[str, "ExtensionsConfig"] = {}
+
+
+def atomic_write_json(path: str | Path, data: dict[str, Any]) -> None:
+    """Write ``data`` as pretty JSON to ``path`` atomically.
+
+    Writes to a temp file in the same directory, flushes + fsyncs it, then
+    ``os.replace()`` onto the target so readers never observe a partial file.
+    This prevents the truncation that corrupts ``extensions_config.json`` when
+    a writer inside a container races a bind-mount sync.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        # Best-effort cleanup of the temp file on any failure.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class McpOAuthConfig(BaseModel):
@@ -138,14 +174,34 @@ class ExtensionsConfig(BaseModel):
             # Return empty config if extensions config file is not found
             return cls(mcp_servers={}, skills={})
 
+        key = str(resolved_path)
         try:
             with open(resolved_path, encoding="utf-8") as f:
                 config_data = json.load(f)
             cls.resolve_env_variables(config_data)
-            return cls.model_validate(config_data)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Extensions config file at {resolved_path} is not valid JSON: {e}") from e
+            parsed = cls.model_validate(config_data)
+            _last_known_good[key] = parsed
+            return parsed
+        except (json.JSONDecodeError, ValueError) as e:
+            # Fail safe: a truncated / mid-write file must NOT wipe out every
+            # loaded tool. Fall back to the last successfully parsed config for
+            # this path if we have one; otherwise return an empty config.
+            fallback = _last_known_good.get(key)
+            if fallback is not None:
+                logger.warning(
+                    "Extensions config at %s is currently invalid (%s); using last-known-good config with %d MCP server(s).",
+                    resolved_path,
+                    e,
+                    len(fallback.mcp_servers),
+                )
+                return fallback
+            logger.error("Extensions config at %s is invalid and no last-known-good exists (%s); loading empty config.", resolved_path, e)
+            return cls(mcp_servers={}, skills={})
         except Exception as e:
+            fallback = _last_known_good.get(key)
+            if fallback is not None:
+                logger.warning("Failed to read extensions config at %s (%s); using last-known-good config.", resolved_path, e)
+                return fallback
             raise RuntimeError(f"Failed to load extensions config from {resolved_path}: {e}") from e
 
     @classmethod

@@ -1,4 +1,3 @@
-import json
 import logging
 from pathlib import Path
 
@@ -329,8 +328,9 @@ async def update_skill(skill_name: str, request: SkillUpdateRequest, config: App
             "skills": {name: {"enabled": skill_config.enabled} for name, skill_config in extensions_config.skills.items()},
         }
 
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=2)
+        from omniharness.config.extensions_config import atomic_write_json
+
+        atomic_write_json(config_path, config_data)
 
         logger.info(f"Skills configuration updated and saved to: {config_path}")
         reload_extensions_config()

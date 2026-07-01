@@ -133,7 +133,13 @@ services:
       # directory above would otherwise shadow it with the (empty) host directory.
       - gateway-venv:/app/backend/.venv
       - ../config.yaml:/app/config.yaml
-      - ../extensions_config.json:/app/extensions_config.json
+      # extensions_config.json is written from INSIDE this container at runtime
+      # (skills toggles, local/agent-built MCP servers). Mount its PARENT
+      # DIRECTORY, not the single file: atomic writes use os.replace (a new
+      # inode), which detaches a single-file bind mount and tears partial syncs
+      # on Docker Desktop/macOS. OMNI_HARNESS_EXTENSIONS_CONFIG_PATH points the
+      # gateway at the file inside this directory mount.
+      - ../extensions:/app/extensions
       - ../skills:/app/skills
       - ../logs:/app/logs
       # Use a Docker-managed uv cache volume instead of a host bind mount.
@@ -159,6 +165,9 @@ services:
     environment:
       - CI=true
       - OMNI_HARNESS_PROJECT_ROOT=/app
+      # Point the gateway at the extensions config inside the DIRECTORY mount
+      # (see volumes above) so runtime writes are atomic and never truncated.
+      - OMNI_HARNESS_EXTENSIONS_CONFIG_PATH=/app/extensions/extensions_config.json
       - OMNI_HARNESS_HOME=/app/backend/.omni-harness
       - OMNI_HARNESS_CHANNELS_LANGGRAPH_URL=${OMNI_HARNESS_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
       - OMNI_HARNESS_CHANNELS_GATEWAY_URL=${OMNI_HARNESS_CHANNELS_GATEWAY_URL:-http://gateway:8001}

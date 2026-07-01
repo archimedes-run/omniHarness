@@ -1,4 +1,3 @@
-import json
 import logging
 from pathlib import Path
 from typing import Literal
@@ -151,9 +150,11 @@ async def update_mcp_configuration(request: McpConfigUpdateRequest) -> McpConfig
             "skills": {name: {"enabled": skill.enabled} for name, skill in current_config.skills.items()},
         }
 
-        # Write the configuration to file
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=2)
+        # Write the configuration to file atomically (temp + fsync + os.replace)
+        # so concurrent readers never observe a truncated file.
+        from omniharness.config.extensions_config import atomic_write_json
+
+        atomic_write_json(config_path, config_data)
 
         logger.info(f"MCP configuration updated and saved to: {config_path}")
 

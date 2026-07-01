@@ -276,6 +276,16 @@ start() {
         fi
     fi
 
+    # The gateway container writes extensions_config.json at runtime. We mount its
+    # PARENT DIRECTORY (extensions/) instead of the single file so atomic writes
+    # (temp + os.replace) don't tear/detach on Docker Desktop bind-mount sync.
+    # Seed the directory from the repo-root config on first run.
+    if [ ! -f "$PROJECT_ROOT/extensions/extensions_config.json" ]; then
+        mkdir -p "$PROJECT_ROOT/extensions"
+        cp "$PROJECT_ROOT/extensions_config.json" "$PROJECT_ROOT/extensions/extensions_config.json"
+        echo -e "${BLUE}Seeded extensions/extensions_config.json for the directory mount${NC}"
+    fi
+
     echo "Building and starting containers..."
     cd "$DOCKER_DIR" && "${COMPOSE_CMD[@]}" up --build -d --remove-orphans $services
     echo ""
