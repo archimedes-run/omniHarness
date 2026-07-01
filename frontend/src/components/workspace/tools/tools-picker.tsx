@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { ToolIcon } from "@/components/workspace/tools/tool-icon";
 import {
   getComposioConnectionStatus,
   initiateComposioConnection,
@@ -18,24 +19,6 @@ import {
   type ToolCatalogItem,
 } from "@/core/tools/api";
 import { cn } from "@/lib/utils";
-
-// Branding-neutral brand marks keyed by the catalog icon slug (no vendor name).
-const ICONS: Record<string, string> = {
-  gmail: "📧",
-  googlecalendar: "📅",
-  googledrive: "🗂️",
-  slack: "💬",
-  notion: "📝",
-  github: "🐙",
-  linear: "⚡",
-  outlook: "📮",
-};
-
-function itemIcon(item: ToolCatalogItem): string {
-  const mark = item.icon ? ICONS[item.icon] : undefined;
-  if (mark) return mark;
-  return item.source === "local" ? "🧩" : "🔌";
-}
 
 export function ToolsPicker({
   threadId,
@@ -278,7 +261,13 @@ export function ToolsPicker({
                   key={item.tool_id}
                   className="hover:bg-muted/60 flex items-center gap-3 px-5 py-3 transition-colors"
                 >
-                  <span className="text-lg">{itemIcon(item)}</span>
+                  <ToolIcon
+                    source={item.source}
+                    name={item.name}
+                    slug={item.toolkit}
+                    origin={item.origin}
+                    description={item.description}
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium">

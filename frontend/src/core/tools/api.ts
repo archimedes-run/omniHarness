@@ -6,6 +6,7 @@ export type ToolCatalogItem = {
   name: string;
   description: string;
   source: "local" | "connector";
+  origin: "builtin" | "user"; // local servers: built-in vs agent-built
   toolkit: string | null;
   icon: string | null;
   category: string;

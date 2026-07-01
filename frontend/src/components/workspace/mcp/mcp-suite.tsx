@@ -22,6 +22,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IntegrationIcon } from "@/components/workspace/tools/integration-icon";
 import { fetch as apiFetch } from "@/core/api/fetcher";
 import {
   disconnectComposioToolkit,
@@ -624,8 +625,8 @@ function ConnectionsTab() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="flex size-10 items-center justify-center rounded-xl border border-stone-100 bg-stone-50 text-xl">
-                    {tk.icon}
+                  <div className="flex size-10 items-center justify-center overflow-hidden rounded-xl border border-stone-100 bg-stone-50">
+                    <IntegrationIcon slug={tk.slug} size={24} label={tk.name} />
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-stone-900">

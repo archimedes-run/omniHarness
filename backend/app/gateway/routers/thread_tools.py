@@ -43,6 +43,7 @@ class CatalogItem(BaseModel):
     name: str
     description: str = ""
     source: str = Field(..., description="local | connector")
+    origin: str = Field(default="builtin", description="For local sources: 'builtin' or 'user' (agent-built)")
     toolkit: str | None = None
     icon: str | None = None
     category: str
@@ -86,6 +87,22 @@ async def get_tools_catalog(request: Request) -> CatalogResponse:
     user_id = _get_user_id(request)
     items: list[CatalogItem] = []
 
+    # Slugified names of the user's agent-built ("Create MCP") servers — these
+    # register into extensions_config under a slugified name (see
+    # MCPServerManager._register), so we match on the same slug to mark origin.
+    import re
+
+    user_server_slugs: set[str] = set()
+    try:
+        mcp_repo = getattr(request.app.state, "mcp_server_repo", None)
+        if mcp_repo is not None:
+            for row in await mcp_repo.list_servers(user_id=user_id):
+                slug = re.sub(r"[^a-z0-9\-]", "-", (row.get("name") or "").lower()).strip("-")
+                if slug:
+                    user_server_slugs.add(slug)
+    except Exception:
+        user_server_slugs = set()
+
     # Local MCP servers from the config (pinned first, connectors excluded).
     try:
         ext = ExtensionsConfig.from_file()
@@ -101,6 +118,7 @@ async def get_tools_catalog(request: Request) -> CatalogResponse:
                 name=name,
                 description=getattr(cfg, "description", "") or "",
                 source="local",
+                origin="user" if name in user_server_slugs else "builtin",
                 category="Local",
                 connected=True,
                 pinned=name in PINNED_LOCAL_SERVERS,
