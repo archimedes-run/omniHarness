@@ -57,10 +57,37 @@ def _fetch_tools_sync() -> list[dict[str, Any]]:
         return r.json().get("items", [])
 
 
+def _prune_empty(value: Any) -> Any:
+    """Recursively strip empty values that Composio's execute API rejects.
+
+    Composio rejects empty object params — e.g. ``attachment={}`` or
+    ``attachment={"s3key": ""}`` fail with "Omit attachment or set it to null".
+    LLM/MCP argument coercion frequently injects such empty optionals, so we
+    drop empty strings, empty dicts, empty lists, and ``None`` before sending.
+    Falsy-but-meaningful values (``False``, ``0``, ``0.0``) are preserved.
+    Returns ``None`` to signal "drop this key".
+    """
+    if isinstance(value, dict):
+        cleaned = {k: pv for k, v in value.items() if (pv := _prune_empty(v)) is not None}
+        return cleaned or None
+    if isinstance(value, list):
+        cleaned = [pv for item in value if (pv := _prune_empty(item)) is not None]
+        return cleaned or None
+    if value == "":
+        return None
+    return value
+
+
+def _sanitize_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Drop empty/auto-injected optional params before calling Composio."""
+    cleaned = _prune_empty(arguments)
+    return cleaned if isinstance(cleaned, dict) else {}
+
+
 async def _execute_tool_async(slug: str, arguments: dict[str, Any]) -> Any:
     body: dict[str, Any] = {
         "connected_account_id": CONNECTED_ACCOUNT_ID,
-        "arguments": arguments,
+        "arguments": _sanitize_arguments(arguments),
     }
     if USER_ID:
         body["user_id"] = USER_ID
@@ -70,11 +97,46 @@ async def _execute_tool_async(slug: str, arguments: dict[str, Any]) -> Any:
         return r.json()
 
 
+def _strip_required_deep(schema: dict[str, Any]) -> None:
+    """Remove ``required`` from a schema and all of its sub-schemas, in place."""
+    if not isinstance(schema, dict):
+        return
+    schema.pop("required", None)
+    for sub in (schema.get("properties") or {}).values():
+        _strip_required_deep(sub)
+    items = schema.get("items")
+    if isinstance(items, dict):
+        _strip_required_deep(items)
+
+
+def _relax_nested_required(schema: dict[str, Any]) -> None:
+    """Drop ``required`` from NESTED object sub-schemas (in place).
+
+    Composio marks optional objects (e.g. ``attachment``) as having required
+    sub-fields (``name``, ``s3key``). When the model passes an empty/partial
+    optional object like ``attachment={}``, the MCP layer's jsonschema
+    validation rejects it BEFORE our execution-time sanitizer can strip it
+    (mcp/server/lowlevel/server.py validates against inputSchema first).
+
+    We keep the TOP-LEVEL ``required`` (genuinely required params such as
+    ``recipient_email``/``body``) but relax everything below it, so empty
+    optionals pass validation and reach :func:`_sanitize_arguments`, which
+    removes them before the call hits Composio.
+    """
+    for sub in (schema.get("properties") or {}).values():
+        if isinstance(sub, dict):
+            _strip_required_deep(sub)
+    items = schema.get("items")
+    if isinstance(items, dict):
+        _strip_required_deep(items)
+
+
 def _build_mcp_tool(tool_def: dict[str, Any]) -> types.Tool | None:
     """Build an MCP Tool from a Composio v3 tool definition.
 
-    The v3 API returns input_parameters as a JSON Schema object directly,
-    so we use it as-is for inputSchema.
+    The v3 API returns input_parameters as a JSON Schema object directly. We
+    relax nested ``required`` constraints so optional objects the model leaves
+    empty (e.g. ``attachment={}``) aren't rejected by client-side validation.
     """
     slug = tool_def.get("slug") or tool_def.get("name", "")
     if not slug:
@@ -84,6 +146,7 @@ def _build_mcp_tool(tool_def: dict[str, Any]) -> types.Tool | None:
     schema: dict[str, Any] = tool_def.get("input_parameters") or {"type": "object", "properties": {}}
     if not isinstance(schema, dict):
         schema = {"type": "object", "properties": {}}
+    _relax_nested_required(schema)
     return types.Tool(
         name=slug,
         description=description,
