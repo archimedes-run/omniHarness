@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ..events import classify
-from ..record_source import RecordSource
+from ..record_source import RecordSource, SkipReason
 from .base import ParsedRecord, SessionAdapter, SessionRef
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Record types seen in the wild that carry no status meaning. Listed explicitly so
 # that a genuinely NEW type shows up in unclassified_types rather than hiding in a
 # catch-all. See research.md R2.
+# Types observed in a real corpus that carry no status meaning. Listed explicitly
+# so a genuinely NEW type surfaces as UNKNOWN_TYPE rather than hiding in a
+# catch-all. The last five were absent from the original research sample and were
+# found only by running against a real ~/.claude — evidence that the one-file
+# sample was too narrow, exactly as research.md R2 cautioned.
 KNOWN_INERT_TYPES = frozenset(
     {
         "attachment",
@@ -35,6 +40,11 @@ KNOWN_INERT_TYPES = frozenset(
         "file-history-snapshot",
         "summary",
         "system",
+        "pr-link",
+        "queue-operation",
+        "agent-name",
+        "frame-link",
+        "agent-setting",
     }
 )
 
@@ -85,6 +95,8 @@ class ClaudeCodeAdapter(SessionAdapter):
         at = _parse_ts(record.get("timestamp"))
         if at is None:
             return None
+        message = record.get("message")
+        stop_reason = message.get("stop_reason") if isinstance(message, dict) else None
         cwd = record.get("cwd")
         branch = record.get("gitBranch")
         project = ""
@@ -95,11 +107,12 @@ class ClaudeCodeAdapter(SessionAdapter):
         return ParsedRecord(
             session_id=sid,
             at=at,
-            kind=classify(raw_type),
+            kind=classify(raw_type, stop_reason=stop_reason if isinstance(stop_reason, str) else None),
             project=project,
-            text=_text_of(record.get("message")),
+            text=_text_of(message),
             is_sidechain=bool(record.get("isSidechain")),
             raw_type=raw_type,
+            stop_reason=stop_reason if isinstance(stop_reason, str) else None,
         )
 
     def discover(self, window: timedelta, *, now: datetime | None = None) -> list[SessionRef]:
@@ -112,19 +125,21 @@ class ClaudeCodeAdapter(SessionAdapter):
                         continue
                     try:
                         raw = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        # Malformed or truncated. Skip it, keep reading the file.
-                        self._source.note_skip(f"unparseable json: {exc.msg}", path, lineno)
+                    except json.JSONDecodeError:
+                        # Genuine damage: truncation or corruption. Skip the line,
+                        # keep reading the file — one bad line must not cost a session.
+                        self._source.note_skip(SkipReason.MALFORMED, path, lineno)
                         continue
+                    if not isinstance(raw, dict):
+                        self._source.note_skip(SkipReason.MALFORMED, path, lineno)
+                        continue
+
                     parsed = self.parse(raw, path, lineno)
                     if parsed is None:
-                        rt = raw.get("type") if isinstance(raw, dict) else None
-                        self._source.note_skip(f"uninterpretable record (type={rt})", path, lineno)
-                        if isinstance(rt, str):
-                            ref = refs.get(_sid_of(raw))
-                            if ref is not None:
-                                ref.unclassified_types[rt] = ref.unclassified_types.get(rt, 0) + 1
+                        reason, rt = self._why_skipped(raw)
+                        self._source.note_skip(reason, path, lineno, raw_type=rt)
                         continue
+
                     ref = refs.get(parsed.session_id)
                     if ref is None:
                         ref = SessionRef(
@@ -133,13 +148,42 @@ class ClaudeCodeAdapter(SessionAdapter):
                             path=path,
                         )
                         refs[parsed.session_id] = ref
+                        # STARTED needs first-record context, which only the caller
+                        # has — classify() cannot know it in isolation (FR-007).
+                        parsed.kind = classify(
+                            parsed.raw_type,
+                            is_first=True,
+                            stop_reason=parsed.stop_reason,
+                        )
                     if parsed.kind is None and parsed.raw_type:
                         ref.unclassified_types[parsed.raw_type] = ref.unclassified_types.get(parsed.raw_type, 0) + 1
+                        if parsed.raw_type not in KNOWN_INERT_TYPES:
+                            self._source.stats.unknown_types[parsed.raw_type] += 1
                     # Sidechain records advance the parent's activity clock but do
                     # not become sessions of their own — a subagent is not a
                     # session the user started (research R2).
                     ref.records.append(parsed)
         return list(refs.values())
+
+    @staticmethod
+    def _why_skipped(raw: dict) -> tuple[SkipReason, str | None]:
+        """Attribute a skip to a specific cause.
+
+        The distinction that matters is INERT_TYPE (recognised, meaningless) vs
+        UNKNOWN_TYPE (never seen — the format moved). Collapsing them is what makes
+        real drift invisible.
+        """
+        raw_type = raw.get("type") if isinstance(raw.get("type"), str) else None
+        sid = raw.get("sessionId") or raw.get("session_id")
+        if not isinstance(sid, str) or not sid:
+            return SkipReason.NO_SESSION_ID, raw_type
+        if raw_type is None:
+            return SkipReason.UNKNOWN_TYPE, None
+        if not isinstance(raw.get("timestamp"), str) or not raw.get("timestamp"):
+            if raw_type in KNOWN_INERT_TYPES:
+                return SkipReason.INERT_TYPE, raw_type
+            return SkipReason.UNKNOWN_TYPE, raw_type
+        return (SkipReason.INERT_TYPE if raw_type in KNOWN_INERT_TYPES else SkipReason.UNKNOWN_TYPE), raw_type
 
 
 def _sid_of(raw: object) -> str:

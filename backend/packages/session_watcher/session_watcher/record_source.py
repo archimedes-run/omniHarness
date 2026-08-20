@@ -12,13 +12,31 @@ hardware even when a full directory scan has been reintroduced.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+class SkipReason(StrEnum):
+    """Why an entry produced no ParsedRecord.
+
+    Split apart because lumping them together hides real drift in a flood of
+    normal bookkeeping: on a real corpus, ~5.4k entries lack a timestamp simply
+    because that is the shape of `mode`/`ai-title`/`last-prompt` records. If
+    those log as damage, an actual format change is invisible in the noise.
+    """
+
+    MALFORMED = "malformed-json"  # genuine damage: truncation, corruption
+    NO_TIMESTAMP = "no-timestamp"  # normal for bookkeeping record types
+    NO_SESSION_ID = "no-session-id"  # normal for a few header-ish records
+    INERT_TYPE = "known-inert-type"  # recognised, carries no status meaning
+    UNKNOWN_TYPE = "unknown-type"  # NOVEL: the one that means the format moved
 
 
 @dataclass
@@ -26,11 +44,20 @@ class RecordStats:
     records_opened: int = 0
     records_skipped: int = 0
     candidates_considered: int = 0
+    skips: Counter[str] = field(default_factory=Counter)
+    unknown_types: Counter[str] = field(default_factory=Counter)
+
+    @property
+    def drift_signals(self) -> int:
+        """Skips that actually suggest the format changed under us."""
+        return self.skips[SkipReason.MALFORMED] + self.skips[SkipReason.UNKNOWN_TYPE]
 
     def reset(self) -> None:
         self.records_opened = 0
         self.records_skipped = 0
         self.candidates_considered = 0
+        self.skips.clear()
+        self.unknown_types.clear()
 
 
 @dataclass
@@ -76,7 +103,21 @@ class RecordSource:
         finally:
             fh.close()
 
-    def note_skip(self, reason: str, path: Path, lineno: int) -> None:
-        """Record an unparseable entry at debug level and keep going (FR-009)."""
+    def note_skip(
+        self,
+        reason: SkipReason,
+        path: Path,
+        lineno: int,
+        *,
+        raw_type: str | None = None,
+    ) -> None:
+        """Record a skipped entry at debug level and keep going (FR-009)."""
         self.stats.records_skipped += 1
-        logger.debug("skipping %s:%d — %s", path, lineno, reason)
+        self.stats.skips[reason] += 1
+        if reason is SkipReason.UNKNOWN_TYPE and raw_type:
+            self.stats.unknown_types[raw_type] += 1
+            # Louder than debug: a type we have never seen is the signal that the
+            # observed format moved. Everything else here is routine.
+            logger.info("unknown record type %r at %s:%d", raw_type, path, lineno)
+        else:
+            logger.debug("skipping %s:%d — %s", path, lineno, reason)

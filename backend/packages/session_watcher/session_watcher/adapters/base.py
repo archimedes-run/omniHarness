@@ -16,6 +16,10 @@ from pathlib import Path
 
 from ..models import EventKind
 
+# stop_reason values that mean the model finished its turn. `tool_use` and a null
+# stop_reason are explicitly NOT here: both mean work was still in flight.
+END_OF_TURN_REASONS = frozenset({"end_turn", "stop_sequence", "max_tokens"})
+
 
 @dataclass
 class ParsedRecord:
@@ -28,6 +32,17 @@ class ParsedRecord:
     text: str = ""
     is_sidechain: bool = False
     raw_type: str = ""
+    stop_reason: str | None = None
+
+    @property
+    def is_end_of_turn(self) -> bool:
+        """True when this record is an OBSERVED end-of-turn marker (FR-006a).
+
+        Verified against a real corpus: stop_reason is present on 100% of
+        assistant message payloads. `tool_use` means the agent paused to call a
+        tool and is still mid-work — emphatically NOT an end of turn.
+        """
+        return self.stop_reason in END_OF_TURN_REASONS
 
 
 @dataclass
