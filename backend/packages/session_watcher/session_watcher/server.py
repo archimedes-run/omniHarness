@@ -30,6 +30,7 @@ from .discovery import Discovery, DiscoveryConfig
 from .record_source import RecordSource
 from .redaction import Channel, redact_or_suppress
 from .registry import Observability, SessionRegistry
+from .reply import compose_rollup, compose_status
 from .state import StateConfig, resolve
 from .summarize.mechanical import MechanicalSummarizer
 
@@ -148,9 +149,11 @@ def build_server(service: WatcherService) -> Server:
                 name="list_coding_sessions",
                 description=(
                     "Status of every coding-agent session observed on this machine. "
-                    "Read-only (Tier 1). Check `observable`: when false, session state "
-                    "cannot currently be seen and an empty list does NOT mean no "
-                    "sessions are running. Lead any reply with the staleness caveat."
+                    "Read-only (Tier 1). Use the `reply` field verbatim — it already "
+                    "applies the required wording. If you rephrase, keep these: when "
+                    "`observable` is false an empty list does NOT mean no sessions are "
+                    "running, and the staleness caveat must come BEFORE any session "
+                    "data; 'finished' was observed, 'may have stalled' was inferred."
                 ),
                 inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
             ),
@@ -176,10 +179,17 @@ def build_server(service: WatcherService) -> Server:
         service.refresh()
         if name == "list_coding_sessions":
             payload = service.list_sessions()
+            spoken = compose_rollup(payload)
         elif name == "get_session_status":
             payload = service.session_status(str(arguments.get("session_id", "")))
+            spoken = compose_status(payload)
         else:
             payload = {"error": f"unknown tool {name}"}
+            spoken = f"unknown tool {name}"
+        # `reply` carries the wording rules already applied — caveat-first when
+        # stale, hedge-leading for inferred states, completed and stalled kept
+        # apart. The structured payload follows for anything that needs fields.
+        payload = {"reply": spoken, **payload}
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     return server

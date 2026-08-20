@@ -85,26 +85,48 @@ def test_candidates_are_stat_filtered_before_opening(big_history: Path) -> None:
 
 
 def test_sticky_membership_survives_going_quiet(tmp_session_dir, make_record, ago) -> None:
-    """FR-005c: once seen alive, a session stays listed even if it goes quiet.
+    """FR-005b/c: once seen active WHILE WE WATCH, a session stays listed.
 
-    Without this, a long build would make a live session vanish from the roll-up.
+    Stickiness is earned by activity after the watcher started — merely turning up
+    in the initial backfill is not "observed active", and treating it as such
+    would make the recency window meaningless on the very first sweep.
     """
     root = tmp_session_dir([make_record(at=ago(1), session_id="live")], session_id="live")
     src = RecordSource(root=root)
     disc = Discovery(ClaudeCodeAdapter(src), DiscoveryConfig(window=timedelta(minutes=30)))
+    # Watcher started before that record, so the record counts as activity we saw.
+    disc.started_at = datetime.now(UTC) - timedelta(minutes=5)
+
     refs = disc.sweep()
     assert [r.session_id for r in refs] == ["live"]
     assert disc.is_sticky("live")
 
     # Now it goes quiet past the window. Membership must not be re-decided.
     disc.config.window = timedelta(seconds=1)
-    disc.sweep()
+    refs = disc.sweep()
     assert disc.is_sticky("live"), "sticky membership was re-tested against the window (FR-005c)"
+    assert [r.session_id for r in refs] == ["live"], "a live session aged out mid-run"
+
+
+def test_backfilled_session_is_not_sticky_and_ages_out(tmp_session_dir, make_record, ago) -> None:
+    """The other half of the rule, and the reason the roll-up stays readable.
+
+    A session that last moved weeks ago but whose file was touched recently is
+    inside the mtime window (so it is cheap to read) yet outside the activity
+    window (so it is not listed). Without this, a roll-up of "what are my
+    sessions doing" answers with weeks of finished work.
+    """
+    root = tmp_session_dir([make_record(at=ago(60 * 24 * 20), session_id="ancient")], session_id="ancient")
+    disc = Discovery(ClaudeCodeAdapter(RecordSource(root=root)), DiscoveryConfig(window=timedelta(hours=24)))
+    refs = disc.sweep()
+    assert refs == [], "a 20-day-old session was listed inside a 24h activity window"
+    assert not disc.is_sticky("ancient")
 
 
 def test_release_drops_stickiness(tmp_session_dir, make_record, ago) -> None:
     root = tmp_session_dir([make_record(at=ago(1), session_id="done")], session_id="done")
     disc = Discovery(ClaudeCodeAdapter(RecordSource(root=root)), DiscoveryConfig(window=WINDOW))
+    disc.started_at = datetime.now(UTC) - timedelta(minutes=5)
     disc.sweep()
     assert disc.is_sticky("done")
     disc.release("done")

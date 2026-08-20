@@ -123,12 +123,12 @@ design, not ten minutes.
 **Independent test**: Start two sessions in different projects, ask "what are my sessions doing?"
 from a remote channel, confirm both appear with correct project and state.
 
-- [ ] T041 [US1] Implement the `list_coding_sessions` MCP tool in `backend/packages/session_watcher/session_watcher/server.py` — no arguments, Tier 1, returning `observable`, `as_of`, `staleness_seconds`, and `sessions[]` per the contract (FR-011, FR-014)
-- [ ] T042 [US1] Wire the `observable` flag from `SessionRegistry.is_stale` in `server.py` — an empty list with `observable: false` means *cannot see*; empty with `observable: true` means *nothing running* (FR-011a)
-- [ ] T043 [US1] Implement caveat-first reply composition in `backend/packages/session_watcher/session_watcher/reply.py` — when stale, the health caveat **leads** and last-known data with its age follows; never the reverse ordering (FR-011b)
-- [ ] T044 [P] [US1] Test the roll-up in `backend/tests/session_watcher/test_us1_rollup.py` — two live sessions yield one accurate line each within the answer budget, distinguishing working from completed (SC-001, SC-004)
-- [ ] T045 [P] [US1] Test caveat ordering in `backend/tests/session_watcher/test_us1_rollup.py` — every reply drawn from a stale registry presents the health caveat **before** any session data and states the data's age (SC-004f, FR-011b)
-- [ ] T046 [P] [US1] Test the empty-vs-unobservable distinction in `backend/tests/session_watcher/test_us1_rollup.py` — a stopped watcher with sessions running never produces "no sessions running" (SC-004e)
+- [X] T041 [US1] Implement the `list_coding_sessions` MCP tool in `backend/packages/session_watcher/session_watcher/server.py` — no arguments, Tier 1, returning `observable`, `as_of`, `staleness_seconds`, and `sessions[]` per the contract (FR-011, FR-014)
+- [X] T042 [US1] Wire the `observable` flag from `SessionRegistry.is_stale` in `server.py` — an empty list with `observable: false` means *cannot see*; empty with `observable: true` means *nothing running* (FR-011a)
+- [X] T043 [US1] Implement caveat-first reply composition in `backend/packages/session_watcher/session_watcher/reply.py` — when stale, the health caveat **leads** and last-known data with its age follows; never the reverse ordering (FR-011b)
+- [X] T044 [P] [US1] Test the roll-up in `backend/tests/session_watcher/test_us1_rollup.py` — two live sessions yield one accurate line each within the answer budget, distinguishing working from completed (SC-001, SC-004)
+- [X] T045 [P] [US1] Test caveat ordering in `backend/tests/session_watcher/test_us1_rollup.py` — every reply drawn from a stale registry presents the health caveat **before** any session data and states the data's age (SC-004f, FR-011b)
+- [X] T046 [P] [US1] Test the empty-vs-unobservable distinction in `backend/tests/session_watcher/test_us1_rollup.py` — a stopped watcher with sessions running never produces "no sessions running" (SC-004e)
 
 **Checkpoint**: User Story 1 is independently shippable. This is the MVP.
 
