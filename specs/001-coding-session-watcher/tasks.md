@@ -32,13 +32,13 @@ Tests: `backend/tests/session_watcher/`
 **Purpose**: Package skeleton placed to satisfy Gate 1, dependencies, fixture corpus — and
 proof that the chosen transport actually works before anything is built on top of it.
 
-- [ ] T001 Create uv workspace package skeleton at `backend/packages/session_watcher/pyproject.toml` — name `session-watcher`, requires-python >=3.12, and **no dependency on `omniharness-harness`** (Gate 1 placement; FR-018, Article I)
-- [ ] T002 [P] Create `backend/packages/session_watcher/ruff.toml` setting `flake8-tidy-imports.banned-api` on `omniharness*`, `langgraph*`, `subprocess`, `os.system`, `os.popen`, and `shell=True` (**GATE 1 impl**; SC-008, research R2 finding 2)
-- [ ] T003 [P] Add `watchdog` and `mcp` to `backend/pyproject.toml` dependencies and run `uv sync` (FR-022, FR-018)
-- [ ] T004 Create test package `backend/tests/session_watcher/__init__.py` and `conftest.py` with a `tmp_session_dir` fixture factory
-- [ ] T005 [P] Build fixture corpus in `backend/tests/session_watcher/fixtures/` — valid records, malformed JSON, truncated final line, unknown `type` values, and **a project directory whose name begins with a hyphen** reproducing the real `-Users-...` slug (FR-009, FR-020, research R2 finding 2)
+- [X] T001 Create uv workspace package skeleton at `backend/packages/session_watcher/pyproject.toml` — name `session-watcher`, requires-python >=3.12, and **no dependency on `omniharness-harness`** (Gate 1 placement; FR-018, Article I)
+- [X] T002 [P] Create `backend/packages/session_watcher/ruff.toml` setting `flake8-tidy-imports.banned-api` on `omniharness*`, `langgraph*`, `subprocess`, `os.system`, `os.popen`, and `shell=True` (**GATE 1 impl**; SC-008, research R2 finding 2)
+- [X] T003 [P] Add `watchdog` and `mcp` to `backend/pyproject.toml` dependencies and run `uv sync` (FR-022, FR-018)
+- [X] T004 Create test package `backend/tests/session_watcher/__init__.py` and `conftest.py` with a `tmp_session_dir` fixture factory
+- [X] T005 [P] Build fixture corpus in `backend/tests/session_watcher/fixtures/` — valid records, malformed JSON, truncated final line, unknown `type` values, and **a project directory whose name begins with a hyphen** reproducing the real `-Users-...` slug (FR-009, FR-020, research R2 finding 2)
 
-- [ ] T006 **TRANSPORT SPIKE — blocking, do before Phase 2.** Stand up a throwaway SSE server on the host in `backend/packages/session_watcher/spike_transport.py` returning a hardcoded status payload, register it in `extensions_config.json`, and reach it **from the containerized backend**. Proves `host.docker.internal` reachability and the whole SSE registration path (`extensions_config.json` → `get_enabled_mcp_servers()` → `local:<name>` catalog → agent). **If this fails, stop and revisit the transport decision before any Phase 2 work.** Delete the spike once the real server lands (SC-008b, FR-018a, FR-021)
+- [X] T006 **TRANSPORT SPIKE — blocking, do before Phase 2.** Stand up a throwaway SSE server on the host in `backend/packages/session_watcher/spike_transport.py` returning a hardcoded status payload, register it in `extensions_config.json`, and reach it **from the containerized backend**. Proves `host.docker.internal` reachability and the whole SSE registration path (`extensions_config.json` → `get_enabled_mcp_servers()` → `local:<name>` catalog → agent). **If this fails, stop and revisit the transport decision before any Phase 2 work.** Delete the spike once the real server lands (SC-008b, FR-018a, FR-021)
 
 **Checkpoint**: `uv run ruff check packages/session_watcher/` runs clean, the hooks match the path,
 and a containerized backend has successfully called a host-resident SSE tool. **The transport is

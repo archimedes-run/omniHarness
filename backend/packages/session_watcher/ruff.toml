@@ -1,0 +1,20 @@
+# Gate 1 (plan.md): these bans are constitutional guarantees expressed as lint rules.
+#
+#   omniharness*, langgraph*  -> Article I. The watcher integrates over MCP and
+#                                imports nothing from core. SC-008.
+#   subprocess, os.system,    -> research.md R2 finding 2. Observed project dirs are
+#   os.popen                     path-slugs beginning with "-", which a shell reads as
+#                                an option flag. Path handling is pathlib-only.
+#
+# Removing an entry here silently removes the guarantee. Don't.
+extend = "../../ruff.toml"
+
+[lint]
+extend-select = ["TID"]
+
+[lint.flake8-tidy-imports.banned-api]
+"omniharness".msg = "Article I: the watcher must not import core. Integrate over MCP."
+"langgraph".msg = "Article I: the watcher must not import LangGraph internals."
+"subprocess".msg = "R2 finding 2: observed paths start with '-'; use pathlib, never a shell."
+"os.system".msg = "R2 finding 2: observed paths start with '-'; use pathlib, never a shell."
+"os.popen".msg = "R2 finding 2: observed paths start with '-'; use pathlib, never a shell."
