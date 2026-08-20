@@ -81,36 +81,36 @@ design, not ten minutes.
 ### Registry and liveness
 
 - [X] T022 [P] Test the UNKNOWN state in `backend/tests/session_watcher/test_state_machine.py` — records present but uninterpretable yield UNKNOWN and never a confident state; assert UNKNOWN is distinguishable from IDLE/STALLED, since unknown means *could not interpret* while stalled means *interpreted and saw nothing* (FR-006, Article X)
-- [ ] T023 Implement `SessionRegistry` in `backend/packages/session_watcher/session_watcher/registry.py` — keyed by `session_id`, with `last_heartbeat_at`, configurable `heartbeat_interval_s` (default 30) and `staleness_threshold_s` (default 90), exposing `is_stale` (FR-002, FR-024a)
-- [ ] T024 Implement the observability tri-state in `registry.py` — populated+fresh, empty+fresh, and stale must be **three distinguishable conditions**, never two (FR-011a)
-- [ ] T025 [P] Test liveness in `backend/tests/session_watcher/test_registry_liveness.py` — with the watcher stopped, a query reports "cannot observe" and **never** "no sessions running", including when the registry is empty (SC-004e, FR-011a)
+- [X] T023 Implement `SessionRegistry` in `backend/packages/session_watcher/session_watcher/registry.py` — keyed by `session_id`, with `last_heartbeat_at`, configurable `heartbeat_interval_s` (default 30) and `staleness_threshold_s` (default 90), exposing `is_stale` (FR-002, FR-024a)
+- [X] T024 Implement the observability tri-state in `registry.py` — populated+fresh, empty+fresh, and stale must be **three distinguishable conditions**, never two (FR-011a)
+- [X] T025 [P] Test liveness in `backend/tests/session_watcher/test_registry_liveness.py` — with the watcher stopped, a query reports "cannot observe" and **never** "no sessions running", including when the registry is empty (SC-004e, FR-011a)
 
 ### Summarization
 
-- [ ] T026 Define `SummarizerPort` in `backend/packages/session_watcher/session_watcher/summarize/port.py` returning text plus `MODEL | MECHANICAL` provenance (FR-008c)
-- [ ] T027 Implement `MechanicalSummarizer` in `backend/packages/session_watcher/session_watcher/summarize/mechanical.py` as the **default** path — take the latest assistant message, strip fenced code blocks and terminal control sequences, collapse whitespace, clip at a sentence boundary, never mid-word. This is what gives every event its one-line summary (**GATE 2 impl**; FR-008, FR-008b, SC-004d)
-- [ ] T028 Implement `OnDemandModelSummarizer` in `backend/packages/session_watcher/session_watcher/summarize/on_demand_model.py` — acquire the model inside a context manager scoped to one batch, release on exit; the handle is never stored on the registry, adapter, or any module-level singleton (**GATE 2 impl**; FR-008a, Article VI)
-- [ ] T029 Test model release in `backend/tests/session_watcher/test_summarizer_lifecycle.py` — hold a `weakref` to the model handle, force collection after a batch, assert the referent is dead (**GATE 2**; Article VI, FR-008a)
-- [ ] T030 **GATE 2 VERIFY** — deliberately retain the model handle on the summarizer instance, confirm `test_summarizer_lifecycle.py` **fails** on the live weakref, then revert. Record the outcome (plan.md standing convention)
-- [ ] T031 [P] Test no-content-egress in `backend/tests/session_watcher/test_summarizer_lifecycle.py` — with no cloud provider opted in, a full observe-and-query cycle makes no outbound request (SC-004c, FR-008a)
+- [X] T026 Define `SummarizerPort` in `backend/packages/session_watcher/session_watcher/summarize/port.py` returning text plus `MODEL | MECHANICAL` provenance (FR-008c)
+- [X] T027 Implement `MechanicalSummarizer` in `backend/packages/session_watcher/session_watcher/summarize/mechanical.py` as the **default** path — take the latest assistant message, strip fenced code blocks and terminal control sequences, collapse whitespace, clip at a sentence boundary, never mid-word. This is what gives every event its one-line summary (**GATE 2 impl**; FR-008, FR-008b, SC-004d)
+- [X] T028 Implement `OnDemandModelSummarizer` in `backend/packages/session_watcher/session_watcher/summarize/on_demand_model.py` — acquire the model inside a context manager scoped to one batch, release on exit; the handle is never stored on the registry, adapter, or any module-level singleton (**GATE 2 impl**; FR-008a, Article VI)
+- [X] T029 Test model release in `backend/tests/session_watcher/test_summarizer_lifecycle.py` — hold a `weakref` to the model handle, force collection after a batch, assert the referent is dead (**GATE 2**; Article VI, FR-008a)
+- [X] T030 **GATE 2 VERIFY** — deliberately retain the model handle on the summarizer instance, confirm `test_summarizer_lifecycle.py` **fails** on the live weakref, then revert. Record the outcome (plan.md standing convention)
+- [X] T031 [P] Test no-content-egress in `backend/tests/session_watcher/test_summarizer_lifecycle.py` — with no cloud provider opted in, a full observe-and-query cycle makes no outbound request (SC-004c, FR-008a)
 
 ### Redaction
 
-- [ ] T032 Implement the redactor in `backend/packages/session_watcher/session_watcher/redaction.py` — runs on **every** channel; `Channel.LOCAL | REMOTE` governs aggressiveness only; remote additionally shortens paths and trims code fragments; emits visible `[redacted]` markers; **raises on failure so the caller suppresses the send** (FR-011c, FR-011e, FR-011f)
-- [ ] T033 [P] Test redaction in `backend/tests/session_watcher/test_redaction.py` — seeded credential patterns never appear on any channel and are replaced by visible markers rather than silently dropped; a forced redactor error suppresses the reply entirely; remote replies carry no full paths or multi-line code while local ones do (SC-004k, SC-004l, SC-004m)
-- [ ] T034 [P] Assert the weaker claim in `backend/tests/session_watcher/test_redaction.py` — no user-facing string, docstring, or tool description states that the filter removes *secrets*; only *recognized patterns* (FR-011d, Article X)
+- [X] T032 Implement the redactor in `backend/packages/session_watcher/session_watcher/redaction.py` — runs on **every** channel; `Channel.LOCAL | REMOTE` governs aggressiveness only; remote additionally shortens paths and trims code fragments; emits visible `[redacted]` markers; **raises on failure so the caller suppresses the send** (FR-011c, FR-011e, FR-011f)
+- [X] T033 [P] Test redaction in `backend/tests/session_watcher/test_redaction.py` — seeded credential patterns never appear on any channel and are replaced by visible markers rather than silently dropped; a forced redactor error suppresses the reply entirely; remote replies carry no full paths or multi-line code while local ones do (SC-004k, SC-004l, SC-004m)
+- [X] T034 [P] Assert the weaker claim in `backend/tests/session_watcher/test_redaction.py` — no user-facing string, docstring, or tool description states that the filter removes *secrets*; only *recognized patterns* (FR-011d, Article X)
 
 ### Zero writes and core isolation
 
-- [ ] T035 [P] Test zero writes in `backend/tests/session_watcher/test_zero_writes.py` — snapshot content hash, size, **and mtime** of every fixture record before a full observation cycle and assert all three unchanged after. Hash *and* mtime, because a write-then-restore leaves content equal (**GATE 1**; FR-019, SC-007)
-- [ ] T036 [P] Test core isolation in `backend/tests/session_watcher/test_no_core_imports.py` — walk the module's import graph and assert no `omniharness*` or `langgraph*` member appears; a runtime backstop for the static ruff ban (SC-008, Article I)
+- [X] T035 [P] Test zero writes in `backend/tests/session_watcher/test_zero_writes.py` — snapshot content hash, size, **and mtime** of every fixture record before a full observation cycle and assert all three unchanged after. Hash *and* mtime, because a write-then-restore leaves content equal (**GATE 1**; FR-019, SC-007)
+- [X] T036 [P] Test core isolation in `backend/tests/session_watcher/test_no_core_imports.py` — walk the module's import graph and assert no `omniharness*` or `langgraph*` member appears; a runtime backstop for the static ruff ban (SC-008, Article I)
 
 ### Transport
 
-- [ ] T037 Implement the SSE MCP server in `backend/packages/session_watcher/session_watcher/server.py` using `mcp.server` with SSE transport, bound to a host-local address, `--port` defaulting to 18101 (FR-018, FR-018a)
-- [ ] T038 Add the `session-watcher` SSE entry to `extensions_config.json` per [contracts/mcp-tools.md](./contracts/mcp-tools.md) — `"type": "sse"`, `url` `http://host.docker.internal:18101/sse`. **stdio is forbidden**: it would be spawned as a backend subprocess and could not read the host's session directory under Docker (FR-018a, FR-021)
-- [ ] T039 Implement filesystem watching in `backend/packages/session_watcher/session_watcher/watcher.py` — `watchdog` observers as the fast path, plus a low-frequency reconciliation sweep so a coalesced or dropped event delays an update rather than losing it (FR-022, FR-024)
-- [ ] T040 [P] Test sleep/wake resilience in `backend/tests/session_watcher/test_reconciliation.py` — simulate a missed-event window, assert reconciliation restores correct state with no restart (FR-024, SC-006)
+- [X] T037 Implement the SSE MCP server in `backend/packages/session_watcher/session_watcher/server.py` using `mcp.server` with SSE transport, bound to a host-local address, `--port` defaulting to 18101 (FR-018, FR-018a)
+- [X] T038 Add the `session-watcher` SSE entry to `extensions_config.json` per [contracts/mcp-tools.md](./contracts/mcp-tools.md) — `"type": "sse"`, `url` `http://host.docker.internal:18101/sse`. **stdio is forbidden**: it would be spawned as a backend subprocess and could not read the host's session directory under Docker (FR-018a, FR-021)
+- [X] T039 Implement filesystem watching in `backend/packages/session_watcher/session_watcher/watcher.py` — `watchdog` observers as the fast path, plus a low-frequency reconciliation sweep so a coalesced or dropped event delays an update rather than losing it (FR-022, FR-024)
+- [X] T040 [P] Test sleep/wake resilience in `backend/tests/session_watcher/test_reconciliation.py` — simulate a missed-event window, assert reconciliation restores correct state with no restart (FR-024, SC-006)
 
 **Checkpoint**: full test suite green; all three gates implemented **and observed failing**.
 
