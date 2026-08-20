@@ -177,33 +177,46 @@ specs/001-coding-session-watcher/
 ```text
 backend/packages/session_watcher/
 ├── pyproject.toml                 # uv workspace member; MUST NOT depend on omniharness-harness
-├── ruff.toml                      # banned-api: omniharness*, langgraph* (Gate 1)
+├── ruff.toml                      # banned-api: omniharness*, langgraph*, subprocess, os.system,
+│                                  #             os.popen, shell=True  (Gates 1 + shell-out ban)
 └── session_watcher/
     ├── __init__.py
+    ├── models.py                  # Session, SessionEvent, SessionState, IdleReason
     ├── server.py                  # SSE MCP server: the two Tier-1 tools (FR-018/018a)
     ├── registry.py                # Session registry, liveness/heartbeat (FR-002, FR-024a)
-    ├── state.py                    # State machine: marker-first, timeout fallback (FR-006a/b)
-    ├── events.py                  # Normalized SessionEvent vocabulary (FR-007)
+    ├── discovery.py               # Recency window + sticky membership (FR-005a-c)
+    ├── state.py                   # Marker-first, timeout fallback, UNKNOWN (FR-006, FR-006a/b)
+    ├── events.py                  # Normalized SessionEvent vocabulary + mapping (FR-007)
     ├── record_source.py           # THE record-open seam + stats counter (Gate 3)
+    ├── reply.py                   # Caveat-first composition, hedged wording (FR-011b, FR-016a)
     ├── redaction.py               # Channel-aware, fail-closed, visible markers (FR-011c-f)
+    ├── watcher.py                 # watchdog observers + reconciliation sweep (FR-022, FR-024)
     ├── summarize/
     │   ├── port.py                # SummarizerPort (Gate 2)
-    │   ├── mechanical.py          # Default path (FR-008b)
+    │   ├── mechanical.py          # Default path (FR-008, FR-008b)
     │   └── on_demand_model.py     # load -> summarize -> release (Gate 2)
     └── adapters/
         ├── base.py                # SessionAdapter interface (FR-023)
         └── claude_code.py         # THE only format-aware file (FR-023)
 
 backend/tests/session_watcher/
-├── fixtures/                      # Real + malformed + truncated records (FR-009)
-├── test_adapter_claude_code.py    # Fixture-based parsing, drift tolerance
-├── test_state_machine.py          # completed vs stalled (FR-006a, SC-004a/b)
+├── fixtures/                      # Valid + malformed + truncated + hyphen-prefixed dir
+├── test_adapter_claude_code.py    # Fixture-based parsing, drift tolerance (FR-009)
+├── test_paths.py                  # Hyphen-prefixed + Windows path handling (FR-020)
+├── test_state_machine.py          # completed vs stalled vs UNKNOWN (SC-004a/b, FR-006)
 ├── test_registry_liveness.py      # heartbeat/staleness (FR-024a, SC-004e/f)
 ├── test_discovery_window.py       # sticky membership + records_opened bound (Gate 3)
 ├── test_redaction.py              # fail-closed, visible markers (SC-004k/l/m)
-├── test_summarizer_lifecycle.py   # weakref release assertion (Gate 2)
+├── test_summarizer_lifecycle.py   # weakref release (Gate 2) + no-egress (SC-004c)
 ├── test_zero_writes.py            # hash+size+mtime unchanged (Gate 1)
-└── test_no_core_imports.py        # backstop for the ruff ban (Gate 1)
+├── test_no_core_imports.py        # backstop for the ruff ban (Gate 1)
+├── test_reconciliation.py         # sleep/wake, missed events (FR-024, SC-006)
+├── test_startup.py                # first-query smoke bound (SC-004j)
+├── test_contract.py               # tool surface, sole-reachability, honest absence
+├── test_us1_rollup.py             # US1
+├── test_us2_blocked.py            # US2 incl. wording assertions (FR-016a)
+├── test_us3_detail.py             # US3
+└── test_us4_lifecycle.py          # US4
 
 extensions_config.json             # + "session-watcher" SSE entry (FR-018)
 ```
