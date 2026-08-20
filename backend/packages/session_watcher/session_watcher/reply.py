@@ -57,8 +57,13 @@ def _line(s: dict) -> str:
     if state == "working":
         head = f"{project} — working, last activity {quiet} ago"
     elif state == "waiting-on-user":
-        # Inferred; Story 2 owns the detail, but the hedge belongs here too.
-        head = f"{project} — looks like it's waiting on you, nothing for {quiet}"
+        # PURE INFERENCE (spike R2b: the format carries no pending-prompt signal).
+        # The hedge LEADS and the observable evidence follows it, so the sentence
+        # sounds like the inference it is. Required shape:
+        #   "Looks like it's waiting on you — last activity was N ago, nothing since"
+        # Forbidden shape:
+        #   "It's waiting for your input"   <- states an inference as an observation
+        head = f"{project} — looks like it's waiting on you; last activity was {quiet} ago, nothing since"
     elif state == "idle" and reason == "completed":
         # OBSERVED end-of-turn. Stated as fact, with no hedge, because hedging a
         # fact is its own dishonesty.

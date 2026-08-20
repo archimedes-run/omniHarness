@@ -45,6 +45,7 @@ KNOWN_INERT_TYPES = frozenset(
         "agent-name",
         "frame-link",
         "agent-setting",
+        "file-history-delta",
     }
 )
 

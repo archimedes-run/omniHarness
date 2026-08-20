@@ -55,3 +55,19 @@ def classify(
     if raw_type == "user":
         return EventKind.STARTED if is_first else EventKind.PROGRESS
     return None
+
+
+def waiting_event(session, at) -> SessionEvent:
+    """Emit the waiting-on-user event a future trigger engine will consume (FR-010).
+
+    Nothing consumes it in this phase, and nothing may: FR-025 forbids proactive
+    push until the trigger engine exists, and Article VII binds that feature to
+    quiet hours, coalescing, and presence-aware routing this feature does not
+    implement. Emitting it now only fixes the shape.
+    """
+    return SessionEvent(
+        kind=EventKind.QUESTION,
+        at=at,
+        summary=f"{session.project} appears to be waiting on a reply",
+        summary_provenance=SummaryProvenance.MECHANICAL,
+    )

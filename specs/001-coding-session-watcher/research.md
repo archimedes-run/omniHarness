@@ -132,6 +132,62 @@ session the user started.
 
 ---
 
+## R2b. Permission-mode corroboration spike (T055) — **NEGATIVE**
+
+**Question**: do `permission-mode` / `mode` records, or any assistant record shape,
+distinguish a session paused on a permission prompt from one merely between turns? If so,
+waiting-on-user upgrades from inference to observation and FR-016a's hedge could be dropped.
+
+**Verdict: no such signal exists in the observed format.** Waiting-on-user remains an
+inference, and the hedge-leads wording stands. Timebox spent; not reopened without new
+evidence.
+
+**Method**: whole-corpus scan — 25,696 lines across 42 files, 17 record types — looking inside
+the message envelope rather than at top-level types, since that is where `stop_reason` was
+missed the first time.
+
+**What was ruled out**
+
+| Candidate | Finding | Why it fails |
+|---|---|---|
+| `mode.mode` | `normal` in 1494/1494 | Constant. Carries no state at all. |
+| `permission-mode.permissionMode` | `default` 366, `acceptEdits` 345, `auto` 97 | The user's configured **policy**, not runtime state. Also **carries no timestamp**, so it cannot be ordered against activity even if it did. |
+| Unmatched `tool_use` (tool_use with no matching `tool_result`) | **0 across all 41 sessions** | The most promising hypothesis — a permission prompt should leave a tool call unanswered. It never occurs here. 5210 `tool_use` blocks, 5217 `tool_result` blocks. |
+| A permission-request record type | None exists | 17 types enumerated; none represents a pending prompt. |
+| `assistant.stop_details` | `<none>` in 10939/10939 | Always absent. |
+
+**Sample limitation, stated rather than buried**: no session in this corpus was left sitting on
+a permission prompt, so the positive case was never observable. This is weak evidence of
+absence, not proof. If a blocked session is ever captured, the unmatched-`tool_use` hypothesis
+is the one to re-test first — it is the only mechanism that would produce a distinguishable
+trace.
+
+**Two useful byproducts, both outside the spike's question**
+
+1. **`system` / `subtype: turn_duration` is a second turn-boundary marker**, timestamped, and
+   follows an `end_turn` assistant record in **460 of 477 cases (96.4%)**. It corroborates the
+   `stop_reason` marker rather than replacing it. Not adopted — `stop_reason` is already
+   sufficient for FR-006a and a second source would add ambiguity for no gain.
+
+2. **`system` / `subtype: away_summary` — Claude Code writes its own session summaries.**
+   Present in 17 of 42 sessions, 194–278 characters, and the last record in 11 of them. They
+   are markedly better than mechanical clipping and often name the next action:
+
+   > "We've been fixing and live-testing this SEO MCP server's providers; all five with keys
+   > now pass after 15 bug fixes, documented in run_*.md files. Next action: run git init and
+   > commit, since everything is currently untracked."
+
+   **Flagged as a possible FR-008 amendment, not adopted unilaterally**: preferring an existing
+   `away_summary` over mechanical derivation would improve summary quality at lower cost, but it
+   changes where summaries come from and belongs in a clarify pass rather than an implementation
+   decision. It also only covers 40% of sessions, so the mechanical path remains the default
+   regardless.
+
+3. **`file-history-delta` (166 records)** is a further record type absent from the original
+   research sample. Added to `KNOWN_INERT_TYPES`.
+
+---
+
 ## R3. Filesystem change notification
 
 **Decision**: `watchdog` (new dependency) for OS-native change notification, with a slow polling
