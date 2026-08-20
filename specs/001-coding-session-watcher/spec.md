@@ -55,6 +55,16 @@
   the send rather than passing content through. Redactions appear as visible markers, never as
   silent removals.
 
+- Q: Does the gateway support external tool registration, as FR-018 assumed? → A: No. Verified
+  by reading the code on 2026-08-20: there is no registration API, and tools reach the agent from
+  exactly two sources — `local:<server>` (MCP) and `connector:<SLUG>` (Composio). The watcher
+  therefore integrates as an MCP server declared in `extensions_config.json`. It MUST be reachable
+  over SSE rather than stdio, because a stdio server is spawned as a subprocess of the backend and
+  so cannot read the host's session directory when the backend runs in a container — which would
+  collide with FR-021. This strengthens Article I rather than weakening it: an MCP server imports
+  nothing from core at all. The spec's intent was correct; only its wording named a mechanism that
+  does not exist.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Ask what my coding sessions are doing (Priority: P1)
@@ -338,8 +348,21 @@ third; then ask for the roll-up and confirm all three are represented correctly.
 
 **Boundaries and operational behavior**
 
-- **FR-018**: The system MUST expose its capabilities to the agent core exclusively through the
-  public gateway interface, and MUST NOT depend on agent-core internals.
+- **FR-018**: The system MUST expose its capabilities to the agent core as an MCP server
+  declared in `extensions_config.json`, surfaced to the agent as a `local:<name>` tool source. It
+  MUST NOT import from or otherwise depend on agent-core internals. Rationale: the gateway
+  exposes no external tool-registration API — tools reach the agent only as `local:<server>`
+  (MCP) or `connector:<SLUG>` (Composio) — and an MCP server satisfies Constitution Article I
+  more strongly than a registration API would, since a separate process speaking a standard
+  protocol imports nothing from core by construction.
+- **FR-018a**: The system MUST be reachable over SSE at a host-local address, and MUST NOT be
+  integrated as a stdio MCP server. Rationale: a stdio server is spawned as a subprocess of the
+  backend, so when the backend runs in a container it cannot read the host's session directory —
+  directly colliding with FR-021. The existing `github-issue-connector` entry in
+  `extensions_config.json`, an SSE server reached at `http://host.docker.internal:<port>/sse`, is
+  the precedent shape.
+- **FR-018b**: The MCP tool surface MUST remain the system's only integration point with the
+  agent core. No capability may be added by a path that bypasses it.
 - **FR-019**: The system MUST perform zero writes to any observed session record. This MUST be
   verifiable automatically.
 - **FR-020**: The system MUST operate correctly on both macOS and Windows file path conventions.
@@ -350,7 +373,10 @@ third; then ask for the roll-up and confirm all three are represented correctly.
   where it is not.
 - **FR-023**: The system MUST isolate all knowledge of the observed agent's record format behind
   a single adapter boundary, so that supporting an additional coding agent later is the addition
-  of a new adapter rather than a change to the registry, event model, or query capabilities.
+  of a new adapter rather than a change to the registry, event model, or exposed tool surface.
+  The MCP tool surface described in FR-018 is the stable contract: adding an adapter MUST NOT
+  change the set of tools the agent sees, their names, or their arguments — a second observed
+  agent appears as additional sessions in the same replies, not as new tools.
 - **FR-024**: The system MUST survive machine sleep and wake, resuming observation of all
   previously known sessions without user action.
 - **FR-024a**: The system MUST emit a liveness heartbeat on a configurable interval, defaulting
@@ -436,6 +462,11 @@ third; then ask for the roll-up and confirm all three are represented correctly.
   — zero writes — verified automatically on every change to the codebase.
 - **SC-008**: The watcher introduces no measurable dependency on agent-core internals, verified
   automatically on every change to the codebase.
+- **SC-008a**: The watcher's capabilities are reachable by the agent solely through its declared
+  MCP tool source; disabling that source removes them entirely, with no residual path, in 100% of
+  trials.
+- **SC-008b**: With the backend running in a container, the watcher reads the host's session
+  directory and answers status correctly — the case a stdio integration could not satisfy.
 - **SC-009**: While no session is active, the watcher's ongoing resource consumption is
   indistinguishable from idle over a 1-hour observation window.
 - **SC-010**: When the user asks the assistant to act on an observed session, the assistant states
@@ -473,6 +504,9 @@ third; then ask for the roll-up and confirm all three are represented correctly.
 - Redaction is pattern-based and therefore best-effort by construction; the spec's claims about
   it are deliberately scoped to recognized patterns so that no user-facing surface overstates
   what it can do.
+- The gateway's tool surface is fixed at two sources (MCP and Composio connectors); this was
+  verified against the code rather than assumed, after an earlier draft of this spec named a
+  registration API that does not exist.
 - Remote channels (for example Telegram) transit third-party infrastructure, which is why
   content reduction on those channels is a default rather than an option.
 - A machine with no local model configured is a supported, unremarkable configuration; the
