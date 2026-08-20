@@ -33,6 +33,34 @@
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`.
 
+### Validation record (iteration 2 — 2026-08-20, post-clarify)
+
+All 16 items re-evaluated against the clarified spec; all still pass (16/16 → 16/16), no
+regressions. The five clarifications added 19 functional requirements, 13 success criteria, and
+14 edge cases, strengthening the completeness items rather than disturbing them.
+
+Two deliberate exceptions carried forward under "No implementation details", both introduced at
+the author's explicit request because the alternative was an untestable requirement:
+
+- **FR-005d/FR-005e and SC-004i** name selection by modification time and assert on the count of
+  records opened. This is closer to mechanism than the rest of the spec. It is retained because
+  a wall-clock-only bound passes on fast hardware even when a full directory scan has been
+  reintroduced — the structural assertion is the only form of this requirement that can actually
+  fail in CI.
+- **FR-008b** names code blocks and terminal control sequences as things the mechanical summary
+  strips. Retained because "produce a readable one-liner" without them is precisely the vague
+  adjective the taxonomy flags.
+
+Newly strengthened by this session (previously passing but thin):
+
+- *Requirements are testable and unambiguous*: "idle" (FR-006a/b), "lagging" (FR-024a), and
+  "how far back" (FR-005a–e) each carried an unmade judgment call into implementation before
+  this pass. All three now have stated defaults and configurable bounds.
+- *Edge cases are identified*: 9 → 23, adding the watcher-down, redaction-failure,
+  quiet-long-build, and history-volume families.
+- *Success criteria are measurable*: 11 → 24, with every new clarification carrying at least one
+  falsifiable criterion.
+
 ### Validation record (iteration 1 — 2026-08-20)
 
 - **No implementation details**: PASS after revision. The source description named concrete
