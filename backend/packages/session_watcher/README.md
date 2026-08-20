@@ -40,9 +40,16 @@ Two options when you are not using it:
 - leave it enabled and start the watcher, or
 - set `"enabled": false` in `extensions_config.json`.
 
-`extensions_config.json` is gitignored, so this entry is per-machine and will not
-appear on a fresh clone. Add it from
-`specs/001-coding-session-watcher/contracts/mcp-tools.md`.
+**Which config file?** The gateway container sets
+`OMNI_HARNESS_EXTENSIONS_CONFIG_PATH=/app/extensions/extensions_config.json`, which
+maps to **`extensions/extensions_config.json`** on the host — *not* the repo-root
+`extensions_config.json`. Editing the root file has no effect on the containerized
+gateway. Both are gitignored, so neither appears on a fresh clone; copy the entry
+from `specs/001-coding-session-watcher/contracts/mcp-tools.md`.
+
+The server is **pinned** (`PINNED_LOCAL_SERVERS` in
+`backend/packages/harness/omniharness/tools/tools.py`), so its two tools are
+available in every conversation with no per-thread selection.
 
 ### Verifying it from the containerized backend
 

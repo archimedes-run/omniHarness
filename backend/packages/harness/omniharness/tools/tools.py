@@ -20,7 +20,11 @@ BUILTIN_TOOLS = [
 # a connector toolkit that share a name (e.g. local "github" vs connector
 # "GITHUB"): local servers are ``local:<server>``, connectors ``connector:<SLUG>``.
 # These two local sources are always available and non-removable in the UI.
-PINNED_LOCAL_SERVERS: frozenset[str] = frozenset({"filesystem", "postgres"})
+# Always available in every conversation, no per-thread selection needed.
+# session-watcher earns its place because "what are my sessions doing?" is a
+# question you ask from anywhere, and ceremony defeats the point. It costs two
+# read-only Tier-1 tools against the schema budget.
+PINNED_LOCAL_SERVERS: frozenset[str] = frozenset({"filesystem", "postgres", "session-watcher"})
 PINNED_LOCAL_SOURCES: frozenset[str] = frozenset(f"local:{s}" for s in PINNED_LOCAL_SERVERS)
 
 
