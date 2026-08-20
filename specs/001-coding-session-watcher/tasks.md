@@ -53,23 +53,23 @@ design, not ten minutes.
 
 ### Data model and the record seam
 
-- [ ] T007 Implement `Session`, `SessionEvent`, `SessionState`, `IdleReason` in `backend/packages/session_watcher/session_watcher/models.py`, enforcing at construction that `idle_reason` is non-None **iff** state is IDLE (FR-003, FR-003a; data-model.md)
-- [ ] T008 Implement `RecordSource` in `backend/packages/session_watcher/session_watcher/record_source.py` — `open()` as the **single seam** for opening any record, incrementing `stats.records_opened`, plus `stats.records_skipped` and `select_candidates(window)` filtering by mtime before parsing (**GATE 3 impl**; FR-005d, FR-005e, SC-004i)
+- [X] T007 Implement `Session`, `SessionEvent`, `SessionState`, `IdleReason` in `backend/packages/session_watcher/session_watcher/models.py`, enforcing at construction that `idle_reason` is non-None **iff** state is IDLE (FR-003, FR-003a; data-model.md)
+- [X] T008 Implement `RecordSource` in `backend/packages/session_watcher/session_watcher/record_source.py` — `open()` as the **single seam** for opening any record, incrementing `stats.records_opened`, plus `stats.records_skipped` and `select_candidates(window)` filtering by mtime before parsing (**GATE 3 impl**; FR-005d, FR-005e, SC-004i)
 
 ### Adapter boundary
 
-- [ ] T009 [P] Define the `SessionAdapter` interface in `backend/packages/session_watcher/session_watcher/adapters/base.py` — `discover(window)` and `parse(record)`, where `parse` returning None means skip (FR-023, FR-009)
-- [ ] T010 Implement the Claude Code adapter in `backend/packages/session_watcher/session_watcher/adapters/claude_code.py` — the **only** format-aware file; read `sessionId` (alias `session_id`), `cwd`, `gitBranch`, `timestamp`, `type`, `isSidechain`; sidechain records update parent activity without creating a registry entry (FR-023, research R2)
+- [X] T009 [P] Define the `SessionAdapter` interface in `backend/packages/session_watcher/session_watcher/adapters/base.py` — `discover(window)` and `parse(record)`, where `parse` returning None means skip (FR-023, FR-009)
+- [X] T010 Implement the Claude Code adapter in `backend/packages/session_watcher/session_watcher/adapters/claude_code.py` — the **only** format-aware file; read `sessionId` (alias `session_id`), `cwd`, `gitBranch`, `timestamp`, `type`, `isSidechain`; sidechain records update parent activity without creating a registry entry (FR-023, research R2)
 - [ ] T011 Implement record→event normalization in `backend/packages/session_watcher/session_watcher/events.py` — map each parsed record onto exactly one of `STARTED | PROGRESS | QUESTION | COMPLETED | FAILED`; a record matching no kind produces no event rather than a defaulted one (FR-007)
-- [ ] T012 [P] Test adapter against the fixture corpus in `backend/tests/session_watcher/test_adapter_claude_code.py` — malformed, truncated, and unknown-`type` records are skipped at debug level and never crash; other records in the same file still parse (FR-009, SC-005)
-- [ ] T013 [P] Test hyphen-prefixed path handling in `backend/tests/session_watcher/test_paths.py` — discovery works against the hyphen fixture directory, asserting `pathlib` handling end to end (FR-020, SC-006 groundwork)
-- [ ] T014 **GATE 1 VERIFY** — add `import omniharness` to a scratch file under `backend/packages/session_watcher/`, confirm `uv run ruff check packages/session_watcher/` **fails**, then remove it. Repeat for `import subprocess`. Record both outcomes in the PR description (plan.md standing convention)
+- [X] T012 [P] Test adapter against the fixture corpus in `backend/tests/session_watcher/test_adapter_claude_code.py` — malformed, truncated, and unknown-`type` records are skipped at debug level and never crash; other records in the same file still parse (FR-009, SC-005)
+- [X] T013 [P] Test hyphen-prefixed path handling in `backend/tests/session_watcher/test_paths.py` — discovery works against the hyphen fixture directory, asserting `pathlib` handling end to end (FR-020, SC-006 groundwork)
+- [X] T014 **GATE 1 VERIFY** — add `import omniharness` to a scratch file under `backend/packages/session_watcher/`, confirm `uv run ruff check packages/session_watcher/` **fails**, then remove it. Repeat for `import subprocess`. Record both outcomes in the PR description (plan.md standing convention)
 
 ### Discovery window
 
-- [ ] T015 Implement the recency window in `backend/packages/session_watcher/session_watcher/discovery.py` — configurable, default 24h; sessions observed active become `sticky` and are exempt from re-testing against the window on subsequent queries. Covers discovery of sessions started outside the assistant, with no user registration (FR-001, FR-005a, FR-005b, FR-005c)
-- [ ] T016 Test the startup bound in `backend/tests/session_watcher/test_discovery_window.py` — synthesise 5 000 records of which 5 fall inside the window, assert `stats.records_opened <= 10`. **Assert on records opened, never elapsed time** (SC-004i, SC-004g)
-- [ ] T017 **GATE 3 VERIFY** — temporarily bypass `RecordSource.select_candidates` so startup scans the whole directory; confirm `test_discovery_window.py` **fails on `records_opened`**. If it still passes, the assertion is on the wrong quantity (most likely elapsed time) and the requirement is unprotected. Restore and record the outcome (plan.md standing convention)
+- [X] T015 Implement the recency window in `backend/packages/session_watcher/session_watcher/discovery.py` — configurable, default 24h; sessions observed active become `sticky` and are exempt from re-testing against the window on subsequent queries. Covers discovery of sessions started outside the assistant, with no user registration (FR-001, FR-005a, FR-005b, FR-005c)
+- [X] T016 Test the startup bound in `backend/tests/session_watcher/test_discovery_window.py` — synthesise 5 000 records of which 5 fall inside the window, assert `stats.records_opened <= 10`. **Assert on records opened, never elapsed time** (SC-004i, SC-004g)
+- [X] T017 **GATE 3 VERIFY** — temporarily bypass `RecordSource.select_candidates` so startup scans the whole directory; confirm `test_discovery_window.py` **fails on `records_opened`**. If it still passes, the assertion is on the wrong quantity (most likely elapsed time) and the requirement is unprotected. Restore and record the outcome (plan.md standing convention)
 - [ ] T018 [P] Test sticky membership in `backend/tests/session_watcher/test_discovery_window.py` — a session observed active then quiet beyond the window remains listed for the rest of its run (FR-005c, SC-004h)
 
 ### State machine

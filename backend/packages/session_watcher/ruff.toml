@@ -10,7 +10,9 @@
 extend = "../../ruff.toml"
 
 [lint]
-extend-select = ["TID"]
+# TID251 only: the banned-api rule. Not all of TID — TID252 would force
+# absolute imports, which is a style preference unrelated to the guarantee.
+extend-select = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "omniharness".msg = "Article I: the watcher must not import core. Integrate over MCP."
