@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from .registry import Observability, SessionRegistry
 from .reply import compose_rollup, compose_status
 from .state import StateConfig, resolve
 from .summarize.mechanical import MechanicalSummarizer
+from .watcher import FileWatcher, Reconciler, WatchConfig
 
 logger = logging.getLogger(__name__)
 DEFAULT_PORT = 18101
@@ -222,6 +224,38 @@ def build_app(service: WatcherService) -> Starlette:
     )
 
 
+def start_background_refresh(service: WatcherService, config: WatchConfig | None = None) -> tuple[threading.Event, FileWatcher, str]:
+    """Keep the registry current between tool calls.
+
+    Without this the heartbeat never beats, so `observability` is always stale
+    between calls and always fresh during one — a signal that carries no
+    information. The Reconciler's unconditional interval is also what makes a
+    dropped filesystem event or a sleep/wake gap survivable.
+    """
+    reconciler = Reconciler(config=config or WatchConfig())
+    stop = threading.Event()
+
+    def loop() -> None:
+        while not stop.is_set():
+            now = datetime.now(UTC)
+            if reconciler.due(now):
+                gap = reconciler.detect_gap(now)
+                if gap is not None:
+                    logger.info("observation gap of %s (sleep/wake?); reconciling", gap)
+                try:
+                    service.refresh(now=now)
+                except Exception:  # noqa: BLE001 - a bad sweep must not kill the loop
+                    logger.exception("refresh failed; will retry on the next interval")
+                reconciler.note_swept(datetime.now(UTC))
+            stop.wait(1.0)
+
+    threading.Thread(target=loop, daemon=True, name="session-watcher-refresh").start()
+    fw = FileWatcher(service.source.root, reconciler.note_change)
+    mode = fw.start()
+    logger.info("watching %s (%s)", service.source.root, mode)
+    return stop, fw, mode
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Read-only coding-session watcher (MCP over SSE)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -231,6 +265,7 @@ def main() -> None:
     logging.basicConfig(level=args.log_level.upper())
     service = WatcherService(root=args.root)
     service.refresh()
+    start_background_refresh(service)
     # 0.0.0.0 so a containerized backend can reach us via host.docker.internal.
     uvicorn.run(build_app(service), host="0.0.0.0", port=args.port, log_level=args.log_level)
 
