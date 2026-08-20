@@ -73,18 +73,50 @@ Fields useful to the registry, present across most record types: `sessionId`, `t
 
 2. **Project directories carry a leading hyphen.** They are path-slugs of the form
    `-Users-rishabh-...`. A leading `-` is read as an option flag by most shell tooling and by some
-   path libraries. **Decision**: the adapter resolves paths via `pathlib` with explicit
-   `Path` construction and never interpolates a directory name into a shell command. A fixture
-   directory reproducing the leading hyphen is mandatory, because this will silently work on the
-   developer's machine and break in a shell-out.
+   path libraries.
+
+   **Decision — a module-wide rule, not a fixture note.** No path derived from the observed
+   directory may be passed to a shell or subprocess **anywhere in the module**. Path handling uses
+   `pathlib` APIs exclusively. This is enforced, not merely documented: `subprocess`, `os.system`,
+   `os.popen`, and `shell=True` are added to the module's ruff `banned-api` list alongside the
+   core-import ban (plan Gate 1), so a violation fails `ruff check` in the existing hook.
+
+   The hyphen fixture proves the rule holds; the ban prevents it being broken later. Both are
+   needed — a fixture only covers the paths a test happens to exercise, and this failure mode is
+   invisible on the developer's machine right up until it isn't.
 
 3. **No explicit waiting-on-user record type appears in the sample.** There is no
    `type: "question"` or equivalent. **Decision**: waiting-on-user must be *inferred* — an
    `assistant` record is the most recent entry, no `user` record follows it, and the inactivity
    threshold has not yet elapsed. This directly engages Article X and FR-016a: it is an
-   inference, and the assistant must word it as one. `mode` / `permission-mode` records are a
-   candidate corroborating signal and are flagged for investigation during implementation; if
-   they prove to carry a permission-prompt state, they upgrade the inference toward observation.
+   inference, and the assistant must word it as one.
+
+   **Error direction — err toward flagging.** When the inference is uncertain, report
+   possible-blocked with honest wording rather than staying silent. The two errors are not
+   symmetric: a false "waiting on you" costs one wasted walk to the machine, while a false
+   "working" leaves a blocked session sitting untouched all evening — precisely the failure this
+   feature exists to prevent. A silent miss is the expensive error; say so in the design and in
+   the tests.
+
+   **Wording is an acceptance criterion, not a style note.** The qualifier leads, exactly as it
+   does for stale data (FR-011b) and mechanical summaries. Required shape:
+
+   > "Looks like it's waiting on you — last activity was a question 8 minutes ago, nothing since."
+
+   Forbidden shape:
+
+   > "It's waiting for your input."
+
+   The second states an inference as an observation, which FR-016a forbids. Story 2's tasks carry
+   this as a testable criterion asserting on the reply's shape — a hedge present, and the
+   observable evidence (what was seen, and when) accompanying it.
+
+   **Corroboration investigation is timeboxed.** `mode` / `permission-mode` records are a
+   candidate corroborating signal; if they carry a permission-prompt state they upgrade the
+   inference toward observation. This is a **bounded** look — one timeboxed task, not an
+   open-ended dig through an undocumented format. If it comes back empty, state the limit plainly
+   and ship on the inference. A P1 story must not block on reverse-engineering a format that is
+   explicitly not a public API.
 
 **Alternatives considered**: parsing the coding agent's process tree or terminal output —
 rejected as far more fragile than a documented-shape file, and unavailable when the session runs

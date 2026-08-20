@@ -96,6 +96,11 @@ does not make them *check the right things*. Two mechanisms are added:
 - **Core-import ban.** `backend/packages/session_watcher/ruff.toml` sets
   `flake8-tidy-imports.banned-api` on `omniharness*` and `langgraph*`. Any such import fails
   `ruff check` in the existing hook and in CI. Satisfies SC-008.
+- **Shell-out ban.** The same `banned-api` list carries `subprocess`, `os.system`, `os.popen`,
+  and `shell=True`. Observed project directories are path-slugs beginning with `-`, which a shell
+  reads as an option flag (research R2, finding 2). Path handling is `pathlib`-only, module-wide.
+  The hyphen fixture proves the rule holds; the ban stops it being broken later — a fixture only
+  covers the paths some test happens to exercise.
 - **Zero-write assertion.** A test snapshots content hash, size, and mtime of every fixture
   record before a full observation cycle and asserts all three unchanged afterwards. Hash
   *and* mtime, because a write-then-restore would leave content equal. Satisfies SC-007/FR-019.
@@ -126,6 +131,13 @@ implementations:
   watcher, idle 60 s with no sessions, sample RSS. Recorded rather than asserted, since absolute
   RSS is environment-dependent and a flaky constitutional gate would be worse than a documented
   one.
+
+### Standing convention — every gate must be observed failing
+
+*Adopted for this feature and for every future gate.* A gate that has never been seen to fail is
+indistinguishable from a gate that does nothing. Each gate below therefore ships with a task that
+deliberately breaks the thing it guards and confirms the gate bites; `quickstart.md` carries the
+commands under "Proving the gates can fail". A gate without that step is not done.
 
 ### Gate 3 — Startup bound asserted on records opened (SC-004i, FR-005d/e)
 
@@ -222,13 +234,23 @@ because the design made structural what had been merely intended:
   observation-vs-inference. Both are the difference between a defect that is possible and one
   that is unrepresentable.
 
-**One design decision worth flagging for review**, though it is not a violation: R2 finding 3
-establishes that waiting-on-user has no explicit record type and must be *inferred*. This is the
-feature's single largest honesty risk under Article X — User Story 2 is P1 and rests entirely on
-an inference. FR-016a's wording rules cover it, and `mode`/`permission-mode` records are flagged
-as a candidate corroborating signal that would upgrade the inference toward observation. If that
-investigation fails, the limitation should be stated plainly in the reply rather than smoothed
-over.
+**One design decision reviewed and resolved**: R2 finding 3 establishes that waiting-on-user has
+no explicit record type and must be *inferred*. This is the feature's single largest honesty risk
+under Article X, since User Story 2 is P1 and rests entirely on an inference. Three rulings
+settle it:
+
+- **Err toward flagging.** The errors are asymmetric. A false "waiting on you" costs one wasted
+  walk to the machine; a false "working" leaves a blocked session sitting all evening, which is
+  the exact failure the feature exists to prevent. When uncertain, report possible-blocked with
+  honest wording rather than staying silent.
+- **The hedge is a testable criterion, not a style note.** Story 2's tasks assert on reply shape:
+  a qualifier leading, and the observable evidence accompanying it — "Looks like it's waiting on
+  you — last activity was a question 8 minutes ago, nothing since", never "It's waiting for your
+  input." Same qualifier-leads rule as stale data (FR-011b) and mechanical summaries.
+- **Corroboration is timeboxed.** The `mode`/`permission-mode` investigation is one bounded task.
+  If it upgrades the inference toward observation, good; if a bounded look comes back empty,
+  state the limit plainly and ship. A P1 story must not block on an open-ended dig through a
+  format that is explicitly not a public API.
 
 **No violations. Complexity Tracking below remains empty.**
 
