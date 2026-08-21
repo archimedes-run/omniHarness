@@ -110,3 +110,28 @@ def _auto_user_context(request):
         yield
     finally:
         reset_current_user(token)
+
+
+@pytest.fixture(autouse=True)
+def _enable_workflows_feature_flag(request, monkeypatch):
+    """Turn the Workflows feature flag on for the workflow test modules.
+
+    ``workflows.enabled`` defaults to False and is False in config.example.yaml,
+    so these tests only ever passed against a developer's local config that had
+    opted in. Without this the routers answer 404 and every assertion reads as a
+    routing bug rather than a disabled feature.
+    """
+    if "workflow" not in request.node.nodeid:
+        return
+
+    from app.gateway.routers import workflows as _workflows_router
+
+    real = _workflows_router.get_app_config
+
+    def _enabled_config():
+        config = real()
+        if not config.workflows.enabled:
+            config = config.model_copy(update={"workflows": config.workflows.model_copy(update={"enabled": True})})
+        return config
+
+    monkeypatch.setattr(_workflows_router, "get_app_config", _enabled_config)
