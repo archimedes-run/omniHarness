@@ -180,9 +180,12 @@ trace.
    Present in 17 of 42 sessions, 194–278 characters, and the last record in 11 of them. They
    are markedly better than mechanical clipping and often name the next action:
 
-   > "We've been fixing and live-testing this SEO MCP server's providers; all five with keys
-   > now pass after 15 bug fixes, documented in run_*.md files. Next action: run git init and
-   > commit, since everything is currently untracked."
+   > "We've been fixing and live-testing this server's providers; all five with keys now pass
+   > after 15 bug fixes, documented in run_*.md files. Next action: run git init and commit,
+   > since everything is currently untracked."
+
+   *(Paraphrased. The originals are read from private session logs and are not reproduced here
+   verbatim — this repository is public.)*
 
    **Flagged as a candidate FR-008 amendment, not adopted.** It is tempting — better prose,
    lower cost — but three objections stand, and the last two matter more than the first:
@@ -292,7 +295,7 @@ it falsifies a rationale that had already propagated into four documents.
 
 ```
 $ docker inspect omni-harness-gateway --format '{{range .Mounts}}...{{end}}'
-bind  /Users/rishabh.sharma/.claude -> /root/.claude
+bind  /Users/<you>/.claude -> /root/.claude
 ```
 
 `docker-compose-dev.yaml:153-154` mounts `${HOME}/.claude` to `/root/.claude`. The container sees
