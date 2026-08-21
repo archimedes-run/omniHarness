@@ -1,0 +1,8 @@
+{"type":"user","sessionId":"sess-drift","session_id":"sess-drift","timestamp":"2026-08-20T10:00:00+00:00","cwd":"/Users/dev/projects/atlas","gitBranch":"main","uuid":"d1","isSidechain":false,"version":"2.0.0","message":{"role":"user","content":[{"type":"text","text":"build it"}]}}
+{"type":"atis-latch","sessionId":"sess-drift","mode":"latched"}
+not json at all
+{"type":"bridge-session","sessionId":"sess-drift"}
+{"type":"assistant","sessionId":"sess-drift","session_id":"sess-drift","timestamp":"2026-08-20T10:00:30+00:00","cwd":"/Users/dev/projects/atlas","gitBranch":"main","uuid":"d2","isSidechain":false,"version":"2.0.0","message":{"role":"assistant","content":[{"type":"text","text":"Building."}]}}
+{"type":"some-future-type-we-have-never-seen","sessionId":"sess-drift","payload":{"a":1}}
+{"type":"assistant","sessionId":"sess-drift","session_id":"sess-drift","timestamp":"2026-08-20T10:01:00+00:00","cwd":"/Users/dev/projects/atlas","gitBranch":"main","uuid":"d3","isSidechain":false,"version":"2.0.0","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}
+{"type":"assistant","sessionId":"sess-drift","session_id":"sess-drift","timestamp":"2026-08-20T10:01:30+00:00","cwd":"/Users/dev/proj

@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-08-20T11:00:00+00:00","cwd":"/Users/dev/projects/orphan","uuid":"o1"}
+{"type":"assistant","sessionId":"sess-orphan","session_id":"sess-orphan","timestamp":"2026-08-20T11:00:05+00:00","cwd":"/Users/dev/projects/orphan","gitBranch":"main","uuid":"o2","isSidechain":false,"version":"2.0.0","message":{"role":"assistant","content":[{"type":"text","text":"Recovered."}]}}

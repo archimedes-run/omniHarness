@@ -36,7 +36,10 @@ extensions_config.json
 coverage.xml
 coverage/
 .omni-harness/
-.claude/
+# Claude Code: share the speckit workflow definitions, keep local settings
+# and agent worktrees machine-local.
+.claude/*
+!.claude/skills/
 skills/custom/*
 logs/
 log/
