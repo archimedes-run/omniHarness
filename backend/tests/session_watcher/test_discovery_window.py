@@ -131,3 +131,55 @@ def test_release_drops_stickiness(tmp_session_dir, make_record, ago) -> None:
     assert disc.is_sticky("done")
     disc.release("done")
     assert not disc.is_sticky("done")
+
+
+# --- the retention reset (FR-005c) ------------------------------------------
+
+
+def test_retention_reset_clears_sticky_membership(tmp_session_dir, make_record, ago) -> None:
+    """FR-005c's "retention reset", which previously existed only as a phrase.
+
+    Sticky membership exempts a live session from the recency window so it cannot
+    age out mid-run. Without an end to that exemption, a session seen active once
+    is exempt for the life of the process and the set never shrinks.
+    """
+    root = tmp_session_dir([make_record(at=ago(1), session_id="live")], session_id="live")
+    disc = Discovery(
+        ClaudeCodeAdapter(RecordSource(root=root)),
+        DiscoveryConfig(window=timedelta(minutes=30), retention_reset=timedelta(days=1)),
+    )
+    start = datetime.now(UTC) - timedelta(minutes=5)
+    disc.started_at = start
+    disc.last_reset_at = start
+    disc.sweep()
+    assert disc.is_sticky("live")
+
+    dropped = disc.reset_retention(datetime.now(UTC))
+    assert "live" in dropped
+    assert not disc.is_sticky("live")
+
+
+def test_retention_reset_fires_automatically_after_the_interval(tmp_session_dir, make_record, ago) -> None:
+    root = tmp_session_dir([make_record(at=ago(1), session_id="s")], session_id="s")
+    disc = Discovery(
+        ClaudeCodeAdapter(RecordSource(root=root)),
+        DiscoveryConfig(window=timedelta(hours=24), retention_reset=timedelta(days=1)),
+    )
+    disc.started_at = datetime.now(UTC) - timedelta(minutes=5)
+    disc.last_reset_at = datetime.now(UTC) - timedelta(days=2)  # overdue
+    disc.sweep()
+    assert disc.last_reset_at is not None
+    assert datetime.now(UTC) - disc.last_reset_at < timedelta(minutes=1), "reset did not fire"
+
+
+def test_sticky_set_does_not_grow_without_bound(tmp_session_dir, make_record, ago) -> None:
+    """The leak the reset exists to prevent, asserted directly."""
+    root = tmp_session_dir([make_record(at=ago(1), session_id="a")], session_id="a")
+    disc = Discovery(
+        ClaudeCodeAdapter(RecordSource(root=root)),
+        DiscoveryConfig(window=timedelta(hours=24), retention_reset=timedelta(days=1)),
+    )
+    disc.started_at = datetime.now(UTC) - timedelta(minutes=5)
+    disc.last_reset_at = datetime.now(UTC) - timedelta(days=2)
+    disc.sweep()
+    assert len(disc.sticky_ids) <= 1

@@ -38,8 +38,9 @@
   watcher reach? → A: A configurable recency window on last activity, defaulting to 24 hours,
   governs what is listed. Any session observed active while the watcher runs is listed
   regardless of when it started, and its membership is sticky — it stays in the registry until
-  it reaches a terminal state or the retention reset, rather than being re-tested against the
-  window on each query. Candidate records are selected by modification time before any are
+  it reaches a terminal state or the retention reset — defined in FR-005f as a 24-hour default,
+  after this spec was found to reference it without defining it — rather than being re-tested
+  against the window on each query. Candidate records are selected by modification time before any are
   parsed, so the window bounds what is read as well as what is listed. Startup cost is bounded
   in two parts: structurally, the count of records opened and parsed scales with the window
   rather than the directory; and visibly, the first status query is answerable within 5 seconds
@@ -74,6 +75,16 @@
   connection, which leaves nothing persistent to be stale about — making the Q3 observability
   tri-state unimplementable rather than merely awkward. That argument holds with no container
   involved at all. The mount is a secondary consideration only.
+
+- Q: What is "the retention reset" that FR-005c and clarification 4 refer to? → A: It was never
+  defined — in this spec or in the code. Sticky membership was granted and never released:
+  `Discovery.release()` existed but was called only from a test, so the set grew for the life of
+  the process. It is now a **daily reset** (FR-005f) that clears sticky membership and lets
+  retained terminal sessions age out. Found by Feature 002 attempting to anchor its fingerprint
+  retention to this phrase and discovering there was nothing to anchor to. Recorded because the
+  failure mode generalises: a phrase that reads like a reference — "the retention reset", "the
+  usual window" — passes every review of its own document, because reviewers assume the referent
+  is defined elsewhere. It only fails when something external tries to resolve it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -264,13 +275,23 @@ third; then ask for the roll-up and confirm all three are represented correctly.
   regardless of when it started, and MUST NOT be excluded by the recency window.
 - **FR-005c**: Registry membership earned under FR-005b MUST be sticky: once a session has been
   observed active, it MUST remain in the registry until it reaches a terminal state (per FR-006a)
-  or until the retention reset, and MUST NOT be re-tested against the recency window on
+  or until the retention reset (FR-005f), and MUST NOT be re-tested against the recency window on
   subsequent queries. Rationale: re-evaluating the window per query lets a long-running session
   that goes quiet during a slow build age out mid-run and vanish from the roll-up while still
   alive — the exact failure FR-005b exists to prevent.
 - **FR-005d**: At startup the system MUST select candidate session records by modification time
   before parsing any of them, so that the recency window bounds the volume of data read and not
   merely the set of sessions listed.
+- **FR-005f**: The **retention reset** is a recurring interval, configurable with a default of
+  **24 hours**, at which sticky membership is cleared and retained terminal sessions are allowed
+  to age out. Sticky membership exempts a live session from the recency window so it cannot
+  vanish mid-run; that exemption MUST end somewhere, or a session observed active once stays
+  exempt for the life of the process and the set grows without bound. A day is chosen so that a
+  session running overnight keeps its place while a process running for weeks does not
+  accumulate indefinitely. This value is a stated default, not a measured one.
+- **FR-005g**: Terminal sessions retained under FR-004 MUST be retained by the running service
+  and not merely by the registry in isolation. A retention mechanism that exists but is never
+  invoked by the code path that runs is indistinguishable from no retention at all.
 - **FR-005e**: The number of session records opened and parsed at startup MUST scale with the
   recency window rather than with the size of the session directory. This MUST be verified by
   asserting on the count of records opened, not on elapsed time: a wall-clock-only bound passes
@@ -466,6 +487,11 @@ third; then ask for the roll-up and confirm all three are represented correctly.
   only sessions inside the window (plus any observed active) are listed, in 100% of trials.
 - **SC-004h**: A session observed active and then quiet beyond the recency window remains listed
   for the rest of its run, in 100% of trials.
+- **SC-004h1**: Sticky membership does not accumulate across a multi-day run; after the retention
+  reset the set reflects only currently-live sessions.
+- **SC-004h2**: A session that completed and then aged out of the discovery window is still
+  reported as completed by the running service — verified through the service, not against the
+  registry in isolation.
 - **SC-004i**: Against a synthetic history directory holding several thousand sessions of which
   only a handful fall inside the recency window, the number of session records opened and parsed
   at startup remains proportional to the handful, not to the several thousand — asserted on
@@ -522,9 +548,9 @@ third; then ask for the roll-up and confirm all three are represented correctly.
   durations.
 - Sessions are read where the coding agent already writes them; the watcher stores no copy of
   session content beyond what its live registry needs to answer questions.
-- Historical sessions from before the watcher first ran may be discovered; retention and pruning
-  of long-past sessions follow ordinary local-cache practice and are not user-configurable in
-  this phase.
+- Historical sessions from before the watcher first ran may be discovered. Retention is now
+  concrete rather than deferred to "ordinary practice": the reset interval of FR-005f, with a
+  24-hour default, configurable.
 - Answering a roll-up may involve summarizing recent activity; summarization is expected to be
   cheap and is not required to be perfect, only honest about what it saw.
 - Redaction is pattern-based and therefore best-effort by construction; the spec's claims about

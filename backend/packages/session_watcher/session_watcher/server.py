@@ -55,7 +55,13 @@ class WatcherService:
         now = now or datetime.now(UTC)
         refs = self.discovery.sweep(now=now)
         sessions = [resolve(r, now=now, config=self.state_config) for r in refs]
-        self.registry.replace_all(sessions, now)
+        # merge(), not replace_all(): a session that completed and then aged out
+        # of the discovery window must keep its terminal state rather than
+        # vanishing. A vanished session reads as "never existed", which is a
+        # different and wronger claim than "finished an hour ago" (FR-004).
+        self.registry.merge(sessions, now)
+        for sid in self.discovery.sticky_ids - set(self.registry.sessions):
+            self.discovery.release(sid)
 
     def _envelope(self, now: datetime) -> dict:
         obs = self.registry.observability(now)

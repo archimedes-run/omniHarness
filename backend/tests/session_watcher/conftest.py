@@ -25,6 +25,7 @@ def _record(
     cwd: str = "/Users/dev/projects/darcy-repo",
     git_branch: str = "main",
     text: str = "Ran the test suite.",
+    stop_reason: str | None = None,
     **extra: object,
 ) -> dict:
     """One session record in the observed shape (see research.md R2)."""
@@ -42,6 +43,11 @@ def _record(
     }
     if kind in {"assistant", "user"}:
         rec["message"] = {"role": kind, "content": [{"type": "text", "text": text}]}
+        # stop_reason lives INSIDE the message envelope, which is where the
+        # adapter reads it from. Putting it at the record's top level looks
+        # right and is silently ignored.
+        if stop_reason is not None:
+            rec["message"]["stop_reason"] = stop_reason
     rec.update(extra)
     return rec
 
