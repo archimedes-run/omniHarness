@@ -1,0 +1,52 @@
+# Gate 4 whitelist — names with no production reference YET.
+#
+# Every entry needs a reason after the '#'. An unexplained entry is
+# indistinguishable from one added to silence a real finding, and that is how
+# this gate quietly stops working.
+#
+# Entries below are DEBT, not permanent exemptions: each is engine surface that
+# a named later task wires. Remove the entry when its caller lands.
+
+evaluate_all           # wired by the evaluation loop, T056
+next_wakeup            # wired by the cron loop, T061
+prune                  # wired by the scheduler retention sweep, T061
+poll                   # TriggerSource implementations; called via the interface, T056
+describe               # runtime inspection surface (FR-023, FR-029); read by ops, not by code
+observe_runs           # wired by the presence poller, T056
+configure_tools        # wired by US1's injection path, T056
+inject                 # wired by US1's injection path, T056
+is_synthetic           # used by presence.py; also the public provenance predicate (FR-009)
+create_thread          # passed as RuleThreadMap's factory by the engine, T056
+forget                 # called when a recorded thread 404s, T056
+known_rules            # used by the retention sweep, T061
+entries                # audit read side; used by ops and by tests
+release                # wired by all three entry conditions, T056/T068/T071
+add                    # CoalesceWindow, wired by the coalescing loop, T065
+is_due                 # CoalesceWindow, wired by the coalescing loop, T065
+drain                  # CoalesceWindow, wired by the coalescing loop, T065
+resolve                # DestinationRegistry, wired by routing, T068; and Firing.resolve is used
+deliver                # OutputDestination implementations; called via the port
+record                 # AuditLog.record, called by the release path
+seen                   # FingerprintStore, wired by the evaluation loop, T056
+maybe_reset            # FingerprintStore retention, wired by the sweep, T061
+count                  # FingerprintStore size, used by ops and by tests
+thread_for             # wired by US1's injection path, T056
+health_for             # engine health inspection, read by ops
+evaluate_one           # called by evaluate_all
+record_success         # RuleHealth, called by evaluate_one
+record_failure         # RuleHealth, called by evaluate_one
+is_muted               # RuleHealth, called by evaluate_one
+load                   # ConfigLoader.load / JsonStore.load, wired by the engine, T056
+save                   # JsonStore.save, called by set/delete
+get                    # JsonStore.get, called by the stores above it
+set                    # JsonStore.set, called by the stores above it
+delete                 # JsonStore.delete, called by forget()
+keys                   # JsonStore.keys, called by count() and known_rules()
+parse                  # config.parse, called by ConfigLoader.load
+compute                # fingerprint.compute, wired by the evaluation loop, T056
+next_due               # scheduler helper, called by next_wakeup
+previous_due           # scheduler helper, called by due_instants
+due_instants           # wired by CronSource
+has_fired              # wired by CronSource / the cron loop, T061
+mark_fired             # wired by the cron loop, T061
+merge                  # coalesce.merge, called by release()

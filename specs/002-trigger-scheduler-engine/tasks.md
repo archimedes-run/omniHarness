@@ -121,29 +121,29 @@ foundation rather than being part of it.
 
 **Purpose**: the machinery that drives the foundation built in 2a.
 
-- [ ] T042 Implement the evaluation loop in `backend/app/trigger_engine/engine.py` — **each rule evaluated inside its own supervised task with an exception barrier and a timeout**, and no rule work on a request-handling path (**GATE 2 impl**; FR-030, FR-031, FR-032)
-- [ ] T043 Implement error backoff in `engine.py` — a repeatedly failing rule is reported and its retry rate reduced, never silently retried forever at full rate (FR-026)
-- [ ] T044 [P] Test blast radius in `backend/tests/trigger_engine/test_blast_radius.py` — a **crashing** rule does not stop the engine and every other rule still evaluates; a **blocking** rule is bounded, abandoned and reported, and ordinary requests serve with no measurable added latency while it hangs (SC-017, SC-018, FR-033)
-- [ ] T045 **GATE 2 VERIFY** — remove the exception barrier and confirm the crashing-rule test **fails**; remove the timeout and confirm the blocking-rule test **fails**. Restore both. Feature 001 got this boundary free from process separation; sharing the gateway process removes it, and an isolation claim never tested against a real failure is not evidence (plan.md standing convention)
+- [X] T042 Implement the evaluation loop in `backend/app/trigger_engine/engine.py` — **each rule evaluated inside its own supervised task with an exception barrier and a timeout**, and no rule work on a request-handling path (**GATE 2 impl**; FR-030, FR-031, FR-032)
+- [X] T043 Implement error backoff in `engine.py` — a repeatedly failing rule is reported and its retry rate reduced, never silently retried forever at full rate (FR-026)
+- [X] T044 [P] Test blast radius in `backend/tests/trigger_engine/test_blast_radius.py` — a **crashing** rule does not stop the engine and every other rule still evaluates; a **blocking** rule is bounded, abandoned and reported, and ordinary requests serve with no measurable added latency while it hangs (SC-017, SC-018, FR-033)
+- [X] T045 **GATE 2 VERIFY** — remove the exception barrier and confirm the crashing-rule test **fails**; remove the timeout and confirm the blocking-rule test **fails**. Restore both. Feature 001 got this boundary free from process separation; sharing the gateway process removes it, and an isolation claim never tested against a real failure is not evidence (plan.md standing convention)
 
 ### Scheduling and sources
 
-- [ ] T046 Implement the scheduler in `backend/app/trigger_engine/scheduler.py` — compute the next due moment across all rules, sleep until it, evaluate, recompute. **No tick loop** (FR-027)
-- [ ] T047 Implement missed-schedule and clock-jump handling in `scheduler.py` — a schedule passed while stopped fires **once, late**; sleep/wake, NTP correction and DST each yield at most one fire per scheduled instant (FR-018)
-- [ ] T048 [P] Implement the trigger-source interface and the cron source in `backend/app/trigger_engine/sources/base.py` and `sources/cron.py` (FR-002)
-- [ ] T049 [P] Implement the watcher source in `backend/app/trigger_engine/sources/watcher.py`, consuming Feature 001's events over its MCP surface. **It may be on another host** — no co-location assumption (FR-002, FR-028)
-- [ ] T050 [P] Implement the completion source in `backend/app/trigger_engine/sources/completion.py` (FR-002)
-- [ ] T051 Implement unreachable-source handling in `sources/watcher.py` — an unreachable source is an **unobservable condition**, never an absence of events, and nothing may report or act as though it had successfully observed nothing (FR-029, SC-013, Article X)
-- [ ] T052 [P] Test the scheduler in `backend/tests/trigger_engine/test_scheduler.py` — one fire per scheduled instant across restart, sleep/wake and DST (SC-003, SC-004)
+- [X] T046 Implement the scheduler in `backend/app/trigger_engine/scheduler.py` — compute the next due moment across all rules, sleep until it, evaluate, recompute. **No tick loop** (FR-027)
+- [X] T047 Implement missed-schedule and clock-jump handling in `scheduler.py` — a schedule passed while stopped fires **once, late**; sleep/wake, NTP correction and DST each yield at most one fire per scheduled instant (FR-018)
+- [X] T048 [P] Implement the trigger-source interface and the cron source in `backend/app/trigger_engine/sources/base.py` and `sources/cron.py` (FR-002)
+- [X] T049 [P] Implement the watcher source in `backend/app/trigger_engine/sources/watcher.py`, consuming Feature 001's events over its MCP surface. **It may be on another host** — no co-location assumption (FR-002, FR-028)
+- [X] T050 [P] Implement the completion source in `backend/app/trigger_engine/sources/completion.py` (FR-002)
+- [X] T051 Implement unreachable-source handling in `sources/watcher.py` — an unreachable source is an **unobservable condition**, never an absence of events, and nothing may report or act as though it had successfully observed nothing (FR-029, SC-013, Article X)
+- [X] T052 [P] Test the scheduler in `backend/tests/trigger_engine/test_scheduler.py` — one fire per scheduled instant across restart, sleep/wake and DST (SC-003, SC-004)
 
 ### Audit log
 
 
 ### Gate 4 — wiring
 
-- [ ] T053 Configure cross-module dead-code detection over `backend/app/trigger_engine/` **with the test tree excluded**, so anything defined and never referenced outside tests fails the build (**GATE 4 impl**; plan.md)
-- [ ] T054 Whitelist framework-invoked entry points for the Gate 4 check — decorated handlers, `main()`, and polymorphic port implementations — **with a comment on every entry explaining why**. An unexplained whitelist entry is indistinguishable from one added to silence a real finding, which is the obvious way this gate quietly stops working (plan.md)
-- [ ] T055 **GATE 4 VERIFY** — delete a real call site (the `release()` call in the engine's delivery path, the direct analogue of Feature 001's unwired `merge()`) and confirm the check **fails**; restore and confirm it passes. Four defects of this shape have been found in this project, every one by running the service and none by the suite (plan.md standing convention)
+- [X] T053 Configure cross-module dead-code detection over `backend/app/trigger_engine/` **with the test tree excluded**, so anything defined and never referenced outside tests fails the build (**GATE 4 impl**; plan.md)
+- [X] T054 Whitelist framework-invoked entry points for the Gate 4 check — decorated handlers, `main()`, and polymorphic port implementations — **with a comment on every entry explaining why**. An unexplained whitelist entry is indistinguishable from one added to silence a real finding, which is the obvious way this gate quietly stops working (plan.md)
+- [X] T055 **GATE 4 VERIFY** — delete a real call site (the `release()` call in the engine's delivery path, the direct analogue of Feature 001's unwired `merge()`) and confirm the check **fails**; restore and confirm it passes. Four defects of this shape have been found in this project, every one by running the service and none by the suite (plan.md standing convention)
 
 **Checkpoint**: full suite green; all four gates implemented **and observed failing**.
 

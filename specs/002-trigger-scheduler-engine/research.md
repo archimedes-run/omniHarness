@@ -59,6 +59,39 @@ and not a fallback for a rare case.
 
 ---
 
+## R3b. The Phase 1 spike, and why status codes are not evidence
+
+**Run 2026-08-21. Result: PASS**, after correcting three assumptions that would otherwise have
+surfaced in Phase 3.
+
+| Assumption | Reality |
+|---|---|
+| `assistant_id: "agent"` | **`lead_agent`**. The wrong value returned HTTP 200 with `messages: 0` and a `FileNotFoundError: Agent directory not found` buried in the server log. |
+| tool body field `tool_ids` | **`sources`**. The wrong field returned **HTTP 200** and saved nothing. |
+| marker readable from the reply | **No.** Absent from the `runs/wait` body; observable on the run record via `/state` and `/runs`. |
+
+### The generalisable lesson: assert on resulting state, not on the response code
+
+The tool-selection call is the sharp example. `PUT /threads/{id}/tools` with the wrong field name
+returned **200 OK**. Nothing errored. A spike that checked `status_code == 200` would have passed,
+recorded "tool configuration works", and the failure would have surfaced at T057 as an agent that
+mysteriously lacked its tools — a long way from the typo that caused it.
+
+What caught it was reading the **response body**, which echoed the saved selection and showed the
+requested source missing. The same shape applies to the `assistant_id` error: 200, an empty
+message list, and the real cause only in the server's log.
+
+**Rule for future spikes: verify the state the call was supposed to produce, not the status of the
+call.** A 200 means the request was understood well enough not to error. It does not mean it did
+what you asked. This generalises past these two endpoints — anywhere a write is followed by a read
+that could confirm it, the read is the assertion.
+
+This pairs with the lesson already recorded for the transport spike: confirming the chosen option
+works is not the same as establishing that the rejected one fails. Together they say a spike
+should be designed around **what would falsify it**, not around what would demonstrate it.
+
+---
+
 ## R4. Presence — derived from provenance, not tracked separately
 
 **Decision**: presence is the timestamp of the most recent turn *lacking* the synthetic-trigger
