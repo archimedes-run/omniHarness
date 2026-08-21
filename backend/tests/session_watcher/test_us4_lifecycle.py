@@ -138,3 +138,29 @@ def test_state_reflects_reality_after_wake(tmp_session_dir, make_record, ago) ->
     s = resolve(refs[0], now=datetime.now(UTC), config=CFG)
     assert s.state is SessionState.IDLE
     assert s.idle_reason is IdleReason.STALLED
+
+
+def test_service_retains_terminal_sessions_across_sweeps(tmp_session_dir, make_record, ago) -> None:
+    """FR-004 through the SERVICE, not just the registry in isolation.
+
+    registry.merge() was implemented for terminal retention and never called —
+    the service used replace_all(), so a completed session that aged out of the
+    window vanished. Unit tests exercised merge() directly and passed throughout.
+    This asserts the wiring, which is where the defect actually lived.
+    """
+    from session_watcher.server import WatcherService
+
+    root = tmp_session_dir(
+        [make_record(at=ago(2), session_id="done", text="All done."), make_record(at=ago(1), session_id="done", stop_reason="end_turn", text="Finished.")],
+        session_id="done",
+    )
+    svc = WatcherService(root=root)
+    svc.discovery.config.window = timedelta(hours=24)
+    svc.refresh()
+    assert "done" in svc.registry.sessions
+    assert svc.registry.sessions["done"].is_terminal
+
+    # Narrow the window so the session is no longer discovered at all.
+    svc.discovery.config.window = timedelta(seconds=1)
+    svc.refresh()
+    assert "done" in svc.registry.sessions, "a completed session vanished when it aged out; it reads as 'never existed', which is a wronger claim than 'finished an hour ago' (FR-004)"
