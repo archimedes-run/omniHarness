@@ -65,7 +65,7 @@ def _build(tmp_path, rules: list[dict]):
     f = tmp_path / "rules.json"
     f.write_text(json.dumps({"rules": rules}))
     gw, dest = _Gateway(), QuietDestination()
-    audit = AuditLog(path=tmp_path / "audit.jsonl")
+    audit = AuditLog(path=tmp_path / "audit.jsonl", actor="default")
     sched = Scheduler(path=tmp_path / "sched.json")
     fps = FingerprintStore(path=tmp_path / "fp.json")
     threads = RuleThreadMap(path=tmp_path / "th.json", create_thread=lambda rid: gw.post("/api/threads", {"metadata": {"trigger_rule_id": rid}})["thread_id"])

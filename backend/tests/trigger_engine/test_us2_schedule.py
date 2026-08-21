@@ -39,7 +39,7 @@ class _GW:
 
 def _runner(tmp_path):
     gw, dest = _GW(), QuietDestination()
-    audit = AuditLog(path=tmp_path / "a.jsonl")
+    audit = AuditLog(path=tmp_path / "a.jsonl", actor="default")
     sched = Scheduler(path=tmp_path / "s.json")
     r = RuleRunner(
         sources={TriggerType.CRON: CronSource(scheduler=sched)},

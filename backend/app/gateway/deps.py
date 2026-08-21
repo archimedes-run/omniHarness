@@ -309,11 +309,30 @@ async def get_optional_user_from_request(request: Request):
 
 
 async def get_current_user(request: Request) -> str | None:
-    """Extract user_id from request cookie, or None if not authenticated.
+    """Extract the request's user id, or None if not authenticated.
 
-    Thin adapter that returns the string id for callers that only need
+    Prefers ``request.state.user``, which ``AuthMiddleware`` has already
+    stamped after deciding who the caller is. That decision covers BOTH
+    cookie-authenticated browser requests and internal-auth server-to-server
+    calls (``X-OmniHarness-Internal-Token``), which resolve to the internal
+    user.
+
+    Re-deriving identity from the cookie alone silently disagreed with that
+    decision: an internal-auth request is authorized as the internal user by
+    the middleware, but has no cookie, so this returned None. Callers that
+    thread the id somewhere — notably ``start_run``, which puts it in
+    ``config["context"]["user_id"]`` — therefore dropped identity for every
+    channel-originated and trigger-originated run.
+
+    Falls back to the cookie path for requests that never passed through the
+    middleware (public paths, direct unit-test construction).
+
+    Thin adapter returning the string id for callers that only need
     identification (e.g., ``feedback.py``). Full-user callers should use
     ``get_current_user_from_request`` or ``get_optional_user_from_request``.
     """
+    stamped = getattr(request.state, "user", None)
+    if stamped is not None:
+        return str(stamped.id)
     user = await get_optional_user_from_request(request)
     return str(user.id) if user else None

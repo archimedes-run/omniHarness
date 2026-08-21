@@ -49,7 +49,7 @@ class _GW:
 
 def _runner(tmp_path, *, quiet=None, busy=False, window=None, urgent=False):
     gw, dest = _GW(), QuietDestination()
-    audit = AuditLog(path=tmp_path / "a.jsonl")
+    audit = AuditLog(path=tmp_path / "a.jsonl", actor="default")
     r = RuleRunner(
         sources={TriggerType.WATCHER: WatcherSource(fetch_sessions=_payload)},
         fingerprints=FingerprintStore(path=tmp_path / "f.json"),
