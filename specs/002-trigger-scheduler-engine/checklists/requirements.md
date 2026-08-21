@@ -80,6 +80,36 @@ outcomes with time bounds, counts, and trial rates. SC-011 and SC-016 describe v
 without naming the verifying tool.
 
 
+### Validation record (iteration 2 — 2026-08-21, post-clarify)
+
+All 16 items re-evaluated against the clarified spec; **16/16 → 16/16, no regressions.** Five
+clarifications added 17 functional requirements, 16 success criteria, and 12 edge cases.
+
+Newly strengthened (previously passing but thin):
+
+- *Requirements are testable and unambiguous*: three phrases carried unmade decisions into
+  implementation before this pass — "the same event" (now FR-017a/b/c, with the fingerprint's
+  inputs constrained so no self-drifting field can leak in), "target thread" (now FR-011a/b/c,
+  with persistence, because a mapping held in memory presents as a stable thread and behaves as
+  a fresh one), and "suppress delivery" (now FR-013a–d, deferred with a re-check).
+- *Edge cases identified*: 13 → 25.
+- *Success criteria measurable*: 18 → 34.
+
+Two structural decisions worth carrying to the plan:
+
+- **One release mechanism, two entry conditions.** Quiet-hours release (FR-013b/d) and
+  queue-expiry release (FR-016c) are the same re-check-then-coalesce path. A second
+  implementation would acquire its own defects in whichever path runs least often.
+- **Heuristics are labelled as heuristics.** The presence window, coalescing window, queued-turn
+  bound, and fingerprint retention are stated defaults, not derived values, and the spec says so
+  per Article X rather than implying they were measured.
+
+**A dangling reference found in Feature 001**: its FR-005c and clarification 4 both say sticky
+membership lasts "until the retention reset", but 001 never defines one — its Assumptions defer
+retention to "ordinary local-cache practice". Feature 002 now defines a concrete daily reset for
+fingerprints (FR-017c). Worth reconciling: either 001 adopts the same daily reset explicitly, or
+the phrase is removed from it. Not blocking either feature.
+
 ### Carry into plan review (verified 2026-08-21, not yet in any plan artifact)
 
 1. **Narrow Gate 1's ban, do not loosen it.** Ban `langgraph` and `langgraph.*` as exact
