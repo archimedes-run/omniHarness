@@ -75,18 +75,18 @@ def _defined() -> dict[str, Path]:
                 if any(getattr(d, "id", getattr(d, "attr", "")) == "abstractmethod" for d in node.decorator_list):
                     continue
                 found.setdefault(node.name, path)
-        # MODULE-LEVEL constants only — tree.body, not ast.walk. Both real
-        # instances of this defect (KNOWN_INERT_TYPES, PINNED_LOCAL_SOURCES)
-        # were module-level.
+        # Module-level constants AND enum members.
         #
-        # Deliberately NOT enum members: walking into classes flags every value
-        # in a vocabulary whose producer is not built yet — four of them on this
-        # tree, all legitimately awaiting Phase 6. Each would need a whitelist
-        # entry, and a whitelist that grows with every unbuilt feature is one
-        # nobody reads, which is how this gate dies. Dead enum vocabulary is a
-        # real if smaller problem; catching it is worth revisiting once the
-        # engine is fully wired and the list would stay short.
-        for node in tree.body:
+        # Enum members were deliberately excluded while the engine was being
+        # built: walking into classes flagged four values whose producers were
+        # unbuilt, and a whitelist growing with every unbuilt feature is one
+        # nobody reads. The exclusion was recorded with a condition — revisit
+        # once the engine is fully wired and the list would stay short — and
+        # that condition is now met, so the scan walks classes too.
+        #
+        # Dead enum vocabulary is the same defect one level down: a value
+        # nothing ever produces.
+        for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for t in node.targets:
                     if isinstance(t, ast.Name) and t.id.isupper() and not t.id.startswith("_"):

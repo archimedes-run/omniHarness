@@ -59,7 +59,13 @@ class DeferralQueue:
     pending: list[Firing] = field(default_factory=list)
 
     def defer(self, firing: Firing, now: datetime, reason: str) -> None:
-        firing.resolve(Outcome.QUEUED, reason)
+        # SUPPRESSED, not QUEUED. The spec distinguishes them and so should the
+        # audit log: FR-013 says quiet hours "suppresses delivery", FR-016 says
+        # a mid-exchange turn "queues until that exchange completes". Using one
+        # outcome for both loses the reason an operator most wants when reading
+        # back a quiet morning — was nothing delivered because of the hour, or
+        # because I was mid-conversation?
+        firing.resolve(Outcome.SUPPRESSED, reason)
         self.pending.append(firing)
 
     def drain(self) -> list[Firing]:

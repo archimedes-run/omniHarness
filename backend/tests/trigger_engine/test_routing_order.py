@@ -75,7 +75,7 @@ async def test_quiet_hours_wins_over_everything_downstream(tmp_path) -> None:
     await r.run(rule, NIGHT)
     assert dest.delivered == []
     assert len(r.deferrals) == 1
-    assert audit.entries()[0]["outcome"] == "queued"
+    assert audit.entries()[0]["outcome"] == "suppressed", "quiet hours and mid-exchange must be distinguishable in the audit log"
     assert "quiet hours" in audit.entries()[0]["reason"]
 
 
