@@ -51,7 +51,7 @@ def _payload(summary="Should I pin the version or rewrite the fixture?", state="
 def _runner(tmp_path, payload_fn, gateway=None):
     gw = gateway or _Gateway()
     dest = QuietDestination()
-    audit = AuditLog(path=tmp_path / "audit.jsonl")
+    audit = AuditLog(path=tmp_path / "audit.jsonl", actor="default")
     return (
         RuleRunner(
             sources={TriggerType.WATCHER: WatcherSource(fetch_sessions=payload_fn)},

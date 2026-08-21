@@ -24,15 +24,32 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AuditLog:
-    """Append-only, local, one JSON object per line."""
+    """Append-only, local, one JSON object per line.
+
+    ``actor`` is required and has no default. Article VIII's audit exists to
+    make actions taken without a human in the loop *reviewable*, and a review
+    asks two questions: what happened, and on whose behalf. An entry that
+    answers only the first is the obligation under-delivering rather than met
+    — it records that the assistant acted while omitting the account it acted
+    as, which is the fact that determines what the action was permitted to
+    reach.
+
+    It is a constructor field rather than a per-firing one because today every
+    firing in an engine acts as the same identity: `Rule` has no owner, and the
+    injector's internal-auth calls all resolve to one user. When per-rule
+    ownership arrives, this moves onto `Firing` and the recorded value becomes
+    the rule's owner. Recording it per-log now is accurate, not a placeholder.
+    """
 
     path: Path
+    actor: str
 
     def record(self, firing: Firing, now: datetime) -> None:
         if firing.outcome is None:
             raise ValueError("a firing must be resolved before it is audited (FR-012)")
         entry = {
             "at": now.isoformat(),
+            "actor": self.actor,
             "rule_id": firing.rule_id,
             "event_type": str(firing.event.type),
             "event_id": firing.event.event_id,
