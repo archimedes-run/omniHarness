@@ -251,6 +251,27 @@ change takes effect on the next evaluation without a restart.
   unobservable condition rather than as an absence of events, and MUST NOT report or act as
   though it had successfully observed nothing (Article X).
 
+**Blast radius (the engine shares a process with the gateway)**
+
+*Feature 001 got a crash boundary for free: the watcher is a separate process, so its failure
+could not reach the assistant. This engine runs in-process with the gateway, which removes that
+boundary. A rule that raises or blocks now takes down the whole assistant unless the isolation
+is built deliberately. These requirements replace the boundary that process separation used to
+provide.*
+
+- **FR-030**: A failing rule MUST NOT be able to terminate, crash, or leave the gateway in an
+  unusable state. Every rule evaluation MUST be isolated such that any exception it raises is
+  contained and attributed to that rule.
+- **FR-031**: Rule evaluation and delivery MUST NOT perform blocking work on the shared request
+  path. A slow or hung rule MUST NOT delay, stall, or degrade the assistant's handling of
+  ordinary user requests.
+- **FR-032**: A rule that hangs indefinitely MUST be bounded, abandoned, and reported, rather
+  than holding a shared resource until the process is restarted.
+- **FR-033**: The isolation in FR-030 through FR-032 MUST be demonstrated by a deliberately
+  crashing rule and a deliberately hanging rule, each proven not to affect the gateway or any
+  other rule. An isolation claim that has never been tested against a real failure is not
+  evidence.
+
 ### Key Entities
 
 - **Rule**: A declared intent to speak first. Attributes: id, trigger type, match criteria,
@@ -302,6 +323,12 @@ change takes effect on the next evaluation without a restart.
   the injected turn is processed, in 100% of trials.
 - **SC-016**: Presence resolves from the last inbound user turn and is unaffected by the engine
   host's own idle state, verified by leaving that host idle while the user remains active.
+- **SC-017**: With a rule that raises on every evaluation, the assistant continues to answer
+  ordinary user requests normally and every other rule continues to be evaluated, in 100% of
+  trials.
+- **SC-018**: With a rule that hangs indefinitely, ordinary user requests are served with no
+  measurable added latency, and the hung rule is abandoned and reported within a stated bound,
+  in 100% of trials.
 
 ## Assumptions
 
@@ -323,4 +350,11 @@ change takes effect on the next evaluation without a restart.
 - Delivery is best-effort with recorded outcome: this feature does not implement guaranteed
   delivery, acknowledgement, or retry-until-received.
 - The engine runs alongside the gateway process where practical, but the design must not assume
-  it — FR-028 governs.
+  it — FR-028 governs. Verified 2026-08-21: in-process is currently the **only** working
+  arrangement, because the gateway's internal-auth token is generated per process
+  (`secrets.token_urlsafe(32)` at import) and is explicitly same-process. Running the engine
+  separately would require a service-account credential concept that does not exist today; a
+  7-day-expiry user JWT is not one. Recorded as future work, not as a task for this feature.
+- Turn injection is verified to exist rather than assumed: the Telegram channel already drives
+  runs server-side through the public SDK client, and the mechanism places no constraint on
+  which thread may be targeted.

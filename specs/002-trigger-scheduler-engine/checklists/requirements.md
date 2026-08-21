@@ -78,3 +78,20 @@ multiple reasonable readings with materially different implications:
 **Success criteria are technology-agnostic**: SC-001 through SC-016 are stated as observable
 outcomes with time bounds, counts, and trial rates. SC-011 and SC-016 describe verification
 without naming the verifying tool.
+
+
+### Carry into plan review (verified 2026-08-21, not yet in any plan artifact)
+
+1. **Narrow Gate 1's ban, do not loosen it.** Ban `langgraph` and `langgraph.*` as exact
+   patterns; allow `langgraph_sdk` as a named exception with the rationale recorded — it is a
+   client for a server, not a reach into internals. The sabotage test must check **both**
+   directions: `import langgraph.graph` still fails, `import langgraph_sdk` passes.
+2. **Article I is satisfied differently here than in 001**, and the plan must say so explicitly:
+   001 used process separation and zero imports; 002 uses the public SDK plus gateway auth from
+   inside the process. Both legitimate — but the difference needs writing down before it becomes
+   precedent that importing anything gateway-shaped is acceptable.
+3. **Out-of-process is future work, blocked on a service-account concept that does not exist.**
+   The gateway's internal token is process-local by construction; a 7-day user JWT is not a
+   substitute. Recorded so nobody re-derives it under time pressure.
+
+Also durably recorded in project memory as `feature-002-plan-constraints`.
