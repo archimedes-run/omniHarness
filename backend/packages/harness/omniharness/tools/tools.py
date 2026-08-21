@@ -4,6 +4,7 @@ from langchain.tools import BaseTool
 
 from omniharness.config import get_app_config
 from omniharness.config.app_config import AppConfig
+from omniharness.persistence.thread_tool_selection.sql import PINNED_SOURCES
 from omniharness.reflection import resolve_variable
 from omniharness.sandbox.security import is_host_bash_allowed
 from omniharness.tools.builtins import ask_clarification_tool, mcp_build_tool, present_file_tool, preview_tool, task_tool, view_image_tool
@@ -24,8 +25,13 @@ BUILTIN_TOOLS = [
 # session-watcher earns its place because "what are my sessions doing?" is a
 # question you ask from anywhere, and ceremony defeats the point. It costs two
 # read-only Tier-1 tools against the schema budget.
-PINNED_LOCAL_SERVERS: frozenset[str] = frozenset({"filesystem", "postgres", "session-watcher"})
-PINNED_LOCAL_SOURCES: frozenset[str] = frozenset(f"local:{s}" for s in PINNED_LOCAL_SERVERS)
+#
+# DERIVED, not duplicated. The canonical list is PINNED_SOURCES in
+# omniharness/persistence/thread_tool_selection/sql.py, which is what actually
+# enforces pinning on save. Keeping a second hand-maintained copy here is how
+# the two drifted: session-watcher was added to one and not the other, the
+# runtime kept working, and the picker showed a `pinned` list that was false.
+PINNED_LOCAL_SERVERS: frozenset[str] = frozenset(src.removeprefix("local:") for src in PINNED_SOURCES)
 
 
 # Default provider tool-array caps by model-provider class-path fragment.

@@ -7,7 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omniharness.persistence.thread_tool_selection.model import ThreadToolSelectionRow
 
 # Namespaced source ids that must ALWAYS be present regardless of client input.
-PINNED_SOURCES: tuple[str, ...] = ("local:filesystem", "local:postgres")
+#: THE canonical pinned set. Namespaced ids, always present in every thread's
+#: selection regardless of what a client sends.
+#:
+#: Single source of truth on purpose: this used to be duplicated as
+#: PINNED_LOCAL_SERVERS in omniharness/tools/tools.py, and the two drifted when
+#: session-watcher was pinned in one and not the other. Nothing broke — the
+#: runtime filter used its copy and worked — but the tools picker displayed a
+#: `pinned` list that was false, which is worse than a break because it teaches
+#: the next reader something untrue.
+PINNED_SOURCES: tuple[str, ...] = ("local:filesystem", "local:postgres", "local:session-watcher")
 
 
 def _enforce_pinned(sources: list[str]) -> list[str]:
