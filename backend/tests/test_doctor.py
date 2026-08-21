@@ -176,7 +176,15 @@ class TestCheckWebSearch:
     def test_ddg_always_ok(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text(
-            "config_version: 5\nmodels:\n  - name: default\n    use: langchain_openai:ChatOpenAI\n    model: gpt-4o\n    api_key: $OPENAI_API_KEY\ntools:\n  - name: web_search\n    use: omniharness.community.ddg_search.tools:web_search_tool\n"
+            "config_version: 5\n"
+            "models:\n"
+            "  - name: default\n"
+            "    use: langchain_openai:ChatOpenAI\n"
+            "    model: gpt-4o\n"
+            "    api_key: $OPENAI_API_KEY\n"
+            "tools:\n"
+            "  - name: web_search\n"
+            "    use: omniharness.community.ddg_search.tools:web_search_tool\n"
         )
         result = doctor.check_web_search(cfg)
         assert result.status == "ok"

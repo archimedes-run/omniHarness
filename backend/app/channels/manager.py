@@ -69,8 +69,6 @@ async def _read_http_inbound_file(file_info: dict[str, Any], client: httpx.Async
     return resp.content
 
 
-
-
 class InvalidChannelSessionConfigError(ValueError):
     """Raised when IM channel session overrides contain invalid agent config."""
 

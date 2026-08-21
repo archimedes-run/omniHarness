@@ -35,6 +35,13 @@ jobs:
         working-directory: backend
         run: uv sync --group dev
 
+      # config.yaml is gitignored (it holds local model and provider settings),
+      # but ~40 tests load it. Without this they fail in CI for an environment
+      # reason and have done since the file was first ignored — noise that made
+      # a red build uninformative.
+      - name: Provide a config for tests
+        run: cp config.example.yaml config.yaml
+
       - name: Run unit tests of backend
         working-directory: backend
         run: make test

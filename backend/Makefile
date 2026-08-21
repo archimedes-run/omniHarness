@@ -10,9 +10,14 @@ gateway:
 test:
 	PYTHONPATH=. uv run pytest tests/ -v
 
+# `uv run`, not `uvx`. uvx resolves the LATEST ruff every invocation, so a new
+# release adds rules and turns CI red without anyone changing code — which is
+# how this repo ended up with a red baseline nobody trusted. `uv run` uses the
+# version pinned in [dependency-groups].dev, so CI and local agree by
+# construction and a ruff upgrade is a deliberate dependency bump.
 lint:
-	uvx ruff check .
-	uvx ruff format --check .
+	uv run ruff check .
+	uv run ruff format --check .
 
 format:
-	uvx ruff check . --fix && uvx ruff format .
+	uv run ruff check . --fix && uv run ruff format .

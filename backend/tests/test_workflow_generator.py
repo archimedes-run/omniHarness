@@ -578,12 +578,18 @@ class TestBoundaryAndStructure:
         """omniharness.* must never import from app.* — verify generator.py doesn't break this."""
         import subprocess
         import sys
+        from pathlib import Path
+
+        # Derived from this file's location, not hardcoded: an absolute path
+        # pins the test to one machine, so it could only ever pass there and
+        # failed in CI from the day it was written.
+        backend_dir = Path(__file__).resolve().parents[1]
 
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/test_harness_boundary.py", "-q", "--tb=short"],
             capture_output=True,
             text=True,
-            cwd="/Users/rishabh.sharma/Documents/GitHub/omniHarness/backend",
+            cwd=str(backend_dir),
         )
         assert result.returncode == 0, f"Harness boundary test failed:\n{result.stdout}\n{result.stderr}"
 
