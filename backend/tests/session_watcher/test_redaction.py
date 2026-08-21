@@ -112,3 +112,63 @@ def test_unrecognized_shapes_pass_through_and_that_is_documented() -> None:
     assert novel in redact(novel, Channel.REMOTE)
     src = Path(redaction.__file__).read_text().lower()
     assert "not an assertion that secrets take only these shapes" in src
+
+
+# --- Both input shapes (feature 002, T033) ----------------------------------
+#
+# The redactor is shared: Feature 001 feeds it session-record text, Feature 002
+# feeds it arbitrary agent-composed output. Its own suite must own BOTH shapes,
+# so a pattern change made for one consumer cannot silently break the other.
+# That cross-consumer regression is the entire risk of sharing the module, and
+# nothing else in either feature's tests would catch it.
+
+AGENT_OUTPUT_SECRETS = [
+    ("gcp-service-account", '{"type": "service_account", "project_id": "x"}'),
+    ("gcp-api-key", "AIzaSyD-1234567890abcdefghijklmnopqrstu"),
+    ("jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+    ("openai-project-key", "sk-proj-abcdefghijklmnopqrstuvwx"),
+    ("private-key-header", "-----BEGIN RSA PRIVATE KEY-----"),
+    ("basic-auth", "Authorization: Basic dXNlcjpzdXBlcnNlY3JldA=="),
+]
+
+
+@pytest.mark.parametrize("name,secret", AGENT_OUTPUT_SECRETS, ids=[n for n, _ in AGENT_OUTPUT_SECRETS])
+@pytest.mark.parametrize("channel", [Channel.LOCAL, Channel.REMOTE])
+def test_agent_output_shapes_are_redacted(name, secret, channel) -> None:
+    """Feature 002's input shape (FR-008c)."""
+    out = redact(f"The agent said: {secret} — end", channel)
+    assert MARKER in out, f"{name} not recognized on {channel}"
+
+
+@pytest.mark.parametrize("secret", SECRETS)
+def test_session_record_shapes_still_redacted_after_widening(secret) -> None:
+    """Feature 001's input shape, re-asserted AFTER the widening.
+
+    This is the regression the shared module risks: a pattern added for 002
+    that shadows or breaks one of 001's. Asserted here rather than in either
+    consumer, because neither consumer's suite guards the other's shapes.
+    """
+    out = redact(f"note: {secret} end", Channel.REMOTE)
+    payload = secret.split("=")[-1].split("@")[0].split()[-1]
+    assert payload not in out
+
+
+def test_widening_did_not_strengthen_the_claim() -> None:
+    """FR-008d — more coverage does NOT license a stronger promise.
+
+    Re-runs the overclaiming scan after the pattern set grew, because that is
+    exactly when someone is tempted to upgrade the wording.
+    """
+    src = Path(redaction.__file__).read_text()
+    forbidden = re.compile(
+        r"(removes?|strips?|scrubs?|eliminates?)\s+(all\s+)?secrets\b|no\s+secrets\s+(will|can)",
+        re.IGNORECASE,
+    )
+    assert not forbidden.findall(src)
+    assert "not an assertion that secrets take only these shapes" in src.lower()
+
+
+def test_prose_survives_the_widened_patterns() -> None:
+    """A widened set must not start eating ordinary text."""
+    msg = "All 41 tests passed. The migration took four minutes and finished cleanly."
+    assert redact(msg, Channel.REMOTE) == msg

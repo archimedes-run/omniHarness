@@ -1,0 +1,37 @@
+# Gate 1 — these bans are constitutional guarantees expressed as lint rules.
+#
+# Article I forbids reaching into agent-core internals. It does NOT forbid using
+# a published client, and the distinction that matters is
+# public-surface-versus-internals rather than same-repo-versus-different-repo:
+#
+#   BANNED   omniharness      — agent core
+#   BANNED   langgraph        — LangGraph internals (exact)
+#   BANNED   langgraph.*      — ditto, submodules
+#   ALLOWED  langgraph_sdk    — the public CLIENT for a server. Required by
+#                               FR-007's turn injection. This is a named
+#                               exception, NOT a loosened glob: `langgraph*`
+#                               would silently permit `import langgraph.graph`.
+#   BANNED   app.gateway.routers — gateway internals; use its HTTP surface
+#   BANNED   subprocess/os.system/os.popen — no shelling out
+#
+# The verification for this file checks BOTH directions: the banned import must
+# fail, AND removing the langgraph_sdk allowance must also fail because the SDK
+# is required. A one-directional test lets a later "simplification" restore the
+# glob or drop the ban with nothing failing.
+extend = "../../ruff.toml"
+
+[lint]
+extend-select = ["TID251"]
+
+[lint.flake8-tidy-imports]
+# Exact patterns only. `banned-module-level-imports` is deliberately not a glob.
+[lint.flake8-tidy-imports.banned-api]
+"omniharness".msg = "Article I: the engine must not import agent core."
+"langgraph".msg = "Article I: LangGraph internals are banned. Use langgraph_sdk, the public client."
+"langgraph.graph".msg = "Article I: LangGraph internals are banned. Use langgraph_sdk."
+"langgraph.checkpoint".msg = "Article I: LangGraph internals are banned. Use langgraph_sdk."
+"langgraph.prebuilt".msg = "Article I: LangGraph internals are banned. Use langgraph_sdk."
+"app.gateway.routers".msg = "Gateway internals: call the HTTP surface instead."
+"subprocess".msg = "No shelling out from the engine."
+"os.system".msg = "No shelling out from the engine."
+"os.popen".msg = "No shelling out from the engine."

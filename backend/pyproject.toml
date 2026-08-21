@@ -30,6 +30,8 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "ruff>=0.14.11",
     "session-watcher",
+    "croniter>=6.0.0",
+    "vulture>=2.14",
 ]
 
 [tool.pytest.ini_options]
