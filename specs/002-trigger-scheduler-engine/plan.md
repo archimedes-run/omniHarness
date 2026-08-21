@@ -175,6 +175,54 @@ delivery path exists.
 **Verification**: a test asserting both entry conditions reach the *same* function, plus a
 sabotage that adds a second delivery path and confirms the test fails.
 
+### Gate 4 — Wiring (the defect shape that has now appeared four times)
+
+**The risk, stated as evidence rather than a worry.** Four defects of one shape have been found in
+this project, all of them by *running the service* and none by the test suite:
+
+| Defect | Why tests missed it |
+|---|---|
+| `KNOWN_INERT_TYPES` defined, never wired | A module-level constant; no linter flags an unused one |
+| `start_background_refresh` never called by `main()` | Every unit test constructed the `Reconciler` directly |
+| `Discovery.release()` called only from a test | The test *was* the only caller |
+| `registry.merge()` never called; `server.py` used `replace_all()` | Unit tests exercised `merge()` directly and passed |
+
+Feature 001's FR-005g responded by *requiring* terminal retention be "exercised by the running
+service". That is the right rule and the wrong enforcement — it relies on someone remembering it.
+This gate makes it mechanical.
+
+**Resolution — dead-code detection scoped to production code.** Run a cross-module dead-code
+check (`vulture` or equivalent) over `backend/app/trigger_engine/` **with the test tree
+excluded**. Anything defined and never referenced outside tests fails the build.
+
+**Why not the AST caller-check first considered**: it walks past constants. `KNOWN_INERT_TYPES`
+was a constant, and a function-caller check would have missed it — one of the four. A tool that
+covers functions, classes, attributes *and* module-level names covers the whole observed shape.
+
+**Scoping, so it does not become noise.** Framework-invoked entry points have no in-repo caller by
+design and must be whitelisted:
+
+- MCP tool handlers registered by decorator (`@server.list_tools()`, `@server.call_tool()`)
+- FastAPI route handlers (`@router.get/post/put`)
+- `main()` and CLI entry points
+- Port implementations invoked polymorphically through a base class
+- Public API deliberately consumed by another feature
+
+**Every whitelist entry requires a comment saying why.** A whitelist is the obvious way for this
+gate to quietly stop working, and an entry without a justification is indistinguishable from one
+added to silence a real finding.
+
+**Verification**: delete a real call site — `self.registry.merge(...)` in the engine's refresh
+path is the exact analogue of the Feature 001 defect — and confirm the gate fails. Restore, and
+confirm it passes.
+
+**What this gate does NOT catch, stated plainly:** a function that *is* called but with wrong
+arguments, and a function called from a branch that never executes. Both are "wired to the wrong
+place" rather than "not wired", and no static check sees them. That is why this gate is paired
+with a **service-level smoke task** that starts the engine for real and drives one rule end to
+end — the same activity that found all four defects in the first place. The gate makes the cheap
+half mechanical; the smoke test covers the rest.
+
 ### Standing convention
 
 Every gate above ships with its observe-it-fail task, and outcomes are recorded in
@@ -234,7 +282,8 @@ backend/tests/trigger_engine/
 ├── test_quiet_hours.py        ├── test_coalesce.py
 ├── test_interrupt_queue.py    ├── test_release_path.py
 ├── test_redaction_boundary.py ├── test_blast_radius.py
-├── test_no_banned_imports.py  └── test_us1_blocked_session.py
+├── test_no_banned_imports.py  ├── test_wiring.py          # Gate 4
+├── test_smoke_end_to_end.py   └── test_us1_blocked_session.py
 ```
 
 **Structure Decision**: `backend/app/trigger_engine/` — under `app/`, alongside `gateway/` and
@@ -259,12 +308,27 @@ All ten articles hold. Three became **stronger** once the design was concrete:
 - **Article VIII** — the audit-log obligation that Feature 001 deferred is discharged here, and
   FR-012 already required the data it needs.
 
-**One design decision flagged for review**, not a violation: the engine imports Feature 001's
-redaction module directly. That is a cross-feature code dependency the watcher does not have in
-reverse. It is the right call — two implementations of a security control is how one ends up
-weaker — but it means the redactor is now shared infrastructure rather than one feature's
-internal detail, and a change to it affects both. Worth extracting to a shared location if a
-third consumer appears.
+**Shared redactor — not extracted, but its tests must cover both consumers.** The engine imports
+Feature 001's redaction module directly. Two implementations of a security control is how one
+ends up weaker, so sharing is right. **Extraction is deliberately deferred**; what is not
+deferred is the test coverage that makes sharing safe.
+
+*The actual risk is narrow and cheap to close*: a pattern change made for this feature's needs
+(FR-008c widens the set for agent-composed output) silently breaking Feature 001's
+session-record case. Nothing in the current arrangement would catch that — 001's tests exercise
+session text, and 002's would exercise agent output, with neither guarding the other's input
+shape.
+
+**Requirement**: the redactor's own test suite owns **both input shapes** — session-record text
+and arbitrary agent output — so either consumer's regression fails in the redactor's tests
+rather than in the consumer's. A task carries this.
+
+**Extraction debt, with an explicit trigger** rather than "when it feels right":
+
+- a **third** consumer appears, or
+- the pattern sets **diverge** enough that one consumer needs patterns the other must not have.
+
+Until one of those, a shared module with two-shape test coverage is the cheaper correct answer.
 
 **No violations. Complexity Tracking below remains empty.**
 
