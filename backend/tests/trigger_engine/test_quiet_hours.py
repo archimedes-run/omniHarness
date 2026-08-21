@@ -141,9 +141,35 @@ def test_an_empty_backlog_delivers_nothing_not_an_empty_message() -> None:
     assert dest.delivered == []
 
 
-def test_deferred_items_are_queued_not_dropped() -> None:
+def test_deferred_items_are_held_not_dropped() -> None:
+    """FR-013a — deferred, not discarded. The session that blocked at 2am is
+    the case the feature exists for."""
     q = DeferralQueue()
     f = _firing()
     q.defer(f, NIGHT, "quiet hours")
     assert len(q) == 1
-    assert f.outcome is Outcome.QUEUED and f.reason
+    assert f.outcome is Outcome.SUPPRESSED and f.reason
+
+
+def test_suppressed_and_queued_are_distinguishable_in_the_audit() -> None:
+    """Found by the enum scan: Outcome.SUPPRESSED was never produced.
+
+    Quiet hours and a mid-exchange hold both delayed delivery, and both recorded
+    QUEUED — which loses the distinction an operator most wants when reading
+    back a quiet morning: was nothing delivered because of the hour, or because
+    I was mid-conversation? The spec always separated them (FR-013 "suppresses",
+    FR-016 "queues"); the implementation had not.
+    """
+    from app.trigger_engine.politeness.interrupt import InterruptQueue
+
+    q = DeferralQueue()
+    f1 = _firing("quiet")
+    q.defer(f1, NIGHT, "quiet hours 22:00-07:30")
+
+    iq = InterruptQueue()
+    f2 = _firing("busy")
+    iq.hold(f2, NIGHT)
+
+    assert f1.outcome is Outcome.SUPPRESSED
+    assert f2.outcome is Outcome.QUEUED
+    assert f1.outcome is not f2.outcome
