@@ -174,10 +174,10 @@ your phone is the whole payoff for Feature 001's unconsumed event.
 **Independent test**: Run across several scheduled times including a sleep/wake cycle; confirm one
 delivery each, none missed, none duplicated.
 
-- [ ] T061 [US2] Wire the cron source through evaluation to `release()` in `engine.py` (FR-002, FR-018)
-- [ ] T062 [US2] Persist last-fired times per scheduled instant in `backend/app/trigger_engine/scheduler.py` so restarts neither skip nor re-fire (FR-018)
-- [ ] T063 [P] [US2] Test the seven-day schedule in `backend/tests/trigger_engine/test_scheduler.py` — exactly one delivery per scheduled time, zero missed, zero duplicated (SC-003)
-- [ ] T064 [P] [US2] Test the missed-schedule case in `test_scheduler.py` — a time that passes while stopped fires **once, late**, rather than being skipped or fired once per missed tick (SC-004)
+- [X] T061 [US2] Wire the cron source through evaluation to `release()` in `engine.py` (FR-002, FR-018)
+- [X] T062 [US2] Persist last-fired times per scheduled instant in `backend/app/trigger_engine/scheduler.py` so restarts neither skip nor re-fire (FR-018)
+- [X] T063 [P] [US2] Test the seven-day schedule in `backend/tests/trigger_engine/test_scheduler.py` — exactly one delivery per scheduled time, zero missed, zero duplicated (SC-003)
+- [X] T064 [P] [US2] Test the missed-schedule case in `test_scheduler.py` — a time that passes while stopped fires **once, late**, rather than being skipped or fired once per missed tick (SC-004)
 
 ---
 
@@ -188,9 +188,9 @@ delivery each, none missed, none duplicated.
 **Independent test**: Fire three rules inside the window; confirm exactly one message containing
 all three.
 
-- [ ] T065 [US3] Wire coalescing into the `release()` path in `backend/app/trigger_engine/politeness/release.py` (FR-015)
-- [ ] T066 [P] [US3] Test coalescing in `backend/tests/trigger_engine/test_coalesce.py` — three rules within the window produce one message with all three; two far apart produce two, so coalescing never delays unrelated items indefinitely (SC-005)
-- [ ] T067 [P] [US3] Test window accumulation in `test_coalesce.py` — a rule firing while a window is open joins it rather than starting a new one (Story 3 scenario 3)
+- [X] T065 [US3] Wire coalescing into the `release()` path in `backend/app/trigger_engine/politeness/release.py` (FR-015)
+- [X] T066 [P] [US3] Test coalescing in `backend/tests/trigger_engine/test_coalesce.py` — three rules within the window produce one message with all three; two far apart produce two, so coalescing never delays unrelated items indefinitely (SC-005)
+- [X] T067 [P] [US3] Test window accumulation in `test_coalesce.py` — a rule firing while a window is open joins it rather than starting a new one (Story 3 scenario 3)
 
 ---
 
@@ -202,17 +202,17 @@ all three.
 reason; mark it urgent and confirm delivery. Separately, fire during an exchange and confirm
 delivery after.
 
-- [ ] T068 [US4] Implement quiet-hours suppression and **deferral** in `backend/app/trigger_engine/politeness/quiet_hours.py`, handling a window that spans midnight (FR-013, FR-013a)
-- [ ] T069 [US4] Implement release-time re-check in `quiet_hours.py` — only items whose condition still holds are delivered; **event types with no re-checkable condition expire rather than deliver blind**, so "re-check" is never implemented as "deliver anything we cannot disprove" (FR-013b, FR-013c)
-- [ ] T070 [US4] Route the quiet-hours release **through `release()`** so a backlog arrives as one message. A release that bypasses coalescing produces a notification storm at the moment the user wakes, which is the single behaviour most likely to get the feature muted (FR-013d)
-- [ ] T071 [US4] Implement the explicit per-rule urgent override in `quiet_hours.py`, with **no implicit escalation** (FR-014)
-- [ ] T072 [US4] Implement mid-exchange detection in `backend/app/trigger_engine/politeness/interrupt.py` — query `GET /api/threads/{id}/state`, and treat a `ConflictError` on injection as the race fallback as the channel manager does (FR-016, research R3)
-- [ ] T073 [US4] Implement the queued-turn bound in `interrupt.py`, **as the primary release path rather than a fallback**: both mid-exchange signals are pull, so for a hung run no completion signal will ever arrive and this is the only mechanism that will release the item. Document its default as a **heuristic** in the code as well as the spec (FR-016a, FR-016b, Article X)
-- [ ] T074 [US4] Route queue-expiry release **through the same `release()`** as quiet hours (FR-016c, GATE 3)
-- [ ] T075 [P] [US4] Test quiet hours in `backend/tests/trigger_engine/test_quiet_hours.py` — non-urgent suppressed with reason recorded, urgent delivered, a blocked session surviving re-check delivered at release, a resolved one not, and a suppressed cron item expiring (SC-006, SC-006a, SC-006b, SC-006c)
-- [ ] T076 [P] [US4] Test backlog coalescing in `test_quiet_hours.py` — six items surviving re-check arrive as **one** message (SC-006d)
-- [ ] T077 [P] [US4] Test the interrupt queue in `backend/tests/trigger_engine/test_interrupt_queue.py` — delivery after the exchange and never during; an exchange emitting **no completion signal** still releases at the bound; multiple queued items arrive coalesced (SC-007, SC-007a, SC-007c)
-- [ ] T078 [P] [US4] Test the shared release path in `backend/tests/trigger_engine/test_release_path.py` — assert quiet-hours release and queue-expiry release reach the **same** function (SC-007b, GATE 3)
+- [X] T068 [US4] Implement quiet-hours suppression and **deferral** in `backend/app/trigger_engine/politeness/quiet_hours.py`, handling a window that spans midnight (FR-013, FR-013a)
+- [X] T069 [US4] Implement release-time re-check in `quiet_hours.py` — only items whose condition still holds are delivered; **event types with no re-checkable condition expire rather than deliver blind**, so "re-check" is never implemented as "deliver anything we cannot disprove" (FR-013b, FR-013c)
+- [X] T070 [US4] Route the quiet-hours release **through `release()`** so a backlog arrives as one message. A release that bypasses coalescing produces a notification storm at the moment the user wakes, which is the single behaviour most likely to get the feature muted (FR-013d)
+- [X] T071 [US4] Implement the explicit per-rule urgent override in `quiet_hours.py`, with **no implicit escalation** (FR-014)
+- [X] T072 [US4] Implement mid-exchange detection in `backend/app/trigger_engine/politeness/interrupt.py` — query `GET /api/threads/{id}/state`, and treat a `ConflictError` on injection as the race fallback as the channel manager does (FR-016, research R3)
+- [X] T073 [US4] Implement the queued-turn bound in `interrupt.py`, **as the primary release path rather than a fallback**: both mid-exchange signals are pull, so for a hung run no completion signal will ever arrive and this is the only mechanism that will release the item. Document its default as a **heuristic** in the code as well as the spec (FR-016a, FR-016b, Article X)
+- [X] T074 [US4] Route queue-expiry release **through the same `release()`** as quiet hours (FR-016c, GATE 3)
+- [X] T075 [P] [US4] Test quiet hours in `backend/tests/trigger_engine/test_quiet_hours.py` — non-urgent suppressed with reason recorded, urgent delivered, a blocked session surviving re-check delivered at release, a resolved one not, and a suppressed cron item expiring (SC-006, SC-006a, SC-006b, SC-006c)
+- [X] T076 [P] [US4] Test backlog coalescing in `test_quiet_hours.py` — six items surviving re-check arrive as **one** message (SC-006d)
+- [X] T077 [P] [US4] Test the interrupt queue in `backend/tests/trigger_engine/test_interrupt_queue.py` — delivery after the exchange and never during; an exchange emitting **no completion signal** still releases at the bound; multiple queued items arrive coalesced (SC-007, SC-007a, SC-007c)
+- [X] T078 [P] [US4] Test the shared release path in `backend/tests/trigger_engine/test_release_path.py` — assert quiet-hours release and queue-expiry release reach the **same** function (SC-007b, GATE 3)
 
 ---
 
@@ -222,22 +222,24 @@ delivery after.
 
 **Independent test**: Add, edit and remove rules while running; each takes effect with no restart.
 
-- [ ] T079 [US5] Wire hot reload into the running engine in `backend/app/trigger_engine/engine.py` so config changes apply on the next evaluation (FR-005)
-- [ ] T080 [P] [US5] Test add, edit and remove without restart in `backend/tests/trigger_engine/test_config_reload.py` (SC-008)
-- [ ] T081 [P] [US5] Test that an invalid edit leaves the prior configuration active and reports the error in `test_config_reload.py` (SC-009)
+- [X] T079 [US5] Wire hot reload into the running engine in `backend/app/trigger_engine/engine.py` so config changes apply on the next evaluation (FR-005)
+- [X] T080 [P] [US5] Test add, edit and remove without restart in `backend/tests/trigger_engine/test_config_reload.py` (SC-008)
+- [X] T081 [P] [US5] Test that an invalid edit leaves the prior configuration active and reports the error in `test_config_reload.py` (SC-009)
 
 ---
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T082 **Service-level smoke test** in `backend/tests/trigger_engine/test_smoke_end_to_end.py` — start the engine for real against a live gateway and drive one rule end to end. **Gate 4 explicitly does not catch a function called with wrong arguments, or called from a branch that never executes**; this is the only check that does, and it is the activity that found all four wiring defects in this project (plan.md)
-- [ ] T083 [P] Test rule isolation in `backend/tests/trigger_engine/test_blast_radius.py` — one rule's error prevents no other rule from being evaluated in the same cycle, and never stops the engine (SC-010, FR-025)
-- [ ] T084 [P] Test the banned-import backstop in `backend/tests/trigger_engine/test_no_banned_imports.py` — walk the module's import graph and assert no `omniharness`/`langgraph` member appears, **while `langgraph_sdk` does** (SC-011, GATE 1)
-- [ ] T085 [P] Measure idle cost with no rule due and record it — documented, not CI-gated, since absolute RSS is environment-dependent and a flaky constitutional gate is worse than a recorded measurement (SC-012, Article VI)
-- [ ] T086 [P] Test the unreachable-source case in `backend/tests/trigger_engine/test_sources.py` — watcher rules do not fire, the condition is observable, and no reply states or implies that no events occurred (SC-013, FR-029)
-- [ ] T087 [P] Write `backend/app/trigger_engine/README.md` — how to author rules, the configurable values and their **stated-heuristic** defaults, the four gates and how to break each, and the plain statement that this feature makes the assistant act with no human in the loop
-- [ ] T088 Walk every scenario in [quickstart.md](./quickstart.md) manually and record results
-- [ ] T089 Record gate-verification outcomes from T006, T041, T045 and T055 in `specs/002-trigger-scheduler-engine/gate-verification.md` — durable, because a PR description is not. **A gate whose failure was never observed is not done**
+- [X] T082 **Register the engine with the gateway's lifespan** in `backend/app/gateway/app.py` — start `TriggerLoop.run_forever()` on startup and `stop()` on shutdown. **Found by Gate 4**: the loop was fully built and nothing started it, which is the feature-level instance of the very defect the gate exists for. Without this the engine is a library nobody calls (FR-027, FR-030)
+- [X] T083 [P] Test the lifespan wiring in `backend/tests/trigger_engine/test_lifespan.py` — the loop starts with the app and stops with it, and a loop that raises does not prevent the gateway from starting (FR-030)
+- [X] T084 **Service-level smoke test** in `backend/tests/trigger_engine/test_smoke_end_to_end.py` — start the engine for real against a live gateway and drive one rule end to end. **Gate 4 explicitly does not catch a function called with wrong arguments, or called from a branch that never executes**; this is the only check that does, and it is the activity that found all four wiring defects in this project (plan.md)
+- [X] T085 [P] Test rule isolation in `backend/tests/trigger_engine/test_blast_radius.py` — one rule's error prevents no other rule from being evaluated in the same cycle, and never stops the engine (SC-010, FR-025)
+- [X] T086 [P] Test the banned-import backstop in `backend/tests/trigger_engine/test_no_banned_imports.py` — walk the module's import graph and assert no `omniharness`/`langgraph` member appears, **while `langgraph_sdk` does** (SC-011, GATE 1)
+- [X] T087 [P] Measure idle cost with no rule due and record it — documented, not CI-gated, since absolute RSS is environment-dependent and a flaky constitutional gate is worse than a recorded measurement (SC-012, Article VI)
+- [X] T088 [P] Test the unreachable-source case in `backend/tests/trigger_engine/test_sources.py` — watcher rules do not fire, the condition is observable, and no reply states or implies that no events occurred (SC-013, FR-029)
+- [X] T089 [P] Write `backend/app/trigger_engine/README.md` — how to author rules, the configurable values and their **stated-heuristic** defaults, the four gates and how to break each, and the plain statement that this feature makes the assistant act with no human in the loop
+- [X] T090 Walk every scenario in [quickstart.md](./quickstart.md) manually and record results
+- [X] T091 Record gate-verification outcomes from T006, T041, T045 and T055 in `specs/002-trigger-scheduler-engine/gate-verification.md` — durable, because a PR description is not. **A gate whose failure was never observed is not done**
 
 ---
 
@@ -285,5 +287,5 @@ after which every other requirement is moot.
 
 **Increment 3 = Phase 7** makes rules cheap to experiment with.
 
-**Phase 8 before release.** T089 especially — four gates are this feature's constitutional
+**Phase 8 before release.** T091 especially — four gates are this feature's constitutional
 guarantees, and an unverified gate is a guarantee in name only.

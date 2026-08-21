@@ -1,31 +1,19 @@
-# Gate 4 whitelist — names with no production reference YET.
+# Gate 4 whitelist — names with no production reference.
 #
 # Two rules, both enforced:
 #   1. Every entry needs a reason after the '#'.
 #   2. An entry deferring to future wiring must name the TASK that wires it,
-#      and the gate FAILS once that task completes. The list shrinks by
-#      construction; an entry that outlives its task announces itself.
+#      and the gate FAILS once that task completes. Debt cannot outlive its
+#      task; the list shrinks by construction.
 #
-# History: 20 entries after Phase 2b, 13 after Phase 3 — seven expired when
-# T056 wired them, which is the mechanism working rather than a coincidence.
+# History: 43 -> 20 (an over-broad first pass, corrected) -> 13 (T056 closed)
+# -> 3 (feature complete). The last drop exposed four release entry conditions
+# that were implemented and never called by the loop — quiet hours would have
+# deferred firings that nothing released.
+#
+# What remains are read surfaces for operators. Not deferred, so no task:
+# they are not waiting on anything.
 
-# --- wired by the US2 scheduler loop (T061) ----------------------------------
-evaluate_all      # SupervisedEngine drives RuleRunner from the loop, T061
-next_wakeup       # the sleep-until-due timer, T061
-mark_fired        # records a served instant, T061
-prune             # scheduler retention sweep, T061
-maybe_reset       # fingerprint daily reset, same sweep, T061
-known_rules       # enumerated by the retention sweep, T061
-forget            # the sweep drops mappings whose thread 404s, T061
-
-# --- wired by US3 coalescing (T065) ------------------------------------------
-is_due            # CoalesceWindow, the window timer, T065
-drain             # CoalesceWindow, flushes on close, T065
-
-# --- wired by US4 presence-aware routing (T068) ------------------------------
-observe_runs      # presence updated from run records before routing, T068
-
-# --- ops read surfaces: not deferred, so no task -----------------------------
 describe          # runtime inspection of presence (FR-023); read by operators
 entries           # audit log read side; read by operators and by tests
 count             # fingerprint store size; read by operators and by tests

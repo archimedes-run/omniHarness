@@ -169,9 +169,19 @@ def _classify_state(
 def _asked_question(dated) -> bool:
     """Did the session end on an assistant question that nobody answered?
 
-    Weak evidence by construction — a trailing "?" is a heuristic, not a marker,
-    which is exactly why FR-016a makes the reply hedge. It is still far better
-    evidence than a pending tool call, which carries none at all.
+    Looks for a question mark ANYWHERE in the final assistant message, not only
+    at its very end. Requiring a trailing "?" missed a real blocked session
+    whose message was:
+
+        "Which environment should this target? ... Once you tell me, I'll make
+         the one-line edit."
+
+    which is how assistants actually ask things — the question, then a closing
+    line. Anchoring on the last character made the common shape invisible.
+
+    Still weak evidence, which is why FR-016a makes the reply hedge. It errs
+    toward flagging per the error-direction ruling: a false "waiting on you"
+    costs one wasted walk to the machine, a false "working" costs an evening.
     """
     if not dated:
         return False
@@ -181,8 +191,5 @@ def _asked_question(dated) -> bool:
             return False
         if rec.raw_type == "assistant":
             text = (rec.text or "").strip()
-            if not text:
-                return False
-            tail = text.rstrip().rstrip(")]}\"'*_`")
-            return tail.endswith("?")
+            return "?" in text
     return False
