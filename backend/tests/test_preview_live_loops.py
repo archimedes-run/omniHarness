@@ -15,6 +15,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Imported at module scope, not inside the test: `from __future__ import
+# annotations` defers annotation evaluation, and FastAPI resolves a route
+# handler's annotations against the *module* globals. With `Request` imported
+# only inside the test function, FastAPI could not tell the parameter was a
+# Request and bound it as a query parameter instead — a 422, not the 204 the
+# test asserts.
+from fastapi import Request  # noqa: F401 — resolves route annotations below
+
 from omniharness.preview.preview_controller import (
     PreviewController,
     PreviewStatusSummary,
@@ -122,7 +130,7 @@ async def test_proxy_request_intercepts_client_error():
     from datetime import UTC, datetime
     from unittest.mock import MagicMock
 
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from app.gateway.preview_sessions import PreviewSessionManager, _PreviewSessionRecord
@@ -367,7 +375,7 @@ def test_gateway_controller_get_status_not_started(tmp_path):
     paths_mock.sandbox_outputs_dir.return_value = outputs_dir
 
     with patch("app.gateway.preview_controller_adapter.get_paths", return_value=paths_mock):
-        status = asyncio.get_event_loop().run_until_complete(ctrl.get_status(thread_id="t1", user_id="u1"))
+        status = asyncio.run(ctrl.get_status(thread_id="t1", user_id="u1"))
 
     assert status.has_web_app is False
     assert status.session_status == "not_started"
@@ -482,7 +490,6 @@ async def test_worker_calls_auto_start_on_success():
     ctx = RunContext(checkpointer=None, preview_controller=ctrl)
 
     with (
-        patch("omniharness.runtime.runs.worker.Runtime"),
         patch("omniharness.runtime.runs.worker._build_runtime_context", return_value={"thread_id": "t1", "run_id": record.run_id, "user_id": "u1"}),
         patch("omniharness.runtime.runs.worker._install_runtime_context"),
         patch("langchain_core.runnables.RunnableConfig", side_effect=lambda **kw: kw),
@@ -520,7 +527,10 @@ async def test_preview_tool_calls_request_preview():
     runtime = MagicMock()
     runtime.context = {"thread_id": "t1", "user_id": "u1"}
 
-    result = await preview_tool.ainvoke({"tool_call_id": "tc1", "runtime": runtime})
+    # `runtime` and `tool_call_id` are injected by langgraph's tool node, not
+    # by `ainvoke`, so calling through the tool wrapper would test LangChain's
+    # injection rather than this tool's logic. Call the coroutine directly.
+    result = await preview_tool.coroutine(runtime=runtime, tool_call_id="tc1")
     assert "starting" in str(result).lower() or "starting" in result.update.get("messages", [{}])[-1].content.lower()
     assert len(ctrl.request_preview_calls) == 1
 
@@ -534,7 +544,7 @@ async def test_preview_tool_no_controller():
     runtime = MagicMock()
     runtime.context = {"thread_id": "t1", "user_id": "u1"}
 
-    result = await preview_tool.ainvoke({"tool_call_id": "tc1", "runtime": runtime})
+    result = await preview_tool.coroutine(runtime=runtime, tool_call_id="tc1")
     assert "not available" in str(result).lower()
 
 
@@ -545,7 +555,14 @@ async def test_preview_tool_no_controller():
 
 @pytest.mark.asyncio
 async def test_start_run_threads_user_id_into_config():
-    """Ensure start_run injects user_id into config['context'] when authenticated."""
+    """start_run must put the authenticated user_id in config["context"].
+
+    Previously this patched `run_agent` and asserted on what that mock
+    captured. `start_run` calls `launch_agent_run_detached`, so the mock never
+    fired, `captured_config` stayed empty, and the test failed for a reason
+    unrelated to user_id threading — while a real identity bug sat underneath
+    (internal-auth requests resolved to None; fixed separately).
+    """
     from unittest.mock import MagicMock, patch
 
     from app.gateway.services import start_run
@@ -566,27 +583,22 @@ async def test_start_run_threads_user_id_into_config():
     body.interrupt_after = None
     body.multitask_strategy = "reject"
 
-    captured_config: dict = {}
+    captured: dict = {}
 
-    async def fake_run_agent(bridge, run_mgr, record, *, ctx, agent_factory, graph_input, config, **kwargs):
-        captured_config.update(config)
+    async def fake_launch(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(run_id="r1", thread_id="t1")
 
     with (
         patch("app.gateway.services.get_stream_bridge", return_value=MagicMock()),
-        patch("app.gateway.services.get_run_manager") as mock_mgr,
-        patch("app.gateway.services.get_run_context", return_value=MagicMock(thread_store=MagicMock(get=AsyncMock(return_value=None), create=AsyncMock(), update_status=AsyncMock()))),
+        patch("app.gateway.services.get_run_manager", return_value=MagicMock()),
+        patch("app.gateway.services.get_run_context", return_value=MagicMock()),
         patch("app.gateway.services.get_current_user", new=AsyncMock(return_value="user-123")),
-        patch("app.gateway.services.run_agent", new=fake_run_agent),
-        patch("asyncio.create_task"),
+        patch("app.gateway.services.launch_agent_run_detached", new=fake_launch),
     ):
-        mgr_instance = MagicMock()
-        mgr_instance.create_or_reject = AsyncMock(return_value=MagicMock(run_id="r1", thread_id="t1", task=None))
-        mock_mgr.return_value = mgr_instance
+        await start_run(body, "t1", mock_request)
 
-        try:
-            await start_run(body, "t1", mock_request)
-        except Exception:
-            pass  # We only care about captured_config
-
-    ctx_dict = captured_config.get("context", {})
-    assert ctx_dict.get("user_id") == "user-123"
+    assert captured, "launch_agent_run_detached was not called — start_run's call path moved again"
+    ctx = captured["run_config"].get("context", {})
+    assert ctx.get("user_id") == "user-123"
+    assert captured["user_id"] == "user-123"
