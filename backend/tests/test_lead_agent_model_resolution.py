@@ -241,7 +241,16 @@ def test_make_lead_agent_reads_runtime_options_from_context(monkeypatch):
         "reasoning_effort": "high",
         "app_config": app_config,
     }
-    get_available_tools.assert_called_once_with(model_name="context-model", groups=None, subagent_enabled=True, app_config=app_config)
+    # Assert on the kwargs this test is about, not the whole call. An exact
+    # assert_called_once_with breaks whenever the signature grows a parameter
+    # unrelated to model resolution — which is how this went stale, when
+    # selected_sources/user_id/max_tools were added.
+    assert get_available_tools.call_count == 1
+    kwargs = get_available_tools.call_args.kwargs
+    assert kwargs["model_name"] == "context-model"
+    assert kwargs["groups"] is None
+    assert kwargs["subagent_enabled"] is True
+    assert kwargs["app_config"] is app_config
     assert result["model"] is not None
 
 
