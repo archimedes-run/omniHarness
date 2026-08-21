@@ -26,6 +26,7 @@ in the first place.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -34,8 +35,12 @@ MODULE = Path(__file__).resolve().parents[2] / "app" / "trigger_engine"
 WHITELIST = MODULE / ".wiring-whitelist"
 
 
+TASKS = Path(__file__).resolve().parents[3] / "specs" / "002-trigger-scheduler-engine" / "tasks.md"
+TASK_REF = re.compile(r"\bT(\d{3})\b")
+
+
 def _whitelist() -> dict[str, str]:
-    """name -> reason. The reason is mandatory; see the test below."""
+    """name -> reason. The reason is mandatory; see the tests below."""
     out: dict[str, str] = {}
     for raw in WHITELIST.read_text().splitlines():
         line = raw.strip()
@@ -44,6 +49,13 @@ def _whitelist() -> dict[str, str]:
         name, _, reason = line.partition("#")
         out[name.strip()] = reason.strip()
     return out
+
+
+def _completed_tasks() -> set[str]:
+    """Task ids marked [X] in tasks.md."""
+    if not TASKS.exists():
+        return set()
+    return set(re.findall(r"^- \[[Xx]\] (T\d{3})\b", TASKS.read_text(), re.M))
 
 
 def _sources() -> list[Path]:
@@ -142,6 +154,35 @@ def test_whitelist_has_no_stale_entries() -> None:
     defined = _defined()
     stale = [n for n in _whitelist() if n not in defined]
     assert not stale, f"whitelist names nothing that exists: {stale}"
+
+
+def test_whitelist_entries_expire_when_their_task_completes() -> None:
+    """The whitelist must SHRINK by construction, not merely be documented.
+
+    Every entry names the task that will wire it. Once that task is marked
+    complete, the entry has outlived its justification: either the wiring
+    landed and the entry is now stale, or the task was closed without doing it
+    — and the second case is exactly the wired-but-never-called defect this
+    whole gate exists to catch, arriving through the back door.
+
+    Without this, 43 entries of "caller lands later" quietly become permanent
+    furniture, and the gate ends up exempting most of the module.
+    """
+    completed = _completed_tasks()
+    expired: dict[str, str] = {}
+    for name, reason in _whitelist().items():
+        for task in TASK_REF.findall(reason):
+            if f"T{task}" in completed:
+                expired[name] = f"T{task} is complete"
+    assert not expired, f"whitelist entries whose wiring task is already done — remove the entry if the caller landed, or reopen the task if it did not: {expired}"
+
+
+def test_every_deferred_entry_names_a_task() -> None:
+    """An entry deferred to 'later' with no task cannot expire, so it is
+    permanent by omission. Only entries justified WITHOUT deferral may omit one.
+    """
+    missing = [name for name, reason in _whitelist().items() if any(w in reason.lower() for w in ("wired by", "lands", "later", "wires")) and not TASK_REF.search(reason)]
+    assert not missing, f"deferred entries with no task id, so they can never expire: {missing}"
 
 
 @pytest.mark.parametrize("blanket", ["*", "ALL", "everything"])
