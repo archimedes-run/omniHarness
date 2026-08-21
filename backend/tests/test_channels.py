@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.channels.base import Channel
-from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
+from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage
 from app.channels.store import ChannelStore
 
 
@@ -962,8 +961,13 @@ class TestChannelManager:
 
         _run(go())
 
-    def test_handle_feishu_chat_streams_multiple_outbound_updates(self, monkeypatch):
+    def test_handle_streaming_chat_streams_multiple_outbound_updates(self, monkeypatch):
+        import app.channels.manager as _manager_mod
         from app.channels.manager import ChannelManager
+
+        # Streaming is a channel capability, not a channel identity. No shipped
+        # channel sets supports_streaming=True, so declare it for this test.
+        monkeypatch.setitem(_manager_mod.CHANNEL_CAPABILITIES, "slack", {"supports_streaming": True})
 
         monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
 
@@ -1013,7 +1017,7 @@ class TestChannelManager:
             await manager.start()
 
             inbound = InboundMessage(
-                channel_name="feishu",
+                channel_name="slack",
                 chat_id="chat1",
                 user_id="user1",
                 text="hi",
@@ -1030,9 +1034,14 @@ class TestChannelManager:
 
         _run(go())
 
-    def test_handle_feishu_stream_error_still_sends_final(self, monkeypatch):
+    def test_handle_streaming_stream_error_still_sends_final(self, monkeypatch):
         """When the stream raises mid-way, a final outbound with is_final=True must still be published."""
+        import app.channels.manager as _manager_mod
         from app.channels.manager import ChannelManager
+
+        # Streaming is a channel capability, not a channel identity. No shipped
+        # channel sets supports_streaming=True, so declare it for this test.
+        monkeypatch.setitem(_manager_mod.CHANNEL_CAPABILITIES, "slack", {"supports_streaming": True})
 
         monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
 
@@ -1065,7 +1074,7 @@ class TestChannelManager:
             await manager.start()
 
             inbound = InboundMessage(
-                channel_name="feishu",
+                channel_name="slack",
                 chat_id="chat1",
                 user_id="user1",
                 text="hi",
@@ -1082,11 +1091,16 @@ class TestChannelManager:
 
         _run(go())
 
-    def test_handle_feishu_stream_conflict_sends_busy_message(self, monkeypatch):
+    def test_handle_streaming_stream_conflict_sends_busy_message(self, monkeypatch):
         import httpx
         from langgraph_sdk.errors import ConflictError
 
+        import app.channels.manager as _manager_mod
         from app.channels.manager import THREAD_BUSY_MESSAGE, ChannelManager
+
+        # Streaming is a channel capability, not a channel identity. No shipped
+        # channel sets supports_streaming=True, so declare it for this test.
+        monkeypatch.setitem(_manager_mod.CHANNEL_CAPABILITIES, "slack", {"supports_streaming": True})
 
         monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
 
@@ -1119,7 +1133,7 @@ class TestChannelManager:
             await manager.start()
 
             inbound = InboundMessage(
-                channel_name="feishu",
+                channel_name="slack",
                 chat_id="chat1",
                 user_id="user1",
                 text="hi",
@@ -1486,9 +1500,14 @@ class TestChannelManager:
 
         _run(go())
 
-    def test_handle_command_bootstrap_feishu_uses_streaming(self, monkeypatch):
-        """/bootstrap from feishu should go through the streaming path."""
+    def test_handle_command_bootstrap_uses_streaming(self, monkeypatch):
+        """/bootstrap on a streaming-capable channel should go through the streaming path."""
+        import app.channels.manager as _manager_mod
         from app.channels.manager import ChannelManager
+
+        # Streaming is a channel capability, not a channel identity. No shipped
+        # channel sets supports_streaming=True, so declare it for this test.
+        monkeypatch.setitem(_manager_mod.CHANNEL_CAPABILITIES, "slack", {"supports_streaming": True})
 
         monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
 
@@ -1524,7 +1543,7 @@ class TestChannelManager:
             await manager.start()
 
             inbound = InboundMessage(
-                channel_name="feishu",
+                channel_name="slack",
                 chat_id="chat1",
                 user_id="user1",
                 text="/bootstrap hello",
@@ -1904,333 +1923,6 @@ class TestHandleChatWithArtifacts:
         _run(go())
 
 
-class TestFeishuChannel:
-    def test_prepare_inbound_publishes_without_waiting_for_running_card(self):
-        from app.channels.feishu import FeishuChannel
-
-        async def go():
-            bus = MessageBus()
-            bus.publish_inbound = AsyncMock()
-            channel = FeishuChannel(bus, config={})
-
-            reply_started = asyncio.Event()
-            release_reply = asyncio.Event()
-
-            async def slow_reply(message_id: str, text: str) -> str:
-                reply_started.set()
-                await release_reply.wait()
-                return "om-running-card"
-
-            channel._add_reaction = AsyncMock()
-            channel._reply_card = AsyncMock(side_effect=slow_reply)
-
-            inbound = InboundMessage(
-                channel_name="feishu",
-                chat_id="chat-1",
-                user_id="user-1",
-                text="hello",
-                thread_ts="om-source-msg",
-            )
-
-            prepare_task = asyncio.create_task(channel._prepare_inbound("om-source-msg", inbound))
-
-            await _wait_for(lambda: bus.publish_inbound.await_count == 1)
-            await prepare_task
-
-            assert reply_started.is_set()
-            assert "om-source-msg" in channel._running_card_tasks
-            assert channel._reply_card.await_count == 1
-
-            release_reply.set()
-            await _wait_for(lambda: channel._running_card_ids.get("om-source-msg") == "om-running-card")
-            await _wait_for(lambda: "om-source-msg" not in channel._running_card_tasks)
-
-        _run(go())
-
-    def test_prepare_inbound_and_send_share_running_card_task(self):
-        from app.channels.feishu import FeishuChannel
-
-        async def go():
-            bus = MessageBus()
-            bus.publish_inbound = AsyncMock()
-            channel = FeishuChannel(bus, config={})
-            channel._api_client = MagicMock()
-
-            reply_started = asyncio.Event()
-            release_reply = asyncio.Event()
-
-            async def slow_reply(message_id: str, text: str) -> str:
-                reply_started.set()
-                await release_reply.wait()
-                return "om-running-card"
-
-            channel._add_reaction = AsyncMock()
-            channel._reply_card = AsyncMock(side_effect=slow_reply)
-            channel._update_card = AsyncMock()
-
-            inbound = InboundMessage(
-                channel_name="feishu",
-                chat_id="chat-1",
-                user_id="user-1",
-                text="hello",
-                thread_ts="om-source-msg",
-            )
-
-            prepare_task = asyncio.create_task(channel._prepare_inbound("om-source-msg", inbound))
-            await _wait_for(lambda: bus.publish_inbound.await_count == 1)
-            await _wait_for(reply_started.is_set)
-
-            send_task = asyncio.create_task(
-                channel.send(
-                    OutboundMessage(
-                        channel_name="feishu",
-                        chat_id="chat-1",
-                        thread_id="thread-1",
-                        text="Hello",
-                        is_final=False,
-                        thread_ts="om-source-msg",
-                    )
-                )
-            )
-
-            await asyncio.sleep(0)
-            assert channel._reply_card.await_count == 1
-
-            release_reply.set()
-            await prepare_task
-            await send_task
-
-            assert channel._reply_card.await_count == 1
-            channel._update_card.assert_awaited_once_with("om-running-card", "Hello")
-            assert "om-source-msg" not in channel._running_card_tasks
-
-        _run(go())
-
-    def test_streaming_reuses_single_running_card(self):
-        from lark_oapi.api.im.v1 import (
-            CreateMessageReactionRequest,
-            CreateMessageReactionRequestBody,
-            Emoji,
-            PatchMessageRequest,
-            PatchMessageRequestBody,
-            ReplyMessageRequest,
-            ReplyMessageRequestBody,
-        )
-
-        from app.channels.feishu import FeishuChannel
-
-        async def go():
-            bus = MessageBus()
-            channel = FeishuChannel(bus, config={})
-
-            channel._api_client = MagicMock()
-            channel._ReplyMessageRequest = ReplyMessageRequest
-            channel._ReplyMessageRequestBody = ReplyMessageRequestBody
-            channel._PatchMessageRequest = PatchMessageRequest
-            channel._PatchMessageRequestBody = PatchMessageRequestBody
-            channel._CreateMessageReactionRequest = CreateMessageReactionRequest
-            channel._CreateMessageReactionRequestBody = CreateMessageReactionRequestBody
-            channel._Emoji = Emoji
-
-            reply_response = MagicMock()
-            reply_response.data.message_id = "om-running-card"
-            channel._api_client.im.v1.message.reply = MagicMock(return_value=reply_response)
-            channel._api_client.im.v1.message.patch = MagicMock()
-            channel._api_client.im.v1.message_reaction.create = MagicMock()
-
-            await channel._send_running_reply("om-source-msg")
-
-            await channel.send(
-                OutboundMessage(
-                    channel_name="feishu",
-                    chat_id="chat-1",
-                    thread_id="thread-1",
-                    text="Hello",
-                    is_final=False,
-                    thread_ts="om-source-msg",
-                )
-            )
-            await channel.send(
-                OutboundMessage(
-                    channel_name="feishu",
-                    chat_id="chat-1",
-                    thread_id="thread-1",
-                    text="Hello world",
-                    is_final=True,
-                    thread_ts="om-source-msg",
-                )
-            )
-
-            assert channel._api_client.im.v1.message.reply.call_count == 1
-            assert channel._api_client.im.v1.message.patch.call_count == 2
-            assert channel._api_client.im.v1.message_reaction.create.call_count == 1
-            assert "om-source-msg" not in channel._running_card_ids
-            assert "om-source-msg" not in channel._running_card_tasks
-
-            first_patch_request = channel._api_client.im.v1.message.patch.call_args_list[0].args[0]
-            final_patch_request = channel._api_client.im.v1.message.patch.call_args_list[1].args[0]
-            assert first_patch_request.message_id == "om-running-card"
-            assert final_patch_request.message_id == "om-running-card"
-            assert json.loads(first_patch_request.body.content)["elements"][0]["content"] == "Hello"
-            assert json.loads(final_patch_request.body.content)["elements"][0]["content"] == "Hello world"
-            assert json.loads(final_patch_request.body.content)["config"]["update_multi"] is True
-
-        _run(go())
-
-
-class TestWeComChannel:
-    def test_publish_ws_inbound_starts_stream_and_publishes_message(self, monkeypatch):
-        from app.channels.wecom import WeComChannel
-
-        async def go():
-            bus = MessageBus()
-            bus.publish_inbound = AsyncMock()
-            channel = WeComChannel(bus, config={})
-            channel._ws_client = SimpleNamespace(reply_stream=AsyncMock())
-
-            monkeypatch.setitem(
-                __import__("sys").modules,
-                "aibot",
-                SimpleNamespace(generate_req_id=lambda prefix: "stream-1"),
-            )
-
-            frame = {
-                "body": {
-                    "msgid": "msg-1",
-                    "from": {"userid": "user-1"},
-                    "aibotid": "bot-1",
-                    "chattype": "single",
-                }
-            }
-            files = [{"type": "image", "url": "https://example.com/image.png"}]
-
-            await channel._publish_ws_inbound(frame, "hello", files=files)
-
-            channel._ws_client.reply_stream.assert_awaited_once_with(frame, "stream-1", "Working on it...", False)
-            bus.publish_inbound.assert_awaited_once()
-
-            inbound = bus.publish_inbound.await_args.args[0]
-            assert inbound.channel_name == "wecom"
-            assert inbound.chat_id == "user-1"
-            assert inbound.user_id == "user-1"
-            assert inbound.text == "hello"
-            assert inbound.thread_ts == "msg-1"
-            assert inbound.topic_id == "user-1"
-            assert inbound.files == files
-            assert inbound.metadata == {"aibotid": "bot-1", "chattype": "single"}
-            assert channel._ws_frames["msg-1"] is frame
-            assert channel._ws_stream_ids["msg-1"] == "stream-1"
-
-        _run(go())
-
-    def test_publish_ws_inbound_uses_configured_working_message(self, monkeypatch):
-        from app.channels.wecom import WeComChannel
-
-        async def go():
-            bus = MessageBus()
-            bus.publish_inbound = AsyncMock()
-            channel = WeComChannel(bus, config={"working_message": "Please wait..."})
-            channel._ws_client = SimpleNamespace(reply_stream=AsyncMock())
-            channel._working_message = "Please wait..."
-
-            monkeypatch.setitem(
-                __import__("sys").modules,
-                "aibot",
-                SimpleNamespace(generate_req_id=lambda prefix: "stream-1"),
-            )
-
-            frame = {
-                "body": {
-                    "msgid": "msg-1",
-                    "from": {"userid": "user-1"},
-                }
-            }
-
-            await channel._publish_ws_inbound(frame, "hello")
-
-            channel._ws_client.reply_stream.assert_awaited_once_with(frame, "stream-1", "Please wait...", False)
-
-        _run(go())
-
-    def test_on_outbound_sends_attachment_before_clearing_context(self, tmp_path):
-        from app.channels.wecom import WeComChannel
-
-        async def go():
-            bus = MessageBus()
-            channel = WeComChannel(bus, config={})
-
-            frame = {"body": {"msgid": "msg-1"}}
-            ws_client = SimpleNamespace(
-                reply_stream=AsyncMock(),
-                reply=AsyncMock(),
-            )
-            channel._ws_client = ws_client
-            channel._ws_frames["msg-1"] = frame
-            channel._ws_stream_ids["msg-1"] = "stream-1"
-            channel._upload_media_ws = AsyncMock(return_value="media-1")
-
-            attachment_path = tmp_path / "image.png"
-            attachment_path.write_bytes(b"png")
-            attachment = ResolvedAttachment(
-                virtual_path="/mnt/user-data/outputs/image.png",
-                actual_path=attachment_path,
-                filename="image.png",
-                mime_type="image/png",
-                size=attachment_path.stat().st_size,
-                is_image=True,
-            )
-
-            msg = OutboundMessage(
-                channel_name="wecom",
-                chat_id="user-1",
-                thread_id="thread-1",
-                text="done",
-                attachments=[attachment],
-                is_final=True,
-                thread_ts="msg-1",
-            )
-
-            await channel._on_outbound(msg)
-
-            ws_client.reply_stream.assert_awaited_once_with(frame, "stream-1", "done", True)
-            channel._upload_media_ws.assert_awaited_once_with(
-                media_type="image",
-                filename="image.png",
-                path=str(attachment_path),
-                size=attachment.size,
-            )
-            ws_client.reply.assert_awaited_once_with(frame, {"image": {"media_id": "media-1"}, "msgtype": "image"})
-            assert "msg-1" not in channel._ws_frames
-            assert "msg-1" not in channel._ws_stream_ids
-
-        _run(go())
-
-    def test_send_falls_back_to_send_message_without_thread_context(self):
-        from app.channels.wecom import WeComChannel
-
-        async def go():
-            bus = MessageBus()
-            channel = WeComChannel(bus, config={})
-            channel._ws_client = SimpleNamespace(send_message=AsyncMock())
-
-            msg = OutboundMessage(
-                channel_name="wecom",
-                chat_id="user-1",
-                thread_id="thread-1",
-                text="hello",
-                thread_ts=None,
-            )
-
-            await channel.send(msg)
-
-            channel._ws_client.send_message.assert_awaited_once_with(
-                "user-1",
-                {"msgtype": "markdown", "markdown": {"content": "hello"}},
-            )
-
-        _run(go())
-
-
 class TestChannelService:
     def test_get_status_no_channels(self):
         from app.channels.service import ChannelService
@@ -2340,7 +2032,7 @@ class TestChannelService:
         async def go():
             service = ChannelService(
                 channels_config={
-                    "wecom": {"enabled": False, "bot_id": "corp123", "bot_secret": "secret"},
+                    "slack": {"enabled": False, "bot_token": "xoxb-test", "app_token": "xapp-test"},
                 }
             )
             with caplog.at_level(logging.WARNING, logger="app.channels.service"):
@@ -2348,7 +2040,7 @@ class TestChannelService:
             await service.stop()
 
         _run(go())
-        assert any("wecom" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+        assert any("slack" in r.message and r.levelno == logging.WARNING for r in caplog.records)
 
     def test_disabled_channel_with_int_creds_emits_warning(self, caplog):
         """Warning is emitted even when YAML-parsed integer credentials are present."""
@@ -2637,27 +2329,6 @@ class TestTelegramSendRetry:
                 await ch.send(msg, _max_retries=0)
 
         _run(go())
-
-
-class TestFeishuSendRetry:
-    def test_raises_runtime_error_when_no_attempts_configured(self):
-        from app.channels.feishu import FeishuChannel
-
-        async def go():
-            bus = MessageBus()
-            ch = FeishuChannel(bus=bus, config={"app_id": "id", "app_secret": "secret"})
-            ch._api_client = MagicMock()
-
-            msg = OutboundMessage(channel_name="feishu", chat_id="chat", thread_id="t1", text="hello")
-            with pytest.raises(RuntimeError, match="without an exception"):
-                await ch.send(msg, _max_retries=0)
-
-        _run(go())
-
-
-# ---------------------------------------------------------------------------
-# Telegram private-chat thread context tests
-# ---------------------------------------------------------------------------
 
 
 def _make_telegram_update(chat_type: str, message_id: int, *, reply_to_message_id: int | None = None, text: str = "hello"):

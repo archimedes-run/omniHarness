@@ -44,4 +44,11 @@ jobs:
 
       - name: Run unit tests of backend
         working-directory: backend
+        env:
+          # config.example.yaml interpolates $OPENAI_API_KEY, which is the right
+          # shape for a real user. Tests never call the provider — they mock the
+          # model — but config loading resolves the variable eagerly and raises
+          # if it is unset. A placeholder keeps the example honest for users
+          # without making the suite depend on a real secret.
+          OPENAI_API_KEY: placeholder-not-a-real-key
         run: make test
