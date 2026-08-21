@@ -156,11 +156,11 @@ foundation rather than being part of it.
 **Independent test**: Drive a watched session into a waiting state; confirm exactly one message
 naming that session, and none while it stays blocked.
 
-- [ ] T056 [US1] Wire the watcher source through evaluation to `release()` in `backend/app/trigger_engine/engine.py`, so a waiting-on-user event composes a prompt, injects a turn, and delivers the reply (FR-007, FR-008)
-- [ ] T057 [US1] Implement prompt-template interpolation from event fields in `backend/app/trigger_engine/config.py` (FR-004)
-- [ ] T058 [P] [US1] Test the blocked-session path end to end in `backend/tests/trigger_engine/test_us1_blocked_session.py` — one delivered message within the bound, naming the session and its apparent question (SC-001)
-- [ ] T059 [P] [US1] Test no-repetition in `test_us1_blocked_session.py` — a session that stays blocked produces no second message; one answered and blocked again on a **different** question does (SC-002, SC-002a)
-- [ ] T060 [P] [US1] Test non-matching rules in `test_us1_blocked_session.py` — a rule whose criteria do not cover the event does not fire (Story 1 scenario 4)
+- [X] T056 [US1] Wire the watcher source through evaluation to `release()` in `backend/app/trigger_engine/engine.py`, so a waiting-on-user event composes a prompt, injects a turn, and delivers the reply (FR-007, FR-008)
+- [X] T057 [US1] Implement prompt-template interpolation from event fields in `backend/app/trigger_engine/config.py` (FR-004)
+- [X] T058 [P] [US1] Test the blocked-session path end to end in `backend/tests/trigger_engine/test_us1_blocked_session.py` — one delivered message within the bound, naming the session and its apparent question (SC-001)
+- [X] T059 [P] [US1] Test no-repetition in `test_us1_blocked_session.py` — a session that stays blocked produces no second message; one answered and blocked again on a **different** question does (SC-002, SC-002a)
+- [X] T060 [P] [US1] Test non-matching rules in `test_us1_blocked_session.py` — a rule whose criteria do not cover the event does not fire (Story 1 scenario 4)
 
 **Checkpoint**: US1 is independently shippable. **This is the MVP** — a blocked session reaching
 your phone is the whole payoff for Feature 001's unconsumed event.

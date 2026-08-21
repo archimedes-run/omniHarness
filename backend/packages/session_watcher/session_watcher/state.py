@@ -24,8 +24,22 @@ MAX_EVENTS = 20
 
 DEFAULT_INACTIVITY = timedelta(minutes=5)
 #: How long a session must sit on an unanswered assistant turn before we call it
-#: possibly-blocked. Short, deliberately: see WAITING_BIAS below.
+#: possibly-blocked. Short, deliberately: see the error-direction note below.
 DEFAULT_WAITING_AFTER = timedelta(seconds=45)
+#: How long a session STAYS possibly-blocked before it reads as simply finished.
+#:
+#: Deliberately NOT the inactivity period. Bounding it by inactivity (5 minutes)
+#: meant a session blocked six minutes ago reported as "finished", which defeats
+#: the point of the state: the whole reason to know a session is blocked is that
+#: you are AWAY, and being away for six minutes is not the interesting case.
+#: Found by running feature 002's blocked-session alert against a real session
+#: that had been waiting eight minutes.
+#:
+#: The upper bound exists so an old finished session that happened to end on
+#: "Anything else?" does not read as waiting forever. Twelve hours is a stated
+#: default, not a measured one: long enough to cover a working day away, short
+#: enough that yesterday's conversation is not still asking.
+DEFAULT_WAITING_UNTIL = timedelta(hours=12)
 
 
 @dataclass
@@ -36,6 +50,8 @@ class StateConfig:
     #: How long an unanswered assistant turn sits before we surface it as
     #: possibly-blocked.
     waiting_after: timedelta = DEFAULT_WAITING_AFTER
+    #: ...and how long it stays that way before reading as finished.
+    waiting_until: timedelta = DEFAULT_WAITING_UNTIL
 
 
 def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None) -> Session:
@@ -69,6 +85,7 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
         now=now,
         inactivity=config.inactivity,
         waiting_after=config.waiting_after,
+        waiting_until=config.waiting_until,
         asked_question=_asked_question(dated),
     )
     session = Session(
@@ -101,6 +118,7 @@ def _classify_state(
     now: datetime,
     inactivity: timedelta,
     waiting_after: timedelta,
+    waiting_until: timedelta,
     asked_question: bool,
 ) -> tuple[SessionState, IdleReason | None]:
     """Resolve state. Read the ordering comments before reordering anything.
@@ -131,7 +149,7 @@ def _classify_state(
     # plausibly owed. Bounded by `inactivity` so an old finished session that
     # happened to end on "Anything else?" reads as finished, not as waiting
     # forever.
-    if ended_turn and asked_question and waiting_after <= quiet < inactivity:
+    if ended_turn and asked_question and waiting_after <= quiet < waiting_until:
         return SessionState.WAITING_ON_USER, None
 
     # MARKER FIRST. An observed end-of-turn ends the turn, regardless of how long

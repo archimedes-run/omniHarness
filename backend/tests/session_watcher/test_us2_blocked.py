@@ -127,10 +127,35 @@ def test_a_blocked_permission_prompt_still_surfaces_eventually() -> None:
 
 
 def test_old_finished_session_ending_in_a_question_reads_as_finished() -> None:
-    """Bounded by inactivity, or "Anything else?" would mean waiting forever."""
-    s = resolve(_ref([_rec(600, stop_reason="end_turn", text="Anything else?")]), now=NOW, config=CFG)
+    """Bounded by its OWN window, or "Anything else?" would wait forever.
+
+    The bound was originally `inactivity` (5 minutes), which meant a session
+    blocked six minutes ago reported as finished — defeating the point of the
+    state, since the reason to know a session is blocked is that you are AWAY.
+    Found by running feature 002's alert against a session waiting eight
+    minutes. The window is now its own parameter, defaulting to 12 hours.
+    """
+    s = resolve(_ref([_rec(60 * 20, stop_reason="end_turn", text="Anything else?")]), now=NOW, config=CFG)
     assert s.state is SessionState.IDLE
     assert s.idle_reason is IdleReason.COMPLETED
+
+
+def test_a_session_blocked_for_hours_is_still_reported_as_waiting() -> None:
+    """The case the old bound got wrong, asserted directly.
+
+    Being away is the premise of the alert; a bound shorter than "away" makes
+    the state unreachable exactly when it matters.
+    """
+    s = resolve(_ref([_rec(180, stop_reason="end_turn", text="Which branch should I target?")]), now=NOW, config=CFG)
+    assert s.state is SessionState.WAITING_ON_USER
+
+
+def test_the_waiting_window_is_configurable() -> None:
+    recs = [_rec(120, stop_reason="end_turn", text="Proceed?")]
+    patient = StateConfig(inactivity=timedelta(minutes=5), waiting_after=timedelta(seconds=45), waiting_until=timedelta(hours=12))
+    impatient = StateConfig(inactivity=timedelta(minutes=5), waiting_after=timedelta(seconds=45), waiting_until=timedelta(minutes=30))
+    assert resolve(_ref(recs), now=NOW, config=patient).state is SessionState.WAITING_ON_USER
+    assert resolve(_ref(recs), now=NOW, config=impatient).state is SessionState.IDLE
 
 
 def test_question_detection_tolerates_trailing_markup() -> None:
