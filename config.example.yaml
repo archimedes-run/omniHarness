@@ -38,6 +38,16 @@ token_usage:
 # Configure available LLM models for the agent to use
 
 models:
+  # At least one model is required — `models:` with everything commented out
+  # parses as null and fails validation, so copying this file produced an
+  # unusable config. This entry is the minimal working shape; replace or add to
+  # it, and set the referenced environment variable.
+  - name: default
+    display_name: OpenAI / GPT-4o
+    use: langchain_openai:ChatOpenAI
+    model: gpt-4o
+    api_key: $OPENAI_API_KEY
+
   # Example: OpenAI model
   # - name: gpt-4
   #   display_name: GPT-4
