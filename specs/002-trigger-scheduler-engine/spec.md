@@ -296,6 +296,12 @@ change takes effect on the next evaluation without a restart.
 - **FR-011c**: A rule thread MUST retain only a rolling window of its most recent firings, with
   a stated, configurable default. Beyond that window, history is context ballast that degrades
   the continuity the thread exists to provide.
+- **FR-012a**: Every firing and its outcome MUST be appended to the local audit log named by
+  Constitution Article VIII. Rationale: Feature 001 recorded that no audit log was required
+  because every tool was Tier 1 and no approval was relayed, and that the obligation would arrive
+  with the first feature that acts without a human in the loop. **This is that feature.** The
+  requirement lives here rather than only in the plan so that regenerating tasks from the
+  specification cannot silently drop a constitutional obligation.
 - **FR-012**: Each fired rule MUST record an outcome — delivered, suppressed, queued, or failed
   — with the reason.
 
@@ -431,7 +437,7 @@ provide.*
 
 - **Rule**: A declared intent to speak first. Attributes: id, trigger type, match criteria,
   target thread, prompt template, output destination, urgency, enabled state.
-- **Trigger Event**: The occurrence that causes evaluation — a scheduled time reached, a watcher
+- **TriggerEvent** (written as one word in plan and tasks): The occurrence that causes evaluation — a scheduled time reached, a watcher
   event received, a task completion. Carries a stable identity used to guarantee at-most-once
   firing per event.
 - **Firing**: One rule's response to one event. Carries the composed prompt, the target thread,
@@ -488,6 +494,9 @@ provide.*
   error, in 100% of trials.
 - **SC-010**: A rule that raises an error does not prevent any other rule from being evaluated in
   the same cycle, in 100% of trials.
+- **SC-010a**: Every firing appears in the audit log with its outcome and reason, including
+  firings that were suppressed, queued, expired or failed — verified by driving one of each and
+  reading the log back, in 100% of trials.
 - **SC-011**: The engine introduces no dependency on agent-core internals, verified automatically
   on every change to the codebase.
 - **SC-012**: With no rule due, the engine's ongoing resource consumption is indistinguishable
