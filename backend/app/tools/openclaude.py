@@ -10,7 +10,7 @@ import asyncio
 import logging
 import re
 import shlex
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -40,18 +40,15 @@ class OpenClaudeCodingTool(BaseTool):
     """
 
     name: str = "openclaude_coder"
-    description: str = (
-        "Delegate a coding task to OpenClaude, an AI coding agent. "
-        "Provide a clear, self-contained prompt describing exactly what to implement or fix."
-    )
+    description: str = "Delegate a coding task to OpenClaude, an AI coding agent. Provide a clear, self-contained prompt describing exactly what to implement or fix."
     args_schema: type[BaseModel] = _Input
     timeout_seconds: int = Field(default=300)
 
-    def _run(self, prompt: str, run_manager: Optional[Any] = None) -> str:
+    def _run(self, prompt: str, run_manager: Any | None = None) -> str:
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self._arun(prompt))
 
-    async def _arun(self, prompt: str, run_manager: Optional[Any] = None) -> str:
+    async def _arun(self, prompt: str, run_manager: Any | None = None) -> str:
         cmd = f"CLAUDE_CODE_USE_OPENAI=1 NO_COLOR=1 FORCE_COLOR=0 openclaude {shlex.quote(prompt)}"
         logger.debug("openclaude invocation: %s", cmd)
         try:
@@ -69,7 +66,7 @@ class OpenClaudeCodingTool(BaseTool):
                 if err:
                     logger.warning("openclaude stderr: %s", err)
             return _strip_ansi(stdout.decode(errors="replace")).strip()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             process.kill()
             await process.communicate()
             return f"Error: OpenClaude execution timed out after {self.timeout_seconds} seconds."

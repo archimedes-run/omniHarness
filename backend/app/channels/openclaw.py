@@ -45,8 +45,7 @@ class OpenClawChannel(Channel):
         self.bus.subscribe_outbound(self._on_outbound)
         self._running = True
         logger.info(
-            "OpenClaw channel started — webhook: POST /api/channels/openclaw/webhook, "
-            "outbound_url=%s",
+            "OpenClaw channel started — webhook: POST /api/channels/openclaw/webhook, outbound_url=%s",
             self._openclaw_url or "(not configured)",
         )
 
