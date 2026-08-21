@@ -6,7 +6,6 @@ import asyncio
 import logging
 import mimetypes
 import re
-import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -32,14 +31,6 @@ DEFAULT_RUN_CONTEXT: dict[str, Any] = {
     "thinking_enabled": True,
     "is_plan_mode": False,
     "subagent_enabled": False,
-}
-STREAM_UPDATE_MIN_INTERVAL_SECONDS = 0.35
-THREAD_BUSY_MESSAGE = "This conversation is already processing another request. Please wait for it to finish and try again."
-
-CHANNEL_CAPABILITIES = {
-    "discord": {"supports_streaming": False},
-    "slack": {"supports_streaming": False},
-    "telegram": {"supports_streaming": False},
 }
 
 InboundFileReader = Callable[[dict[str, Any], httpx.AsyncClient], Awaitable[bytes | None]]
@@ -170,98 +161,6 @@ def _extract_response_text(result: dict | list) -> str:
                 if text:
                     return text
     return ""
-
-
-def _extract_text_content(content: Any) -> str:
-    """Extract text from a streaming payload content field."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, Mapping):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-                else:
-                    nested = block.get("content")
-                    if isinstance(nested, str):
-                        parts.append(nested)
-        return "".join(parts)
-    if isinstance(content, Mapping):
-        for key in ("text", "content"):
-            value = content.get(key)
-            if isinstance(value, str):
-                return value
-    return ""
-
-
-def _merge_stream_text(existing: str, chunk: str) -> str:
-    """Merge either delta text or cumulative text into a single snapshot."""
-    if not chunk:
-        return existing
-    if not existing or chunk == existing:
-        return chunk or existing
-    if chunk.startswith(existing):
-        return chunk
-    if existing.endswith(chunk):
-        return existing
-    return existing + chunk
-
-
-def _extract_stream_message_id(payload: Any, metadata: Any) -> str | None:
-    """Best-effort extraction of the streamed AI message identifier."""
-    candidates = [payload, metadata]
-    if isinstance(payload, Mapping):
-        candidates.append(payload.get("kwargs"))
-
-    for candidate in candidates:
-        if not isinstance(candidate, Mapping):
-            continue
-        for key in ("id", "message_id"):
-            value = candidate.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
-
-
-def _accumulate_stream_text(
-    buffers: dict[str, str],
-    current_message_id: str | None,
-    event_data: Any,
-) -> tuple[str | None, str | None]:
-    """Convert a ``messages-tuple`` event into the latest displayable AI text."""
-    payload = event_data
-    metadata: Any = None
-    if isinstance(event_data, (list, tuple)):
-        if event_data:
-            payload = event_data[0]
-        if len(event_data) > 1:
-            metadata = event_data[1]
-
-    if isinstance(payload, str):
-        message_id = current_message_id or "__default__"
-        buffers[message_id] = _merge_stream_text(buffers.get(message_id, ""), payload)
-        return buffers[message_id], message_id
-
-    if not isinstance(payload, Mapping):
-        return None, current_message_id
-
-    payload_type = str(payload.get("type", "")).lower()
-    if "tool" in payload_type:
-        return None, current_message_id
-
-    text = _extract_text_content(payload.get("content"))
-    if not text and isinstance(payload.get("kwargs"), Mapping):
-        text = _extract_text_content(payload["kwargs"].get("content"))
-    if not text:
-        return None, current_message_id
-
-    message_id = _extract_stream_message_id(payload, metadata) or current_message_id or "__default__"
-    buffers[message_id] = _merge_stream_text(buffers.get(message_id, ""), text)
-    return buffers[message_id], message_id
 
 
 def _extract_artifacts(result: dict | list) -> list[str]:
@@ -529,17 +428,6 @@ class ChannelManager:
         self._running = False
         self._task: asyncio.Task | None = None
 
-    @staticmethod
-    def _channel_supports_streaming(channel_name: str) -> bool:
-        from .service import get_channel_service
-
-        service = get_channel_service()
-        if service:
-            channel = service.get_channel(channel_name)
-            if channel is not None:
-                return channel.supports_streaming
-        return CHANNEL_CAPABILITIES.get(channel_name, {}).get("supports_streaming", False)
-
     def _resolve_session_layer(self, msg: InboundMessage) -> tuple[dict[str, Any], dict[str, Any]]:
         channel_layer = _as_dict(self._channel_sessions.get(msg.channel_name))
         users_layer = _as_dict(channel_layer.get("users"))
@@ -731,18 +619,6 @@ class ChannelManager:
         uploaded = await _ingest_inbound_files(thread_id, msg)
         if uploaded:
             msg.text = f"{_format_uploaded_files_block(uploaded)}\n\n{msg.text}".strip()
-
-        if self._channel_supports_streaming(msg.channel_name):
-            await self._handle_streaming_chat(
-                client,
-                msg,
-                thread_id,
-                assistant_id,
-                run_config,
-                run_context,
-            )
-            return
-
         logger.info("[Manager] invoking runs.wait(thread_id=%s, text=%r)", thread_id, msg.text[:100])
         result = await client.runs.wait(
             thread_id,
@@ -782,112 +658,6 @@ class ChannelManager:
         )
         logger.info("[Manager] publishing outbound message to bus: channel=%s, chat_id=%s", msg.channel_name, msg.chat_id)
         await self.bus.publish_outbound(outbound)
-
-    async def _handle_streaming_chat(
-        self,
-        client,
-        msg: InboundMessage,
-        thread_id: str,
-        assistant_id: str,
-        run_config: dict[str, Any],
-        run_context: dict[str, Any],
-    ) -> None:
-        logger.info("[Manager] invoking runs.stream(thread_id=%s, text=%r)", thread_id, msg.text[:100])
-
-        last_values: dict[str, Any] | list | None = None
-        streamed_buffers: dict[str, str] = {}
-        current_message_id: str | None = None
-        latest_text = ""
-        last_published_text = ""
-        last_publish_at = 0.0
-        stream_error: BaseException | None = None
-
-        try:
-            async for chunk in client.runs.stream(
-                thread_id,
-                assistant_id,
-                input={"messages": [{"role": "human", "content": msg.text}]},
-                config=run_config,
-                context=run_context,
-                stream_mode=["messages-tuple", "values"],
-                multitask_strategy="reject",
-            ):
-                event = getattr(chunk, "event", "")
-                data = getattr(chunk, "data", None)
-
-                if event == "messages-tuple":
-                    accumulated_text, current_message_id = _accumulate_stream_text(streamed_buffers, current_message_id, data)
-                    if accumulated_text:
-                        latest_text = accumulated_text
-                elif event == "values" and isinstance(data, (dict, list)):
-                    last_values = data
-                    snapshot_text = _extract_response_text(data)
-                    if snapshot_text:
-                        latest_text = snapshot_text
-
-                if not latest_text or latest_text == last_published_text:
-                    continue
-
-                now = time.monotonic()
-                if last_published_text and now - last_publish_at < STREAM_UPDATE_MIN_INTERVAL_SECONDS:
-                    continue
-
-                await self.bus.publish_outbound(
-                    OutboundMessage(
-                        channel_name=msg.channel_name,
-                        chat_id=msg.chat_id,
-                        thread_id=thread_id,
-                        text=latest_text,
-                        is_final=False,
-                        thread_ts=msg.thread_ts,
-                        metadata=_slim_metadata(msg.metadata),
-                    )
-                )
-                last_published_text = latest_text
-                last_publish_at = now
-        except Exception as exc:
-            stream_error = exc
-            if _is_thread_busy_error(exc):
-                logger.warning("[Manager] thread busy (concurrent run rejected): thread_id=%s", thread_id)
-            else:
-                logger.exception("[Manager] streaming error: thread_id=%s", thread_id)
-        finally:
-            result = last_values if last_values is not None else {"messages": [{"type": "ai", "content": latest_text}]}
-            response_text = _extract_response_text(result)
-            artifacts = _extract_artifacts(result)
-            response_text, attachments = _prepare_artifact_delivery(thread_id, response_text, artifacts)
-
-            if not response_text:
-                if attachments:
-                    response_text = _format_artifact_text([attachment.virtual_path for attachment in attachments])
-                elif stream_error:
-                    if _is_thread_busy_error(stream_error):
-                        response_text = THREAD_BUSY_MESSAGE
-                    else:
-                        response_text = "An error occurred while processing your request. Please try again."
-                else:
-                    response_text = latest_text or "(No response from agent)"
-
-            logger.info(
-                "[Manager] streaming response completed: thread_id=%s, response_len=%d, artifacts=%d, error=%s",
-                thread_id,
-                len(response_text),
-                len(artifacts),
-                stream_error,
-            )
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel_name=msg.channel_name,
-                    chat_id=msg.chat_id,
-                    thread_id=thread_id,
-                    text=response_text,
-                    artifacts=artifacts,
-                    attachments=attachments,
-                    is_final=True,
-                    thread_ts=msg.thread_ts,
-                    metadata=_slim_metadata(msg.metadata),
-                )
-            )
 
     # -- command handling --------------------------------------------------
 

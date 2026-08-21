@@ -31,10 +31,6 @@ class Channel(ABC):
     def is_running(self) -> bool:
         return self._running
 
-    @property
-    def supports_streaming(self) -> bool:
-        return False
-
     # -- lifecycle ---------------------------------------------------------
 
     @abstractmethod
