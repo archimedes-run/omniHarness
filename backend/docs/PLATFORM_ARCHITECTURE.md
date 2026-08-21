@@ -59,6 +59,28 @@ Phase 1 will add workflow execution support.
 
 ---
 
+## IM Channels — no streaming path (deliberate)
+
+`ChannelManager` delivers an assistant reply with a single `runs.wait` call. There is **no
+incremental/streaming delivery path**, and `Channel` has no `supports_streaming` capability.
+
+One existed until 2026-08-21 (`_handle_streaming_chat`, ~109 lines, plus its stream-accumulation
+helpers and a `CHANNEL_CAPABILITIES` table). It was unreachable: Feishu was the only channel that
+set `supports_streaming = True`, and Feishu was never ported here from the DeerFlow heritage —
+`app/channels/feishu.py` has no history in this repo. The manager-side code arrived; its only
+possible caller did not.
+
+**It was deleted rather than kept for a future streaming consumer, and that was a deliberate
+call.** The next thing likely to want streaming is a local spoken channel. Voice needs
+audio-chunk semantics — utterance boundaries, barge-in, partial-transcript revision — not the
+message-patch semantics this code implemented (edit-a-sent-message-in-place, throttled by a
+0.35s minimum interval). Keeping it would have preserved code that was unused now *and* wrong
+for its expected consumer later, in a shape convincing enough to be adopted instead of designed.
+
+If you are implementing streaming: design it against the consumer you actually have. Recover the
+deleted code with `git log -- backend/app/channels/manager.py` if you want it as reference, not
+as a starting point.
+
 ## Platform Event Envelope
 
 **Invariant: there is one events table and one event store. Product objects emit through
