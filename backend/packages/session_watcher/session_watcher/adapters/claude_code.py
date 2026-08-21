@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from ..events import classify
 from ..record_source import RecordSource, SkipReason
@@ -65,6 +65,20 @@ def _text_of(message: object) -> str:
     return ""
 
 
+def _leaf(cwd: str) -> str:
+    """Last path segment of a cwd recorded on EITHER platform (FR-020).
+
+    Not `Path(cwd).name`: on macOS/Linux that returns the whole string for a
+    backslash path, so a session recorded on Windows would be named
+    "C:\\Users\\dev\\projects\\repo" instead of "repo". The watcher normally reads
+    its own host's records, but the adapter is the wrong place to assume that —
+    and a mangled name is worse than a missing one, because it looks deliberate.
+    """
+    if "\\" in cwd and "/" not in cwd:
+        return PureWindowsPath(cwd).name or cwd
+    return PurePosixPath(cwd).name or cwd
+
+
 def _parse_ts(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -102,7 +116,7 @@ class ClaudeCodeAdapter(SessionAdapter):
         branch = record.get("gitBranch")
         project = ""
         if isinstance(cwd, str) and cwd:
-            project = Path(cwd).name
+            project = _leaf(cwd)
             if isinstance(branch, str) and branch:
                 project = f"{project}@{branch}"
         return ParsedRecord(

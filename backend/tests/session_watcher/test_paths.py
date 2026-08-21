@@ -63,3 +63,49 @@ def test_stat_failure_on_candidate_is_survived(tmp_session_dir, make_record, mon
 
     monkeypatch.setattr(Path, "stat", boom)
     assert src.select_candidates(WINDOW) == []
+
+
+# --- T065: Windows path conventions (FR-020) --------------------------------
+
+
+def test_pure_windows_paths_resolve_without_shelling_out() -> None:
+    """Path handling must be correct under Windows conventions.
+
+    Tested via PureWindowsPath rather than skipped-on-not-Windows, so it runs in
+    CI on macOS and Linux too. A skipped test is indistinguishable from a passing
+    one in a summary line, and this is a two-platform requirement.
+    """
+    from pathlib import PureWindowsPath
+
+    p = PureWindowsPath(r"C:\Users\dev\.claude\projects\-C--Users-dev-repo\s1.jsonl")
+    assert p.name == "s1.jsonl"
+    assert p.parent.name.startswith("-")  # the hyphen slug survives
+    assert p.suffix == ".jsonl"
+    # A Windows project slug encodes the drive; it must not be mangled.
+    assert "C--Users-dev-repo" in p.parent.name
+
+
+def test_windows_style_cwd_yields_a_sensible_project_name() -> None:
+    """The adapter derives project from `cwd`; that must work for both separators."""
+    from pathlib import PureWindowsPath
+
+    assert PureWindowsPath(r"C:\Users\dev\projects\darcy-repo").name == "darcy-repo"
+
+
+def test_adapter_project_extraction_handles_a_windows_cwd(tmp_session_dir, make_record) -> None:
+    from datetime import timedelta
+
+    from session_watcher.adapters.claude_code import ClaudeCodeAdapter
+    from session_watcher.record_source import RecordSource
+
+    root = tmp_session_dir(
+        [make_record(cwd=r"C:\Users\dev\projects\darcy-repo", git_branch="main")],
+        project_slug="-C--Users-dev-projects-darcy-repo",
+    )
+    refs = ClaudeCodeAdapter(RecordSource(root=root)).discover(timedelta(days=3650))
+    assert refs, "no session discovered under a Windows-style slug"
+    # Path(cwd).name on a posix host returns the WHOLE backslash string, which
+    # would name the project "C:\\Users\\dev\\projects\\darcy-repo@main". A mangled
+    # name is worse than a missing one because it looks deliberate.
+    assert refs[0].project == "darcy-repo@main", refs[0].project
+    assert "\\" not in refs[0].project

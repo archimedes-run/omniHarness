@@ -162,10 +162,10 @@ confirm only that session is named with its pending question — and that the wo
 **Independent test**: With one session running, ask about it by project name; confirm elapsed
 time, recent activity, and last message are accurate.
 
-- [ ] T056 [US3] Implement the `get_session_status` MCP tool in `backend/packages/session_watcher/session_watcher/server.py` — accepts a session id or project name, Tier 1, returning `found`, `ambiguous`, `candidates`, and `session` per the contract (FR-012, FR-013, FR-014)
-- [ ] T057 [US3] Implement `SessionDetail` assembly in `backend/packages/session_watcher/session_watcher/registry.py` — `started_at`, `elapsed_seconds`, and ordered `recent_events` each carrying summary provenance (FR-013, FR-008c)
-- [ ] T058 [P] [US3] Test detail retrieval in `backend/tests/session_watcher/test_us3_detail.py` — elapsed time and ordered activity summary are accurate; an unknown project yields "not found" rather than a similar session (FR-012)
-- [ ] T059 [P] [US3] Test ambiguity handling in `backend/tests/session_watcher/test_us3_detail.py` — a project reference matching two sessions returns `ambiguous` with candidates, and the assistant asks which one rather than picking (FR-017)
+- [X] T056 [US3] Implement the `get_session_status` MCP tool in `backend/packages/session_watcher/session_watcher/server.py` — accepts a session id or project name, Tier 1, returning `found`, `ambiguous`, `candidates`, and `session` per the contract (FR-012, FR-013, FR-014)
+- [X] T057 [US3] Implement `SessionDetail` assembly in `backend/packages/session_watcher/session_watcher/registry.py` — `started_at`, `elapsed_seconds`, and ordered `recent_events` each carrying summary provenance (FR-013, FR-008c)
+- [X] T058 [P] [US3] Test detail retrieval in `backend/tests/session_watcher/test_us3_detail.py` — elapsed time and ordered activity summary are accurate; an unknown project yields "not found" rather than a similar session (FR-012)
+- [X] T059 [P] [US3] Test ambiguity handling in `backend/tests/session_watcher/test_us3_detail.py` — a project reference matching two sessions returns `ambiguous` with candidates, and the assistant asks which one rather than picking (FR-017)
 
 ---
 
@@ -176,24 +176,24 @@ time, recent activity, and last message are accurate.
 **Independent test**: While the watcher runs, kill one session, let another complete, start a
 third; ask for the roll-up and confirm all three are represented correctly.
 
-- [ ] T060 [US4] Implement registry lifecycle transitions in `backend/packages/session_watcher/session_watcher/registry.py` — terminal sessions retain their terminal state; new sessions are discovered live; nothing requires a restart (FR-004, FR-005)
-- [ ] T061 [P] [US4] Test the kill/complete/start cycle in `backend/tests/session_watcher/test_us4_lifecycle.py` — all three reflected correctly with no restart; the killed session reports stalled and is described as possibly stalled or killed, not finished (SC-003, SC-004a)
-- [ ] T062 [P] [US4] Test sleep/wake in `backend/tests/session_watcher/test_us4_lifecycle.py` — after a simulated sleep/wake the watcher answers correctly for all previously known sessions with no user action (SC-006, FR-024)
-- [ ] T063 [P] [US4] Test late discovery in `backend/tests/session_watcher/test_us4_lifecycle.py` — a session started after the watcher launches appears without restart, and a pre-existing mid-run session is discovered rather than ignored until its next activity (FR-005, FR-005b)
+- [X] T060 [US4] Implement registry lifecycle transitions in `backend/packages/session_watcher/session_watcher/registry.py` — terminal sessions retain their terminal state; new sessions are discovered live; nothing requires a restart (FR-004, FR-005)
+- [X] T061 [P] [US4] Test the kill/complete/start cycle in `backend/tests/session_watcher/test_us4_lifecycle.py` — all three reflected correctly with no restart; the killed session reports stalled and is described as possibly stalled or killed, not finished (SC-003, SC-004a)
+- [X] T062 [P] [US4] Test sleep/wake in `backend/tests/session_watcher/test_us4_lifecycle.py` — after a simulated sleep/wake the watcher answers correctly for all previously known sessions with no user action (SC-006, FR-024)
+- [X] T063 [P] [US4] Test late discovery in `backend/tests/session_watcher/test_us4_lifecycle.py` — a session started after the watcher launches appears without restart, and a pre-existing mid-run session is discovered rather than ignored until its next activity (FR-005, FR-005b)
 
 ---
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T064 [P] Test the first-query latency smoke bound in `backend/tests/session_watcher/test_startup.py` — first status answerable within 5 s of launch regardless of history size. **This is a smoke assertion with generous margin and is explicitly NOT the mechanism protecting FR-005e** — T016 is (SC-004j)
-- [ ] T065 [P] Verify Windows path behaviour in `backend/tests/session_watcher/test_paths.py` — path handling correct under Windows conventions, including the hyphen-prefixed directory (FR-020)
-- [ ] T066 Test MCP surface stability in `backend/tests/session_watcher/test_contract.py` — the tool set, names, and arguments match [contracts/mcp-tools.md](./contracts/mcp-tools.md) exactly; adding an adapter must not change them. **Also assert sole-reachability**: disabling the `session-watcher` entry in `extensions_config.json` removes the capabilities entirely, leaving no residual path (FR-018b, FR-023, SC-008a). *SC-011 — that a second adapter needs no change beyond the adapter — is only fully verifiable once one exists; the tool-surface half is asserted here, the remainder deferred to that feature*
-- [ ] T067 [P] Confirm no write surface exists in `backend/tests/session_watcher/test_contract.py` — neither tool accepts a mutation argument and no third tool is registered. The observe-only limit is enforced by absence, not policy (FR-015, Article IV)
-- [ ] T068 [P] Test honest absence in `backend/tests/session_watcher/test_contract.py` — any field the watcher has not observed is returned as null and stated as absent; assert no field is ever populated with an estimate or a plausible-looking default (FR-016, Article X)
-- [ ] T069 Walk every scenario in [quickstart.md](./quickstart.md) manually against two real sessions and record results, including the documented idle-RSS measurement (Article VI, SC-009)
-- [ ] T070 [P] Write `backend/packages/session_watcher/README.md` — how to run on the host, the configurable values and their defaults (inactivity 5 min, heartbeat 30 s, staleness 90 s, window 24 h), and a plain statement that externally-started sessions are observe-only (FR-015, Article X)
-- [ ] T071 **Containerized end-to-end validation** — run the backend in Docker with the real watcher (not the Phase 1 spike) on the host; confirm it reads the host's `~/.claude` and answers a roll-up. The Phase 1 spike proved the transport; this proves the feature. Empirical validation of the FR-018a stdio exclusion (SC-008b, FR-018a, FR-021)
-- [ ] T072 Record gate-verification outcomes from T014, T017, and T030 in the PR description. **A gate whose failure was never observed is not done** (plan.md standing convention)
+- [X] T064 [P] Test the first-query latency smoke bound in `backend/tests/session_watcher/test_startup.py` — first status answerable within 5 s of launch regardless of history size. **This is a smoke assertion with generous margin and is explicitly NOT the mechanism protecting FR-005e** — T016 is (SC-004j)
+- [X] T065 [P] Verify Windows path behaviour in `backend/tests/session_watcher/test_paths.py` — path handling correct under Windows conventions, including the hyphen-prefixed directory (FR-020)
+- [X] T066 Test MCP surface stability in `backend/tests/session_watcher/test_contract.py` — the tool set, names, and arguments match [contracts/mcp-tools.md](./contracts/mcp-tools.md) exactly; adding an adapter must not change them. **Also assert sole-reachability**: disabling the `session-watcher` entry in `extensions_config.json` removes the capabilities entirely, leaving no residual path (FR-018b, FR-023, SC-008a). *SC-011 — that a second adapter needs no change beyond the adapter — is only fully verifiable once one exists; the tool-surface half is asserted here, the remainder deferred to that feature*
+- [X] T067 [P] Confirm no write surface exists in `backend/tests/session_watcher/test_contract.py` — neither tool accepts a mutation argument and no third tool is registered. The observe-only limit is enforced by absence, not policy (FR-015, Article IV)
+- [X] T068 [P] Test honest absence in `backend/tests/session_watcher/test_contract.py` — any field the watcher has not observed is returned as null and stated as absent; assert no field is ever populated with an estimate or a plausible-looking default (FR-016, Article X)
+- [X] T069 Walk every scenario in [quickstart.md](./quickstart.md) manually against two real sessions and record results, including the documented idle-RSS measurement (Article VI, SC-009)
+- [X] T070 [P] Write `backend/packages/session_watcher/README.md` — how to run on the host, the configurable values and their defaults (inactivity 5 min, heartbeat 30 s, staleness 90 s, window 24 h), and a plain statement that externally-started sessions are observe-only (FR-015, Article X)
+- [X] T071 **Containerized end-to-end validation** — run the backend in Docker with the real watcher (not the Phase 1 spike) on the host; confirm the containerized backend reaches it over SSE and receives real session data. **Scope corrected:** this demonstrates that the chosen transport works end to end. It does NOT validate the stdio exclusion — `~/.claude` is bind-mounted into the container (research.md R6b), so stdio is excluded on process-lifecycle grounds, which no runtime check here exercises. A validation that overclaims its own scope is the same defect as a gate that never fails (SC-008b, FR-018a, FR-021)
+- [X] T072 Record gate-verification outcomes from T014, T017, and T030 in [gate-verification.md](./gate-verification.md) (a PR description is not durable). **A gate whose failure was never observed is not done** (plan.md standing convention)
 
 ---
 

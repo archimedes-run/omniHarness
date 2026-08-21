@@ -21,9 +21,16 @@ tool-registration API; tools reach the agent from exactly two sources, `local:<s
 
 **Alternatives considered**:
 
-- *stdio MCP server* — **rejected, and the rejection is structural.** A stdio server is spawned as
-  a subprocess of the backend. When the backend runs in a container it cannot read the host's
-  `~/.claude`, which is the watcher's entire purpose (FR-021, FR-018a).
+- *stdio MCP server* — **rejected, and the rejection is structural — but not for the reason first
+  recorded here.** A stdio server is spawned and owned by its client and torn down with the
+  connection, so it cannot hold the registry, heartbeat, or filesystem observer this watcher needs
+  across calls; that makes FR-024a and the FR-011a tri-state unimplementable, container or no
+  container (FR-018a).
+
+  *Originally recorded as*: "when the backend runs in a container it cannot read the host's
+  `~/.claude`". **That is false** — the directory is bind-mounted into the container (R6b below).
+  Corrected rather than deleted, because the wrong reason had already propagated into the spec,
+  the contract, and the README.
 - *Custom gateway registration API* — rejected: does not exist, and building one would add a
   core-coupled surface where a standard protocol already suffices.
 
@@ -177,11 +184,24 @@ trace.
    > now pass after 15 bug fixes, documented in run_*.md files. Next action: run git init and
    > commit, since everything is currently untracked."
 
-   **Flagged as a possible FR-008 amendment, not adopted unilaterally**: preferring an existing
-   `away_summary` over mechanical derivation would improve summary quality at lower cost, but it
-   changes where summaries come from and belongs in a clarify pass rather than an implementation
-   decision. It also only covers 40% of sessions, so the mechanical path remains the default
-   regardless.
+   **Flagged as a candidate FR-008 amendment, not adopted.** It is tempting — better prose,
+   lower cost — but three objections stand, and the last two matter more than the first:
+
+   - **Coverage**: present in only 17 of 42 sessions (~40%), so the mechanical path remains the
+     default regardless and both would have to coexist.
+   - **Semantic mismatch**: `away_summary` summarizes the WHOLE SESSION, while the roll-up line
+     reports LAST ACTIVITY. Substituting one for the other makes an incoherent roll-up — some
+     lines answering "what has this session been doing overall" and others answering "what did it
+     just do", with nothing marking which is which.
+   - **Staleness**: a summary written twenty turns ago describes the session as it was then, not
+     now. Worse, it *reads* more authoritative than a mechanically clipped line while being less
+     current — confident, well-formed, and out of date. That is precisely the fake-precision
+     failure Article X names as a defect.
+
+   **If adopted later, the likely right shape is a separate "session gist" field on the
+   single-session detail reply — not a replacement for the activity line.** Two fields answering
+   two different questions, each labelled, rather than one field quietly answering whichever
+   question happened to have data.
 
 3. **`file-history-delta` (166 records)** is a further record type absent from the original
    research sample. Added to `KNOWN_INERT_TYPES`.
@@ -262,6 +282,37 @@ process; those are separable, and separating them is what lets one placement sat
 the hook surface and would require four new hook entries to restore gates that placement gives
 for free; living inside `packages/harness/` — rejected outright as it would make an Article I
 violation a single import away.
+
+---
+
+## R6b. `~/.claude` IS mounted into the gateway container — discovered fact
+
+**Discovered 2026-08-20 during T071**, the containerized end-to-end validation. Recorded because
+it falsifies a rationale that had already propagated into four documents.
+
+```
+$ docker inspect omni-harness-gateway --format '{{range .Mounts}}...{{end}}'
+bind  /Users/rishabh.sharma/.claude -> /root/.claude
+```
+
+`docker-compose-dev.yaml:153-154` mounts `${HOME}/.claude` to `/root/.claude`. The container sees
+the same 42 session files across 12 project directories as the host.
+
+**Consequence**: FR-018a's original claim — that a containerized backend *cannot* read the host's
+session directory — is false here. A stdio MCP server inside this container could read those
+records. The stdio exclusion still stands, but on process-lifecycle grounds (see the amended
+FR-018a), not on reachability.
+
+**How this was missed, and what to change about spikes.** The T006 transport spike proved that
+SSE *works*: a host-resident SSE server, reached from the containerized backend, returning a
+payload. It never attempted to falsify the alternative. Confirming that the chosen option works
+is not the same as establishing that the rejected one fails, and only the second justifies an
+exclusion written into a requirement.
+
+The check that would have caught this was one `docker inspect` of the mount table — cheaper than
+the spike that was run. **Design future spikes to attack the rejected option, not only to
+validate the chosen one.** A spike that can only return "yes, this works" cannot tell you whether
+you needed it.
 
 ---
 

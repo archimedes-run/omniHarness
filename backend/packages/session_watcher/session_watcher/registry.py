@@ -78,6 +78,22 @@ class SessionRegistry:
     def upsert(self, session: Session) -> None:
         self.sessions[session.session_id] = session
 
+    def merge(self, sessions: list[Session], now: datetime) -> None:
+        """Install a sweep's results while RETAINING sessions that have ended.
+
+        replace_all() is right for a full re-read; this is right for lifecycle
+        updates, where a session that completed or failed must keep its terminal
+        state rather than vanishing because it aged out of the discovery window
+        (FR-004, FR-005). A vanished session reads as "never existed", which is a
+        different and wronger claim than "finished an hour ago".
+        """
+        incoming = {s.session_id: s for s in sessions}
+        for sid, existing in list(self.sessions.items()):
+            if sid not in incoming and existing.is_terminal:
+                incoming[sid] = existing  # keep the terminal record
+        self.sessions = incoming
+        self.heartbeat(now)
+
     def get(self, key: str) -> Session | None:
         """Look up by session id, falling back to an exact project-name match."""
         if key in self.sessions:

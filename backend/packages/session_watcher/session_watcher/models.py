@@ -84,6 +84,12 @@ class Session:
     last_message: str = ""
     sticky: bool = False
     events: list[SessionEvent] = field(default_factory=list)
+    #: The clock the state was decided with. Durations in replies are measured
+    #: from HERE, not from the caller's "now" — otherwise a reply can pair a state
+    #: resolved at one time with an age computed at another and say something
+    #: self-contradictory, e.g. "hasn't moved in less than a minute; may have
+    #: stalled". Coherence by construction rather than by discipline.
+    resolved_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.session_id:
@@ -108,5 +114,12 @@ class Session:
             return True
         return self.state is SessionState.IDLE and self.idle_reason is IdleReason.COMPLETED
 
+    def _clock(self, now: datetime) -> datetime:
+        return self.resolved_at or now
+
     def elapsed_seconds(self, now: datetime) -> int:
-        return int((now - self.started_at).total_seconds())
+        return max(0, int((self._clock(now) - self.started_at).total_seconds()))
+
+    def quiet_seconds(self, now: datetime) -> int:
+        """Seconds of silence, measured against the clock the state was decided with."""
+        return max(0, int((self._clock(now) - self.last_activity_at).total_seconds()))

@@ -16,8 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .adapters.base import SessionRef
-from .events import waiting_event
+from .events import to_event, waiting_event
 from .models import IdleReason, Session, SessionState
+
+#: How many recent events a session retains for the detail reply (FR-013).
+MAX_EVENTS = 20
 
 DEFAULT_INACTIVITY = timedelta(minutes=5)
 #: How long a session must sit on an unanswered assistant turn before we call it
@@ -51,6 +54,7 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
             state=SessionState.UNKNOWN,
             started_at=stamp,
             last_activity_at=stamp,
+            resolved_at=now,
         )
 
     first = min(dated, key=lambda r: r.at)
@@ -76,7 +80,15 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
         last_activity_at=last.at,
         last_message=last_text,
         sticky=True,
+        resolved_at=now,
     )
+    # Recent activity, newest last, bounded. Only classified records become
+    # events — an unclassified record is not silently promoted to PROGRESS
+    # (FR-007), so a quiet session shows few events rather than invented ones.
+    for rec in sorted(dated, key=lambda r: r.at)[-MAX_EVENTS:]:
+        ev = to_event(rec)
+        if ev is not None:
+            session.events.append(ev)
     if state is SessionState.WAITING_ON_USER:
         session.events.append(waiting_event(session, last.at))
     return session

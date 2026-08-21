@@ -113,3 +113,33 @@ def test_last_message_prefers_most_recent_text() -> None:
         config=CFG,
     )
     assert s.last_message == "newer"
+
+
+def test_state_and_duration_cannot_disagree() -> None:
+    """A reply must never pair a state decided at one clock with an age from another.
+
+    Found by walking quickstart against real sessions (T069): the detail reply
+    said "hasn't moved in less than a minute; may have stalled or been killed" —
+    two claims that cannot both be true. The state had been resolved 8 hours
+    forward while the age was computed at the original now.
+
+    Durations are therefore measured from the clock the state was decided with.
+    Coherence by construction, not by remembering to pass the same `now` twice.
+    """
+    s = resolve(_ref([_rec(30, stop_reason="tool_use")]), now=NOW, config=CFG)
+    assert s.state is SessionState.IDLE and s.idle_reason is IdleReason.STALLED
+
+    # Query with a clock BEHIND the one the state was resolved with.
+    behind = NOW - timedelta(hours=8)
+    assert s.quiet_seconds(behind) == 30 * 60, "duration drifted from the state's clock"
+
+    # ...and one ahead. Still the state's own clock.
+    assert s.quiet_seconds(NOW + timedelta(hours=8)) == 30 * 60
+
+
+def test_stalled_session_never_reports_a_sub_threshold_quiet_time() -> None:
+    """The specific contradiction, asserted directly."""
+    s = resolve(_ref([_rec(30, stop_reason="tool_use")]), now=NOW, config=CFG)
+    for clock in (NOW - timedelta(hours=8), NOW, NOW + timedelta(days=1)):
+        if s.idle_reason is IdleReason.STALLED:
+            assert s.quiet_seconds(clock) >= CFG.inactivity.total_seconds()

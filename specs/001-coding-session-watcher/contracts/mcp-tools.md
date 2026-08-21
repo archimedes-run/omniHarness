@@ -29,9 +29,13 @@ Declared in `extensions_config.json` under `mcpServers`, following the shape alr
 Surfaces in the tool catalog as `local:session-watcher`
 (`backend/app/gateway/routers/thread_tools.py:117`).
 
-**`type` MUST be `sse`.** A stdio entry would be spawned as a backend subprocess and could not
-read the host's session directory under Docker (FR-018a, FR-021). This is a correctness
-constraint, not a deployment preference.
+**`type` MUST be `sse`.** A stdio entry is spawned and owned by its client and torn down with
+the connection, leaving nothing persistent to hold the registry, the heartbeat, or the filesystem
+observer — which makes the `observable` field below unimplementable rather than merely awkward
+(FR-018a). This is a correctness constraint, not a deployment preference.
+
+*Not the reason*: an earlier draft claimed a containerized backend cannot reach the host's
+session directory. It can — `~/.claude` is mounted (research.md R6b).
 
 ---
 

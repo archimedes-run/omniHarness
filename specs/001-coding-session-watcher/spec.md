@@ -59,11 +59,21 @@
   by reading the code on 2026-08-20: there is no registration API, and tools reach the agent from
   exactly two sources — `local:<server>` (MCP) and `connector:<SLUG>` (Composio). The watcher
   therefore integrates as an MCP server declared in `extensions_config.json`. It MUST be reachable
-  over SSE rather than stdio, because a stdio server is spawned as a subprocess of the backend and
-  so cannot read the host's session directory when the backend runs in a container — which would
-  collide with FR-021. This strengthens Article I rather than weakening it: an MCP server imports
+  over SSE rather than stdio. *(The reason recorded here — that a containerized backend cannot
+  read the host's session directory — was later found to be false: `~/.claude` is mounted in. The
+  stdio exclusion stands on process-lifecycle grounds instead. See the following clarification and
+  research.md R6b. Kept as written so the correction is legible.)* This strengthens Article I rather than weakening it: an MCP server imports
   nothing from core at all. The spec's intent was correct; only its wording named a mechanism that
   does not exist.
+
+- Q: Is FR-018a's stated reason for excluding stdio — that a containerized backend cannot read
+  the host's session directory — actually true? → A: No. `~/.claude` is bind-mounted into the
+  gateway container (`docker-compose-dev.yaml:153`), so a stdio server there could read it.
+  SSE remains correct for a different and stronger reason: **process lifecycle**. The watcher is
+  stateful across calls by design, and a stdio server is owned by its client and torn down per
+  connection, which leaves nothing persistent to be stale about — making the Q3 observability
+  tri-state unimplementable rather than merely awkward. That argument holds with no container
+  involved at all. The mount is a secondary consideration only.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -356,11 +366,27 @@ third; then ask for the roll-up and confirm all three are represented correctly.
   more strongly than a registration API would, since a separate process speaking a standard
   protocol imports nothing from core by construction.
 - **FR-018a**: The system MUST be reachable over SSE at a host-local address, and MUST NOT be
-  integrated as a stdio MCP server. Rationale: a stdio server is spawned as a subprocess of the
-  backend, so when the backend runs in a container it cannot read the host's session directory —
-  directly colliding with FR-021. The existing `github-issue-connector` entry in
-  `extensions_config.json`, an SSE server reached at `http://host.docker.internal:<port>/sse`, is
-  the precedent shape.
+  integrated as a stdio MCP server.
+
+  **Primary rationale — process lifecycle.** The watcher is stateful across calls by design: a
+  background refresh loop, a liveness heartbeat, staleness tracking, sticky membership, and a
+  filesystem observer on the session tree. A stdio MCP server is spawned and owned by its client
+  and torn down with the connection, so it has nothing persistent to be stale *about*. That does
+  not make FR-024a awkward to implement — it makes it **unimplementable**, and with it the
+  three-valued observability of FR-011a. This argument involves no container at all, which is
+  precisely why it is the primary one.
+
+  **Secondary rationale — deployment fragility.** Under the project's Docker configuration a
+  stdio server would additionally depend on `~/.claude` being mounted into the container. It is
+  mounted today (`docker-compose-dev.yaml:153`), but that is a dev-compose detail rather than a
+  guarantee, and Article VI forbids a feature that works only under one compose file.
+
+  *Superseded rationale, recorded so it is not re-derived*: an earlier draft claimed a
+  containerized backend simply **cannot** read the host's session directory. That is false in
+  this deployment — see the mount above, and research.md R6b.
+
+  The existing `github-issue-connector` entry in `extensions_config.json`, an SSE server reached
+  at `http://host.docker.internal:<port>/sse`, is the precedent shape.
 - **FR-018b**: The MCP tool surface MUST remain the system's only integration point with the
   agent core. No capability may be added by a path that bypasses it.
 - **FR-019**: The system MUST perform zero writes to any observed session record. This MUST be
