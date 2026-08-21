@@ -305,7 +305,8 @@ function MessageContent_({
 
   // Tool messages: render content with truncation badge when the middleware trimmed output.
   if (message.type === "tool") {
-    const { cleanContent, truncatedChars } = extractTruncationInfo(contentToDisplay);
+    const { cleanContent, truncatedChars } =
+      extractTruncationInfo(contentToDisplay);
     return (
       <AIElementMessageContent className={className}>
         <MarkdownContent
