@@ -2475,11 +2475,13 @@ postgres = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "croniter" },
     { name = "prompt-toolkit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
     { name = "session-watcher" },
+    { name = "vulture" },
 ]
 
 [package.metadata]
@@ -2503,11 +2505,13 @@ provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "croniter", specifier = ">=6.0.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "ruff", specifier = ">=0.14.11" },
     { name = "session-watcher", editable = "packages/session_watcher" },
+    { name = "vulture", specifier = ">=2.14" },
 ]
 
 [[package]]
@@ -4408,6 +4412,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/62/a4/9727a02db6775b12f497139d7dfaf7c67bfcd1e42deed73dbde6e6f81b82/volcengine_python_sdk-5.0.26.tar.gz", hash = "sha256:bcc360ff3fa93ba350437b38d94b192c73cd31e52aab7bb36f09504f4d304604", size = 8714030, upload-time = "2026-05-07T12:12:53.959Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/6b/d26e61e4dfcd427aca7661a62d25f1dd5085c223b305dcc98e2c20d64ae4/volcengine_python_sdk-5.0.26-py2.py3-none-any.whl", hash = "sha256:bb2c953bc4fdd55bdc408a9180ac327a09b1e4be11f3eb8192789f2ce1819b6d", size = 34369450, upload-time = "2026-05-07T12:12:43.918Z" },
+]
+
+[[package]]
+name = "vulture"
+version = "2.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/3e/4d08c5903b2c0c70cad583c170cc4a663fc6a61e2ad00b711fcda61358cd/vulture-2.16.tar.gz", hash = "sha256:f8d9f6e2af03011664a3c6c240c9765b3f392917d3135fddca6d6a68d359f717", size = 52680, upload-time = "2026-03-25T14:41:27.141Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/be/f935130312330614811dae2ea9df3f395f6d63889eb6c2e68c14507152ee/vulture-2.16-py3-none-any.whl", hash = "sha256:6e0f1c312cef1c87856957e5c2ca9608834a7c794c2180477f30bf0e4cc58eee", size = 26993, upload-time = "2026-03-25T14:41:26.21Z" },
 ]
 
 [[package]]

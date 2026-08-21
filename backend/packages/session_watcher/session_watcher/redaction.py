@@ -42,6 +42,16 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("bearer", re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{12,}")),
     ("uri-credentials", re.compile(r"\b([a-zA-Z][\w+.-]*)://[^\s:/@]+:[^\s/@]+@")),
     ("pem-block", re.compile(r"-----BEGIN[^-]{0,40}PRIVATE KEY-----.*?-----END[^-]{0,40}PRIVATE KEY-----", re.DOTALL)),
+    # --- widened for feature 002 (FR-008c) --------------------------------
+    # Agent-composed output carries shapes session records did not. The wording
+    # below does NOT strengthen: these remain RECOGNIZED patterns, and
+    # unrecognized shapes still pass through (FR-008d).
+    ("gcp-service-account", re.compile(r'"type"\s*:\s*"service_account"')),
+    ("gcp-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")),
+    ("openai-project-key", re.compile(r"\bsk-proj-[A-Za-z0-9_\-]{16,}\b")),
+    ("private-key-header", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")),
+    ("basic-auth-header", re.compile(r"\bBasic\s+[A-Za-z0-9+/]{16,}={0,2}")),
     (
         "secretish-assignment",
         re.compile(

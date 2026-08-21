@@ -1,0 +1,4 @@
+{"rules": [
+  {"id": "bad-field", "type": "cron", "match": {"schedule": "0 7 * * *"},
+   "prompt": "A cron event has no {project} field"}
+]}

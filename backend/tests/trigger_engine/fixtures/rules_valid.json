@@ -1,0 +1,12 @@
+{
+  "quiet_hours": {"start": "22:00", "end": "07:30", "timezone": "UTC"},
+  "defaults": {"coalesce_window_seconds": 60, "presence_threshold_seconds": 300,
+               "queued_turn_max_wait_seconds": 300, "fingerprint_retention": "24h"},
+  "rules": [
+    {"id": "blocked-session", "type": "watcher", "match": {"event": "waiting-on-user"},
+     "prompt": "The session in {project} appears to be waiting on you. It last said: {last_message}",
+     "destination": "auto", "urgent": false},
+    {"id": "morning-briefing", "type": "cron", "match": {"schedule": "30 7 * * 1-5", "timezone": "UTC"},
+     "prompt": "Summarise what happened across my sessions overnight.", "destination": "remote"}
+  ]
+}

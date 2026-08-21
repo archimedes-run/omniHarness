@@ -1,0 +1,4 @@
+{"rules": [
+  {"id": "dup", "type": "watcher", "match": {"event": "waiting-on-user"}, "prompt": "a"},
+  {"id": "dup", "type": "cron", "match": {"schedule": "0 7 * * *"}, "prompt": "b"}
+]}

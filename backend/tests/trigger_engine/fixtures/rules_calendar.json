@@ -1,0 +1,3 @@
+{"rules": [
+  {"id": "meeting-prep", "type": "calendar", "match": {"lead_minutes": 10}, "prompt": "x"}
+]}

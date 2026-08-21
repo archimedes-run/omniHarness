@@ -1,0 +1,19 @@
+# Gate 4 whitelist — names with no production reference.
+#
+# Two rules, both enforced:
+#   1. Every entry needs a reason after the '#'.
+#   2. An entry deferring to future wiring must name the TASK that wires it,
+#      and the gate FAILS once that task completes. Debt cannot outlive its
+#      task; the list shrinks by construction.
+#
+# History: 43 -> 20 (an over-broad first pass, corrected) -> 13 (T056 closed)
+# -> 3 (feature complete). The last drop exposed four release entry conditions
+# that were implemented and never called by the loop — quiet hours would have
+# deferred firings that nothing released.
+#
+# What remains are read surfaces for operators. Not deferred, so no task:
+# they are not waiting on anything.
+
+describe          # runtime inspection of presence (FR-023); read by operators
+entries           # audit log read side; read by operators and by tests
+count             # fingerprint store size; read by operators and by tests
