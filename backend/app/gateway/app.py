@@ -167,6 +167,93 @@ async def _migrate_orphaned_threads(store, admin_user_id: str) -> int:
     return migrated
 
 
+async def _start_trigger_engine(app: FastAPI):
+    """Contend for leadership and, on winning, start the engine.
+
+    Losing is the normal outcome for most workers and is logged as such, not as
+    a failure: under `uvicorn --workers 4`, three are meant to lose.
+    """
+    from app.gateway import trigger_engine_wiring as wiring
+    from app.trigger_engine import lifespan as engine_lifespan
+
+    config = app.state.config
+    if not config.trigger_engine.enabled:
+        logger.info("Trigger engine disabled by configuration")
+        return None
+
+    lock = None
+    try:
+        lock = wiring.elect(config)
+        if lock is None:
+            return None
+
+        from app.gateway.internal_auth import create_internal_auth_headers
+
+        def _gateway_call(method: str):
+            def _call(path: str, body: dict | None = None) -> dict:
+                import httpx
+
+                url = f"http://127.0.0.1:8001{path}"
+                with httpx.Client(timeout=120.0) as client:
+                    resp = client.request(method, url, json=body, headers=create_internal_auth_headers())
+                    resp.raise_for_status()
+                    return resp.json() if resp.content else {}
+
+            return _call
+
+        handle = await engine_lifespan.start(
+            lambda: wiring.build_loop(
+                config,
+                gateway_post=_gateway_call("POST"),
+                gateway_put=_gateway_call("PUT"),
+                gateway_get=_gateway_call("GET"),
+                fetch_sessions=_fetch_watcher_sessions,
+            ),
+            enabled=True,
+        )
+        if handle.error:
+            _release_engine_lock(lock)
+            return None
+        handle.lock = lock
+        logger.info("Trigger engine: %s", wiring.describe(config, lock))
+        return handle
+    except Exception:
+        logger.exception("Trigger engine failed to start; the gateway continues without it")
+        _release_engine_lock(lock)
+        return None
+
+
+def _release_engine_lock(lock) -> None:
+    if lock is not None:
+        try:
+            lock.release()
+        except Exception:
+            logger.warning("releasing the trigger-engine lock failed", exc_info=True)
+
+
+def _fetch_watcher_sessions() -> dict:
+    """Session state from the Feature 001 watcher, or an explicit unobservable
+    result. Never an empty session list on failure — an empty registry reads as
+    'you have no sessions running', which is a false negative stated as fact."""
+    return {"observable": False, "sessions": []}
+
+
+async def _stop_trigger_engine(app: FastAPI) -> None:
+    handle = getattr(app.state, "trigger_engine", None)
+    if handle is None:
+        return
+    from app.trigger_engine import lifespan as engine_lifespan
+
+    try:
+        await asyncio.wait_for(engine_lifespan.stop(handle), timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning("Trigger engine shutdown exceeded %.1fs; proceeding with worker exit.", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
+    except Exception:
+        logger.exception("Trigger engine shutdown raised")
+    finally:
+        _release_engine_lock(getattr(handle, "lock", None))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
@@ -219,7 +306,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("No IM channels configured or channel service failed to start")
 
+        # Start the trigger engine, in exactly one worker.
+        #
+        # This is the call site whose absence made Feature 002 ship inert: the
+        # loop was fully built and nothing started it. Startup failure must not
+        # prevent the gateway from starting — the engine is an addition to the
+        # assistant, not a precondition for it.
+        app.state.trigger_engine = await _start_trigger_engine(app)
+
         yield
+
+        # Stop the trigger engine before the channel service, so a firing in
+        # flight still has a destination to deliver to.
+        await _stop_trigger_engine(app)
 
         # Stop channel service on shutdown (bounded to prevent worker hang)
         try:

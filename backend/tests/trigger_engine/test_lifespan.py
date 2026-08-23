@@ -68,7 +68,7 @@ async def test_a_loop_that_raises_does_not_escape_startup() -> None:
 async def test_disabled_is_a_supported_state() -> None:
     handle = await start(lambda: _Loop(), enabled=False)
     assert not handle.running and handle.error is None
-    assert handle.describe() == {"running": False, "error": None}
+    assert handle.describe() == {"running": False, "error": None, "holds_lock": False}
 
 
 async def test_stopping_a_never_started_handle_is_safe() -> None:
