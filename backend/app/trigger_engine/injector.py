@@ -90,6 +90,16 @@ class TurnInjector:
 
     def inject(self, thread_id: str, rule_id: str, prompt: str) -> str:
         """Inject the turn and return the assistant's reply text."""
+        # The markers go in `configurable` and `metadata` ONLY — deliberately.
+        #
+        # They must also reach `config["context"]`, because that is the sole
+        # container `ToolRuntime.context` is built from, and therefore the only
+        # way a policy middleware's wrap_tool_call can tell a synthetic turn
+        # from a real one. But do NOT add a "context" key here to achieve that:
+        # build_run_config prefers `context` when a request carries both and
+        # drops `configurable` wholesale, taking `thread_id` with it. The
+        # gateway mirrors the whitelisted keys across instead — see
+        # `_mirror_runtime_visible_keys` in app/gateway/services.py.
         payload = {
             "assistant_id": self.assistant_id,
             "input": {"messages": [{"role": "human", "content": prompt}]},
