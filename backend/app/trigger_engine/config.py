@@ -47,6 +47,10 @@ class QuietHours:
     start: str = "22:00"
     end: str = "07:30"
     timezone: str = "UTC"
+    #: Quiet hours must be switchable off from the rules file. Without this the
+    #: only way to disable them was to edit code, and every value the user set
+    #: was enforced whether they wanted the mechanism or not.
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -123,6 +127,7 @@ def parse(doc: dict) -> EngineConfig:
         start=qh_raw.get("start", "22:00"),
         end=qh_raw.get("end", "07:30"),
         timezone=qh_raw.get("timezone", "UTC"),
+        enabled=bool(qh_raw.get("enabled", True)),
     )
     d = doc.get("defaults") or {}
 

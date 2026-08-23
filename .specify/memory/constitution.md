@@ -1,7 +1,7 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (unversioned template scaffold) → 1.0.0
+Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR, a new article)
 Bump rationale: Initial ratification. First concrete constitution replacing the
                 placeholder scaffold; MAJOR baseline established at 1.0.0.
 
@@ -133,6 +133,35 @@ invented ETAs, fabricated status — is a defect, tracked and fixed like any oth
 Rationale: the assistant's only product is trustworthy status. One fabricated status costs more
 trust than ten honest "I can't see that from here" responses.
 
+### XI. Tests Must Exercise the Production Shape
+
+A test environment that differs structurally from production hides defects of exactly the kind
+the test exists to catch. Where such a difference exists, at least one test MUST exercise the
+production shape.
+
+Four instances in this project, each of which passed a full green suite:
+
+| Test shape | Production shape | What it hid |
+|---|---|---|
+| one process | four uvicorn workers | per-worker auth tokens; every politeness mechanism per-process |
+| one log file | the whole session corpus | a mangled key, a Windows path, an unused constant |
+| fixtures | real session records | a question detector that required a trailing `?` |
+| constructing a type directly | loading it from config | two classes named `QuietHours`, never converted between |
+
+The pattern is the same each time: the test builds a simplified world in which the defect cannot
+occur, then reports that the defect does not occur. Coverage is unaffected — every one of these
+had tests, and they passed.
+
+This does NOT require every test to run in the production shape; most should not, because
+simplified tests are faster and localise failures better. It requires that no structural
+difference goes entirely unexercised. Where the production shape is expensive to reproduce, one
+test at that shape is enough, and the structural difference MUST be named in that test so a
+reader knows which simplification it exists to defend against.
+
+Rationale: the other articles are enforced by gates, and a gate is only as good as the
+environment it runs in. Article XI is what keeps the rest from being verified against a world
+that does not exist.
+
 ## Additional Constraints
 
 - **Host-resident modules**: components that read user-home files (e.g. the session watcher)
@@ -185,4 +214,4 @@ the prior text. Amendments take effect on merge.
 re-examined at each phase boundary in the Article IX roadmap. Violations found in merged code
 are tracked as defects, not accepted as precedent.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-20
+**Version**: 1.1.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-23

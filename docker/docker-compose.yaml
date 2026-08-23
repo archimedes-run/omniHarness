@@ -71,7 +71,10 @@ services:
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
         UV_EXTRAS: ${UV_EXTRAS:-}
     container_name: omni-harness-gateway
-    command: sh -c "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-4}"
+    # Shared across workers: each worker mints its own token otherwise, and
+    # internal loopback calls (channels, trigger injection) 401 whenever the
+    # kernel hands the connection to a different worker than minted it.
+    command: sh -c "export OMNI_HARNESS_INTERNAL_AUTH_TOKEN=${OMNI_HARNESS_INTERNAL_AUTH_TOKEN:-$$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')} && cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-4}"
     volumes:
       - ${OMNI_HARNESS_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${OMNI_HARNESS_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
