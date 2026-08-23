@@ -1,0 +1,15 @@
+# Repo-level wiring gate: modules under app/ with no static importer outside
+# themselves and the test tree.
+#
+# Two rules, both enforced by tests/test_module_wiring.py:
+#   1. Every entry needs a reason after the '#'.
+#   2. An entry deferring to future wiring must say what would expire it, and
+#      it is a FAILURE to leave the entry in place once that has happened.
+#
+# Gate 4 (tests/trigger_engine/test_wiring.py) checks wiring *within* a module.
+# It cannot see a module that nothing imports at all — its scope boundary is
+# exactly where that defect lives. This is the companion check.
+
+middlewares    # config-loaded extension point: `use: app.middlewares.truncation:...` in config.yaml, no static importer by design
+tools          # config-loaded extension point: `use: app.tools.openclaude:openclaude_coder` in config.yaml, same
+trigger_engine # DEFERRED: Feature 002 is not started by the gateway. Wiring is blocked on a design decision — docker-compose runs uvicorn --workers 4, and the engine's politeness state (quiet-hours pending, interrupt queue, coalescing window) is per-process while its fingerprint store caches on first load and never re-reads. Needs single-runner election or shared state. REMOVE THIS ENTRY when the gateway starts the engine.
