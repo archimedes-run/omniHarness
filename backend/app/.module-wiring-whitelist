@@ -9,7 +9,10 @@
 # Gate 4 (tests/trigger_engine/test_wiring.py) checks wiring *within* a module.
 # It cannot see a module that nothing imports at all — its scope boundary is
 # exactly where that defect lives. This is the companion check.
+#
+# History: 3 -> 2. `trigger_engine` was removed when the gateway started the
+# engine; the gate reported the entry stale on the same commit that wired it,
+# which is what "self-expiring" was meant to mean.
 
 middlewares    # config-loaded extension point: `use: app.middlewares.truncation:...` in config.yaml, no static importer by design
 tools          # config-loaded extension point: `use: app.tools.openclaude:openclaude_coder` in config.yaml, same
-trigger_engine # DEFERRED: Feature 002 is not started by the gateway. Wiring is blocked on a design decision — docker-compose runs uvicorn --workers 4, and the engine's politeness state (quiet-hours pending, interrupt queue, coalescing window) is per-process while its fingerprint store caches on first load and never re-reads. Needs single-runner election or shared state. REMOVE THIS ENTRY when the gateway starts the engine.
