@@ -16,6 +16,16 @@ This feature is the first where a mistake costs the user something real — a de
 
 Constitution Article II defines three tiers of action. This feature makes them operational and applies them to every tool in the system, including those Features 001 and 002 already exposed.
 
+## Clarifications
+
+### Session 2026-08-23
+
+- Q: When a Tier 2 action executes and must be disclosed in the reply, is that disclosure produced by the system, or is the model expected to mention it? → A: B — the system records each Tier 2 execution and GUARANTEES the disclosure appears, appending it when the model's own text omits it; the model may phrase it but cannot skip it. Two things pinned: (1) the coverage check is BIASED TOWARD APPENDING — when uncertain whether the model's text already discloses the action, append, because a redundant disclosure is clumsy while a missing one is the defect the requirement exists to prevent; (2) appended disclosures are generated FROM THE RECORDED EXECUTION, never from the model's account of it.
+- Q: When a per-argument exception applies to a tool call, may it move that call to a LOWER tier than the tool's default, or only to a higher one? → A: A — exceptions may only RAISE a tier, never lower it; making something safer than its default requires editing the tool's default, which is a visible change rather than a narrow exception. One addition: provide a way to inspect the effective tier of a hypothetical call WITHOUT executing it, showing which rule decided it — raise-only is safe but opaque, and without a way to see why a call was raised the pressure to add lowering exceptions returns. Options B and D (either direction; either direction with lowering rules marked) were considered and REJECTED: both put the central guarantee behind a casually-edited config where one over-broad rule disables it silently, and D's marking only helps a reader who looks, while the failure mode is a rule nobody re-reads.
+- Q: What form must a user's confirmation take for a Tier 3 action to execute — free-form agreement the model interprets, or a specific act the system recognises without interpretation? → A: B — the system recognises confirmation DETERMINISTICALLY and the model never adjudicates it; ambiguous replies are re-asked, not interpreted. Two additions: (1) an unrecognised reply is re-asked with the PLAN RESTATED IN FULL, not merely re-prompted; (2) recognised DECLINE must be as deterministic as recognised confirm. Option C (free-form interpretation over user-lineage text only) was considered and REJECTED: it closes the injection path but leaves the gate resting on model judgment for ambiguous replies, so the check stays interpretive where B makes it mechanical.
+- Q: When the lead agent delegates to a subagent and that subagent calls a tool, does the policy layer classify that call, and who confirms a Tier 3 hit? → A: A — classified identically; a Tier 3 hit suspends the subagent and asks the USER through the lead agent's conversation. Delegation grants no authority the delegator did not have. Two additions: (1) suspend/resume was VERIFIED against the runtime and DOES NOT currently work for subagents — see VP-008, which this feature must fix rather than plan around; (2) the confirmation names the requester and the delegation chain. Option D (a confirmed delegation covering all subsequent Tier 3 calls) was considered and REJECTED: it makes delegation a privilege escalation, one confirmation buying unlimited authority.
+- Q: When the assistant states a Tier 3 plan and waits, where does that pending action live — and does it survive the process that created it? → A: A — durable store, same mechanism as Feature 002's pending firings; any worker can find, confirm and expire it, and it survives restart. Two additions: (1) the record stores the RESOLVED, SPECIFIC targets, not a description, and a confirmation whose recorded targets no longer match current reality is declined and restated rather than approximated; (2) claiming a confirmed pending action is ATOMIC — one confirmation, one execution.
+
 ## Verified Preconditions
 
 *This section records mechanisms confirmed against the running code before this spec was written, following the project convention that a plan may not rest on an unverified assumption. Each was checked; two were found broken and one has been repaired.*
@@ -24,8 +34,17 @@ Constitution Article II defines three tiers of action. This feature makes them o
 - **VP-002 — All tool sources normalise to one shape.** Built-in tools, MCP-server tools, third-party connector tools, and agent-to-agent tools are all assembled into a single list and executed through the same path. There is no tool category that reaches execution by another route.
 - **VP-003 — The synthetic-turn marker is readable at dispatch (REPAIRED).** Feature 002 marks trigger-injected turns structurally, where message content cannot forge it. That marker was **not** readable at the dispatch chokepoint: the interception hook receives no run configuration, and the only container it can read had stopped being populated from the one the marker lives in. This broke silently on a dependency upgrade, with no test failing, because nothing was reading it yet. It has been repaired and is now guarded by a test that reads the marker from inside the interception hook. **FR-004 depends on this and must not re-verify it by assumption.**
 - **VP-004 — Tool-surface filtering is server-granular, not per-tool (GAP).** Tools can be included or excluded a whole server at a time; there is no per-tool allow or deny capability in the server configuration. FR-012's requirement is therefore *written*, not *configured* — see FR-013.
-- **VP-005 — Feature 002 is not currently running (BLOCKING for Part 3).** The trigger engine has no consumer outside itself and its own tests; nothing starts it, and its audit log is never constructed in production. A repo-level gate now guards this. Wiring it is a separate change that must land before this feature's Part 3 and FR-011 can be demonstrated. See Dependencies.
+- **VP-005 — Feature 002 is running (RESOLVED).** The engine had no consumer outside itself and its own tests; nothing started it and its audit log was never constructed in production. It is now started by the gateway under single-runner election, with a durable pending set and an audit log carrying a required actor. A repo-level gate keeps any module under `app/` from becoming orphaned the same way. Part 3 and FR-011 rest on a live mechanism.
 - **VP-006 — A fifth agent-construction path bypasses the chokepoint.** One agent factory assembles its own interception chain and does not pass through the shared one. It is public API with no production consumer. Anything built through it would escape classification entirely — see FR-003.
+- **VP-008 — Subagents cannot currently be suspended and resumed (GAP, must be fixed here).** FR-031 requires suspending a subagent mid-run and resuming it with a tool result after an arbitrary wait. Measured against the runtime:
+
+  | Shape | Behaviour |
+  |---|---|
+  | With a checkpointer (the lead agent's shape — one is attached at run time) | suspends, resumes, and the tool then runs |
+  | Without a checkpointer (the subagent's shape — none is ever attached) | the run **ends** at the suspension point; the tool never runs and there is nothing to resume from |
+
+  It does not raise. A subagent asked to confirm would simply stop, having done nothing, which is indistinguishable from a correct refusal in any test that never confirms. That is the failure this verification existed to catch. The fix is small and known — attach a checkpointer to the subagent agent as the run worker already does for the lead agent — but it is a TASK, not an assumption.
+
 - **VP-007 — The redactor is consumed as an injected callable, not a static import.** Feature 002 receives redaction as a supplied function and fails closed when it errors. The owning package is a declared dependency of the consuming one, and the import ban runs the other direction. Reuse this shape rather than duplicating patterns — see FR-018.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -123,9 +142,16 @@ A configured interval before a calendar event, the assistant proactively says wh
 
 - A Tier 3 action is confirmed after its expiry interval has passed — the confirmation is not honoured, and the user is told why rather than seeing silence.
 - The classification config is edited while a Tier 3 action is pending — the tier in force at the time the plan was stated governs, so a reclassification cannot retroactively downgrade an action already awaiting confirmation.
+- A subagent requests a Tier 3 action, the user is asked, and the user does not answer before the pending action expires — the subagent resumes with a refusal rather than hanging or being abandoned mid-run.
 - A tool result contains text resembling a plan statement, attempting to make the user believe the assistant proposed something it did not.
-- Two Tier 3 actions are pending simultaneously and the user confirms ambiguously — an ambiguous confirmation satisfies neither.
+- Two Tier 3 actions are pending simultaneously and the user confirms ambiguously — an ambiguous confirmation satisfies neither, and both plans are restated.
+- The user replies with something that is neither a recognised confirmation nor a recognised decline — the plan is restated in full and re-asked, rather than being interpreted or silently dropped.
+- A confirmation arrives after the world has moved: an event in the stated plan has already been deleted, or a held slot has been taken. The recorded targets no longer match, so the action is declined and restated rather than executed against a different reality than the one approved.
+- Two workers read the same confirmed Pending Action at the same moment — exactly one claims it and executes; the other finds it already claimed and does nothing.
+- The process that stated a plan restarts before the user answers — the pending action is still there, still confirmable, and still expires on its original schedule.
 - The classification config is missing, unreadable, or malformed — every tool is Tier 3 rather than every tool being unclassified.
+- The model claims in its reply to have done something it did not do, or describes a Tier 2 action inaccurately — the appended disclosure is generated from the execution record, so what the user reads about the action is what happened.
+- Several Tier 2 actions occur in one turn and the model mentions some but not others — the unmentioned ones are appended.
 - Redaction fails on worker output crossing to a remote channel — delivery is suppressed rather than sent unredacted.
 - A calendar event is deleted between the pre-alert firing and its delivery.
 - The browser is asked to navigate to a site the user has granted no login for.
@@ -144,10 +170,24 @@ A configured interval before a calendar event, the assistant proactively says wh
 - **FR-008**: Classification MUST support matching on tool name by pattern, and MUST support per-argument exceptions where a tool's tier depends on what it is being asked to do.
 - **FR-009**: A tool matching no classification rule MUST be treated as Tier 3. This MUST hold for tools that did not exist when the configuration was written, and when the configuration is missing or unreadable.
 - **FR-010**: Every tool already exposed by Features 001 and 002 MUST be classified. No tool anywhere in the system may be unclassified.
-- **FR-011**: Every Tier 3 execution MUST be recorded in the audit log, including the actor it acted as, the plan exactly as stated to the user, and the confirmation that authorised it. *(Depends on the precondition in VP-005 — see Dependencies.)*
+- **FR-011**: Every Tier 3 execution MUST be recorded in the audit log, including the actor it acted as, the plan exactly as stated to the user, and the confirmation that authorised it. *(Depends on Feature 002, now live — see DEP-001.)*
 - **FR-019**: An unconfirmed Tier 3 action MUST expire after a stated, configurable interval. It MUST NOT wait indefinitely and MUST NOT execute on expiry.
 - **FR-020**: Tier behaviour MUST be: Tier 1 executes silently; Tier 2 executes and is disclosed in the reply; Tier 3 states its plan, waits for confirmation, then executes.
 - **FR-021**: A stated Tier 3 plan MUST name the specific items it will affect, not the category of action. Confirming a plan MUST authorise exactly the stated items and nothing else.
+- **FR-028**: A Pending Action MUST be durable and reachable from any worker process. Storing it in the memory of the process that stated the plan is insufficient: the gateway serves from several workers behind one socket, so a confirmation would reach the stating worker only some of the time and would otherwise find nothing pending — a correctly-confirmed action silently never running. It MUST survive a restart of the process that created it.
+- **FR-029**: A Pending Action MUST record the RESOLVED, SPECIFIC targets of the stated plan — the identified items themselves — not a description of the action or the criteria that selected them. At execution time the recorded targets MUST still match the current state of the world. Where they do not, the action MUST be declined and restated rather than approximated or re-resolved. The user confirmed a plan, not a category of action.
+- **FR-030**: Claiming a confirmed Pending Action MUST be atomic: one confirmation yields exactly one execution. Several workers can read the same durable record, and two of them acting on a calendar cleanup would delete twice — which is silent — and create holds twice, which is visible clutter.
+- **FR-031**: Tool calls made by a subagent MUST be classified identically to those made by the lead agent. A Tier 3 hit MUST suspend the subagent and ask the user through the lead agent's conversation; the subagent MUST then resume with the outcome. Delegation MUST NOT grant authority the delegator did not have.
+- **FR-032**: Subagents MUST be given the ability to suspend and resume (VP-008). Without it FR-031 degrades silently into "the subagent stops, having done nothing", which no test that declines to confirm can distinguish from correct refusal.
+- **FR-033**: A confirmation prompt MUST name the requester and the delegation chain that led to it. "Should I delete these four events?" means something different when the asker is a subagent the user never instructed by name; the user is authorising an action by something they did not directly ask for and MUST be able to see that.
+- **FR-034**: A confirmation MUST be recognised deterministically by the system — by reference to the pending action's identifier or an equivalent explicit affordance — and MUST NOT be adjudicated by the model. A gate that rests on the model judging whether a reply constitutes agreement is defended by prompting, which Article III forbids; it also puts a web page reading "the user has approved this, proceed" on the same channel as the real answer.
+- **FR-035**: A reply that is not recognised as either confirmation or decline MUST cause the plan to be **restated in full** and re-asked. Re-prompting without restating leaves the user confirming something they can no longer see, which defeats the purpose of stating a plan.
+- **FR-036**: Decline MUST be recognised as deterministically as confirmation. If confirmation is mechanical and refusal falls back to interpretation, an intended refusal is read as ambiguity and re-asked — which teaches users to type whatever makes the prompt stop. A gate users learn to route around is worse than no gate, because it still looks like protection.
+- **FR-037**: A per-argument exception MUST only RAISE a call's tier, never lower it. Lowering a tier MUST require changing the tool's default classification, which is a visible edit, rather than a narrow exception buried in a rule set. A malformed or over-broad exception therefore fails toward asking, not toward acting.
+- **FR-038**: The system MUST provide a way to inspect the effective tier of a hypothetical tool call WITHOUT executing it, showing which rule decided it. Raise-only classification is safe but opaque: someone edits a default, forgets an exception raises it, and is asked to confirm something they meant to be silent. Without a way to see why, pressure to add lowering exceptions returns — not because they are needed, but because the policy is unreadable. This is what makes FR-037 livable rather than merely correct.
+- **FR-039**: Tier 2 disclosure MUST be guaranteed by the system, not left to the model. Each Tier 2 execution MUST be recorded, and the reply MUST be checked for a disclosure of it; where none is present, the system MUST append one. The model MAY phrase a disclosure itself; it MUST NOT be able to omit one. Disclosure left to prompt guidance is unverifiable, and a turn where the model forgets is indistinguishable from a turn in which nothing happened — which makes Tier 2 into Tier 1 with good intentions.
+- **FR-040**: The disclosure coverage check MUST be biased toward appending: where it is uncertain whether the model's text already discloses an action, it MUST append. A redundant disclosure is clumsy; a missing one is the defect FR-039 exists to prevent. Stating the direction is required because without it the check is tuned toward not-appending — duplicates are the visible failure and omissions the invisible one.
+- **FR-041**: An appended disclosure MUST be generated from the RECORDED EXECUTION — the tool called, its resolved arguments, and its result — and MUST NOT be generated from the model's account of what it did. A model that misdescribes its own action would otherwise produce a disclosure that satisfies the coverage check while misinforming the user, which is worse than silence because it carries the system's authority rather than the model's.
 
 ### Functional Requirements — Workers
 
@@ -163,7 +203,7 @@ A configured interval before a calendar event, the assistant proactively says wh
 
 ### Functional Requirements — Calendar Triggers
 
-- **FR-024**: A calendar trigger type MUST fire a stated interval before a calendar event. *(Depends on VP-005 — see Dependencies.)*
+- **FR-024**: A calendar trigger type MUST fire a stated interval before a calendar event. *(Depends on Feature 002, now live — see DEP-001.)*
 - **FR-025**: The calendar trigger MUST be a new event source feeding the existing trigger engine. It MUST NOT require changes to that engine's core. If building it reveals that engine changes are required, that is a finding to report before building, not a change to make quietly.
 - **FR-026**: A pre-alert MUST name who the meeting is with and what it is about, drawing on memory for relevant context about that person or topic.
 - **FR-027**: Exactly one pre-alert MUST be delivered per event occurrence, however many times the engine evaluates the rule beforehand.
@@ -171,13 +211,14 @@ A configured interval before a calendar event, the assistant proactively says wh
 ### Key Entities
 
 - **Tier**: One of three levels of consequence — read, reversible write, irreversible/outbound/spawning — determining whether a call executes silently, executes with disclosure, or requires confirmation first.
-- **Classification Rule**: A user-authored, declarative statement mapping a tool-name pattern to a tier, optionally with per-argument exceptions. Absence of a matching rule is itself meaningful (FR-009).
-- **Pending Action**: A Tier 3 call that has been stated to the user and is awaiting confirmation. Carries the exact plan as stated, the tier in force when stated, and an expiry.
-- **Confirmation**: A user response authorising a specific Pending Action. Has an origin — which turn it came from and whether that content originated in a tool result — and is valid only from a trusted origin (FR-004, FR-005).
+- **Classification Rule**: A user-authored, declarative statement mapping a tool-name pattern to a tier, optionally with per-argument exceptions that may only raise the resulting tier (FR-037). Absence of a matching rule is itself meaningful (FR-009). Which rule decided a given call is inspectable without executing it (FR-038).
+- **Pending Action**: A Tier 3 call that has been stated to the user and is awaiting confirmation. Records the requester and delegation chain when the call originated in a subagent (FR-033). Durable and reachable from any worker (FR-028). Carries the exact plan as stated, the **resolved specific targets** it will act on (FR-029), the tier in force when stated, an expiry, and a claim state that exactly one confirmation can take (FR-030).
+- **Confirmation**: A deterministically recognised user act authorising a specific Pending Action — never a model judgement about whether a reply meant agreement (FR-034). Decline is recognised the same way (FR-036). Has an origin — which turn it came from and whether that content originated in a tool result — and is valid only from a trusted origin (FR-004, FR-005).
 - **Turn Provenance**: The structural marker distinguishing a user-originated turn from a machine-generated one. Established by Feature 002; readable at dispatch per VP-003.
 - **Content Lineage**: Whether a piece of conversation content originated from the user or arrived inside a tool result. Distinct from Turn Provenance and determined by a different mechanism.
 - **Worker**: An external tool source (email, calendar, browser) with an associated tier map.
 - **Audit Entry**: A record of a Tier 3 execution — the actor, the plan as stated, and the authorising confirmation.
+- **Execution Record**: What a Tier 2 action actually did — the tool, its resolved arguments, its result. The sole source for an appended disclosure (FR-041), and distinct from the model's narration of the same event.
 - **Browser Profile**: An isolated storage context for assistant-driven browsing, holding only logins the user granted deliberately.
 
 ## Success Criteria *(mandatory)*
@@ -194,17 +235,28 @@ A configured interval before a calendar event, the assistant proactively says wh
 - **SC-008**: An unconfirmed Tier 3 action expires within the configured interval and does not execute.
 - **SC-009**: No dispatch path bypasses classification. Verified by deliberately introducing a bypassing path and observing the build fail — including a bypass introduced at the agent-construction site named in VP-006.
 - **SC-010**: 100% of tools exposed anywhere in the system resolve to a tier, including those from Features 001 and 002.
-- **SC-011**: Every Tier 3 execution appears in the audit log with actor, stated plan, and authorising confirmation. *(Gated — see Dependencies.)*
-- **SC-012**: A meeting starting soon produces exactly one pre-alert through the existing trigger engine, with no change to that engine's core. *(Gated — see Dependencies.)*
+- **SC-011**: Every Tier 3 execution appears in the audit log with actor, stated plan, and authorising confirmation. *(Depends on Feature 002, now live — see DEP-001.)*
+- **SC-012**: A meeting starting soon produces exactly one pre-alert through the existing trigger engine, with no change to that engine's core. *(Depends on Feature 002, now live — see DEP-001.)*
 - **SC-013**: Worker output crossing to a remote channel is redacted, and when redaction cannot complete, nothing is delivered.
+- **SC-014**: A plan stated by one worker can be confirmed through another and executes exactly once. Verified with the gateway running its real worker count, not a single process (Article XI).
+- **SC-015**: A confirmation whose recorded targets no longer match current reality does not execute, and the user is told what changed rather than seeing a silent no-op or an approximated action.
+- **SC-016**: Concurrent confirmation attempts against one Pending Action produce exactly one execution.
+- **SC-017**: A Tier 3 action requested by a subagent does not execute until the user confirms it, and the subagent then resumes and completes. Verified by confirming AFTER a delay, not immediately — an instant confirmation cannot distinguish suspend-and-resume from stop-and-abandon (VP-008).
+- **SC-018**: A confirmation prompt originating in a subagent names the requester and the delegation chain.
+- **SC-019**: A reply that is not a recognised confirmation or decline results in the full plan being restated, and no execution.
+- **SC-020**: A recognised decline stops the action without re-asking, and is distinguishable in the audit record from an expiry and from an ambiguous reply.
+- **SC-021**: An exception that would lower a call's tier does not lower it, and the discrepancy is visible to the user rather than silently ignored.
+- **SC-022**: The effective tier of a hypothetical call, and the rule that decided it, can be inspected without the call executing.
+- **SC-023**: Every Tier 2 execution is disclosed in the reply that caused it, including when the model's own text omits it.
+- **SC-024**: An appended disclosure matches the recorded execution, and does not match a contradicting claim in the model's text.
 
 ## Dependencies
 
-- **DEP-001 (BLOCKING for FR-011, FR-024–FR-027, SC-011, SC-012)**: The Feature 002 trigger engine must be started by the running product, with its audit log constructed in production. It is not today (VP-005). This is being resolved by a separate change — single-runner election via a database advisory lock — that lands before implementation of this feature begins.
+- **DEP-001 — RESOLVED 2026-08-23.** The Feature 002 trigger engine is now started by the gateway under single-runner election, its audit log is constructed in production with a required `actor` field, and pending firings are durable across the death of the worker holding them. Feature 002 is live, so FR-011 and FR-024–FR-027 rest on a running mechanism rather than a planned one.
 
-  **This dependency MUST NOT block Parts 1 and 2.** User Stories 1–4 and SC-001 through SC-010 and SC-013 must be independently demonstrable while User Story 5 is pending. Phase ordering must make this true rather than assuming it.
-
-  Where FR-011's audit requirement cannot yet be satisfied, the correct response is to sequence it behind DEP-001 — not to record Tier 3 executions somewhere else in the meantime, which would leave two audit trails to reconcile.
+  Two properties of that resolution carry into this feature and MUST NOT be re-derived:
+  - **The engine runs in one elected worker; the policy layer does not.** A policy decision happens in whichever worker handles the run, which is why FR-028 requires the Pending Action to be durable and worker-independent rather than reusing the engine's election.
+  - **In-memory state belonging to one worker is lost when that worker dies.** This was resolved for the engine's deferrals by persisting them; FR-028 applies the same conclusion to Pending Actions rather than rediscovering it.
 
 - **DEP-002**: The provenance repair described in VP-003 has landed. FR-004 depends on it and must exercise it, not assume it.
 
@@ -218,6 +270,16 @@ A configured interval before a calendar event, the assistant proactively says wh
 - "Reversible" for a calendar hold means the assistant can delete what it created. Reversibility is assessed against what the assistant can itself undo, not against what the provider technically permits.
 - Memory content used in pre-alerts (FR-026) is already available from earlier work; this feature reads it rather than building it.
 - Redaction covers recognised patterns only. It reduces exposure and does not guarantee that no sensitive content crosses a channel — user-facing wording must not claim otherwise.
+
+## Considered and Rejected
+
+- **Tier 2 disclosure by prompt instruction alone.** Rejected: unverifiable, and its failure is invisible — a forgotten disclosure looks exactly like a turn in which nothing happened.
+- **Deferring Tier 2 disclosures to a digest or on-request report.** Rejected: the point of disclosure is that the user learns of a change while it is still connected to the request that caused it. A hold created and reported hours later is a surprise with a citation.
+- **Per-argument exceptions that may lower a tier, in either direction.** Rejected: it puts the feature's central guarantee behind a config file the user edits casually, where a single over-broad rule disables it silently for exactly the case it exists to cover.
+- **Lowering permitted but marked, and surfaced whenever the policy is displayed.** Rejected for the same reason. Marking helps a reader who looks; the failure mode is a rule nobody re-reads.
+- **Free-form confirmation interpreted by the model, restricted to text of genuine user lineage.** Rejected: excluding tool-result lineage closes the injection path, but the gate still rests on model judgment for ambiguous replies. That leaves the check interpretive where FR-034 makes it mechanical, and the interpretive part is where it fails under adversarial input.
+- **A confirmed delegation covering all subsequent Tier 3 calls by that subagent.** Rejected: it makes delegation a privilege escalation — one confirmation buys unlimited authority, and the broader the delegated task the more it buys. Every Tier 3 call is confirmed on its own terms (FR-031).
+- **Restricting subagents to Tier 1 and 2 only.** Rejected as the default: it is safe but makes delegation useless for exactly the work this feature exists to enable. A per-spawn tier ceiling remains available as a later refinement.
 
 ## Out of Scope
 
