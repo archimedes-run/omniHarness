@@ -1,7 +1,7 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR, a new article)
+Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR)
 Bump rationale: Initial ratification. First concrete constitution replacing the
                 placeholder scaffold; MAJOR baseline established at 1.0.0.
 
@@ -162,6 +162,32 @@ Rationale: the other articles are enforced by gates, and a gate is only as good 
 environment it runs in. Article XI is what keeps the rest from being verified against a world
 that does not exist.
 
+### XII. A Probe Must Be Seen Finding Something
+
+Before a measurement's negative result is trusted, the instrument MUST be observed producing a
+positive result. An instrument that has never been seen detecting the thing it looks for is not
+evidence of absence.
+
+The occasion: a probe testing whether a subagent could be suspended and resumed reported that
+suspension was unavailable. It was actually failing earlier, on an unrelated missing method in
+the stand-in model, and would have reported "this runtime cannot suspend at all" — a wrong
+finding that would have redirected the design of a whole feature. A positive control, run
+against a configuration known to work, caught it. The true finding was narrower and the opposite
+shape: suspension works, and resumption is what is missing.
+
+This is Article XI's rule applied to measurement rather than to tests, and the sabotage
+convention applied in the other direction. A gate is sabotaged to prove it can fail; a probe is
+given a known-positive case to prove it can succeed. Both exist because a step that never
+changes its answer is indistinguishable from one that is not running.
+
+Applies to: verification of a mechanism before planning on it, any "X is not supported" claim,
+and any measurement whose result would change a design decision. It does NOT apply to routine
+assertions in tests that already fail meaningfully when the code is wrong.
+
+Rationale: a false negative from a trusted probe is more expensive than no probe at all, because
+it is acted on. The absence of a capability is a claim about everything that was not observed,
+and it needs the stronger evidence.
+
 ## Additional Constraints
 
 - **Host-resident modules**: components that read user-home files (e.g. the session watcher)
@@ -214,4 +240,4 @@ the prior text. Amendments take effect on merge.
 re-examined at each phase boundary in the Article IX roadmap. Violations found in merged code
 are tracked as defects, not accepted as precedent.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-23
+**Version**: 1.2.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-23
