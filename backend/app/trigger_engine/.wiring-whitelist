@@ -17,3 +17,11 @@
 describe          # runtime inspection of presence (FR-023); read by operators
 entries           # audit log read side; read by operators and by tests
 count             # fingerprint store size; read by operators and by tests
+
+# Election entry points. Called from app/gateway/trigger_engine_wiring.py, the
+# composition root — which lives OUTSIDE this module because Gate 1 bans the
+# engine from importing agent core, and assembling the engine needs AppConfig.
+# Gate 4's scope is this module, so a caller on the gateway side is invisible to
+# it. Not deferred; nothing is waiting on these.
+build_lock        # chooses the lock backend from database config; called by the composition root
+acquire           # SingleRunnerLock.acquire; called by the composition root during election

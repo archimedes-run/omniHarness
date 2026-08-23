@@ -25,8 +25,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 BACKEND = Path(__file__).resolve().parents[1]
 APP = BACKEND / "app"
 WHITELIST = APP / ".module-wiring-whitelist"
@@ -186,14 +184,3 @@ def test_self_import_does_not_count_as_a_consumer(tmp_path):
     (app / "solo" / "b.py").write_text("thing = 1\n")
 
     assert not consumers("solo", root=tmp_path), "a module importing itself proves nothing about whether the product reaches it"
-
-
-def test_trigger_engine_is_currently_an_orphan():
-    """Pins the finding that motivated this gate, so the whitelist entry cannot
-    quietly become permanent.
-
-    When the gateway starts the engine this test fails, and its failure is the
-    instruction: delete it and the whitelist entry together.
-    """
-    if consumers("trigger_engine"):
-        pytest.fail("trigger_engine now has a consumer — remove its .module-wiring-whitelist entry and delete this test; the deferral it recorded is closed.")

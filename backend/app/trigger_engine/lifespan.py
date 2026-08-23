@@ -23,13 +23,17 @@ class EngineHandle:
     task: asyncio.Task | None = None
     loop: object | None = None
     error: str | None = None
+    #: Leadership lock held while this worker runs the engine. Released on
+    #: shutdown so a restarting worker can take over immediately rather than
+    #: waiting for the OS to reap the old process.
+    lock: object | None = None
 
     @property
     def running(self) -> bool:
         return self.task is not None and not self.task.done()
 
     def describe(self) -> dict:
-        return {"running": self.running, "error": self.error}
+        return {"running": self.running, "error": self.error, "holds_lock": self.lock is not None}
 
 
 async def start(build_loop, *, enabled: bool = True) -> EngineHandle:
