@@ -116,6 +116,12 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         "max_concurrent_subagents",
         "agent_name",
         "is_bootstrap",
+        # Feature 002 turn provenance. These are read at TOOL DISPATCH, by a
+        # middleware's wrap_tool_call, whose ToolCallRequest exposes only
+        # {tool_call, tool, state, runtime} — no run config. The only container
+        # that reaches it is ``config["context"]``, via _build_runtime_context.
+        "turn_provenance",
+        "trigger_rule_id",
     }
 )
 
@@ -135,6 +141,40 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
                 configurable.setdefault(key, context[key])
             if isinstance(runtime_context, dict):
                 runtime_context.setdefault(key, context[key])
+
+
+def _mirror_runtime_visible_keys(config: dict[str, Any]) -> None:
+    """Copy whitelisted keys from ``configurable`` into ``context``.
+
+    ``ToolRuntime.context`` is built from ``config["context"]`` alone, so a key
+    that only ever lands in ``configurable`` is invisible to anything reading
+    runtime context — including a middleware's ``wrap_tool_call``, whose
+    ``ToolCallRequest`` carries no run config at all.
+
+    LangGraph used to bridge this itself: ``ToolRuntime.context`` fell back to
+    ``configurable``. That fallback was removed in >=1.1.9 (see the note above
+    ``_CONTEXT_CONFIGURABLE_KEYS``), and nothing failed at the time because
+    nothing was reading provenance from tool context yet. This restores the
+    bridge explicitly, for a named set of keys rather than for everything.
+
+    Callers must NOT work around this by sending both containers: when a request
+    carries ``context`` and ``configurable`` together, :func:`build_run_config`
+    prefers ``context`` and drops ``configurable`` wholesale — taking
+    ``thread_id`` with it. Send ``configurable``; this mirrors.
+    """
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return
+    context = config.get("context")
+    if not isinstance(context, dict):
+        if not any(k in configurable for k in _CONTEXT_CONFIGURABLE_KEYS):
+            return
+        context = config.setdefault("context", {})
+    if not isinstance(context, dict):
+        return
+    for key in _CONTEXT_CONFIGURABLE_KEYS:
+        if key in configurable:
+            context.setdefault(key, configurable[key])
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -219,6 +259,7 @@ def build_run_config(
             target["agent_name"] = normalized
     if metadata:
         config.setdefault("metadata", {}).update(metadata)
+    _mirror_runtime_visible_keys(config)
     return config
 
 
