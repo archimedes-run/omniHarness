@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..models import Firing, Outcome
 
@@ -32,17 +33,44 @@ class QuietHours:
     start: str = "22:00"
     end: str = "07:30"
     enabled: bool = True
+    #: The window is expressed in THIS zone, not the server's.
+    #:
+    #: Previously `contains` compared the naive local time of whatever instant
+    #: it was handed, so a configured timezone was parsed and ignored. A window
+    #: silently running in the wrong zone is worse than one that is switched
+    #: off, because it looks like it works — the user sees quiet hours in the
+    #: config, sees messages suppressed, and has no reason to check that the
+    #: hours are the ones they wrote.
+    timezone: str = "UTC"
 
     def contains(self, at: datetime) -> bool:
-        """True when `at` falls inside the window, which may span midnight."""
+        """True when `at` falls inside the window, which may span midnight.
+
+        `at` is converted into the configured zone first; a naive `at` is taken
+        to be UTC, matching how the engine stamps events.
+        """
         if not self.enabled:
             return False
         s, e = _parse_hhmm(self.start), _parse_hhmm(self.end)
-        now = at.timetz().replace(tzinfo=None)
+        now = self._local(at).time()
         if s <= e:
             return s <= now < e
         # Spans midnight: 22:00–07:30 is one window, not two.
         return now >= s or now < e
+
+    def _local(self, at: datetime) -> datetime:
+        """Move `at` into the configured zone. An unknown zone falls back to
+        UTC and says so, rather than suppressing at unpredictable hours."""
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=UTC)
+        try:
+            return at.astimezone(ZoneInfo(self.timezone))
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.error(
+                "quiet hours timezone %r is not a known zone; falling back to UTC. The window will not be the one configured.",
+                self.timezone,
+            )
+            return at.astimezone(UTC)
 
     def next_end(self, at: datetime) -> datetime:
         e = _parse_hhmm(self.end)
@@ -54,9 +82,33 @@ class QuietHours:
 
 @dataclass
 class DeferralQueue:
-    """Holds firings suppressed by quiet hours until the window ends."""
+    """Holds firings suppressed by quiet hours until the window ends.
+
+    Durable when a store is supplied. Under single-runner election this list
+    belongs to one worker, and its death would otherwise drop every deferred
+    firing permanently — the fingerprint suppressing re-fire is written before
+    delivery, so nothing re-derives them.
+    """
 
     pending: list[Firing] = field(default_factory=list)
+    store: object | None = None
+    queue_name: str = "quiet_hours"
+
+    def __post_init__(self) -> None:
+        self.restore()
+
+    def restore(self) -> int:
+        """Adopt anything a previous runner left behind. Returns the count."""
+        if self.store is None:
+            return 0
+        recovered = self.store.load(self.queue_name)
+        if recovered:
+            self.pending = recovered + self.pending
+        return len(recovered)
+
+    def _persist(self) -> None:
+        if self.store is not None:
+            self.store.save(self.queue_name, self.pending)
 
     def defer(self, firing: Firing, now: datetime, reason: str) -> None:
         # SUPPRESSED, not QUEUED. The spec distinguishes them and so should the
@@ -67,9 +119,11 @@ class DeferralQueue:
         # because I was mid-conversation?
         firing.resolve(Outcome.SUPPRESSED, reason)
         self.pending.append(firing)
+        self._persist()
 
     def drain(self) -> list[Firing]:
         out, self.pending = self.pending, []
+        self._persist()
         return out
 
     def __len__(self) -> int:

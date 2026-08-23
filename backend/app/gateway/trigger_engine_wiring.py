@@ -31,6 +31,7 @@ from app.trigger_engine.fingerprint import FingerprintStore
 from app.trigger_engine.injector import TurnInjector
 from app.trigger_engine.loop import TriggerLoop
 from app.trigger_engine.models import TriggerType
+from app.trigger_engine.persistence import PendingStore
 from app.trigger_engine.politeness.coalesce import CoalesceWindow
 from app.trigger_engine.politeness.interrupt import InterruptQueue
 from app.trigger_engine.politeness.quiet_hours import DeferralQueue
@@ -77,22 +78,16 @@ def _quiet_hours(engine_config) -> EnforcedQuietHours:
     user wrote in `quiet_hours:` never reached the mechanism enforcing it —
     every test passed because each constructed the enforcing type directly.
 
-    TWO GAPS REMAIN, deliberately not papered over here:
-
-      * The config type has NO `enabled` field, so "quiet hours off" is not
-        expressible in the rules file. This adapter enables it whenever the
-        engine runs, which matches the enforcing type's own default but means
-        a user cannot turn it off by configuration.
-      * The config type has `timezone`; the enforcing type does not, and
-        compares naive local times. A configured timezone is silently ignored.
-
-    Both are Feature 002 defects surfaced by wiring it up, and both change
-    FR-013's semantics to fix, so they are reported rather than decided here.
+    Both types now carry the full set — `enabled` was added to the config type
+    so quiet hours can be switched off from the rules file, and `timezone` to
+    the enforcing type, which previously parsed a zone and then compared naive
+    local times. This adapter therefore copies rather than guessing.
     """
     return EnforcedQuietHours(
         start=engine_config.quiet_hours.start,
         end=engine_config.quiet_hours.end,
-        enabled=True,
+        enabled=engine_config.quiet_hours.enabled,
+        timezone=engine_config.quiet_hours.timezone,
     )
 
 
@@ -105,6 +100,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     audit = AuditLog(path=state / "audit.jsonl", actor=cfg.actor)
     scheduler = Scheduler(path=state / "scheduler.json")
     fingerprints = FingerprintStore(path=state / "fingerprints.json")
+    pending = PendingStore(path=state / "pending.json")
     injector = TurnInjector(post=gateway_post, put=gateway_put, get=gateway_get)
     threads = RuleThreadMap(
         path=state / "threads.json",
@@ -137,10 +133,10 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         # unit test for it kept passing, because those construct their own.
         # See _quiet_hours for why an adapter is needed at all.
         quiet=_quiet_hours(engine_config),
-        deferrals=DeferralQueue(),
+        deferrals=DeferralQueue(store=pending),
         interrupts=InterruptQueue(),
         thread_state=gateway_get,
-        window=CoalesceWindow(window=engine_config.coalesce_window),
+        window=CoalesceWindow(window=engine_config.coalesce_window, store=pending),
     )
 
     return TriggerLoop(
