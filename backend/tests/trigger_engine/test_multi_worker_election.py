@@ -105,12 +105,20 @@ def test_exactly_one_worker_wins_the_election(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _fire_three_rules_in_this_process(deliveries, worker_index: int) -> None:
+RULES = ("a", "b", "c")
+
+
+def _fire_three_rules_in_this_process(deliveries, worker_index: int, n: int) -> None:
     """Each worker runs its own engine — the pre-election behaviour — and
-    coalesces only what it saw itself."""
+    coalesces only the rules that landed on it.
+
+    Assignment is by index, deliberately: `hash()` is randomised per process, so
+    a hash-based split makes this test's outcome depend on PYTHONHASHSEED. It
+    passed locally and failed in CI for exactly that reason.
+    """
     window = CoalesceWindow(window=timedelta(seconds=60))
-    for rule_id in ("a", "b", "c"):
-        if hash((rule_id, worker_index)) % 3 != worker_index % 3:
+    for i, rule_id in enumerate(RULES):
+        if i % n != worker_index:
             continue  # this rule landed on a different worker
         window.add(
             Firing(rule_id=rule_id, event=TriggerEvent(type=TriggerType.CRON, event_id=rule_id, at=NOW), prompt="p"),
@@ -126,7 +134,7 @@ def test_three_rules_across_workers_would_deliver_three_messages_without_electio
     n = gateway_worker_count()
     with mp.Manager() as manager:
         deliveries = manager.list()
-        procs = [mp.Process(target=_fire_three_rules_in_this_process, args=(deliveries, i)) for i in range(n)]
+        procs = [mp.Process(target=_fire_three_rules_in_this_process, args=(deliveries, i, n)) for i in range(n)]
         for p in procs:
             p.start()
         for p in procs:
