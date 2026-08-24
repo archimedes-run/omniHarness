@@ -40,7 +40,11 @@ policy:
 | The file is missing, unreadable, or malformed | **every** tool resolves to Tier 3 | FR-009 |
 | Two patterns match one tool | the **highest** tier wins | FR-037 |
 
-Rejecting a lowering exception at load rather than ignoring it at match time is deliberate: the mistake becomes visible when it is made, not when something fails to be guarded.
+Rejecting a lowering exception at load rather than ignoring it at match time is deliberate, and the reason is about the author rather than the system:
+
+> **A file that silently does something safer than what its author wrote is a file whose author never learns they were wrong.**
+
+Ignoring the exception at match time produces correct behaviour and no understanding. The user keeps a rule they believe is in force, is not, and will write more like it. Failing the reload teaches; ignoring does not. The safe outcome is not sufficient — the author has to find out.
 
 The highest-tier-wins rule for overlapping patterns follows the same direction as FR-037 — ambiguity resolves toward asking.
 
