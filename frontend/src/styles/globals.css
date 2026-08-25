@@ -297,7 +297,7 @@
   --muted: oklch(0.468 0.0325 240.31);
   /* Kept above 0.6 so muted text stays legible on --muted; the light value
    * (0.556) is a contrast failure against a dark surface. */
-  --muted-foreground: oklch(0.42 0.0128 236.64);
+  --muted-foreground: oklch(0.8894 0.0128 236.64);
   --accent: oklch(0.5094 0.0347 239.44);
   --accent-foreground: oklch(1 0 0);
   --destructive: oklch(0.704 0.191 22.216);
