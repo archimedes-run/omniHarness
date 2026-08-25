@@ -313,8 +313,13 @@
     @apply border-border outline-ring/50;
   }
   body {
+    /* NO hardcoded background here. `background-color: white` used to follow
+       this @apply in the same rule, and a later declaration at equal
+       specificity wins unconditionally — so bg-background was overridden on
+       every render and the body stayed white in dark mode.
+       text-foreground was NOT overridden, which is why text colour changed on
+       toggle while the background never did. */
     @apply bg-background text-foreground;
-    background-color: white;
   }
 
   .container-md {
