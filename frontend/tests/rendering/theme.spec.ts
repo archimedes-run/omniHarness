@@ -162,37 +162,26 @@ test.describe("the theme toggle changes what the user sees", () => {
   });
 
   /**
-   * The palette must be CHARCOAL, not neutral black.
+   * The dark background is a CHOSEN value, pinned exactly.
    *
-   * The .dark block used to be a neutral greyscale ramp anchored on
-   * oklch(0.145 0 0) — near-black with zero chroma. Reported as "the dark
-   * colour is just black"; the ask was #36454f, a blue-grey charcoal.
+   * This assertion used to say "charcoal, not neutral black" and checked that
+   * blue led red — encoding #36454f, a blue-grey. The chosen colour is now
+   * #28282B, a near-neutral dark grey, so that check expressed an intent the
+   * design no longer has: it would have passed on #28282B by two points of
+   * blue while asserting nothing anyone cares about.
    *
-   * Asserting on chroma rather than on an exact value leaves room to tune the
-   * shade without rewriting the test, while still failing if someone
-   * "simplifies" the palette back to a neutral ramp.
+   * A brand colour is worth pinning exactly rather than characterising. The
+   * failure message carries the intended value, so a future change is a
+   * deliberate edit here rather than a puzzle.
    */
-  test("the dark background is charcoal, not neutral black", async ({
-    page,
-  }) => {
+  test("the dark background is the chosen #28282B", async ({ page }) => {
     await load(page, "dark");
     const [r, g, b] = await token(page, "--background");
 
     expect(
       { r, g, b },
-      `--background renders rgb(${r}, ${g}, ${b}). A neutral ramp has r=g=b; ` +
-        `charcoal is blue-grey, so blue must lead red.`,
-    ).not.toEqual({ r: g, g, b: g });
-    expect(
-      b!,
-      `blue (${b}) does not lead red (${r}) — this is not a charcoal`,
-    ).toBeGreaterThan(r!);
-
-    const lum = luminance([r!, g!, b!]);
-    expect(
-      lum,
-      `--background is near-black (luminance ${lum.toFixed(4)})`,
-    ).toBeGreaterThan(0.02);
+      `--background renders rgb(${r}, ${g}, ${b}); #28282B is rgb(40, 40, 43)`,
+    ).toEqual({ r: 40, g: 40, b: 43 });
   });
 
   /**

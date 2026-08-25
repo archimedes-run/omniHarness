@@ -8,7 +8,7 @@ name: Theme Rendering
 
 on:
   push:
-    branches: [main, "fix-charcoal-dark-palette"]
+    branches: [main, "set-background-28282b"]
   pull_request:
   workflow_dispatch:
 
