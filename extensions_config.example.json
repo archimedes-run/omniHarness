@@ -39,6 +39,33 @@
       ],
       "env": {},
       "description": "PostgreSQL database access"
+    },
+    "gmail": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@gongrzhe/server-gmail-autoauth-mcp"
+      ],
+      "description": "Email \u2014 READ AND DRAFT ONLY. The send capability is denied below, not classified: FR-012 requires it absent from the tool surface, because a capability that cannot be reached is a stronger guarantee than one that is guarded. A saved draft is its own confirmation gate \u2014 nothing leaves until the user presses send.",
+      "tools": {
+        "deny": [
+          "send_email",
+          "send_draft",
+          "send_message"
+        ]
+      }
+    },
+    "googlecalendar": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@cocal/google-calendar-mcp"
+      ],
+      "description": "Calendar. Tier map lives in .omni-harness/policy/rules.yaml: reads and free/busy are Tier 1, a tentative hold is Tier 2, and delete/update/decline are Tier 3. Creating an event that emails other people is raised to Tier 3 by an argument exception \u2014 the assistant cannot un-reach an inbox."
     }
   },
   "skills": {}

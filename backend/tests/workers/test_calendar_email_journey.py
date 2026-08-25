@@ -86,7 +86,12 @@ def test_nothing_was_sent_because_nothing_can_send():
     Verified against the configured tool surface, not against this run's
     behaviour: a behavioural check shows only that no send happened THIS time.
     """
-    config = json.loads((Path(__file__).resolve().parents[3] / "extensions_config.json").read_text())
+    # The EXAMPLE, not the live file. extensions_config.json is gitignored
+    # runtime state, so a test reading it passes on a developer's machine and
+    # fails on a clean checkout — which is how CI found this. The example is
+    # what ships and what a new user copies, so it is also where the deny has
+    # to be for the guarantee to hold on a fresh install.
+    config = json.loads((Path(__file__).resolve().parents[3] / "extensions_config.example.json").read_text())
     gmail = config["mcpServers"]["gmail"]
 
     denied = set(gmail["tools"]["deny"])
