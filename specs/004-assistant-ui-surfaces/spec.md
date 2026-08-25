@@ -220,6 +220,21 @@ confirm by inspection that the tool was not executed.
   reported as already resolved, naming the outcome, distinctly from a failure to submit.
 - **FR-008**: The surface MUST distinguish "no actions are pending" from "the pending
   set could not be read".
+- **FR-009**: Above a configurable count of resolved targets, confirmation MUST require
+  the user to type a value derived from the plan — the number of resolved targets —
+  rather than to click. Below the threshold a click alone confirms.
+  - The typed value MUST be derived from the plan, not a fixed phrase. A fixed phrase
+    becomes muscle memory and is producible without reading; a count is producible only
+    by having read what is being approved.
+  - The threshold MUST be configurable, and its default is **10 resolved targets** — a
+    stated guess, not a measured value (Article X). It is set where a single click
+    stops feeling proportionate to the blast radius, and is expected to move once the
+    surface has been used.
+  - An incorrect value MUST NOT confirm, and MUST NOT consume or resolve the action.
+  - This is the cheap version of a blast-radius gate: deleting six events and deleting
+    sixty are currently one identical click apart, and the interface shows no difference
+    in weight. It costs almost nothing here because scope is already carried in the
+    resolved targets.
 
 ### Functional Requirements — Coding sessions (Surface 2)
 
@@ -347,6 +362,11 @@ confirm by inspection that the tool was not executed.
 - **SC-015**: A record whose display fails redaction is suppressed, and the suppression
   is visible as such rather than as absent data.
 - **SC-016**: No test in this feature reads a gitignored path.
+- **SC-018**: An action whose resolved targets exceed the configured threshold cannot be
+  confirmed by clicking alone; a correct typed target count confirms it, and an
+  incorrect one neither confirms nor resolves it.
+- **SC-019**: The threshold is readable from configuration and a changed value changes
+  which actions demand the typed count.
 - **SC-017**: The six accessibility rules are set to error and the build fails on a
   deliberate violation.
 
@@ -358,11 +378,24 @@ confirm by inspection that the tool was not executed.
   navigation, component library and theme tokens. No new authentication model is
   introduced; whoever can reach the workspace can reach these surfaces.
 - **Pressing an explicit Confirm control is itself the deliberate act** that exact
-  string matching was standing in for, and no additional typed phrase is required.
-  Article XIII is satisfied because initiation and confirmation remain separate acts by
-  separate parties — the assistant proposes, the user presses. Recorded as an assumption
-  because it is a security-relevant judgement and the cheapest place to overrule it is
-  here.
+  string matching was standing in for, and no additional typed phrase is required at
+  ordinary scope. The security property being defended is the PROVENANCE of the act,
+  and a click from an authenticated browser session is a trusted channel. A typed
+  phrase on every confirmation buys nothing against that threat and produces the
+  reflex-approval fatigue that makes confirmation gates worthless. Article XIII is
+  satisfied because initiation and confirmation remain separate acts by separate
+  parties — the assistant proposes, the user presses.
+
+  **Amended with a scope threshold (FR-009).** Above a configurable count of resolved
+  targets, confirmation requires typing the target count rather than clicking. Provenance
+  is the property at ordinary scope; at large scope the additional property worth
+  defending is that the user has actually READ the scope, and a click cannot demonstrate
+  that. The typed value is derived from the plan rather than fixed, because a fixed
+  phrase becomes muscle memory and is producible without reading.
+
+  Both halves remain recorded as an assumption rather than a derived requirement,
+  because both are security-relevant judgements rather than consequences of anything
+  above them, and the cheapest place to overrule either is here.
 - **Liveness is achieved by client-side countdown plus periodic refresh**, not by a
   streaming connection. The expiry requirement in FR-005 concerns what the user sees, so
   a refresh interval short enough to satisfy it is sufficient; the streaming path that
