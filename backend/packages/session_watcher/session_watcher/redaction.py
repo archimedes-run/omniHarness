@@ -126,9 +126,25 @@ def _shorten_paths(text: str) -> str:
 
 
 def redact(text: str, channel: Channel = Channel.LOCAL) -> str:
-    """Redact for a channel. Raises RedactionError; callers must fail closed."""
-    if text is None:
-        return ""
+    """Redact for a channel. Raises RedactionError; callers must fail closed.
+
+    THERE IS DELIBERATELY NO `if text is None` GUARD. One existed and was
+    removed: mypy reported it unreachable (the parameter is `str`), and tracing
+    every caller confirmed nothing passes None —
+
+        release.py         merge() returns str, explicitly "" when empty
+        server.py          raw = summary.text if summary else "", and
+                           Summary.text is typed str
+        wiring.py          passes through from release.py
+
+    — in production or in tests.
+
+    But dead was not the worst of it. The guard returned "", which reads
+    downstream as "successfully redacted to nothing" and DELIVERS. Without it,
+    a None falls into the broad handler below, becomes a RedactionError, and
+    `redact_or_suppress` suppresses the message. On a security path those are
+    opposite outcomes, and the guard was short-circuiting the safe one.
+    """
     try:
         out, _ = _apply_patterns(text)
         if channel is Channel.REMOTE:

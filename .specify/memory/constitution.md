@@ -249,9 +249,25 @@ falling back to the shipped default. Substituting silently runs a different
 policy than the operator wrote, which is a second guarantee lost while fixing
 the first.
 
-**The check**: every path a requirement reads from MUST resolve to a tracked
-file, and that MUST be verified against a fresh clone rather than by inspection.
-Inspection is exactly what cannot see this — the file is right there.
+**THIS APPLIES TO TESTS TOO.** A test asserting against untracked config is as
+hollow as a requirement reading from one, and worse in one respect: a
+requirement at least fails visibly when exercised, while the test simply stops
+proving anything and still reports green.
+
+It was reproduced two days after this article was ratified — a test asserting
+"the shipped config declares a thinking-capable model" read `config.yaml`, which
+is gitignored. It would have passed where it was written and proved nothing
+anywhere else.
+
+The one legitimate exception: a test MAY read a gitignored path as a
+**precondition to skip**. That is the opposite failure mode — the test declines
+to run rather than pretending to have proved something. Reading one as a
+*source of assertions* is what is forbidden.
+
+**The check**: every path a requirement OR A TEST reads from MUST resolve to a
+tracked file, and that MUST be verified against a fresh clone rather than by
+inspection. Inspection is exactly what cannot see this — the file is right
+there.
 
 Rationale: the other articles describe behaviour the product must have. This one
 is about whether the product a user installs is the product that was tested. A

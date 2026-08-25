@@ -126,6 +126,96 @@ def test_gitignored_paths_are_overrides_with_a_shipped_default_beneath(tracked):
         assert default in tracked, f"{override} is gitignored and {default} is NOT tracked — so there is no shipped default beneath the override, and a fresh clone has neither (Article XIV)"
 
 
+#: Paths that TESTS read from. A test asserting against untracked config is as
+#: hollow as a requirement reading from one — it passes on the machine where it
+#: was written and fails, or worse silently skips, on a clean checkout.
+#:
+#: This category exists because it was reproduced two days after Article XIV was
+#: ratified: a test asserting "the shipped config declares a thinking-capable
+#: model" read `config.yaml`, which is gitignored.
+TEST_READ_PATHS = [
+    ("config.example.yaml", "frontend mode-mapping test — asserts a thinking-capable model ships"),
+    ("extensions_config.example.json", "worker surface tests — assert the send capability is denied"),
+    ("backend/app/policy/default_rules.yaml", "shipped-rules tests — assert 001/002 tools stay Tier 1"),
+    ("backend/app/trigger_engine/default_rules.json", "wiring tests — assert the shipped defaults parse and are disabled"),
+]
+
+
+@pytest.mark.parametrize("path,reader", TEST_READ_PATHS)
+def test_a_path_a_test_reads_is_tracked(tracked, path, reader):
+    """Article XIV, applied to tests.
+
+    A requirement reading untracked config loses its guarantee on a fresh
+    clone. A TEST reading untracked config loses its evidence — which is worse
+    in one respect: the requirement at least fails visibly when exercised, while
+    the test simply stops proving anything and still reports green.
+    """
+    assert path in tracked, f"{path} is not tracked, and it is read by: {reader}.\n\nOn a clean checkout that test asserts against a file that is not there. It passes where it was written and proves nothing anywhere else."
+
+
+def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
+    """Scans the test suites for reads of a REPO-ROOT gitignored path.
+
+    Narrow on purpose. ``tmp_path / "config.yaml"`` is legitimate — a test
+    writing its own fixture — and an earlier, broader version of this check
+    flagged those plus every docstring that mentioned a filename. A check with a
+    high false-positive rate gets a whitelist, then gets ignored, then gets
+    deleted.
+
+    What it looks for is the shape that actually occurred: navigating UP to the
+    repository root with ``parents[...]`` and reading a gitignored file from
+    there. That is the only way a test picks up the developer's real config
+    rather than one it made itself.
+
+    LIMIT, stated rather than implied: a computed path defeats this. It catches
+    the literal form, which is the form the bug took — twice, once in each
+    language.
+    """
+    import re
+
+    #: Reads that are deliberate, each with the reason. A file may read a
+    #: gitignored path as a PRECONDITION TO SKIP — that is the opposite failure
+    #: mode: the test declines to run rather than pretending to have proved
+    #: something. What is forbidden is reading one as a source of assertions.
+    allowed = {
+        "backend/tests/test_client_live.py": "reads config.yaml to SKIP when real credentials are absent; a precondition, not an assertion source",
+    }
+
+    gitignored = ("config.yaml", "extensions_config.json", ".omni-harness")
+    pattern = re.compile(r"""["'][^"']*(?:""" + "|".join(re.escape(g) for g in gitignored) + r")")
+    comment_starts = ("#", "//", "*", '"""', "'''")
+    offenders: list[str] = []
+
+    for root in (REPO / "backend" / "tests", REPO / "frontend" / "tests"):
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.suffix not in (".py", ".ts", ".tsx") or not path.is_file():
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                stripped = line.lstrip()
+                if stripped.startswith(comment_starts) or "example" in line:
+                    continue
+                # BOTH navigation idioms. Python tests use `parents[N]`;
+                # TypeScript tests use `join(__dirname, "..")`. An earlier
+                # version checked only the first and missed a frontend test
+                # reading gitignored config — the exact bug this exists for,
+                # found by CI instead.
+                if "parents[" not in line and "__dirname" not in line:
+                    continue
+                if not pattern.search(line):
+                    continue
+                if str(path.relative_to(REPO)) in allowed:
+                    continue
+                offenders.append(f"{path.relative_to(REPO)}:{number}: {stripped[:70]}")
+
+    assert not offenders, (
+        "these tests navigate to the repo root and read a gitignored path, so they assert "
+        "against a file that does not exist on a clean checkout:\n  " + "\n  ".join(offenders) + "\n\nIf the read is a PRECONDITION TO SKIP rather than a source of assertions, add the "
+        "file to `allowed` with that reason."
+    )
+
+
 def test_the_check_would_notice_an_untracked_requirement_file(tracked, tmp_path):
     """CONTROL (Article XII).
 
