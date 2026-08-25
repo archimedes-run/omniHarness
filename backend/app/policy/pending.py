@@ -125,30 +125,38 @@ class PendingStore:
                 out.append(action)
         return out
 
-    def claim(self, action_id: str, claimant: str) -> bool:
-        """Take exclusive ownership. True for exactly one caller (FR-030).
+    def claim(self, action_id: str, claimant: str) -> PendingAction | None:
+        """Take exclusive ownership. Returns the claimed action for exactly one
+        caller, None for everyone else (FR-030).
 
         `os.link` fails if the destination exists, and the OS makes that check
         and the creation one indivisible operation — across processes, without a
         lock. A read-then-write would let two workers both see "unclaimed".
+
+        RETURNS THE ACTION rather than a boolean, deliberately. A caller that
+        claims and then re-reads has a window between the two in which another
+        process can write the record, and the caller sees a version without its
+        own claim on it — which surfaces as an audit entry that does not say who
+        authorised the execution. Handing back the object it just wrote removes
+        the window rather than narrowing it.
         """
         source, claim = self._path(action_id), self._claim_path(action_id)
         if not source.exists():
-            return False
+            return None
         try:
             os.link(source, claim)
         except FileExistsError:
-            return False
+            return None
         except OSError as exc:
             logger.error("could not claim pending action %s: %s", action_id, exc)
-            return False
+            return None
 
         action = self.get(action_id)
         if action is None:
-            return False
+            return None
         action.claimed_by = claimant
         self.save(action)
-        return True
+        return action
 
     def resolve(self, action: PendingAction, outcome: Outcome, reason: str = "") -> PendingAction:
         action.resolve(outcome, reason)

@@ -59,12 +59,13 @@ def test_only_one_claim_succeeds(tmp_path):
     first = store.claim("d" * 12, "worker-1")
     second = store.claim("d" * 12, "worker-2")
 
-    assert first is True
-    assert second is False, "two workers both claimed the same action; a calendar cleanup would run twice"
+    assert first is not None, "the first claim should have succeeded"
+    assert first.claimed_by == "worker-1", "claim() must return the action carrying the claim it just wrote"
+    assert second is None, "two workers both claimed the same action; a calendar cleanup would run twice"
 
 
 def _try_claim(directory: str, action_id: str, results, index: int) -> None:
-    results[index] = 1 if PendingStore(directory=__import__("pathlib").Path(directory)).claim(action_id, f"worker-{index}") else 0
+    results[index] = 1 if PendingStore(directory=__import__("pathlib").Path(directory)).claim(action_id, f"worker-{index}") is not None else 0
 
 
 def test_only_one_claim_succeeds_across_processes(tmp_path):

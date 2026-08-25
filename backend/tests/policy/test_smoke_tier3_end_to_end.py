@@ -91,11 +91,14 @@ def test_one_tier3_action_from_statement_to_audit(system):
     # 3. CONFIRM — from a genuine user turn, claimed atomically.
     verdict = recognise(HumanMessage(content=f"yes {action.id}"), pending)
     assert verdict.verdict is Verdict.CONFIRM
-    assert system.store.claim(action.id, "worker-1") is True
-    assert system.store.claim(action.id, "worker-2") is False
+    claimed = system.store.claim(action.id, "worker-1")
+    assert claimed is not None
+    assert system.store.claim(action.id, "worker-2") is None
 
-    # 4. EXECUTE — the recorded targets still match, so it runs.
-    claimed = system.store.get(action.id)
+    # 4. EXECUTE — the recorded targets still match, so it runs. `claimed` is
+    # the object claim() wrote, not a re-read: re-reading opens a window in
+    # which another worker's write can drop this claim, which surfaces as an
+    # audit entry that does not say who authorised the execution.
     result = system.middleware.execute_confirmed(
         claimed,
         run_tool=lambda name, args: executed.append((name, args)) or "declined 2 meetings",
