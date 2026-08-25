@@ -46,6 +46,7 @@ EXPIRED = "expired"
 TARGETS_DRIFTED = "targets_drifted"
 UNRECOGNISED = "unrecognised"
 THRESHOLD_NOT_MET = "threshold_not_met"
+FAILED = "failed"
 
 #: Internal, and deliberately NOT one of the seven. It means "this turn said
 #: nothing about any pending action", which is what almost every turn is. It
@@ -159,7 +160,23 @@ class ConfirmationFlow:
             return FlowResult(ALREADY_RESOLVED, action.id, "another route confirmed that first", expired_meanwhile=expired)
 
         before = list(claimed.targets)
-        result = self.middleware.execute_confirmed(claimed, run_tool=run_tool, current_targets=current_targets)
+        try:
+            result = self.middleware.execute_confirmed(claimed, run_tool=run_tool, current_targets=current_targets)
+        except Exception as exc:  # noqa: BLE001 — see below
+            # A CLAIMED ACTION MUST NEVER BE LEFT UNRESOLVED. The claim is a
+            # one-shot file link, so an action that is claimed and still open
+            # can never be confirmed again and never reports why — recoverable
+            # only by expiry, and silent until then. Found by running a real
+            # gateway: a tool raised on a missing injected argument and the
+            # action sat claimed with outcome None.
+            self.store.resolve(claimed, Outcome.FAILED, f"authorised, but the tool did not complete: {exc}")
+            return FlowResult(
+                FAILED,
+                claimed.id,
+                f"You approved it and I could not complete it: {exc}",
+                detail={"error": str(exc)},
+                expired_meanwhile=expired,
+            )
         refreshed = self.store.get(claimed.id)
         if refreshed is not None and refreshed.outcome == Outcome.TARGETS_DRIFTED:
             return FlowResult(

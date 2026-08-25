@@ -23,7 +23,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents.middleware import AgentMiddleware
 
@@ -174,13 +174,16 @@ class PolicyMiddleware(AgentMiddleware):
             if name:
                 registry[name] = tool
 
+        runtime = getattr(request, "runtime", None)
+        state = getattr(request, "state", None)
+
         def run(tool_name: str, arguments: dict) -> Any:
             tool = registry.get(tool_name)
             if tool is None:
                 # Loud, not silent. A confirmation that cannot execute must say
                 # so; the failure this whole phase closes was a quiet one.
                 raise LookupError(f"tool {tool_name!r} is not available on this worker, so the confirmation cannot be completed")
-            return tool.invoke(arguments)
+            return tool.invoke(_with_injected(tool, arguments, runtime, state))
 
         return run
 
@@ -314,3 +317,38 @@ class PolicyMiddleware(AgentMiddleware):
         if self.audit is not None:
             self.audit.record_tier3(action=action, actor=self.actor, now=self.now())
         return result
+
+
+def _with_injected(tool: Any, arguments: dict, runtime: Any, state: Any) -> dict:
+    """Fill framework-injected parameters a stored argument dict cannot carry.
+
+    A PendingAction records what the MODEL chose — path, content, and so on. It
+    cannot record `runtime`, which the agent's own tool node injects and which is
+    not JSON. Invoking with the stored arguments alone raised
+
+        1 validation error for write_file
+        runtime  Field required
+
+    on a real gateway, AFTER the confirmation had been recognised and the claim
+    taken. The gate worked; the execution did not.
+    """
+    from langchain.tools import ToolRuntime
+
+    schema = getattr(tool, "args_schema", None)
+    fields = set(getattr(schema, "model_fields", {}) or {})
+    if "runtime" not in fields or runtime is None:
+        return dict(arguments)
+    # `tools`, `execution_info` and `server_info` carry defaults and are left
+    # to them. The six without defaults are passed through from the live
+    # runtime; mypy types three of them as non-optional while the runtime hands
+    # back None for them in ordinary operation, so the values are widened here
+    # rather than asserted — a cast would claim something that is not true.
+    built = ToolRuntime(
+        state=state,
+        context=getattr(runtime, "context", None),
+        config=cast("Any", getattr(runtime, "config", None)),
+        stream_writer=cast("Any", getattr(runtime, "stream_writer", None)),
+        tool_call_id=None,
+        store=cast("Any", getattr(runtime, "store", None)),
+    )
+    return {**arguments, "runtime": built}

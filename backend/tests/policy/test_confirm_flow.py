@@ -90,3 +90,28 @@ def test_threshold_not_met(build_flow, make_pending):
     assert system.ran == []
     assert system.store.get(action.id).outcome is None, "a wrong count must not resolve the action"
     assert system.store.get(action.id).claimed_by is None, "a wrong count must not claim the action"
+
+
+def test_a_tool_that_raises_never_leaves_the_action_claimed_and_open(system, make_pending):
+    """Found by running a real gateway, not by this suite.
+
+    A confirmed action was claimed and the tool then raised on a missing
+    injected argument. The action sat with `claimed_by` set and `outcome` None:
+    the claim is a one-shot file link, so it could never be confirmed again, and
+    nothing said why. Recoverable only by expiry, and silent until then.
+
+    Every test here used a plain callable, which cannot raise that way — the
+    reason the suite was green while the real thing was not.
+    """
+    action = make_pending(system, targets=["Standup"])
+
+    def explodes(name, arguments):
+        raise ValueError("1 validation error for write_file: runtime Field required")
+
+    result = system.flow.from_message(HumanMessage(content="yes"), run_tool=explodes)
+
+    assert result.outcome == cf.FAILED
+    assert "runtime" in result.message, "the user is not told what went wrong"
+    stored = system.store.get(action.id)
+    assert stored.outcome == Outcome.FAILED, "the action was left claimed and open"
+    assert stored.outcome_reason

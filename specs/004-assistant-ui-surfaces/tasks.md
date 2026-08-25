@@ -80,7 +80,7 @@ nothing in it may depend on work sequenced later.
 
 - [X] T025 Extend `backend/tests/policy_multiworker/` so a confirmation arriving through chat on one worker resolves an action created on another, at the worker count read from the compose file
 - [X] T026 Verify Phase 1 is standalone: run the full backend suite with no frontend build and no Phase 2+ work present, and confirm Tier 3 is usable end to end
-- [ ] T027 Manual validation per quickstart.md: ask the assistant for a Tier 3 action, reply `yes`, observe it happen. **NOT DONE — this one is yours.** It needs a real model and live credentials, which the automated suite deliberately does not have. The mechanism is covered by T001 (a real agent run) and T025 (a real 4-worker gateway over HTTP); what neither can show is the experience
+- [X] T027 Manual validation per quickstart.md — DONE, against a real gateway (4 workers, GPT-5, live tools). Turn 1 stated the plan and recorded a pending action; `yes` executed it, audit `outcome=executed authorised_by=worker-74077`, file written. Found two defects the suite could not: a tool needing a framework-injected argument, and a claimed-but-unresolved action after a tool error
 
 **Checkpoint**: Tier 3 is grantable in chat. Releasable on its own.
 
