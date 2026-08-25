@@ -62,7 +62,12 @@ function contrast(fg: number[], bg: number[]) {
 }
 
 async function token(page: Page, name: string) {
-  return await page.evaluate<number[]>(RESOLVE + `("${name}")`);
+  // The parens around RESOLVE are load-bearing: it is an arrow-function
+  // EXPRESSION, so `(t) => {...}("--background")` is a SyntaxError rather than
+  // a call. Without them every contrast assertion failed identically with
+  // `SyntaxError: Unexpected token '('` — nine red tests, none of which had
+  // reached the palette they claimed to measure.
+  return await page.evaluate<number[]>(`(${RESOLVE})("${name}")`);
 }
 
 async function computed(page: Page, prop: string) {
