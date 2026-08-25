@@ -259,6 +259,11 @@ def get_available_tools(
             wanted_connectors = [sid.split(":", 1)[1].upper() for sid in selected_sources if sid.startswith("connector:") and sid.split(":", 1)[1].upper() in CONNECTOR_SLUGS]
             if wanted_connectors:
                 connector_tools = load_connector_tools(user_id, wanted_connectors)
+                # FR-012/FR-013: the SECOND assembly point. Gmail and Google
+                # Calendar exist as connector toolkits, and this path never
+                # touches mcp/tools.py — a deny applied only there would leave
+                # connector:GMAIL and its send tool fully exposed.
+                connector_tools = apply_connector_tool_surface(config, connector_tools)
                 logger.info(f"Loaded {len(connector_tools)} live connector tool(s) for {len(wanted_connectors)} toolkit(s)")
         except Exception as e:
             logger.error(f"Failed to load connector tools: {e}")
@@ -304,3 +309,36 @@ def get_available_tools(
         raise ToolCapExceededError(count=len(unique_tools), cap=max_tools)
 
     return unique_tools
+
+
+def apply_connector_tool_surface(config, connector_tools: list[BaseTool]) -> list[BaseTool]:
+    """Drop denied tools from the connector surface (FR-012, FR-013).
+
+    Connector toolkits are configured under the same ``mcpServers`` key by their
+    lowercased slug, so ``GMAIL`` reads its surface from a ``gmail`` entry. That
+    keeps one place to express "this tool must not exist", regardless of which
+    route the tool arrives by — which is what makes the tool-surface gate
+    assertable on the FINAL assembled list rather than per path.
+    """
+    from omniharness.config.extensions_config import ExtensionsConfig
+
+    try:
+        extensions = ExtensionsConfig.from_file()
+    except Exception:  # noqa: BLE001 — a config read must not break tool loading
+        return connector_tools
+
+    kept: list[BaseTool] = []
+    for tool in connector_tools:
+        server = None
+        unprefixed = tool.name
+        for name, entry in extensions.mcp_servers.items():
+            prefix = f"{name}_"
+            if tool.name.startswith(prefix):
+                server, unprefixed = entry, tool.name[len(prefix) :]
+                break
+        surface = getattr(server, "tools", None)
+        if surface is None or surface.permits(unprefixed):
+            kept.append(tool)
+        else:
+            logger.info("Tool surface: connector tool '%s' is denied and will not be exposed", tool.name)
+    return kept

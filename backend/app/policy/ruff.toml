@@ -1,0 +1,21 @@
+# Import bans supporting Gate A (FR-002, FR-003).
+#
+# The policy layer runs INSIDE the dispatch path, so unlike Features 001 and 002
+# it may import agent core — that coupling is recorded deliberately in plan.md's
+# Complexity Tracking, because a classification check that can be skipped is not
+# a gate. What it must NOT do is reach around the chokepoint.
+
+extend = "../../ruff.toml"
+
+[lint]
+extend-select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+# Constructing an agent here would create a sixth dispatch path — precisely what
+# FR-002 forbids and Gate A checks for.
+"langchain.agents.create_agent".msg = "FR-002: the policy layer occupies the dispatch path, it does not construct agents. A create_agent call here would be a sixth site."
+# Shelling out from a component that decides what is permitted to run would
+# bypass the classification it exists to perform.
+"subprocess".msg = "FR-001: a component that decides what may run must not run things itself."
+"os.system".msg = "FR-001: see subprocess."
+"os.popen".msg = "FR-001: see subprocess."

@@ -25,39 +25,39 @@
 
 ### Setup
 
-- [ ] T001 Create the module skeleton at `backend/app/policy/` with `__init__.py`, and register `backend/tests/policy/`, `backend/tests/workers/`, `backend/tests/policy_multiworker/` as test directories per repo convention (no `__init__.py` in test dirs — matches Features 001/002).
-- [ ] T002 [P] Add `backend/app/policy/ruff.toml` with `flake8-tidy-imports` banned-api entries supporting Gate A, each ban carrying a comment naming what it protects.
-- [ ] T003 [P] Add `PolicyConfig` to `backend/packages/harness/omniharness/config/policy_config.py` with `enabled: bool = False`, rules path, and `expires_after` default; wire into `AppConfig`. Flag defaults OFF (FR-007, Article IX).
+- [X] T001 Create the module skeleton at `backend/app/policy/` with `__init__.py`, and register `backend/tests/policy/`, `backend/tests/workers/`, `backend/tests/policy_multiworker/` as test directories per repo convention (no `__init__.py` in test dirs — matches Features 001/002).
+- [X] T002 [P] Add `backend/app/policy/ruff.toml` with `flake8-tidy-imports` banned-api entries supporting Gate A, each ban carrying a comment naming what it protects.
+- [X] T003 [P] Add `PolicyConfig` to `backend/packages/harness/omniharness/config/policy_config.py` with `enabled: bool = False`, rules path, and `expires_after` default; wire into `AppConfig`. Flag defaults OFF (FR-007, Article IX).
 
 ### Spike 1 — subagent suspend and resume (BLOCKING, FR-032)
 
-- [ ] T004 **Positive control** — `backend/tests/policy/test_suspend_resume_control.py` asserts the LEAD agent, which already has a checkpointer attached at run time, suspends inside `wrap_tool_call` and resumes with a tool result. Must pass before T005's result means anything: a failure here is a harness problem, not a subagent problem (Article XII).
-- [ ] T005 Reproduce VP-008 in `backend/tests/policy/test_subagent_suspend.py` — with no checkpointer the subagent run ENDS at the suspension point, the tool never runs, and nothing raises. Record the observation.
-- [ ] T006 Attach a checkpointer to the subagent agent in `backend/packages/harness/omniharness/subagents/executor.py::_create_agent`, mirroring how the run worker attaches one to the lead agent (FR-032).
-- [ ] T007 Extend `backend/tests/policy/test_subagent_suspend.py` to confirm **after a delay** — suspend, wait, resume, then assert the tool ran. State in the docstring that an instant confirmation cannot distinguish suspend-and-resume from stop-and-abandon (FR-032, SC-017, Article XI).
+- [X] T004 **Positive control** — `backend/tests/policy/test_suspend_resume_control.py` asserts the LEAD agent, which already has a checkpointer attached at run time, suspends inside `wrap_tool_call` and resumes with a tool result. Must pass before T005's result means anything: a failure here is a harness problem, not a subagent problem (Article XII).
+- [X] T005 Reproduce VP-008 in `backend/tests/policy/test_subagent_suspend.py` — with no checkpointer the subagent run ENDS at the suspension point, the tool never runs, and nothing raises. Record the observation.
+- [X] T006 Attach a checkpointer to the subagent agent in `backend/packages/harness/omniharness/subagents/executor.py::_create_agent`, mirroring how the run worker attaches one to the lead agent (FR-032).
+- [X] T007 Extend `backend/tests/policy/test_subagent_suspend.py` to confirm **after a delay** — suspend, wait, resume, then assert the tool ran. State in the docstring that an instant confirmation cannot distinguish suspend-and-resume from stop-and-abandon (FR-032, SC-017, Article XI).
 
 ### Spike 2 — tool-surface deny (BLOCKING for Phase 4, FR-013)
 
-- [ ] T008 **Positive control** — `backend/tests/workers/test_tool_surface.py` asserts a chosen tool IS present in the assembled list when no deny rule exists. Without this, T010/T011's absence proves nothing (Article XII).
-- [ ] T009 Add `tools: {allow: [...], deny: [...]}` to `McpServerConfig` in `backend/packages/harness/omniharness/config/extensions_config.py`, keyed on UNPREFIXED tool names per `contracts/tool-surface.md` (FR-013).
-- [ ] T010 Apply the deny list in `backend/packages/harness/omniharness/mcp/tools.py` between `single_client.get_tools()` and `tools.extend(server_tools)` — the per-server load point (FR-013).
-- [ ] T011 Apply the same deny list to connector tools in `backend/packages/harness/omniharness/tools/tools.py` where `load_connector_tools` returns, because `GMAIL` and `GOOGLECALENDAR` already exist in `CONNECTOR_SLUGS` and never pass through `mcp/tools.py` (FR-013, research R4).
+- [X] T008 **Positive control** — `backend/tests/workers/test_tool_surface.py` asserts a chosen tool IS present in the assembled list when no deny rule exists. Without this, T010/T011's absence proves nothing (Article XII).
+- [X] T009 Add `tools: {allow: [...], deny: [...]}` to `McpServerConfig` in `backend/packages/harness/omniharness/config/extensions_config.py`, keyed on UNPREFIXED tool names per `contracts/tool-surface.md` (FR-013).
+- [X] T010 Apply the deny list in `backend/packages/harness/omniharness/mcp/tools.py` between `single_client.get_tools()` and `tools.extend(server_tools)` — the per-server load point (FR-013).
+- [X] T011 Apply the same deny list to connector tools in `backend/packages/harness/omniharness/tools/tools.py` where `load_connector_tools` returns, because `GMAIL` and `GOOGLECALENDAR` already exist in `CONNECTOR_SLUGS` and never pass through `mcp/tools.py` (FR-013, research R4).
 
 ### Spike 3 — browser profile (BLOCKING for Phase 4 browser work, FR-017)
 
-- [ ] T012 **Positive control, runs FIRST** — stand up Playwright MCP in `extensions_config.json` and demonstrate in `backend/tests/workers/test_browser_profile.py` that the browser DOES persist a cookie into its configured profile. Until this passes, any "no user cookies" result is untrustworthy: against an inert profile mechanism it passes for the wrong reason and reports the strongest possible answer (Article XII). **This task owns the browser MCP configuration; Phase 4 extends it rather than redoing it.**
-- [ ] T013 Measure and record the browser's disk footprint and idle memory in `spike-results.md` — measured, not estimated (Article X) — and confirm it runs in the lean non-Docker profile (Article VI). If it cannot, STOP and report before Phase 4 designs around it.
+- [!] T012 **BLOCKED — not run.** Positive control, runs FIRST — stand up Playwright MCP in `extensions_config.json` and demonstrate in `backend/tests/workers/test_browser_profile.py` that the browser DOES persist a cookie into its configured profile. Until this passes, any "no user cookies" result is untrustworthy: against an inert profile mechanism it passes for the wrong reason and reports the strongest possible answer (Article XII). **This task owns the browser MCP configuration; Phase 4 extends it rather than redoing it.**
+- [~] T013 **PARTIAL — footprint measured, lean-profile confirmation blocked.** Measure and record the browser's disk footprint and idle memory in `spike-results.md` — measured, not estimated (Article X) — and confirm it runs in the lean non-Docker profile (Article VI). If it cannot, STOP and report before Phase 4 designs around it.
 
 ### Spike 4 — tool-result message lineage (BLOCKING for Phase 3, FR-005/FR-006)
 
 *Promoted from Phase 3 by analyze finding P3. research R8 marks this UNMEASURED, and if tool-result content cannot be distinguished from user content in message state then FR-005, FR-006 and SC-002 are unimplementable as designed — a discovery that must not happen inside the phase that depends on it.*
 
-- [ ] T014 **Positive control** — in `backend/tests/policy/test_lineage_control.py`, construct an agent state containing a KNOWN tool-result message and assert the lineage check detects it. A check that has never been seen identifying real tool-result content is not evidence that content is user-originated (Article XII).
-- [ ] T015 Establish the tool-result message shape across every tool source (builtin, MCP, connector, ACP) in `backend/app/policy/lineage.py`, and record in `spike-results.md` whether the distinction holds uniformly. If any source produces tool results indistinguishable from user turns, STOP and report (research R8).
+- [X] T014 **Positive control** — in `backend/tests/policy/test_lineage_control.py`, construct an agent state containing a KNOWN tool-result message and assert the lineage check detects it. A check that has never been seen identifying real tool-result content is not evidence that content is user-originated (Article XII).
+- [X] T015 Establish the tool-result message shape across every tool source (builtin, MCP, connector, ACP) in `backend/app/policy/lineage.py`, and record in `spike-results.md` whether the distinction holds uniformly. If any source produces tool results indistinguishable from user turns, STOP and report (research R8).
 
 ### Phase 1 checkpoint
 
-- [ ] T016 **CHECKPOINT** — confirm T004+T007 (subagent resumes after a delay), T008+T010+T011 (deny works on both paths, control included), T012+T013 (browser profile with measured footprint), T014+T015 (lineage distinguishable). Write all four spike outcomes into `specs/003-policy-engine-workers/spike-results.md`, including any that failed. **No Phase 2 task may start before this passes.**
+- [X] T016 **CHECKPOINT — 3 of 4 spikes measured, Spike 3 BLOCKED (see spike-results.md).** — confirm T004+T007 (subagent resumes after a delay), T008+T010+T011 (deny works on both paths, control included), T012+T013 (browser profile with measured footprint), T014+T015 (lineage distinguishable). Write all four spike outcomes into `specs/003-policy-engine-workers/spike-results.md`, including any that failed. **No Phase 2 task may start before this passes.**
 
 ---
 

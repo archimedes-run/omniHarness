@@ -69,6 +69,25 @@ class McpOAuthConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class McpToolSurface(BaseModel):
+    """Which of a server's tools reach the agent (FR-012, FR-013).
+
+    Names are UNPREFIXED — as the server exposes them, not as
+    ``<server>_<tool>`` after assembly. A user configures a server; they should
+    not have to know the prefixing convention.
+
+    When both are set, ``allow`` is the whitelist and ``deny`` subtracts from it.
+    """
+
+    allow: list[str] | None = Field(default=None, description="If set, ONLY these tools are exposed.")
+    deny: list[str] = Field(default_factory=list, description="Tools removed from the surface entirely.")
+
+    def permits(self, unprefixed_name: str) -> bool:
+        if self.allow is not None and unprefixed_name not in self.allow:
+            return False
+        return unprefixed_name not in self.deny
+
+
 class McpServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
@@ -81,6 +100,15 @@ class McpServerConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP headers to send (for sse or http type)")
     oauth: McpOAuthConfig | None = Field(default=None, description="OAuth configuration (for sse or http type)")
     description: str = Field(default="", description="Human-readable description of what this MCP server provides")
+    tools: "McpToolSurface | None" = Field(
+        default=None,
+        description=(
+            "Per-tool allow/deny for this server's surface (FR-012, FR-013). "
+            "Controls what the agent can call AT ALL, which is a stronger "
+            "guarantee than classifying a tool as high-risk: a capability that "
+            "cannot be reached is not one a bug in the permission path can use."
+        ),
+    )
     model_config = ConfigDict(extra="allow")
 
 
