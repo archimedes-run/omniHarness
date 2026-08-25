@@ -8,7 +8,7 @@ name: Theme Rendering
 
 on:
   push:
-    branches: [main, "fix-dark-mode-body-background"]
+    branches: [main, "fix-charcoal-dark-palette"]
   pull_request:
   workflow_dispatch:
 
