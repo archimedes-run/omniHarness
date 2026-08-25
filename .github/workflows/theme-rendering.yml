@@ -1,0 +1,54 @@
+# Rendering assertions that defend the theme, against a real build.
+#
+# Standalone for the same reason the capability probe is: the e2e workflow has
+# been red since June because it starts no backend, and a real finding buried
+# in a permanently-red suite is invisible. These specs hit `/` only, which is
+# static, so no backend is needed here.
+name: Theme Rendering
+
+on:
+  push:
+    branches: [main, "fix-dark-mode-body-background"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  theme:
+    name: Does the theme change what the user sees?
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Use pinned pnpm version
+        run: corepack prepare pnpm@10.26.2 --activate
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      # The build is reported as its own step so "the app does not compile" and
+      # "the theme does not change the render" stay distinguishable. They are
+      # different findings with different fixes, and a build failure inside the
+      # test step would wear this job's name while answering another question.
+      - name: Build the app
+        working-directory: frontend
+        env:
+          SKIP_ENV_VALIDATION: "1"
+        run: pnpm build
+
+      - name: Run the rendering assertions
+        working-directory: frontend
+        run: npx playwright test --config=playwright.theme.config.ts
