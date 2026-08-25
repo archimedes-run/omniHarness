@@ -686,6 +686,12 @@ def test_missing_jwt_secret_generates_ephemeral(monkeypatch, caplog):
 
     config_module._auth_config = None
     monkeypatch.delenv("AUTH_JWT_SECRET", raising=False)
+    # NEUTRALISE .env. `get_auth_config()` calls `load_dotenv()`, which reads
+    # the repo's gitignored .env and puts AUTH_JWT_SECRET back AFTER the
+    # delenv above. A developer with a secret in .env saw this fail; CI, which
+    # has no .env, saw it pass. A test asserting behaviour-when-absent must
+    # control that condition rather than inherit it.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
 
     with caplog.at_level(logging.WARNING):
         config = config_module.get_auth_config()

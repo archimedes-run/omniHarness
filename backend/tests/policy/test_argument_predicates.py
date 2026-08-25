@@ -94,3 +94,77 @@ def test_the_existing_when_exceptions_still_work(shipped):
     Feature 003 shipped must behave exactly as before."""
     assert classify("googlecalendar_create_event", {"send_updates": "all"}, shipped).tier is Tier.TIER_3
     assert classify("googlecalendar_create_event", {}, shipped).tier is Tier.TIER_2
+
+
+# ---------------------------------------------------------------------------
+# GitHub writes — the tier turns on an argument for three of them
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "github_add_issue_comment",
+        "github_create_pull_request_review",
+        "github_create_issue",
+        "github_merge_pull_request",
+        "github_create_repository",
+        "github_fork_repository",
+    ],
+)
+def test_a_github_write_that_reaches_someone_asks_first(shipped, tool):
+    """The dividing line is NOTIFICATION, not mutation. A comment cannot be
+    unsent even though GitHub will delete it afterwards."""
+    assert classify(tool, {}, shipped).tier is Tier.TIER_3
+
+
+@pytest.mark.parametrize("tool", ["github_create_branch", "github_update_issue", "github_update_pull_request_branch"])
+def test_a_reversible_github_write_is_disclosed_not_gated(shipped, tool):
+    assert classify(tool, {}, shipped).tier is Tier.TIER_2
+
+
+@pytest.mark.parametrize("tool", ["github_push_files", "github_create_or_update_file"])
+@pytest.mark.parametrize(
+    "branch,expected",
+    [
+        ("feature/x", Tier.TIER_2),
+        ("refs/heads/topic", Tier.TIER_2),
+        ("main", Tier.TIER_3),
+        ("MAIN", Tier.TIER_3),
+        ("refs/heads/master", Tier.TIER_3),
+        ("production", Tier.TIER_3),
+        ("", Tier.TIER_3),
+        (None, Tier.TIER_3),
+        (123, Tier.TIER_3),
+    ],
+)
+def test_a_push_is_gated_by_which_branch(shipped, tool, branch, expected):
+    assert classify(tool, {"branch": branch}, shipped).tier is expected
+
+
+@pytest.mark.parametrize("tool", ["github_push_files", "github_create_or_update_file"])
+def test_a_push_with_no_branch_argument_raises(shipped, tool):
+    """Same direction as the SQL predicate: a rule naming an argument the tool
+    does not have must raise, not silently permit."""
+    assert classify(tool, {}, shipped).tier is Tier.TIER_3
+
+
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [
+        ({"draft": True}, Tier.TIER_2),
+        ({"draft": False}, Tier.TIER_3),
+        ({"draft": "true"}, Tier.TIER_3),
+        ({"draft": 1}, Tier.TIER_3),
+        ({}, Tier.TIER_3),
+    ],
+    ids=["draft", "not-draft", "string-true", "int-one", "absent"],
+)
+def test_a_pull_request_is_gated_by_whether_it_is_a_draft(shipped, arguments, expected):
+    """A draft notifies nobody. A non-draft requests review from real people,
+    which is the same rule applied to github_create_issue.
+
+    `string-true` and `int-one` are the interesting ones: truthiness differs
+    between callers and a tier must not turn on which.
+    """
+    assert classify("github_create_pull_request", arguments, shipped).tier is expected

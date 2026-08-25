@@ -232,31 +232,52 @@ class TestToolCallFlow:
     """Verify the LLM actually invokes tools through the real agent pipeline."""
 
     @requires_llm
-    def test_tool_call_produces_events(self, client):
-        """When the LLM decides to use a tool, we see tool call + result events."""
-        # Give a clear instruction that forces a tool call
-        events = list(client.stream("Use the bash tool to run: echo hello_e2e_test"))
+    def test_a_requested_tool_is_called_and_its_result_comes_back(self, client):
+        """One test where there were two, because both were broken.
 
-        types = [e.type for e in events]
-        assert types[-1] == "end"
+        `test_tool_call_produces_events` said "use the bash tool" — there is no
+        bash tool; the lead agent has `ls`, `glob`, `grep`, `read_file`,
+        `write_file`, `str_replace` and whatever the MCP servers provide.
 
-        # Should have at least one tool call event
-        tool_call_events = [e for e in events if e.type == "messages-tuple" and e.data.get("tool_calls")]
-        tool_result_events = [e for e in events if e.type == "messages-tuple" and e.data.get("type") == "tool"]
-        assert len(tool_call_events) >= 1, "Expected at least one tool_call event"
-        assert len(tool_result_events) >= 1, "Expected at least one tool result event"
+        `test_tool_call_event_structure` was worse: its body was wrapped in
+        `if tc_events:`, and `tc_events` reads `messages-tuple` events, which —
+        measured — carry only streamed assistant text and never `tool_calls`.
+        The condition was never true, so the test asserted NOTHING and had been
+        green throughout.
 
-    @requires_llm
-    def test_tool_call_event_structure(self, client):
-        """Tool call events contain name, args, and id fields."""
-        events = list(client.stream("Use the read_file tool to read /mnt/user-data/workspace/nonexistent.txt"))
+        Neither was noticed because `requires_llm` skips whenever CI runs or
+        OPENAI_API_KEY is unset. CI never ran either one. A test that runs only
+        when ambient state is present is a test nobody is watching.
 
-        tc_events = [e for e in events if e.type == "messages-tuple" and e.data.get("tool_calls")]
-        if tc_events:
-            tc = tc_events[0].data["tool_calls"][0]
-            assert "name" in tc
-            assert "args" in tc
-            assert "id" in tc
+        Tool activity arrives on `values`, whose measured shape is
+        ['human'] -> ['human','ai' with tool_calls] -> [...,'tool'] -> [...,'ai'].
+
+        CURRENTLY FAILING, and the cause is NOT the two defects above.
+
+        The same prompt through a plain `OmniHarnessClient` calls `ls` and
+        returns its output — verified. Inside this file's `client` fixture,
+        which runs under `e2e_env`, the model answers without calling anything.
+        Something about the isolated environment changes what the agent will do,
+        and I have not established what. `thinking_enabled=False` was the
+        obvious candidate and turning it on changed nothing.
+
+        Left red on purpose. It is a TRUE red — it was previously a false red
+        for the wrong reasons, beside a sibling that was falsely green — and
+        forcing it green would restore the condition this exercise removed.
+        """
+        events = list(client.stream("Use the ls tool to list the files in the current directory."))
+        assert [e.type for e in events][-1] == "end"
+
+        states = [e.data.get("messages") or [] for e in events if e.type == "values"]
+        called = [m for msgs in states for m in msgs if isinstance(m, dict) and m.get("tool_calls")]
+        results = [m for msgs in states for m in msgs if isinstance(m, dict) and m.get("type") == "tool"]
+
+        assert called, "asked to list files, the model answered without calling a tool"
+        assert results, "a tool was requested and no result came back"
+
+        call = called[0]["tool_calls"][0]
+        for field in ("name", "args", "id"):
+            assert field in call, f"a tool call with no {field} cannot be rendered or audited"
 
 
 # ---------------------------------------------------------------------------

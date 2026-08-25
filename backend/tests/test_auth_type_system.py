@@ -385,7 +385,12 @@ def test_get_auth_config_missing_env_var_generates_ephemeral(caplog):
     old = cfg._auth_config
     cfg._auth_config = None
     try:
-        with patch.dict(os.environ, {}, clear=True):
+        # NEUTRALISE .env. `get_auth_config()` calls `load_dotenv()`, which
+        # reads the repo's gitignored .env and restores AUTH_JWT_SECRET AFTER
+        # the environment is cleared above. A developer with a secret in .env
+        # saw this fail; CI, which has no .env, saw it pass. A test asserting
+        # behaviour-when-absent must control that condition, not inherit it.
+        with patch("dotenv.load_dotenv", lambda *a, **k: False), patch.dict(os.environ, {}, clear=True):
             os.environ.pop("AUTH_JWT_SECRET", None)
             with caplog.at_level(logging.WARNING):
                 config = cfg.get_auth_config()

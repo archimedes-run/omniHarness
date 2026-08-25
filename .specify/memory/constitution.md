@@ -1,7 +1,7 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR) → 1.3.0 (2026-08-24: added Article XIII, Initiation and Confirmation Are Separate Defences — MINOR) → 1.4.0 (2026-08-25: added Article XIV, A Gitignored File Cannot Carry a Guarantee — MINOR) → 1.4.1 (2026-08-25: Article XII extended — confirm the failure is the thing being measured; clarification within an existing article, PATCH) → 1.4.2 (2026-08-25: Article XII extended to sabotages, and to filtered observation of a run's outcome; clarification within an existing article, PATCH)
+Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR) → 1.3.0 (2026-08-24: added Article XIII, Initiation and Confirmation Are Separate Defences — MINOR) → 1.4.0 (2026-08-25: added Article XIV, A Gitignored File Cannot Carry a Guarantee — MINOR) → 1.4.1 (2026-08-25: Article XII extended — confirm the failure is the thing being measured; clarification within an existing article, PATCH) → 1.4.2 (2026-08-25: Article XII extended to sabotages, and to filtered observation of a run's outcome; clarification within an existing article, PATCH) → 1.4.3 (2026-08-25: Article XIV extended — a test must not inherit the condition it asserts; clarification within an existing article, PATCH)
 Bump rationale: Initial ratification. First concrete constitution replacing the
                 placeholder scaffold; MAJOR baseline established at 1.0.0.
 
@@ -357,4 +357,29 @@ the prior text. Amendments take effect on merge.
 re-examined at each phase boundary in the Article IX roadmap. Violations found in merged code
 are tracked as defects, not accepted as precedent.
 
-**Version**: 1.4.2 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-25
+**Version**: 1.4.3 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-25
+
+
+**AND A TEST MUST NOT INHERIT THE CONDITION IT ASSERTS.** The article above is about a
+file that is not shipped. One layer out is the same defect without a file: a test whose
+result depends on ambient state — an environment variable, a `.env` the loader re-reads,
+a key that decides whether the test runs at all — is untrustworthy in whichever direction
+it happens to land.
+
+Whichever direction. It is tempting to treat "passes in CI, fails locally" as a local
+problem and the reverse as a real bug. Both are the same defect, and which way it falls
+is an accident of whose machine ran it:
+
+| Test | Asserts | Inherited instead | Landed |
+|---|---|---|---|
+| `test_missing_jwt_secret_generates_ephemeral` | behaviour when `AUTH_JWT_SECRET` is unset | `get_auth_config()` calls `load_dotenv()`, restoring it from a gitignored `.env` after the test cleared it | red locally, green in CI |
+| `test_tool_call_produces_events` | a tool call appears in the stream | `requires_llm` skips without an API key, so CI never ran it and it rotted | red locally, never ran in CI |
+| `test_tool_call_event_structure` | tool-call events carry name/args/id | its body sat under `if tc_events:`, and that list is always empty | **green everywhere, asserting nothing** |
+
+The third is the one to keep in mind. It was the most reassuring of the three.
+
+**How to apply**: a test that asserts behaviour-when-absent must MAKE the thing absent,
+including against loaders that restore it. A test that only runs when ambient state is
+present is a test nobody is watching — either give it a deterministic substitute or
+delete it, because a suite that is green on one machine and different on another is not
+a suite. Where a test genuinely cannot control the condition, say so at the assertion.

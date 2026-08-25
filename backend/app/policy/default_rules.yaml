@@ -219,6 +219,68 @@ policy:
     - pattern: "github_search_users"
       tier: 1
 
+    # GitHub writes. Decided individually rather than as a block, because
+    # "writes to GitHub" spans a branch nobody sees and a merge nobody can undo.
+    #
+    # The dividing line is NOTIFICATION, not mutation: anything that reaches
+    # another person cannot be unsent, which is what Article II means by
+    # outbound. A comment is irreversible in the way that matters even though
+    # GitHub will happily delete it afterwards.
+    - pattern: "github_add_issue_comment"
+      tier: 3
+    - pattern: "github_create_pull_request_review"
+      tier: 3
+    - pattern: "github_create_issue"
+      tier: 3
+    # Your call, and irreversible in practice.
+    - pattern: "github_merge_pull_request"
+      tier: 3
+    # Creates a namespace that may be public; deleting it is a separate
+    # privileged act.
+    - pattern: "github_create_repository"
+      tier: 3
+    - pattern: "github_fork_repository"
+      tier: 3
+
+    # Reversible, and notifies nobody.
+    - pattern: "github_create_branch"
+      tier: 2
+    # Edits text already published under your name; history is retained and no
+    # new person is reached.
+    - pattern: "github_update_issue"
+      tier: 2
+    # Mechanical: brings the base into a PR branch.
+    - pattern: "github_update_pull_request_branch"
+      tier: 2
+
+    # A push is reversible ON A BRANCH. Neither tool's NAME says which branch,
+    # and a push to an unprotected main is not reversible in the sense that
+    # matters — so the tier turns on the argument, like postgres_query.
+    #
+    # The predicate judges by name and cannot confirm a repository's real
+    # default without a network call, which classification must never make. An
+    # absent, empty, non-string or default-looking branch raises.
+    - pattern: "github_push_files"
+      tier: 2
+      exceptions:
+        - unless: {branch: branch_is_not_default}
+          tier: 3
+    - pattern: "github_create_or_update_file"
+      tier: 2
+      exceptions:
+        - unless: {branch: branch_is_not_default}
+          tier: 3
+
+    # A DRAFT pull request notifies nobody and is reversible. A non-draft one
+    # requests review from real people, which is the same
+    # notification-is-the-irreversible-part rule applied to github_create_issue
+    # above. Missing or non-boolean `draft` raises.
+    - pattern: "github_create_pull_request"
+      tier: 2
+      exceptions:
+        - unless: {draft: explicitly_true}
+          tier: 3
+
     # ---------------------------------------------------------------------
     # postgres_query — the first tool whose NAME cannot classify it. SELECT and
     # DELETE FROM arrive through the same entry point.
