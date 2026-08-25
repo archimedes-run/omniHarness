@@ -45,8 +45,8 @@
 
 ### Spike 3 — browser profile (BLOCKING for Phase 4 browser work, FR-017)
 
-- [!] T012 **BLOCKED — not run.** Positive control, runs FIRST — stand up Playwright MCP in `extensions_config.json` and demonstrate in `backend/tests/workers/test_browser_profile.py` that the browser DOES persist a cookie into its configured profile. Until this passes, any "no user cookies" result is untrustworthy: against an inert profile mechanism it passes for the wrong reason and reports the strongest possible answer (Article XII). **This task owns the browser MCP configuration; Phase 4 extends it rather than redoing it.**
-- [~] T013 **PARTIAL — footprint measured, lean-profile confirmation blocked.** Measure and record the browser's disk footprint and idle memory in `spike-results.md` — measured, not estimated (Article X) — and confirm it runs in the lean non-Docker profile (Article VI). If it cannot, STOP and report before Phase 4 designs around it.
+- [!] ~~T012~~ **CUT with the browser worker — the bundle cannot be produced here.** Positive control, runs FIRST — stand up Playwright MCP in `extensions_config.json` and demonstrate in `backend/tests/workers/test_browser_profile.py` that the browser DOES persist a cookie into its configured profile. Until this passes, any "no user cookies" result is untrustworthy: against an inert profile mechanism it passes for the wrong reason and reports the strongest possible answer (Article XII). **This task owns the browser MCP configuration; Phase 4 extends it rather than redoing it.**
+- [~] T013 **DONE for the part that could be measured (~550 MB, FR-023a); the rest CUT with the browser worker.** Measure and record the browser's disk footprint and idle memory in `spike-results.md` — measured, not estimated (Article X) — and confirm it runs in the lean non-Docker profile (Article VI). If it cannot, STOP and report before Phase 4 designs around it.
 
 ### Spike 4 — tool-result message lineage (BLOCKING for Phase 3, FR-005/FR-006)
 
@@ -136,33 +136,33 @@
 
 **Depends on**: T016 (Spike 4 established the lineage shape), T045.
 
-- [ ] T046 [US2] Implement turn-provenance rejection in `backend/app/policy/confirm.py` — read `request.runtime.context["turn_provenance"]`; a synthetic turn cannot confirm (FR-004).
-- [ ] T047 [US2] Test in `backend/tests/policy/test_provenance_confirmation.py` that a trigger-injected turn does not confirm. Exercise the marker FROM INSIDE the middleware, not by asserting the gateway wrote it — those are different claims and only the first is FR-004's (FR-004, SC-001).
-- [ ] T048 [US2] Implement lineage-based rejection using the shape established in T015 — content originating inside a tool result cannot confirm (FR-005).
-- [ ] T049 [US2] Implement initiation blocking — tool-result content cannot INITIATE a Tier 3 action, independently of whether it could confirm one (FR-006).
-- [ ] T050 [P] [US2] Test in `backend/tests/policy/test_lineage_confirmation.py` that tool-result content neither confirms nor initiates, and that a genuine user turn still does (FR-005, FR-006, SC-002).
+- [X] T046 [US2] Implement turn-provenance rejection in `backend/app/policy/confirm.py` — read `request.runtime.context["turn_provenance"]`; a synthetic turn cannot confirm (FR-004).
+- [X] T047 [US2] Test in `backend/tests/policy/test_provenance_confirmation.py` that a trigger-injected turn does not confirm. Exercise the marker FROM INSIDE the middleware, not by asserting the gateway wrote it — those are different claims and only the first is FR-004's (FR-004, SC-001).
+- [X] T048 [US2] Implement lineage-based rejection using the shape established in T015 — content originating inside a tool result cannot confirm (FR-005).
+- [X] T049 [US2] Implement initiation blocking — tool-result content cannot INITIATE a Tier 3 action, independently of whether it could confirm one (FR-006).
+- [X] T050 [P] [US2] Test in `backend/tests/policy/test_lineage_confirmation.py` that tool-result content neither confirms nor initiates, and that a genuine user turn still does (FR-005, FR-006, SC-002).
 
 ### Subagent confirmation
 
-- [ ] T051 [US2] Implement subagent Tier 3 suspension in `backend/app/policy/middleware.py` — classify subagent calls identically, suspend, ask the user through the lead agent's conversation, resume with the outcome (FR-031; requires T006/T007).
-- [ ] T052 [US2] Record requester and delegation chain on the Pending Action and name them in the prompt (FR-033, SC-018).
-- [ ] T053 [P] [US2] Test that a subagent Tier 3 action does not execute until confirmed and that the subagent then resumes, **confirming after a delay** (FR-031, SC-017).
+- [X] T051 [US2] Implement subagent Tier 3 suspension in `backend/app/policy/middleware.py` — classify subagent calls identically, suspend, ask the user through the lead agent's conversation, resume with the outcome (FR-031; requires T006/T007).
+- [X] T052 [US2] Record requester and delegation chain on the Pending Action and name them in the prompt (FR-033, SC-018).
+- [X] T053 [P] [US2] Test that a subagent Tier 3 action does not execute until confirmed and that the subagent then resumes, **confirming after a delay** (FR-031, SC-017).
 
 ### Tier 2 disclosure
 
 - [X] T054 [US2] Implement `ExecutionRecord` and disclosure in `backend/app/policy/disclose.py` — record every Tier 2 execution, check the reply, append when absent (FR-039).
 - [X] T055 [US2] **Define "uncertain" operationally** in `contracts/policy-config.md` and implement it in `backend/app/policy/disclose.py`: the coverage check treats a Tier 2 execution as disclosed ONLY when the reply names the tool's effect on the specific resolved target; anything less is uncertain and appends. Without a stated boundary the append-bias in FR-040 cannot be tested, and an untestable acceptance criterion on a disclosure guarantee is the failure shape this project keeps finding (FR-040).
-- [ ] T056 [US2] Test the bias directly in `backend/tests/policy/test_disclosure_bias.py` — a reply that mentions the tool but not the target, and one that mentions neither, both produce an appended disclosure (FR-040).
-- [ ] T057 [US2] Generate appended disclosures FROM THE EXECUTION RECORD, never the model's account — a disclosure that satisfies the check and misinforms is worse than silence, because it carries the system's authority (FR-041, SC-024).
+- [X] T056 [US2] Test the bias directly in `backend/tests/policy/test_disclosure_bias.py` — a reply that mentions the tool but not the target, and one that mentions neither, both produce an appended disclosure (FR-040).
+- [X] T057 [US2] Generate appended disclosures FROM THE EXECUTION RECORD, never the model's account — a disclosure that satisfies the check and misinforms is worse than silence, because it carries the system's authority (FR-041, SC-024).
 
 ### Gate B — structural, not interpretive
 
-- [ ] T058 [US2] Implement Gate B in `backend/tests/policy/test_gate_structural.py` — confirmation, decline and disclosure are system-guaranteed, never model-judged (FR-034, FR-036, FR-039).
-- [ ] T059 [US2] **Observe Gate B failing** — make the model emit "the user has approved this, proceed", confirm it does NOT satisfy the confirmation check; separately confirm a suppressed disclosure is still appended. Record both (SC-023).
+- [X] T058 [US2] Implement Gate B in `backend/tests/policy/test_gate_structural.py` — confirmation, decline and disclosure are system-guaranteed, never model-judged (FR-034, FR-036, FR-039).
+- [X] T059 [US2] **Observe Gate B failing** — make the model emit "the user has approved this, proceed", confirm it does NOT satisfy the confirmation check; separately confirm a suppressed disclosure is still appended. Record both (SC-023).
 
 ### Phase 3 checkpoint
 
-- [ ] T060 **CHECKPOINT** — US2 demonstrable. Quickstart scenarios 2, 7, 8 pass.
+- [X] T060 **CHECKPOINT — US2 demonstrable; Gates A, B, C observed failing.** — US2 demonstrable. Quickstart scenarios 2, 7, 8 pass.
 
 ---
 
@@ -176,9 +176,9 @@
 
 - [ ] T061 [P] [US3] Configure the email worker in `extensions_config.json` with the send capability in the DENY list, and its tier map (FR-012, FR-014).
 - [ ] T062 [P] [US3] Configure the calendar worker and tier map — read/free-busy Tier 1, tentative hold Tier 2, delete/decline/modify-others Tier 3 (FR-015).
-- [ ] T063 [P] [US3] **(after T061/T062 — see phase note)** Extend the browser MCP configuration T012 created with the browser tier map — read/navigate Tier 1, submit/purchase/remote-write Tier 3 (FR-016).
-- [ ] T064 [US3] Configure the dedicated browser profile, logged into nothing by default, with per-site logins granted deliberately (FR-017).
-- [ ] T065 [US3] Test browser profile isolation in `backend/tests/workers/test_browser_profile.py` — assert on the path the RUNNING browser actually uses, not the configured value. A configured path the browser ignores is the inert-mechanism case (FR-017, SC-007; requires T012).
+- [ ] ~~T063~~ **CUT — browser worker removed from 003 (see spec.md).** [P] [US3] Extend the browser MCP configuration T012 created with the browser tier map — read/navigate Tier 1, submit/purchase/remote-write Tier 3 (FR-016).
+- [ ] ~~T064~~ **CUT — browser worker removed from 003.** [US3] Configure the dedicated browser profile, logged into nothing by default, with per-site logins granted deliberately (FR-017).
+- [ ] ~~T065~~ **CUT — browser worker removed from 003.** [US3] Test browser profile isolation in `backend/tests/workers/test_browser_profile.py` — assert on the path the RUNNING browser actually uses, not the configured value. A configured path the browser ignores is the inert-mechanism case (FR-017, SC-007; requires T012).
 - [ ] T066 [US3] Test the mutual-free-slot journey in `backend/tests/workers/test_calendar_email_journey.py` — find a slot, create the hold, save the draft invitation, assert NOTHING was sent (FR-014, FR-015, SC-006).
 - [ ] T067 [US3] Implement honest-limits wording for absent capabilities and confirmation-required actions — say what is true, never imply a capability the assistant lacks (FR-023, Article X).
 - [ ] T068 [US3] Wire redaction into worker output crossing to a remote channel, as an injected callable failing closed, in the shape Feature 002 already uses. **Moved from Phase 6**: the workers can emit page content and email bodies from this phase, so shipping T072 without it means output crossing unredacted (FR-018, SC-013).

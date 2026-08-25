@@ -25,6 +25,7 @@ from enum import StrEnum
 
 from .lineage import eligible_to_confirm
 from .models import PendingAction
+from .provenance import is_synthetic_turn
 
 
 class Verdict(StrEnum):
@@ -56,15 +57,25 @@ def _normalise(text: str) -> str:
     return _NORMALISE.sub(" ", (text or "").strip().lower()).strip()
 
 
-def recognise(message, pending: list[PendingAction]) -> Recognition:
+def recognise(message, pending: list[PendingAction], runtime_context: dict | None = None) -> Recognition:
     """Read a verdict from a message, or refuse to.
 
-    Two structural checks run BEFORE any text is looked at, and neither can be
+    THREE structural checks run BEFORE any text is looked at, and none can be
     satisfied by content:
 
-      1. the message must be a genuine user turn (FR-005 — lineage)
-      2. it must name or unambiguously address one pending action
+      1. the turn must not be machine-generated (FR-004 — runtime context)
+      2. the message must be a genuine user turn (FR-005 — message lineage)
+      3. it must name or unambiguously address one pending action
+
+    Checks 1 and 2 are DIFFERENT MECHANISMS answering different questions —
+    "who is speaking" versus "where did this content come from" — and are
+    deliberately not merged. Article III states them in one sentence; in code
+    they read different places and fail differently, and a single check would
+    leave one of them assumed.
     """
+    if is_synthetic_turn(runtime_context):
+        return Recognition(Verdict.UNRECOGNISED, reason="the turn is machine-generated — a trigger-injected turn cannot confirm a Tier 3 action (FR-004)")
+
     if not eligible_to_confirm(message):
         return Recognition(Verdict.UNRECOGNISED, reason="not a user turn — tool-result content cannot confirm or decline (FR-005)")
 

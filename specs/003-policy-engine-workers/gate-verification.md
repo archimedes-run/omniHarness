@@ -25,7 +25,30 @@ Reverted; gate passes. **It names the offending file and line**, which is the di
 
 A second test (`test_the_gate_actually_finds_call_sites`) asserts the AST walk finds ≥3 real sites, because a gate that enumerates nothing passes trivially.
 
-### FR-003 is NOT closed — it needs a decision
+### FR-003 — CLOSED 2026-08-24 by DELETING agents/factory.py
+
+The whitelist is now **empty**, and the header says it should stay that way.
+
+The module was deleted rather than routed through the shared base. Its
+middleware-takeover contract — `middleware=[x]` yields exactly `[x]` — is
+incompatible with Article II **by design**: you cannot guarantee both "the
+caller controls the whole middleware list" and "no path bypasses policy". The
+contract was the thing that was wrong. Routing it through was attempted and
+failed six tests asserting that contract, which is the contract working.
+
+It had no production caller. Keeping it would have bought a public API nobody
+calls at the cost of a permanently whitelisted bypass of this feature's central
+guarantee.
+
+**Gate A's rule therefore stays at its stronger form** — every `create_agent`
+site, not merely every publicly reachable one. Making the module private would
+have satisfied a weaker rule while leaving the bypass in the tree, and a weaker
+rule would not catch a new INTERNAL bypass added later. Three sites remain
+(lead agent, client, subagent executor) and all three reach the shared base.
+
+Recorded in `backend/docs/PLATFORM_ARCHITECTURE.md`.
+
+### The two closures, and why neither was taken as written
 
 `agents/factory.py` is whitelisted, and **as a blocker rather than deferred work**. FR-003 offered two closures and both conflict with something real:
 

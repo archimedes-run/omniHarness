@@ -195,11 +195,11 @@ A configured interval before a calendar event, the assistant proactively says wh
 - **FR-013**: Satisfying FR-012 requires a per-tool allow/deny capability in tool-source configuration, which does not exist today (VP-004). This mechanism MUST be built as part of this feature. *(The rest of the worker configuration is declarative; this one item is written, not configured. The framing correction is deliberate — treating it as configuration would leave FR-012 unmet and appearing met.)*
 - **FR-014**: Email tools MUST be limited to reading and drafting. A saved draft is its own confirmation gate: nothing leaves until the user sends it themselves.
 - **FR-015**: Calendar tools MUST be classified as: reading events and free/busy is Tier 1; creating a tentative hold is Tier 2; deleting events, declining invitations, and modifying meetings owned by others are Tier 3.
-- **FR-016**: Browser tools MUST be classified as: reading and navigating are Tier 1; submitting a form, completing a purchase, or any interaction that writes to a remote system is Tier 3.
-- **FR-017**: The browser MUST use a dedicated profile that is logged into nothing by default. Its storage MUST be verifiably isolated from the user's everyday browser profile — demonstrated by test, not asserted by convention. The user grants logins per site deliberately.
+- **FR-016**: ~~Browser tools MUST be classified as: reading and navigating are Tier 1; submitting a form, completing a purchase, or any interaction that writes to a remote system is Tier 3.~~ **CUT FROM 003 — 2026-08-24.** See *Cut from this feature* below.
+- **FR-017**: ~~The browser MUST use a dedicated profile that is logged into nothing by default...~~ **CUT FROM 003 — 2026-08-24.** The requirement is right and unchanged; it cannot be *verified* here. See below.
 - **FR-018**: Any worker output crossing to a remote channel MUST pass through redaction, including page content and email bodies. Redaction MUST fail closed: when it cannot complete, delivery is suppressed rather than sent unredacted. It MUST be consumed as an injected dependency in the shape described in VP-007, rather than statically imported or reimplemented.
 - **FR-022**: Redaction patterns MUST be assessed against the input shapes this feature introduces. Page content and email bodies are wider and less structured than the session records and agent output earlier features tuned for. Where patterns are widened, the widening MUST be covered by the redactor's own tests so a change here cannot silently weaken Features 001 or 002.
-- **FR-023a**: The browser worker's disk cost MUST be stated to the user as a **measured** figure, not an estimate: a Chromium build is **356 MB** and its headless shell **196 MB** — roughly **550 MB of disk** — measured 2026-08-24 from an installed bundle, not projected. The browser runs on demand and is not resident, so Article VI's idle-memory budget is unaffected; the disk cost is nonetheless real and MUST NOT be omitted from setup guidance because it is inconvenient (Article X).
+- **FR-023a**: *(Applies when the browser worker lands — see Cut from this feature.)* The browser worker's disk cost MUST be stated to the user as a **measured** figure, not an estimate: a Chromium build is **356 MB** and its headless shell **196 MB** — roughly **550 MB of disk** — measured 2026-08-24 from an installed bundle, not projected. The browser runs on demand and is not resident, so Article VI's idle-memory budget is unaffected; the disk cost is nonetheless real and MUST NOT be omitted from setup guidance because it is inconvenient (Article X).
 - **FR-023**: The assistant MUST describe its own limits honestly. Where a capability is absent (FR-012) or an action requires confirmation, the user-facing wording MUST say what is actually true and MUST NOT imply a capability the assistant does not have.
 
 ### Functional Requirements — Calendar Triggers
@@ -232,7 +232,7 @@ A configured interval before a calendar event, the assistant proactively says wh
 - **SC-004**: The email send capability is absent from what the assistant can call — verified by inspecting the assistant's available capabilities, not by the presence of a policy rule.
 - **SC-005**: Asking the assistant to clear a cluttered day produces a plan naming each meeting it will decline or delete, executes nothing before confirmation, and after confirmation executes exactly that set and nothing else.
 - **SC-006**: Finding a mutual free slot, holding it, and drafting an invitation completes with the hold created, the draft saved, and nothing sent.
-- **SC-007**: A browser session started by the assistant carries none of the user's everyday browser cookies or sessions, demonstrated by test.
+- **SC-007**: ~~A browser session started by the assistant carries none of the user's everyday browser cookies or sessions, demonstrated by test.~~ **CUT FROM 003 — 2026-08-24**, because it cannot be demonstrated here and this is not a claim to make on reasoning.
 - **SC-008**: An unconfirmed Tier 3 action expires within the configured interval and does not execute.
 - **SC-009**: No dispatch path bypasses classification. Verified by deliberately introducing a bypassing path and observing the build fail — including a bypass introduced at the agent-construction site named in VP-006.
 - **SC-010**: 100% of tools exposed anywhere in the system resolve to a tier, including those from Features 001 and 002.
@@ -272,6 +272,18 @@ A configured interval before a calendar event, the assistant proactively says wh
 - Memory content used in pre-alerts (FR-026) is already available from earlier work; this feature reads it rather than building it.
 - The browser's ~550 MB disk footprint is measured (FR-023a), not estimated. Where any other resource figure appears in user-facing guidance it must be measured too, or labelled as a guess the way the Tier 3 expiry interval is.
 - Redaction covers recognised patterns only. It reduces exposure and does not guarantee that no sensitive content crosses a channel — user-facing wording must not claim otherwise.
+
+## Cut from this feature — the browser worker (2026-08-24)
+
+**FR-016, FR-017 and SC-007 are cut from Feature 003.** Email and calendar are unaffected and remain in scope.
+
+**Why**: SC-007 says the assistant's browser "carries none of the user's everyday browser cookies or sessions, **demonstrated by test**". It could not be demonstrated. A browser bundle cannot be produced in the development environment: after two clean removals and reinstalls, the Playwright browser directory is created and stays at **448 KB** against roughly 350 MB for a complete build — the download never progresses. Every launch attempt fails at process start, which a 448 KB bundle fully explains.
+
+**What that is and is not.** It is a local tooling limitation, not a finding about the design. Whether a *complete* bundle would launch here is untested, because one cannot be obtained to test with. Nothing about FR-017 has been shown to be wrong.
+
+**Why cut rather than deferred within 003**: shipping the browser worker would mean shipping FR-017 unverified. *"Carries none of your daily cookies"* is a claim about the user's private browsing state, and it is not one to make on reasoning — an isolation test that has never been seen detecting a leak is not evidence of isolation (Article XII). A worker that is present but whose central guarantee is unproven is worse than one that is absent, because the absence is visible and the unproven guarantee is not.
+
+**What carries forward unchanged**: the requirements themselves, the positive-control-first spike design (prove the profile persists a cookie BEFORE trusting that it excludes one), and the measured ~550 MB disk figure in FR-023a. When a working bundle is available the probe runs as written.
 
 ## Considered and Rejected
 
