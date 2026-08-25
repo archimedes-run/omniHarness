@@ -58,6 +58,39 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY)[A-Z0-9_]*)\s*[=:]\s*[\"']?([^\s\"',]{6,})",
         ),
     ),
+    # --- widened for feature 003 (FR-022) ---------------------------------
+    # Email bodies and web pages are WIDER AND LESS STRUCTURED than anything
+    # earlier features handled. Session records are machine-written and agent
+    # output is prose the assistant composed; both are narrow next to arbitrary
+    # human correspondence and arbitrary HTML.
+    #
+    # The shapes below appear in that material and did not appear in the
+    # earlier two. Every one is still a RECOGNIZED pattern — the wording does
+    # not strengthen, and unrecognized shapes still pass through (FR-008d).
+    # This reduces exposure; it does not make a guarantee.
+    #
+    # Widened HERE, in the redactor's own module, so its own suite covers it
+    # and a change made for Feature 003 cannot silently weaken 001 or 002.
+    #
+    # A password reset or "here is your login" mail, verbatim in a reply.
+    ("reset-link", re.compile(r"https?://[^\s<>\"']*(?:reset|verify|confirm|activate|magic|invite)[^\s<>\"']*[?&](?:token|key|code|t|k)=[A-Za-z0-9._\-]{12,}", re.IGNORECASE)),
+    # Any URL carrying a credential-shaped query parameter. Web pages are full
+    # of these and a session record essentially never contains one.
+    # `#` as well as `?&`: OAuth implicit flow returns the token in the URL
+    # FRAGMENT, which is the single most common way one ends up pasted into a
+    # page the assistant then reads back.
+    ("url-credential-param", re.compile(r"[?&#](?:access_token|id_token|refresh_token|api_?key|apikey|auth|password|signature|sig)=[A-Za-z0-9%._\-]{8,}", re.IGNORECASE)),
+    # A one-time code quoted back from a mail. Deliberately requires the
+    # surrounding words: a bare 6-digit number is a year, a price, or a room.
+    ("one-time-code", re.compile(r"\b(?:one[- ]?time|verification|security|auth(?:entication)?|login|access|confirmation)\s+code(?:\s+is)?[:\s]+\b\d{4,8}\b", re.IGNORECASE)),
+    # Stripe and similar live keys, which turn up in receipts and dashboards.
+    ("stripe-live-key", re.compile(r"\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b")),
+    # Payment card numbers in a receipt body. Luhn is not checked — this is a
+    # shape match, and over-matching a 16-digit order number is the acceptable
+    # direction.
+    ("card-number", re.compile(r"\b(?:\d[ -]?){13,19}\b(?=[^\d]|$)")),
+    # Cookie and Set-Cookie headers, which a page fetch can surface verbatim.
+    ("cookie-header", re.compile(r"\b(?:Set-)?Cookie:\s*[^\s;]{8,}", re.IGNORECASE)),
 )
 
 # Remote-only reduction (FR-011c, SC-004m).

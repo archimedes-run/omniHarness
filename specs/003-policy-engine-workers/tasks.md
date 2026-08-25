@@ -199,18 +199,18 @@
 
 **Depends on**: Feature 002's live trigger engine (DEP-001, resolved) and Phase 4's calendar worker.
 
-- [ ] T073 [US5] **Investigate before building**: determine whether a calendar source can feed the existing engine with NO changes to its core. If it needs engine changes, STOP and report — that is a finding, not a change to make quietly (FR-025).
-- [ ] T074 [US5] Implement the calendar trigger source in `backend/app/trigger_engine/sources/calendar.py` as a new source only (FR-024, FR-025).
-- [ ] T075 [US5] Implement pre-alert composition naming attendees and subject, drawing on memory for relevant context (FR-026).
-- [ ] T076 [US5] Test exactly-once delivery per event occurrence, however many times the rule is evaluated beforehand (FR-027, SC-012).
+- [X] T073 [US5] **Investigate before building**: determine whether a calendar source can feed the existing engine with NO changes to its core. If it needs engine changes, STOP and report — that is a finding, not a change to make quietly (FR-025).
+- [X] T074 [US5] Implement the calendar trigger source in `backend/app/trigger_engine/sources/calendar.py` as a new source only (FR-024, FR-025).
+- [~] T075 **PARTIAL — the source supplies summary/attendees/description and AVAILABLE_FIELDS permits them; memory lookup is not wired.** [US5] Implement pre-alert composition naming attendees and subject, drawing on memory for relevant context (FR-026).
+- [X] T076 [US5] Test exactly-once delivery per event occurrence, however many times the rule is evaluated beforehand (FR-027, SC-012).
 
 ---
 
 ## Phase 6 — Cross-cutting
 
-- [ ] T077 [P] Extend the REDACTOR'S OWN suite in `backend/tests/session_watcher/test_redaction.py` to cover page content and email bodies, so a pattern change for this feature cannot silently break Features 001 or 002 (FR-022).
+- [X] T077 [P] Extend the REDACTOR'S OWN suite in `backend/tests/session_watcher/test_redaction.py` to cover page content and email bodies, so a pattern change for this feature cannot silently break Features 001 or 002 (FR-022).
 - [X] T078 Record all gate observations in `specs/003-policy-engine-workers/gate-verification.md` — four gates, five observations (Gate D twice).
-- [ ] T079 Update `backend/docs/PLATFORM_ARCHITECTURE.md` with the policy layer's position in the dispatch path and the recorded Article I coupling.
+- [ ] ~~T079~~ **DEFERRED at your direction — the close-out records carry the reasoning.** Update `backend/docs/PLATFORM_ARCHITECTURE.md` with the policy layer's position in the dispatch path and the recorded Article I coupling.
 
 ---
 
