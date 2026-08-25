@@ -4,7 +4,7 @@ import path from "path";
 import type { NextRequest } from "next/server";
 
 export async function POST(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ thread_id: string }> },
 ) {
   const threadId = (await params).thread_id;

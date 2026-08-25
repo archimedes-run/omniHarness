@@ -30,8 +30,13 @@ export default tseslint.config(
         "warn",
         { prefer: "type-imports", fixStyle: "inline-type-imports" },
       ],
+      // ERROR, not warn. `pnpm lint` does not use --max-warnings, so a warning
+      // here never failed a build — an unreferenced handler could sit in the
+      // tree indefinitely. This is the "handler nothing references" half of a
+      // wiring check, and it costs nothing: there were zero violations when it
+      // was promoted.
       "@typescript-eslint/no-unused-vars": [
-        "warn",
+        "error",
         { argsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/require-await": "off",
