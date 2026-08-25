@@ -1,7 +1,18 @@
 # Gate A whitelist — agent-construction sites that do not reach the shared
 # middleware base.
 #
+# EMPTY, and it should stay that way.
+#
+# History: 1 -> 0. `agents/factory.py` was the only entry. It was not routed
+# through the shared base; it was DELETED (FR-003), because its
+# middleware-takeover contract was incompatible with Article II by design —
+# you cannot guarantee both "the caller controls the whole middleware list" and
+# "no path bypasses policy".
+#
+# Gate A's rule therefore stays at its stronger form: EVERY create_agent site,
+# not merely every publicly reachable one. A weaker rule would have let the
+# module survive by being made private, and would not catch a new INTERNAL
+# bypass added later.
+#
 # Every entry needs a reason. An entry deferring to future work must name the
 # task that closes it, and the gate FAILS once that task lands.
-
-packages/harness/omniharness/agents/factory.py  # BLOCKED, needs a decision — not deferred work. FR-003 offered two closures and BOTH conflict with something real. Routing it through _build_runtime_middlewares breaks the documented middleware-takeover contract (`middleware=[x]` must yield exactly `[x]`) — attempted, and it failed 6 tests in tests/test_create_deerflow_agent.py that assert exactly that. Removing create_omniharness_agent from the public surface closes the bypass for embedders but leaves the create_agent call in place, so this gate as written still flags it. See gate-verification.md.
