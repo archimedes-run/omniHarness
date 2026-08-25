@@ -24,6 +24,9 @@
  * the comment says where to look.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 type Mode = "flash" | "thinking" | "pro" | "ultra";
@@ -148,20 +151,22 @@ describe("the bug that stuck the picker", () => {
 });
 
 describe("the shipped config supports the modes", () => {
-  it("declares at least one thinking-capable model", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-
+  it("declares at least one thinking-capable model", () => {
+    // The EXAMPLE, not config.yaml. config.yaml is gitignored, so a test
+    // reading it passes locally and fails on a clean checkout — Article XIV,
+    // which this test reproduced once already. The example is also what a new
+    // user copies, so it is where the capability must be declared for a fresh
+    // install's picker to work at all.
     const config = readFileSync(
-      join(__dirname, "..", "..", "..", "config.yaml"),
+      join(__dirname, "..", "..", "..", "config.example.yaml"),
       "utf8",
     );
     const thinkingModels = config.match(/supports_thinking:\s*true/g) ?? [];
 
     expect(
       thinkingModels.length,
-      "no model in config.yaml sets supports_thinking: true, so getResolvedMode will " +
-        "force every selection to flash and the picker will appear stuck",
+      "no model in config.example.yaml sets supports_thinking: true, so getResolvedMode " +
+        "will force every selection to flash and the picker will appear stuck",
     ).toBeGreaterThan(0);
   });
 });
