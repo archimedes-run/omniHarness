@@ -34,7 +34,10 @@ async function load(page: import("@playwright/test").Page, theme: string) {
   // next-themes persists under the `theme` key and reads it before paint.
   // Seeding via addInitScript rather than toggling-then-reloading avoids a
   // race where the assertion runs against the pre-hydration paint.
-  await page.addInitScript((t) => window.localStorage.setItem("theme", t), theme);
+  await page.addInitScript(
+    (t) => window.localStorage.setItem("theme", t),
+    theme,
+  );
   await page.goto("/");
   await page.waitForSelector(BODY);
 }
@@ -59,7 +62,10 @@ test.describe("the theme toggle changes what the user sees", () => {
     await load(page, "dark");
     const darkText = await computed(page, "color");
 
-    expect(lightText, "body has no computed text colour — the stylesheet never applied").toBeTruthy();
+    expect(
+      lightText,
+      "body has no computed text colour — the stylesheet never applied",
+    ).toBeTruthy();
     expect(
       darkText,
       `body text colour is ${darkText} in both themes. The harness cannot see ` +
@@ -67,7 +73,7 @@ test.describe("the theme toggle changes what the user sees", () => {
     ).not.toBe(lightText);
   });
 
-  test("<html> receives class=\"dark\"", async ({ page }) => {
+  test('<html> receives class="dark"', async ({ page }) => {
     await load(page, "dark");
     const cls = await page.evaluate(() => document.documentElement.className);
     expect(
@@ -77,7 +83,9 @@ test.describe("the theme toggle changes what the user sees", () => {
     ).toContain("dark");
   });
 
-  test("the --background token resolves to different values", async ({ page }) => {
+  test("the --background token resolves to different values", async ({
+    page,
+  }) => {
     await load(page, "light");
     const light = await computed(page, "--background");
     await load(page, "dark");
