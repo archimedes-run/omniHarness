@@ -172,7 +172,8 @@ def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
     rather than one it made itself.
 
     LIMIT, stated rather than implied: a computed path defeats this. It catches
-    the literal form, which is the form the bug took.
+    the literal form, which is the form the bug took — twice, once in each
+    language.
     """
     import re
 
@@ -199,7 +200,12 @@ def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
                 stripped = line.lstrip()
                 if stripped.startswith(comment_starts) or "example" in line:
                     continue
-                if "parents[" not in line:
+                # BOTH navigation idioms. Python tests use `parents[N]`;
+                # TypeScript tests use `join(__dirname, "..")`. An earlier
+                # version checked only the first and missed a frontend test
+                # reading gitignored config — the exact bug this exists for,
+                # found by CI instead.
+                if "parents[" not in line and "__dirname" not in line:
                     continue
                 if not pattern.search(line):
                     continue
