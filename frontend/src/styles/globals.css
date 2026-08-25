@@ -258,6 +258,18 @@
 }
 
 .dark {
+  /* CHARCOAL, not a neutral ramp. Anchored on #36454f as asked: the previous
+     palette was a zero-chroma greyscale from oklch(0.145 0 0), which reads as
+     plain black. Every surface here is the same blue-grey hue (~238) at
+     rising lightness, so panels lift off the background without changing hue.
+
+     Every foreground is pure white except --muted-foreground (#d3dce2), which
+     is held just off white so secondary text stays distinguishable from
+     primary; it measures 7.12:1 on the background, well above the 4.5:1 AA
+     floor. tests/rendering/theme.spec.ts asserts the ratio for eight
+     foreground/surface pairs against the RENDERED colour, not the token
+     text — Chromium reports oklch back as lab(), so only a painted pixel
+     tells you what is actually readable. */
   /* A real dark palette, not the light one with the charts swapped.
    *
    * This block previously duplicated :root for 24 of its 31 tokens — including
@@ -272,39 +284,39 @@
    * Lightness runs the light scale inverted: surfaces dark and rising with
    * elevation (background < card < popover), text light, borders low-contrast.
    */
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.185 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.145 0 0);
-  --secondary: oklch(0.245 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.245 0 0);
+  --background: oklch(0.3814 0.0258 237.54);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0.4109 0.0274 238.36);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0.4359 0.031 239.8);
+  --popover-foreground: oklch(1 0 0);
+  --primary: oklch(1 0 0);
+  --primary-foreground: oklch(0.3814 0.0258 237.54);
+  --secondary: oklch(0.468 0.0325 240.31);
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.468 0.0325 240.31);
   /* Kept above 0.6 so muted text stays legible on --muted; the light value
    * (0.556) is a contrast failure against a dark surface. */
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.275 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --muted-foreground: oklch(0.8894 0.0128 236.64);
+  --accent: oklch(0.5094 0.0347 239.44);
+  --accent-foreground: oklch(1 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(0.275 0 0);
-  --input: oklch(0.29 0 0);
+  --border: oklch(0.5094 0.0347 239.44);
+  --input: oklch(0.5438 0.0361 239.9);
   --ring: transparent;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.185 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.985 0 0);
-  --sidebar-primary-foreground: oklch(0.145 0 0);
-  --sidebar-accent: oklch(0.275 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.275 0 0);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.4109 0.0274 238.36);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-primary: oklch(1 0 0);
+  --sidebar-primary-foreground: oklch(0.3814 0.0258 237.54);
+  --sidebar-accent: oklch(0.5094 0.0347 239.44);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.5094 0.0347 239.44);
+  --sidebar-ring: oklch(0.7 0.02 238);
   font-weight: 300;
 }
 

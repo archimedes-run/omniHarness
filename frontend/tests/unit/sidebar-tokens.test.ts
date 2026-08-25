@@ -25,16 +25,23 @@ const SIDEBAR = readFileSync(
 );
 
 describe("the sidebar takes its colours from tokens", () => {
-  it("does not hardcode a text colour on the menu button", () => {
+  it("does not hardcode a text colour anywhere in the menu button variants", () => {
     const start = SIDEBAR.indexOf("const sidebarMenuButtonVariants");
     expect(
       start,
       "sidebarMenuButtonVariants has been renamed; this test is now blind",
     ).toBeGreaterThan(-1);
 
-    // The base class string, up to the variants object.
-    const base = SIDEBAR.slice(start, SIDEBAR.indexOf("variants:", start));
-    const literals = base.match(/\btext-(black|white)\b/g) ?? [];
+    // THE WHOLE cva CALL, not just the base string. The first version of this
+    // test stopped at `variants:` and would have passed while the `outline`
+    // variant still said `bg-background text-black` — the identical bug, one
+    // object deeper. A gate scoped narrower than the defect is not a gate.
+    const end = SIDEBAR.indexOf("\n)", start);
+    expect(end, "could not find the end of the cva call").toBeGreaterThan(
+      start,
+    );
+    const cva = SIDEBAR.slice(start, end);
+    const literals = cva.match(/\btext-(black|white)\b/g) ?? [];
 
     expect(
       literals,
