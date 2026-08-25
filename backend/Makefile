@@ -21,3 +21,12 @@ lint:
 
 format:
 	uv run ruff check . --fix && uv run ruff format .
+
+# Type checking. NOT in CI yet — see the report in the PR that added it.
+# Wiring a check that currently fails would make it decorative on day one,
+# which is the exact antipattern the lint audit just found.
+typecheck:
+	uv run mypy app/policy app/trigger_engine packages/session_watcher/session_watcher
+
+typecheck-all:
+	uv run mypy app packages
