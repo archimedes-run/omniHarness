@@ -23,7 +23,7 @@ from app.policy.models import Tier
 from app.policy.pending import PendingStore
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
-RULES = Path(__file__).resolve().parents[3] / ".omni-harness" / "policy" / "rules.yaml"
+RULES = Path(__file__).resolve().parents[2] / "app" / "policy" / "default_rules.yaml"
 
 
 @pytest.fixture

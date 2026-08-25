@@ -1,0 +1,139 @@
+# Permission policy — DEFAULT classification rules (Feature 003, FR-007).
+#
+# THIS FILE SHIPS WITH THE PACKAGE. It lives here rather than under
+# .omni-harness/ because that directory is runtime state and gitignored — a
+# "shipped rule set" that is not in version control does not ship, which CI
+# caught by failing every test that asserted against it.
+#
+# To customise: copy it somewhere writable and point `policy.rules_path` at
+# your copy. Editing this file works but is overwritten on upgrade.
+#
+# THREE THINGS TO KNOW BEFORE EDITING:
+#
+# 1. A tool matching NO rule here is Tier 3. That is a decision, not a
+#    fallback (FR-009): a newly connected tool source is dangerous until you
+#    say otherwise, including tools that did not exist when this was written.
+#
+# 2. An exception may only RAISE a tier, never lower it (FR-037). Trying to
+#    lower one FAILS THE LOAD, naming this file and line — deliberately, so you
+#    find out. To make a call safer than its rule's default, change the rule.
+#
+# 3. If this file cannot be read, EVERY tool is Tier 3. A broken file makes the
+#    assistant ask about everything; it never makes it act freely.
+#
+# Tier 1 = read, silent.  Tier 2 = reversible write, disclosed.
+# Tier 3 = irreversible / outbound / spawning — stated, confirmed, then done.
+
+policy:
+  rules:
+    # ---------------------------------------------------------------------
+    # Feature 001 — coding-session watcher. Observe-only by construction:
+    # the module offers no way to act on a session, so there is nothing here
+    # that could be higher than Tier 1 (FR-010).
+    # ---------------------------------------------------------------------
+    - pattern: "list_coding_sessions"
+      tier: 1
+    - pattern: "get_session_status"
+      tier: 1
+    - pattern: "session-watcher_*"
+      tier: 1
+
+    # ---------------------------------------------------------------------
+    # Feature 002 — trigger engine. Exposes no agent-callable tools; it
+    # injects turns. Listed so the absence is deliberate rather than an
+    # oversight, and so a tool added later does not silently inherit Tier 1.
+    # ---------------------------------------------------------------------
+
+    # ---------------------------------------------------------------------
+    # Built-in tools
+    # ---------------------------------------------------------------------
+    - pattern: "ask_clarification"
+      tier: 1
+    - pattern: "view_image"
+      tier: 1
+    - pattern: "present_files"
+      tier: 1
+    - pattern: "tool_search"
+      tier: 1
+    # Starts a preview server in the user's own sandbox — reversible (it can be
+    # stopped) and worth mentioning, so Tier 2 rather than silent.
+    - pattern: "preview"
+      tier: 2
+    # Spawns work. Article II names spawning as Tier 3 explicitly.
+    - pattern: "task"
+      tier: 3
+    - pattern: "mcp_build"
+      tier: 3
+
+    # ---------------------------------------------------------------------
+    # Filesystem — reads are silent, writes are disclosed, deletion is not
+    # something to discover after the fact.
+    # ---------------------------------------------------------------------
+    - pattern: "filesystem_read*"
+      tier: 1
+    - pattern: "filesystem_list*"
+      tier: 1
+    - pattern: "filesystem_write*"
+      tier: 2
+    - pattern: "filesystem_move*"
+      tier: 2
+    - pattern: "filesystem_delete*"
+      tier: 3
+
+    # ---------------------------------------------------------------------
+    # Email (FR-014). Read and draft only — the SEND capability is not
+    # classified here because it is ABSENT from the tool surface entirely
+    # (FR-012), removed in extensions_config.json. A capability that cannot be
+    # reached is a stronger guarantee than one that is guarded, and a draft is
+    # its own confirmation gate: nothing leaves until the user sends it.
+    # ---------------------------------------------------------------------
+    - pattern: "gmail_list*"
+      tier: 1
+    - pattern: "gmail_read*"
+      tier: 1
+    - pattern: "gmail_get*"
+      tier: 1
+    - pattern: "gmail_search*"
+      tier: 1
+    - pattern: "gmail_create_draft"
+      tier: 2
+    - pattern: "gmail_update_draft"
+      tier: 2
+    - pattern: "gmail_delete_draft"
+      tier: 2
+
+    # ---------------------------------------------------------------------
+    # Calendar (FR-015).
+    # ---------------------------------------------------------------------
+    - pattern: "googlecalendar_list*"
+      tier: 1
+    - pattern: "googlecalendar_get*"
+      tier: 1
+    - pattern: "googlecalendar_find*"
+      tier: 1
+    - pattern: "googlecalendar_freebusy*"
+      tier: 1
+    # A tentative hold is reversible: the assistant created it and can remove
+    # it. "Reversible" is assessed against what the assistant can itself undo.
+    - pattern: "googlecalendar_create_event"
+      tier: 2
+      exceptions:
+        # Inviting other people is outbound — it reaches someone else's inbox,
+        # which the assistant cannot undo.
+        - when: {send_updates: [all, externalOnly]}
+          tier: 3
+    - pattern: "googlecalendar_delete_event"
+      tier: 3
+    - pattern: "googlecalendar_update_event"
+      tier: 3
+    - pattern: "googlecalendar_decline*"
+      tier: 3
+    - pattern: "googlecalendar_respond*"
+      tier: 3
+
+  confirmation:
+    # 4 hours. THIS IS A STARTING GUESS, NOT A MEASURED VALUE — long enough to
+    # survive a meeting, short enough that a forgotten action does not linger
+    # for days. Labelled here, in the file you read, so it does not acquire
+    # authority it has not earned.
+    expires_after_seconds: 14400

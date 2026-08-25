@@ -84,7 +84,7 @@ def test_no_classification_rule_mentions_a_send_capability():
 
     from app.policy.config import ConfigLoader
 
-    rules = Path(__file__).resolve().parents[3] / ".omni-harness" / "policy" / "rules.yaml"
+    rules = Path(__file__).resolve().parents[2] / "app" / "policy" / "default_rules.yaml"
     ruleset = ConfigLoader(path=rules).load()
 
     offenders = [r.pattern for r in ruleset.rules if "send" in r.pattern.lower()]

@@ -25,6 +25,25 @@ from .pending import PendingStore
 
 logger = logging.getLogger(__name__)
 
+#: Rules that ship with this module. Resolved HERE rather than in the harness's
+#: PolicyConfig, because `omniharness-harness` is a standalone package that must
+#: not import `app` — a boundary an existing gate enforces
+#: (tests/test_harness_boundary.py), and which caught this when the resolution
+#: was first written on the config object.
+DEFAULT_RULES = Path(__file__).parent / "default_rules.yaml"
+
+
+def resolve_rules_path(policy) -> Path:
+    """The rules file to load.
+
+    Falls back to the packaged defaults ONLY when no path is configured. A
+    configured path that cannot be read is NOT replaced by the defaults: that
+    would silently run a different policy than the operator wrote, and FR-009
+    already makes an unreadable file safe by classifying everything Tier 3.
+    """
+    configured = getattr(policy, "rules_path", "") or ""
+    return Path(configured) if configured else DEFAULT_RULES
+
 
 def build(app_config) -> PolicyMiddleware | None:
     """Construct the policy middleware for one agent, or None when disabled.
@@ -40,7 +59,7 @@ def build(app_config) -> PolicyMiddleware | None:
 
     state = Path(policy.state_dir)
     return PolicyMiddleware(
-        loader=ConfigLoader(path=Path(policy.rules_path)),
+        loader=ConfigLoader(path=resolve_rules_path(policy)),
         pending=PendingStore(directory=state / "pending"),
         ledger=DisclosureLedger(),
         audit=PolicyAuditLog(path=state / "audit.jsonl", actor="default"),

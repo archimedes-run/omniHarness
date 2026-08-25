@@ -23,7 +23,10 @@ from app.policy.classify import classify
 from app.policy.config import ConfigLoader
 from app.policy.models import Tier
 
-RULES_FILE = Path(__file__).resolve().parents[3] / ".omni-harness" / "policy" / "rules.yaml"
+#: The rules that SHIP — in the package, not under .omni-harness/, which is
+#: runtime state and gitignored. A shipped rule set that is not in version
+#: control does not ship, which is how CI found this.
+RULES_FILE = Path(__file__).resolve().parents[2] / "app" / "policy" / "default_rules.yaml"
 
 
 @pytest.fixture(scope="module")
