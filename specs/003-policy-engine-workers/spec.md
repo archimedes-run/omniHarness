@@ -273,7 +273,29 @@ A configured interval before a calendar event, the assistant proactively says wh
 - The browser's ~550 MB disk footprint is measured (FR-023a), not estimated. Where any other resource figure appears in user-facing guidance it must be measured too, or labelled as a guess the way the Tier 3 expiry interval is.
 - Redaction covers recognised patterns only. It reduces exposure and does not guarantee that no sensitive content crosses a channel — user-facing wording must not claim otherwise.
 
-## Cut from this feature — the browser worker (2026-08-24)
+## Cut from this feature — the browser worker (2026-08-24), REOPENED (2026-08-25)
+
+> **REOPENED. The cut stands for Feature 003; the REASONING no longer does.**
+>
+> The worker was cut because SC-007 could not be demonstrated — a browser bundle
+> could not be produced, and *"carries none of your daily cookies"* is not a
+> claim to make on reasoning. That was correct on the information available.
+>
+> **The information has changed.** A standalone CI job now downloads a 369 MB
+> Chromium bundle in about four seconds and runs rendering assertions,
+> including a class-toggle-and-read-computed-style check. The 448 KB failure is
+> **local and environmental**, not a limit on what can be verified.
+>
+> SC-007 is therefore verifiable — in CI. FR-016, FR-017 and SC-007 go back on
+> the roadmap as a **follow-up feature**, not as part of Feature 004, and not as
+> a silent reinstatement inside 003. What carries forward unchanged: the
+> requirements themselves, the positive-control-first spike design (prove the
+> profile persists a cookie BEFORE trusting that it excludes one), and the
+> measured ~550 MB disk figure in FR-023a.
+>
+> Recorded here rather than only in the roadmap so the cut is never read with
+> its original reasoning still standing.
+
 
 **FR-016, FR-017 and SC-007 are cut from Feature 003.** Email and calendar are unaffected and remain in scope.
 

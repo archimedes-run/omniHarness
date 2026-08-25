@@ -1,7 +1,7 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR) → 1.3.0 (2026-08-24: added Article XIII, Initiation and Confirmation Are Separate Defences — MINOR) → 1.4.0 (2026-08-25: added Article XIV, A Gitignored File Cannot Carry a Guarantee — MINOR)
+Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR) → 1.3.0 (2026-08-24: added Article XIII, Initiation and Confirmation Are Separate Defences — MINOR) → 1.4.0 (2026-08-25: added Article XIV, A Gitignored File Cannot Carry a Guarantee — MINOR) → 1.4.1 (2026-08-25: Article XII extended — confirm the failure is the thing being measured; clarification within an existing article, PATCH) → 1.4.2 (2026-08-25: Article XII extended to sabotages, and to filtered observation of a run's outcome; clarification within an existing article, PATCH)
 Bump rationale: Initial ratification. First concrete constitution replacing the
                 placeholder scaffold; MAJOR baseline established at 1.0.0.
 
@@ -180,6 +180,38 @@ convention applied in the other direction. A gate is sabotaged to prove it can f
 given a known-positive case to prove it can succeed. Both exist because a step that never
 changes its answer is indistinguishable from one that is not running.
 
+**AND CONFIRM THE FAILURE IS THE THING BEING MEASURED.** A positive control proves the
+instrument can succeed. It does not prove that a failure came from the subject rather than from
+the apparatus around it. Both must hold before a negative result means anything.
+
+**THIS APPLIES TO SABOTAGES TOO.** A sabotage is a probe pointed the other way: it asks "can this
+gate fail?" and a sabotage that dies before reaching the gate answers a different question. Its
+failure mode is worse than a probe's, because a sabotage that never reaches its subject reports
+*the suite still passing* — which reads as "the gate held" when nothing was tested.
+
+Five instances, each of which would have read as a valid answer to the question asked:
+
+| Probe | Reported | Actually failed on |
+|---|---|---|
+| can a subagent suspend and resume? | "this runtime cannot suspend" | a missing `bind_tools` on the stand-in model, before reaching suspension |
+| can CI run a browser? | "the browser step failed" | a Next.js `webServer` in the default Playwright config failing to build |
+| can CI run a browser? (second attempt) | "the run failed" | the probe's own config resolving no tests |
+| does the worker-count check fail at 1 worker? | "4 passed" — gate looks weak | the fixture *skips* below 2 workers; `4 skipped` matched neither `passed` nor `failed` in the grep, so the summary line shown came from the next, unsabotaged run |
+| does the count check fail if 2 launch where 4 are expected? | "4 passed" | a trailing `# SABOTAGE` comment swallowed the closing `]`; the file did not parse and collection errored |
+
+In every case the browser, the runtime, or the assertion was never reached. The failure was
+upstream of the subject and indistinguishable from a finding about it.
+
+The last two share a specific trap worth naming: **the observation was filtered.** Grepping a
+test run for `passed|failed` silently discards `skipped`, `error`, and collection failures — the
+outcomes a broken sabotage actually produces. Read the summary line, and confirm the sabotage
+text is in the file before believing what the run says about it.
+
+**How to apply**: before reporting a negative result — or a sabotage that did not fire — name the
+step that failed and confirm it is the step under test. Where a probe depends on scaffolding — a stand-in model, a build, a server,
+a config — isolate it or remove it. A probe that cannot fail for reasons unrelated to its subject
+is worth more than one with better coverage.
+
 Applies to: verification of a mechanism before planning on it, any "X is not supported" claim,
 and any measurement whose result would change a design decision. It does NOT apply to routine
 assertions in tests that already fail meaningfully when the code is wrong.
@@ -325,4 +357,4 @@ the prior text. Amendments take effect on merge.
 re-examined at each phase boundary in the Article IX roadmap. Violations found in merged code
 are tracked as defects, not accepted as precedent.
 
-**Version**: 1.4.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-25
+**Version**: 1.4.2 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-25
