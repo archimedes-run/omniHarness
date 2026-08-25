@@ -150,11 +150,7 @@ def test_a_path_a_test_reads_is_tracked(tracked, path, reader):
     in one respect: the requirement at least fails visibly when exercised, while
     the test simply stops proving anything and still reports green.
     """
-    assert path in tracked, (
-        f"{path} is not tracked, and it is read by: {reader}.\n\n"
-        "On a clean checkout that test asserts against a file that is not there. "
-        "It passes where it was written and proves nothing anywhere else."
-    )
+    assert path in tracked, f"{path} is not tracked, and it is read by: {reader}.\n\nOn a clean checkout that test asserts against a file that is not there. It passes where it was written and proves nothing anywhere else."
 
 
 def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
@@ -215,8 +211,7 @@ def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
 
     assert not offenders, (
         "these tests navigate to the repo root and read a gitignored path, so they assert "
-        "against a file that does not exist on a clean checkout:\n  " + "\n  ".join(offenders) +
-        "\n\nIf the read is a PRECONDITION TO SKIP rather than a source of assertions, add the "
+        "against a file that does not exist on a clean checkout:\n  " + "\n  ".join(offenders) + "\n\nIf the read is a PRECONDITION TO SKIP rather than a source of assertions, add the "
         "file to `allowed` with that reason."
     )
 
