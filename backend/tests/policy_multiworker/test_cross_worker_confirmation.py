@@ -108,20 +108,60 @@ def gateway(tmp_path_factory):
     )
 
     deadline = time.monotonic() + 90
-    pids = set()
+    served = set()
     while time.monotonic() < deadline:
         try:
             for _ in range(workers * 6):
-                pids.add(httpx.get(f"http://127.0.0.1:{PORT}/health", timeout=2).json()["pid"])
-            if len(pids) >= 2:
+                served.add(httpx.get(f"http://127.0.0.1:{PORT}/health", timeout=2).json()["pid"])
+            if len(served) >= 2:
                 break
         except Exception:
             time.sleep(1)
     else:  # pragma: no cover
         proc.send_signal(signal.SIGTERM)
-        pytest.fail(f"gateway did not come up with several workers; saw pids {pids}")
+        pytest.fail(f"gateway did not come up with several workers; saw pids {served}")
 
-    yield {"state": state, "workers": workers, "pids": pids, "token": env["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"]}
+    def worker_pids() -> set[int]:
+        """The worker set from the process tree, read FRESH on every call.
+
+        THIS IS NOT `served`. `served` is a SAMPLE — whichever workers happened
+        to answer a /health probe before the loop hit its "at least 2 distinct"
+        exit. It is the right evidence for "several workers really are serving"
+        and the WRONG evidence for "pid X is a worker": an unsampled worker is
+        still a worker. Asserting a claimant's membership in `served` failed in
+        CI against a claimant that was a perfectly real worker, and passed twice
+        before that only because round-robin happened to cover it. The kernel
+        decides who answers a socket; a test must not encode a guess about that.
+
+        Read fresh rather than snapshotted at setup because the tree is only
+        complete once every worker has forked, and this fixture returns as soon
+        as TWO are serving. A snapshot taken then can undercount — an early
+        probe here saw one child where four were coming.
+
+        The resource_tracker exclusion is MEASURED, not assumed. Classifying
+        each child of the master by command line gave, at workers=4:
+            RESOURCE_TRACKER x1, SPAWN_MAIN x4
+        Excluding the tracker rather than matching `spawn_main` keeps this true
+        under fork (Linux), where workers inherit the master's command line and
+        no tracker is started at all.
+        """
+        listed = subprocess.run(["pgrep", "-P", str(proc.pid)], capture_output=True, text=True)
+        found = set()
+        for entry in listed.stdout.split():
+            if not entry.strip():
+                continue
+            cmd = subprocess.run(["ps", "-ww", "-o", "command=", "-p", entry], capture_output=True, text=True).stdout
+            if "resource_tracker" not in cmd:
+                found.add(int(entry))
+        return found
+
+    yield {
+        "state": state,
+        "workers": workers,
+        "worker_pids": worker_pids,
+        "served": served,
+        "token": env["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"],
+    }
 
     proc.send_signal(signal.SIGTERM)
     try:
@@ -152,8 +192,18 @@ def _audit(gateway) -> list[dict]:
 
 
 def test_the_gateway_really_is_running_several_workers(gateway):
-    """The premise. Without it every assertion below is about one process."""
-    assert len(gateway["pids"]) >= 2, f"only saw {gateway['pids']}"
+    """The premise. Without it every assertion below is about one process.
+
+    Both halves are load-bearing. `served` proves workers OBSERVED answering
+    requests — forked children that never accept a connection would satisfy the
+    process tree and not the premise. The tree then proves the count is the one
+    production runs, which `served` alone cannot show: sampling two distinct
+    responders is equally consistent with two workers and with forty.
+    """
+    assert len(gateway["served"]) >= 2, f"only one worker answered: {gateway['served']}"
+    running = gateway["worker_pids"]()
+    assert len(running) == gateway["workers"], f"expected {gateway['workers']} workers, the master has {sorted(running)}"
+    assert gateway["served"] <= running, f"a worker answered /health but is not a child of the master: served={sorted(gateway['served'])} children={sorted(running)}"
 
 
 def test_a_plan_stated_on_one_worker_is_confirmable_through_another(gateway):
@@ -219,7 +269,8 @@ def test_the_audit_entry_names_the_worker_that_claimed_it(gateway):
     assert entry["authorised_by"], "the audit entry does not say which worker claimed the action"
     assert entry["authorised_by"].startswith("worker-")
     claimant_pid = int(entry["authorised_by"].split("-")[1])
-    assert claimant_pid in gateway["pids"], f"claimant {claimant_pid} is not one of the running workers"
+    running = gateway["worker_pids"]()
+    assert claimant_pid in running, f"claimant {claimant_pid} is not one of the running workers {sorted(running)}"
     assert entry["targets"] == ["Standup 9am", "Review 2pm"]
     assert "Standup 9am" in entry["plan_as_stated"]
 
