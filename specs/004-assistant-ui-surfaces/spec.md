@@ -197,32 +197,23 @@ confirm by inspection that the tool was not executed.
 
 ## Requirements *(mandatory)*
 
-### Functional Requirements — Pending confirmations (Surface 1)
+### Functional Requirements — Confirmation (every route)
 
-- **FR-001**: The system MUST list Tier 3 actions awaiting confirmation, across all
-  gateway workers, not only actions created by the worker serving the page.
-- **FR-002**: Each pending action MUST show what was requested, the plan exactly as it
-  was stated to the user, the resolved specific targets the confirmation authorises,
-  the requesting agent including the delegation chain when a subagent asked, and the
-  time remaining before expiry.
-- **FR-003**: Users MUST be able to confirm and to decline each pending action, with
-  declining as available and as deterministic as confirming.
-- **FR-004**: Confirmation and decline through this surface MUST go through the same
-  recognition, atomic claim and resolution logic used when confirming in chat. A second
-  confirmation route that reimplements the claim would allow one confirmation to
-  execute twice, and this is the requirement that forbids it.
-- **FR-005**: An action that expires while displayed MUST become visibly expired without
-  a page reload, and its controls MUST become inoperable rather than remaining pressable.
-- **FR-006**: Confirming an action whose resolved targets have drifted MUST produce the
-  same decline-and-restate behaviour as chat, and the surface MUST state that the
-  targets changed rather than reporting a generic failure.
-- **FR-007**: A confirmation for an action already resolved by any route MUST be
-  reported as already resolved, naming the outcome, distinctly from a failure to submit.
-- **FR-008**: The surface MUST distinguish "no actions are pending" from "the pending
-  set could not be read".
-- **FR-009**: Above a configurable count of resolved targets, confirmation MUST require
-  the user to type a value derived from the plan — the number of resolved targets —
-  rather than to click. Below the threshold a click alone confirms.
+*These govern the act of confirming, wherever it happens. They were previously located
+under Surface 1, which scoped them to the UI by placement rather than by intent — FR-009
+in particular would have left the chat route with no scope gate at all. The content did
+not change; only where it sits, and therefore what it reaches.*
+
+- **FR-004**: Confirmation and decline MUST go through ONE recognition, atomic claim and
+  resolution implementation, whichever route they arrive by — chat or UI. A second route
+  that reimplements the claim would allow one confirmation to execute twice, and this is
+  the requirement that forbids it. There is no chat implementation today to reuse: the
+  functions exist and nothing calls them, so this feature builds the first one and both
+  routes call it.
+- **FR-009**: Above a configurable count of resolved targets, confirmation through ANY
+  route MUST require the user to supply a value derived from the plan — the number of
+  resolved targets. Below the threshold a single confirming act suffices: a click in the
+  UI, a recognised affirmation in chat.
   - The typed value MUST be derived from the plan, not a fixed phrase. A fixed phrase
     becomes muscle memory and is producible without reading; a count is producible only
     by having read what is being approved.
@@ -236,6 +227,25 @@ confirm by inspection that the tool was not executed.
     in weight. It costs almost nothing here because scope is already carried in the
     resolved targets.
 
+### Functional Requirements — Pending confirmations (Surface 1)
+
+- **FR-001**: The system MUST list Tier 3 actions awaiting confirmation, across all
+  gateway workers, not only actions created by the worker serving the page.
+- **FR-002**: Each pending action MUST show what was requested, the plan exactly as it
+  was stated to the user, the resolved specific targets the confirmation authorises,
+  the requesting agent including the delegation chain when a subagent asked, and the
+  time remaining before expiry.
+- **FR-003**: Users MUST be able to confirm and to decline each pending action, with
+  declining as available and as deterministic as confirming.
+- **FR-005**: An action that expires while displayed MUST become visibly expired without
+  a page reload, and its controls MUST become inoperable rather than remaining pressable.
+- **FR-006**: Confirming an action whose resolved targets have drifted MUST produce the
+  same decline-and-restate behaviour as chat, and the surface MUST state that the
+  targets changed rather than reporting a generic failure.
+- **FR-007**: A confirmation for an action already resolved by any route MUST be
+  reported as already resolved, naming the outcome, distinctly from a failure to submit.
+- **FR-008**: The surface MUST distinguish "no actions are pending" from "the pending
+  set could not be read".
 ### Functional Requirements — Coding sessions (Surface 2)
 
 - **FR-010**: The system MUST display each known session's project, state, last activity
@@ -302,6 +312,20 @@ confirm by inspection that the tool was not executed.
   error, so new UI is held to them from the start rather than retrofitted.
 - **FR-035**: Acceptance criteria for this feature MUST assert rendered output — what
   the user sees — and not component props alone.
+- **FR-037**: The recognised confirmation and decline sets MUST remain closed and matched
+  exactly — interpretation was rejected as a security property and is not reopened — and
+  MUST accept the affirmations a user actually types. Closed is not the same as narrow: a
+  set rejecting "yes, do it" trains people to fight the gate, which is the failure
+  deterministic decline exists to prevent. Every addition is a deliberate edit carrying
+  its own justification.
+- **FR-038**: An action reaching its expiry MUST tell the user, rather than producing
+  silence. *(Adopts Feature 003's FR-019, which has no production caller today: the
+  function exists, is unit-tested, and nothing invokes it.)*
+- **FR-039**: A gate MUST NOT be scoped to the module that motivated it unless its
+  subject genuinely is that module. Gate 4 was hardcoded to `app/trigger_engine` and
+  therefore could not see `recognise` — a function built, unit-tested, and never called
+  in a different module. A gate whose scope boundary sits where the next instance will
+  appear is the same shape as the defect it hunts.
 - **FR-036**: This feature MUST NOT include a rule editor for triggers or for policy.
   Writes remain conversational, proposed by the assistant and written after approval
   through the existing Tier 3 gate.
@@ -365,6 +389,12 @@ confirm by inspection that the tool was not executed.
 - **SC-018**: An action whose resolved targets exceed the configured threshold cannot be
   confirmed by clicking alone; a correct typed target count confirms it, and an
   incorrect one neither confirms nor resolves it.
+- **SC-020**: Every affirmation listed as accepted in the closed-set coverage table is
+  accepted, and every phrase listed as rejected is rejected, driven by one table so the
+  document and the code cannot drift.
+- **SC-021**: An action reaching expiry produces a user-visible statement, not silence.
+- **SC-022**: The wiring gate names a function that nothing calls, in any feature module,
+  and is green on the current tree only because of whitelist entries that carry reasons.
 - **SC-019**: The threshold is readable from configuration and a changed value changes
   which actions demand the typed count.
 - **SC-017**: The six accessibility rules are set to error and the build fails on a

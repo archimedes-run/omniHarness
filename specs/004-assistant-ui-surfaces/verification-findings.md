@@ -87,3 +87,40 @@ The session watcher runs as a **separate process**, exposing `list_sessions` and
 `session_watcher.redaction`. Surface 2 therefore cannot read the registry in-process —
 it needs the gateway to reach the watcher's server, or the watcher to publish somewhere
 shared. A design decision for the plan, not a false premise.
+
+---
+
+## Addendum — requirements scoped by their heading (2026-08-25)
+
+Prompted by C1: FR-009's content was correct and its *location* scoped it. Under
+"Functional Requirements — Pending confirmations (Surface 1)", a rule meant to govern
+confirmation everywhere reached only the UI. A structure defect, not a content one.
+
+Audited 001–004 for the same shape.
+
+| Feature | Requirement headings | Finding |
+|---|---|---|
+| 001 | one flat `### Functional Requirements` | Cannot have the defect |
+| 002 | one flat `### Functional Requirements` | Cannot have the defect |
+| 003 | Policy Engine / Workers / Calendar Triggers | **One instance — FR-023** |
+| 004 | five per-surface headings | FR-004, FR-009 — fixed |
+
+**003 FR-023**: *"The assistant MUST describe its own limits honestly. Where a capability
+is absent (FR-012) or an action requires confirmation, the user-facing wording MUST say
+what is actually true and MUST NOT imply a capability the assistant does not have."*
+
+It sits under **Workers**. Its subject is not workers — it names confirmation wording
+explicitly, which is Policy Engine territory, and it is a direct expression of Article X.
+Located where it is, it reaches the email and calendar tools' wording and nothing else.
+
+**Consequence for 004**: this feature adds four surfaces of user-facing wording — expiry
+notices, drift explanations, `threshold_not_met`, "the watcher cannot be reached". Under
+its current heading FR-023 does not reach any of them. It is not re-scoped here, because
+editing a shipped feature's spec to widen a requirement is a change to what 003 claims to
+have delivered, and that is a decision rather than a correction. Recorded so the choice is
+visible.
+
+The general lesson, worth applying at spec time rather than at analyze time: **a
+requirement under a scoping heading inherits that scope silently.** When a requirement's
+subject is broader than the section it sits in, the section wins, and nothing in the
+document says so.

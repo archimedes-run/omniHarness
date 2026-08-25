@@ -11,15 +11,17 @@ see" is the specific failure the sessions surface exists to avoid.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/confirmations` | Open actions across all workers, with `threshold_targets` and whether each action exceeds it |
-| POST | `/api/confirmations/{id}/confirm` | Body carries `typed_count` when above threshold |
+| POST | `/api/confirmations/{id}/confirm` | Body carries `typed_count` when above `threshold_targets` |
 | POST | `/api/confirmations/{id}/decline` | |
 
 Both POSTs call the **same** `confirm_flow` function the `before_model` chat path calls.
 This is FR-004, and a gate asserts a single implementation exists.
 
-Outcomes are distinct, never collapsed into a generic failure:
+Outcomes are exactly seven, distinct, never collapsed into a generic failure:
 `executed`, `declined`, `already_resolved` (naming the prior outcome), `expired`,
-`targets_drifted` (with old and new target lists), `threshold_not_met`.
+`targets_drifted` (with old and new target lists), `unrecognised`, `threshold_not_met`.
+
+The same seven are returned by the chat route, because both call one implementation.
 
 `threshold_not_met` **must not consume or resolve the action** — a wrong count is a
 failed attempt, not a decline.
