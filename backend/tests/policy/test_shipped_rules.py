@@ -77,6 +77,49 @@ def test_the_builtin_read_tools_stay_silent(shipped):
         assert classify(tool, {}, shipped).tier is Tier.TIER_1, f"{tool} would start asking"
 
 
+#: Local reads, listings and metadata the lead agent actually has. Enumerated
+#: from a built agent on 2026-08-25, not from the rules file — reading the rules
+#: to decide what the rules should cover proves nothing.
+LOCAL_READS = (
+    "ls",
+    "glob",
+    "grep",
+    "read_file",
+    "filesystem_directory_tree",
+    "filesystem_get_file_info",
+    "filesystem_search_files",
+    "filesystem_list_directory",
+    "filesystem_read_text_file",
+)
+
+
+@pytest.mark.parametrize("tool", LOCAL_READS)
+def test_a_local_read_never_asks(shipped, tool):
+    """A confirmation prompt for a directory listing is how a person learns to
+    approve without reading. Before these rules, 3 of the agent's 39 tools were
+    classified and `ls` was Tier 3."""
+    assert classify(tool, {}, shipped).tier is Tier.TIER_1, f"{tool} would ask before listing a directory"
+
+
+#: THE CONTROL. If a glob were widened until it swallowed the world, every
+#: assertion above would pass and mean nothing.
+LOCAL_MUTATIONS = ("write_file", "str_replace", "filesystem_edit_file", "filesystem_create_directory")
+
+
+@pytest.mark.parametrize("tool", LOCAL_MUTATIONS)
+def test_a_local_write_is_not_silenced_by_the_read_rules(shipped, tool):
+    assert classify(tool, {}, shipped).tier is not Tier.TIER_1, f"{tool} became silent"
+
+
+def test_each_local_read_is_matched_by_a_rule_not_by_the_default(shipped):
+    """Tier 1 cannot arrive by accident: the default is Tier 3, so a Tier 1
+    result means a rule matched. This asserts the rule is NAMED rather than a
+    broad glob that happened to fit."""
+    patterns = {r.pattern for r in shipped.rules}
+    for tool in ("ls", "glob", "grep", "read_file", "filesystem_directory_tree", "filesystem_get_file_info", "filesystem_search_files"):
+        assert tool in patterns, f"{tool} is Tier 1 via a glob rather than its own rule"
+
+
 # ---------------------------------------------------------------------------
 # And the ones that SHOULD ask, do — otherwise the above passes vacuously
 # ---------------------------------------------------------------------------
