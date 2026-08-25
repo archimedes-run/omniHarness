@@ -16,7 +16,16 @@ class TriggerEngineConfig(BaseModel):
     """
 
     enabled: bool = Field(default=False, description="Start the trigger engine in this gateway process (subject to single-runner election).")
-    rules_path: str = Field(default=".omni-harness/triggers/rules.json", description="Hot-reloadable rule definitions.")
+    rules_path: str = Field(
+        default="",
+        description=(
+            "Hot-reloadable rule definitions. Empty means the defaults the "
+            "engine ships (all rules disabled). Point this at your own file to "
+            "customise; a configured path that cannot be read stops the engine "
+            "rather than falling back, which would run a different rule set "
+            "than you wrote."
+        ),
+    )
     state_dir: str = Field(default=".omni-harness/triggers", description="Directory for scheduler, fingerprint, thread-map, audit and lock files.")
     tick_seconds: float = Field(default=30.0, description="Base interval between rule evaluations. The loop sleeps to the next computed moment rather than busy-polling.")
     actor: str = Field(default="default", description="Identity the engine acts as; recorded on every audit entry (Article VIII).")

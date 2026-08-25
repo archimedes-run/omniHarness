@@ -48,6 +48,24 @@ from omniharness.config.app_config import AppConfig
 logger = logging.getLogger(__name__)
 
 
+#: Rules that ship with the engine. Resolved here, on the composition side, for
+#: the same reason the policy layer's are: the module that owns the default and
+#: the module that reads configuration are not the same layer.
+DEFAULT_RULES = Path(__file__).resolve().parents[1] / "trigger_engine" / "default_rules.json"
+
+
+def _resolve_rules_path(cfg) -> Path:
+    """The rule file to load.
+
+    Falls back to the shipped defaults ONLY when nothing is configured. A
+    configured path that cannot be read is NOT replaced by them — that would run
+    a different rule set than the operator wrote, which is a second guarantee
+    lost while fixing the first.
+    """
+    configured = getattr(cfg, "rules_path", "") or ""
+    return Path(configured) if configured else DEFAULT_RULES
+
+
 def _redactor():
     """Feature 001's redactor, consumed as an injected callable.
 
@@ -107,8 +125,17 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         create_thread=injector.create_thread,
     )
     destination = QuietDestination()
-    loader = ConfigLoader(path=Path(cfg.rules_path))
+    loader = ConfigLoader(path=_resolve_rules_path(cfg))
     engine_config = loader.load()
+
+    # Article XIV. A missing rule file used to produce an empty config, a logged
+    # error, and a handle reporting `running: True` — so every proactive-message
+    # requirement was silently inert while the operator surface said healthy.
+    # Absence must fail loudly. lifespan.start() catches this and records it in
+    # `handle.error`, so the gateway still starts; what changes is that the
+    # engine does not pretend to be working.
+    if not engine_config.rules and loader.last_error:
+        raise RuntimeError(f"trigger engine: no rules are in effect ({loader.last_error}). Expected a rule file at {_resolve_rules_path(cfg)}. The engine will not start rather than run with nothing to evaluate and report itself healthy.")
 
     runner = RuleRunner(
         sources={
