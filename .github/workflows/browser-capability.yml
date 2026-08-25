@@ -1,0 +1,58 @@
+# Measures whether CI can run RENDERING assertions.
+#
+# Standalone by design. The e2e workflow has been red since June because it
+# starts no backend, so a browser result buried there would prove nothing.
+#
+# This job installs Chromium and asserts on computed styles and layout. Its
+# outcome decides whether frontend/docs/FRONTEND_TESTING_GAP.md describes a
+# local inconvenience or a real testing hole — and therefore what shape Feature
+# 004's UI acceptance criteria can take.
+name: Browser Capability Probe
+
+on:
+  push:
+    branches: [main, "measure-playwright-in-ci"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Can CI run rendering assertions?
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Use pinned pnpm version
+        run: corepack prepare pnpm@10.26.2 --activate
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      # The step that fails locally. Reported separately so "the bundle cannot
+      # be downloaded" and "the browser cannot run" stay distinguishable — they
+      # are different findings with different fixes.
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      - name: Report the installed bundle size
+        run: |
+          echo "Locally this directory stays at ~448 KB against ~350 MB expected."
+          du -sh ~/.cache/ms-playwright/* 2>/dev/null || echo "no bundle present"
+
+      - name: Run the rendering assertions
+        working-directory: frontend
+        # A dedicated config with NO webServer. playwright.config.ts starts
+        # Next.js, and a failure to build the app would answer a different
+        # question while looking like an answer to this one.
+        run: npx playwright test --config=playwright.probe.config.ts

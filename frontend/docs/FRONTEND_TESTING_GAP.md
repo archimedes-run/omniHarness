@@ -1,4 +1,38 @@
-# The frontend has no Article XI equivalent
+# The frontend testing gap is LOCAL, not universal
+
+**Status**: MEASURED 2026-08-25. The constraint is local tooling, not a limit on what can be asserted. Superseding text below marked where it applied.
+
+## The measurement
+
+A standalone CI job (`.github/workflows/browser-capability.yml`) installs Chromium and runs four rendering assertions. Result:
+
+|                                         | local                                  | CI                             |
+| --------------------------------------- | -------------------------------------- | ------------------------------ |
+| Chromium bundle                         | **448 KB** (download never progresses) | **369 MB**, downloaded in ~4 s |
+| headless shell                          | absent                                 | 257 MB                         |
+| browser launches                        | ✗                                      | ✓                              |
+| computed style readable                 | not runnable                           | ✓                              |
+| **class toggle changes computed style** | not runnable                           | **✓**                          |
+| layout is real                          | not runnable                           | ✓                              |
+
+That third assertion is the one the gap was about: toggle a class, read the computed background, assert it changed. **It works in CI.** It is precisely the assertion that would have caught the dark-mode bug.
+
+## What this changes
+
+**UI acceptance criteria for Feature 004 CAN be written about what the user sees**, provided the assertion runs in CI. Locally they will not run; that is an inconvenience, not a hole.
+
+Two consequences worth acting on:
+
+1. **The frontend can have an Article XI equivalent after all** — a CI-only rendering tier. The pattern is the same one the backend uses for its multi-worker suite: a test that runs where the production shape exists.
+2. **The browser worker cut from Feature 003 should be revisited.** It was cut because FR-017 ("carries none of your daily cookies") could not be verified, on the evidence of this same 448 KB blockage. If CI can obtain a working bundle, the verification can run there — and the reason for the cut no longer holds. The cut was correct on the information available; the information has changed.
+
+**What is still true**: rendering assertions do not run locally, so a developer cannot check them before pushing. Feedback moves to CI.
+
+---
+
+## Original analysis (2026-08-24), retained
+
+The reasoning below led to the measurement above. Its conclusion — that the frontend has no Article XI equivalent — was **too broad**: it inferred a universal limit from a local one.
 
 **Status**: known limitation, blocked on tooling. Stated here because a UI feature spec written against this codebase will inherit it, and it is better named than discovered.
 
@@ -36,6 +70,8 @@ A rendering assertion needs a real browser. Playwright is the tool, it is alread
 
 **A browser bundle cannot be produced in this environment.** After repeated clean removals and `npx playwright install chromium`, the browser directory is created and stays at **448 KB** against roughly 350 MB for a complete build. The download does not progress. Every launch fails at process start, which a 448 KB bundle fully explains.
 
+> **SUPERSEDED**: true locally, false in CI. Measured — see the top of this document.
+
 This is the **same blocked bundle** that cut the browser worker (FR-016, FR-017, SC-007) from Feature 003. One tooling limitation, two consequences: a feature cut, and a testing tier absent.
 
 Whether a _complete_ bundle would run here is **untested** — one cannot be obtained to test with. The limitation is about acquiring the browser, not about running it.
@@ -70,3 +106,5 @@ Any of:
 3. A different rendering target — jsdom plus a CSS-computation library — which is weaker than a real browser but not nothing.
 
 Option 2 is likely the cheapest real fix: CI already installs Playwright for the e2e job, so the constraint may be local rather than universal. Worth measuring before assuming.
+
+> **MEASURED, and option 2 is confirmed.** CI downloads a 369 MB bundle and runs rendering assertions. See the top of this document.
