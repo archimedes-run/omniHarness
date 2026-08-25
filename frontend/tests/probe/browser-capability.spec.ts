@@ -46,18 +46,26 @@ test("a browser launches and renders a page", async ({ page }) => {
 test("a computed style can be read back", async ({ page }) => {
   await page.setContent(PAGE);
 
-  const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const background = await page.evaluate(
+    () => getComputedStyle(document.body).backgroundColor,
+  );
 
   // The literal resolved value, not the variable. Only a real cascade produces this.
   expect(background).toBe("rgb(17, 34, 51)");
 });
 
-test("a class toggle changes what is computed — the assertion the gap is about", async ({ page }) => {
+test("a class toggle changes what is computed — the assertion the gap is about", async ({
+  page,
+}) => {
   await page.setContent(PAGE);
 
-  const before = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const before = await page.evaluate(
+    () => getComputedStyle(document.body).backgroundColor,
+  );
   await page.evaluate(() => document.documentElement.classList.add("dark"));
-  const after = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const after = await page.evaluate(
+    () => getComputedStyle(document.body).backgroundColor,
+  );
 
   expect(before).toBe("rgb(17, 34, 51)");
   expect(after).toBe("rgb(238, 221, 204)");

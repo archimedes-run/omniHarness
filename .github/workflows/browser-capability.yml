@@ -52,4 +52,7 @@ jobs:
 
       - name: Run the rendering assertions
         working-directory: frontend
-        run: npx playwright test tests/probe/browser-capability.spec.ts --reporter=list
+        # A dedicated config with NO webServer. playwright.config.ts starts
+        # Next.js, and a failure to build the app would answer a different
+        # question while looking like an answer to this one.
+        run: npx playwright test --config=playwright.probe.config.ts
