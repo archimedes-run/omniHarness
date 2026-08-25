@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /**
  * Does toggling the theme change WHAT THE USER SEES?
@@ -23,14 +23,56 @@ import { expect, test } from "@playwright/test";
 
 const BODY = "body";
 
-async function computed(page: import("@playwright/test").Page, prop: string) {
+/**
+ * Resolve a CSS custom property to sRGB and measure contrast IN THE BROWSER.
+ *
+ * Chromium reports oklch() tokens back from getComputedStyle as `lab(...)`, so
+ * a string comparison cannot tell you whether a colour is readable. Painting
+ * the resolved value onto a 1x1 canvas and reading the pixel gives the actual
+ * sRGB the user's screen receives — a measurement of the render, not of the
+ * stylesheet. That distinction is the whole reason this file exists.
+ */
+const RESOLVE = `(token) => {
+  const probe = document.createElement("div");
+  probe.style.color = "var(" + token + ")";
+  document.body.appendChild(probe);
+  const value = getComputedStyle(probe).color;
+  probe.remove();
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = value;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return [r, g, b];
+}`;
+
+function luminance([r, g, b]: number[]) {
+  const lin = [r, g, b].map((c) => {
+    const v = (c ?? 0) / 255;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!;
+}
+
+function contrast(fg: number[], bg: number[]) {
+  const a = luminance(fg);
+  const b = luminance(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+async function token(page: Page, name: string) {
+  return await page.evaluate<number[]>(RESOLVE + `("${name}")`);
+}
+
+async function computed(page: Page, prop: string) {
   return page.evaluate(
     (p) => getComputedStyle(document.body).getPropertyValue(p).trim(),
     prop,
   );
 }
 
-async function load(page: import("@playwright/test").Page, theme: string) {
+async function load(page: Page, theme: string) {
   // next-themes persists under the `theme` key and reads it before paint.
   // Seeding via addInitScript rather than toggling-then-reloading avoids a
   // race where the assertion runs against the pre-hydration paint.
@@ -113,4 +155,71 @@ test.describe("the theme toggle changes what the user sees", () => {
         `declaration in the same rule overrides the utility.`,
     ).not.toBe(light);
   });
+
+  /**
+   * The palette must be CHARCOAL, not neutral black.
+   *
+   * The .dark block used to be a neutral greyscale ramp anchored on
+   * oklch(0.145 0 0) — near-black with zero chroma. Reported as "the dark
+   * colour is just black"; the ask was #36454f, a blue-grey charcoal.
+   *
+   * Asserting on chroma rather than on an exact value leaves room to tune the
+   * shade without rewriting the test, while still failing if someone
+   * "simplifies" the palette back to a neutral ramp.
+   */
+  test("the dark background is charcoal, not neutral black", async ({
+    page,
+  }) => {
+    await load(page, "dark");
+    const [r, g, b] = await token(page, "--background");
+
+    expect(
+      { r, g, b },
+      `--background renders rgb(${r}, ${g}, ${b}). A neutral ramp has r=g=b; ` +
+        `charcoal is blue-grey, so blue must lead red.`,
+    ).not.toEqual({ r: g, g, b: g });
+    expect(
+      b!,
+      `blue (${b}) does not lead red (${r}) — this is not a charcoal`,
+    ).toBeGreaterThan(r!);
+
+    const lum = luminance([r!, g!, b!]);
+    expect(
+      lum,
+      `--background is near-black (luminance ${lum.toFixed(4)})`,
+    ).toBeGreaterThan(0.02);
+  });
+
+  /**
+   * Every foreground token must be readable on the surface it sits on.
+   *
+   * WCAG AA for normal text is 4.5:1. This is the check that would have caught
+   * a label rendering black on a near-black sidebar — for the tokens. It does
+   * NOT catch a component that hardcodes `text-black` and ignores the token
+   * entirely; the sidebar only renders under /workspace, which redirects
+   * without a backend, so that case is covered by tests/unit/sidebar-tokens.
+   */
+  const PAIRS: Array<[string, string]> = [
+    ["--foreground", "--background"],
+    ["--muted-foreground", "--background"],
+    ["--card-foreground", "--card"],
+    ["--popover-foreground", "--popover"],
+    ["--sidebar-foreground", "--sidebar"],
+    ["--secondary-foreground", "--secondary"],
+    ["--accent-foreground", "--accent"],
+    ["--primary-foreground", "--primary"],
+  ];
+
+  for (const [fg, bg] of PAIRS) {
+    test(`${fg} on ${bg} meets WCAG AA in dark mode`, async ({ page }) => {
+      await load(page, "dark");
+      const ratio = contrast(await token(page, fg), await token(page, bg));
+      expect(
+        ratio,
+        `${fg} on ${bg} is ${ratio.toFixed(2)}:1, below the 4.5:1 AA floor for ` +
+          `normal text — this is what "invisible until you hover over it" looks ` +
+          `like as a number.`,
+      ).toBeGreaterThanOrEqual(4.5);
+    });
+  }
 });
