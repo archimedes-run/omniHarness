@@ -81,3 +81,27 @@ surfaces are exactly such consumers.
 
 **What a fix looks like**: a failed run returns a non-2xx status, or the 200 body carries
 an explicit error the caller can read. Either is fine; silence is not.
+
+---
+
+## `policy.expires_after_seconds` is declared in config.yaml and never read
+
+**Found 2026-08-25 while enabling the engine.** `PolicyConfig` declares
+`expires_after_seconds`, and nothing reads it: `PolicyMiddleware` takes expiry from
+`ruleset.expires_after_seconds`, which the `ConfigLoader` parses out of the RULES file's
+`confirmation:` block. Setting it in `config.yaml` changes nothing.
+
+`threshold_targets` is the same story from the other direction — it exists only in the
+rules file, so a reader of `config.yaml` has no way to discover it.
+
+This is the built-but-never-consumed family on a **configuration** surface, which is
+worse than on a code one: a config key that looks settable and is inert gives an operator
+a false belief about a security setting they deliberately changed. Nobody would notice
+until an action expired at four hours after they had set forty.
+
+**Where it should be decided**: either `build()` passes the config values through to the
+loader (config wins), or the key is deleted and the rules file is documented as the only
+home (rules win). Either is defensible; two homes for one setting is not.
+
+The generalised wiring gate planned for Feature 004 Phase 6 scans code, not config
+schemas — so it would not catch this. Worth widening its scope, or noting the limit.
