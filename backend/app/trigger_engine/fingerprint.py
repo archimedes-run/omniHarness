@@ -31,6 +31,11 @@ PERMITTED_INPUTS: dict[TriggerType, frozenset[str]] = {
     TriggerType.WATCHER: frozenset({"question", "state", "idle_reason"}),
     TriggerType.CRON: frozenset({"scheduled_at"}),
     TriggerType.COMPLETION: frozenset({"task_id", "status"}),
+    #: Feature 003. Both stable for a given occurrence. Deliberately NOT
+    #: minutes_until / starts_in / is_soon: those drift on every poll, which
+    #: would make each evaluation a new event and fire the pre-alert on every
+    #: tick — the inverse of the repeat failure, and the worse one.
+    TriggerType.CALENDAR: frozenset({"event_id", "starts_at"}),
 }
 
 #: Explicitly excluded, listed so a future contributor sees the intent rather

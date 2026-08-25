@@ -172,3 +172,104 @@ def test_prose_survives_the_widened_patterns() -> None:
     """A widened set must not start eating ordinary text."""
     msg = "All 41 tests passed. The migration took four minutes and finished cleanly."
     assert redact(msg, Channel.REMOTE) == msg
+
+
+# ---------------------------------------------------------------------------
+# Feature 003 (FR-022) — email bodies and page content
+#
+# These input shapes are WIDER and LESS STRUCTURED than anything the earlier
+# features handled: session records are machine-written, agent output is prose
+# the assistant composed, and both are narrow next to arbitrary human
+# correspondence and arbitrary HTML.
+#
+# Widened in the redactor's OWN suite so a pattern change made for Feature 003
+# cannot silently break Features 001 or 002 — the earlier tests in this file are
+# what would catch that, and they run alongside these.
+# ---------------------------------------------------------------------------
+
+
+class TestFeature003InputShapes:
+    """Shapes that appear in mail and web pages and not in session records."""
+
+    def test_a_password_reset_link_is_redacted(self):
+        body = "Click here to reset: https://accounts.example.com/reset?token=aZ39kd0Lm2Xq8s1PpQ7w"
+
+        out = redact(body, channel=Channel.REMOTE)
+
+        assert "aZ39kd0Lm2Xq8s1PpQ7w" not in out
+        assert "[redacted" in out
+
+    def test_a_magic_login_link_is_redacted(self):
+        body = "Sign in: https://app.example.com/magic?k=abcd1234efgh5678ijkl"
+
+        assert "abcd1234efgh5678ijkl" not in redact(body, channel=Channel.REMOTE)
+
+    def test_an_access_token_in_a_url_is_redacted(self):
+        page = "redirected to https://example.com/cb#access_token=ya29.A0ARrdaM9xKq2Lp&state=xyz"
+
+        assert "ya29.A0ARrdaM9xKq2Lp" not in redact(page, channel=Channel.REMOTE)
+
+    def test_a_one_time_code_quoted_from_mail_is_redacted(self):
+        body = "Your verification code is 493028. It expires in 10 minutes."
+
+        assert "493028" not in redact(body, channel=Channel.REMOTE)
+
+    def test_a_bare_six_digit_number_is_not_redacted(self):
+        """The discriminator. Redacting every 6-digit number would eat years,
+        prices and room numbers, and a redactor that mangles ordinary prose gets
+        turned off."""
+        body = "The 2026 offsite is in room 401829 and the budget is 250000."
+
+        out = redact(body, channel=Channel.REMOTE)
+
+        assert "401829" in out
+        assert "250000" in out
+
+    def test_a_card_number_in_a_receipt_is_redacted(self):
+        body = "Charged to 4111 1111 1111 1111 on 24 August."
+
+        assert "4111 1111 1111 1111" not in redact(body, channel=Channel.REMOTE)
+
+    def test_a_stripe_live_key_is_redacted(self):
+        assert "sk_live_51ABCdefGHIjklMNO" not in redact("key sk_live_51ABCdefGHIjklMNO here", channel=Channel.REMOTE)
+
+    def test_a_cookie_header_from_a_page_fetch_is_redacted(self):
+        page = "Set-Cookie: session=eyJhbGciOiJIUzI1NiJ9abcdef; Path=/"
+
+        assert "eyJhbGciOiJIUzI1NiJ9abcdef" not in redact(page, channel=Channel.REMOTE)
+
+    def test_ordinary_email_prose_survives_intact(self):
+        """The most important test here.
+
+        A redactor that mangles normal mail is one the user disables, and a
+        disabled redactor protects nothing. Over-redaction is not the safe
+        direction when it destroys the feature.
+        """
+        body = "Hi Darcy,\n\nThanks for the notes. Tuesday at 3pm works — I've held it. The Q3 numbers are in the deck on page 4, and the 2026 forecast is on 7.\n\nBest,\nRishabh"
+
+        assert redact(body, channel=Channel.REMOTE) == body
+
+    def test_a_calendar_description_survives_intact(self):
+        description = "Weekly sync. Agenda: Q3 plan, hiring, the 2026 roadmap. Room 401."
+
+        assert redact(description, channel=Channel.REMOTE) == description
+
+    def test_widening_did_not_weaken_the_earlier_patterns(self):
+        """FR-022's actual requirement: a change for 003 must not break 001/002.
+
+        The rest of this file is the real guard — it runs unchanged. This is a
+        spot check that the shapes those features care about still redact.
+        """
+        for secret, sample in [
+            ("sk-abcdefghijklmnop1234", "OPENAI_API_KEY=sk-abcdefghijklmnop1234"),
+            ("AKIAIOSFODNN7EXAMPLE", "aws id AKIAIOSFODNN7EXAMPLE"),
+            ("ghp_abcdefghijklmnopqrstuvwxyz012345", "token ghp_abcdefghijklmnopqrstuvwxyz012345"),
+        ]:
+            assert secret not in redact(sample, channel=Channel.REMOTE), f"{secret} is no longer redacted"
+
+    def test_the_limit_is_still_stated_honestly(self):
+        """Article X. These are RECOGNIZED shapes; an unrecognized one passes
+        through, and the wording must not imply otherwise."""
+        invented = "my passphrase is correct-horse-battery-staple"
+
+        assert redact(invented, channel=Channel.REMOTE) == invented

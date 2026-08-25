@@ -1,3 +1,13 @@
-{"rules": [
-  {"id": "meeting-prep", "type": "calendar", "match": {"lead_minutes": 10}, "prompt": "x"}
-]}
+{
+  "rules": [
+    {
+      "id": "meeting-prep",
+      "type": "calendar",
+      "match": {
+        "lead_minutes": 10,
+        "minutes_before": 5
+      },
+      "prompt": "x"
+    }
+  ]
+}

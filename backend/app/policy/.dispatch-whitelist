@@ -1,0 +1,18 @@
+# Gate A whitelist — agent-construction sites that do not reach the shared
+# middleware base.
+#
+# EMPTY, and it should stay that way.
+#
+# History: 1 -> 0. `agents/factory.py` was the only entry. It was not routed
+# through the shared base; it was DELETED (FR-003), because its
+# middleware-takeover contract was incompatible with Article II by design —
+# you cannot guarantee both "the caller controls the whole middleware list" and
+# "no path bypasses policy".
+#
+# Gate A's rule therefore stays at its stronger form: EVERY create_agent site,
+# not merely every publicly reachable one. A weaker rule would have let the
+# module survive by being made private, and would not catch a new INTERNAL
+# bypass added later.
+#
+# Every entry needs a reason. An entry deferring to future work must name the
+# task that closes it, and the gate FAILS once that task lands.

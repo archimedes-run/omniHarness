@@ -19,6 +19,7 @@ from omniharness.config.loop_detection_config import LoopDetectionConfig
 from omniharness.config.mcp_builder_config import McpBuilderConfig
 from omniharness.config.memory_config import MemoryConfig, load_memory_config_from_dict
 from omniharness.config.model_config import ModelConfig
+from omniharness.config.policy_config import PolicyConfig
 from omniharness.config.run_events_config import RunEventsConfig
 from omniharness.config.runtime_paths import existing_project_file
 from omniharness.config.sandbox_config import SandboxConfig
@@ -97,6 +98,7 @@ class AppConfig(BaseModel):
     mcp_builder: McpBuilderConfig = Field(default_factory=McpBuilderConfig, description="MCP builder feature flag and configuration")
     workflows: WorkflowsConfig = Field(default_factory=WorkflowsConfig, description="Workflows feature flag and configuration")
     trigger_engine: TriggerEngineConfig = Field(default_factory=TriggerEngineConfig, description="Trigger engine feature flag and configuration")
+    policy: PolicyConfig = Field(default_factory=PolicyConfig, description="Permission policy engine feature flag and configuration")
     extensions: ExtensionsConfig = Field(default_factory=ExtensionsConfig, description="Extensions configuration (MCP servers and skills state)")
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig, description="Tool search / deferred loading configuration")
     title: TitleConfig = Field(default_factory=TitleConfig, description="Automatic title generation configuration")

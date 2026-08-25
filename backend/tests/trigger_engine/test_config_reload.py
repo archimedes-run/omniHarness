@@ -38,11 +38,29 @@ def test_template_referencing_an_unavailable_field_fails_at_load() -> None:
         parse(_doc("rules_bad_template.json"))
 
 
-def test_calendar_is_reserved_but_rejected() -> None:
-    """FR-003 — accepted by the schema, refused at load, so adding it later
-    is a new source rather than a schema migration."""
-    with pytest.raises(ConfigError, match="not implemented"):
-        parse(_doc("rules_calendar.json"))
+def test_calendar_is_now_accepted() -> None:
+    """The reservation paid off.
+
+    This test used to assert calendar rules were REFUSED at load, pinning the
+    Feature 002 deferral. It failed on the commit that implemented them, which
+    is what the reservation was for: adding calendar was a new source plus two
+    registration points, not a schema migration.
+    """
+    cfg = parse(_doc("rules_calendar.json"))
+
+    assert any(r.type is TriggerType.CALENDAR for r in cfg.rules)
+
+
+def test_a_calendar_rule_must_say_how_far_ahead_to_fire() -> None:
+    """The one thing a calendar rule cannot do without. Absent it, the engine
+    would have to invent a lead time, and a pre-alert at a guessed interval is
+    worse than none."""
+    doc = _doc("rules_calendar.json")
+    for rule in doc["rules"]:
+        rule.get("match", {}).pop("minutes_before", None)
+
+    with pytest.raises(ConfigError, match="minutes_before"):
+        parse(doc)
 
 
 def test_urgent_defaults_to_false_and_must_be_explicit() -> None:

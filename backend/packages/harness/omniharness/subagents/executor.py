@@ -231,6 +231,7 @@ class SubagentExecutor:
         thread_data: ThreadDataState | None = None,
         thread_id: str | None = None,
         trace_id: str | None = None,
+        checkpointer: Any | None = None,
     ):
         """Initialize the executor.
 
@@ -245,9 +246,14 @@ class SubagentExecutor:
             thread_data: Thread data from parent agent.
             thread_id: Thread ID for sandbox operations.
             trace_id: Trace ID from parent for distributed tracing.
+            checkpointer: Persistence for suspend/resume. When None,
+                ``_create_agent`` resolves the process checkpointer. Required
+                for any middleware that interrupts the run — without one the
+                subagent suspends and never resumes.
         """
         self.config = config
         self.app_config = app_config
+        self.checkpointer = checkpointer
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
         # to _create_agent (which already loads app_config) so unit tests can construct
@@ -283,12 +289,31 @@ class SubagentExecutor:
         # Reuse shared middleware composition with lead agent.
         middlewares = build_subagent_runtime_middlewares(app_config=app_config, model_name=self.model_name, lazy_init=True)
 
+        # A checkpointer, for the same reason the lead agent gets one: without
+        # it a middleware that suspends the run (a permission gate asking the
+        # user to confirm) SUSPENDS AND NEVER RESUMES. The run ends at the
+        # suspension point, the tool never executes, and nothing raises — so a
+        # subagent asked to confirm simply stops, having done nothing, which is
+        # indistinguishable from a correct refusal.
+        #
+        # The lead agent has one attached at run time by the run worker; the
+        # subagent path had none anywhere. Measured, not assumed: see
+        # backend/tests/policy/test_subagent_suspend.py, whose positive control
+        # (test_suspend_resume_control.py) establishes that the probe can detect
+        # suspension where it is known to work.
+        checkpointer = self.checkpointer
+        if checkpointer is None:
+            from omniharness.runtime.checkpointer import get_checkpointer
+
+            checkpointer = get_checkpointer()
+
         return create_agent(
             model=model,
             tools=tools if tools is not None else self.tools,
             middleware=middlewares,
             system_prompt=self.config.system_prompt,
             state_schema=ThreadState,
+            checkpointer=checkpointer,
         )
 
     async def _load_skills(self) -> list[Skill]:

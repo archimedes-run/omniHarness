@@ -28,6 +28,10 @@ AVAILABLE_FIELDS: dict[TriggerType, frozenset[str]] = {
     TriggerType.WATCHER: frozenset({"project", "session_id", "last_message", "state", "idle_reason"}),
     TriggerType.CRON: frozenset({"scheduled_at"}),
     TriggerType.COMPLETION: frozenset({"task_id", "status", "summary"}),
+    #: Feature 003. What a calendar event can supply to a prompt template.
+    #: `attendees` and `summary` are what FR-026's "who it is with and what it
+    #: is about" needs; `minutes_before` lets the wording say how soon.
+    TriggerType.CALENDAR: frozenset({"summary", "attendees", "description", "starts_at", "minutes_before"}),
 }
 
 DEFAULTS = {
@@ -81,8 +85,11 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         rtype = TriggerType(raw.get("type"))
     except ValueError as exc:
         raise ConfigError(f"rule {rid!r}: unknown type {raw.get('type')!r}") from exc
-    if rtype is TriggerType.CALENDAR:
-        raise ConfigError(f"rule {rid!r}: calendar triggers are not implemented in this feature. The type is reserved in the schema so adding it later is a new source.")
+    if rtype is TriggerType.CALENDAR and "minutes_before" not in (raw.get("match") or {}):
+        # Implemented in Feature 003 as a new source (sources/calendar.py). The
+        # rejection that used to sit here is gone, replaced by the one thing a
+        # calendar rule cannot do without: how far ahead to fire.
+        raise ConfigError(f"rule {rid!r}: a calendar rule needs match.minutes_before")
 
     prompt = raw.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():

@@ -123,6 +123,12 @@ async def get_mcp_tools() -> list[BaseTool]:
             try:
                 single_client = MultiServerMCPClient({server_name: server_params}, tool_interceptors=tool_interceptors, tool_name_prefix=True)
                 server_tools = await single_client.get_tools()
+                # FR-012/FR-013: remove denied tools from the SURFACE, here,
+                # between loading and assembly. Not via tool_interceptors —
+                # those wrap execution, which yields "guarded"; a capability
+                # that is absent cannot be reached by a bug in the permission
+                # path at all.
+                server_tools = _apply_tool_surface(extensions_config, server_name, server_tools)
                 logger.info(f"Loaded {len(server_tools)} tool(s) from '{server_name}'")
                 tools.extend(server_tools)
             except Exception as server_err:
@@ -140,3 +146,27 @@ async def get_mcp_tools() -> list[BaseTool]:
     except Exception as e:
         logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
         return []
+
+
+def _apply_tool_surface(extensions_config: ExtensionsConfig, server_name: str, server_tools: list) -> list:
+    """Drop tools this server's config denies (FR-012, FR-013).
+
+    Deny names are UNPREFIXED, but tools arrive named ``<server>_<tool>``
+    because the client is constructed with ``tool_name_prefix=True``. Strip the
+    prefix before matching so the user configures the names the server actually
+    exposes.
+    """
+    server = extensions_config.mcp_servers.get(server_name)
+    surface = getattr(server, "tools", None)
+    if surface is None:
+        return server_tools
+
+    prefix = f"{server_name}_"
+    kept = []
+    for tool in server_tools:
+        unprefixed = tool.name[len(prefix) :] if tool.name.startswith(prefix) else tool.name
+        if surface.permits(unprefixed):
+            kept.append(tool)
+        else:
+            logger.info("Tool surface: '%s' from '%s' is denied and will not be exposed", unprefixed, server_name)
+    return kept

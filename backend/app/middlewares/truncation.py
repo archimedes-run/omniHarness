@@ -4,14 +4,9 @@ Positioned immediately before OmniHarnessSummarizationMiddleware in the chain
 via @Prev so that the model's effective input window is never exceeded before
 summarization runs.
 
-Usage with create_omniharness_agent:
-    from app.middlewares.truncation import LargeContextTruncatorMiddleware
-
-    agent = create_omniharness_agent(
-        model=model,
-        tools=tools,
-        extra_middleware=[LargeContextTruncatorMiddleware()],
-    )
+Configured via `use: app.middlewares.truncation:LargeContextTruncatorMiddleware`
+in config.yaml. The @Prev anchor above places it in the chain; it is not
+constructed directly by application code.
 """
 
 from __future__ import annotations

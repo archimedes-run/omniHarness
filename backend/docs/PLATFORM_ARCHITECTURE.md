@@ -81,6 +81,43 @@ If you are implementing streaming: design it against the consumer you actually h
 deleted code with `git log -- backend/app/channels/manager.py` if you want it as reference, not
 as a starting point.
 
+## Agent construction — one path, no embedding API (deliberate)
+
+Every agent in this system is constructed through a call site that reaches
+`_build_runtime_middlewares`. There are three: the lead agent, the client, and
+the subagent executor. A CI gate enumerates every `create_agent` call in the
+repository and fails if one does not reach that base, with an **empty**
+whitelist.
+
+A fourth existed until 2026-08-24: `omniharness.agents.factory`, exporting
+`create_omniharness_agent` as an embedding API. It was **deleted**, not routed
+through the base, and the reason is about its contract rather than its wiring.
+
+The factory documented a **middleware-takeover contract**: passing
+`middleware=[x]` produced exactly `[x]`, with the caller in full control of the
+chain. Feature 003 requires that no dispatch path bypass policy classification.
+**Those two guarantees cannot both hold.** You cannot promise "the caller
+controls the whole middleware list" and "no path bypasses policy" — the contract
+was the thing that was wrong, not the absence of a prepended middleware. Routing
+it through the base was attempted and failed six tests that assert the takeover
+contract, which is the contract doing its job.
+
+Keeping it would have bought a public API **with no production caller**, at the
+cost of a permanently whitelisted bypass of this feature's central guarantee.
+
+**The gate's rule stayed at its stronger form as a direct result**: every
+`create_agent` site, not merely every publicly reachable one. Making the module
+private would have satisfied a weaker rule while leaving the bypass in the tree,
+and a weaker rule would not catch a new INTERNAL bypass added later.
+
+**If an embedding API is wanted later**, the correct version routes through
+policy — the caller composes *additional* middleware, never the whole list.
+Recover the deleted code with `git log -- backend/packages/harness/omniharness/agents/factory.py`
+as reference, not as a starting point.
+
+This is the same call, for the same reason, as the deleted IM streaming path
+described above: unused now, and wrong for its eventual consumer later.
+
 ## Platform Event Envelope
 
 **Invariant: there is one events table and one event store. Product objects emit through
