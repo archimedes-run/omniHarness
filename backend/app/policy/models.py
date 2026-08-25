@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 from typing import Any
 
+from .predicates import PREDICATES
+
 
 class Tier(IntEnum):
     """One of three levels of consequence (Article II).
@@ -58,19 +60,48 @@ class Outcome(StrEnum):
 class RuleException:
     """An argument-conditional override. May only RAISE (FR-037)."""
 
-    when: dict[str, Any]
     tier: Tier
+    when: dict[str, Any] = field(default_factory=dict)
     source_line: int | None = None
 
+    #: argument key -> name of a SAFETY predicate from PREDICATES. The
+    #: exception applies when the predicate is not satisfied.
+    unless: dict[str, str] = field(default_factory=dict)
+
     def matches(self, arguments: dict[str, Any]) -> bool:
+        args = arguments or {}
         for key, expected in self.when.items():
-            actual = (arguments or {}).get(key)
+            actual = args.get(key)
             if isinstance(expected, list):
                 if actual not in expected:
                     return False
             elif actual != expected:
                 return False
-        return True
+
+        # `unless` names a SAFETY predicate per argument. The exception applies
+        # — and therefore RAISES the tier — whenever safety cannot be
+        # established. A missing argument counts as unestablished, so a rule
+        # naming an argument this tool does not have raises rather than falls
+        # through to the lower tier. That direction is deliberate: it makes a
+        # wrong argument name in a rules file safe instead of silent.
+        for key, predicate_name in self.unless.items():
+            predicate = PREDICATES.get(predicate_name)
+            if predicate is None:  # unknown names are rejected at load
+                return True
+            if key not in args:
+                return True
+            try:
+                if not predicate(args[key]):
+                    return True
+            except Exception:  # noqa: BLE001 — a predicate that throws has not established safety
+                return True
+
+        # A `when` exception that survived every check APPLIES: its conditions
+        # all held. An `unless` exception that survived established safety on
+        # every argument it names, so it does NOT apply and the rule's own tier
+        # stands. Returning True here for a pure-`unless` exception raised every
+        # call, including the SELECT the rule exists to let through.
+        return bool(self.when)
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,7 @@ from pathlib import Path
 import yaml
 
 from .models import ClassificationRule, RuleException, Tier
+from .predicates import PREDICATES
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,21 @@ class ConfigLoader:
                         f"tier, never lower it. To make this call safer than the rule's default, "
                         f"change the rule's tier — that is a visible edit, where a narrow exception is not."
                     )
-                exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier))
+                unless = raw_exception.get("unless") or {}
+                unknown = sorted(set(unless.values()) - set(PREDICATES))
+                if unknown:
+                    # AT LOAD, like the raise-only check above. A rule naming a
+                    # predicate that does not exist would otherwise sit in the
+                    # file looking like protection while matching nothing.
+                    raise PolicyConfigError(
+                        f'{self.path}:{index}: exception on pattern "{pattern}" names unknown '
+                        f"predicate(s) {unknown}. Known predicates: {sorted(PREDICATES)}. "
+                        f"Predicates are a closed set in app/policy/predicates.py; adding one is "
+                        f"a code change with a test, not a config edit."
+                    )
+                if not (raw_exception.get("when") or unless):
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has neither `when` nor `unless`, so it can never apply.')
+                exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier, unless=unless))
 
             rules.append(ClassificationRule(pattern=pattern, tier=tier, exceptions=tuple(exceptions), source_file=str(self.path), source_line=index))
 

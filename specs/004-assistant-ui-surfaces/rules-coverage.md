@@ -37,7 +37,39 @@ Guarded by `test_a_local_read_never_asks`, with `test_a_local_write_is_not_silen
 as the control — sabotaged by widening `read_file` to `*file*`, which correctly reported
 `write_file became silent`.
 
-## Not applied — these are yours to decide
+## Decided 2026-08-25 — four of five applied
+
+Groups A, B, C and E are decided and implemented. Group D is below, awaiting review.
+
+### A. Local mutations → **Tier 2**
+
+`write_file` · `str_replace` · `filesystem_edit_file` · `filesystem_create_directory`
+
+Following `filesystem_write*`. A sandbox write is more contained than one through the
+MCP server's allowed directories, not less, so it does not warrant a higher tier than its
+equivalent.
+
+### B. Outbound reads → **Tier 1**
+
+`web_search` · `web_fetch` · `image_search`
+
+Article II tiers by **consequence**, not by whether a packet leaves the machine. A search
+creates nothing, modifies nothing, notifies nobody. Exfiltration is Article III's rule —
+nothing read from a tool result may initiate an action — and tiering searches does not
+help that while costing a confirmation on every lookup.
+
+### C. GitHub reads → **Tier 1** (14 rules)
+
+Same reasoning as B, plus the destination is one already authorised with a token.
+
+### E. `postgres_query` → **Tier 1, raised to Tier 3 unless the statement is a SELECT**
+
+Built as the general mechanism, because it is the pattern every future ambiguous tool
+follows. See *The predicate mechanism* below.
+
+## Still open — Group D
+
+### The original enumeration follows, for the record
 
 I have not classified any of the following. Each is a judgement about what the assistant
 may do without asking, and guessing them is exactly what you asked me not to do.
@@ -103,3 +135,45 @@ GitHub read, every web search, and every file write. That is Tier 3 by *default*
 than by decision, and it is the list above. A day of use is what tells us which of those
 prompts read as protection and which read as noise — cheaper to learn now than after
 three more surfaces are built on top.
+
+---
+
+## The predicate mechanism (Group E)
+
+`app/policy/predicates.py` holds a **closed set** of named argument predicates. A rules
+file may name one; it cannot describe a new one. Adding one is a code change with a test.
+Letting the file carry arbitrary expressions would put interpretation back inside the
+security boundary, which Feature 003 rejected for confirmation and for the same reason.
+
+```yaml
+- pattern: "postgres_query"
+  tier: 1
+  exceptions:
+    - unless: {sql: read_only_sql}
+      tier: 3
+```
+
+**Every predicate answers "is this SAFE", never "is this dangerous."** Anything it cannot
+establish raises:
+
+| Input | Tier | Why |
+|---|---|---|
+| `SELECT 1` | 1 | established safe |
+| `DELETE FROM t` | 3 | not a SELECT |
+| `SELECT 1; DROP TABLE t` | 3 | a second statement can be anything |
+| `WITH x AS (DELETE ... RETURNING *) SELECT ...` | 3 | legal SQL that writes |
+| `SELECT * INTO copy FROM t` | 3 | writes |
+| `""`, `None`, `123` | 3 | not establishable |
+| **argument absent** | 3 | see below |
+| **`{"query": ...}` — wrong argument name** | 3 | see below |
+
+The last two matter most. **The `sql` argument name is unverified** — the postgres MCP
+server needs a live database to expose its schema, so it comes from documentation rather
+than measurement. If it is wrong, the argument is absent and the exception raises anyway.
+Being wrong this way costs a confirmation prompt; being wrong the other way runs an
+unreviewed `DELETE`. Confirm the name once a database is attached.
+
+An unknown predicate name is rejected at load, degrading the whole rule set to unreadable
+— which FR-009 makes mean every tool is Tier 3. Both directions are sabotage-verified:
+making the predicate permissive when confused, and letting an absent argument fall
+through, each fail the suite.

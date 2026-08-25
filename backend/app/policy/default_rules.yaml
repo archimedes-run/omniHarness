@@ -76,6 +76,26 @@ policy:
       tier: 1
     - pattern: "read_file"
       tier: 1
+
+    # Sandbox mutations, following filesystem_write* (Tier 2). A sandbox write
+    # is more contained than one through the MCP server's allowed directories,
+    # not less, so it does not warrant a higher tier than its equivalent.
+    - pattern: "write_file"
+      tier: 2
+    - pattern: "str_replace"
+      tier: 2
+
+    # Outbound reads. Tier 1 because Article II tiers by CONSEQUENCE, not by
+    # whether a packet leaves the machine: a search creates nothing, modifies
+    # nothing and notifies nobody. Exfiltration is Article III's territory —
+    # nothing read from a tool result may initiate an action — and tiering
+    # searches does not help that while costing a confirmation on every lookup.
+    - pattern: "web_search"
+      tier: 1
+    - pattern: "web_fetch"
+      tier: 1
+    - pattern: "image_search"
+      tier: 1
     # Starts a preview server in the user's own sandbox — reversible (it can be
     # stopped) and worth mentioning, so Tier 2 rather than silent.
     - pattern: "preview"
@@ -101,6 +121,11 @@ policy:
       tier: 1
     - pattern: "filesystem_search_files"
       tier: 1
+    # Mutations, matching filesystem_write* rather than the read rules above.
+    - pattern: "filesystem_edit_file"
+      tier: 2
+    - pattern: "filesystem_create_directory"
+      tier: 2
     - pattern: "filesystem_write*"
       tier: 2
     - pattern: "filesystem_move*"
@@ -158,6 +183,64 @@ policy:
       tier: 3
     - pattern: "googlecalendar_respond*"
       tier: 3
+
+    # ---------------------------------------------------------------------
+    # GitHub — reads are silent. Same reasoning as the outbound reads above,
+    # plus the destination is one the user already authorised with a token.
+    # Writes are NOT covered here: they are unclassified on purpose, so they
+    # remain Tier 3 by the FR-009 default until each is decided individually.
+    # ---------------------------------------------------------------------
+    - pattern: "github_get_file_contents"
+      tier: 1
+    - pattern: "github_get_issue"
+      tier: 1
+    - pattern: "github_get_pull_request"
+      tier: 1
+    - pattern: "github_get_pull_request_comments"
+      tier: 1
+    - pattern: "github_get_pull_request_files"
+      tier: 1
+    - pattern: "github_get_pull_request_reviews"
+      tier: 1
+    - pattern: "github_get_pull_request_status"
+      tier: 1
+    - pattern: "github_list_commits"
+      tier: 1
+    - pattern: "github_list_issues"
+      tier: 1
+    - pattern: "github_list_pull_requests"
+      tier: 1
+    - pattern: "github_search_code"
+      tier: 1
+    - pattern: "github_search_issues"
+      tier: 1
+    - pattern: "github_search_repositories"
+      tier: 1
+    - pattern: "github_search_users"
+      tier: 1
+
+    # ---------------------------------------------------------------------
+    # postgres_query — the first tool whose NAME cannot classify it. SELECT and
+    # DELETE FROM arrive through the same entry point.
+    #
+    # Tier 1 by default, RAISED to Tier 3 whenever the statement is not
+    # established to be a single SELECT. The predicate answers "is this safe",
+    # never "is this dangerous", so everything it cannot establish — an
+    # unparseable statement, a missing `sql` argument, a second statement after
+    # a semicolon, a WITH that might hide a DELETE — raises rather than falls
+    # through.
+    #
+    # THE ARGUMENT NAME IS UNVERIFIED. The postgres MCP server needs a live
+    # database to expose its schema, so `sql` is taken from the server's
+    # documentation rather than measured. If it is wrong, the argument is absent
+    # and the exception raises anyway — a wrong name here costs a confirmation
+    # prompt, not a silent execution. Confirm it once a database is attached.
+    # ---------------------------------------------------------------------
+    - pattern: "postgres_query"
+      tier: 1
+      exceptions:
+        - unless: {sql: read_only_sql}
+          tier: 3
 
   confirmation:
     # 4 hours. THIS IS A STARTING GUESS, NOT A MEASURED VALUE — long enough to
