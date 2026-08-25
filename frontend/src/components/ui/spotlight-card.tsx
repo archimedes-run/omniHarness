@@ -3,11 +3,6 @@
 import React, { useRef } from "react";
 import "./spotlight-card.css";
 
-interface Position {
-  x: number;
-  y: number;
-}
-
 interface SpotlightCardProps extends React.PropsWithChildren {
   className?: string;
   spotlightColor?: `rgba(${number}, ${number}, ${number}, ${number})`;

@@ -19,10 +19,18 @@ export default async function RootLayout({
   return (
     <html lang={locale} suppressContentEditableWarning suppressHydrationWarning>
       <body>
+        {/* enableSystem is TRUE because the settings page offers a "System"
+            option. It previously did not, so that control was inert — a
+            control that cannot work is worse than an absent one, because the
+            user believes they have made a choice.
+
+            defaultTheme stays "light" deliberately: enabling system support
+            makes the option FUNCTION, it does not change what anyone currently
+            sees. A user gets system behaviour only by choosing it. */}
         <ThemeProvider
           attribute="class"
           defaultTheme="light"
-          enableSystem={false}
+          enableSystem
           disableTransitionOnChange
         >
           <I18nProvider initialLocale={locale}>{children}</I18nProvider>

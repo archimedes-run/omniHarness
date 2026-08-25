@@ -41,20 +41,17 @@ import { cn } from "@/lib/utils";
 import type { ChatStatus } from "ai";
 import {
   ArrowUpIcon,
-  ImageIcon,
   Loader2Icon,
   MicIcon,
   PaperclipIcon,
   PlusIcon,
   SquareIcon,
-  UploadIcon,
   XIcon,
 } from "lucide-react";
 import { nanoid } from "nanoid";
 import {
   type ChangeEvent,
   type ChangeEventHandler,
-  Children,
   type ClipboardEventHandler,
   type ComponentProps,
   createContext,

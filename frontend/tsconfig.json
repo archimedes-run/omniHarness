@@ -11,6 +11,19 @@
     "verbatimModuleSyntax": true,
     /* Strictness */
     "strict": true,
+    /* The cheapest half of a frontend wiring check (Article XI has no frontend
+     * equivalent — see docs/FRONTEND_TESTING_GAP.md).
+     *
+     * "a handler nothing references" is exactly an unused symbol, and the
+     * compiler already knows. Enabling these turns that from something a
+     * reviewer might notice into something the build refuses. Cost when
+     * enabled: 5 symbols across 3 files, all genuinely dead, all removed.
+     *
+     * This does NOT catch the other half — a rendered control with no handler —
+     * and neither of the two bugs that prompted it. Kept because it is free,
+     * not because it closes the gap. */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitAny": false,
     "checkJs": false,
