@@ -20,6 +20,7 @@ than hidden.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -96,6 +97,97 @@ class PolicyMiddleware(AgentMiddleware):
         return self._require_confirmation(request, decision)
 
     # -- internals ---------------------------------------------------------
+
+    # ---- completing a confirmation --------------------------------------
+    #
+    # THE SEAM IS wrap_model_call, NOT before_model.
+    #
+    # Research R1 verified before_model can read the latest human turn and drive
+    # recognise -> claim -> execute, and it can. Implementation found the thing
+    # the probe did not need: executing a confirmed action requires the TOOL,
+    # and before_model cannot reach one. Its signature is (state, runtime), and
+    # Runtime carries context, store, stream_writer, previous, execution_info
+    # and server_info — no tools. AgentMiddleware.tools is for CONTRIBUTING
+    # tools to the agent, which is the opposite direction.
+    #
+    # ModelRequest carries `tools`. So the confirmation completes here, where
+    # the registry is available on every model call rather than assembled from
+    # whichever tools this worker happens to have dispatched before.
+    #
+    # It SHORT-CIRCUITS rather than letting the model narrate. The outcome of a
+    # Tier 3 confirmation is a deterministic statement about what did or did not
+    # happen; handing it to a model to phrase invites a fluent sentence that
+    # does not match the audit log.
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        verdict, note = self._complete_confirmation(request)
+        if verdict is not None:
+            return verdict
+        return handler(request.override(messages=note) if note else request)
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        verdict, note = self._complete_confirmation(request)
+        if verdict is not None:
+            return verdict
+        return await handler(request.override(messages=note) if note else request)
+
+    def _complete_confirmation(self, request: Any) -> tuple[Any, Any]:
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from . import confirm_flow
+        from .confirm_flow import ConfirmationFlow
+
+        messages = list(getattr(request, "messages", None) or [])
+        if not messages or not isinstance(messages[-1], HumanMessage):
+            # ONLY a turn that has just arrived can be a verdict. Without this,
+            # the same human turn that PROVOKED the proposal is re-read as an
+            # answer to it on the next loop, and every Tier 3 proposal is
+            # immediately met with "I did not recognise that".
+            return None, None
+
+        flow = ConfirmationFlow(store=self.pending, middleware=self, now=self.now)
+        result = flow.from_message(
+            messages[-1],
+            run_tool=self._runner(request),
+            runtime_context=self._runtime_context(request),
+            current_targets=None,
+        )
+        note = None
+        if result.expired_meanwhile:
+            # FR-038: expiry TELLS the user rather than producing silence. It is
+            # appended rather than short-circuited, because swallowing the turn
+            # to deliver it would lose whatever the user actually asked.
+            said = ", ".join(a.tool_name for a in result.expired_meanwhile)
+            note = [*messages, AIMessage(content=f"(An earlier request to {said} expired before it was confirmed, so I did not do it.)")]
+
+        if result.outcome == confirm_flow.NO_VERDICT:
+            return None, note
+
+        logger.info("policy: confirmation resolved as %s (%s)", result.outcome, result.action_id)
+        return AIMessage(content=result.message), None
+
+    @staticmethod
+    def _runner(request: Any) -> Callable[[str, dict], Any]:
+        registry = {}
+        for tool in getattr(request, "tools", None) or []:
+            name = getattr(tool, "name", None)
+            if name:
+                registry[name] = tool
+
+        def run(tool_name: str, arguments: dict) -> Any:
+            tool = registry.get(tool_name)
+            if tool is None:
+                # Loud, not silent. A confirmation that cannot execute must say
+                # so; the failure this whole phase closes was a quiet one.
+                raise LookupError(f"tool {tool_name!r} is not available on this worker, so the confirmation cannot be completed")
+            return tool.invoke(arguments)
+
+        return run
+
+    @staticmethod
+    def _runtime_context(request: Any) -> dict | None:
+        runtime = getattr(request, "runtime", None)
+        return dict(getattr(runtime, "context", None) or {}) if runtime is not None else None
 
     def _classify(self, request):
         return classify(self._tool_name(request), self._arguments(request), self.loader.load())

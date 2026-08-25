@@ -41,6 +41,15 @@ class PolicyConfigError(ValueError):
 class RuleSet:
     rules: tuple[ClassificationRule, ...] = ()
     expires_after_seconds: int = 4 * 60 * 60
+    #: Above this many resolved targets, confirming requires supplying the
+    #: target count rather than a bare affirmation (FR-009).
+    #:
+    #: 10 IS A GUESS. It is not derived from usage, because there is none to
+    #: derive it from: until Feature 004 the confirmation path had no completion
+    #: route, so no distribution of target counts exists. It is set where a
+    #: single "yes" stops feeling proportionate to the blast radius, and is
+    #: expected to move once the surface has been used (Article X).
+    threshold_targets: int = 10
     source_file: str = ""
     #: True when the file could not be read or parsed. Everything is Tier 3
     #: either way; this records WHY, so "no rules were written" and "the rules
@@ -122,6 +131,7 @@ class ConfigLoader:
         return RuleSet(
             rules=tuple(rules),
             expires_after_seconds=int(confirmation.get("expires_after_seconds", 4 * 60 * 60)),
+            threshold_targets=int(confirmation.get("threshold_targets", 10)),
             source_file=str(self.path),
         )
 

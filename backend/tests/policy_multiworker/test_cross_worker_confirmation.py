@@ -50,6 +50,7 @@ policy:
       tier: 3
   confirmation:
     expires_after_seconds: 3600
+    threshold_targets: 3
 """
 
 
@@ -289,3 +290,64 @@ def test_a_second_confirmation_after_execution_does_nothing(gateway):
     assert not result.get("executed")
     assert len(_executions(gateway)) == before
     assert len(_audit(gateway)) == 1, "a second audit entry appeared for one authorisation"
+
+
+# ---------------------------------------------------------------------------
+# FR-009 — the scope threshold, against a RUNNING SERVER at the production
+# worker count. Unit tests already cover the branch; this asserts the rule
+# survives the whole path — HTTP, a different process, the durable store, the
+# real config file — because that is where a rule enforced in one route and not
+# another would show up.
+# ---------------------------------------------------------------------------
+
+
+def test_the_threshold_refuses_a_bare_yes_and_accepts_the_count(gateway):
+    """Four targets against a threshold of three, over HTTP, cross-process.
+
+    Both halves in one test on purpose: the second confirmation succeeding is
+    what proves the first refusal did NOT consume the action. A separate test
+    would have to re-state the plan, and would then be asserting about a
+    different action than the one it refused.
+    """
+    stated = httpx.post(
+        f"http://127.0.0.1:{PORT}/state",
+        json={"tool": "calendar_decline", "args": {"targets": ["A", "B", "C", "D"]}},
+        timeout=10,
+    ).json()
+    assert stated["pending"], "no action was recorded to confirm"
+
+    refused = httpx.post(
+        f"http://127.0.0.1:{PORT}/confirm",
+        json={"reply": "yes"},
+        headers=_headers(gateway),
+        timeout=10,
+    ).json()
+    assert refused["executed"] is False
+    assert refused["verdict"] == "threshold_not_met", refused
+    assert "4" in refused["reason"], "the user is not told what to type"
+
+    accepted = httpx.post(
+        f"http://127.0.0.1:{PORT}/confirm",
+        json={"reply": "yes 4"},
+        headers=_headers(gateway),
+        timeout=10,
+    ).json()
+    assert accepted["executed"] is True, accepted
+    assert accepted["claimant"].startswith("worker-")
+
+
+def test_below_the_threshold_a_bare_yes_still_confirms(gateway):
+    """The gate must not make ordinary confirmations harder. Two targets
+    against a threshold of three: 'yes' is enough, as it always was."""
+    httpx.post(
+        f"http://127.0.0.1:{PORT}/state",
+        json={"tool": "calendar_decline", "args": {"targets": ["A", "B"]}},
+        timeout=10,
+    )
+    done = httpx.post(
+        f"http://127.0.0.1:{PORT}/confirm",
+        json={"reply": "yes"},
+        headers=_headers(gateway),
+        timeout=10,
+    ).json()
+    assert done["executed"] is True, done

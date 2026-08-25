@@ -39,8 +39,61 @@ class Verdict(StrEnum):
 #:
 #: The action id may accompany either, which is what disambiguates when several
 #: actions are pending.
-_CONFIRM_FORMS = frozenset({"yes", "y", "confirm", "confirmed", "approve", "approved", "go ahead", "do it", "proceed"})
-_DECLINE_FORMS = frozenset({"no", "n", "decline", "declined", "cancel", "cancelled", "stop", "don't", "do not"})
+#: EXTENDED 2026-08-25 (FR-037). Closed and exact, as before — but closed is
+#: not the same as narrow, and the previous set rejected "yes please", "sure",
+#: "ok" and "yes, do it", which is what people actually type. A gate that
+#: refuses ordinary affirmations teaches users to stop answering it, which is
+#: the failure deterministic decline exists to prevent.
+#:
+#: THE TWO SETS ARE NOT HELD TO THE SAME BAR, deliberately. Misreading a phrase
+#: as a DECLINE resolves the action and nothing runs; the user asks again.
+#: Misreading one as a CONFIRM executes something irreversible. So a confirm
+#: entry must be unambiguous standing alone, while a decline entry need only be
+#: clearly not-an-approval — which is why "maybe later" declines and why
+#: "send it" is in neither.
+#:
+#: Every entry is a literal string. See specs/004-assistant-ui-surfaces/
+#: closed-set-coverage.md for the per-entry judgement.
+_CONFIRM_FORMS = frozenset(
+    {
+        "yes",
+        "y",
+        "confirm",
+        "confirmed",
+        "approve",
+        "approved",
+        "go ahead",
+        "do it",
+        "proceed",
+        "yes please",
+        "yes do it",
+        "sure",
+        "ok",
+        "okay",
+        "yep",
+        "yeah",
+        "please do",
+    }
+)
+_DECLINE_FORMS = frozenset(
+    {
+        "no",
+        "n",
+        "decline",
+        "declined",
+        "cancel",
+        "cancelled",
+        "stop",
+        "don't",
+        "do not",
+        "nope",
+        "no thanks",
+        "never mind",
+        "not now",
+        "leave it",
+        "maybe later",
+    }
+)
 
 _ID = re.compile(r"\b([0-9a-f]{12})\b")
 _NORMALISE = re.compile(r"[^a-z0-9' ]+")
@@ -54,7 +107,14 @@ class Recognition:
 
 
 def _normalise(text: str) -> str:
-    return _NORMALISE.sub(" ", (text or "").strip().lower()).strip()
+    """Lower, strip punctuation, COLLAPSE INTERNAL WHITESPACE.
+
+    The collapse is not cosmetic. Substituting a space per stripped character
+    turned "yes, do it" into "yes  do it" with two spaces, and `.strip()` only
+    trims the ends — so the entry "yes do it" would have sat in the set looking
+    correct and never matched. Found by measuring the set rather than reading it.
+    """
+    return " ".join(_NORMALISE.sub(" ", (text or "").strip().lower()).split())
 
 
 def recognise(message, pending: list[PendingAction], runtime_context: dict | None = None) -> Recognition:

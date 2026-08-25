@@ -117,7 +117,21 @@ class PendingStore:
             return None
 
     def open_actions(self, now: datetime) -> list[PendingAction]:
-        """Unresolved, unexpired actions — what a confirmation can address."""
+        """Unresolved, unexpired actions — what a confirmation can address.
+
+        EXPIRES LAZILY, AS IT READS (FR-038). Filtering expired actions out was
+        enough to keep the display honest, but it left them unresolved forever,
+        so nothing ever told the user their request had lapsed — Feature 003's
+        FR-019 says the opposite, and `expire_due` sat there with no caller.
+
+        Expiry is done here, not from a background task. The gateway's only
+        periodic work is the trigger engine's loop, behind
+        `config.trigger_engine.enabled`, which defaults to false; hanging expiry
+        off it would make the requirement inert whenever that flag is off. That
+        is the built-but-never-runs shape this whole phase exists to close, and
+        reintroducing it to close it would be a poor trade.
+        """
+        self.expire_due(now)
         out = []
         for path in sorted(self.directory.glob("*.json")):
             action = self.get(path.stem)

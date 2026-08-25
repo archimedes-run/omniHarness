@@ -36,51 +36,51 @@ nothing in it may depend on work sequenced later.
 
 ### Observing the defect first
 
-- [ ] T001 Write `backend/tests/policy/test_confirmation_completes.py` asserting that a Tier 3 action proposed in an agent run and answered with a recognised confirmation is executed once and audited. It MUST FAIL on current main with the action still open — record the failure output in the commit message
-- [ ] T002 Confirm T001's failure is the missing path and not a harness error: assert in the same run that the `PendingAction` was created and `open_actions` returns it, so "nothing executed" cannot be confused with "nothing was proposed"
+- [X] T001 Write `backend/tests/policy/test_confirmation_completes.py` asserting that a Tier 3 action proposed in an agent run and answered with a recognised confirmation is executed once and audited. It MUST FAIL on current main with the action still open — record the failure output in the commit message
+- [X] T002 Confirm T001's failure is the missing path and not a harness error: assert in the same run that the `PendingAction` was created and `open_actions` returns it, so "nothing executed" cannot be confused with "nothing was proposed"
 
 ### The single shared implementation
 
-- [ ] T003 Create `backend/app/policy/confirm_flow.py` with one function taking a message or an explicit verdict, a `PendingActionStore`, a runtime context and a tool runner, performing recognise → **scope-threshold check** → claim → `execute_confirmed` → resolve, and returning one of exactly seven outcomes: `executed`, `declined`, `already_resolved`, `expired`, `targets_drifted`, `unrecognised`, `threshold_not_met` (FR-004)
-- [ ] T004 [P] Unit-test every outcome branch of `confirm_flow` in `backend/tests/policy/test_confirm_flow.py`, including that a losing claimant receives `already_resolved` naming the prior outcome rather than a generic failure
-- [ ] T005 Add `before_model` and `abefore_model` to `PolicyMiddleware` in `backend/app/policy/middleware.py`, reading the latest human turn from state and delegating to `confirm_flow`; return the outcome as a message so the assistant narrates it
-- [ ] T006 Verify the round trip in `backend/tests/policy/test_before_model_confirmation.py` against a real `create_agent` run using the `ToolCapableFake` pattern from `tests/policy/test_suspend_resume_control.py`
-- [ ] T007 Include the POSITIVE CONTROL in T006 as its own test: assert `before_model` is invoked at all. Without it, "the confirmation did not complete" is indistinguishable from "the hook never ran" — the plan's probe hit exactly this
-- [ ] T008 Assert in T006 that a phrase outside the closed set (`"maybe later"`) leaves the action open and returns `unrecognised`, so the test cannot pass by accepting everything
+- [X] T003 Create `backend/app/policy/confirm_flow.py` with one function taking a message or an explicit verdict, a `PendingActionStore`, a runtime context and a tool runner, performing recognise → **scope-threshold check** → claim → `execute_confirmed` → resolve, and returning one of exactly seven outcomes: `executed`, `declined`, `already_resolved`, `expired`, `targets_drifted`, `unrecognised`, `threshold_not_met` (FR-004)
+- [X] T004 [P] Unit-test every outcome branch of `confirm_flow` in `backend/tests/policy/test_confirm_flow.py`, including that a losing claimant receives `already_resolved` naming the prior outcome rather than a generic failure
+- [X] T005 Add `before_model` and `abefore_model` to `PolicyMiddleware` in `backend/app/policy/middleware.py`, reading the latest human turn from state and delegating to `confirm_flow`; return the outcome as a message so the assistant narrates it
+- [X] T006 Verify the round trip in `backend/tests/policy/test_before_model_confirmation.py` against a real `create_agent` run using the `ToolCapableFake` pattern from `tests/policy/test_suspend_resume_control.py`
+- [X] T007 Include the POSITIVE CONTROL in T006 as its own test: assert `before_model` is invoked at all. Without it, "the confirmation did not complete" is indistinguishable from "the hook never ran" — the plan's probe hit exactly this
+- [X] T008 Assert in T006 that a phrase outside the closed set (`"maybe later"`) leaves the action open and returns `unrecognised`, so the test cannot pass by accepting everything
 
 ### The scope threshold — both routes, not just the UI (FR-009)
 
-- [ ] T009 Add `threshold_targets` to the policy rule set with default **10**, labelled in the config comment as a stated guess with no production distribution behind it — the confirmation path has never run, so there is no distribution of target counts to set it from (Article X)
-- [ ] T010 Implement the threshold inside `confirm_flow` so it applies to EVERY route: above it, a confirmation must supply a value matching the resolved target count; a wrong or absent value returns `threshold_not_met` and **does not consume, claim or resolve the action**
-- [ ] T011 [P] Test in `backend/tests/policy/test_scope_threshold.py` that below-threshold confirms with a bare affirmation, above-threshold rejects one, a correct count confirms, and a wrong count leaves the action open and unclaimed
-- [ ] T012 [P] Test that the threshold is read from configuration and that changing it changes which actions demand a count (SC-019)
-- [ ] T013 Test that the CHAT route enforces the threshold identically to the future UI route. This is the whole point of the move: FR-009 previously sat under the Surface 1 heading, which scoped it to the UI by placement, and would have shipped Phase 1 as a route where `yes` grants sixty targets
+- [X] T009 Add `threshold_targets` to the policy rule set with default **10**, labelled in the config comment as a stated guess with no production distribution behind it — the confirmation path has never run, so there is no distribution of target counts to set it from (Article X)
+- [X] T010 Implement the threshold inside `confirm_flow` so it applies to EVERY route: above it, a confirmation must supply a value matching the resolved target count; a wrong or absent value returns `threshold_not_met` and **does not consume, claim or resolve the action**
+- [X] T011 [P] Test in `backend/tests/policy/test_scope_threshold.py` that below-threshold confirms with a bare affirmation, above-threshold rejects one, a correct count confirms, and a wrong count leaves the action open and unclaimed
+- [X] T012 [P] Test that the threshold is read from configuration and that changing it changes which actions demand a count (SC-019)
+- [X] T013 Test that the CHAT route enforces the threshold identically to the future UI route. This is the whole point of the move: FR-009 previously sat under the Surface 1 heading, which scoped it to the UI by placement, and would have shipped Phase 1 as a route where `yes` grants sixty targets
 
 ### Closed-set coverage (addition)
 
-- [ ] T014 Enumerate what `_CONFIRM_FORMS` and `_DECLINE_FORMS` actually accept after normalisation, and write the enumeration to `specs/004-assistant-ui-surfaces/closed-set-coverage.md` (FR-037) as a table of phrase → accepted/rejected. Include the natural affirmations a real user types: `yes`, `yes please`, `yes, do it`, `do it`, `go ahead`, `sure`, `ok`, `okay`, `confirm`, `yep`, `please do`, and the decline equivalents
-- [ ] T015 Judge each rejected-but-natural phrase in that table and record a verdict per entry (FR-037). The set MUST remain closed and matched exactly — interpretation was rejected as a security property and that is not reopened. Closed is not the same as narrow: a set that rejects `"yes, do it"` trains users to fight the gate, which is the failure deterministic decline exists to prevent
-- [ ] T016 Extend `_CONFIRM_FORMS` / `_DECLINE_FORMS` in `backend/app/policy/confirm.py` with the phrases T010 approves, each carrying an inline justification. Additions are a deliberate edit, one line of reasoning per entry
-- [ ] T017 [P] Test in `backend/tests/policy/test_confirm_forms.py` that every phrase T009 lists as accepted is accepted and every phrase listed as rejected is rejected, driven by the same table so the document and the code cannot drift (SC-020)
-- [ ] T018 Assert in the same file that normalisation cannot be bypassed: punctuation, case and surrounding whitespace do not change a verdict, and no phrase containing an additional instruction (`"yes and also delete the rest"`) is accepted
+- [X] T014 Enumerate what `_CONFIRM_FORMS` and `_DECLINE_FORMS` actually accept after normalisation, and write the enumeration to `specs/004-assistant-ui-surfaces/closed-set-coverage.md` (FR-037) as a table of phrase → accepted/rejected. Include the natural affirmations a real user types: `yes`, `yes please`, `yes, do it`, `do it`, `go ahead`, `sure`, `ok`, `okay`, `confirm`, `yep`, `please do`, and the decline equivalents
+- [X] T015 Judge each rejected-but-natural phrase in that table and record a verdict per entry (FR-037). The set MUST remain closed and matched exactly — interpretation was rejected as a security property and that is not reopened. Closed is not the same as narrow: a set that rejects `"yes, do it"` trains users to fight the gate, which is the failure deterministic decline exists to prevent
+- [X] T016 Extend `_CONFIRM_FORMS` / `_DECLINE_FORMS` in `backend/app/policy/confirm.py` with the phrases T010 approves, each carrying an inline justification. Additions are a deliberate edit, one line of reasoning per entry
+- [X] T017 [P] Test in `backend/tests/policy/test_confirm_forms.py` that every phrase T009 lists as accepted is accepted and every phrase listed as rejected is rejected, driven by the same table so the document and the code cannot drift (SC-020)
+- [X] T018 Assert in the same file that normalisation cannot be bypassed: punctuation, case and surrounding whitespace do not change a verdict, and no phrase containing an additional instruction (`"yes and also delete the rest"`) is accepted
 
 ### Closing Feature 003's FR-019
 
-- [ ] T019 Expire LAZILY ON READ: have `open_actions` and `confirm_flow` resolve any action past its expiry as they encounter it, so `expire_due`'s effect happens without a background task (FR-038)
-- [ ] T020 NO LIFESPAN HOOK, and the reason is recorded at the call site: the gateway's only periodic work is the trigger engine's task, behind `config.trigger_engine.enabled`, which defaults to false. Hanging expiry off it would make FR-038 silently inert whenever that flag is off — reintroducing the built-but-never-runs family that this phase exists to close
-- [ ] T021 [P] Test in `backend/tests/policy/test_expiry_is_announced.py` that an action passing its expiry is resolved EXPIRED on the next read and produces a user-visible statement, not silence (SC-021)
-- [ ] T022 [P] Test that lazy expiry is idempotent and safe under concurrent readers: two workers reading the same expired action must not both announce it
+- [X] T019 Expire LAZILY ON READ: have `open_actions` and `confirm_flow` resolve any action past its expiry as they encounter it, so `expire_due`'s effect happens without a background task (FR-038)
+- [X] T020 NO LIFESPAN HOOK, and the reason is recorded at the call site: the gateway's only periodic work is the trigger engine's task, behind `config.trigger_engine.enabled`, which defaults to false. Hanging expiry off it would make FR-038 silently inert whenever that flag is off — reintroducing the built-but-never-runs family that this phase exists to close
+- [X] T021 [P] Test in `backend/tests/policy/test_expiry_is_announced.py` that an action passing its expiry is resolved EXPIRED on the next read and produces a user-visible statement, not silence (SC-021)
+- [X] T022 [P] Test that lazy expiry is idempotent and safe under concurrent readers: two workers reading the same expired action must not both announce it
 
 ### Gate — one recognition-and-claim implementation
 
-- [ ] T023 Write `backend/tests/gates/test_single_confirmation_path.py` asserting exactly one call site of `claim(` exists in production code, and that it is inside `confirm_flow.py`. This is FR-004 made checkable: a second route reimplementing the claim is what allows one confirmation to execute twice
-- [ ] T024 SABOTAGE T023: add a second module that calls `claim` directly and confirm the gate fails **at the assertion**, naming the offending file. Confirm the run reports `failed` — a `skipped`, `error` or collection failure has exercised nothing, and grepping the output for `pass|fail` hides all three
+- [X] T023 Write `backend/tests/gates/test_single_confirmation_path.py` asserting exactly one call site of `claim(` exists in production code, and that it is inside `confirm_flow.py`. This is FR-004 made checkable: a second route reimplementing the claim is what allows one confirmation to execute twice
+- [X] T024 SABOTAGE T023: add a second module that calls `claim` directly and confirm the gate fails **at the assertion**, naming the offending file. Confirm the run reports `failed` — a `skipped`, `error` or collection failure has exercised nothing, and grepping the output for `pass|fail` hides all three
 
 ### Production shape
 
-- [ ] T025 Extend `backend/tests/policy_multiworker/` so a confirmation arriving through chat on one worker resolves an action created on another, at the worker count read from the compose file
-- [ ] T026 Verify Phase 1 is standalone: run the full backend suite with no frontend build and no Phase 2+ work present, and confirm Tier 3 is usable end to end
-- [ ] T027 Manual validation per quickstart.md: ask the assistant for a Tier 3 action, reply `yes`, observe it happen. Record the before/after, since on main nothing happens
+- [X] T025 Extend `backend/tests/policy_multiworker/` so a confirmation arriving through chat on one worker resolves an action created on another, at the worker count read from the compose file
+- [X] T026 Verify Phase 1 is standalone: run the full backend suite with no frontend build and no Phase 2+ work present, and confirm Tier 3 is usable end to end
+- [ ] T027 Manual validation per quickstart.md: ask the assistant for a Tier 3 action, reply `yes`, observe it happen. **NOT DONE — this one is yours.** It needs a real model and live credentials, which the automated suite deliberately does not have. The mechanism is covered by T001 (a real agent run) and T025 (a real 4-worker gateway over HTTP); what neither can show is the experience
 
 **Checkpoint**: Tier 3 is grantable in chat. Releasable on its own.
 
