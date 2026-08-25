@@ -55,6 +55,27 @@ policy:
       tier: 1
     - pattern: "tool_search"
       tier: 1
+
+    # Local reads, listings and metadata. Added 2026-08-25 after enumerating
+    # what the lead agent ACTUALLY has: 3 of 39 tools were classified, so
+    # everything else fell to the FR-009 default of Tier 3 — including `ls`.
+    #
+    # A confirmation prompt for a directory listing is how a person learns to
+    # approve without reading, which is the failure the tier model exists to
+    # prevent. FR-009 was behaving correctly; the rules were not covering the
+    # surface.
+    #
+    # EACH ONE IS NAMED. No `read*` or `*_list*` shortcut: a tool added later
+    # must be classified deliberately rather than inherit Tier 1 from a glob
+    # that happened to fit, which is the same reasoning as the comment above.
+    - pattern: "ls"
+      tier: 1
+    - pattern: "glob"
+      tier: 1
+    - pattern: "grep"
+      tier: 1
+    - pattern: "read_file"
+      tier: 1
     # Starts a preview server in the user's own sandbox — reversible (it can be
     # stopped) and worth mentioning, so Tier 2 rather than silent.
     - pattern: "preview"
@@ -72,6 +93,13 @@ policy:
     - pattern: "filesystem_read*"
       tier: 1
     - pattern: "filesystem_list*"
+      tier: 1
+    # Listing and metadata, named individually for the same reason.
+    - pattern: "filesystem_directory_tree"
+      tier: 1
+    - pattern: "filesystem_get_file_info"
+      tier: 1
+    - pattern: "filesystem_search_files"
       tier: 1
     - pattern: "filesystem_write*"
       tier: 2

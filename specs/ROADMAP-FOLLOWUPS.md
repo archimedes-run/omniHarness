@@ -50,3 +50,34 @@ mypy is configured — permissive globally, strict on `app.policy`, `app.trigger
 - **T079** — architecture doc for the policy layer, deferred; the close-out records carry the reasoning.
 - **`config.example.yaml` `models:`** now ships a verified `gpt-5` entry. Revisit when the default should be something else.
 - **The e2e workflow starts no backend**, so two landing-page tests fail by design. Red since June, unrelated to any feature here.
+
+---
+
+## A run that errors returns HTTP 200 with an empty body
+
+**Found 2026-08-25 during Feature 004's T027 walkthrough.** Opened as a follow-up rather
+than fixed inline: it is a gateway concern, not a policy one.
+
+Posting to `/api/threads/{id}/runs/wait` with a bad `assistant_id` returned:
+
+```
+HTTP/1.1 200 OK
+{}
+```
+
+The run had failed — `FileNotFoundError: Agent directory not found` — and the only place
+that said so was the server log. A caller checking the status code sees success. A caller
+checking the body sees nothing to distinguish "the run produced no messages" from "the
+run never started".
+
+This cost real time during T027: an empty response read as "the model said nothing", and
+the actual cause was found only by reading the gateway log.
+
+**Why it matters beyond the inconvenience.** "Assert on state, not status" has been a
+lesson about how we write tests. This makes it a defect in the product: the transport
+layer reports success for a failed run, so any consumer that trusts the status code is
+wrong, and every consumer written against this API has to know that. Feature 004's four
+surfaces are exactly such consumers.
+
+**What a fix looks like**: a failed run returns a non-2xx status, or the 200 body carries
+an explicit error the caller can read. Either is fine; silence is not.

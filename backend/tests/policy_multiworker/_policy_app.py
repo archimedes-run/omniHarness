@@ -22,10 +22,9 @@ from fastapi import FastAPI, Request
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
 from app.policy.audit import PolicyAuditLog
 from app.policy.config import ConfigLoader
-from app.policy.confirm import Verdict, recognise
+from app.policy.confirm import recognise  # noqa: F401
 from app.policy.disclose import DisclosureLedger
 from app.policy.middleware import PolicyMiddleware
-from app.policy.models import Outcome
 from app.policy.pending import PendingStore
 
 STATE_DIR = Path(os.environ["POLICY_TEST_STATE_DIR"])
@@ -71,7 +70,15 @@ async def state_a_plan(request: Request):
 
 @app.post("/confirm")
 async def confirm(request: Request):
-    """Whichever worker the kernel picks: recognise, claim, execute, audit."""
+    """Whichever worker the kernel picks: the SHARED flow, not a copy of it.
+
+    This endpoint used to inline recognise -> claim -> execute_confirmed. That
+    was the only implementation in existence, which is how a test app came to
+    hold the sole copy of a production behaviour. It now calls
+    `ConfirmationFlow`, the same object the chat route uses, so what this proves
+    about cross-worker confirmation is a fact about production and not about
+    this file.
+    """
     if not is_valid_internal_auth_token(request.headers.get(INTERNAL_AUTH_HEADER_NAME)):
         # Exercises the shared-secret fix: a per-worker token would 401 here
         # whenever the reply lands on a worker other than the one that minted it.
@@ -80,25 +87,27 @@ async def confirm(request: Request):
     body = await request.json()
     from langchain_core.messages import HumanMessage
 
-    now = datetime.now(UTC)
-    pending = _store.open_actions(now)
-    verdict = recognise(HumanMessage(content=body["reply"]), pending, runtime_context={"thread_id": "t1"})
+    from app.policy.confirm_flow import EXECUTED, ConfirmationFlow
 
-    if verdict.verdict is not Verdict.CONFIRM:
-        return {"pid": os.getpid(), "executed": False, "verdict": str(verdict.verdict), "reason": verdict.reason}
-
-    claimant = f"worker-{os.getpid()}"
-    action = _store.claim(verdict.action_id, claimant)
-    if action is None:
-        return {"pid": os.getpid(), "executed": False, "verdict": "confirm", "reason": "already claimed"}
+    flow = ConfirmationFlow(store=_store, middleware=_middleware, now=lambda: datetime.now(UTC))
 
     def _run(tool_name, args):
         EXECUTIONS.mkdir(parents=True, exist_ok=True)
-        (EXECUTIONS / f"{os.getpid()}-{action.id}").write_text(f"{tool_name} {args}")
+        (EXECUTIONS / f"{os.getpid()}-{tool_name}-{len(list(EXECUTIONS.iterdir()))}").write_text(f"{tool_name} {args}")
         return "done"
 
-    _middleware.execute_confirmed(action, run_tool=_run, current_targets=action.targets)
-    return {"pid": os.getpid(), "executed": _store.get(action.id).outcome is Outcome.EXECUTED, "claimant": claimant}
+    result = flow.from_message(
+        HumanMessage(content=body["reply"]),
+        run_tool=_run,
+        runtime_context={"thread_id": "t1"},
+    )
+    return {
+        "pid": os.getpid(),
+        "executed": result.outcome == EXECUTED,
+        "verdict": result.outcome,
+        "reason": result.message,
+        "claimant": f"worker-{os.getpid()}" if result.outcome == EXECUTED else None,
+    }
 
 
 @app.get("/health")

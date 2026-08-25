@@ -46,11 +46,16 @@ def test_recognised_declines_are_as_mechanical_as_confirmations(text):
         "that seems fine",
         "sure why not",
         "yes but only the first one",
-        "ok",
         "",
     ],
 )
 def test_anything_else_is_unrecognised(text):
+    """NOTE: "ok" was removed from this list on 2026-08-25 and is now a
+    recognised confirmation (FR-037). Not a weakening — the set is still closed
+    and matched exactly. The judgement is recorded per entry in
+    specs/004-assistant-ui-surfaces/closed-set-coverage.md; "sure why not" and
+    "yes but only the first one" stay here because neither is unambiguous
+    standing alone."""
     """Not interpreted, not guessed — re-asked."""
     assert recognise(HumanMessage(content=text), [_action()]).verdict is Verdict.UNRECOGNISED
 

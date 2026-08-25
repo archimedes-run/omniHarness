@@ -46,6 +46,12 @@ class Outcome(StrEnum):
     UNRECOGNISED = "unrecognised"
     TARGETS_DRIFTED = "targets-drifted"
     SUPERSEDED = "superseded"
+    #: Authorised, claimed, attempted — and the tool raised. Distinct from every
+    #: other member because the user DID approve and the action DID NOT happen,
+    #: which no other outcome says. Added when a real gateway run left an action
+    #: claimed and unresolved after a tool error: recoverable only by expiry,
+    #: and invisible until then.
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
