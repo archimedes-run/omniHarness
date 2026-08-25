@@ -75,6 +75,27 @@ class DisclosureLedger:
         if record.tool_name.lower() not in text:
             return False
         if record.targets:
+            # SUBSTRING MATCH, DELIBERATELY, AND DO NOT "IMPROVE" IT.
+            #
+            # This is exact containment, so a reply saying "Tuesday afternoon"
+            # does NOT cover a target of "Tue 3pm with Darcy" — it appends. That
+            # near miss looks like a false positive and is the whole point.
+            #
+            # The obvious improvement is fuzzy or semantic matching, so a reply
+            # that gestures at the right thing counts as covered. That change
+            # moves the bias from append toward silence, which is the wrong
+            # direction: a redundant disclosure is clumsy, a missing one is the
+            # defect FR-039 exists to prevent. Duplicates are the VISIBLE
+            # failure and omissions the INVISIBLE one, so anyone tuning this
+            # feels pressure toward not-appending — which is why FR-040 states
+            # the direction rather than leaving it to judgement.
+            #
+            # A similarity score also reintroduces the thing Gate B removed:
+            # a threshold is a judgement, and a judgement about whether the
+            # model said enough is exactly what "system-guaranteed, never
+            # model-judged" rules out.
+            #
+            # tests/policy/test_disclosure_bias.py pins the near-miss case.
             return all(str(target).lower() in text for target in record.targets)
         # No resolved targets to name: the tool alone is the whole of the effect.
         return True

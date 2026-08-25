@@ -306,6 +306,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("No IM channels configured or channel service failed to start")
 
+        # Install the permission policy layer at the tool-dispatch chokepoint
+        # (FR-002). Before anything can build an agent: an agent constructed
+        # earlier would carry no policy middleware, and would look identical to
+        # one that had been checked.
+        from app.policy.registration import install as install_policy
+
+        install_policy()
+
         # Start the trigger engine, in exactly one worker.
         #
         # This is the call site whose absence made Feature 002 ship inert: the

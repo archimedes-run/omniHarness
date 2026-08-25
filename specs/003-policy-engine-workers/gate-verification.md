@@ -2,7 +2,7 @@
 
 A gate never seen failing is indistinguishable from one that does nothing. Each gate below has an implementation, a deliberate sabotage, and the observed outcome.
 
-**Status: 3 of 4 gates landed and observed. Gate D is Phase 4.**
+**Status: 4 of 4 gates landed and observed. 5 observations — Gate D has two.**
 
 ---
 
@@ -109,4 +109,20 @@ A second assertion covers the belt-and-braces case — even if a load ever let o
 
 ## Gate D — the email send capability is absent from the tool surface (FR-012)
 
-**Not yet landed — Phase 4.** The deny mechanism it will assert on is built and tested (Spike 2, both assembly points). Gate D itself asserts on the **final assembled list** and gets **two** observations, one per assembly path, because the MCP and connector paths are independent: a gate that only ever saw one fail has never been shown to cover the other.
+**Implementation**: `backend/tests/workers/test_gate_tool_surface.py`. Asserts on the **final assembled list** — not on either path, and not on the presence of a config entry. Asserting on the outcome rather than the known routes means a **third** assembly path added later fails this gate rather than slipping past it.
+
+**Sabotage 1 — the MCP path**: deny removed from the server config. **Observed**: `gmail_send_email` present in the assembled list.
+
+**Sabotage 2 — the connector path**: deny removed, connector route only. **Observed**: `gmail_send_email` present.
+
+**Two observations, not one**, because the paths are independent. A third test pins that independence directly: denying on the MCP path does **not** deny on the connector path. If that ever becomes false the two-observation requirement can be revisited; until then it holds.
+
+**Controls**: reading, listing and drafting survive the deny — a gate that removed everything would satisfy the absence assertions and destroy the worker. A further test asserts **no classification rule mentions a send capability**, because FR-012 is not satisfied by a Tier 3 rule, and such a rule would imply the capability exists and is merely gated.
+
+---
+
+## A note on what the gates do NOT cover
+
+Four gates check that the pieces are present and correctly shaped. None of them catches "called with the wrong arguments" or "called from a branch that never runs" — four defects in this project had passing unit tests and were found by running the thing.
+
+That is what `tests/policy/test_smoke_tier3_end_to_end.py` is for, and why it drives the real objects in the real order rather than asserting about them.

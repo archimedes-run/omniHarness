@@ -49,7 +49,19 @@ def test_positive_control_the_tool_is_present_when_not_denied():
     assert [t.name for t in kept] == ["gmail_read_email", "gmail_send_email"]
 
 
-def test_positive_control_for_the_connector_path():
+def test_positive_control_for_the_connector_path(tmp_path, monkeypatch):
+    """Isolated from the repo's real config on purpose.
+
+    This originally read whatever `extensions_config.json` happened to contain,
+    and started failing the moment a real gmail deny was configured — a test
+    that passes or fails on ambient state rather than on what it asserts.
+    """
+    import json
+
+    cfg = tmp_path / "extensions_config.json"
+    cfg.write_text(json.dumps({"mcpServers": {"gmail": {"enabled": True}}, "skills": {}}))
+    monkeypatch.setenv("OMNI_HARNESS_EXTENSIONS_CONFIG_PATH", str(cfg))
+
     tools = [_tool("gmail_read_email"), _tool("gmail_send_email")]
 
     kept = apply_connector_tool_surface(None, tools)

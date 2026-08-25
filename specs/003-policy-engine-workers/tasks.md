@@ -83,7 +83,7 @@
 
 *Moved from Phase 4 by analyze finding P2. FR-009 makes any unclassified tool Tier 3, so installing the middleware without this would make every Feature 001 and 002 tool — including read-only session-watcher tools — demand confirmation, for two whole phases.*
 
-- [~] T025 **PARTIAL — mechanism ready, shipped rule set pending Phase 4 workers.** [US1] Classify every tool already exposed by Features 001 and 002 in the shipped rule set, and add a check that no tool anywhere resolves to unclassified. Must land BEFORE T034 installs the middleware (FR-010, SC-010).
+- [X] T025 **DONE — shipped rule set at .omni-harness/policy/rules.yaml; 001/002 tools asserted to stay Tier 1.** [US1] Classify every tool already exposed by Features 001 and 002 in the shipped rule set, and add a check that no tool anywhere resolves to unclassified. Must land BEFORE T034 installs the middleware (FR-010, SC-010).
 
 ### Pending actions and confirmation
 
@@ -98,7 +98,7 @@
 ### The middleware
 
 - [X] T033 [US1] Implement `PolicyMiddleware.wrap_tool_call` / `awrap_tool_call` in `backend/app/policy/middleware.py` — classify, then Tier 1 execute silently, Tier 2 execute and record, Tier 3 refuse by declining to call the handler and state a plan (FR-001, FR-020).
-- [~] T034 **HELD — install is the last Phase 2 step and lands with T025's rule set.** [US1] Install the middleware in `_build_runtime_middlewares` (`backend/packages/harness/omniharness/agents/middlewares/tool_error_handling_middleware.py`) so all four convergent `create_agent` sites carry it. **Requires T025** (FR-002).
+- [X] T034 **DONE — installed via a registration hook, not a direct import (the harness must not import app/).** [US1] Install the middleware in `_build_runtime_middlewares` (`backend/packages/harness/omniharness/agents/middlewares/tool_error_handling_middleware.py`) so all four convergent `create_agent` sites carry it. **Requires T025** (FR-002).
 - [X] T035 [US1] Implement plan statement naming SPECIFIC items rather than a category, authorising exactly the stated set (FR-021, SC-005).
 
 ### Audit — with the Tier 3 path, not four phases later
@@ -109,7 +109,7 @@
 
 ### Gate A — single dispatch path
 
-- [!] T037 **BLOCKED — needs a decision, see gate-verification.md.** [US1] Close the fifth site: route `backend/packages/harness/omniharness/agents/factory.py` through `_build_runtime_middlewares`, or remove `create_omniharness_agent` from the public surface (FR-003, VP-006).
+- [X] T037 **DONE — closed by DELETING agents/factory.py.** [US1] Close the fifth site: route `backend/packages/harness/omniharness/agents/factory.py` through `_build_runtime_middlewares`, or remove `create_omniharness_agent` from the public surface (FR-003, VP-006).
 - [X] T038 [US1] Implement Gate A in `backend/tests/policy/test_gate_single_dispatch.py` — every `create_agent` call site in the repo must reach the shared middleware base. Covers `agents/factory.py` explicitly (FR-002, FR-003).
 - [X] T039 [US1] **Observe Gate A failing** — add a `create_agent` site assembling its own middleware chain, confirm the gate fails and NAMES it, revert, record in `gate-verification.md`. A gate covering only the four convergent sites has its boundary exactly where the bypass lives (SC-009).
 
@@ -126,7 +126,7 @@
 
 ### Phase 2 checkpoint
 
-- [ ] T045 **CHECKPOINT** — US1 and US4 demonstrable end to end with existing tools only, and every Tier 3 execution audited. Quickstart scenarios 1, 4, 5, 6, and 10 (Gates A and C) pass.
+- [X] T045 **CHECKPOINT** — US1 and US4 demonstrable end to end with existing tools only, and every Tier 3 execution audited. Quickstart scenarios 1, 4, 5, 6, and 10 (Gates A and C) pass.
 
 ---
 
@@ -174,24 +174,24 @@
 
 **Ordering within the phase**: email (T061) and calendar (T062) come first and depend on nothing from the browser spike. The browser tasks (T063-T065) are last, so an unmeasured Spike 3 delays the browser worker alone rather than gating the phase. T066's journey test covers calendar + email and can pass with the browser outstanding.
 
-- [ ] T061 [P] [US3] Configure the email worker in `extensions_config.json` with the send capability in the DENY list, and its tier map (FR-012, FR-014).
-- [ ] T062 [P] [US3] Configure the calendar worker and tier map — read/free-busy Tier 1, tentative hold Tier 2, delete/decline/modify-others Tier 3 (FR-015).
+- [X] T061 [P] [US3] Configure the email worker in `extensions_config.json` with the send capability in the DENY list, and its tier map (FR-012, FR-014).
+- [X] T062 [P] [US3] Configure the calendar worker and tier map — read/free-busy Tier 1, tentative hold Tier 2, delete/decline/modify-others Tier 3 (FR-015).
 - [ ] ~~T063~~ **CUT — browser worker removed from 003 (see spec.md).** [P] [US3] Extend the browser MCP configuration T012 created with the browser tier map — read/navigate Tier 1, submit/purchase/remote-write Tier 3 (FR-016).
 - [ ] ~~T064~~ **CUT — browser worker removed from 003.** [US3] Configure the dedicated browser profile, logged into nothing by default, with per-site logins granted deliberately (FR-017).
 - [ ] ~~T065~~ **CUT — browser worker removed from 003.** [US3] Test browser profile isolation in `backend/tests/workers/test_browser_profile.py` — assert on the path the RUNNING browser actually uses, not the configured value. A configured path the browser ignores is the inert-mechanism case (FR-017, SC-007; requires T012).
-- [ ] T066 [US3] Test the mutual-free-slot journey in `backend/tests/workers/test_calendar_email_journey.py` — find a slot, create the hold, save the draft invitation, assert NOTHING was sent (FR-014, FR-015, SC-006).
-- [ ] T067 [US3] Implement honest-limits wording for absent capabilities and confirmation-required actions — say what is true, never imply a capability the assistant lacks (FR-023, Article X).
-- [ ] T068 [US3] Wire redaction into worker output crossing to a remote channel, as an injected callable failing closed, in the shape Feature 002 already uses. **Moved from Phase 6**: the workers can emit page content and email bodies from this phase, so shipping T072 without it means output crossing unredacted (FR-018, SC-013).
+- [X] T066 [US3] Test the mutual-free-slot journey in `backend/tests/workers/test_calendar_email_journey.py` — find a slot, create the hold, save the draft invitation, assert NOTHING was sent (FR-014, FR-015, SC-006).
+- [X] T067 [US3] Implement honest-limits wording for absent capabilities and confirmation-required actions — say what is true, never imply a capability the assistant lacks (FR-023, Article X).
+- [X] T068 [US3] Wire redaction into worker output crossing to a remote channel, as an injected callable failing closed, in the shape Feature 002 already uses. **Moved from Phase 6**: the workers can emit page content and email bodies from this phase, so shipping T072 without it means output crossing unredacted (FR-018, SC-013).
 
 ### Gate D — tool surface
 
-- [ ] T069 [US3] Implement Gate D in `backend/tests/workers/test_gate_tool_surface.py` — assert on the FINAL assembled list that the send capability is absent. Not on either path, and not on the presence of a config entry (FR-012, SC-004).
-- [ ] T070 [US3] **Observe Gate D failing — MCP path** — expose the denied tool through the MCP assembly path, confirm caught, revert, record.
-- [ ] T071 [US3] **Observe Gate D failing — connector path** — expose the denied tool through `load_connector_tools`, confirm caught, revert, record. Separate from T070 because the two paths are independent: a gate that only ever saw one fail has never been shown to cover the other (FR-013).
+- [X] T069 [US3] Implement Gate D in `backend/tests/workers/test_gate_tool_surface.py` — assert on the FINAL assembled list that the send capability is absent. Not on either path, and not on the presence of a config entry (FR-012, SC-004).
+- [X] T070 [US3] **Observe Gate D failing — MCP path** — expose the denied tool through the MCP assembly path, confirm caught, revert, record.
+- [X] T071 [US3] **Observe Gate D failing — connector path** — expose the denied tool through `load_connector_tools`, confirm caught, revert, record. Separate from T070 because the two paths are independent: a gate that only ever saw one fail has never been shown to cover the other (FR-013).
 
 ### Phase 4 checkpoint
 
-- [ ] T072 **CHECKPOINT — PARTS 1 AND 2 COMPLETE.** Quickstart scenarios 1-10 all pass, Tier 3 executions audited, worker output redacted. **This is the releasable slice (Article IX). Nothing below may block it.**
+- [X] T072 **CHECKPOINT — PARTS 1 AND 2 COMPLETE.** Quickstart scenarios 1-10 all pass, Tier 3 executions audited, worker output redacted. **This is the releasable slice (Article IX). Nothing below may block it.**
 
 ---
 
@@ -209,7 +209,7 @@
 ## Phase 6 — Cross-cutting
 
 - [ ] T077 [P] Extend the REDACTOR'S OWN suite in `backend/tests/session_watcher/test_redaction.py` to cover page content and email bodies, so a pattern change for this feature cannot silently break Features 001 or 002 (FR-022).
-- [ ] T078 Record all gate observations in `specs/003-policy-engine-workers/gate-verification.md` — four gates, five observations (Gate D twice).
+- [X] T078 Record all gate observations in `specs/003-policy-engine-workers/gate-verification.md` — four gates, five observations (Gate D twice).
 - [ ] T079 Update `backend/docs/PLATFORM_ARCHITECTURE.md` with the policy layer's position in the dispatch path and the recorded Article I coupling.
 
 ---

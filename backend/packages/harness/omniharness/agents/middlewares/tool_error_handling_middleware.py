@@ -123,6 +123,22 @@ def _build_runtime_middlewares(
 
     middlewares.append(SandboxAuditMiddleware())
     middlewares.append(ToolErrorHandlingMiddleware())
+
+    # Feature 003 policy layer (FR-001, FR-002). LAST in the list, which places
+    # it OUTERMOST at the tool-call chokepoint: middleware compose first-defined
+    # = outermost for wrap_tool_call, so appending here means every other
+    # middleware's view of a tool call happens inside a call the policy layer
+    # has already allowed.
+    #
+    # This is the ONE installation point. Every agent-construction site reaches
+    # this function — a CI gate enumerates every create_agent call and fails on
+    # any that does not, with an empty whitelist.
+    from omniharness.agents.middlewares.policy_hook import build_policy_middleware
+
+    policy = build_policy_middleware(app_config)
+    if policy is not None:
+        middlewares.append(policy)
+
     return middlewares
 
 

@@ -10,11 +10,9 @@
 # It cannot see a module that nothing imports at all — its scope boundary is
 # exactly where that defect lives. This is the companion check.
 #
-# History: 3 -> 2 -> 3. `trigger_engine` was removed when the gateway started
-# the engine; the gate reported the entry stale on the same commit that wired
-# it, which is what "self-expiring" was meant to mean. `policy` was added by
-# Feature 003 Phase 1 and expires the same way.
+# History: 3 -> 2 -> 3 -> 2. Both `trigger_engine` and `policy` were removed on
+# the commit that wired them — the gate reported each entry stale immediately,
+# which is what "self-expiring" was meant to mean. Neither needed a reminder.
 
 middlewares    # config-loaded extension point: `use: app.middlewares.truncation:...` in config.yaml, no static importer by design
 tools          # config-loaded extension point: `use: app.tools.openclaude:openclaude_coder` in config.yaml, same
-policy         # DEFERRED: Feature 003 Phase 1 builds the module; T034 installs the middleware in _build_runtime_middlewares. REMOVE THIS ENTRY when T034 lands — the gate will report it stale on that commit.
