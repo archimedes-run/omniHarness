@@ -34,6 +34,7 @@ dev = [
     "session-watcher",
     "croniter>=6.0.0",
     "vulture>=2.14",
+    "mypy>=2.3.1",
 ]
 
 [tool.pytest.ini_options]
@@ -50,3 +51,31 @@ members = ["packages/harness", "packages/session_watcher"]
 [tool.uv.sources]
 omniharness-harness = { workspace = true }
 session-watcher = { workspace = true }
+
+[tool.mypy]
+python_version = "3.12"
+# Non-strict to start. The point is to make three features' worth of
+# annotations into constraints rather than documentation; tightening comes
+# after we have seen what that costs.
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = false
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+
+# CI-BLOCKING only on what we wrote. Everything else inherits the permissive
+# default above, so the checker is useful immediately rather than after a
+# whole-codebase annotation project — which is how type checkers get added,
+# never satisfied, and quietly disabled.
+#
+# A policy engine whose correctness rests on its types being what they claim is
+# the strongest argument for this: `Tier` ordering, `PendingAction.targets`,
+# and the confirm/decline verdicts are all load-bearing.
+[[tool.mypy.overrides]]
+module = ["app.policy.*", "app.trigger_engine.*", "session_watcher.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
