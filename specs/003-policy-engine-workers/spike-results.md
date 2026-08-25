@@ -66,7 +66,13 @@ Four assumptions measured before any policy code is built on them. Each spike ca
 
 A single full build plus headless shell is roughly **550 MB of disk**. It runs on demand, so Article VI's <500 MB *idle RAM* budget is not threatened by the binary sitting there — but the disk cost is real and belongs in the honest-limits wording.
 
-**Why it is blocked, precisely**: the version of Playwright installed expects browser build 1217; the cache held 1228 and 1234. `npx playwright install chromium` was started and downloaded the full 1217 build, but had not finished the headless shell when this ran, and every launch attempt — full build via `channel: 'chromium'` included — failed at process start. Whether the cause is the concurrent install, a partially written bundle, or an environment restriction on launching a browser here **was not determined**.
+**Which was it — install integrity or environment restriction? ANSWERED 2026-08-24: install integrity.**
+
+The 1217 bundles were deleted and `npx playwright install chromium --with-deps` re-run clean. After an extended run the bundle directory is **448 KB** — against roughly 350 MB for a complete build. It is created and then never fills; the download does not progress in this environment.
+
+That fully explains the launch failure: a 448 KB "browser" has no executable to start, which is exactly the `Target page, context or browser has been closed` symptom. It is **not** profile behaviour, and it is **not** demonstrated to be an environment restriction on *launching* — the environment-restriction hypothesis remains **untested**, because a complete bundle cannot be obtained here to test it against.
+
+**What that means for FR-017**: nothing yet. This is a local tooling/network limitation, not a finding about the browser worker's design. It delays T063–T065 and changes nothing about the requirement. If a complete bundle is obtainable elsewhere — a machine with working access to the Playwright CDN, or a vendored bundle — the probe runs unchanged.
 
 **Consequence**: T012/T013 are NOT complete. Per T016 and the stop-and-report list, **Phase 4's browser worker must not be designed against an assumed answer.** Re-run the probe (`launchPersistentContext` with two distinct `userDataDir`s: set a cookie, reopen, assert persistence; then assert the other profile's cookie is absent) once a browser can start. The probe is written and ready.
 

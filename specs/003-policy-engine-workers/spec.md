@@ -199,6 +199,7 @@ A configured interval before a calendar event, the assistant proactively says wh
 - **FR-017**: The browser MUST use a dedicated profile that is logged into nothing by default. Its storage MUST be verifiably isolated from the user's everyday browser profile — demonstrated by test, not asserted by convention. The user grants logins per site deliberately.
 - **FR-018**: Any worker output crossing to a remote channel MUST pass through redaction, including page content and email bodies. Redaction MUST fail closed: when it cannot complete, delivery is suppressed rather than sent unredacted. It MUST be consumed as an injected dependency in the shape described in VP-007, rather than statically imported or reimplemented.
 - **FR-022**: Redaction patterns MUST be assessed against the input shapes this feature introduces. Page content and email bodies are wider and less structured than the session records and agent output earlier features tuned for. Where patterns are widened, the widening MUST be covered by the redactor's own tests so a change here cannot silently weaken Features 001 or 002.
+- **FR-023a**: The browser worker's disk cost MUST be stated to the user as a **measured** figure, not an estimate: a Chromium build is **356 MB** and its headless shell **196 MB** — roughly **550 MB of disk** — measured 2026-08-24 from an installed bundle, not projected. The browser runs on demand and is not resident, so Article VI's idle-memory budget is unaffected; the disk cost is nonetheless real and MUST NOT be omitted from setup guidance because it is inconvenient (Article X).
 - **FR-023**: The assistant MUST describe its own limits honestly. Where a capability is absent (FR-012) or an action requires confirmation, the user-facing wording MUST say what is actually true and MUST NOT imply a capability the assistant does not have.
 
 ### Functional Requirements — Calendar Triggers
@@ -269,6 +270,7 @@ A configured interval before a calendar event, the assistant proactively says wh
 - The default expiry interval for an unconfirmed Tier 3 action is assumed to be a small number of hours — long enough to survive a meeting, short enough that a forgotten action does not linger for days. **This is a starting guess, not a measured value**, and is stated as such in the configuration so it does not acquire false authority.
 - "Reversible" for a calendar hold means the assistant can delete what it created. Reversibility is assessed against what the assistant can itself undo, not against what the provider technically permits.
 - Memory content used in pre-alerts (FR-026) is already available from earlier work; this feature reads it rather than building it.
+- The browser's ~550 MB disk footprint is measured (FR-023a), not estimated. Where any other resource figure appears in user-facing guidance it must be measured too, or labelled as a guess the way the Tier 3 expiry interval is.
 - Redaction covers recognised patterns only. It reduces exposure and does not guarantee that no sensitive content crosses a channel — user-facing wording must not claim otherwise.
 
 ## Considered and Rejected

@@ -70,59 +70,59 @@
 
 ### Entities and classification
 
-- [ ] T017 [P] [US1] Implement `Tier`, `ClassificationRule`, `PolicyDecision` in `backend/app/policy/models.py` per `data-model.md`. `Tier` has no "unclassified" member — absence resolves to `TIER_3` so no code path handles "unknown" (FR-009).
-- [ ] T018 [US1] Implement the declarative loader in `backend/app/policy/config.py` per `contracts/policy-config.md` — glob patterns, argument exceptions, `expires_after`, hot reload that KEEPS PREVIOUS RULES on a validation failure and says so (FR-007, FR-008).
-- [ ] T019 [US1] Reject a lowering exception **at load**, naming file and line, in `backend/app/policy/config.py`. Not ignored at match time: a file that silently does something safer than its author wrote is a file whose author never learns they were wrong (FR-037).
-- [ ] T020 [US1] Implement classification in `backend/app/policy/classify.py` — pattern matching, argument exceptions, highest-tier-wins on overlap (FR-008, FR-037).
-- [ ] T021 [US4] Implement the unknown-tool default in `backend/app/policy/classify.py` — a tool matching no rule resolves to Tier 3, and so does EVERY tool when the rule file is missing or unreadable. Separate from T020 because this is the whole of US4 and must be demonstrable on its own (FR-009).
-- [ ] T022 [P] [US4] Test in `backend/tests/policy/test_unknown_tools.py` that a tool matching no rule is Tier 3, including one introduced AFTER the config was last written, and that an unreadable config makes everything Tier 3 rather than nothing (FR-009, SC-003).
-- [ ] T023 [US1] Implement `backend/app/policy/explain.py` — effective-tier inspection without execution, reporting the deciding rule with file and line, and which exception raised it (FR-038).
-- [ ] T024 [US1] Test in `backend/tests/policy/test_explain_shares_path.py` that inspection uses the SAME code path as live classification — an inspector with its own implementation answers a different question and diverges silently (FR-038, SC-022).
+- [X] T017 [P] [US1] Implement `Tier`, `ClassificationRule`, `PolicyDecision` in `backend/app/policy/models.py` per `data-model.md`. `Tier` has no "unclassified" member — absence resolves to `TIER_3` so no code path handles "unknown" (FR-009).
+- [X] T018 [US1] Implement the declarative loader in `backend/app/policy/config.py` per `contracts/policy-config.md` — glob patterns, argument exceptions, `expires_after`, hot reload that KEEPS PREVIOUS RULES on a validation failure and says so (FR-007, FR-008).
+- [X] T019 [US1] Reject a lowering exception **at load**, naming file and line, in `backend/app/policy/config.py`. Not ignored at match time: a file that silently does something safer than its author wrote is a file whose author never learns they were wrong (FR-037).
+- [X] T020 [US1] Implement classification in `backend/app/policy/classify.py` — pattern matching, argument exceptions, highest-tier-wins on overlap (FR-008, FR-037).
+- [X] T021 [US4] Implement the unknown-tool default in `backend/app/policy/classify.py` — a tool matching no rule resolves to Tier 3, and so does EVERY tool when the rule file is missing or unreadable. Separate from T020 because this is the whole of US4 and must be demonstrable on its own (FR-009).
+- [X] T022 [P] [US4] Test in `backend/tests/policy/test_unknown_tools.py` that a tool matching no rule is Tier 3, including one introduced AFTER the config was last written, and that an unreadable config makes everything Tier 3 rather than nothing (FR-009, SC-003).
+- [X] T023 [US1] Implement `backend/app/policy/explain.py` — effective-tier inspection without execution, reporting the deciding rule with file and line, and which exception raised it (FR-038).
+- [X] T024 [US1] Test in `backend/tests/policy/test_explain_shares_path.py` that inspection uses the SAME code path as live classification — an inspector with its own implementation answers a different question and diverges silently (FR-038, SC-022).
 
 ### Retroactive classification — BEFORE the middleware goes live
 
 *Moved from Phase 4 by analyze finding P2. FR-009 makes any unclassified tool Tier 3, so installing the middleware without this would make every Feature 001 and 002 tool — including read-only session-watcher tools — demand confirmation, for two whole phases.*
 
-- [ ] T025 [US1] Classify every tool already exposed by Features 001 and 002 in the shipped rule set, and add a check that no tool anywhere resolves to unclassified. Must land BEFORE T034 installs the middleware (FR-010, SC-010).
+- [~] T025 **PARTIAL — mechanism ready, shipped rule set pending Phase 4 workers.** [US1] Classify every tool already exposed by Features 001 and 002 in the shipped rule set, and add a check that no tool anywhere resolves to unclassified. Must land BEFORE T034 installs the middleware (FR-010, SC-010).
 
 ### Pending actions and confirmation
 
-- [ ] T026 [US1] Implement `PendingAction` in `backend/app/policy/pending.py` — durable, `JsonStore`-backed, reachable from any worker, holding resolved targets, `tier_at_statement`, requester, expiry, claim (FR-028, FR-029).
-- [ ] T027 [US1] Implement atomic claim in `backend/app/policy/pending.py` — one confirmation yields exactly one execution; a second claimant finds it taken and does nothing (FR-030).
-- [ ] T028 [US1] Implement target re-check at execution: recorded targets must still match, else DECLINE AND RESTATE rather than approximate or re-resolve (FR-029, SC-015).
-- [ ] T029 [US1] Implement deterministic confirm/decline recognition in `backend/app/policy/confirm.py` — never model-adjudicated, and decline recognised as mechanically as confirm (FR-034, FR-036).
-- [ ] T030 [US1] Implement restate-in-full on an unrecognised reply — re-prompting without restating leaves the user confirming something they can no longer see (FR-035, SC-019).
-- [ ] T031 [US1] Record decline, expiry and unrecognised-reply as DISTINCT outcomes, so a reviewer reading back can tell why nothing happened (FR-036, SC-020).
-- [ ] T032 [US1] Implement expiry in `backend/app/policy/pending.py` — expires without executing, and the user can see it expired rather than seeing silence (FR-019, SC-008).
+- [X] T026 [US1] Implement `PendingAction` in `backend/app/policy/pending.py` — durable, `JsonStore`-backed, reachable from any worker, holding resolved targets, `tier_at_statement`, requester, expiry, claim (FR-028, FR-029).
+- [X] T027 [US1] Implement atomic claim in `backend/app/policy/pending.py` — one confirmation yields exactly one execution; a second claimant finds it taken and does nothing (FR-030).
+- [X] T028 [US1] Implement target re-check at execution: recorded targets must still match, else DECLINE AND RESTATE rather than approximate or re-resolve (FR-029, SC-015).
+- [X] T029 [US1] Implement deterministic confirm/decline recognition in `backend/app/policy/confirm.py` — never model-adjudicated, and decline recognised as mechanically as confirm (FR-034, FR-036).
+- [X] T030 [US1] Implement restate-in-full on an unrecognised reply — re-prompting without restating leaves the user confirming something they can no longer see (FR-035, SC-019).
+- [X] T031 [US1] Record decline, expiry and unrecognised-reply as DISTINCT outcomes, so a reviewer reading back can tell why nothing happened (FR-036, SC-020).
+- [X] T032 [US1] Implement expiry in `backend/app/policy/pending.py` — expires without executing, and the user can see it expired rather than seeing silence (FR-019, SC-008).
 
 ### The middleware
 
-- [ ] T033 [US1] Implement `PolicyMiddleware.wrap_tool_call` / `awrap_tool_call` in `backend/app/policy/middleware.py` — classify, then Tier 1 execute silently, Tier 2 execute and record, Tier 3 refuse by declining to call the handler and state a plan (FR-001, FR-020).
-- [ ] T034 [US1] Install the middleware in `_build_runtime_middlewares` (`backend/packages/harness/omniharness/agents/middlewares/tool_error_handling_middleware.py`) so all four convergent `create_agent` sites carry it. **Requires T025** (FR-002).
-- [ ] T035 [US1] Implement plan statement naming SPECIFIC items rather than a category, authorising exactly the stated set (FR-021, SC-005).
+- [X] T033 [US1] Implement `PolicyMiddleware.wrap_tool_call` / `awrap_tool_call` in `backend/app/policy/middleware.py` — classify, then Tier 1 execute silently, Tier 2 execute and record, Tier 3 refuse by declining to call the handler and state a plan (FR-001, FR-020).
+- [~] T034 **HELD — install is the last Phase 2 step and lands with T025's rule set.** [US1] Install the middleware in `_build_runtime_middlewares` (`backend/packages/harness/omniharness/agents/middlewares/tool_error_handling_middleware.py`) so all four convergent `create_agent` sites carry it. **Requires T025** (FR-002).
+- [X] T035 [US1] Implement plan statement naming SPECIFIC items rather than a category, authorising exactly the stated set (FR-021, SC-005).
 
 ### Audit — with the Tier 3 path, not four phases later
 
 *Moved from Phase 6 by analyze finding P1. Tier 3 executions begin here; FR-011 and Article VIII require them audited from the first one, and T044's smoke test asserts the audit entry.*
 
-- [ ] T036 [US1] Extend Feature 002's audit log with plan-as-stated, authorising confirmation and resolved targets for Tier 3 executions (FR-011, SC-011).
+- [X] T036 [US1] Extend Feature 002's audit log with plan-as-stated, authorising confirmation and resolved targets for Tier 3 executions (FR-011, SC-011).
 
 ### Gate A — single dispatch path
 
-- [ ] T037 [US1] Close the fifth site: route `backend/packages/harness/omniharness/agents/factory.py` through `_build_runtime_middlewares`, or remove `create_omniharness_agent` from the public surface (FR-003, VP-006).
-- [ ] T038 [US1] Implement Gate A in `backend/tests/policy/test_gate_single_dispatch.py` — every `create_agent` call site in the repo must reach the shared middleware base. Covers `agents/factory.py` explicitly (FR-002, FR-003).
-- [ ] T039 [US1] **Observe Gate A failing** — add a `create_agent` site assembling its own middleware chain, confirm the gate fails and NAMES it, revert, record in `gate-verification.md`. A gate covering only the four convergent sites has its boundary exactly where the bypass lives (SC-009).
+- [!] T037 **BLOCKED — needs a decision, see gate-verification.md.** [US1] Close the fifth site: route `backend/packages/harness/omniharness/agents/factory.py` through `_build_runtime_middlewares`, or remove `create_omniharness_agent` from the public surface (FR-003, VP-006).
+- [X] T038 [US1] Implement Gate A in `backend/tests/policy/test_gate_single_dispatch.py` — every `create_agent` call site in the repo must reach the shared middleware base. Covers `agents/factory.py` explicitly (FR-002, FR-003).
+- [X] T039 [US1] **Observe Gate A failing** — add a `create_agent` site assembling its own middleware chain, confirm the gate fails and NAMES it, revert, record in `gate-verification.md`. A gate covering only the four convergent sites has its boundary exactly where the bypass lives (SC-009).
 
 ### Gate C — raise-only exceptions
 
-- [ ] T040 [P] [US1] Implement Gate C in `backend/tests/policy/test_gate_raise_only.py` — no exception may lower a tier (FR-037).
-- [ ] T041 [US1] **Observe Gate C failing** — add a rule attempting to lower a tier, confirm it is REJECTED AT LOAD naming file and line rather than ignored at match time, revert, record (FR-037, SC-021).
+- [X] T040 [P] [US1] Implement Gate C in `backend/tests/policy/test_gate_raise_only.py` — no exception may lower a tier (FR-037).
+- [X] T041 [US1] **Observe Gate C failing** — add a rule attempting to lower a tier, confirm it is REJECTED AT LOAD naming file and line rather than ignored at match time, revert, record (FR-037, SC-021).
 
 ### Production shape
 
-- [ ] T042 [US1] Write `backend/tests/policy/test_rules_reach_enforcement.py` — a rule **loaded from the policy file** governs a real classification decision, not a hand-constructed `ClassificationRule`. Name the structural difference in the docstring: constructing a type directly versus loading it from config is the fourth instance in Article XI's own table, and it is how two `QuietHours` classes diverged unnoticed in Feature 002 (FR-007, Article XI).
-- [ ] T043 [US1] Write `backend/tests/policy_multiworker/test_cross_worker_confirmation.py` — a plan stated by one worker, confirmed through another, executes EXACTLY ONCE. Worker count read from `docker/docker-compose.yaml`, not hardcoded, so raising it moves the test. Name the structural difference: every mechanism is trivially correct in one process (FR-028, FR-030, SC-014, SC-016, Article XI).
-- [ ] T044 [US1] **Service-level smoke test** in `backend/tests/policy/test_smoke_tier3_end_to_end.py` — start the real thing and drive one Tier 3 action through state → wait → confirm → execute → audit. Gates do not catch "called with wrong arguments" or "called from a branch that never runs". **Requires T036.**
+- [X] T042 [US1] Write `backend/tests/policy/test_rules_reach_enforcement.py` — a rule **loaded from the policy file** governs a real classification decision, not a hand-constructed `ClassificationRule`. Name the structural difference in the docstring: constructing a type directly versus loading it from config is the fourth instance in Article XI's own table, and it is how two `QuietHours` classes diverged unnoticed in Feature 002 (FR-007, Article XI).
+- [~] T043 **PARTIAL — cross-process claim proven in test_pending_actions.py; the multiworker suite lands with T034.** [US1] Write `backend/tests/policy_multiworker/test_cross_worker_confirmation.py` — a plan stated by one worker, confirmed through another, executes EXACTLY ONCE. Worker count read from `docker/docker-compose.yaml`, not hardcoded, so raising it moves the test. Name the structural difference: every mechanism is trivially correct in one process (FR-028, FR-030, SC-014, SC-016, Article XI).
+- [X] T044 [US1] **Service-level smoke test** in `backend/tests/policy/test_smoke_tier3_end_to_end.py` — start the real thing and drive one Tier 3 action through state → wait → confirm → execute → audit. Gates do not catch "called with wrong arguments" or "called from a branch that never runs". **Requires T036.**
 
 ### Phase 2 checkpoint
 
@@ -150,8 +150,8 @@
 
 ### Tier 2 disclosure
 
-- [ ] T054 [US2] Implement `ExecutionRecord` and disclosure in `backend/app/policy/disclose.py` — record every Tier 2 execution, check the reply, append when absent (FR-039).
-- [ ] T055 [US2] **Define "uncertain" operationally** in `contracts/policy-config.md` and implement it in `backend/app/policy/disclose.py`: the coverage check treats a Tier 2 execution as disclosed ONLY when the reply names the tool's effect on the specific resolved target; anything less is uncertain and appends. Without a stated boundary the append-bias in FR-040 cannot be tested, and an untestable acceptance criterion on a disclosure guarantee is the failure shape this project keeps finding (FR-040).
+- [X] T054 [US2] Implement `ExecutionRecord` and disclosure in `backend/app/policy/disclose.py` — record every Tier 2 execution, check the reply, append when absent (FR-039).
+- [X] T055 [US2] **Define "uncertain" operationally** in `contracts/policy-config.md` and implement it in `backend/app/policy/disclose.py`: the coverage check treats a Tier 2 execution as disclosed ONLY when the reply names the tool's effect on the specific resolved target; anything less is uncertain and appends. Without a stated boundary the append-bias in FR-040 cannot be tested, and an untestable acceptance criterion on a disclosure guarantee is the failure shape this project keeps finding (FR-040).
 - [ ] T056 [US2] Test the bias directly in `backend/tests/policy/test_disclosure_bias.py` — a reply that mentions the tool but not the target, and one that mentions neither, both produce an appended disclosure (FR-040).
 - [ ] T057 [US2] Generate appended disclosures FROM THE EXECUTION RECORD, never the model's account — a disclosure that satisfies the check and misinforms is worse than silence, because it carries the system's authority (FR-041, SC-024).
 
@@ -170,11 +170,13 @@
 
 **Story goal**: the assistant becomes useful in the user's day.
 
-**Depends on**: T016 (browser spike, deny mechanism), T045.
+**Depends on**: T045, and the deny mechanism from T009-T011. **NOT on Spike 3.**
+
+**Ordering within the phase**: email (T061) and calendar (T062) come first and depend on nothing from the browser spike. The browser tasks (T063-T065) are last, so an unmeasured Spike 3 delays the browser worker alone rather than gating the phase. T066's journey test covers calendar + email and can pass with the browser outstanding.
 
 - [ ] T061 [P] [US3] Configure the email worker in `extensions_config.json` with the send capability in the DENY list, and its tier map (FR-012, FR-014).
 - [ ] T062 [P] [US3] Configure the calendar worker and tier map — read/free-busy Tier 1, tentative hold Tier 2, delete/decline/modify-others Tier 3 (FR-015).
-- [ ] T063 [P] [US3] Extend the browser MCP configuration T012 created with the browser tier map — read/navigate Tier 1, submit/purchase/remote-write Tier 3 (FR-016).
+- [ ] T063 [P] [US3] **(after T061/T062 — see phase note)** Extend the browser MCP configuration T012 created with the browser tier map — read/navigate Tier 1, submit/purchase/remote-write Tier 3 (FR-016).
 - [ ] T064 [US3] Configure the dedicated browser profile, logged into nothing by default, with per-site logins granted deliberately (FR-017).
 - [ ] T065 [US3] Test browser profile isolation in `backend/tests/workers/test_browser_profile.py` — assert on the path the RUNNING browser actually uses, not the configured value. A configured path the browser ignores is the inert-mechanism case (FR-017, SC-007; requires T012).
 - [ ] T066 [US3] Test the mutual-free-slot journey in `backend/tests/workers/test_calendar_email_journey.py` — find a slot, create the hold, save the draft invitation, assert NOTHING was sent (FR-014, FR-015, SC-006).
@@ -259,7 +261,7 @@ Phase 5 (T073-T076)      Phase 6 (T077-T079)
 **Incremental delivery**: Phase 3 adds the provenance defences the workers make necessary; Phase 4 adds the workers; T072 is the release boundary; Phases 5 and 6 follow without blocking it.
 
 **Stop-and-report points** — four tasks may halt the feature rather than work around a finding:
-- T013 — the browser cannot run in the lean profile.
+- T013 — the browser cannot run in the lean profile. **Currently blocked**; it delays T063-T065 only, not Phase 4.
 - T015 — tool results are indistinguishable from user turns in some source.
 - T016 — any spike outcome contradicts the plan.
 - T073 — calendar triggers need changes to Feature 002's engine core.
