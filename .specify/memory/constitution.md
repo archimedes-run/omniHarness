@@ -1,7 +1,7 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR) → 1.3.0 (2026-08-24: added Article XIII, Initiation and Confirmation Are Separate Defences — MINOR)
+Version change: (unversioned template scaffold) → 1.0.0 → 1.1.0 (2026-08-23: added Article XI, Tests Must Exercise the Production Shape — MINOR) → 1.2.0 (2026-08-23: added Article XII, A Probe Must Be Seen Finding Something — MINOR) → 1.3.0 (2026-08-24: added Article XIII, Initiation and Confirmation Are Separate Defences — MINOR) → 1.4.0 (2026-08-25: added Article XIV, A Gitignored File Cannot Carry a Guarantee — MINOR)
 Bump rationale: Initial ratification. First concrete constitution replacing the
                 placeholder scaffold; MAJOR baseline established at 1.0.0.
 
@@ -224,6 +224,39 @@ Rationale: Article IV puts a human in the loop for consequential actions. A huma
 asked the wrong question is still a human in the loop, and is no protection at
 all.
 
+### XIV. A Gitignored File Cannot Carry a Guarantee
+
+Anything a requirement depends on MUST ship tracked in the repository. A
+gitignored file may carry local overrides layered on a shipped default; it may
+never be the only copy of something a requirement reads.
+
+The failure is quiet in the worst way: the file is present on the machine where
+the work was done, so every test passes and every manual check succeeds. It is
+absent on a fresh clone, where the requirement it backed is not violated so much
+as *never engaged* — the guarantee is simply not there, and nothing says so.
+
+Three instances in one feature:
+
+| What | Where it lived | What its absence would have done |
+|---|---|---|
+| the classification rule set | `.omni-harness/` | a fresh install starts with no rules |
+| the email send-deny | `extensions_config.json` | the send capability present on first run |
+| a developer's own config | `config.yaml` | irrecoverable when overwritten; no other copy existed |
+
+**Layering, not substitution.** Where a configured path cannot be read, the
+correct response is the safe failure the requirement already defines — NOT
+falling back to the shipped default. Substituting silently runs a different
+policy than the operator wrote, which is a second guarantee lost while fixing
+the first.
+
+**The check**: every path a requirement reads from MUST resolve to a tracked
+file, and that MUST be verified against a fresh clone rather than by inspection.
+Inspection is exactly what cannot see this — the file is right there.
+
+Rationale: the other articles describe behaviour the product must have. This one
+is about whether the product a user installs is the product that was tested. A
+guarantee that exists only in the author's working tree was never shipped.
+
 ## Additional Constraints
 
 - **Host-resident modules**: components that read user-home files (e.g. the session watcher)
@@ -276,4 +309,4 @@ the prior text. Amendments take effect on merge.
 re-examined at each phase boundary in the Article IX roadmap. Violations found in merged code
 are tracked as defects, not accepted as precedent.
 
-**Version**: 1.3.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-24
+**Version**: 1.4.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-25

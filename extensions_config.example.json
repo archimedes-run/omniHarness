@@ -66,6 +66,17 @@
         "@cocal/google-calendar-mcp"
       ],
       "description": "Calendar. Tier map lives in .omni-harness/policy/rules.yaml: reads and free/busy are Tier 1, a tentative hold is Tier 2, and delete/update/decline are Tier 3. Creating an event that emails other people is raised to Tier 3 by an argument exception \u2014 the assistant cannot un-reach an inbox."
+    },
+    "session-watcher": {
+      "enabled": false,
+      "type": "sse",
+      "command": null,
+      "args": [],
+      "env": {},
+      "url": "http://host.docker.internal:18101/sse",
+      "headers": {},
+      "oauth": null,
+      "description": "Feature 001's read-only coding-session watcher (FR-018). This entry IS the integration point \u2014 the gateway has no external tool-registration API, so without it the watcher's tools never reach the agent and 'what are my sessions doing?' answers 'I don't have that tool'. Disabled by default: it needs the watcher process running on the host."
     }
   },
   "skills": {}

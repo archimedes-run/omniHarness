@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "DEFAULT trigger rules (Feature 002). This file SHIPS with the package.",
+    "",
+    "It exists because the engine's previous behaviour on a missing rule file was to",
+    "log an error, return an empty config, and report itself healthy — so every",
+    "proactive-message requirement was silently inert on a fresh install, and the",
+    "operator surface said 'running'. Article XIV: a gitignored file cannot carry a",
+    "guarantee.",
+    "",
+    "The rules below are DISABLED. A shipped default must not start messaging someone",
+    "because they installed the software; what it must do is exist, parse, and show",
+    "the shape of a working rule. Enable one, or point trigger_engine.rules_path at",
+    "your own file."
+  ],
+  "quiet_hours": {"start": "22:00", "end": "07:30", "timezone": "UTC", "enabled": true},
+  "rules": [
+    {
+      "id": "blocked-session",
+      "type": "watcher",
+      "enabled": false,
+      "match": {"event": "waiting-on-user"},
+      "prompt": "The session in {project} is waiting on you: {last_message}",
+      "destination": "auto"
+    },
+    {
+      "id": "morning-briefing",
+      "type": "cron",
+      "enabled": false,
+      "match": {"schedule": "30 8 * * 1-5"},
+      "prompt": "Good morning. Brief me on what is waiting, as of {scheduled_at}.",
+      "destination": "auto"
+    }
+  ]
+}
