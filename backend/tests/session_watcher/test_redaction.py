@@ -273,3 +273,43 @@ class TestFeature003InputShapes:
         invented = "my passphrase is correct-horse-battery-staple"
 
         assert redact(invented, channel=Channel.REMOTE) == invented
+
+
+class TestUnexpectedInputFailsClosed:
+    """The removed None guard, pinned as behaviour.
+
+    `redact` once began `if text is None: return ""`. mypy reported it
+    unreachable — the parameter is `str` — and tracing every caller confirmed
+    nothing passes None, in production or tests.
+
+    Dead was not the worst of it. Returning "" reads downstream as
+    "successfully redacted to nothing" and DELIVERS. Falling through to the
+    broad handler raises RedactionError, and `redact_or_suppress` SUPPRESSES.
+    On a security path those are opposite outcomes, and the guard short-circuited
+    the safe one.
+    """
+
+    def test_none_raises_rather_than_returning_empty(self):
+        with pytest.raises(RedactionError):
+            redact(None, channel=Channel.REMOTE)
+
+    def test_none_suppresses_delivery(self):
+        safe, ok = redact_or_suppress(None, channel=Channel.REMOTE)
+
+        assert ok is False, "unexpected input must suppress delivery, not deliver an empty message"
+        assert safe != ""
+
+    @pytest.mark.parametrize("value", [None, 42, [], {}, object()])
+    def test_any_non_text_suppresses(self, value):
+        """Not just None. Whatever arrives that is not text fails closed."""
+        _, ok = redact_or_suppress(value, channel=Channel.REMOTE)
+
+        assert ok is False
+
+    def test_the_empty_string_is_still_a_valid_input(self):
+        """The discriminator. "" is legitimately empty text and must pass
+        through — otherwise this change would suppress every empty summary."""
+        safe, ok = redact_or_suppress("", channel=Channel.REMOTE)
+
+        assert ok is True
+        assert safe == ""
