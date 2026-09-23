@@ -33,6 +33,7 @@ from .disclose import DisclosureLedger
 from .lineage import eligible_to_initiate
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
+from .targets import source_argument
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,7 @@ class PolicyMiddleware(AgentMiddleware):
         now = self.now()
 
         action = PendingAction(
-            plan_text=self._plan_text(tool_name, targets, self._requester(request), self._delegation_chain(request)),
+            plan_text=self._plan_text(tool_name, targets, self._requester(request), self._delegation_chain(request), arguments=arguments),
             tool_name=tool_name,
             arguments=arguments,
             targets=targets,
@@ -284,10 +285,10 @@ class PolicyMiddleware(AgentMiddleware):
         return action.plan_text
 
     def _plan_text_for(self, action: PendingAction) -> str:
-        return self._plan_text(action.tool_name, action.targets, action.requester, action.delegation_chain, action.id)
+        return self._plan_text(action.tool_name, action.targets, action.requester, action.delegation_chain, action.id, action.arguments)
 
     @staticmethod
-    def _plan_text(tool_name: str, targets: list[str], requester: str = "lead_agent", delegation_chain: tuple[str, ...] = (), action_id: str | None = None) -> str:
+    def _plan_text(tool_name: str, targets: list[str], requester: str = "lead_agent", delegation_chain: tuple[str, ...] = (), action_id: str | None = None, arguments: dict | None = None) -> str:
         """FR-021: name the SPECIFIC items, not the category.
 
         "Delete some meetings" cannot be confirmed meaningfully — the user would
@@ -300,7 +301,14 @@ class PolicyMiddleware(AgentMiddleware):
             via = " -> ".join(delegation_chain) if delegation_chain else requester
             lines.append(f"**{requester}**, a subagent I delegated to ({via}), is asking for permission.")
             lines.append("")
-        lines.append(f"Before I do this, please confirm. I intend to use **{tool_name}** on exactly these {len(targets)} item(s):")
+        # NAME THE ARGUMENT THE TARGETS CAME FROM. Which argument holds "the
+        # things this acts on" is a GUESS — no schema marks it — so the plan
+        # states what it guessed instead of presenting a scope as fact. When
+        # nothing could be resolved it says that too, rather than implying a
+        # specific list.
+        source = source_argument(arguments) if arguments is not None else None
+        provenance = f" (from `{source}`)" if source else ""
+        lines.append(f"Before I do this, please confirm. I intend to use **{tool_name}** on exactly these {len(targets)} item(s){provenance}:")
         lines.append("")
         lines += [f"  - {target}" for target in targets]
         if action_id:

@@ -22,6 +22,7 @@ from .config import ConfigLoader
 from .disclose import DisclosureLedger
 from .middleware import PolicyMiddleware
 from .pending import PendingStore
+from .targets import resolve_targets
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,12 @@ def build(app_config) -> PolicyMiddleware | None:
     state = Path(policy.state_dir)
     return PolicyMiddleware(
         loader=ConfigLoader(path=resolve_rules_path(policy)),
+        # WITHOUT THIS, every plan said "exactly these 1 item(s)" and held a
+        # repr of the whole call. FR-029 asks for the resolved SPECIFIC
+        # targets, and FR-009's threshold compares a target COUNT — pinned at
+        # one, it could never fire. The parameter existed, was used correctly
+        # when supplied, and was never supplied.
+        resolve_targets=resolve_targets,
         pending=PendingStore(directory=state / "pending"),
         ledger=DisclosureLedger(),
         audit=PolicyAuditLog(path=state / "audit.jsonl", actor="default"),
