@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 
 from .config import ConfigLoader
 from .engine import SupervisedEngine
+from .evaluations import EvaluationLog
 from .fingerprint import FingerprintStore
 from .models import Rule, TriggerType
 from .presence import PresenceSignal
@@ -40,6 +41,7 @@ class TriggerLoop:
     engine: SupervisedEngine
     scheduler: Scheduler
     fingerprints: FingerprintStore
+    evaluations: EvaluationLog
     threads: RuleThreadMap
     presence: PresenceSignal
     now: Callable[[], datetime]
@@ -74,6 +76,11 @@ class TriggerLoop:
                     self.scheduler.mark_fired(rule.id, f.event.at, at)
 
         self.engine.evaluate = _run
+        # FR-020. Recorded for every rule the engine actually evaluates,
+        # whether or not it fires and whether or not it raises — so
+        # "evaluated five hundred times, never fired" stops looking identical
+        # to "never evaluated".
+        self.engine.on_evaluated = self.evaluations.record
         results = await self.engine.evaluate_all(list(cfg.rules), now)
 
         # The three release entry conditions, all reaching the one release()

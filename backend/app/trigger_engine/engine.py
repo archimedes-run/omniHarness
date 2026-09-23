@@ -63,6 +63,14 @@ class SupervisedEngine:
     evaluate: Callable[[Rule, datetime], Awaitable[None]]
     rule_timeout: timedelta = DEFAULT_RULE_TIMEOUT
     health: dict[str, RuleHealth] = field(default_factory=dict)
+    #: Called with (rule_id, now) immediately BEFORE a rule is evaluated, and
+    #: only when it actually is (FR-020). The engine does not own persistence;
+    #: the loop points this at the durable EvaluationLog.
+    #:
+    #: Before the call, not after, so a rule that raises or times out still
+    #: counts as evaluated — we asked and it failed, which is a different fact
+    #: from never having asked.
+    on_evaluated: Callable[[str, datetime], None] | None = None
 
     def health_for(self, rule_id: str) -> RuleHealth:
         return self.health.setdefault(rule_id, RuleHealth())
@@ -76,7 +84,12 @@ class SupervisedEngine:
         """
         h = self.health_for(rule.id)
         if h.is_muted(now):
+            # NOT recorded as evaluated. A muted rule was skipped before
+            # anything ran, and reporting it as looked-at would claim the engine
+            # did something it deliberately did not.
             return False
+        if self.on_evaluated is not None:
+            self.on_evaluated(rule.id, now)
         try:
             await asyncio.wait_for(self.evaluate(rule, now), timeout=self.rule_timeout.total_seconds())
         except TimeoutError:

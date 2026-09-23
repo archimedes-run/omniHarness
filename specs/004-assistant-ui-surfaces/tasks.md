@@ -91,14 +91,14 @@ nothing in it may depend on work sequenced later.
 **Purpose**: Record what Surface 3 must read. A view over unrecorded data is a blank
 column, so this precedes any trigger UI.
 
-- [ ] T028 Add `last_evaluated_at` per rule in `backend/app/trigger_engine/`, updated whenever a rule is evaluated regardless of whether it fires (FR-020)
-- [ ] T029 [P] Test in `backend/tests/trigger_engine/test_evaluation_record.py` that a rule evaluated repeatedly without firing is distinguishable from one never evaluated — the distinction the calendar lead-time bug fell into (SC-009)
-- [ ] T030 Add `batch_id` to `Firing` in `backend/app/trigger_engine/models.py`, set at release for every firing delivered in one coalesced message (FR-021)
-- [ ] T031 Write the batch id through `backend/app/trigger_engine/audit.py` and `politeness/release.py` so each survivor's audit entry carries it
-- [ ] T032 [P] Test in `backend/tests/trigger_engine/test_batch_identity.py` that coalesced firings share a batch id and that **each is still recorded DELIVERED**. Coalescing is not an outcome; a firing that was merged was delivered, and recording otherwise would put a false statement in the audit log
-- [ ] T033 [P] Test that a single uncoalesced delivery has no batch id, so the field's presence means something
-- [ ] T034 Ensure audit rows written before T028 and T030 read back as "not recorded" rather than as a recorded absence (FR-022), tested against a fixture of pre-existing rows
-- [ ] T035 Run mypy over the changed trigger modules and keep them clean under the strict override
+- [X] T028 Add `last_evaluated_at` per rule in `backend/app/trigger_engine/`, updated whenever a rule is evaluated regardless of whether it fires (FR-020)
+- [X] T029 [P] Test in `backend/tests/trigger_engine/test_evaluation_record.py` that a rule evaluated repeatedly without firing is distinguishable from one never evaluated — the distinction the calendar lead-time bug fell into (SC-009)
+- [X] T030 Add `batch_id` to `Firing` in `backend/app/trigger_engine/models.py`, set at release for every firing delivered in one coalesced message (FR-021)
+- [X] T031 Write the batch id through `backend/app/trigger_engine/audit.py` and `politeness/release.py` so each survivor's audit entry carries it
+- [X] T032 [P] Test in `backend/tests/trigger_engine/test_batch_identity.py` that coalesced firings share a batch id and that **each is still recorded DELIVERED**. Coalescing is not an outcome; a firing that was merged was delivered, and recording otherwise would put a false statement in the audit log
+- [X] T033 [P] Test that a single uncoalesced delivery has no batch id, so the field's presence means something
+- [X] T034 Ensure audit rows written before T028 and T030 read back as "not recorded" rather than as a recorded absence (FR-022), tested against a fixture of pre-existing rows
+- [X] T035 Run mypy over the changed trigger modules and keep them clean under the strict override
 
 **Checkpoint**: The trigger record can answer "why did nothing arrive". Still no UI.
 
