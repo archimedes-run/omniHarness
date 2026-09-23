@@ -56,6 +56,14 @@ class AuditLog:
             "thread_id": firing.thread_id,
             "outcome": str(firing.outcome),
             "reason": firing.reason,
+            # ALWAYS WRITTEN, null when the firing was delivered alone.
+            #
+            # That is what lets a reader tell three things apart (FR-022):
+            #   key absent  -> written before batching existed: NOT RECORDED
+            #   key is null -> recorded, and this firing was not coalesced
+            #   key is set  -> delivered with the others sharing this id
+            # Omitting the key for solo deliveries would collapse the first two.
+            "batch_id": firing.batch_id,
             "delivered_chars": len(firing.reply or ""),
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

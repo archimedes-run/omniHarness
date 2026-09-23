@@ -25,3 +25,13 @@ count             # fingerprint store size; read by operators and by tests
 # it. Not deferred; nothing is waiting on these.
 build_lock        # chooses the lock backend from database config; called by the composition root
 acquire           # SingleRunnerLock.acquire; called by the composition root during election
+
+# FR-020's READ side. `record` is wired into the loop; these are what Surface 3
+# will call to render "last evaluated" (Feature 004, T056). Deferred with a
+# CHECKABLE CONDITION rather than indefinitely: the gate fails again the moment
+# T056 lands and these gain a real consumer, at which point the entries must go.
+# NOTE: no bare task id here on purpose. The gate resolves `TNNN` against THIS
+# module's own feature tasks (002), so citing Feature 004's numbering made it
+# report "T056 is complete" about an unrelated task. Ids are per-feature; this
+# gate assumes one feature's numbering.
+last_evaluated_at # the read side of FR-020; remove when Feature 004's rules panel renders "last evaluated"

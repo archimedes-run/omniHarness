@@ -27,6 +27,7 @@ from app.trigger_engine.config import ConfigLoader
 from app.trigger_engine.destinations.base import DestinationRegistry, QuietDestination
 from app.trigger_engine.election import SingleRunnerLock, build_lock
 from app.trigger_engine.engine import SupervisedEngine
+from app.trigger_engine.evaluations import EvaluationLog
 from app.trigger_engine.fingerprint import FingerprintStore
 from app.trigger_engine.injector import TurnInjector
 from app.trigger_engine.loop import TriggerLoop
@@ -118,6 +119,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     audit = AuditLog(path=state / "audit.jsonl", actor=cfg.actor)
     scheduler = Scheduler(path=state / "scheduler.json")
     fingerprints = FingerprintStore(path=state / "fingerprints.json")
+    evaluations = EvaluationLog(path=state / "evaluations.json")
     pending = PendingStore(path=state / "pending.json")
     injector = TurnInjector(post=gateway_post, put=gateway_put, get=gateway_get)
     threads = RuleThreadMap(
@@ -143,6 +145,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
             TriggerType.CRON: CronSource(scheduler=scheduler),
         },
         fingerprints=fingerprints,
+        evaluations=evaluations,
         threads=threads,
         injector=injector,
         releaser=Releaser(
@@ -172,6 +175,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         engine=SupervisedEngine(evaluate=lambda rule, now: None),
         scheduler=scheduler,
         fingerprints=fingerprints,
+        evaluations=evaluations,
         threads=threads,
         presence=PresenceSignal(),
         now=lambda: datetime.now(UTC),

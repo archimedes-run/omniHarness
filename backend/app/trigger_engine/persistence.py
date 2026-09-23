@@ -35,6 +35,7 @@ def to_dict(firing: Firing) -> dict:
         "thread_id": firing.thread_id,
         "reply": firing.reply,
         "outcome": str(firing.outcome) if firing.outcome else None,
+        "batch_id": firing.batch_id,
         "reason": firing.reason,
         "event": {
             "type": str(firing.event.type),
@@ -61,6 +62,10 @@ def from_dict(raw: dict) -> Firing:
         thread_id=raw.get("thread_id"),
         reply=raw.get("reply"),
         reason=raw.get("reason") or "",
+        # .get, so a row written before batching existed restores as None
+        # rather than raising — the same rows FR-022 says must read as
+        # "not recorded" rather than as a recorded absence.
+        batch_id=raw.get("batch_id"),
     )
     if raw.get("outcome"):
         firing.outcome = Outcome(raw["outcome"])

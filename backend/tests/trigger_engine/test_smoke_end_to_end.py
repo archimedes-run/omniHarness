@@ -20,6 +20,7 @@ from app.trigger_engine.audit import AuditLog
 from app.trigger_engine.config import ConfigLoader
 from app.trigger_engine.destinations.base import DestinationRegistry, QuietDestination
 from app.trigger_engine.engine import SupervisedEngine
+from app.trigger_engine.evaluations import EvaluationLog
 from app.trigger_engine.fingerprint import FingerprintStore
 from app.trigger_engine.injector import TurnInjector
 from app.trigger_engine.loop import TriggerLoop
@@ -91,6 +92,7 @@ def _build(tmp_path, rules: list[dict]):
         default_tools=("local:session-watcher",),
     )
     loop = TriggerLoop(
+        evaluations=EvaluationLog(path=tmp_path / "evaluations.json"),
         loader=ConfigLoader(path=f),
         runner=runner,
         engine=SupervisedEngine(evaluate=lambda r, n: None),

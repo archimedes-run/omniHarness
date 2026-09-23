@@ -74,6 +74,16 @@ class Firing:
     reply: str | None = None
     outcome: Outcome | None = None
     reason: str = ""
+    #: Shared by every firing delivered in ONE coalesced message (FR-021).
+    #:
+    #: NOT AN OUTCOME. A coalesced firing was DELIVERED — the merge changed how
+    #: many messages the user received, not whether this firing succeeded. A
+    #: COALESCED member of Outcome would put a false statement in the audit log,
+    #: which is why the identity lives here instead.
+    #:
+    #: None means this firing was delivered on its own. The field's presence is
+    #: therefore meaningful, and a test asserts a solo delivery leaves it unset.
+    batch_id: str | None = None
 
     def resolve(self, outcome: Outcome, reason: str = "") -> Firing:
         """Set the outcome. Every non-DELIVERED outcome MUST carry a reason.

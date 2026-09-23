@@ -13,6 +13,7 @@ delivery path appears beside it.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -81,7 +82,13 @@ class Releaser:
             return None
 
         destination.deliver(safe)
+        # One id across the firings that became ONE message, so "what was this
+        # merged with" is answerable afterwards. Only when there is more than
+        # one: a solo delivery gets None, which is what makes the field's
+        # presence mean something.
+        batch = uuid.uuid4().hex[:12] if len(survivors) > 1 else None
         for f in survivors:
+            f.batch_id = batch
             f.resolve(Outcome.DELIVERED)
             self.audit(f, now)
         return safe
