@@ -12,10 +12,38 @@ is luck rather than design.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from langchain_core.tools import tool as make_tool
 
 from omniharness.tools.tools import apply_connector_tool_surface
+
+#: THE TEST SUPPLIES ITS OWN DENY LIST. It used to read whatever
+#: extensions_config.json the developer happened to have, so it passed on a
+#: machine with one and raised UnboundLocalError in CI, which has none — a test
+#: inheriting the condition it asserts, one day after Article XIV was extended
+#: to forbid exactly that. Now the fixture writes the config and points the
+#: loader at it, so the result is the same everywhere.
+_CONFIG = {
+    "mcp_servers": {
+        "gmail": {
+            "enabled": True,
+            "type": "stdio",
+            "command": "npx",
+            "args": [],
+            "tools": {"deny": ["send_email", "send_draft", "send_message"]},
+        }
+    }
+}
+
+
+@pytest.fixture(autouse=True)
+def extensions_config(tmp_path, monkeypatch):
+    path = tmp_path / "extensions_config.json"
+    path.write_text(json.dumps(_CONFIG))
+    monkeypatch.setenv("OMNI_HARNESS_EXTENSIONS_CONFIG_PATH", str(path))
+    return path
 
 
 def _named(name: str):
