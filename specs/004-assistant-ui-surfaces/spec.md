@@ -312,6 +312,19 @@ not change; only where it sits, and therefore what it reaches.*
   error, so new UI is held to them from the start rather than retrofitted.
 - **FR-035**: Acceptance criteria for this feature MUST assert rendered output — what
   the user sees — and not component props alone.
+- **FR-042**: When the rule set reloads, any pending action whose tool no longer
+  classifies Tier 3 MUST be superseded, with a reason naming the change. It MUST NOT be
+  executed: the user asked for it under rules that required approval, so the answer is to
+  stop asking rather than to proceed unasked.
+
+  *`PendingAction` records `tier_at_statement` so that a later rule change cannot
+  retroactively authorise something — the right property, whose consequence is that a
+  pending action outlives the rules that produced it. On 2026-09-23 three read-only calls
+  were gated by rules that did not match the connector tool names, the rules were fixed,
+  and the three became permanently un-confirmable: a bare confirmation is refused while
+  several are pending, and nothing cleared them. They blocked every confirmation for four
+  hours.*
+
 - **FR-040**: Every configured tool source MUST have its state visible — not configured,
   configured but disabled, enabled but unreachable, or live — and an agent MUST NOT be
   left to infer it from an empty tool list. This generalises FR-013/FR-014 from the
@@ -415,6 +428,8 @@ not change; only where it sits, and therefore what it reaches.*
   accepted, and every phrase listed as rejected is rejected, driven by one table so the
   document and the code cannot drift.
 - **SC-021**: An action reaching expiry produces a user-visible statement, not silence.
+- **SC-025**: After a rule change makes a pending action's tool Tier 1, that action is
+  superseded rather than left blocking confirmations — and it is not executed.
 - **SC-023**: With a configured tool source unreachable, the interface says so; it does
   not present the same view as a source that was never configured.
 - **SC-024**: A connector that is authorised but not selected for a conversation is

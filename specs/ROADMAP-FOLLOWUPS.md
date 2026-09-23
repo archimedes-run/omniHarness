@@ -105,3 +105,39 @@ home (rules win). Either is defensible; two homes for one setting is not.
 
 The generalised wiring gate planned for Feature 004 Phase 6 scans code, not config
 schemas — so it would not catch this. Worth widening its scope, or noting the limit.
+
+---
+
+## A rules change orphans the actions already pending under the old rules
+
+**Found 2026-09-23, by walking into it.** A user asked the assistant to read their email.
+The classification rules did not match the connector tool names, so three read-only calls
+became Tier 3 and sat in the pending store. The rules were then fixed — those tools are
+Tier 1 now — and the three pending actions became **permanently un-confirmable**:
+
+- `recognise` refuses a bare "approved" while more than one action is pending, correctly.
+- The user cannot name one, because at the time those were created the plan text did not
+  show the action id (fixed separately).
+- Nothing supersedes an action whose tool is no longer Tier 3.
+
+So they blocked every subsequent confirmation for their full four-hour expiry, and the
+only remedy was running a script inside the container. The user could not clear their own
+inbox-reading request.
+
+**Why it is not just a migration nuisance.** `PendingAction` records `tier_at_statement`
+deliberately — the tier in force when the plan was stated — so that a later rule change
+cannot retroactively authorise something. That is the right property. Its consequence is
+that a pending action outlives the rules that produced it, and nothing reconciles the two.
+
+**Proposed fix**: on rule-set reload, supersede any pending action whose tool no longer
+classifies Tier 3, with a reason naming the change. `Outcome.SUPERSEDED` already exists
+and had no producer. The direction is safe: it can only ever *remove* a confirmation
+demand that the current rules say is unnecessary, never grant one.
+
+**What it must not do**: execute the superseded action. The user asked for a tool call
+under rules that required approval; the answer is to stop asking, not to proceed
+unasked.
+
+**Related**: this is also the second time in one day that the unbuilt pending-confirmations
+surface (Feature 004, Surface 1, Phase 3) was the thing standing between the user and a
+working feature. A decline control would have cleared this in one click.
