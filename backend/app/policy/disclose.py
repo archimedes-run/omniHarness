@@ -43,13 +43,41 @@ class ExecutionRecord:
     disclosed: bool = False
 
     def sentence(self) -> str:
-        """Generated from the record. Never from the reply."""
+        """Generated from the record. Never from the reply.
+
+        COMPACT ON PURPOSE. This used to interpolate `self.arguments` whole,
+        so a disclosure for a file write reproduced the entire file — after
+        the user had already read the summary it contained. Observed in real
+        use: a one-paragraph note came back in full inside "Also, for the
+        record".
+
+        A disclosure nobody reads is a disclosure that failed. Short values
+        stay verbatim because they are the specifics FR-040 asks for; long ones
+        become a size, because their length is the only part that matters here.
+        """
         if self.targets:
-            items = ", ".join(self.targets)
-            return f"I used {self.tool_name} on {items}."
+            return f"I used {self.tool_name} on {', '.join(self.targets)}."
         if self.arguments:
-            return f"I used {self.tool_name} with {self.arguments}."
+            return f"I used {self.tool_name} with {_render(self.arguments)}."
         return f"I used {self.tool_name}."
+
+
+#: Longer than this and a value is described rather than repeated. 80 is A
+#: GUESS, chosen so a path or a title survives intact while a document does
+#: not; it has no usage behind it and is expected to move.
+_MAX_VALUE = 80
+
+
+def _render(arguments: dict) -> str:
+    """Argument names with short values, and a size for anything long."""
+    parts = []
+    for key, value in arguments.items():
+        text = str(value)
+        if len(text) > _MAX_VALUE:
+            parts.append(f"{key}=<{len(text)} chars>")
+        else:
+            parts.append(f"{key}={text!r}")
+    return ", ".join(parts)
 
 
 @dataclass
