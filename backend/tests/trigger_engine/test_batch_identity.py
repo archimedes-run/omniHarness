@@ -16,7 +16,7 @@ import pytest
 
 from app.trigger_engine.audit import AuditLog
 from app.trigger_engine.models import Firing, Outcome, TriggerEvent, TriggerType
-from app.trigger_engine.politeness.release import ReleaseReason, Releaser
+from app.trigger_engine.politeness.release import Releaser, ReleaseReason
 
 NOW = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
 
