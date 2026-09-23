@@ -84,6 +84,48 @@ services:
     restart: unless-stopped
 
   # Frontend - Next.js Development Server
+  # ── Session Watcher (Feature 001) ──────────────────────────────────────────
+  # Read-only MCP server over SSE. It reports what coding sessions are doing.
+  #
+  # WHY IT IS A SERVICE NOW. It was a process nobody started: no compose entry,
+  # no make target, no supervisor. The symptom was not an error — the gateway
+  # skips an MCP server it cannot reach, so the agent simply had no
+  # session-watcher tools and answered "share a URL and a token with me", which
+  # reads as the feature not existing.
+  #
+  # THE PORT IS PUBLISHED ON PURPOSE. extensions_config.json points at
+  # host.docker.internal:18101, and publishing lets that ONE url work from both
+  # the gateway container (via extra_hosts) and a gateway run locally outside
+  # Docker. A service-name url would have worked only inside compose and would
+  # have silently broken `make dev` run on the host.
+  session-watcher:
+    build:
+      context: ../
+      dockerfile: backend/Dockerfile
+      target: dev
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
+        UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
+    container_name: omni-harness-session-watcher
+    command: sh -c "cd backend && (uv sync || true) && PYTHONPATH=. uv run python -m session_watcher.server --port 18101 --root /root/.claude/projects"
+    ports:
+      - "18101:18101"
+    volumes:
+      - ../backend:/app/backend
+      # The sessions it reports on. READ-ONLY: this server never writes, and
+      # the mount is what makes that structural rather than a promise.
+      - type: bind
+        source: ${HOME:?HOME must be set}/.claude
+        target: /root/.claude
+        read_only: true
+        bind:
+          create_host_path: true
+    working_dir: /app
+    networks:
+      - omni-harness-dev
+    restart: unless-stopped
+
   frontend:
     build:
       context: ../

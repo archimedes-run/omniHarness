@@ -312,6 +312,28 @@ not change; only where it sits, and therefore what it reaches.*
   error, so new UI is held to them from the start rather than retrofitted.
 - **FR-035**: Acceptance criteria for this feature MUST assert rendered output — what
   the user sees — and not component props alone.
+- **FR-040**: Every configured tool source MUST have its state visible — not configured,
+  configured but disabled, enabled but unreachable, or live — and an agent MUST NOT be
+  left to infer it from an empty tool list. This generalises FR-013/FR-014 from the
+  session watcher to every source, because the watcher was only the instance that
+  happened to be noticed.
+
+  *The occasion, 2026-09-23: two capabilities appeared broken in the same hour and the
+  causes were unrelated. The session watcher was a server nobody started — no compose
+  service, no make target — and the gateway skips an unreachable MCP server silently.
+  Gmail was connected and ACTIVE the whole time, but connector toolkits load only when a
+  conversation selects them, and that one had not. Both produced the identical symptom:
+  the assistant asked the user to hand over a URL and an OAuth token for a capability the
+  product already had. That is worse than an error message, because it reads as the
+  feature not existing.*
+
+  *The model could not have done better. It saw an empty tool list, and nothing
+  distinguishes never-configured from configured-but-off from on-and-unreachable.*
+
+- **FR-041**: A tool source that fails to load MUST be reported to the user rather than
+  logged and skipped. Silent degradation of a tool surface is indistinguishable from a
+  feature that was never built.
+
 - **FR-037**: The recognised confirmation and decline sets MUST remain closed and matched
   exactly — interpretation was rejected as a security property and is not reopened — and
   MUST accept the affirmations a user actually types. Closed is not the same as narrow: a
@@ -393,6 +415,10 @@ not change; only where it sits, and therefore what it reaches.*
   accepted, and every phrase listed as rejected is rejected, driven by one table so the
   document and the code cannot drift.
 - **SC-021**: An action reaching expiry produces a user-visible statement, not silence.
+- **SC-023**: With a configured tool source unreachable, the interface says so; it does
+  not present the same view as a source that was never configured.
+- **SC-024**: A connector that is authorised but not selected for a conversation is
+  distinguishable from one that is not authorised at all.
 - **SC-022**: The wiring gate names a function that nothing calls, in any feature module,
   and is green on the current tree only because of whitelist entries that carry reasons.
 - **SC-019**: The threshold is readable from configuration and a changed value changes
