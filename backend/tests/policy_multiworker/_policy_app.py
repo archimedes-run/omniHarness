@@ -110,6 +110,43 @@ async def confirm(request: Request):
     }
 
 
+@app.post("/resolve")
+async def resolve(request: Request):
+    """The UI-shaped route: an explicit verdict on a NAMED action.
+
+    Calls ConfirmationFlow.explicit — the same object the chat route uses, and
+    the same single claim. A second implementation here is what SC-002 exists
+    to make impossible.
+    """
+    if not is_valid_internal_auth_token(request.headers.get(INTERNAL_AUTH_HEADER_NAME)):
+        return {"pid": os.getpid(), "error": "internal auth rejected", "executed": False}
+
+    body = await request.json()
+
+    from app.policy.confirm_flow import EXECUTED, ConfirmationFlow
+
+    flow = ConfirmationFlow(store=_store, middleware=_middleware, now=lambda: datetime.now(UTC))
+
+    def _run(tool_name, args):
+        EXECUTIONS.mkdir(parents=True, exist_ok=True)
+        (EXECUTIONS / f"{os.getpid()}-{tool_name}-{len(list(EXECUTIONS.iterdir()))}").write_text(f"{tool_name} {args}")
+        return "done"
+
+    result = flow.explicit(
+        body["action_id"],
+        confirm=bool(body.get("confirm", True)),
+        run_tool=_run,
+        supplied_count=body.get("typed_count"),
+    )
+    return {
+        "pid": os.getpid(),
+        "executed": result.outcome == EXECUTED,
+        "verdict": result.outcome,
+        "reason": result.message,
+        "claimant": f"worker-{os.getpid()}" if result.outcome == EXECUTED else None,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"pid": os.getpid()}

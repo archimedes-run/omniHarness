@@ -113,27 +113,27 @@ observe it execute exactly once with the claiming worker named in the audit entr
 
 ### Backend
 
-- [ ] T036 [US1] Create `backend/app/gateway/routers/confirmations.py` with `GET /api/confirmations`, `POST /api/confirmations/{id}/confirm`, `POST /api/confirmations/{id}/decline`, all delegating to `confirm_flow`
-- [ ] T037 [US1] Register the router in `backend/app/gateway/app.py`
-- [ ] T038 [US1] Return distinct outcomes from the endpoints — `already_resolved` naming the prior outcome, `expired`, `targets_drifted` carrying both target lists, `threshold_not_met` — never collapsed into a generic failure (FR-007)
-- [ ] T039 [P] [US1] Test that `GET /api/confirmations` distinguishes "no actions pending" from "the pending set could not be read" (FR-008)
+- [X] T036 [US1] Create `backend/app/gateway/routers/confirmations.py` with `GET /api/confirmations`, `POST /api/confirmations/{id}/confirm`, `POST /api/confirmations/{id}/decline`, all delegating to `confirm_flow`
+- [X] T037 [US1] Register the router in `backend/app/gateway/app.py`
+- [X] T038 [US1] Return distinct outcomes from the endpoints — `already_resolved` naming the prior outcome, `expired`, `targets_drifted` carrying both target lists, `threshold_not_met` — never collapsed into a generic failure (FR-007)
+- [X] T039 [P] [US1] Test that `GET /api/confirmations` distinguishes "no actions pending" from "the pending set could not be read" (FR-008)
 
 ### Frontend
 
-- [ ] T040 [P] [US1] Create `frontend/src/core/confirmations/hooks.ts` using `@tanstack/react-query` v5, matching the existing per-domain hook convention
-- [ ] T041 [US1] Create the route at `frontend/src/app/workspace/confirmations/page.tsx`
-- [ ] T042 [US1] Build the pending action card in `frontend/src/components/workspace/confirmations/`, showing what was requested, the plan exactly as stated, the resolved targets, the requesting agent with its delegation chain, and time remaining (FR-002)
-- [ ] T043 [US1] Implement the confirm and decline controls, with decline as prominent and as deterministic as confirm (FR-003)
-- [ ] T044 [US1] Implement the typed-count control shown only above threshold, stating the count is required because the action affects more than the configured number of targets
-- [ ] T045 [US1] Implement client-side expiry: an action expiring while displayed becomes visibly expired without a reload and its controls become inoperable rather than remaining pressable (FR-005)
-- [ ] T046 [US1] Surface drifted targets clearly, stating that the targets changed rather than reporting a generic failure (FR-006)
-- [ ] T047 [P] [US1] Unit-test the countdown and threshold logic in `frontend/tests/unit/confirmations.test.ts`
+- [X] T040 [P] [US1] Create `frontend/src/core/confirmations/hooks.ts` using `@tanstack/react-query` v5, matching the existing per-domain hook convention
+- [X] T041 [US1] Create the route at `frontend/src/app/workspace/confirmations/page.tsx`
+- [X] T042 [US1] Build the pending action card in `frontend/src/components/workspace/confirmations/`, showing what was requested, the plan exactly as stated, the resolved targets, the requesting agent with its delegation chain, and time remaining (FR-002)
+- [X] T043 [US1] Implement the confirm and decline controls, with decline as prominent and as deterministic as confirm (FR-003)
+- [X] T044 [US1] Implement the typed-count control shown only above threshold, stating the count is required because the action affects more than the configured number of targets
+- [X] T045 [US1] Implement client-side expiry: an action expiring while displayed becomes visibly expired without a reload and its controls become inoperable rather than remaining pressable (FR-005)
+- [X] T046 [US1] Surface drifted targets clearly, stating that the targets changed rather than reporting a generic failure (FR-006)
+- [X] T047 [P] [US1] Unit-test the countdown and threshold logic in `frontend/tests/unit/confirmations.test.ts`
 
 ### Rendering and cross-worker
 
-- [ ] T048 [US1] Rendering assertions in `frontend/tests/rendering/confirmations.spec.ts`: an above-threshold action cannot be confirmed by clicking; a wrong typed count neither confirms nor resolves; an expired action's controls are inoperable. CI only
-- [ ] T049 [US1] Extend `backend/tests/policy_multiworker/` so an action created on one worker is confirmed through the HTTP route on another, and the audit entry names the claiming worker (SC-001, SC-005)
-- [ ] T050 [US1] Test simultaneous confirmation through the UI route and the chat path, asserting exactly one execution (SC-002). This is now meaningful because Phase 1 exists
+- [X] T048 [US1] Rendering assertions in `frontend/tests/rendering/confirmations.spec.ts`: an above-threshold action cannot be confirmed by clicking; a wrong typed count neither confirms nor resolves; an expired action's controls are inoperable. CI only
+- [X] T049 [US1] Extend `backend/tests/policy_multiworker/` so an action created on one worker is confirmed through the HTTP route on another, and the audit entry names the claiming worker (SC-001, SC-005)
+- [X] T050 [US1] Test simultaneous confirmation through the UI route and the chat path, asserting exactly one execution (SC-002). This is now meaningful because Phase 1 exists
 
 **Checkpoint**: The feature's reason for existing is operable.
 
