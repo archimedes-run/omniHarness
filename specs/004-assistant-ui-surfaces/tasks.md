@@ -214,6 +214,12 @@ feature exposed.
 - [ ] T088 [P] Assert no new surface hardcodes a colour utility, extending the existing token check to the four new component directories (FR-033)
 - [ ] T089 SABOTAGE T088: add a hardcoded colour utility to one of the four new component directories and confirm the check fails naming the file. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
 - [ ] T090 Confirm `backend/tests/test_shipped_paths.py` covers this feature's tests, including the frontend `join(__dirname, "..")` idiom, and that no test added here reads a gitignored path (FR-032, SC-016)
+- [ ] T090e On rule-set reload, supersede any pending action whose tool no longer classifies Tier 3, with a reason naming the change (FR-042). `Outcome.SUPERSEDED` exists and has no producer; this is its first
+- [ ] T090f SABOTAGE T090e: make the superseding path EXECUTE instead of resolve, and confirm a test fails. Superseding must only ever remove a confirmation demand the current rules say is unnecessary — never grant one (SC-025)
+- [ ] T090a Build a tool-source status view covering EVERY configured source, not only the watcher (FR-040): for each, whether it is configured, enabled, reachable, and how many tools it contributed
+- [ ] T090b Surface a load failure to the user rather than logging and skipping it (FR-041). The gateway logs `Skipping MCP server '<name>'` and carries on, and the only downstream symptom is an agent that behaves as though the feature does not exist
+- [ ] T090c Distinguish an authorised-but-unselected connector from an unauthorised one (SC-024). Gmail was ACTIVE in Composio while the assistant asked the user to grant OAuth access, because connector toolkits load only when a conversation selects them
+- [ ] T090d SABOTAGE T090a: point a configured MCP server at a dead port and confirm the surface reports it UNREACHABLE rather than showing the same empty state as a source nobody configured. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
 - [ ] T091 [P] Route all rendered session summaries, page content and email bodies through the existing redactor, suppressing display on failure rather than falling through (FR-031, SC-015)
 - [ ] T092 SABOTAGE T091: feed content that fails redaction and confirm the surface suppresses rather than renders, and that the suppression is visible as such rather than as absent data
 - [ ] T093 Run quickstart.md end to end and record which steps ran locally and which only in CI

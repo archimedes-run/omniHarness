@@ -219,6 +219,68 @@ policy:
     - pattern: "github_search_users"
       tier: 1
 
+    # ---------------------------------------------------------------------
+    # CONNECTOR TOOLS. Composio toolkits arrive as
+    # `connector-<slug>_<SLUG>_<ACTION>`, e.g.
+    # connector-gmail_GMAIL_FETCH_EMAILS — NOT as `gmail_fetch_emails`.
+    #
+    # The gmail_* and googlecalendar_* rules above were written against a
+    # naming that never occurs on this path, so every connector call fell to
+    # the FR-009 default and reading an inbox demanded confirmation. Measured
+    # 2026-09-23, after a user asked to check their email and was asked to
+    # approve three separate reads.
+    #
+    # Named individually, as everywhere else: a `connector-gmail_*` glob would
+    # silently cover a send capability added to the toolkit later.
+    # ---------------------------------------------------------------------
+    - pattern: "connector-gmail_GMAIL_FETCH_EMAILS"
+      tier: 1
+    - pattern: "connector-gmail_GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID"
+      tier: 1
+    - pattern: "connector-gmail_GMAIL_FETCH_MESSAGE_BY_THREAD_ID"
+      tier: 1
+    - pattern: "connector-gmail_GMAIL_LIST_THREADS"
+      tier: 1
+    - pattern: "connector-gmail_GMAIL_LIST_LABELS"
+      tier: 1
+    - pattern: "connector-gmail_GMAIL_GET_PROFILE"
+      tier: 1
+    - pattern: "connector-gmail_GMAIL_GET_ATTACHMENT"
+      tier: 1
+    # A draft is its own confirmation gate: nothing leaves until the user sends
+    # it. Disclosed, not gated.
+    - pattern: "connector-gmail_GMAIL_CREATE_EMAIL_DRAFT"
+      tier: 2
+    # Reaches other people's inboxes and cannot be recalled.
+    - pattern: "connector-gmail_GMAIL_DELETE_MESSAGE"
+      tier: 3
+    - pattern: "connector-gmail_GMAIL_MOVE_TO_TRASH"
+      tier: 3
+
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_FIND_EVENT"
+      tier: 1
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_LIST_CALENDARS"
+      tier: 1
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_GET_CALENDAR"
+      tier: 1
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_FIND_FREE_SLOTS"
+      tier: 1
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_GET_CURRENT_DATE_TIME"
+      tier: 1
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_QUICK_ADD"
+      tier: 2
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_CREATE_EVENT"
+      tier: 2
+      exceptions:
+        # Inviting other people is outbound — the assistant cannot un-reach an
+        # inbox. Mirrors the googlecalendar_create_event rule above.
+        - when: {send_updates: [all, externalOnly]}
+          tier: 3
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_UPDATE_EVENT"
+      tier: 3
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_DELETE_EVENT"
+      tier: 3
+
     # GitHub writes. Decided individually rather than as a block, because
     # "writes to GitHub" spans a branch nobody sees and a merge nobody can undo.
     #

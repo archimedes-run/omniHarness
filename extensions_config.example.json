@@ -68,7 +68,7 @@
       "description": "Calendar. Tier map lives in .omni-harness/policy/rules.yaml: reads and free/busy are Tier 1, a tentative hold is Tier 2, and delete/update/decline are Tier 3. Creating an event that emails other people is raised to Tier 3 by an argument exception \u2014 the assistant cannot un-reach an inbox."
     },
     "session-watcher": {
-      "enabled": false,
+      "enabled": true,
       "type": "sse",
       "command": null,
       "args": [],
@@ -76,7 +76,7 @@
       "url": "http://host.docker.internal:18101/sse",
       "headers": {},
       "oauth": null,
-      "description": "Feature 001's read-only coding-session watcher (FR-018). This entry IS the integration point \u2014 the gateway has no external tool-registration API, so without it the watcher's tools never reach the agent and 'what are my sessions doing?' answers 'I don't have that tool'. Disabled by default: it needs the watcher process running on the host."
+      "description": "Feature 001's read-only coding-session watcher (FR-018). This entry IS the integration point \u2014 the gateway has no external tool-registration API, so without it the watcher's tools never reach the agent and 'what are my sessions doing?' answers 'I don't have that tool'. The process is the `session-watcher` service in docker/docker-compose-dev.yaml (and docker-compose.yaml); it used to be something you had to remember to start, which is how it came to be running nowhere. The url stays host.docker.internal because the service publishes its port, so the same value works from inside the stack and from a gateway run on the host."
     }
   },
   "skills": {}
