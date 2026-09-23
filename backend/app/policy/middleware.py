@@ -123,13 +123,53 @@ class PolicyMiddleware(AgentMiddleware):
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return handler(request.override(messages=note) if note else request)
+        return self._disclose(handler(request.override(messages=note) if note else request))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return await handler(request.override(messages=note) if note else request)
+        return self._disclose(await handler(request.override(messages=note) if note else request))
+
+    # ---- Tier 2 disclosure ------------------------------------------------
+    #
+    # `DisclosureLedger.apply()` had NO PRODUCTION CALLER. The middleware
+    # recorded every Tier 2 execution into the ledger and nothing ever read it
+    # back, so Tier 2 was execute-and-say-nothing — Tier 1 with bookkeeping —
+    # while this class's own docstring promised "execute, and guarantee the
+    # reply discloses it". Found by a user running a write and seeing no
+    # mention of it.
+    #
+    # APPLIED TO THE MESSAGE WITH NO TOOL CALLS, and only that one. That is the
+    # reply a person actually reads; an intermediate step in the tool loop is
+    # not. `apply` does not consume records, so disclosing on every call would
+    # repeat each line once per model round trip.
+
+    def _disclose(self, response: Any) -> Any:
+        if not self.ledger.records:
+            return response
+        message = self._final_message(response)
+        if message is None:
+            return response  # still mid-loop; the user has not been spoken to yet
+
+        disclosed = self.ledger.apply(str(message.content or ""))
+        if disclosed != message.content:
+            message.content = disclosed
+        self.ledger.clear()
+        return response
+
+    @staticmethod
+    def _final_message(response: Any) -> Any:
+        """The assistant turn a user reads, or None while tools are still running."""
+        from langchain_core.messages import AIMessage
+
+        candidates = getattr(response, "result", None)
+        if isinstance(response, AIMessage):
+            candidates = [response]
+        for message in reversed(list(candidates or [])):
+            if isinstance(message, AIMessage):
+                return None if getattr(message, "tool_calls", None) else message
+        return None
 
     def _complete_confirmation(self, request: Any) -> tuple[Any, Any]:
         from langchain_core.messages import AIMessage, HumanMessage

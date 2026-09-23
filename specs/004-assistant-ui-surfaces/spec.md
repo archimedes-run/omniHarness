@@ -325,6 +325,20 @@ not change; only where it sits, and therefore what it reaches.*
   several are pending, and nothing cleared them. They blocked every confirmation for four
   hours.*
 
+- **FR-043**: The wiring gate MUST treat a name referenced only by its own defining module
+  and by tests as unwired. Gate 4 asks whether a name is referenced by production code
+  *inside* its module, and a helper called by a sibling function in the same file answers
+  yes while nothing in the running system calls either.
+
+  *The occasion, 2026-09-23 — the FOURTH instance of this shape, after the trigger engine
+  shipping inert, `recognise`/`claim`/`execute_confirmed` having only test callers, and
+  `expire_due` never running. `DisclosureLedger.apply()` guarantees that a Tier 2 action
+  is mentioned in the reply. The middleware recorded every Tier 2 execution into the
+  ledger and nothing ever read it back, so a user asked for a file to be written, it was
+  written, and the assistant said nothing about it. Tier 2 was Tier 1 with bookkeeping,
+  against a docstring promising "execute, and guarantee the reply discloses it". Every
+  existing test called `apply()` directly and passed throughout.*
+
 - **FR-040**: Every configured tool source MUST have its state visible — not configured,
   configured but disabled, enabled but unreachable, or live — and an agent MUST NOT be
   left to infer it from an empty tool list. This generalises FR-013/FR-014 from the
@@ -430,6 +444,9 @@ not change; only where it sits, and therefore what it reaches.*
 - **SC-021**: An action reaching expiry produces a user-visible statement, not silence.
 - **SC-025**: After a rule change makes a pending action's tool Tier 1, that action is
   superseded rather than left blocking confirmations — and it is not executed.
+- **SC-026**: A Tier 2 action is named in the reply the user reads, even when the model's
+  own wording does not mention it — and a Tier 1 action is not, so disclosure does not
+  become noise.
 - **SC-023**: With a configured tool source unreachable, the interface says so; it does
   not present the same view as a source that was never configured.
 - **SC-024**: A connector that is authorised but not selected for a conversation is
