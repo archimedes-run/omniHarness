@@ -92,7 +92,16 @@ class PolicyMiddleware(AgentMiddleware):
 
         if decision.tier is Tier.TIER_2:
             result = await handler(request)
-            self.ledger.record(tool_name=decision.tool_name, arguments=self._arguments(request), result=result)
+            # PASS THE TARGETS WHEN THEY WERE GENUINELY RESOLVED, and not
+            # otherwise. `covered()` requires the reply to name every target,
+            # so handing it the fallback — a repr of the whole call — makes
+            # coverage unreachable and guarantees an append on every Tier 2
+            # action forever. An unresolved scope is better represented as no
+            # targets: the tool name alone then satisfies coverage, which is
+            # what that branch was written for.
+            arguments = self._arguments(request)
+            resolved = tuple(self.resolve_targets(decision.tool_name, arguments)) if (self.resolve_targets and source_argument(arguments)) else ()
+            self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
             return result
 
         return self._require_confirmation(request, decision)
