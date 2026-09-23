@@ -236,15 +236,18 @@ class PolicyMiddleware(AgentMiddleware):
             requester=self._requester(request),
             delegation_chain=self._delegation_chain(request),
         )
+        # The plan text is rewritten now that the id exists, so the user is told
+        # how to name THIS action among several.
+        action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
         return action.plan_text
 
     def _plan_text_for(self, action: PendingAction) -> str:
-        return self._plan_text(action.tool_name, action.targets, action.requester, action.delegation_chain)
+        return self._plan_text(action.tool_name, action.targets, action.requester, action.delegation_chain, action.id)
 
     @staticmethod
-    def _plan_text(tool_name: str, targets: list[str], requester: str = "lead_agent", delegation_chain: tuple[str, ...] = ()) -> str:
+    def _plan_text(tool_name: str, targets: list[str], requester: str = "lead_agent", delegation_chain: tuple[str, ...] = (), action_id: str | None = None) -> str:
         """FR-021: name the SPECIFIC items, not the category.
 
         "Delete some meetings" cannot be confirmed meaningfully — the user would
@@ -260,6 +263,16 @@ class PolicyMiddleware(AgentMiddleware):
         lines.append(f"Before I do this, please confirm. I intend to use **{tool_name}** on exactly these {len(targets)} item(s):")
         lines.append("")
         lines += [f"  - {target}" for target in targets]
+        if action_id:
+            # THE ID IS NOT DECORATION. `recognise` refuses an ambiguous
+            # confirmation when more than one action is pending — correctly,
+            # since guessing which was meant is the interpretation this design
+            # rejects. But the id was never shown, so a user with three pending
+            # actions was asked to name one they had never been told. They could
+            # not confirm anything. Observed 2026-09-23: "3 actions are pending
+            # and the reply names none of them", with no way forward.
+            lines.append("")
+            lines.append(f"Reply `yes {action_id}` to confirm this one, or `no {action_id}` to decline it.")
         return "\n".join(lines)
 
     @staticmethod

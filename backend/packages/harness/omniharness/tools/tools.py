@@ -332,12 +332,27 @@ def apply_connector_tool_surface(config, connector_tools: list[BaseTool]) -> lis
         server = None
         unprefixed = tool.name
         for name, entry in extensions.mcp_servers.items():
-            prefix = f"{name}_"
-            if tool.name.startswith(prefix):
-                server, unprefixed = entry, tool.name[len(prefix) :]
+            # BOTH PREFIXES. Connector tools arrive as
+            # `connector-gmail_GMAIL_SEND_EMAIL`, not `gmail_send_email`, so
+            # matching only `f"{name}_"` found no server, left `surface` None,
+            # and KEPT every tool — including the send capability FR-012
+            # requires to be absent. Measured 2026-09-23: the deny list was
+            # correct and matched nothing.
+            for prefix in (f"{name}_", f"connector-{name}_"):
+                if tool.name.startswith(prefix):
+                    server, unprefixed = entry, tool.name[len(prefix) :]
+                    break
+            if server is not None:
                 break
         surface = getattr(server, "tools", None)
-        if surface is None or surface.permits(unprefixed):
+        # Case-insensitively: the deny list is written `send_email` and the
+        # connector names the same capability `GMAIL_SEND_EMAIL`. A guarantee
+        # that depends on matching case is not a guarantee.
+        candidates = {unprefixed, unprefixed.lower(), unprefixed.upper()}
+        if unprefixed.upper().startswith(f"{name.upper()}_"):
+            bare = unprefixed[len(name) + 1 :]
+            candidates |= {bare, bare.lower(), bare.upper()}
+        if surface is None or all(surface.permits(c) for c in candidates):
             kept.append(tool)
         else:
             logger.info("Tool surface: connector tool '%s' is denied and will not be exposed", tool.name)

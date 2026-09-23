@@ -61,7 +61,7 @@ services:
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
         UV_EXTRAS: ${UV_EXTRAS:-}
     container_name: omni-harness-session-watcher
-    command: sh -c "cd backend && PYTHONPATH=. uv run python -m session_watcher.server --port 18101 --root /root/.claude/projects"
+    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects"
     ports:
       - "18101:18101"
     volumes:
