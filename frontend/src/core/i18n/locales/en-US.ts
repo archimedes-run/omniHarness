@@ -174,6 +174,7 @@ export const enUS: Translations = {
     demoChats: "Demo chats",
     agents: "Agents",
     mcpSuite: "MCP Suite",
+    confirmations: "Confirmations",
   },
 
   // Agents

@@ -168,6 +168,7 @@ export const zhCN: Translations = {
     demoChats: "演示对话",
     agents: "智能体",
     mcpSuite: "MCP 套件",
+    confirmations: "待确认",
   },
 
   // Agents

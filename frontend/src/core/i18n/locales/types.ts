@@ -118,6 +118,7 @@ export interface Translations {
     demoChats: string;
     agents: string;
     mcpSuite: string;
+    confirmations: string;
   };
 
   // Agents
