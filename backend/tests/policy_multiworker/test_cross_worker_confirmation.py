@@ -351,3 +351,78 @@ def test_below_the_threshold_a_bare_yes_still_confirms(gateway):
         timeout=10,
     ).json()
     assert done["executed"] is True, done
+
+
+# ---------------------------------------------------------------------------
+# T049/T050 — the UI route, at the worker count production runs.
+#
+# SC-002 is the one that needed Phase 1 to exist: before there was a chat
+# completion path, "confirmed through both routes at once" could not be tested
+# at all, because only one route existed.
+# ---------------------------------------------------------------------------
+
+
+def test_an_action_stated_on_one_worker_resolves_through_another_explicitly(gateway):
+    """T049. The explicit (UI-shaped) route, not the message-shaped one."""
+    stated = httpx.post(
+        f"http://127.0.0.1:{PORT}/state",
+        json={"tool": "calendar_decline", "args": {"targets": ["A", "B"]}},
+        timeout=10,
+    ).json()
+    action_id = stated["pending"][0]
+
+    done = httpx.post(
+        f"http://127.0.0.1:{PORT}/resolve",
+        json={"action_id": action_id, "confirm": True},
+        headers=_headers(gateway),
+        timeout=10,
+    ).json()
+
+    assert done["executed"] is True, done
+    assert done["claimant"].startswith("worker-")
+    assert done["pid"] in gateway["worker_pids"](), "the claimant is not one of the running workers"
+
+
+def test_confirming_through_both_routes_at_once_executes_once(gateway):
+    """SC-002. Two routes, one claim.
+
+    The claim is a one-shot file link, so exactly one of these can win. The
+    loser must be told WHAT happened — 'already resolved', naming the prior
+    outcome — rather than being handed a failure it would sensibly retry.
+    """
+    # Counted as a DELTA: the executions directory is shared by every test
+    # against this gateway, so an absolute count would report earlier tests'
+    # work as a double execution. The first version of this assertion did
+    # exactly that and read as a product defect.
+    before = len(_executions(gateway))
+
+    stated = httpx.post(
+        f"http://127.0.0.1:{PORT}/state",
+        json={"tool": "calendar_decline", "args": {"targets": ["A", "B"]}},
+        timeout=10,
+    ).json()
+    action_id = stated["pending"][0]
+    headers = _headers(gateway)
+
+    def via_chat():
+        return httpx.post(f"http://127.0.0.1:{PORT}/confirm", json={"reply": "yes"}, headers=headers, timeout=15).json()
+
+    def via_ui():
+        return httpx.post(
+            f"http://127.0.0.1:{PORT}/resolve",
+            json={"action_id": action_id, "confirm": True},
+            headers=headers,
+            timeout=15,
+        ).json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        both = [f.result() for f in (pool.submit(via_chat), pool.submit(via_ui))]
+
+    executed = [r for r in both if r.get("executed")]
+    assert len(executed) == 1, f"expected exactly one execution, got {both}"
+
+    loser = next(r for r in both if not r.get("executed"))
+    assert loser["verdict"] in {"already_resolved", "executed"}, loser
+    assert "fail" not in (loser.get("reason") or "").lower(), "the loser was told it failed rather than what happened"
+
+    assert len(_executions(gateway)) - before == 1, "the action ran more than once"

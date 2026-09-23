@@ -20,6 +20,7 @@ from app.gateway.routers import (
     auth,
     channels,
     composio,
+    confirmations,
     feedback,
     mcp,
     mcp_studio,
@@ -525,6 +526,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Thread cleanup API is mounted at /api/threads/{thread_id}
     app.include_router(threads.router)
+    # Surface 1: pending Tier 3 confirmations (Feature 004).
+    app.include_router(confirmations.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
