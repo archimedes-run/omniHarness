@@ -470,3 +470,33 @@ class TestWorkflowRunRouter:
             # Try to get it under wf2["id"]
             resp = client.get(f"/api/workflows/{wf2['id']}/runs/{run_id}")
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# The workflow list's newest-run lookup: one query, not one per workflow
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_latest_by_workflows_returns_each_workflows_newest_run(session_factory):
+    """Phase 2.5. The list page fetched every run of every workflow (16
+    requests on a real page) to show one line each. One query now; this pins
+    that it picks the NEWEST run per workflow and leaves runless ones out."""
+    import asyncio
+
+    from omniharness.persistence.workflow_runs.sql import WorkflowRunRepository
+
+    a = await _make_workflow(session_factory)
+    b = await _make_workflow(session_factory)
+    idle = await _make_workflow(session_factory)
+    await _make_run(session_factory, a["id"])
+    await asyncio.sleep(0.01)
+    newest_a = await _make_run(session_factory, a["id"], status="running")
+    only_b = await _make_run(session_factory, b["id"])
+
+    latest = await WorkflowRunRepository(session_factory).latest_by_workflows([a["id"], b["id"], idle["id"]])
+
+    assert latest[a["id"]]["id"] == newest_a["id"]
+    assert latest[b["id"]]["id"] == only_b["id"]
+    assert idle["id"] not in latest
+    assert await WorkflowRunRepository(session_factory).latest_by_workflows([]) == {}

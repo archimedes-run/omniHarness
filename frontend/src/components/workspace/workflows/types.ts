@@ -25,6 +25,8 @@ export interface Workflow {
   approval_policy?: string | null;
   created_at: string;
   updated_at: string;
+  /** The newest run, sent with the list (one query for all workflows). */
+  last_run?: WorkflowRun | null;
 }
 
 export interface WorkflowTemplate {
