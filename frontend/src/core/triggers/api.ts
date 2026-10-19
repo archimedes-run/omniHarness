@@ -3,12 +3,13 @@ import { getBackendBaseURL } from "@/core/config";
 
 import type { FiringsView, RulesView } from "./types";
 
-export async function loadRules(): Promise<RulesView> {
-  const response = await fetch(`${getBackendBaseURL()}/api/triggers/rules`);
-  return response.json() as Promise<RulesView>;
+// A failed read throws, so the page shows "I cannot read the trigger records"
+// rather than treating an error body as data.
+async function read<T>(path: string): Promise<T> {
+  const response = await fetch(`${getBackendBaseURL()}${path}`);
+  if (!response.ok) throw new Error(`${path}: ${response.status}`);
+  return response.json() as Promise<T>;
 }
 
-export async function loadFirings(): Promise<FiringsView> {
-  const response = await fetch(`${getBackendBaseURL()}/api/triggers/firings`);
-  return response.json() as Promise<FiringsView>;
-}
+export const loadRules = () => read<RulesView>("/api/triggers/rules");
+export const loadFirings = () => read<FiringsView>("/api/triggers/firings");

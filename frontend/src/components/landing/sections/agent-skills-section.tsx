@@ -396,6 +396,8 @@ const LOG_LINES: LogLine[] = [
   },
 ];
 
+// The agent log is an always-dark panel (bg-stone-950) in both themes, so its
+// colours are fixed, not theme tokens.
 const LINE_COLOR: Partial<Record<NonNullable<LogLine["type"]>, string>> = {
   cmd: "text-stone-100",
   info: "text-stone-300",
@@ -452,7 +454,7 @@ function AgentLogWindow() {
           <div className="h-2.5 w-2.5 rounded-full bg-stone-700" />
           <div className="h-2.5 w-2.5 rounded-full bg-stone-700" />
         </div>
-        <span className="font-mono text-xs text-stone-600">
+        <span className="font-mono text-xs text-stone-400">
           omniharness · agent log
         </span>
         <button
@@ -464,7 +466,7 @@ function AgentLogWindow() {
               play();
             }
           }}
-          className="text-xs text-stone-600 transition-colors hover:text-stone-400"
+          className="text-xs text-stone-400 transition-colors hover:text-stone-200"
         >
           {running ? "pause" : "replay"}
         </button>
@@ -479,8 +481,8 @@ function AgentLogWindow() {
             className={cn(
               "whitespace-pre",
               line.type
-                ? (LINE_COLOR[line.type] ?? "text-stone-500")
-                : "text-stone-500",
+                ? (LINE_COLOR[line.type] ?? "text-stone-400")
+                : "text-stone-400",
             )}
           >
             {line.text || " "}
@@ -517,14 +519,16 @@ export function AgentSkillsSection({ className }: { className?: string }) {
       )}
     >
       <div className="mb-14 flex flex-col items-center gap-3 text-center">
-        <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
+        <p className="text-muted-foreground text-xs font-semibold tracking-widest uppercase">
           From chat to capability
         </p>
-        <h2 className="max-w-3xl text-4xl font-bold tracking-tight text-balance text-stone-950 md:text-5xl">
+        <h2 className="text-foreground max-w-3xl text-4xl font-bold tracking-tight text-balance md:text-5xl">
           Chat is the interface.{" "}
-          <span className="text-stone-400">Harnesses are the output.</span>
+          <span className="text-muted-foreground">
+            Harnesses are the output.
+          </span>
         </h2>
-        <p className="max-w-3xl text-base leading-relaxed text-pretty text-stone-500">
+        <p className="text-muted-foreground max-w-3xl text-base leading-relaxed text-pretty">
           Ask OmniHarness to build or operate something. It can route work
           across skills, MCP tools, sub-agents, workflows, memory, sandboxes,
           logs, and live previews without collapsing everything into a single
@@ -533,22 +537,22 @@ export function AgentSkillsSection({ className }: { className?: string }) {
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="flex flex-col gap-4 rounded-3xl border border-stone-200 bg-white p-5 shadow-[0_16px_40px_rgba(15,23,42,0.04)] sm:p-6">
-          <p className="text-xs font-medium tracking-widest text-stone-400 uppercase">
+        <div className="border-border bg-card flex flex-col gap-4 rounded-3xl border p-5 shadow-[0_16px_40px_rgba(15,23,42,0.04)] sm:p-6">
+          <p className="text-muted-foreground text-xs font-medium tracking-widest uppercase">
             How the harness orchestrates
           </p>
           <AgentHarnessDiagram />
-          <div className="mt-1 flex flex-wrap gap-4 text-xs text-stone-400">
+          <div className="text-muted-foreground mt-1 flex flex-wrap gap-4 text-xs">
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2 w-2 rounded-full bg-stone-900" />
+              <span className="bg-foreground inline-block h-2 w-2 rounded-full" />
               Control plane
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2 w-2 rounded-full border border-stone-400" />
+              <span className="border-input inline-block h-2 w-2 rounded-full border" />
               Sub-Agents
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1 w-4 bg-stone-300" />
+              <span className="bg-muted-foreground/30 inline-block h-1 w-4" />
               Data flow
             </span>
           </div>
@@ -561,9 +565,9 @@ export function AgentSkillsSection({ className }: { className?: string }) {
         {HARNESS_STEPS.map((step, index) => (
           <div
             key={step}
-            className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3 text-sm text-stone-700"
+            className="border-border bg-muted/70 text-foreground rounded-2xl border px-4 py-3 text-sm"
           >
-            <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full bg-stone-900 text-[11px] font-semibold text-white">
+            <span className="bg-primary text-primary-foreground mb-2 inline-flex size-6 items-center justify-center rounded-full text-[11px] font-semibold">
               {index + 1}
             </span>
             <p className="leading-relaxed">{step}</p>

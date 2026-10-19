@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * Surface 1, asserted against what a user can actually press.
+ * The Inbox (Phase 2.5; Feature 004's Surface 1 moved here with its content),
+ * asserted against what a user can actually press.
  *
  * The unit tests cover the countdown and threshold LOGIC. They cannot tell you
  * whether the Confirm button is disabled — that is a property of the render,
@@ -34,7 +35,20 @@ function action(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function serve(page: Page, body: Record<string, unknown>) {
+const NO_ALERTS = { alerts: [], waiting_count: 0 };
+
+async function serve(
+  page: Page,
+  body: Record<string, unknown>,
+  alerts: Record<string, unknown> = NO_ALERTS,
+) {
+  await page.route("**/api/inbox/alerts", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(alerts),
+    }),
+  );
   await page.route("**/api/confirmations", async (route) => {
     await route.fulfill({
       status: 200,
@@ -56,7 +70,7 @@ async function serve(page: Page, body: Record<string, unknown>) {
       }),
     });
   });
-  await page.goto("/workspace/confirmations");
+  await page.goto("/workspace/inbox");
   return () => resolveCalls;
 }
 
@@ -201,4 +215,88 @@ test("a plan that failed redaction shows as withheld, not as the plan (FR-031, S
 
   await expect(page.getByTestId("withheld")).toBeVisible();
   await expect(page.getByTestId("withheld")).toContainText("Withheld");
+});
+
+// --- alerts, and the badge (Phase 2.5) ----------------------------------------
+
+const ALERTS = {
+  alerts: [
+    {
+      rule_id: "blocked-session",
+      event_id: "s1",
+      event_type: "watcher",
+      at: new Date().toISOString(),
+      state: "waiting",
+      reason: "awaiting the coalescing window",
+      thread_id: "t-blocked",
+    },
+    {
+      rule_id: "weekly-review",
+      event_id: "w1",
+      event_type: "cron",
+      at: new Date().toISOString(),
+      state: "not-delivered",
+      reason: "held past 2h",
+      thread_id: null,
+    },
+    {
+      rule_id: "morning-briefing",
+      event_id: "m1",
+      event_type: "cron",
+      at: new Date().toISOString(),
+      state: "delivered",
+      reason: "",
+      thread_id: "t-morning",
+    },
+  ],
+  waiting_count: 2,
+};
+
+test("alerts say whether they are waiting, missed or delivered, and link to their conversation", async ({
+  page,
+}) => {
+  await serve(page, { actions: [], readable: true, error: "" }, ALERTS);
+
+  await expect(
+    page.getByTestId("alerts-waiting").getByTestId("alert"),
+  ).toHaveCount(2);
+  await expect(
+    page.getByTestId("alerts-recent").getByTestId("alert"),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-testid="alert"][data-state="not-delivered"]'),
+  ).toContainText("held past 2h");
+  await expect(
+    page.locator('[data-testid="alert"][data-state="waiting"] a'),
+  ).toHaveAttribute("href", "/workspace/chats/t-blocked");
+});
+
+test("the Inbox badge counts confirmations plus waiting alerts", async ({
+  page,
+}) => {
+  await serve(page, { actions: [action()], readable: true, error: "" }, ALERTS);
+
+  await expect(page.getByTestId("inbox-badge")).toHaveText("3");
+});
+
+test("the badge says it cannot tell, rather than showing 0, when the pending set is unreadable", async ({
+  page,
+}) => {
+  await serve(
+    page,
+    { actions: [], readable: false, error: "store unreadable" },
+    NO_ALERTS,
+  );
+
+  await expect(page.getByTestId("inbox-badge")).toHaveAttribute(
+    "data-count",
+    "unknown",
+  );
+});
+
+test("nothing waiting shows no badge at all", async ({ page }) => {
+  await serve(page, { actions: [], readable: true, error: "" }, NO_ALERTS);
+
+  await expect(page.getByTestId("empty")).toBeVisible();
+  await expect(page.getByTestId("inbox-badge")).toHaveCount(0);
 });

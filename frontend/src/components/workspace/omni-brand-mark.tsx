@@ -1,7 +1,14 @@
 "use client";
 
+import { useId } from "react";
+
 import { cn } from "@/lib/utils";
 
+/**
+ * The OmniHarness mark: a ring with a node on its orbit (public/images/mark.svg,
+ * src/app/icon.svg). Drawn in the current text colour, so it follows the theme
+ * instead of being black on a dark sidebar.
+ */
 export function OmniBrandMark({
   className,
   animated = false,
@@ -11,27 +18,34 @@ export function OmniBrandMark({
   animated?: boolean;
   size?: "sm" | "md" | "lg";
 }) {
+  const cut = useId();
   const sizeClass =
-    size === "sm" ? "size-7" : size === "lg" ? "size-10" : "size-8";
-  const textClass =
-    size === "sm"
-      ? "text-[1.35rem]"
-      : size === "lg"
-        ? "text-[2rem]"
-        : "text-[1.7rem]";
-
+    size === "sm" ? "size-6" : size === "lg" ? "size-9" : "size-7";
   return (
-    <span
+    <svg
+      viewBox="0 0 100 100"
       aria-hidden="true"
       className={cn(
-        "inline-flex shrink-0 items-center justify-center font-semibold text-black select-none",
+        "text-foreground shrink-0",
         sizeClass,
-        textClass,
         animated && "transition-transform duration-300 ease-out",
         className,
       )}
     >
-      O
-    </span>
+      <mask id={cut}>
+        <rect width="100" height="100" fill="white" />
+        <circle cx="72" cy="28" r="17" fill="black" />
+      </mask>
+      <circle
+        cx="50"
+        cy="50"
+        r="31"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="11"
+        mask={`url(#${cut})`}
+      />
+      <circle cx="72" cy="28" r="11" fill="currentColor" />
+    </svg>
   );
 }

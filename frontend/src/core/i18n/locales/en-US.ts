@@ -173,12 +173,9 @@ export const enUS: Translations = {
     recentChats: "Recent chats",
     demoChats: "Demo chats",
     agents: "Agents",
-    mcpSuite: "MCP Suite",
-    confirmations: "Confirmations",
-    toolSources: "Tool sources",
-    sessions: "Coding sessions",
-    triggers: "Triggers",
-    policy: "Policy",
+    inbox: "Inbox",
+    automations: "Automations",
+    settings: "Settings",
   },
 
   // Agents
@@ -240,7 +237,7 @@ export const enUS: Translations = {
   workspace: {
     officialWebsite: "OmniHarness's official website",
     githubTooltip: "OmniHarness on Github",
-    settingsAndMore: "Settings and more",
+    settingsAndMore: "More",
     visitGithub: "OmniHarness on GitHub",
     reportIssue: "Report a issue",
     contactUs: "Contact us",

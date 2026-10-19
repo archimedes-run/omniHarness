@@ -44,6 +44,11 @@ class WatcherUnreachable(WatcherUnavailable):
     pass
 
 
+class WatcherTimedOut(WatcherUnreachable):
+    """It is there (the connection was made or pending) and did not answer in
+    time: busy, not down. A refused connection is plain WatcherUnreachable."""
+
+
 def _root_cause(exc: BaseException) -> BaseException:
     """The error worth reporting. The MCP client runs in a task group, so a
     refused connection arrives as 'ExceptionGroup: unhandled errors in a
@@ -88,7 +93,10 @@ class WatcherClient:
             result = await asyncio.wait_for(_call(), timeout=self.timeout)
         except Exception as exc:  # noqa: BLE001 — every failure here means "could not ask"
             cause = _root_cause(exc)
-            raise WatcherUnreachable(f"{url}: {type(cause).__name__}: {cause}") from exc
+            import httpx
+
+            kind = WatcherTimedOut if isinstance(cause, (TimeoutError, httpx.TimeoutException)) else WatcherUnreachable
+            raise kind(f"{url}: {type(cause).__name__}: {cause}") from exc
         if result.isError or not result.content:
             raise WatcherUnreachable(f"{url}: {tool} returned an error or no content")
         return json.loads(result.content[0].text)

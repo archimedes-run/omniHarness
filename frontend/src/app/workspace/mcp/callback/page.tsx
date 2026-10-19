@@ -37,7 +37,7 @@ export default function ComposioCallbackPage() {
                 );
                 window.close();
               } else {
-                router.push("/workspace/mcp");
+                router.push("/workspace/settings/connections");
               }
             }, 1500);
             return;
@@ -62,22 +62,22 @@ export default function ComposioCallbackPage() {
   if (state === "polling") {
     return (
       <div className="flex h-screen items-center justify-center">
-        <p className="text-stone-600">Completing connection to {toolkit}…</p>
+        <p className="text-muted-foreground">
+          Completing connection to {toolkit}…
+        </p>
       </div>
     );
   }
   if (state === "connected") {
     return (
       <div className="flex h-screen items-center justify-center">
-        <p className="text-emerald-600">
-          Connected! {account && `(${account})`}
-        </p>
+        <p className="text-success">Connected! {account && `(${account})`}</p>
       </div>
     );
   }
   return (
     <div className="flex h-screen items-center justify-center">
-      <p className="text-red-500">Connection failed. Please try again.</p>
+      <p className="text-destructive">Connection failed. Please try again.</p>
     </div>
   );
 }

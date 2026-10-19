@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { AgentWelcome } from "@/components/workspace/agent-welcome";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import { ChatBox, useThreadChat } from "@/components/workspace/chats";
+import { PendingConfirmations } from "@/components/workspace/confirmations/pending-confirmations";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
 import {
@@ -163,6 +164,13 @@ export default function AgentChatPage() {
                 hasMoreHistory={hasMoreHistory}
                 loadMoreHistory={loadMoreHistory}
                 isHistoryLoading={isHistoryLoading}
+                footer={
+                  // A Tier 3 action this thread stated, approved where it was
+                  // proposed: the same component and route as the Inbox.
+                  !isNewThread && (
+                    <PendingConfirmations threadId={threadId} quietWhenEmpty />
+                  )
+                }
                 tokenUsageInlineMode={tokenUsageInlineMode}
               />
             </div>

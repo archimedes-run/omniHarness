@@ -1,5 +1,6 @@
-import { WorkflowList } from "@/components/workspace/workflows/workflow-list";
+import { redirect } from "next/navigation";
 
-export default function WorkflowsPage() {
-  return <WorkflowList />;
+// Phase 2.5 navigation: Workflows are listed in Automations; their detail pages stay under /workspace/workflows/[id].
+export default function MovedPage() {
+  redirect("/workspace/automations");
 }

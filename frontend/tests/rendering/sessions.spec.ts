@@ -143,3 +143,22 @@ test("a summary that failed redaction shows as withheld, not as blank (FR-031, S
   await expect(page.getByTestId("withheld")).toBeVisible();
   await expect(page.getByTestId("withheld")).toContainText("Withheld");
 });
+
+test("a watcher that did not answer in time shows its last answer, labelled with its age", async ({
+  page,
+}) => {
+  await serve(page, {
+    ...LIVE,
+    reachable: false,
+    unreachable_kind: "unreachable",
+    unreachable_detail: "TimeoutError",
+    last_known_age_seconds: 40,
+  });
+
+  await expect(page.getByTestId("watcher-health")).toHaveAttribute(
+    "data-health",
+    "last-known",
+  );
+  await expect(page.getByTestId("watcher-health")).toContainText("40s ago");
+  await expect(page.getByTestId("session")).toHaveCount(2);
+});

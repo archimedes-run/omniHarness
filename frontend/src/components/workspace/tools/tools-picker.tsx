@@ -226,7 +226,7 @@ export function ToolsPicker({
               className={cn(
                 "rounded-full border px-2.5 py-1 text-xs transition-colors",
                 activeCategory === c
-                  ? "border-neutral-900 bg-neutral-900 text-white"
+                  ? "border-primary bg-primary text-primary-foreground"
                   : "text-muted-foreground border-border hover:bg-muted",
               )}
             >
@@ -292,7 +292,7 @@ export function ToolsPicker({
                   {needsConnect ? (
                     <Button
                       size="sm"
-                      className="bg-neutral-900 text-white hover:bg-neutral-800"
+                      className="bg-primary text-primary-foreground hover:bg-primary/90"
                       disabled={connecting === item.tool_id}
                       onClick={() => void connect(item)}
                     >

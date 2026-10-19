@@ -14,13 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-import {
-  createWorkflow,
-  getTemplates,
-  listRuns,
-  listWorkflows,
-  triggerRun,
-} from "./api";
+import { createWorkflow, getTemplates, listWorkflows, triggerRun } from "./api";
 import { CreateWorkflowModal } from "./create-workflow-modal";
 import type { Workflow, WorkflowRun, WorkflowTemplate } from "./types";
 import { WorkflowCard } from "./workflow-card";
@@ -58,19 +52,11 @@ export function WorkflowList() {
       setWorkflows(wfs);
       setTemplates(tpls);
 
-      // Fetch most recent run for each workflow
-      const runEntries = await Promise.all(
-        wfs.map(async (wf) => {
-          try {
-            const runs = await listRuns(wf.id);
-            // runs come newest-first from the backend
-            return [wf.id, runs[0] ?? null] as const;
-          } catch {
-            return [wf.id, null] as const;
-          }
-        }),
+      // The list carries each workflow's newest run. Fetching every run of
+      // every workflow here was one request per workflow (Phase 2.5).
+      setLastRuns(
+        Object.fromEntries(wfs.map((wf) => [wf.id, wf.last_run ?? null])),
       );
-      setLastRuns(Object.fromEntries(runEntries));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load workflows");
     } finally {

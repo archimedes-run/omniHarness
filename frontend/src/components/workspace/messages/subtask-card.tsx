@@ -46,7 +46,7 @@ export function SubtaskCard({
     if (task.status === "completed") {
       return <CheckCircleIcon className="size-3" />;
     } else if (task.status === "failed") {
-      return <XCircleIcon className="size-3 text-red-500" />;
+      return <XCircleIcon className="text-destructive size-3" />;
     } else if (task.status === "in_progress") {
       return <Loader2Icon className="size-3 animate-spin" />;
     }
@@ -96,7 +96,9 @@ export function SubtaskCard({
                   <div
                     className={cn(
                       "text-muted-foreground flex items-center gap-1 text-xs font-normal",
-                      task.status === "failed" ? "text-red-500 opacity-67" : "",
+                      task.status === "failed"
+                        ? "text-destructive opacity-67"
+                        : "",
                     )}
                   >
                     {icon}
@@ -166,8 +168,8 @@ export function SubtaskCard({
           )}
           {task.status === "failed" && (
             <ChainOfThoughtStep
-              label={<div className="text-red-500">{task.error}</div>}
-              icon={<XCircleIcon className="size-4 text-red-500" />}
+              label={<div className="text-destructive">{task.error}</div>}
+              icon={<XCircleIcon className="text-destructive size-4" />}
             ></ChainOfThoughtStep>
           )}
         </ChainOfThoughtContent>

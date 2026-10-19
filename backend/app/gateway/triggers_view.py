@@ -28,6 +28,11 @@ class RuleView(BaseModel):
     type: str
     enabled: bool
     match: dict
+    #: What the rule asks the assistant, where the answer goes, and whether it
+    #: may interrupt quiet hours: what the Automations edit form shows.
+    prompt: str = ""
+    destination: str = "auto"
+    urgent: bool = False
     activity: Activity
     last_evaluated_at: str | None = None
     last_evaluated: Recorded
@@ -59,13 +64,31 @@ class RulesView(BaseModel):
     engine_enabled: bool
     rules: list[RuleView]
     rules_error: str | None = None
+    #: Hash of the rule file's bytes. An edit names the version it was based
+    #: on, and is refused if the file changed since (no clobbered hand edits).
+    version: str | None = None
+    #: False when no rules_path is configured: the engine is running the
+    #: shipped defaults, which are not edited in place. `not_writable_reason`
+    #: says so, for the page to show instead of edit controls.
+    writable: bool = False
+    not_writable_reason: str | None = None
 
 
 class FiringsView(BaseModel):
     firings: list[FiringView]
 
 
-def describe_rules(*, rules: list, evaluated: dict[str, str | None], audit: list[dict], engine_enabled: bool, rules_error: str | None = None) -> RulesView:
+def describe_rules(
+    *,
+    rules: list,
+    evaluated: dict[str, str | None],
+    audit: list[dict],
+    engine_enabled: bool,
+    rules_error: str | None = None,
+    version: str | None = None,
+    writable: bool = False,
+    not_writable_reason: str | None = None,
+) -> RulesView:
     """Pure. `evaluated` maps rule id -> last evaluated ISO time (absent: no record)."""
     out = []
     for rule in rules:
@@ -90,6 +113,9 @@ def describe_rules(*, rules: list, evaluated: dict[str, str | None], audit: list
                 type=str(rule.type),
                 enabled=rule.enabled,
                 match=dict(rule.match),
+                prompt=rule.prompt,
+                destination=str(rule.destination),
+                urgent=rule.urgent,
                 activity=activity,
                 last_evaluated_at=stamp,
                 last_evaluated=recorded,
@@ -97,7 +123,7 @@ def describe_rules(*, rules: list, evaluated: dict[str, str | None], audit: list
                 last_outcome=last.get("outcome") if last else None,
             )
         )
-    return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error)
+    return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error, version=version, writable=writable, not_writable_reason=not_writable_reason)
 
 
 def describe_firings(audit: list[dict], *, limit: int = 200) -> FiringsView:

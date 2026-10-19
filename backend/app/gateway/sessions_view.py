@@ -48,8 +48,12 @@ class SessionsView(BaseModel):
     observability: str | None = None
     staleness_seconds: int | None = None
     as_of: str | None = None
-    #: None when the watcher could not be asked. Never [] for that.
+    #: None when the watcher could not be asked and there is no earlier answer.
+    #: Never [] for that.
     sessions: list[SessionRow] | None = None
+    #: Set when the watcher did not answer in time and `sessions` is its LAST
+    #: answer, this many seconds old. `reachable` is False alongside it.
+    last_known_age_seconds: int | None = None
     observe_only: bool = True
     observe_only_reason: str = OBSERVE_ONLY_REASON
 

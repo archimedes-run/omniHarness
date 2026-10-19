@@ -167,12 +167,9 @@ export const zhCN: Translations = {
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
-    mcpSuite: "MCP 套件",
-    confirmations: "待确认",
-    toolSources: "工具来源",
-    sessions: "编码会话",
-    triggers: "触发器",
-    policy: "权限策略",
+    inbox: "收件箱",
+    automations: "自动化",
+    settings: "设置",
   },
 
   // Agents
@@ -228,7 +225,7 @@ export const zhCN: Translations = {
   workspace: {
     officialWebsite: "访问 OmniHarness 官方网站",
     githubTooltip: "访问 OmniHarness 的 Github 仓库",
-    settingsAndMore: "设置和更多",
+    settingsAndMore: "更多",
     visitGithub: "在 Github 上查看 OmniHarness",
     reportIssue: "报告问题",
     contactUs: "联系我们",

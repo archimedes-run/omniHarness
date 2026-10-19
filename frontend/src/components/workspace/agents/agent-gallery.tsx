@@ -11,7 +11,7 @@ import { AgentCard } from "./agent-card";
 
 export function AgentGallery() {
   const { t } = useI18n();
-  const { agents, isLoading } = useAgents();
+  const { agents, isLoading, error, disabled } = useAgents();
   const router = useRouter();
 
   const handleNewAgent = () => {
@@ -39,6 +39,27 @@ export function AgentGallery() {
         {isLoading ? (
           <div className="text-muted-foreground flex h-40 items-center justify-center text-sm">
             {t.common.loading}
+          </div>
+        ) : disabled ? (
+          // Switched off is not the same as none: say which (honest absence).
+          <div
+            className="text-muted-foreground flex h-40 flex-col items-center justify-center gap-1 text-center text-sm"
+            data-testid="agents-disabled"
+          >
+            <p className="text-foreground font-medium">
+              Custom agents are turned off
+            </p>
+            <p>
+              Set <code>agents_api.enabled: true</code> in config.yaml to create
+              and manage them here.
+            </p>
+          </div>
+        ) : error ? (
+          <div
+            className="text-destructive flex h-40 items-center justify-center text-sm"
+            data-testid="agents-error"
+          >
+            {`Could not load agents: ${String(error)}`}
           </div>
         ) : agents.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">

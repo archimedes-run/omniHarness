@@ -106,6 +106,13 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         raise ConfigError(f"rule {rid!r}: match must be an object")
     if rtype is TriggerType.CRON and not match.get("schedule"):
         raise ConfigError(f"rule {rid!r}: a cron rule needs match.schedule")
+    if rtype is TriggerType.CRON:
+        # Checked at load, so an edit that breaks it is refused while the
+        # previous rules stay in force, instead of failing on every evaluation.
+        from croniter import croniter
+
+        if not croniter.is_valid(str(match["schedule"])):
+            raise ConfigError(f"rule {rid!r}: match.schedule {match['schedule']!r} is not a valid cron expression (minute hour day month weekday, e.g. '45 8 * * 1-5')")
     if rtype is TriggerType.CRON and match.get("timezone"):
         # Rejected at load, like any other invalid rule: an unknown zone would
         # otherwise raise on every evaluation, or worse, be read as UTC.

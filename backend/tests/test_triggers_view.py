@@ -8,7 +8,7 @@ from app.gateway.triggers_view import describe_firings, describe_rules
 
 
 def _rule(rid):
-    return SimpleNamespace(id=rid, type="cron", enabled=True, match={"schedule": "* * * * *"})
+    return SimpleNamespace(id=rid, type="cron", enabled=True, match={"schedule": "* * * * *"}, prompt="Brief me at {scheduled_at}.", destination="auto", urgent=False)
 
 
 def test_three_rule_conditions_are_distinct() -> None:

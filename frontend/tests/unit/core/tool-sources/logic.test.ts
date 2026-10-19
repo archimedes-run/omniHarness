@@ -20,20 +20,43 @@ function source(
 }
 
 describe("tool source states are distinct (FR-040)", () => {
-  it("gives every state its own label", () => {
-    const states: ToolSource["state"][] = [
+  // Phase 2.5: Settings → Connections names four statuses — Not configured,
+  // Off, Unreachable, Live — for both kinds, shown in separate sections. So a
+  // label is distinct within its kind, and every state's meaning is distinct.
+  it("gives every state of a kind its own label", () => {
+    const local: ToolSource["state"][] = [
       "live",
       "unreachable",
       "disabled",
       "not-configured",
       "not-loaded",
+    ];
+    const connector: ToolSource["state"][] = [
       "authorised",
       "authorised-selected",
       "authorised-not-selected",
       "not-authorised",
     ];
-    const labels = states.map((s) => describeState(source(s)).label);
-    expect(new Set(labels).size).toBe(states.length);
+    for (const states of [local, connector]) {
+      const labels = states.map((s) => describeState(source(s)).label);
+      expect(new Set(labels).size, labels.join(" | ")).toBe(states.length);
+    }
+    const all = [...local, ...connector];
+    const meanings = all.map((s) => describeState(source(s)).meaning);
+    expect(new Set(meanings).size).toBe(all.length);
+  });
+
+  it("uses the four Connections statuses", () => {
+    expect(describeState(source("live")).label).toBe("Live");
+    expect(describeState(source("disabled")).label).toBe("Off");
+    expect(describeState(source("unreachable")).label).toBe("Unreachable");
+    expect(describeState(source("not-configured")).label).toBe(
+      "Not configured",
+    );
+    expect(describeState(source("authorised")).label).toBe("Live");
+    expect(describeState(source("not-authorised")).label).toBe(
+      "Not configured",
+    );
   });
 
   it("marks only a failing source as a problem", () => {

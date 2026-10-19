@@ -12,6 +12,7 @@ hardware even when a full directory scan has been reintroduced.
 from __future__ import annotations
 
 import logging
+import time
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,6 +22,11 @@ from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+#: An unknown record type is logged at INFO the first time it is seen, then at
+#: most once per this interval with the count since. It was once logged per
+#: record, on every re-read of every file: 27,000 lines a minute.
+UNKNOWN_TYPE_LOG_INTERVAL_S = 600.0
 
 
 class SkipReason(StrEnum):
@@ -42,6 +48,10 @@ class SkipReason(StrEnum):
 @dataclass
 class RecordStats:
     records_opened: int = 0
+    #: Bytes actually read. An append must cost the appended bytes, not the file
+    #: (Gate 3, extended): re-reading an 85 MB transcript on every append held a
+    #: core at 100% and timed the gateway out.
+    bytes_read: int = 0
     records_skipped: int = 0
     candidates_considered: int = 0
     skips: Counter[str] = field(default_factory=Counter)
@@ -54,6 +64,7 @@ class RecordStats:
 
     def reset(self) -> None:
         self.records_opened = 0
+        self.bytes_read = 0
         self.records_skipped = 0
         self.candidates_considered = 0
         self.skips.clear()
@@ -72,6 +83,8 @@ class RecordSource:
 
     root: Path
     stats: RecordStats = field(default_factory=RecordStats)
+    _unknown_logged_at: dict[str, float] = field(default_factory=dict)
+    _unknown_since_log: Counter[str] = field(default_factory=Counter)
 
     def select_candidates(self, window: timedelta, *, now: datetime | None = None) -> list[Path]:
         """Filter by modification time BEFORE opening anything (FR-005d).
@@ -103,6 +116,20 @@ class RecordSource:
         finally:
             fh.close()
 
+    def read_from(self, path: Path, offset: int) -> bytes:
+        """Read a record file from `offset` to its current end. Counts as an open.
+
+        Binary, so offsets are byte positions a later call can resume from; the
+        caller decodes whole lines only, leaving a partial last line unread until
+        its newline arrives.
+        """
+        self.stats.records_opened += 1
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            data = fh.read()
+        self.stats.bytes_read += len(data)
+        return data
+
     def note_skip(
         self,
         reason: SkipReason,
@@ -117,7 +144,16 @@ class RecordSource:
         if reason is SkipReason.UNKNOWN_TYPE and raw_type:
             self.stats.unknown_types[raw_type] += 1
             # Louder than debug: a type we have never seen is the signal that the
-            # observed format moved. Everything else here is routine.
-            logger.info("unknown record type %r at %s:%d", raw_type, path, lineno)
+            # observed format moved. Everything else here is routine. Rate
+            # limited per type, so the signal stays readable.
+            self._unknown_since_log[raw_type] += 1
+            now = time.monotonic()
+            last = self._unknown_logged_at.get(raw_type)
+            if last is None or now - last >= UNKNOWN_TYPE_LOG_INTERVAL_S:
+                count = self._unknown_since_log.pop(raw_type)
+                self._unknown_logged_at[raw_type] = now
+                logger.info("unknown record type %r at %s:%d (%d occurrence(s) since last report)", raw_type, path, lineno, count)
+            else:
+                logger.debug("unknown record type %r at %s:%d", raw_type, path, lineno)
         else:
             logger.debug("skipping %s:%d — %s", path, lineno, reason)

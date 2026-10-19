@@ -4,7 +4,8 @@ export type WatcherHealth =
   | { kind: "live" }
   | { kind: "stale"; age: string }
   | { kind: "never-observed" }
-  | { kind: "cannot-see"; why: string };
+  | { kind: "cannot-see"; why: string }
+  | { kind: "last-known"; age: string };
 
 function age(seconds: number | null): string {
   if (seconds == null) return "an unknown time";
@@ -18,6 +19,14 @@ function age(seconds: number | null): string {
  * mean any of them and only one of them means "nothing is running".
  */
 export function watcherHealth(view: SessionsView): WatcherHealth {
+  // Busy, not down: it did not answer in time, and this is what it said last.
+  if (
+    !view.reachable &&
+    view.sessions != null &&
+    view.last_known_age_seconds != null
+  ) {
+    return { kind: "last-known", age: age(view.last_known_age_seconds) };
+  }
   if (!view.reachable) {
     const why =
       view.unreachable_kind === "not-configured"

@@ -42,7 +42,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { getAPIClient } from "@/core/api";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   exportThreadAsJSON,
@@ -52,8 +51,9 @@ import {
   useDeleteThread,
   useRenameThread,
   useThreads,
-} from "@/core/threads/hooks";
-import type { AgentThread, AgentThreadState } from "@/core/threads/types";
+} from "@/core/threads/queries";
+import { getThreadState } from "@/core/threads/rest";
+import type { AgentThread } from "@/core/threads/types";
 import { pathOfThread, titleOfThread } from "@/core/threads/utils";
 import { env } from "@/env";
 import { isIMEComposing } from "@/lib/ime";
@@ -138,10 +138,7 @@ export function RecentChatList() {
   const handleExport = useCallback(
     async (thread: AgentThread, format: "markdown" | "json") => {
       try {
-        const apiClient = getAPIClient();
-        const state = await apiClient.threads.getState<AgentThreadState>(
-          thread.thread_id,
-        );
+        const state = await getThreadState(thread.thread_id);
         const messages = state.values?.messages ?? [];
         if (messages.length === 0) {
           toast.error(t.conversation.noMessages);

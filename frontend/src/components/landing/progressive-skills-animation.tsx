@@ -350,7 +350,7 @@ export default function ProgressiveSkillsAnimation() {
               onClick={handlePlay}
               className="group flex flex-col items-center gap-4 transition-transform hover:scale-105 active:scale-95"
             >
-              <div className="flex h-24 w-24 items-center justify-center rounded-full bg-white/10 backdrop-blur-md transition-all group-hover:bg-white/20">
+              <div className="bg-card/10 group-hover:bg-card/20 flex h-24 w-24 items-center justify-center rounded-full backdrop-blur-md transition-all">
                 <Play
                   size={48}
                   className="ml-1 text-white transition-transform group-hover:scale-110"
@@ -372,7 +372,7 @@ export default function ProgressiveSkillsAnimation() {
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             onClick={handleTogglePlayPause}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-md transition-all hover:scale-110 hover:bg-white/20 active:scale-95"
+            className="bg-card/10 hover:bg-card/20 flex h-12 w-12 items-center justify-center rounded-full backdrop-blur-md transition-all hover:scale-110 active:scale-95"
           >
             {isPlaying ? (
               <Pause size={24} className="text-white" fill="white" />
@@ -403,7 +403,7 @@ export default function ProgressiveSkillsAnimation() {
                 key={`${item.name}-${index}`}
                 className={`flex items-center gap-3 text-lg font-medium transition-all duration-300 ${
                   item.done
-                    ? "text-green-500"
+                    ? "text-success"
                     : item.dragging
                       ? "translate-x-8 scale-105 text-blue-400"
                       : item.active
@@ -427,7 +427,7 @@ export default function ProgressiveSkillsAnimation() {
                     size={20}
                     className={
                       item.done
-                        ? "text-green-500"
+                        ? "text-success"
                         : item.highlight
                           ? "text-purple-400"
                           : ""
@@ -438,7 +438,7 @@ export default function ProgressiveSkillsAnimation() {
                     size={20}
                     className={
                       item.done
-                        ? "text-green-500"
+                        ? "text-success"
                         : item.highlight
                           ? "text-purple-400"
                           : ""
@@ -446,7 +446,7 @@ export default function ProgressiveSkillsAnimation() {
                   />
                 )}
                 <span>{item.name}</span>
-                {item.done && <Check size={16} className="text-green-500" />}
+                {item.done && <Check size={16} className="text-success" />}
                 {item.highlight && !item.done && (
                   <Sparkles size={16} className="text-purple-400" />
                 )}
@@ -460,7 +460,7 @@ export default function ProgressiveSkillsAnimation() {
           {/* Chat Header */}
           <div className="border-b border-zinc-800 p-4">
             <div className="flex items-center gap-2">
-              <div className="h-3 w-3 rounded-full bg-green-500" />
+              <div className="bg-success h-3 w-3 rounded-full" />
               <span className="text-sm text-zinc-400">OmniHarness Agent</span>
             </div>
           </div>
@@ -578,7 +578,7 @@ export default function ProgressiveSkillsAnimation() {
                               {step.type === "search" ? (
                                 <Search size={14} className="text-blue-400" />
                               ) : (
-                                <Globe size={14} className="text-green-400" />
+                                <Globe size={14} className="text-success" />
                               )}
                               <span className="truncate">{step.text}</span>
                             </motion.div>
@@ -603,7 +603,7 @@ export default function ProgressiveSkillsAnimation() {
                               {step.type === "search" ? (
                                 <Search size={14} className="text-blue-400" />
                               ) : (
-                                <Globe size={14} className="text-green-400" />
+                                <Globe size={14} className="text-success" />
                               )}
                               <span className="truncate">{step.text}</span>
                             </motion.div>
@@ -634,7 +634,7 @@ export default function ProgressiveSkillsAnimation() {
                             key={file}
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
-                            className="flex items-center gap-2 text-sm text-green-500"
+                            className="text-success flex items-center gap-2 text-sm"
                           >
                             <FileText size={14} />
                             <span>Generating {file}...</span>
@@ -674,9 +674,9 @@ export default function ProgressiveSkillsAnimation() {
                         <motion.div
                           initial={{ opacity: 0, scale: 0.9 }}
                           animate={{ opacity: 1, scale: 1 }}
-                          className="mt-4 rounded-xl border border-green-500/30 bg-green-500/10 p-4"
+                          className="border-success/30 bg-success/10 mt-4 rounded-xl border p-4"
                         >
-                          <div className="text-lg font-medium text-green-500">
+                          <div className="text-success text-lg font-medium">
                             ✅ Live at biotech-startup.vercel.app
                           </div>
                         </motion.div>

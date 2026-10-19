@@ -540,26 +540,26 @@ export function InputBox({
                 <PromptInputActionMenuTrigger className="gap-1! px-2!">
                   <div>
                     {context.mode === "flash" && (
-                      <ZapIcon className="size-3 text-emerald-500" />
+                      <ZapIcon className="text-success size-3" />
                     )}
                     {context.mode === "thinking" && (
-                      <LightbulbIcon className="size-3 text-yellow-400" />
+                      <LightbulbIcon className="text-warning size-3" />
                     )}
                     {context.mode === "pro" && (
-                      <GraduationCapIcon className="size-3 text-orange-500" />
+                      <GraduationCapIcon className="text-warning size-3" />
                     )}
                     {context.mode === "ultra" && (
-                      <RocketIcon className="size-3 text-red-500 [filter:drop-shadow(0_0_5px_rgb(239_68_68/0.85))]" />
+                      <RocketIcon className="text-destructive size-3 [filter:drop-shadow(0_0_5px_rgb(239_68_68/0.85))]" />
                     )}
                   </div>
                   <div
                     className={cn(
                       "text-xs font-normal",
-                      context.mode === "flash" && "text-emerald-600",
-                      context.mode === "thinking" && "text-yellow-500",
-                      context.mode === "pro" && "text-orange-500",
+                      context.mode === "flash" && "text-success",
+                      context.mode === "thinking" && "text-warning",
+                      context.mode === "pro" && "text-warning",
                       context.mode === "ultra" &&
-                        "text-red-500 [text-shadow:0_0_8px_rgb(239_68_68/0.55)]",
+                        "text-destructive [text-shadow:0_0_8px_rgb(239_68_68/0.55)]",
                     )}
                   >
                     {(context.mode === "flash" && t.inputBox.flashMode) ||
@@ -579,7 +579,7 @@ export function InputBox({
                     <PromptInputActionMenuItem
                       className={cn(
                         context.mode === "flash"
-                          ? "text-emerald-700"
+                          ? "text-success"
                           : "text-muted-foreground/65",
                       )}
                       onSelect={() => handleModeSelect("flash")}
@@ -590,7 +590,7 @@ export function InputBox({
                             className={cn(
                               "mr-2 size-4",
                               context.mode === "flash"
-                                ? "text-emerald-500"
+                                ? "text-success"
                                 : "text-muted-foreground/60",
                             )}
                           />
@@ -610,7 +610,7 @@ export function InputBox({
                       <PromptInputActionMenuItem
                         className={cn(
                           context.mode === "thinking"
-                            ? "text-yellow-600"
+                            ? "text-warning"
                             : "text-muted-foreground/65",
                         )}
                         onSelect={() => handleModeSelect("thinking")}
@@ -621,7 +621,7 @@ export function InputBox({
                               className={cn(
                                 "mr-2 size-4",
                                 context.mode === "thinking"
-                                  ? "text-yellow-400"
+                                  ? "text-warning"
                                   : "text-muted-foreground",
                               )}
                             />
@@ -641,7 +641,7 @@ export function InputBox({
                     <PromptInputActionMenuItem
                       className={cn(
                         context.mode === "pro"
-                          ? "text-orange-600"
+                          ? "text-warning"
                           : "text-muted-foreground/65",
                       )}
                       onSelect={() => handleModeSelect("pro")}
@@ -652,7 +652,7 @@ export function InputBox({
                             className={cn(
                               "mr-2 size-4",
                               context.mode === "pro"
-                                ? "text-orange-500"
+                                ? "text-warning"
                                 : "text-muted-foreground/60",
                             )}
                           />
@@ -671,7 +671,7 @@ export function InputBox({
                     <PromptInputActionMenuItem
                       className={cn(
                         context.mode === "ultra"
-                          ? "text-red-600"
+                          ? "text-destructive"
                           : "text-muted-foreground/65",
                       )}
                       onSelect={() => handleModeSelect("ultra")}
@@ -682,14 +682,14 @@ export function InputBox({
                             className={cn(
                               "mr-2 size-4",
                               context.mode === "ultra"
-                                ? "text-red-500 [filter:drop-shadow(0_0_7px_rgb(239_68_68/0.9))]"
+                                ? "text-destructive [filter:drop-shadow(0_0_7px_rgb(239_68_68/0.9))]"
                                 : "text-muted-foreground/60",
                             )}
                           />
                           <div
                             className={cn(
                               context.mode === "ultra" &&
-                                "text-red-500 [text-shadow:0_0_10px_rgb(239_68_68/0.6)]",
+                                "text-destructive [text-shadow:0_0_10px_rgb(239_68_68/0.6)]",
                             )}
                           >
                             {t.inputBox.ultraMode}

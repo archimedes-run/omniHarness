@@ -27,10 +27,9 @@ import { fetch as apiFetch } from "@/core/api/fetcher";
 import {
   disconnectComposioToolkit,
   getComposioCatalog,
-  getComposioConnectionStatus,
-  initiateComposioConnection,
   listComposioConnections,
 } from "@/core/mcp/api";
+import { connectComposioToolkit } from "@/core/mcp/connect";
 import {
   type ComposioConnection,
   type ComposioToolkit,
@@ -57,11 +56,13 @@ type MyMcp = {
 function langTagClass(language: string | null): string {
   switch ((language ?? "").toLowerCase()) {
     case "typescript":
-      return "bg-blue-50 text-blue-700 border-blue-200";
+      return "bg-highlight/10 text-highlight border-highlight/30";
     case "python":
-      return "bg-yellow-50 text-yellow-700 border-yellow-200";
+      // Amber, as Python's tag always was: the warning token is the theme's
+      // amber, not a statement that something is wrong.
+      return "bg-warning/10 text-warning border-warning/30";
     default:
-      return "bg-stone-50 text-stone-600 border-stone-200";
+      return "bg-muted text-muted-foreground border-border";
   }
 }
 
@@ -70,26 +71,27 @@ function langTagClass(language: string | null): string {
 function statusBadgeClass(status: McpStatus | string) {
   switch (status) {
     case "deployed":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      return "border-success/30 bg-success/10 text-success";
     case "starting":
-      return "border-amber-200 bg-amber-50 text-amber-700";
+      return "border-warning/30 bg-warning/10 text-warning";
     case "failed":
-      return "border-red-200 bg-red-50 text-red-700";
+      return "border-destructive/30 bg-destructive/10 text-destructive";
     default:
-      return "border-purple-200 bg-purple-50 text-purple-700";
+      // Stopped or not running: a neutral state, shown neutrally.
+      return "border-border bg-muted text-muted-foreground";
   }
 }
 
 function statusDot(status: McpStatus | string) {
   switch (status) {
     case "deployed":
-      return "bg-emerald-500";
+      return "bg-success";
     case "starting":
-      return "bg-amber-400";
+      return "bg-warning";
     case "failed":
-      return "bg-red-500";
+      return "bg-destructive";
     default:
-      return "bg-purple-400";
+      return "bg-muted-foreground";
   }
 }
 
@@ -195,19 +197,19 @@ function MyMcpsTab() {
 
       {/* Agent-built servers heading */}
       <div className="flex flex-col gap-4">
-        <h2 className="text-sm font-semibold text-stone-700">
+        <h2 className="text-foreground text-sm font-semibold">
           Agent-Built Servers
         </h2>
         {/* Filters */}
         <div className="flex items-center gap-3">
           <div className="relative flex-1">
-            <SearchIcon className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-stone-400" />
+            <SearchIcon className="text-muted-foreground absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
             <input
               type="text"
               placeholder="Search your MCPs..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-lg border border-stone-200 bg-white py-2 pr-3 pl-9 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none"
+              className="border-border bg-card text-foreground placeholder:text-muted-foreground focus:border-input w-full rounded-lg border py-2 pr-3 pl-9 text-sm focus:outline-none"
             />
           </div>
           <select
@@ -215,7 +217,7 @@ function MyMcpsTab() {
             onChange={(e) =>
               setStatusFilter(e.target.value as McpStatus | "all")
             }
-            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 focus:border-stone-400 focus:outline-none"
+            className="border-border bg-card text-foreground focus:border-input rounded-lg border px-3 py-2 text-sm focus:outline-none"
           >
             <option value="all">All Statuses</option>
             <option value="deployed">Deployed</option>
@@ -227,33 +229,33 @@ function MyMcpsTab() {
         </div>
 
         {/* Table */}
-        <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+        <div className="border-border bg-card overflow-hidden rounded-xl border">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-stone-100 bg-stone-50/60">
-                <th className="px-5 py-3 text-left text-xs font-medium tracking-wide text-stone-500">
+              <tr className="border-border bg-muted/60 border-b">
+                <th className="text-muted-foreground px-5 py-3 text-left text-xs font-medium tracking-wide">
                   Name &amp; Description
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-medium tracking-wide text-stone-500">
+                <th className="text-muted-foreground px-5 py-3 text-left text-xs font-medium tracking-wide">
                   Status
                 </th>
-                <th className="hidden px-5 py-3 text-left text-xs font-medium tracking-wide text-stone-500 md:table-cell">
+                <th className="text-muted-foreground hidden px-5 py-3 text-left text-xs font-medium tracking-wide md:table-cell">
                   Created
                 </th>
-                <th className="hidden px-5 py-3 text-left text-xs font-medium tracking-wide text-stone-500 lg:table-cell">
+                <th className="text-muted-foreground hidden px-5 py-3 text-left text-xs font-medium tracking-wide lg:table-cell">
                   Updated
                 </th>
-                <th className="px-5 py-3 text-right text-xs font-medium tracking-wide text-stone-500">
+                <th className="text-muted-foreground px-5 py-3 text-right text-xs font-medium tracking-wide">
                   Actions
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-stone-100">
+            <tbody className="divide-border divide-y">
               {loading ? (
                 <tr>
                   <td
                     colSpan={5}
-                    className="px-5 py-12 text-center text-sm text-stone-400"
+                    className="text-muted-foreground px-5 py-12 text-center text-sm"
                   >
                     Loading…
                   </td>
@@ -262,7 +264,7 @@ function MyMcpsTab() {
                 <tr>
                   <td
                     colSpan={5}
-                    className="px-5 py-12 text-center text-sm text-red-400"
+                    className="text-destructive px-5 py-12 text-center text-sm"
                   >
                     {error}
                   </td>
@@ -271,7 +273,7 @@ function MyMcpsTab() {
                 <tr>
                   <td
                     colSpan={5}
-                    className="px-5 py-12 text-center text-sm text-stone-400"
+                    className="text-muted-foreground px-5 py-12 text-center text-sm"
                   >
                     {search || statusFilter !== "all"
                       ? "No MCPs match your search."
@@ -282,13 +284,13 @@ function MyMcpsTab() {
                 servers.map((mcp) => (
                   <tr
                     key={mcp.id}
-                    className="group cursor-pointer hover:bg-stone-50/60"
+                    className="group hover:bg-muted/60 cursor-pointer"
                     onClick={() => router.push(`/workspace/mcp/${mcp.id}`)}
                   >
                     <td className="px-5 py-4">
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-stone-900">
+                          <span className="text-foreground text-sm font-medium">
                             {mcp.name}
                           </span>
                           {mcp.language && (
@@ -303,7 +305,7 @@ function MyMcpsTab() {
                           )}
                         </div>
                         {mcp.description && (
-                          <p className="max-w-xs text-xs leading-relaxed text-stone-500">
+                          <p className="text-muted-foreground max-w-xs text-xs leading-relaxed">
                             {mcp.description}
                           </p>
                         )}
@@ -312,10 +314,10 @@ function MyMcpsTab() {
                     <td className="px-5 py-4">
                       <StatusBadge status={mcp.status} />
                     </td>
-                    <td className="hidden px-5 py-4 text-sm text-stone-500 md:table-cell">
+                    <td className="text-muted-foreground hidden px-5 py-4 text-sm md:table-cell">
                       {formatDate(mcp.created_at)}
                     </td>
-                    <td className="hidden px-5 py-4 text-sm text-stone-500 lg:table-cell">
+                    <td className="text-muted-foreground hidden px-5 py-4 text-sm lg:table-cell">
                       {formatDate(mcp.updated_at)}
                     </td>
                     <td
@@ -333,7 +335,7 @@ function MyMcpsTab() {
                           <button
                             key={label}
                             title={label}
-                            className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+                            className="text-muted-foreground hover:bg-muted hover:text-foreground rounded p-1.5 transition-colors"
                           >
                             <Icon className="size-3.5" />
                           </button>
@@ -344,14 +346,14 @@ function MyMcpsTab() {
                               title="Confirm delete"
                               onClick={() => void handleDelete(mcp.id)}
                               disabled={deletingId === mcp.id}
-                              className="rounded px-2 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50"
+                              className="text-destructive hover:bg-destructive/10 rounded px-2 py-1 text-[11px] font-medium"
                             >
                               {deletingId === mcp.id ? "…" : "Delete?"}
                             </button>
                             <button
                               title="Cancel"
                               onClick={() => setConfirmDeleteId(null)}
-                              className="rounded p-1.5 text-stone-400 hover:bg-stone-100"
+                              className="text-muted-foreground hover:bg-muted rounded p-1.5"
                             >
                               ✕
                             </button>
@@ -360,7 +362,7 @@ function MyMcpsTab() {
                           <button
                             title="Delete"
                             onClick={() => setConfirmDeleteId(mcp.id)}
-                            className="rounded p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive rounded p-1.5 transition-colors"
                           >
                             <Trash2Icon className="size-3.5" />
                           </button>
@@ -409,16 +411,16 @@ function ConnectedToolkitsSection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold text-stone-700">
+      <h2 className="text-foreground text-sm font-semibold">
         Connected Toolkits
       </h2>
       <div className="flex flex-wrap gap-3">
         {connections.map((conn) => (
           <div
             key={conn.toolkit}
-            className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3"
+            className="border-border bg-card flex items-center gap-3 rounded-xl border px-4 py-3"
           >
-            <div className="flex size-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+            <div className="bg-success/10 text-success flex size-8 items-center justify-center rounded-lg">
               {conn.status === "connected" ? (
                 <CheckCircle2Icon className="size-4" />
               ) : (
@@ -426,10 +428,10 @@ function ConnectedToolkitsSection() {
               )}
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-stone-900">
+              <span className="text-foreground text-sm font-medium">
                 {conn.toolkit}
               </span>
-              <span className="text-xs text-stone-500">
+              <span className="text-muted-foreground text-xs">
                 {conn.status === "connected"
                   ? (conn.account_display ?? "Connected")
                   : "Connecting…"}
@@ -485,70 +487,18 @@ function ConnectionsTab() {
     async (toolkit: string) => {
       setBusy(toolkit);
       try {
-        const callbackUrl = `${window.location.origin}/workspace/mcp/callback?toolkit=${toolkit}`;
-        const result = await initiateComposioConnection(toolkit, callbackUrl);
-
-        if ("status" in result && result.status === "already_connected") {
-          await refreshCatalog();
-          return;
-        }
-
-        // Mark as pending locally for immediate feedback.
-        setToolkits((prev) =>
-          prev.map((t) =>
-            t.slug === toolkit ? { ...t, status: "pending" } : t,
-          ),
-        );
-
-        const popup = window.open(
-          (result as { composio_redirect_url: string }).composio_redirect_url,
-          "composio_oauth",
-          "width=600,height=700",
-        );
-
-        // connect.composio.dev sends Cross-Origin-Opener-Policy headers that
-        // sever the opener-popup link, making popup.closed inaccessible.
-        // Poll our own API instead — it auto-syncs from Composio when pending.
-        const poll = {
-          timer: undefined as ReturnType<typeof setInterval> | undefined,
-        };
-
-        const handler = (ev: MessageEvent) => {
-          const data = ev.data as { type?: string; toolkit?: string } | null;
-          if (
-            data?.type === "composio_connected" &&
-            data?.toolkit === toolkit
-          ) {
-            clearInterval(poll.timer);
-            window.removeEventListener("message", handler);
-            popup?.close();
-            void refreshCatalog();
-          }
-        };
-        window.addEventListener("message", handler);
-
-        let pollAttempts = 0;
-        poll.timer = setInterval(() => {
-          pollAttempts++;
-          void (async () => {
-            try {
-              const status = await getComposioConnectionStatus(toolkit);
-              if (status.status === "active" || status.status === "connected") {
-                clearInterval(poll.timer);
-                window.removeEventListener("message", handler);
-                popup?.close();
-                void refreshCatalog();
-                return;
-              }
-            } catch {
-              /* retry on transient error */
-            }
-            if (pollAttempts >= 40) {
-              clearInterval(poll.timer);
-              window.removeEventListener("message", handler);
-            }
-          })();
-        }, 2000);
+        // Mark as pending locally for immediate feedback while OAuth runs;
+        // the button is busy only until the popup opens, as before.
+        const outcome = connectComposioToolkit(toolkit, () => {
+          setBusy(null);
+          setToolkits((prev) =>
+            prev.map((t) =>
+              t.slug === toolkit ? { ...t, status: "pending" } : t,
+            ),
+          );
+        });
+        await outcome;
+        await refreshCatalog();
       } catch (err: unknown) {
         setError(
           err instanceof Error ? err.message : "Failed to start connection",
@@ -583,7 +533,7 @@ function ConnectionsTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-sm text-stone-500">
+      <p className="text-muted-foreground text-sm">
         Connect your accounts with one click. OmniHarness uses Composio to
         handle OAuth securely — tools become available to the agent immediately.
       </p>
@@ -597,8 +547,8 @@ function ConnectionsTab() {
             className={cn(
               "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
               activeCategory === cat
-                ? "border-stone-900 bg-stone-900 text-white"
-                : "border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50",
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-muted-foreground hover:border-input hover:bg-muted",
             )}
           >
             {cat}
@@ -607,13 +557,13 @@ function ConnectionsTab() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-xs text-red-600">
+        <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border px-4 py-2 text-xs">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="py-12 text-center text-sm text-stone-400">
+        <div className="text-muted-foreground py-12 text-center text-sm">
           Loading connectors…
         </div>
       ) : (
@@ -621,30 +571,30 @@ function ConnectionsTab() {
           {filtered.map((tk) => (
             <div
               key={tk.slug}
-              className="group flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-5 transition-shadow hover:shadow-md hover:shadow-stone-100"
+              className="group border-border bg-card flex flex-col gap-3 rounded-xl border p-5 transition-shadow hover:shadow-md"
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="flex size-10 items-center justify-center overflow-hidden rounded-xl border border-stone-100 bg-stone-50">
+                  <div className="border-border bg-muted flex size-10 items-center justify-center overflow-hidden rounded-xl border">
                     <IntegrationIcon slug={tk.slug} size={24} label={tk.name} />
                   </div>
                   <div>
-                    <p className="text-sm font-semibold text-stone-900">
+                    <p className="text-foreground text-sm font-semibold">
                       {tk.name}
                     </p>
                     {tk.status === "connected" && tk.account_display && (
-                      <p className="text-[11px] text-stone-400">
+                      <p className="text-muted-foreground text-[11px]">
                         {tk.account_display}
                       </p>
                     )}
                   </div>
                 </div>
-                <span className="rounded-full border border-stone-100 bg-stone-50 px-2 py-0.5 text-[10px] text-stone-500">
+                <span className="border-border bg-muted text-muted-foreground rounded-full border px-2 py-0.5 text-[10px]">
                   {tk.category}
                 </span>
               </div>
 
-              <p className="text-xs leading-relaxed text-stone-500">
+              <p className="text-muted-foreground text-xs leading-relaxed">
                 {tk.description}
               </p>
 
@@ -663,20 +613,20 @@ function ConnectionsTab() {
                       </Button>
                       <button
                         onClick={() => setConfirmDisconnect(null)}
-                        className="rounded-lg border border-stone-200 px-2 py-1 text-xs text-stone-500 hover:bg-stone-50"
+                        className="border-border text-muted-foreground hover:bg-muted rounded-lg border px-2 py-1 text-xs"
                       >
                         Cancel
                       </button>
                     </div>
                   ) : (
                     <div className="flex flex-1 items-center gap-2">
-                      <span className="flex flex-1 items-center gap-1.5 text-xs font-medium text-emerald-600">
+                      <span className="text-success flex flex-1 items-center gap-1.5 text-xs font-medium">
                         <CheckCircle2Icon className="size-3.5" />
                         Connected
                       </span>
                       <button
                         onClick={() => setConfirmDisconnect(tk.slug)}
-                        className="rounded-lg border border-stone-200 px-2.5 py-1 text-xs text-stone-500 hover:bg-red-50 hover:text-red-500"
+                        className="border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive rounded-lg border px-2.5 py-1 text-xs"
                       >
                         Disconnect
                       </button>
@@ -726,10 +676,10 @@ export function McpSuite() {
   return (
     <div className="flex size-full flex-col">
       {/* Page header */}
-      <div className="flex items-center justify-between border-b border-stone-200 px-6 py-4">
+      <div className="border-border flex items-center justify-between border-b px-6 py-4">
         <div>
-          <h1 className="text-xl font-semibold text-stone-900">MCP Suite</h1>
-          <p className="mt-0.5 text-sm text-stone-500">
+          <h1 className="text-foreground text-xl font-semibold">MCP Suite</h1>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             Build, deploy, and connect MCP servers that give the agent new
             capabilities at runtime.
           </p>
@@ -743,7 +693,7 @@ export function McpSuite() {
       </div>
 
       {/* Stats banner */}
-      <div className="flex items-stretch border-b border-stone-100 bg-white">
+      <div className="border-border bg-card flex items-stretch border-b">
         {[
           {
             value: "Agent-built",
@@ -765,22 +715,22 @@ export function McpSuite() {
             key={value}
             className={cn(
               "flex flex-1 items-center justify-center gap-3 py-5",
-              i !== 2 && "border-r border-stone-100",
+              i !== 2 && "border-border border-r",
             )}
           >
-            <div className="flex size-8 items-center justify-center rounded-lg bg-stone-100">
-              <Icon className="size-4 text-stone-700" />
+            <div className="bg-muted flex size-8 items-center justify-center rounded-lg">
+              <Icon className="text-foreground size-4" />
             </div>
             <div>
-              <p className="text-base font-bold text-stone-900">{value}</p>
-              <p className="text-xs text-stone-400">{label}</p>
+              <p className="text-foreground text-base font-bold">{value}</p>
+              <p className="text-muted-foreground text-xs">{label}</p>
             </div>
           </div>
         ))}
       </div>
 
       {/* Tab bar */}
-      <div className="flex items-center gap-1 border-b border-stone-200 bg-white px-6 pt-4">
+      <div className="border-border bg-card flex items-center gap-1 border-b px-6 pt-4">
         {[
           { id: "mine" as const, label: "My MCPs", icon: BoxIcon },
           {
@@ -795,8 +745,8 @@ export function McpSuite() {
             className={cn(
               "flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors",
               tab === id
-                ? "border-b-2 border-stone-900 text-stone-900"
-                : "text-stone-500 hover:text-stone-700",
+                ? "border-foreground text-foreground border-b-2"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <Icon className="size-3.5" />
@@ -806,7 +756,7 @@ export function McpSuite() {
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-y-auto bg-stone-50/40 p-6">
+      <div className="bg-muted/40 flex-1 overflow-y-auto p-6">
         {tab === "mine" ? <MyMcpsTab /> : <ConnectionsTab />}
       </div>
     </div>

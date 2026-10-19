@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -109,6 +109,27 @@ class WorkflowRunRepository:
         async with self._sf() as session:
             result = await session.execute(stmt)
             return [r.to_dict() for r in result.scalars()]
+
+    async def latest_by_workflows(self, workflow_ids: list[str]) -> dict[str, dict]:
+        """The newest run of each workflow, in one query.
+
+        The workflow list used to fetch every run of every workflow to show one
+        line per workflow: one request per workflow (16 on a real page).
+        """
+        if not workflow_ids:
+            return {}
+        ranked = (
+            select(
+                WorkflowRunRow.id.label("id"),
+                func.row_number().over(partition_by=WorkflowRunRow.workflow_id, order_by=WorkflowRunRow.created_at.desc()).label("rank"),
+            )
+            .where(WorkflowRunRow.workflow_id.in_(workflow_ids))
+            .subquery()
+        )
+        stmt = select(WorkflowRunRow).join(ranked, ranked.c.id == WorkflowRunRow.id).where(ranked.c.rank == 1)
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return {r.workflow_id: r.to_dict() for r in result.scalars()}
 
     async def transition_status(self, run_id: str, new_status: str) -> dict:
         """Transition a WorkflowRun to new_status, enforcing legal transitions.

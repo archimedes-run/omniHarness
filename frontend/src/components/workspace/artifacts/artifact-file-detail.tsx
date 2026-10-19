@@ -18,6 +18,7 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import {
   Component,
   type ReactNode,
@@ -47,7 +48,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { CodeEditor } from "@/components/workspace/code-editor";
 import type { ArtifactManifest, ProjectFileEntry } from "@/core/artifacts/api";
 import {
   useArtifactContent,
@@ -85,19 +85,32 @@ type PreviewStatus = "starting" | "running" | "failed" | "stopped";
 function statusBadgeClass(status: PreviewStatus | "not running" | undefined) {
   switch (status) {
     case "running":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      return "border-success/30 bg-success/10 text-success";
     case "starting":
-      return "border-amber-200 bg-amber-50 text-amber-700";
+      return "border-warning/30 bg-warning/10 text-warning";
     case "failed":
-      return "border-red-200 bg-red-50 text-red-700";
+      return "border-destructive/30 bg-destructive/10 text-destructive";
     case "stopped":
     case "not running":
     default:
-      return "border-purple-200 bg-purple-50 text-purple-700";
+      // Stopped or not running: a neutral state, shown neutrally.
+      return "border-border bg-muted text-muted-foreground";
   }
 }
 
 import { useArtifacts } from "./context";
+
+// codemirror is ~470 KB; it loads when an artifact's editor is shown, not with
+// every chat page (Phase 2.5).
+const CodeEditor = dynamic(
+  () => import("@/components/workspace/code-editor").then((m) => m.CodeEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-muted-foreground p-4 text-sm">Loading editor…</div>
+    ),
+  },
+);
 
 class ArtifactErrorBoundary extends Component<
   { children: ReactNode },

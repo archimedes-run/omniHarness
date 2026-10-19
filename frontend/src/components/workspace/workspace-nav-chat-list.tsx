@@ -1,16 +1,6 @@
 "use client";
 
-import {
-  BotIcon,
-  BoxIcon,
-  CodeIcon,
-  GitBranchIcon,
-  MessagesSquare,
-  PlugIcon,
-  ScaleIcon,
-  ShieldQuestionIcon,
-  ZapIcon,
-} from "lucide-react";
+import { BotIcon, InboxIcon, MessagesSquare, ZapIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -21,21 +11,20 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { usePendingConfirmations } from "@/core/confirmations/hooks";
 import { useI18n } from "@/core/i18n/hooks";
-import { useToolSources } from "@/core/tool-sources/hooks";
+import { useInboxCount } from "@/core/inbox/hooks";
 
+/**
+ * The sidebar (Phase 2.5): New chat (in the header) · Chats · Inbox ·
+ * Automations · Agents, and Settings in the footer. Projects and Today arrive
+ * with Feature 005. Coding sessions keep their route, off the sidebar.
+ */
 export function WorkspaceNavChatList() {
   const { t } = useI18n();
   const pathname = usePathname();
-  const { pending } = usePendingConfirmations();
-  // Only a real count. An unreadable pending set must not render as "0
-  // waiting" — that is the same collapse the surface itself refuses to make.
-  const waiting = pending?.readable ? pending.actions.length : null;
-  // FR-041: a source that failed to load reaches the user here, rather than
-  // waiting for them to open the page.
-  const { view: sources } = useToolSources();
-  const failing = sources?.failing ?? 0;
+  // Pending confirmations plus alerts waiting or missed. Null when either
+  // cannot be read: a "0" would claim nothing is waiting (FR-008).
+  const waiting = useInboxCount();
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
@@ -44,6 +33,43 @@ export function WorkspaceNavChatList() {
             <Link className="text-inherit" href="/workspace/chats">
               <MessagesSquare />
               <span>{t.sidebar.chats}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/inbox")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/inbox">
+              <InboxIcon />
+              <span>{t.sidebar.inbox}</span>
+            </Link>
+          </SidebarMenuButton>
+          {waiting === null ? (
+            <SidebarMenuBadge
+              data-testid="inbox-badge"
+              data-count="unknown"
+              title="Cannot tell what is waiting"
+            >
+              ?
+            </SidebarMenuBadge>
+          ) : (
+            waiting > 0 && (
+              <SidebarMenuBadge data-testid="inbox-badge" data-count={waiting}>
+                {waiting}
+              </SidebarMenuBadge>
+            )
+          )}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/automations")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/automations">
+              <ZapIcon />
+              <span>{t.sidebar.automations}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -58,97 +84,6 @@ export function WorkspaceNavChatList() {
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/mcp")}
-            asChild
-          >
-            <Link className="text-inherit" href="/workspace/mcp">
-              <BoxIcon />
-              <span>{t.sidebar.mcpSuite}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/confirmations")}
-            asChild
-          >
-            <Link className="text-inherit" href="/workspace/confirmations">
-              <ShieldQuestionIcon />
-              <span>{t.sidebar.confirmations}</span>
-            </Link>
-          </SidebarMenuButton>
-          {/* The count is the point. Not knowing something was waiting is what
-              made a stuck action cost an interruption rather than a click. */}
-          {waiting !== null && waiting > 0 && (
-            <SidebarMenuBadge data-testid="pending-count">
-              {waiting}
-            </SidebarMenuBadge>
-          )}
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/policy")}
-            asChild
-          >
-            <Link className="text-inherit" href="/workspace/policy">
-              <ScaleIcon />
-              <span>{t.sidebar.policy}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/triggers")}
-            asChild
-          >
-            <Link className="text-inherit" href="/workspace/triggers">
-              <ZapIcon />
-              <span>{t.sidebar.triggers}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/sessions")}
-            asChild
-          >
-            <Link className="text-inherit" href="/workspace/sessions">
-              <CodeIcon />
-              <span>{t.sidebar.sessions}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/tool-sources")}
-            asChild
-          >
-            <Link className="text-inherit" href="/workspace/tool-sources">
-              <PlugIcon />
-              <span>{t.sidebar.toolSources}</span>
-            </Link>
-          </SidebarMenuButton>
-          {failing > 0 && (
-            <SidebarMenuBadge data-testid="failing-sources">
-              {failing}
-            </SidebarMenuBadge>
-          )}
-        </SidebarMenuItem>
-        {process.env.NEXT_PUBLIC_FEATURE_WORKFLOWS === "true" && (
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              isActive={pathname.startsWith("/workspace/workflows")}
-              asChild
-            >
-              <Link className="text-inherit" href="/workspace/workflows">
-                <GitBranchIcon />
-                <span>Workflows</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        )}
       </SidebarMenu>
     </SidebarGroup>
   );

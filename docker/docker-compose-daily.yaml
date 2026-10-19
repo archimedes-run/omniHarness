@@ -1,0 +1,29 @@
+# `make daily`: the stack for day-to-day use.
+#
+# Layered on docker-compose-dev.yaml, so the gateway, session watcher, nginx and
+# all data (backend/.omni-harness, config.yaml, extensions/) are exactly the dev
+# stack's. Only the frontend changes: a production build (`next build`, served
+# by `next start`) instead of `next dev`.
+#
+# Why (Phase 2.5, measured): `next dev` compiles each route on first visit
+# (4-25 s), sat at 2.6 GiB at boot, and its on-disk cache grew to 4 GB and was
+# OOM-killed in a loop on a 7.75 GiB Docker VM. The production build serves
+# every page in well under a second and needs a few hundred MB.
+#
+# Dev mode stays for frontend work: `make daily-dev` puts the dev frontend back.
+services:
+  frontend:
+    image: omni-harness-dev-frontend-daily
+    build:
+      target: prod
+      args:
+        # NEXT_PUBLIC_* values are compiled into the bundle, so they are build
+        # arguments here, read from the root .env.
+        NEXT_PUBLIC_FEATURE_WORKFLOWS: ${NEXT_PUBLIC_FEATURE_WORKFLOWS:-}
+    command: sh -c "cd /app/frontend && pnpm start > /app/logs/frontend.log 2>&1"
+    # No source mounts: the build is baked into the image.
+    volumes: !override
+      - ../logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - WATCHPACK_POLLING=false

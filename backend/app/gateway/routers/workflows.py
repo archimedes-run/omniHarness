@@ -132,6 +132,8 @@ class WorkflowResponse(BaseModel):
     spec_json: dict | None = None
     created_at: str
     updated_at: str
+    #: The newest run, on the list route only (one query for all workflows).
+    last_run: WorkflowRunResponse | None = None
 
 
 def _dt(v) -> str:
@@ -213,6 +215,9 @@ class WorkflowRunResponse(BaseModel):
     final_summary: str | None = None
     created_at: str
     updated_at: str
+
+
+WorkflowResponse.model_rebuild()
 
 
 def _dt_opt(v) -> str | None:
@@ -307,7 +312,11 @@ async def list_workflows(request: Request) -> list[WorkflowResponse]:
     repo = _get_repo(request)
     owner_id = get_effective_user_id()
     rows = await repo.list_by_owner(owner_id)
-    return [_serialize(r) for r in rows]
+    # The newest run is an extra on this route: without a run store the list
+    # still answers, with no last_run, rather than failing.
+    run_repo = getattr(request.app.state, "workflow_run_repo", None)
+    latest = await run_repo.latest_by_workflows([r["id"] for r in rows]) if run_repo is not None else {}
+    return [_serialize(r).model_copy(update={"last_run": _serialize_run(latest[r["id"]]) if r["id"] in latest else None}) for r in rows]
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse, summary="Get Workflow")

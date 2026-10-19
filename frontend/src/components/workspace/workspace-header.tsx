@@ -41,13 +41,13 @@ export function WorkspaceHeader({ className }: { className?: string }) {
             {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ? (
               <Link
                 href="/"
-                className="ml-2 flex items-center gap-2 text-[0.95rem] font-medium tracking-[0.02em] text-black"
+                className="text-foreground ml-2 flex items-center gap-2 text-[0.95rem] font-medium tracking-[0.02em]"
               >
                 <OmniBrandMark size="sm" />
                 <span>OmniHarness</span>
               </Link>
             ) : (
-              <div className="ml-2 flex cursor-default items-center gap-2 text-[0.95rem] font-medium tracking-[0.02em] text-black">
+              <div className="text-foreground ml-2 flex cursor-default items-center gap-2 text-[0.95rem] font-medium tracking-[0.02em]">
                 <OmniBrandMark size="sm" />
                 <span>OmniHarness</span>
               </div>

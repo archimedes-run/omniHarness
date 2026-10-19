@@ -46,6 +46,14 @@ export default function SessionsPage() {
           </AlertDescription>
         </Alert>
       )}
+      {health?.kind === "last-known" && (
+        <Alert data-testid="watcher-health" data-health="last-known">
+          <AlertTitle>{`The watcher did not answer just now`}</AlertTitle>
+          <AlertDescription>
+            {`Showing what it reported ${health.age} ago. These are the last-known states, not the current ones.`}
+          </AlertDescription>
+        </Alert>
+      )}
       {health?.kind === "stale" && (
         <Alert data-testid="watcher-health" data-health="stale">
           <AlertTitle>{`Last seen ${health.age} ago`}</AlertTitle>

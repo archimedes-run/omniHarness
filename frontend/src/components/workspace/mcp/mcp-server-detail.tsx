@@ -189,55 +189,55 @@ const PHASE_CONFIG: Record<
 > = {
   idle: {
     label: "Draft",
-    pill: "border-stone-200 bg-stone-50 text-stone-500",
-    dotCls: "bg-stone-400",
+    pill: "border-border bg-muted text-muted-foreground",
+    dotCls: "bg-muted-foreground/50",
   },
   building: {
     label: "Generating…",
-    pill: "border-amber-200 bg-amber-50 text-amber-700",
-    dotCls: "bg-amber-500",
+    pill: "border-warning/30 bg-warning/10 text-warning",
+    dotCls: "bg-warning",
     spin: true,
   },
   testing: {
     label: "Couldn't verify",
-    pill: "border-orange-200 bg-orange-50 text-orange-700",
-    dotCls: "bg-orange-500",
+    pill: "border-warning/30 bg-warning/10 text-warning",
+    dotCls: "bg-warning",
   },
   verified: {
     label: "Verified in sandbox",
-    pill: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    dotCls: "bg-emerald-500",
+    pill: "border-success/30 bg-success/10 text-success",
+    dotCls: "bg-success",
   },
   ready: {
     label: "Running",
-    pill: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    dotCls: "bg-emerald-500",
+    pill: "border-success/30 bg-success/10 text-success",
+    dotCls: "bg-success",
   },
   deploying: {
     label: "Deploying…",
-    pill: "border-indigo-200 bg-indigo-50 text-indigo-700",
-    dotCls: "bg-indigo-500",
+    pill: "border-highlight/30 bg-highlight/10 text-highlight",
+    dotCls: "bg-highlight",
     spin: true,
   },
   deployed: {
     label: "Deployed",
-    pill: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    dotCls: "bg-emerald-500",
+    pill: "border-success/30 bg-success/10 text-success",
+    dotCls: "bg-success",
   },
   failed: {
     label: "Blocked by scan",
-    pill: "border-red-200 bg-red-50 text-red-700",
-    dotCls: "bg-red-500",
+    pill: "border-destructive/30 bg-destructive/10 text-destructive",
+    dotCls: "bg-destructive",
   },
   stopped: {
     label: "Stopped",
-    pill: "border-stone-200 bg-stone-50 text-stone-500",
-    dotCls: "bg-stone-400",
+    pill: "border-border bg-muted text-muted-foreground",
+    dotCls: "bg-muted-foreground/50",
   },
   needs_secrets: {
     label: "Needs secrets",
-    pill: "border-amber-200 bg-amber-50 text-amber-700",
-    dotCls: "bg-amber-500",
+    pill: "border-warning/30 bg-warning/10 text-warning",
+    dotCls: "bg-warning",
   },
 };
 
@@ -421,20 +421,20 @@ function FileTreeNode({
       <div>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm hover:bg-stone-100"
+          className="hover:bg-muted flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm"
           style={{ paddingLeft: `${8 + depth * 12}px` }}
         >
           {open ? (
-            <FolderOpenIcon className="size-3.5 shrink-0 text-[#7C79F0]" />
+            <FolderOpenIcon className="text-highlight size-3.5 shrink-0" />
           ) : (
-            <FolderIcon className="size-3.5 shrink-0 text-[#7C79F0]" />
+            <FolderIcon className="text-highlight size-3.5 shrink-0" />
           )}
           {open ? (
-            <ChevronDownIcon className="size-3 shrink-0 text-stone-400" />
+            <ChevronDownIcon className="text-muted-foreground size-3 shrink-0" />
           ) : (
-            <ChevronRightIcon className="size-3 shrink-0 text-stone-400" />
+            <ChevronRightIcon className="text-muted-foreground size-3 shrink-0" />
           )}
-          <span className="truncate text-stone-500">{node.name}</span>
+          <span className="text-muted-foreground truncate">{node.name}</span>
         </button>
         {open &&
           node.children?.map((child) => (
@@ -457,15 +457,15 @@ function FileTreeNode({
       className={cn(
         "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm",
         isSelected
-          ? "bg-indigo-50 text-stone-900"
-          : "text-stone-500 hover:bg-stone-100 hover:text-stone-700",
+          ? "text-foreground bg-highlight/10"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
       style={{ paddingLeft: `${8 + depth * 12}px` }}
     >
       <FileIcon
         className={cn(
           "size-3.5 shrink-0",
-          isSelected ? "text-[#7C79F0]" : "text-stone-400",
+          isSelected ? "text-highlight" : "text-muted-foreground",
         )}
       />
       <span className="truncate">{node.name}</span>
@@ -474,8 +474,8 @@ function FileTreeNode({
           className={cn(
             "ml-auto rounded px-1 py-0.5 text-[9px] font-medium",
             isSelected
-              ? "bg-indigo-100 text-[#7C79F0]"
-              : "bg-stone-100 text-stone-400",
+              ? "bg-highlight/15 text-highlight"
+              : "bg-muted text-muted-foreground",
           )}
         >
           entry
@@ -498,8 +498,8 @@ function FileTreePanel({
   const entrypoint = "server.py";
   return (
     <div className="flex min-h-0 flex-col">
-      <div className="flex items-center justify-between border-b border-stone-200 px-3 py-2">
-        <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
+      <div className="border-border flex items-center justify-between border-b px-3 py-2">
+        <span className="text-muted-foreground text-[10px] font-semibold tracking-widest uppercase">
           Files ({Object.keys(files).length})
         </span>
       </div>
@@ -543,17 +543,17 @@ function SyntaxCodeViewer({
       style={{ background: "#13141a" }}
     >
       {/* tab bar */}
-      <div className="flex items-center gap-0 border-b border-stone-200 bg-white">
-        <div className="flex items-center gap-2 border-r border-stone-200 px-3 py-2">
-          <span className="text-xs text-stone-600">{filename}</span>
-          <span className="size-1.5 rounded-full bg-[#5B57E0]" />
+      <div className="border-border bg-card flex items-center gap-0 border-b">
+        <div className="border-border flex items-center gap-2 border-r px-3 py-2">
+          <span className="text-muted-foreground text-xs">{filename}</span>
+          <span className="bg-highlight size-1.5 rounded-full" />
         </div>
         <button
           onClick={handleCopy}
-          className="mr-3 ml-auto flex items-center gap-1 text-xs text-stone-400 transition-colors hover:text-stone-700"
+          className="text-muted-foreground hover:text-foreground mr-3 ml-auto flex items-center gap-1 text-xs transition-colors"
         >
           {copied ? (
-            <CheckIcon className="size-3 text-emerald-400" />
+            <CheckIcon className="text-success size-3" />
           ) : (
             <ClipboardIcon className="size-3" />
           )}
@@ -599,12 +599,12 @@ function CodePlaceholder({ phase }: { phase: McpPhase }) {
   return (
     <div
       className={cn(
-        "flex flex-1 flex-col items-center justify-center gap-3 bg-white",
-        isGenerating ? "text-stone-400" : "text-stone-300",
+        "bg-card flex flex-1 flex-col items-center justify-center gap-3",
+        isGenerating ? "text-muted-foreground" : "text-muted-foreground",
       )}
     >
       {isGenerating ? (
-        <Loader2Icon className="size-8 animate-spin text-stone-400" />
+        <Loader2Icon className="text-muted-foreground size-8 animate-spin" />
       ) : (
         <TerminalIcon className="size-8" />
       )}
@@ -806,15 +806,15 @@ function BuildActivityFeed({
   const hasContent = displayMessages.length > 0;
 
   return (
-    <div className="flex h-full flex-col bg-[#F6F5F1]">
+    <div className="bg-muted flex h-full flex-col">
       {/* header strip */}
-      <div className="flex items-center justify-between border-b border-[#E4E2DB] px-4 py-2.5">
-        <span className="text-[10px] font-semibold tracking-widest text-[#6C6F79] uppercase">
+      <div className="border-border flex items-center justify-between border-b px-4 py-2.5">
+        <span className="text-muted-foreground text-[10px] font-semibold tracking-widest uppercase">
           Build Activity
         </span>
         {isLoading && (
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-[#5B57E0]">
-            <span className="size-1.5 animate-pulse rounded-full bg-[#5B57E0]" />
+          <span className="text-highlight flex items-center gap-1.5 text-[11px] font-medium">
+            <span className="bg-highlight size-1.5 animate-pulse rounded-full" />
             Agent working
           </span>
         )}
@@ -824,26 +824,26 @@ function BuildActivityFeed({
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {!hasContent && isLoading && (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
-            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
-              <Loader2Icon className="size-4 animate-spin text-[#5B57E0]" />
+            <div className="border-border bg-card flex size-10 items-center justify-center rounded-full border">
+              <Loader2Icon className="text-highlight size-4 animate-spin" />
             </div>
-            <p className="text-sm font-medium text-[#1B1D23]">
+            <p className="text-foreground text-sm font-medium">
               Agent is writing your server…
             </p>
-            <p className="text-xs text-[#6C6F79]">
+            <p className="text-muted-foreground text-xs">
               This usually takes 30–60 seconds
             </p>
           </div>
         )}
         {!hasContent && !isLoading && (
           <div className="flex flex-col items-center gap-2 py-16 text-center">
-            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
-              <SparklesIcon className="size-4 text-[#5B57E0]" />
+            <div className="border-border bg-card flex size-10 items-center justify-center rounded-full border">
+              <SparklesIcon className="text-highlight size-4" />
             </div>
-            <p className="text-sm font-medium text-[#6C6F79]">
+            <p className="text-muted-foreground text-sm font-medium">
               No activity yet
             </p>
-            <p className="text-xs text-[#6C6F79]">
+            <p className="text-muted-foreground text-xs">
               Ask the agent to fix, extend, or explain its code.
             </p>
           </div>
@@ -858,7 +858,7 @@ function BuildActivityFeed({
             if (!text) return null;
             return (
               <div key={id} className="flex justify-end">
-                <div className="max-w-[82%] rounded-2xl rounded-br-sm border border-[#E4E2DB] bg-[#EFEEE8] px-3.5 py-2.5 text-sm leading-relaxed text-[#1B1D23] shadow-sm">
+                <div className="border-border bg-muted text-foreground max-w-[82%] rounded-2xl rounded-br-sm border px-3.5 py-2.5 text-sm leading-relaxed shadow-sm">
                   {text}
                 </div>
               </div>
@@ -877,11 +877,11 @@ function BuildActivityFeed({
                 {/* Thinking disclosure */}
                 {thinking && (
                   <details className="group">
-                    <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] text-[#6C6F79] select-none hover:text-[#1B1D23]">
+                    <summary className="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1.5 text-[11px] select-none">
                       <ChevronRightIcon className="size-3 transition-transform group-open:rotate-90" />
                       Thinking
                     </summary>
-                    <div className="mt-1.5 ml-4 rounded-lg border border-[#E4E2DB] bg-[#EFEEE8] px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap text-[#6C6F79]">
+                    <div className="border-border bg-muted text-muted-foreground mt-1.5 ml-4 rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap">
                       {thinking}
                     </div>
                   </details>
@@ -890,28 +890,28 @@ function BuildActivityFeed({
                 {/* AI text bubble */}
                 {(text || isStreaming) && (
                   <div className="flex items-start gap-2.5">
-                    <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[#5B57E0]">
-                      <SparklesIcon className="size-3 text-white" />
+                    <div className="bg-highlight mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full">
+                      <SparklesIcon className="text-highlight-foreground size-3" />
                     </div>
-                    <div className="max-w-[82%] min-w-0 rounded-2xl rounded-tl-sm border border-[#E4E2DB] bg-[#FCFBF8] px-3.5 py-2.5 shadow-sm">
+                    <div className="border-border bg-card max-w-[82%] min-w-0 rounded-2xl rounded-tl-sm border px-3.5 py-2.5 shadow-sm">
                       {text ? (
                         <>
                           <MessageResponse
                             remarkPlugins={streamdownPlugins.remarkPlugins}
                             rehypePlugins={streamdownPlugins.rehypePlugins}
-                            className="text-sm leading-relaxed text-[#33363E] [&_a]:text-[#5B57E0] [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-l-2 [&_blockquote]:border-[#E4E2DB] [&_blockquote]:pl-3 [&_blockquote]:text-[#6C6F79] [&_code]:rounded [&_code]:border [&_code]:border-[#E4E2DB] [&_code]:bg-white [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-[#1B1D23] [&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-[#1B1D23] [&_h2]:mb-1.5 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-[#1B1D23] [&_h3]:text-sm [&_h3]:font-medium [&_h3]:text-[#1B1D23] [&_li]:mb-0.5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:mb-1.5 [&_p:last-child]:mb-0 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#E4E2DB] [&_pre]:bg-[#131519] [&_pre]:p-3 [&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:text-[#E9EBF0] [&_strong]:font-semibold [&_strong]:text-[#1B1D23] [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4"
+                            className="[&_code]:bg-card text-foreground [&_a]:text-highlight [&_blockquote]:border-border [&_blockquote]:text-muted-foreground [&_code]:border-border [&_code]:text-foreground [&_h1]:text-foreground [&_h2]:text-foreground [&_h3]:text-foreground [&_pre]:border-border [&_strong]:text-foreground text-sm leading-relaxed [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_code]:rounded [&_code]:border [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-medium [&_li]:mb-0.5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:mb-1.5 [&_p:last-child]:mb-0 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:bg-[#131519] [&_pre]:p-3 [&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:text-[#E9EBF0] [&_strong]:font-semibold [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-4"
                           >
                             {text}
                           </MessageResponse>
                           {isStreaming && (
-                            <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-sm bg-[#5B57E0] align-middle" />
+                            <span className="bg-highlight ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-sm align-middle" />
                           )}
                         </>
                       ) : (
                         <span className="flex items-center gap-1 py-0.5">
-                          <span className="size-1.5 animate-bounce rounded-full bg-[#5B57E0] opacity-60 [animation-delay:0ms]" />
-                          <span className="size-1.5 animate-bounce rounded-full bg-[#5B57E0] opacity-60 [animation-delay:150ms]" />
-                          <span className="size-1.5 animate-bounce rounded-full bg-[#5B57E0] opacity-60 [animation-delay:300ms]" />
+                          <span className="bg-highlight size-1.5 animate-bounce rounded-full opacity-60 [animation-delay:0ms]" />
+                          <span className="bg-highlight size-1.5 animate-bounce rounded-full opacity-60 [animation-delay:150ms]" />
+                          <span className="bg-highlight size-1.5 animate-bounce rounded-full opacity-60 [animation-delay:300ms]" />
                         </span>
                       )}
                     </div>
@@ -929,38 +929,40 @@ function BuildActivityFeed({
                       className={cn(
                         "flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition-colors",
                         isDone
-                          ? "border-[#E4E2DB] bg-[#FCFBF8]"
-                          : "border-[#E4E2DB] bg-[#EFEEE8]",
+                          ? "border-border bg-card"
+                          : "border-border bg-muted",
                       )}
                     >
                       <div
                         className={cn(
                           "mt-0.5 size-1.5 shrink-0 rounded-full",
-                          isDone ? "bg-[#5B57E0]" : "bg-[#C4C3E8]",
+                          isDone ? "bg-highlight" : "bg-highlight/30",
                         )}
                       />
                       <div className="min-w-0 flex-1">
                         <span
                           className={cn(
                             "text-xs font-medium",
-                            isDone ? "text-[#1B1D23]" : "text-[#6C6F79]",
+                            isDone
+                              ? "text-foreground"
+                              : "text-muted-foreground",
                           )}
                         >
                           {label}
                         </span>
                         {detail && (
-                          <span className="ml-2 truncate font-mono text-[10px] text-[#6C6F79]">
+                          <span className="text-muted-foreground ml-2 truncate font-mono text-[10px]">
                             {detail}
                           </span>
                         )}
                         {isDone && result && (
-                          <p className="mt-0.5 text-[10px] leading-relaxed text-[#6C6F79]">
+                          <p className="text-muted-foreground mt-0.5 text-[10px] leading-relaxed">
                             {toolResultSummary(result.name, result.text)}
                           </p>
                         )}
                       </div>
                       {!isDone && (
-                        <Loader2Icon className="mt-0.5 size-3 shrink-0 animate-spin text-[#5B57E0]" />
+                        <Loader2Icon className="text-highlight mt-0.5 size-3 shrink-0 animate-spin" />
                       )}
                     </div>
                   );
@@ -976,8 +978,8 @@ function BuildActivityFeed({
       </div>
 
       {/* input */}
-      <div className="border-t border-[#E4E2DB] p-3">
-        <div className="flex items-end gap-2 rounded-xl border border-[#E4E2DB] bg-[#FCFBF8] px-3 py-2 shadow-sm transition-all focus-within:border-[#5B57E0] focus-within:shadow-[0_0_0_3px_rgba(91,87,224,0.1)]">
+      <div className="border-border border-t p-3">
+        <div className="border-border bg-card focus-within:border-highlight flex items-end gap-2 rounded-xl border px-3 py-2 shadow-sm transition-all focus-within:shadow-[0_0_0_3px_rgba(91,87,224,0.1)]">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -985,12 +987,12 @@ function BuildActivityFeed({
             placeholder="Ask the agent to fix, extend, or explain…"
             rows={2}
             disabled={isLoading}
-            className="flex-1 resize-none bg-transparent text-sm text-[#1B1D23] placeholder:text-[#A8ABB3] focus:outline-none disabled:opacity-50"
+            className="text-foreground placeholder:text-muted-foreground flex-1 resize-none bg-transparent text-sm focus:outline-none disabled:opacity-50"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
-            className="mb-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#5B57E0] text-white transition-colors hover:bg-[#4A46D0] disabled:opacity-30"
+            className="bg-highlight text-highlight-foreground hover:bg-highlight/90 mb-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-30"
           >
             {isLoading ? (
               <Loader2Icon className="size-3.5 animate-spin" />
@@ -999,7 +1001,7 @@ function BuildActivityFeed({
             )}
           </button>
         </div>
-        <p className="mt-1.5 text-center text-[10px] text-[#A8ABB3]">
+        <p className="text-muted-foreground mt-1.5 text-center text-[10px]">
           Enter to send · Shift+Enter for newline
         </p>
       </div>
@@ -1078,7 +1080,7 @@ function GeneratingView({
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
       {/* LEFT: activity feed — 50% */}
-      <div className="flex w-1/2 shrink-0 flex-col border-r border-[#E4E2DB]">
+      <div className="border-border flex w-1/2 shrink-0 flex-col border-r">
         {threadId ? (
           <BuildActivityFeed
             messages={stream.messages ?? []}
@@ -1087,14 +1089,14 @@ function GeneratingView({
             onBuildUpdated={onBuildUpdated}
           />
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#F6F5F1] p-6 text-center">
-            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
-              <TerminalIcon className="size-4 text-[#6C6F79]" />
+          <div className="bg-muted flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="border-border bg-card flex size-10 items-center justify-center rounded-full border">
+              <TerminalIcon className="text-muted-foreground size-4" />
             </div>
-            <p className="text-sm font-medium text-[#1B1D23]">
+            <p className="text-foreground text-sm font-medium">
               No chat session linked
             </p>
-            <p className="text-xs text-[#6C6F79]">
+            <p className="text-muted-foreground text-xs">
               Create a new server from the Start tab to get an embedded chat.
             </p>
           </div>
@@ -1102,32 +1104,32 @@ function GeneratingView({
       </div>
 
       {/* RIGHT: code panel — 50% */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
+      <div className="bg-card flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* server info card */}
-        <div className="border-b border-stone-200 bg-white px-5 py-3">
+        <div className="border-border bg-card border-b px-5 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-stone-50">
-              <TerminalIcon className="size-4 text-[#7C79F0]" />
+            <div className="border-border bg-muted flex size-8 shrink-0 items-center justify-center rounded-lg border">
+              <TerminalIcon className="text-highlight size-4" />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h2 className="truncate text-sm font-semibold text-stone-900">
+                <h2 className="text-foreground truncate text-sm font-semibold">
                   {server.name}
                 </h2>
                 {server.language && (
-                  <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-500">
+                  <span className="border-border bg-muted text-muted-foreground rounded border px-1.5 py-0.5 text-[10px]">
                     {server.language}
                   </span>
                 )}
                 {files && (
-                  <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-500">
+                  <span className="border-border bg-muted text-muted-foreground rounded border px-1.5 py-0.5 text-[10px]">
                     {Object.keys(files).length}{" "}
                     {Object.keys(files).length === 1 ? "file" : "files"}
                   </span>
                 )}
               </div>
               {server.description && (
-                <p className="mt-0.5 line-clamp-1 text-[11px] leading-relaxed text-stone-400">
+                <p className="text-muted-foreground mt-0.5 line-clamp-1 text-[11px] leading-relaxed">
                   {server.description}
                 </p>
               )}
@@ -1137,10 +1139,10 @@ function GeneratingView({
 
         {/* detected tools */}
         {tools_discovered.length > 0 && (
-          <div className="border-b border-stone-200 bg-white px-5 py-2.5">
+          <div className="border-border bg-card border-b px-5 py-2.5">
             <button
               onClick={() => setToolsExpanded((v) => !v)}
-              className="flex items-center gap-2 text-[10px] font-semibold tracking-wider text-stone-400 uppercase hover:text-stone-600"
+              className="text-muted-foreground hover:text-foreground flex items-center gap-2 text-[10px] font-semibold tracking-wider uppercase"
             >
               <ChevronRightIcon
                 className={cn(
@@ -1155,7 +1157,7 @@ function GeneratingView({
                 {tools_discovered.map((t) => (
                   <span
                     key={t.name}
-                    className="flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 font-mono text-[10px] text-stone-600"
+                    className="border-border bg-muted text-muted-foreground flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px]"
                   >
                     {t.name}
                   </span>
@@ -1167,11 +1169,11 @@ function GeneratingView({
 
         {/* errors banner */}
         {errors.length > 0 && phase !== "building" && (
-          <div className="border-b border-red-900/30 bg-red-950/50 px-5 py-2">
+          <div className="border-destructive/30 bg-destructive/10 border-b px-5 py-2">
             {errors.map((e, i) => (
               <p
                 key={i}
-                className="flex items-center gap-1.5 text-xs text-red-400"
+                className="text-destructive flex items-center gap-1.5 text-xs"
               >
                 <ShieldAlertIcon className="size-3 shrink-0" /> {e}
               </p>
@@ -1183,7 +1185,7 @@ function GeneratingView({
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {files ? (
             <>
-              <div className="w-44 shrink-0 border-r border-stone-200 bg-white">
+              <div className="border-border bg-card w-44 shrink-0 border-r">
                 <FileTreePanel
                   files={files}
                   selectedPath={selectedFile}
@@ -1199,7 +1201,7 @@ function GeneratingView({
                 ) : liveCode ? (
                   <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
                     {stream.isLoading && (
-                      <div className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded border border-stone-200 bg-white/90 px-2 py-0.5 text-[10px] text-[#7C79F0]">
+                      <div className="border-border bg-card/90 text-highlight absolute top-2 right-3 z-10 flex items-center gap-1 rounded border px-2 py-0.5 text-[10px]">
                         <Loader2Icon className="size-2.5 animate-spin" />{" "}
                         streaming
                       </div>
@@ -1214,7 +1216,7 @@ function GeneratingView({
           ) : liveCode ? (
             <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
               {stream.isLoading && (
-                <div className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded border border-stone-200 bg-white/90 px-2 py-0.5 text-[10px] text-[#7C79F0]">
+                <div className="border-border bg-card/90 text-highlight absolute top-2 right-3 z-10 flex items-center gap-1 rounded border px-2 py-0.5 text-[10px]">
                   <Loader2Icon className="size-2.5 animate-spin" /> streaming
                 </div>
               )}
@@ -1303,18 +1305,18 @@ function SecretRow({
   }
 
   return (
-    <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+    <div className="border-border bg-muted rounded-xl border p-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <code className="font-mono text-xs font-semibold text-stone-700">
+        <code className="text-foreground font-mono text-xs font-semibold">
           {keyName}
         </code>
         {isStored ? (
-          <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600">
+          <span className="text-success flex items-center gap-1 text-[10px] font-medium">
             <CheckCircle2Icon className="size-3" />
             {hint ? <span className="font-mono">•••{hint}</span> : "Stored"}
           </span>
         ) : (
-          <span className="text-[10px] text-stone-400">Not set</span>
+          <span className="text-muted-foreground text-[10px]">Not set</span>
         )}
       </div>
       <div className="flex items-center gap-1">
@@ -1324,13 +1326,13 @@ function SecretRow({
           placeholder={placeholder}
           value={displayValue}
           onChange={(e) => handleChange(e.target.value)}
-          className="flex-1 rounded-lg border border-stone-200 bg-white px-2 py-1.5 font-mono text-xs text-stone-900 placeholder:text-stone-300 focus:border-[#5B57E0] focus:shadow-[0_0_0_2px_rgba(91,87,224,0.15)] focus:outline-none"
+          className="border-border bg-card text-foreground placeholder:text-muted-foreground focus:border-highlight flex-1 rounded-lg border px-2 py-1.5 font-mono text-xs focus:shadow-[0_0_0_2px_rgba(91,87,224,0.15)] focus:outline-none"
         />
         <button
           type="button"
           onClick={() => void handleEye()}
           disabled={revealing || (!isStored && !value)}
-          className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-600 disabled:opacity-30"
+          className="text-muted-foreground hover:bg-muted hover:text-foreground rounded p-1 disabled:opacity-30"
           title={
             revealing
               ? "Revealing…"
@@ -1405,7 +1407,7 @@ function SecretsSection({
   return (
     <div>
       <div className="space-y-3">
-        <p className="text-[11px] leading-relaxed text-stone-400">
+        <p className="text-muted-foreground text-[11px] leading-relaxed">
           Encrypted at rest · auto-detected from code · never sent to AI.
         </p>
         {secretNames.map((key) => (
@@ -1421,11 +1423,11 @@ function SecretsSection({
           />
         ))}
 
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-destructive text-xs">{error}</p>}
 
         <Button
           size="sm"
-          className="w-full bg-stone-900 text-white hover:bg-stone-700"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 w-full"
           disabled={saving || retesting || !hasUnsaved}
           onClick={() => void handleSave()}
         >
@@ -1476,48 +1478,51 @@ function ToolCard({
     )
       return {
         label: "pass",
-        cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        cls: "border-success/30 bg-success/10 text-success",
       };
     if (ot === "auth" || (!ot && testResult.ok))
       return {
         label: "401",
-        cls: "border-amber-200 bg-amber-50 text-amber-700",
+        cls: "border-warning/30 bg-warning/10 text-warning",
         title:
           "Callable — placeholder credentials returned 401 (expected during sandbox testing)",
       };
     if (ot === "args")
       return {
         label: "args",
-        cls: "border-blue-200 bg-blue-50 text-blue-600",
+        cls: "border-highlight/30 bg-highlight/10 text-highlight",
         title:
           "Callable — requires arguments not supplied in automated testing",
       };
     if (ot === "error" || !testResult.ok)
-      return { label: "fail", cls: "border-red-200 bg-red-50 text-red-600" };
+      return {
+        label: "fail",
+        cls: "border-destructive/30 bg-destructive/10 text-destructive",
+      };
     return {
       label: "pass",
-      cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      cls: "border-success/30 bg-success/10 text-success",
     };
   })();
 
   return (
-    <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm transition-colors hover:border-stone-300">
+    <div className="border-border bg-card hover:border-input overflow-hidden rounded-xl border shadow-sm transition-colors">
       <button
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
       >
         <ChevronRightIcon
           className={cn(
-            "size-3.5 shrink-0 text-stone-400 transition-transform",
+            "text-muted-foreground size-3.5 shrink-0 transition-transform",
             expanded && "rotate-90",
           )}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <code className="font-mono text-sm font-semibold text-stone-900">
+            <code className="text-foreground font-mono text-sm font-semibold">
               {tool.name}
             </code>
-            <span className="rounded border border-stone-200 bg-stone-50 px-1.5 py-0.5 text-[10px] text-stone-400">
+            <span className="border-border bg-muted text-muted-foreground rounded border px-1.5 py-0.5 text-[10px]">
               async
             </span>
             {badgeInfo && (
@@ -1533,7 +1538,7 @@ function ToolCard({
             )}
           </div>
           {!expanded && tool.description && (
-            <p className="mt-0.5 line-clamp-1 text-xs text-stone-400">
+            <p className="text-muted-foreground mt-0.5 line-clamp-1 text-xs">
               {tool.description}
             </p>
           )}
@@ -1544,7 +1549,7 @@ function ToolCard({
               e.stopPropagation();
               onRetest();
             }}
-            className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-lg p-1.5"
             title="Re-test"
           >
             <RefreshCwIcon className="size-3.5" />
@@ -1552,19 +1557,19 @@ function ToolCard({
         )}
       </button>
       {expanded && (
-        <div className="space-y-2 border-t border-stone-200 px-4 py-3">
+        <div className="border-border space-y-2 border-t px-4 py-3">
           {tool.description && (
-            <p className="text-sm leading-relaxed text-stone-500">
+            <p className="text-muted-foreground text-sm leading-relaxed">
               {tool.description}
             </p>
           )}
           {testResult?.error && (
-            <div className="rounded-lg border border-[#E4E2DB] bg-[#FCFBF8] px-3 py-2 font-mono text-xs text-red-600">
+            <div className="text-destructive border-border bg-card rounded-lg border px-3 py-2 font-mono text-xs">
               {testResult.error}
             </div>
           )}
           {testResult?.output && (
-            <div className="rounded-lg border border-[#E4E2DB] bg-[#FCFBF8] px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-[#1B1D23]">
+            <div className="border-border bg-card text-foreground rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap">
               {testResult.output}
             </div>
           )}
@@ -1612,39 +1617,39 @@ function ToolsView({
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       {/* header — MCP name + re-test controls */}
-      <div className="flex items-center gap-3 border-b border-stone-200 bg-white px-5 py-3">
+      <div className="border-border bg-card flex items-center gap-3 border-b px-5 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <div className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-stone-50">
-            <BoxIcon className="size-3.5 text-[#7C79F0]" />
+          <div className="border-border bg-muted flex size-7 shrink-0 items-center justify-center rounded-lg border">
+            <BoxIcon className="text-highlight size-3.5" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-stone-900">
+            <p className="text-foreground truncate text-sm font-semibold">
               {server.name}
             </p>
-            <p className="text-[10px] text-stone-400">
+            <p className="text-muted-foreground text-[10px]">
               {tools_discovered.length} tool
               {tools_discovered.length !== 1 ? "s" : ""} discovered
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded-lg border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs text-stone-500">
+          <span className="border-border bg-muted text-muted-foreground rounded-lg border px-2.5 py-1 text-xs">
             Sandbox
           </span>
           {errors.length > 0 ? (
-            <span className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs text-red-600">
+            <span className="border-destructive/30 bg-destructive/10 text-destructive flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs">
               <XCircleIcon className="size-3" /> {errors.length} error
               {errors.length !== 1 ? "s" : ""}
             </span>
           ) : (
-            <span className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+            <span className="border-success/30 bg-success/10 text-success flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs">
               <CheckCircle2Icon className="size-3" /> 0 errors
             </span>
           )}
           <button
             onClick={() => void handleRetest()}
             disabled={retesting}
-            className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-lg p-1.5"
             title="Re-test all"
           >
             <RotateCcwIcon
@@ -1656,69 +1661,69 @@ function ToolsView({
 
       {/* status banners */}
       {dp === "verified" && (
-        <div className="flex items-center gap-2.5 border-b border-emerald-200 bg-emerald-600 px-5 py-2.5">
+        <div className="border-success/30 bg-success flex items-center gap-2.5 border-b px-5 py-2.5">
           <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
-            <CheckCircle2Icon className="size-3.5 text-white" />
+            <CheckCircle2Icon className="text-success-foreground size-3.5" />
           </div>
-          <span className="text-sm font-medium text-white">
+          <span className="text-success-foreground text-sm font-medium">
             Sandbox verified — all tools tested successfully
           </span>
         </div>
       )}
       {dp === "needs_secrets" && (
-        <div className="flex items-center gap-2.5 border-b border-amber-200 bg-amber-500 px-5 py-2.5">
+        <div className="border-warning/30 bg-warning flex items-center gap-2.5 border-b px-5 py-2.5">
           <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
-            <KeyIcon className="size-3.5 text-white" />
+            <KeyIcon className="text-warning-foreground size-3.5" />
           </div>
-          <span className="text-sm font-medium text-white">
+          <span className="text-warning-foreground text-sm font-medium">
             Needs secrets — add API keys below and re-test
           </span>
         </div>
       )}
       {dp === "failed" && (
-        <div className="flex items-center gap-3 border-b border-red-900/20 bg-red-700 px-5 py-3">
+        <div className="border-destructive/20 bg-destructive flex items-center gap-3 border-b px-5 py-3">
           <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/15">
-            <ShieldXIcon className="size-4 text-white" />
+            <ShieldXIcon className="text-destructive-foreground size-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-white">
+            <p className="text-destructive-foreground text-sm font-semibold">
               Blocked by Security Scan
             </p>
-            <p className="text-[11px] text-red-200">
+            <p className="text-destructive-foreground/80 text-[11px]">
               {errors.length} {errors.length === 1 ? "issue" : "issues"}{" "}
               prevented execution
             </p>
           </div>
-          <span className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-white ring-1 ring-white/20">
+          <span className="text-destructive-foreground flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold ring-1 ring-white/20">
             <XCircleIcon className="size-3" />
             {errors.length} {errors.length === 1 ? "error" : "errors"}
           </span>
         </div>
       )}
       {dp === "testing" && (
-        <div className="flex items-center gap-2.5 border-b border-orange-200 bg-orange-500 px-5 py-2.5">
+        <div className="border-warning/30 bg-warning flex items-center gap-2.5 border-b px-5 py-2.5">
           <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
-            <ShieldAlertIcon className="size-3.5 text-white" />
+            <ShieldAlertIcon className="text-warning-foreground size-3.5" />
           </div>
-          <span className="text-sm font-medium text-white">
+          <span className="text-warning-foreground text-sm font-medium">
             Couldn&apos;t verify — server started but no tools found
           </span>
         </div>
       )}
 
       {/* tool list / error details */}
-      <div className="flex-1 space-y-4 overflow-y-auto bg-stone-50 p-4">
+      <div className="bg-muted flex-1 space-y-4 overflow-y-auto p-4">
         {/* Secrets panel — always shown when secrets are detected */}
         {detected_secret_names.length > 0 && (
-          <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
-            <div className="flex items-center gap-2 border-b border-stone-200 px-4 py-3">
-              <KeyIcon className="size-3.5 text-[#7C79F0]" />
-              <h3 className="text-xs font-semibold text-stone-700">
+          <div className="border-border bg-card overflow-hidden rounded-xl border shadow-sm">
+            <div className="border-border flex items-center gap-2 border-b px-4 py-3">
+              <KeyIcon className="text-highlight size-3.5" />
+              <h3 className="text-foreground text-xs font-semibold">
                 API Secrets
               </h3>
               {detected_secret_names.some((k) => !storedInfo.has(k)) && (
-                <span className="ml-auto flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-600">
-                  <span className="size-1.5 rounded-full bg-red-500" />
+                <span className="border-destructive/30 bg-destructive/10 text-destructive ml-auto flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium">
+                  <span className="bg-destructive size-1.5 rounded-full" />
                   {
                     detected_secret_names.filter((k) => !storedInfo.has(k))
                       .length
@@ -1727,7 +1732,7 @@ function ToolsView({
                 </span>
               )}
               {detected_secret_names.every((k) => storedInfo.has(k)) && (
-                <span className="ml-auto flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                <span className="border-success/30 bg-success/10 text-success ml-auto flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium">
                   <CheckCircle2Icon className="size-2.5" /> All set
                 </span>
               )}
@@ -1747,37 +1752,37 @@ function ToolsView({
         {tools_discovered.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
+              <span className="text-muted-foreground text-[10px] font-semibold tracking-widest uppercase">
                 Tools
               </span>
-              <div className="h-px flex-1 bg-stone-200" />
-              <span className="font-mono text-[10px] text-[#5B57E0]">
+              <div className="bg-accent h-px flex-1" />
+              <span className="text-highlight font-mono text-[10px]">
                 {tools_discovered.length}
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
-              <span className="text-[10px] text-stone-500">
+            <div className="border-border bg-muted flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2">
+              <span className="text-muted-foreground text-[10px]">
                 Sandbox uses placeholder credentials —
               </span>
               <span className="flex items-center gap-1 text-[10px]">
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                <span className="border-success/30 bg-success/10 text-success rounded-full border px-1.5 py-0.5 text-[10px] font-medium">
                   pass
                 </span>
-                <span className="text-stone-400">real response</span>
+                <span className="text-muted-foreground">real response</span>
               </span>
               <span className="flex items-center gap-1 text-[10px]">
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                <span className="border-warning/30 bg-warning/10 text-warning rounded-full border px-1.5 py-0.5 text-[10px] font-medium">
                   401
                 </span>
-                <span className="text-stone-400">
+                <span className="text-muted-foreground">
                   callable, real key used at runtime
                 </span>
               </span>
               <span className="flex items-center gap-1 text-[10px]">
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
+                <span className="border-highlight/30 bg-highlight/10 text-highlight rounded-full border px-1.5 py-0.5 text-[10px] font-medium">
                   args
                 </span>
-                <span className="text-stone-400">
+                <span className="text-muted-foreground">
                   callable, needs arguments
                 </span>
               </span>
@@ -1789,17 +1794,17 @@ function ToolsView({
           <div className="flex flex-col gap-4">
             {/* blocked illustration */}
             <div className="flex flex-col items-center gap-3 pt-6 pb-2 text-center">
-              <div className="relative flex size-16 items-center justify-center rounded-2xl border border-red-900/40 bg-red-950/30">
-                <ShieldXIcon className="size-8 text-red-400" />
-                <span className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white ring-2 ring-stone-50">
+              <div className="border-destructive/40 bg-destructive/10 relative flex size-16 items-center justify-center rounded-2xl border">
+                <ShieldXIcon className="text-destructive size-8" />
+                <span className="bg-destructive ring-muted-foreground absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold text-white ring-2">
                   {errors.length}
                 </span>
               </div>
               <div>
-                <h3 className="text-base font-semibold text-stone-900">
+                <h3 className="text-foreground text-base font-semibold">
                   Server blocked by security scan
                 </h3>
-                <p className="mt-0.5 text-sm text-stone-500">
+                <p className="text-muted-foreground mt-0.5 text-sm">
                   {errors.length === 1 ? "1 issue" : `${errors.length} issues`}{" "}
                   prevented sandbox execution
                 </p>
@@ -1814,40 +1819,40 @@ function ToolsView({
               return (
                 <div
                   key={i}
-                  className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm"
+                  className="border-border bg-card overflow-hidden rounded-xl border shadow-sm"
                 >
-                  <div className="flex items-center gap-2.5 border-b border-stone-200 bg-red-50 px-4 py-2.5">
-                    <ShieldAlertIcon className="size-3.5 shrink-0 text-red-500" />
-                    <span className="text-[11px] font-semibold tracking-wider text-red-600 uppercase">
+                  <div className="border-border bg-destructive/10 flex items-center gap-2.5 border-b px-4 py-2.5">
+                    <ShieldAlertIcon className="text-destructive size-3.5 shrink-0" />
+                    <span className="text-destructive text-[11px] font-semibold tracking-wider uppercase">
                       {isModelCfgError
                         ? "Configuration Error"
                         : "Security Block"}
                     </span>
-                    <span className="ml-auto rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-600 ring-1 ring-red-200">
+                    <span className="bg-destructive/15 text-destructive ring-destructive/30 ml-auto rounded-full px-2 py-0.5 text-[10px] font-medium ring-1">
                       #{i + 1}
                     </span>
                   </div>
                   <div className="px-4 py-3.5">
-                    <p className="text-sm leading-relaxed text-stone-600">
+                    <p className="text-muted-foreground text-sm leading-relaxed">
                       {error}
                     </p>
                     {isModelCfgError && (
-                      <div className="mt-3.5 rounded-xl border border-amber-900/30 bg-amber-950/20 px-3.5 py-3">
-                        <p className="mb-2 text-xs font-semibold text-amber-400">
+                      <div className="border-warning/30 bg-warning/10 mt-3.5 rounded-xl border px-3.5 py-3">
+                        <p className="text-warning mb-2 text-xs font-semibold">
                           How to fix
                         </p>
-                        <ul className="space-y-1.5 text-xs leading-relaxed text-amber-500/80">
+                        <ul className="text-warning/80 space-y-1.5 text-xs leading-relaxed">
                           <li className="flex items-start gap-1.5">
                             <span className="mt-0.5 shrink-0 font-bold">
                               1.
                             </span>
                             <span>
                               Open{" "}
-                              <code className="rounded bg-amber-950/40 px-1 py-0.5 font-mono text-[11px] text-amber-400">
+                              <code className="text-warning bg-warning/15 rounded px-1 py-0.5 font-mono text-[11px]">
                                 config.yaml
                               </code>{" "}
                               and set{" "}
-                              <code className="rounded bg-amber-950/40 px-1 py-0.5 font-mono text-[11px] text-amber-400">
+                              <code className="text-warning bg-warning/15 rounded px-1 py-0.5 font-mono text-[11px]">
                                 skill_evolution.moderation_model_name
                               </code>{" "}
                               to a valid model name.
@@ -1880,7 +1885,7 @@ function ToolsView({
             <button
               onClick={() => void handleRetest()}
               disabled={retesting}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-medium text-stone-700 shadow-sm transition-all hover:border-stone-300 hover:bg-stone-50 disabled:opacity-50"
+              className="border-border bg-card text-foreground hover:border-input hover:bg-muted flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium shadow-sm transition-all disabled:opacity-50"
             >
               <RotateCcwIcon
                 className={cn("size-4", retesting && "animate-spin")}
@@ -1890,14 +1895,14 @@ function ToolsView({
           </div>
         ) : tools_discovered.length === 0 ? (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full border border-stone-200 bg-stone-50">
-              <BoxIcon className="size-5 text-stone-400" />
+            <div className="border-border bg-muted flex size-12 items-center justify-center rounded-full border">
+              <BoxIcon className="text-muted-foreground size-5" />
             </div>
-            <p className="text-sm font-medium text-stone-500">
+            <p className="text-muted-foreground text-sm font-medium">
               No tools discovered yet
             </p>
             {dp !== "verified" && (
-              <p className="text-xs text-stone-400">
+              <p className="text-muted-foreground text-xs">
                 Run re-test to discover tools.
               </p>
             )}
@@ -1934,16 +1939,16 @@ function EditorView({ server }: { server: McpServerResponse }) {
 
   if (!files) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-white">
-        <TerminalIcon className="size-8 text-stone-300" />
-        <p className="text-sm text-stone-400">No code available</p>
+      <div className="bg-card flex flex-1 flex-col items-center justify-center gap-2">
+        <TerminalIcon className="text-muted-foreground size-8" />
+        <p className="text-muted-foreground text-sm">No code available</p>
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      <div className="w-48 shrink-0 border-r border-stone-200 bg-white">
+      <div className="border-border bg-card w-48 shrink-0 border-r">
         <FileTreePanel
           files={files}
           selectedPath={selectedFile}
@@ -1957,8 +1962,8 @@ function EditorView({ server }: { server: McpServerResponse }) {
             code={files[selectedFile]}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center bg-white">
-            <p className="text-sm text-stone-400">Select a file</p>
+          <div className="bg-card flex flex-1 items-center justify-center">
+            <p className="text-muted-foreground text-sm">Select a file</p>
           </div>
         )}
       </div>
@@ -2054,7 +2059,7 @@ function InspectView({
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
       {/* LEFT: persistent chat feed — 50% */}
-      <div className="flex w-1/2 shrink-0 flex-col border-r border-[#E4E2DB]">
+      <div className="border-border flex w-1/2 shrink-0 flex-col border-r">
         {threadId ? (
           <BuildActivityFeed
             messages={stream.messages ?? []}
@@ -2062,14 +2067,14 @@ function InspectView({
             onSubmit={handleSubmit}
           />
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#F6F5F1] p-6 text-center">
-            <div className="flex size-10 items-center justify-center rounded-full border border-[#E4E2DB] bg-[#FCFBF8]">
-              <TerminalIcon className="size-4 text-[#6C6F79]" />
+          <div className="bg-muted flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="border-border bg-card flex size-10 items-center justify-center rounded-full border">
+              <TerminalIcon className="text-muted-foreground size-4" />
             </div>
-            <p className="text-sm font-medium text-[#1B1D23]">
+            <p className="text-foreground text-sm font-medium">
               No chat session linked
             </p>
-            <p className="text-xs text-[#6C6F79]">
+            <p className="text-muted-foreground text-xs">
               Create a new server from the Start tab to get an embedded chat.
             </p>
           </div>
@@ -2077,8 +2082,8 @@ function InspectView({
       </div>
 
       {/* RIGHT: white panel with tabs */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
-        <div className="flex items-center gap-0 border-b border-stone-200 bg-white px-5 pt-3">
+      <div className="bg-card flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="border-border bg-card flex items-center gap-0 border-b px-5 pt-3">
           {[
             { id: "tools" as InspectSubTab, label: "MCP Tools", icon: BoxIcon },
             {
@@ -2093,8 +2098,8 @@ function InspectView({
               className={cn(
                 "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors",
                 subTab === id
-                  ? "border-b-2 border-[#7C79F0] text-stone-900"
-                  : "text-stone-400 hover:text-stone-700",
+                  ? "text-foreground border-highlight border-b-2"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Icon className="size-3.5" />
@@ -2152,32 +2157,32 @@ function StartTab({
   };
 
   return (
-    <div className="flex flex-1 items-center justify-center bg-stone-50 p-8">
+    <div className="bg-muted flex flex-1 items-center justify-center p-8">
       <div className="w-full max-w-xl space-y-6">
         <div className="space-y-1 text-center">
-          <h2 className="text-2xl font-semibold text-stone-900">
+          <h2 className="text-foreground text-2xl font-semibold">
             What do you want to build?
           </h2>
-          <p className="text-sm text-stone-500">
+          <p className="text-muted-foreground text-sm">
             Describe your MCP server and the agent will write and verify it.
           </p>
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-stone-600">
-            Server name <span className="text-red-400">*</span>
+          <label className="text-muted-foreground text-xs font-medium">
+            Server name <span className="text-destructive">*</span>
           </label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. GitHub Issues Connector"
-            className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 shadow-sm placeholder:text-stone-400 focus:border-stone-400 focus:ring-2 focus:ring-stone-900/5 focus:outline-none"
+            className="border-border bg-card text-foreground placeholder:text-muted-foreground focus:border-input focus:ring-foreground/5 w-full rounded-xl border px-3 py-2.5 text-sm shadow-sm focus:ring-2 focus:outline-none"
           />
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-stone-600">
+          <label className="text-muted-foreground text-xs font-medium">
             Description
           </label>
           <textarea
@@ -2185,12 +2190,12 @@ function StartTab({
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe what this server should do, what APIs it connects to, and what tools it should expose…"
             rows={4}
-            className="w-full resize-none rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 shadow-sm placeholder:text-stone-400 focus:border-stone-400 focus:ring-2 focus:ring-stone-900/5 focus:outline-none"
+            className="border-border bg-card text-foreground placeholder:text-muted-foreground focus:border-input focus:ring-foreground/5 w-full resize-none rounded-xl border px-3 py-2.5 text-sm shadow-sm focus:ring-2 focus:outline-none"
           />
         </div>
 
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-stone-600">Template</p>
+          <p className="text-muted-foreground text-xs font-medium">Template</p>
           <div className="flex flex-wrap gap-2">
             {TEMPLATE_TYPES.map((t) => (
               <button
@@ -2199,8 +2204,8 @@ function StartTab({
                 className={cn(
                   "rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
                   template === t.id
-                    ? "border-stone-900 bg-stone-900 text-white shadow-sm"
-                    : "border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:shadow-sm",
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                    : "border-border bg-card text-muted-foreground hover:border-input hover:shadow-sm",
                 )}
               >
                 {t.label}
@@ -2210,7 +2215,7 @@ function StartTab({
         </div>
 
         {error && (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+          <p className="border-destructive/30 bg-destructive/10 text-destructive rounded-xl border px-3 py-2 text-xs">
             {error}
           </p>
         )}
@@ -2218,7 +2223,7 @@ function StartTab({
         <Button
           onClick={() => void doCreate()}
           disabled={!name.trim() || creating}
-          className="w-full bg-stone-900 text-white shadow-sm hover:bg-stone-700"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 w-full shadow-sm"
         >
           {creating ? (
             <>
@@ -2267,13 +2272,13 @@ function DeployTimeline({
   const offset = circ * (1 - progress / 100);
 
   return (
-    <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+    <div className="border-border bg-card w-full max-w-sm overflow-hidden rounded-2xl border shadow-sm">
       {/* Header */}
-      <div className="border-b border-stone-100 px-5 py-4 text-center">
-        <p className="text-sm font-semibold text-stone-900">
+      <div className="border-border border-b px-5 py-4 text-center">
+        <p className="text-foreground text-sm font-semibold">
           Deploying {serverName}
         </p>
-        <p className="mt-0.5 text-[11px] text-stone-400">
+        <p className="text-muted-foreground mt-0.5 text-[11px]">
           {failed
             ? (failed.detail ?? "Deployment failed")
             : (current?.detail ?? "Please wait…")}
@@ -2288,7 +2293,7 @@ function DeployTimeline({
             cy="55"
             r={r}
             fill="none"
-            stroke="#e7e5e4"
+            stroke="var(--color-border)"
             strokeWidth="7"
           />
           <circle
@@ -2296,7 +2301,9 @@ function DeployTimeline({
             cy="55"
             r={r}
             fill="none"
-            stroke={failed ? "#ef4444" : "#7C79F0"}
+            stroke={
+              failed ? "var(--color-destructive)" : "var(--color-highlight)"
+            }
             strokeWidth="7"
             strokeLinecap="round"
             strokeDasharray={circ}
@@ -2311,19 +2318,23 @@ function DeployTimeline({
             dominantBaseline="middle"
             fontSize="18"
             fontWeight="700"
-            fill={failed ? "#ef4444" : "#1c1917"}
+            fill={
+              failed ? "var(--color-destructive)" : "var(--color-foreground)"
+            }
           >
             {progress}%
           </text>
         </svg>
 
         {/* Thin progress bar */}
-        <div className="h-1 w-full overflow-hidden rounded-full bg-stone-100">
+        <div className="bg-muted h-1 w-full overflow-hidden rounded-full">
           <div
             className="h-full rounded-full transition-all duration-700"
             style={{
               width: `${progress}%`,
-              backgroundColor: failed ? "#ef4444" : "#7C79F0",
+              backgroundColor: failed
+                ? "var(--color-destructive)"
+                : "var(--color-highlight)",
             }}
           />
         </div>
@@ -2336,43 +2347,45 @@ function DeployTimeline({
             key={step.key}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors",
-              step.status === "running" && "bg-violet-50",
-              step.status === "done" && "bg-emerald-50/60",
-              step.status === "failed" && "bg-red-50",
+              step.status === "running" && "bg-highlight/10",
+              step.status === "done" && "bg-success/10",
+              step.status === "failed" && "bg-destructive/10",
               step.status === "pending" && "bg-transparent",
             )}
           >
             <div className="shrink-0">
               {step.status === "done" && (
-                <CheckCircle2Icon className="size-4 text-emerald-500" />
+                <CheckCircle2Icon className="text-success size-4" />
               )}
               {step.status === "running" && (
-                <Loader2Icon className="size-4 animate-spin text-[#7C79F0]" />
+                <Loader2Icon className="text-highlight size-4 animate-spin" />
               )}
               {step.status === "failed" && (
-                <XCircleIcon className="size-4 text-red-500" />
+                <XCircleIcon className="text-destructive size-4" />
               )}
               {step.status === "pending" && (
-                <div className="size-4 rounded-full border-2 border-stone-200" />
+                <div className="border-border size-4 rounded-full border-2" />
               )}
             </div>
             <div className="min-w-0 flex-1">
               <p
                 className={cn(
                   "text-xs font-medium",
-                  step.status === "running" && "text-[#7C79F0]",
-                  step.status === "done" && "text-emerald-700",
-                  step.status === "failed" && "text-red-600",
-                  step.status === "pending" && "text-stone-400",
+                  step.status === "running" && "text-highlight",
+                  step.status === "done" && "text-success",
+                  step.status === "failed" && "text-destructive",
+                  step.status === "pending" && "text-muted-foreground",
                 )}
               >
                 {step.label}
               </p>
               {step.status === "running" && step.detail && (
-                <p className="text-[10px] text-stone-400">{step.detail}</p>
+                <p className="text-muted-foreground text-[10px]">
+                  {step.detail}
+                </p>
               )}
               {step.status === "failed" && step.detail && (
-                <p className="truncate text-[10px] text-red-400">
+                <p className="text-destructive truncate text-[10px]">
                   {step.detail}
                 </p>
               )}
@@ -2448,17 +2461,17 @@ function DeployView({
   // ── Deploying: show live timeline instead of the checklist ─────────────────
   if (hasTimeline) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-stone-50 p-8">
+      <div className="bg-muted flex flex-1 flex-col items-center justify-center gap-4 p-8">
         <DeployTimeline serverName={server.name} steps={deploySteps} />
         {isFailed && (
           <Button
-            className="w-full max-w-sm bg-stone-900 py-3 text-sm font-semibold text-white hover:bg-stone-700"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 w-full max-w-sm py-3 text-sm font-semibold"
             onClick={() => void handleDeploy()}
           >
             Retry deploy
           </Button>
         )}
-        <p className="max-w-sm text-center text-[10px] leading-relaxed text-stone-400">
+        <p className="text-muted-foreground max-w-sm text-center text-[10px] leading-relaxed">
           Secrets are injected as container env vars and are never written to
           disk or logs.
         </p>
@@ -2468,39 +2481,39 @@ function DeployView({
 
   // ── Idle / verified / deployed: show the checklist card ────────────────────
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-stone-50 p-8">
+    <div className="bg-muted flex flex-1 flex-col items-center justify-center gap-6 p-8">
       {/* Server card */}
-      <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-        <div className="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-stone-200 bg-stone-50">
-            <BoxIcon className="size-4 text-[#7C79F0]" />
+      <div className="border-border bg-card w-full max-w-sm overflow-hidden rounded-2xl border shadow-sm">
+        <div className="border-border flex items-center gap-3 border-b px-5 py-4">
+          <div className="border-border bg-muted flex size-9 shrink-0 items-center justify-center rounded-xl border">
+            <BoxIcon className="text-highlight size-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-stone-900">
+            <p className="text-foreground truncate text-sm font-semibold">
               {server.name}
             </p>
-            <p className="text-[10px] text-stone-400">MCP Server</p>
+            <p className="text-muted-foreground text-[10px]">MCP Server</p>
           </div>
           {isDeployed && (
-            <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700">
+            <span className="border-success/30 bg-success/10 text-success flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-medium">
               <CheckCircle2Icon className="size-3" /> Live
             </span>
           )}
         </div>
 
         {/* Checklist */}
-        <div className="divide-y divide-stone-100 px-5">
+        <div className="divide-border divide-y px-5">
           <div className="flex items-center gap-3 py-3">
             {isVerified || isDeployed ? (
-              <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
+              <CheckCircle2Icon className="text-success size-4 shrink-0" />
             ) : (
-              <div className="size-4 shrink-0 rounded-full border-2 border-stone-200" />
+              <div className="border-border size-4 shrink-0 rounded-full border-2" />
             )}
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-stone-700">
+              <p className="text-foreground text-xs font-medium">
                 Sandbox verified
               </p>
-              <p className="text-[10px] text-stone-400">
+              <p className="text-muted-foreground text-[10px]">
                 {toolCount} tool{toolCount !== 1 ? "s" : ""} discovered &amp;
                 tested
               </p>
@@ -2509,15 +2522,15 @@ function DeployView({
 
           <div className="flex items-center gap-3 py-3">
             {allSecretsStored ? (
-              <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
+              <CheckCircle2Icon className="text-success size-4 shrink-0" />
             ) : (
-              <div className="size-4 shrink-0 rounded-full border-2 border-amber-300" />
+              <div className="border-warning/30 size-4 shrink-0 rounded-full border-2" />
             )}
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-stone-700">
+              <p className="text-foreground text-xs font-medium">
                 API secrets stored
               </p>
-              <p className="text-[10px] text-stone-400">
+              <p className="text-muted-foreground text-[10px]">
                 {secretCount === 0
                   ? "No secrets required"
                   : allSecretsStored
@@ -2529,12 +2542,12 @@ function DeployView({
 
           {isDeployed && containerPort && (
             <div className="flex items-center gap-3 py-3">
-              <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />
+              <CheckCircle2Icon className="text-success size-4 shrink-0" />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium text-stone-700">
+                <p className="text-foreground text-xs font-medium">
                   Running on port {containerPort}
                 </p>
-                <p className="text-[10px] text-stone-400">
+                <p className="text-muted-foreground text-[10px]">
                   Docker container · SSE transport
                 </p>
               </div>
@@ -2544,21 +2557,21 @@ function DeployView({
 
         {/* SSE URL */}
         {isDeployed && sseUrl && (
-          <div className="border-t border-stone-100 px-5 py-3">
-            <p className="mb-1.5 text-[10px] font-semibold tracking-wider text-stone-400 uppercase">
+          <div className="border-border border-t px-5 py-3">
+            <p className="text-muted-foreground mb-1.5 text-[10px] font-semibold tracking-wider uppercase">
               SSE endpoint
             </p>
-            <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
-              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-700">
+            <div className="border-border bg-muted flex items-center gap-2 rounded-lg border px-3 py-2">
+              <code className="text-foreground min-w-0 flex-1 truncate font-mono text-[11px]">
                 {sseUrl}
               </code>
               <button
                 onClick={copyUrl}
-                className="shrink-0 text-stone-400 hover:text-stone-600"
+                className="text-muted-foreground hover:text-foreground shrink-0"
                 title="Copy URL"
               >
                 {copied ? (
-                  <CheckIcon className="size-3.5 text-emerald-500" />
+                  <CheckIcon className="text-success size-3.5" />
                 ) : (
                   <CopyIcon className="size-3.5" />
                 )}
@@ -2575,8 +2588,8 @@ function DeployView({
             className={cn(
               "w-full py-3 text-sm font-semibold transition-all",
               canDeploy
-                ? "bg-stone-900 text-white hover:bg-stone-700"
-                : "cursor-not-allowed bg-stone-100 text-stone-300",
+                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                : "bg-muted text-muted-foreground cursor-not-allowed",
             )}
             disabled={!canDeploy}
             onClick={() => void handleDeploy()}
@@ -2586,13 +2599,13 @@ function DeployView({
         ) : (
           <div className="flex flex-col gap-2">
             <Button
-              className="w-full border border-stone-200 bg-white py-3 text-sm font-semibold text-stone-700 shadow-sm hover:bg-stone-50"
+              className="border-border bg-card text-foreground hover:bg-muted w-full border py-3 text-sm font-semibold shadow-sm"
               onClick={() => void handleDeploy()}
             >
               Re-deploy
             </Button>
             <Button
-              className="w-full border border-red-200 bg-red-50 py-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+              className="border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/15 w-full border py-3 text-sm font-semibold"
               disabled={undeploying}
               onClick={() => void handleUndeploy()}
             >
@@ -2611,25 +2624,27 @@ function DeployView({
         )}
 
         {!allSecretsStored && !isDeployed && (
-          <p className="text-center text-[11px] text-stone-400">
+          <p className="text-muted-foreground text-center text-[11px]">
             Add your API secrets on the Build tab to enable deploy
           </p>
         )}
         {allSecretsStored && !isVerified && !isDeployed && (
-          <p className="text-center text-[11px] text-stone-400">
+          <p className="text-muted-foreground text-center text-[11px]">
             Run the sandbox test on the Build tab to reach verified phase
           </p>
         )}
         {isDeployed && (
-          <p className="text-center text-[11px] text-stone-400">
+          <p className="text-muted-foreground text-center text-[11px]">
             Go to the Connect tab to wire this server into the agent
           </p>
         )}
-        {error && <p className="text-center text-xs text-red-500">{error}</p>}
+        {error && (
+          <p className="text-destructive text-center text-xs">{error}</p>
+        )}
       </div>
 
       {/* Docker note */}
-      <p className="max-w-sm text-center text-[10px] leading-relaxed text-stone-400">
+      <p className="text-muted-foreground max-w-sm text-center text-[10px] leading-relaxed">
         Requires Docker installed and running on this host. Secrets are injected
         as container env vars and are never written to disk or logs.
       </p>
@@ -2684,15 +2699,15 @@ function ConnectView({
 
   if (!isDeployed) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-stone-50 p-8">
-        <div className="flex size-14 items-center justify-center rounded-2xl border border-stone-200 bg-white shadow-sm">
-          <PlugIcon className="size-6 text-stone-300" />
+      <div className="bg-muted flex flex-1 flex-col items-center justify-center gap-4 p-8">
+        <div className="border-border bg-card flex size-14 items-center justify-center rounded-2xl border shadow-sm">
+          <PlugIcon className="text-muted-foreground size-6" />
         </div>
         <div className="space-y-1 text-center">
-          <p className="text-sm font-medium text-stone-700">
+          <p className="text-foreground text-sm font-medium">
             Deploy first to connect
           </p>
-          <p className="text-xs text-stone-400">
+          <p className="text-muted-foreground text-xs">
             The server needs to be running in Docker before it can be wired into
             the agent.
           </p>
@@ -2702,23 +2717,23 @@ function ConnectView({
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-stone-50 p-8">
-      <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+    <div className="bg-muted flex flex-1 flex-col items-center justify-center gap-6 p-8">
+      <div className="border-border bg-card w-full max-w-sm overflow-hidden rounded-2xl border shadow-sm">
         {/* Header */}
-        <div className="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-stone-200 bg-stone-50">
-            <PlugZapIcon className="size-4 text-[#7C79F0]" />
+        <div className="border-border flex items-center gap-3 border-b px-5 py-4">
+          <div className="border-border bg-muted flex size-9 shrink-0 items-center justify-center rounded-xl border">
+            <PlugZapIcon className="text-highlight size-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-stone-900">
+            <p className="text-foreground truncate text-sm font-semibold">
               {server.name}
             </p>
-            <p className="text-[10px] text-stone-400">
+            <p className="text-muted-foreground text-[10px]">
               Running · port {containerPort}
             </p>
           </div>
           {connected && (
-            <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700">
+            <span className="border-success/30 bg-success/10 text-success flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-medium">
               <CheckCircle2Icon className="size-3" /> Wired in
             </span>
           )}
@@ -2727,20 +2742,20 @@ function ConnectView({
         {/* SSE URL row */}
         {sseUrl && (
           <div className="px-5 py-3">
-            <p className="mb-1.5 text-[10px] font-semibold tracking-wider text-stone-400 uppercase">
+            <p className="text-muted-foreground mb-1.5 text-[10px] font-semibold tracking-wider uppercase">
               SSE endpoint
             </p>
-            <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
-              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-700">
+            <div className="border-border bg-muted flex items-center gap-2 rounded-lg border px-3 py-2">
+              <code className="text-foreground min-w-0 flex-1 truncate font-mono text-[11px]">
                 {sseUrl}
               </code>
               <button
                 onClick={copyUrl}
-                className="shrink-0 text-stone-400 hover:text-stone-600"
+                className="text-muted-foreground hover:text-foreground shrink-0"
                 title="Copy"
               >
                 {copied ? (
-                  <CheckIcon className="size-3.5 text-emerald-500" />
+                  <CheckIcon className="text-success size-3.5" />
                 ) : (
                   <CopyIcon className="size-3.5" />
                 )}
@@ -2751,14 +2766,14 @@ function ConnectView({
 
         {/* After connect: show what was registered */}
         {connected && connectedName && (
-          <div className="border-t border-stone-100 px-5 py-3">
-            <p className="text-[10px] leading-relaxed text-stone-500">
+          <div className="border-border border-t px-5 py-3">
+            <p className="text-muted-foreground text-[10px] leading-relaxed">
               Added{" "}
-              <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[10px] text-stone-700">
+              <code className="bg-muted text-foreground rounded px-1 py-0.5 font-mono text-[10px]">
                 {connectedName}
               </code>{" "}
               to{" "}
-              <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[10px] text-stone-700">
+              <code className="bg-muted text-foreground rounded px-1 py-0.5 font-mono text-[10px]">
                 extensions_config.json
               </code>
               . The agent hot-reloads this file automatically — the new tools
@@ -2774,8 +2789,8 @@ function ConnectView({
           className={cn(
             "w-full py-3 text-sm font-semibold transition-all",
             connected
-              ? "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-              : "bg-stone-900 text-white hover:bg-stone-700",
+              ? "border-success/30 bg-success/10 text-success hover:bg-success/15 border"
+              : "bg-primary text-primary-foreground hover:bg-primary/90",
           )}
           disabled={connecting}
           onClick={() => void handleConnect()}
@@ -2795,10 +2810,12 @@ function ConnectView({
           )}
         </Button>
 
-        {error && <p className="text-center text-xs text-red-500">{error}</p>}
+        {error && (
+          <p className="text-destructive text-center text-xs">{error}</p>
+        )}
       </div>
 
-      <p className="max-w-sm text-center text-[10px] leading-relaxed text-stone-400">
+      <p className="text-muted-foreground max-w-sm text-center text-[10px] leading-relaxed">
         Writes the SSE URL into{" "}
         <code className="font-mono">extensions_config.json</code>. The agent
         picks it up via mtime hot-reload — no restart needed.
@@ -2979,7 +2996,7 @@ export function McpServerDetail({
   if (!isNew && loading) {
     return (
       <div className="flex size-full items-center justify-center">
-        <Loader2Icon className="size-5 animate-spin text-stone-400" />
+        <Loader2Icon className="text-muted-foreground size-5 animate-spin" />
       </div>
     );
   }
@@ -2987,11 +3004,11 @@ export function McpServerDetail({
   if (!isNew && loadError) {
     return (
       <div className="flex size-full flex-col items-center justify-center gap-3">
-        <XCircleIcon className="size-8 text-red-400" />
-        <p className="text-sm text-stone-600">{loadError}</p>
+        <XCircleIcon className="text-destructive size-8" />
+        <p className="text-muted-foreground text-sm">{loadError}</p>
         <Link
           href="/workspace/mcp"
-          className="text-xs text-stone-500 underline hover:text-stone-700"
+          className="text-muted-foreground hover:text-foreground text-xs underline"
         >
           Back to MCP Suite
         </Link>
@@ -3000,20 +3017,20 @@ export function McpServerDetail({
   }
 
   return (
-    <div className="flex size-full flex-col overflow-hidden bg-white">
+    <div className="bg-card flex size-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-stone-200 bg-white px-5 py-3.5">
+      <div className="border-border bg-card flex items-center gap-3 border-b px-5 py-3.5">
         <Link
           href="/workspace/mcp"
-          className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+          className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-lg p-1.5"
         >
           <ArrowLeftIcon className="size-4" />
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">
+          <p className="text-muted-foreground text-[10px] font-semibold tracking-widest uppercase">
             MCP Studio
           </p>
-          <h1 className="truncate text-base font-semibold text-stone-900">
+          <h1 className="text-foreground truncate text-base font-semibold">
             {isNew ? "New MCP Server" : (server?.name ?? "Loading…")}
           </h1>
         </div>
@@ -3021,7 +3038,7 @@ export function McpServerDetail({
       </div>
 
       {/* Lifecycle tab bar */}
-      <div className="flex items-center gap-0 border-b border-stone-200 bg-white px-5 pt-3">
+      <div className="border-border bg-card flex items-center gap-0 border-b px-5 pt-3">
         {LIFECYCLE_TABS.map(({ id, label, disabled }) => (
           <button
             key={id}
@@ -3030,14 +3047,14 @@ export function McpServerDetail({
             className={cn(
               "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors",
               disabled
-                ? "cursor-not-allowed text-stone-300"
+                ? "text-muted-foreground cursor-not-allowed"
                 : activeTab === id
-                  ? "border-b-2 border-stone-900 text-stone-900"
-                  : "text-stone-400 hover:text-stone-700",
+                  ? "border-foreground text-foreground border-b-2"
+                  : "text-muted-foreground hover:text-foreground",
             )}
           >
             {label}
-            {disabled && <LockIcon className="size-3 text-stone-300" />}
+            {disabled && <LockIcon className="text-muted-foreground size-3" />}
           </button>
         ))}
       </div>
@@ -3048,14 +3065,14 @@ export function McpServerDetail({
           <StartTab onCreated={handleCreated} />
         )}
         {activeTab === "start" && !isNew && (
-          <div className="flex flex-1 items-center justify-center bg-stone-50 p-8">
+          <div className="bg-muted flex flex-1 items-center justify-center p-8">
             <div className="space-y-3 text-center">
-              <p className="text-sm text-stone-500">
+              <p className="text-muted-foreground text-sm">
                 This server was already created.
               </p>
               <Button
                 size="sm"
-                className="bg-stone-900 text-white hover:bg-stone-700"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
                 onClick={() => setActiveTab("build")}
               >
                 View Build →
@@ -3087,8 +3104,10 @@ export function McpServerDetail({
           !isNew &&
           (!server || !buildStatus) &&
           !loading && (
-            <div className="flex flex-1 items-center justify-center bg-stone-50">
-              <p className="text-sm text-stone-400">No build data yet.</p>
+            <div className="bg-muted flex flex-1 items-center justify-center">
+              <p className="text-muted-foreground text-sm">
+                No build data yet.
+              </p>
             </div>
           )}
         {activeTab === "deploy" && !isNew && server && (

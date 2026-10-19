@@ -9,15 +9,16 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "cursor-pointer bg-black text-white hover:bg-black/90",
+        default:
+          "cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90",
         destructive:
-          "cursor-pointer bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
         outline:
-          "cursor-pointer border border-black bg-black text-white shadow-xs hover:bg-black/90 hover:text-white dark:border-black dark:bg-black",
-        secondary: "cursor-pointer bg-black text-white hover:bg-black/90",
-        ghost:
-          "cursor-pointer hover:bg-stone-100 hover:text-stone-900 dark:hover:bg-stone-800 dark:hover:text-stone-100",
-        link: "cursor-pointer text-black underline-offset-4 hover:underline",
+          "cursor-pointer border border-primary bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground",
+        secondary:
+          "cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90",
+        ghost: "cursor-pointer hover:bg-muted hover:text-foreground",
+        link: "cursor-pointer text-foreground underline-offset-4 hover:underline",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
@@ -36,7 +37,7 @@ const buttonVariants = cva(
 );
 
 const submitButtonClasses =
-  "border-black bg-black text-white hover:bg-black/90 hover:text-white active:translate-y-px active:scale-[0.985] disabled:border-black disabled:bg-black disabled:text-white";
+  "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:translate-y-px active:scale-[0.985] disabled:border-primary disabled:bg-primary disabled:text-primary-foreground";
 
 function Button({
   className,

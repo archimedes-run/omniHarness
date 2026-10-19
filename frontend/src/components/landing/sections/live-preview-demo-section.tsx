@@ -116,7 +116,7 @@ function SkillIcon() {
     <svg
       viewBox="0 0 16 16"
       fill="none"
-      className="size-3.5 shrink-0 text-stone-400"
+      className="text-muted-foreground size-3.5 shrink-0"
     >
       <rect
         x="2"
@@ -142,7 +142,7 @@ function EditIcon() {
     <svg
       viewBox="0 0 16 16"
       fill="none"
-      className="size-3.5 shrink-0 text-stone-400"
+      className="text-muted-foreground size-3.5 shrink-0"
     >
       <path
         d="M9.5 3.5l3 3-7 7H2.5v-3l7-7z"
@@ -196,7 +196,11 @@ function FileDocIcon({ active }: { active?: boolean }) {
 
 function GlobeIcon() {
   return (
-    <svg viewBox="0 0 20 20" fill="none" className="size-4 text-stone-500">
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      className="text-muted-foreground size-4"
+    >
       <circle cx="10" cy="10" r="7.5" stroke="currentColor" strokeWidth="1.3" />
       <path
         d="M10 2.5c0 0-3 3-3 7.5s3 7.5 3 7.5M10 2.5c0 0 3 3 3 7.5s-3 7.5-3 7.5M2.5 10h15"
@@ -414,22 +418,22 @@ function PreviewDashboard({ visible }: { visible: boolean }) {
   return (
     <div
       className={cn(
-        "h-full overflow-y-auto bg-white px-5 py-4 transition-opacity duration-500",
+        "bg-card h-full overflow-y-auto px-5 py-4 transition-opacity duration-500",
         visible ? "opacity-100" : "opacity-0",
       )}
     >
-      <h3 className="text-sm font-bold text-stone-900">Analytics Dashboard</h3>
-      <p className="mt-0.5 text-[10px] leading-relaxed text-stone-400">
+      <h3 className="text-foreground text-sm font-bold">Analytics Dashboard</h3>
+      <p className="text-muted-foreground mt-0.5 text-[10px] leading-relaxed">
         Market Share %, Estimated Visits, and Visibility % with 4w/12w MAs and
         anomaly markers.
       </p>
 
       {/* Controls */}
       <div className="mt-3 flex items-center gap-3">
-        <div className="flex items-center gap-1.5 rounded-md border border-stone-200 px-2 py-1 text-[10px] text-stone-600">
+        <div className="border-border text-muted-foreground flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px]">
           Metric
           <span className="font-medium">Market Share %</span>
-          <svg viewBox="0 0 10 10" className="size-2.5 fill-stone-400">
+          <svg viewBox="0 0 10 10" className="fill-muted-foreground size-2.5">
             <path
               d="M2 3.5l3 3 3-3"
               stroke="currentColor"
@@ -438,17 +442,17 @@ function PreviewDashboard({ visible }: { visible: boolean }) {
             />
           </svg>
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-stone-500">
+        <div className="text-muted-foreground flex items-center gap-1 text-[10px]">
           <span>Date range</span>
           {["1y", "2y", "3y"].map((r) => (
             <span
               key={r}
-              className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-stone-100"
+              className="text-muted-foreground hover:bg-muted rounded px-1.5 py-0.5"
             >
               {r}
             </span>
           ))}
-          <span className="rounded bg-stone-900 px-1.5 py-0.5 text-white">
+          <span className="bg-primary text-primary-foreground rounded px-1.5 py-0.5">
             max
           </span>
         </div>
@@ -468,17 +472,17 @@ function PreviewDashboard({ visible }: { visible: boolean }) {
             label: "Latest",
             value: "4.08%",
             sub: "▲ 0.00% WoW",
-            subColor: "text-emerald-500",
+            subColor: "text-success",
           },
           { label: "4w MA", value: "4.17%", sub: "", subColor: "" },
           { label: "12w MA", value: "2.43%", sub: "", subColor: "" },
         ].map(({ label, value, sub, subColor }) => (
           <div
             key={label}
-            className="rounded-lg border border-stone-100 bg-stone-50 px-3 py-2"
+            className="border-border bg-muted rounded-lg border px-3 py-2"
           >
-            <p className="text-[9px] text-stone-400">{label}</p>
-            <p className="mt-0.5 text-base leading-none font-bold text-stone-900">
+            <p className="text-muted-foreground text-[9px]">{label}</p>
+            <p className="text-foreground mt-0.5 text-base leading-none font-bold">
               {value}
             </p>
             {sub && <p className={cn("mt-1 text-[9px]", subColor)}>{sub}</p>}
@@ -489,28 +493,28 @@ function PreviewDashboard({ visible }: { visible: boolean }) {
       {/* Chart */}
       <div
         className={cn(
-          "mt-3 rounded-lg border border-stone-100 p-3 transition-all duration-500",
+          "border-border mt-3 rounded-lg border p-3 transition-all duration-500",
           visible && chartProgress > 0.05 ? "opacity-100" : "opacity-0",
         )}
       >
         <div className="mb-1.5 flex items-center justify-between">
-          <p className="text-[10px] font-medium text-stone-700">
+          <p className="text-foreground text-[10px] font-medium">
             Market Share % over time
           </p>
-          <div className="flex items-center gap-3 text-[8.5px] text-stone-400">
+          <div className="text-muted-foreground flex items-center gap-3 text-[8.5px]">
             <span className="flex items-center gap-1">
               <span className="inline-block h-0.5 w-4 bg-blue-500" /> Base
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block h-0.5 w-4 border-t-2 border-dashed border-emerald-400" />{" "}
+              <span className="border-success inline-block h-0.5 w-4 border-t-2 border-dashed" />{" "}
               4w MA
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block h-0.5 w-4 border-t-2 border-dashed border-yellow-400" />{" "}
+              <span className="border-warning inline-block h-0.5 w-4 border-t-2 border-dashed" />{" "}
               12w MA
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block size-2 rounded-full bg-red-500" />{" "}
+              <span className="bg-destructive inline-block size-2 rounded-full" />{" "}
               Anomaly
             </span>
           </div>
@@ -528,7 +532,7 @@ function CodeEditor({ visibleLines }: { visibleLines: number }) {
     <div className="h-full overflow-hidden bg-[#111111] px-4 py-3 font-mono">
       {CODE_LINES.slice(0, visibleLines).map((line, i) => (
         <div key={i} className="flex items-start">
-          <span className="mr-3 w-4 shrink-0 text-right text-[10px] leading-[1.65] text-stone-600 select-none">
+          <span className="mr-3 w-4 shrink-0 text-right text-[10px] leading-[1.65] text-stone-400 select-none">
             {i + 1}
           </span>
           <span
@@ -581,7 +585,7 @@ function FileTreeView() {
       <div className="flex-1 overflow-hidden bg-[#111111] px-4 py-3 font-mono">
         {CODE_LINES.slice(0, 20).map((line, i) => (
           <div key={i} className="flex items-start">
-            <span className="mr-3 w-4 shrink-0 text-right text-[10px] leading-[1.65] text-stone-600 select-none">
+            <span className="mr-3 w-4 shrink-0 text-right text-[10px] leading-[1.65] text-stone-400 select-none">
               {i + 1}
             </span>
             <span
@@ -698,30 +702,36 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
       )}
     >
       <div className="mb-12 flex flex-col items-center gap-3 text-center">
-        <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
+        <p className="text-muted-foreground text-xs font-semibold tracking-widest uppercase">
           Project Workbench
         </p>
-        <h2 className="max-w-3xl text-4xl font-bold tracking-tight text-balance text-stone-900 md:text-5xl">
+        <h2 className="text-foreground max-w-3xl text-4xl font-bold tracking-tight text-balance md:text-5xl">
           Build, preview, inspect,
-          <span className="text-stone-400"> and repair live outputs</span>
+          <span className="text-muted-foreground">
+            {" "}
+            and repair live outputs
+          </span>
         </h2>
-        <p className="max-w-2xl text-base leading-relaxed text-pretty text-stone-500">
+        <p className="text-muted-foreground max-w-2xl text-base leading-relaxed text-pretty">
           Harnesses do not stop at code generation. OmniHarness starts preview
           sessions, streams logs, exposes files and artifacts, and keeps the
           workbench attached to the capability the agent built.
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-stone-200 shadow-2xl shadow-stone-200/60">
-        <div className="flex items-center gap-3 border-b border-stone-200 bg-stone-50 px-4 py-2.5">
+      <div className="border-border overflow-hidden rounded-2xl border shadow-2xl shadow-stone-200/60">
+        <div className="border-border bg-muted flex items-center gap-3 border-b px-4 py-2.5">
           <div className="flex gap-1.5">
-            <div className="size-2.5 rounded-full bg-red-400" />
-            <div className="size-2.5 rounded-full bg-yellow-400" />
-            <div className="size-2.5 rounded-full bg-green-400" />
+            <div className="size-2.5 rounded-full bg-red-500" />
+            <div className="size-2.5 rounded-full bg-yellow-500" />
+            <div className="size-2.5 rounded-full bg-green-500" />
           </div>
           <div className="flex flex-1 items-center justify-center">
-            <div className="flex items-center gap-1.5 rounded-md border border-stone-200 bg-white px-3 py-1 text-[11px] text-stone-400">
-              <svg viewBox="0 0 14 14" className="size-2.5 fill-stone-400">
+            <div className="border-border bg-card text-muted-foreground flex items-center gap-1.5 rounded-md border px-3 py-1 text-[11px]">
+              <svg
+                viewBox="0 0 14 14"
+                className="fill-muted-foreground size-2.5"
+              >
                 <path d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 1.2a4.8 4.8 0 110 9.6 4.8 4.8 0 010-9.6z" />
               </svg>
               localhost:2026/workspace/chats/analytics-dashboard
@@ -729,9 +739,9 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
           </div>
         </div>
 
-        <div className="flex min-h-[900px] flex-col bg-white lg:h-[500px] lg:min-h-0 lg:flex-row">
-          <div className="hidden w-10 shrink-0 flex-col items-center gap-4 border-r border-stone-100 bg-stone-50 py-4 lg:flex">
-            <div className="flex size-5 items-center justify-center rounded-full bg-stone-900 text-[8px] font-bold text-white">
+        <div className="bg-card flex min-h-[900px] flex-col lg:h-[500px] lg:min-h-0 lg:flex-row">
+          <div className="border-border bg-muted hidden w-10 shrink-0 flex-col items-center gap-4 border-r py-4 lg:flex">
+            <div className="bg-primary text-primary-foreground flex size-5 items-center justify-center rounded-full text-[8px] font-bold">
               O
             </div>
             {[
@@ -739,7 +749,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 key="c"
                 viewBox="0 0 16 16"
                 fill="none"
-                className="size-4 text-stone-400"
+                className="text-muted-foreground size-4"
               >
                 <path
                   d="M2 3h12v8H2z"
@@ -758,7 +768,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 key="m"
                 viewBox="0 0 16 16"
                 fill="none"
-                className="size-4 text-stone-400"
+                className="text-muted-foreground size-4"
               >
                 <circle
                   cx="8"
@@ -778,7 +788,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 key="a"
                 viewBox="0 0 16 16"
                 fill="none"
-                className="size-4 text-stone-400"
+                className="text-muted-foreground size-4"
               >
                 <rect
                   x="2"
@@ -820,16 +830,16 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
             ]}
           </div>
 
-          <div className="flex w-full flex-col border-b border-stone-100 lg:w-[44%] lg:shrink-0 lg:border-r lg:border-b-0">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 px-4 py-2.5">
-              <span className="text-[11px] font-medium text-stone-700">
+          <div className="border-border flex w-full flex-col border-b lg:w-[44%] lg:shrink-0 lg:border-r lg:border-b-0">
+            <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+              <span className="text-foreground text-[11px] font-medium">
                 Analytics Dashboard
               </span>
               <div className="flex flex-wrap items-center gap-2">
-                <button className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-stone-400 hover:bg-stone-50">
+                <button className="text-muted-foreground hover:bg-muted flex items-center gap-1 rounded px-2 py-1 text-[10px]">
                   <DownloadIcon /> Export
                 </button>
-                <button className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-stone-400 hover:bg-stone-50">
+                <button className="text-muted-foreground hover:bg-muted flex items-center gap-1 rounded px-2 py-1 text-[10px]">
                   <svg viewBox="0 0 14 14" fill="none" className="size-3">
                     <rect
                       x="2"
@@ -877,8 +887,8 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
             <div className="flex-1 overflow-hidden px-4 py-3">
               {/* Steps accordion */}
               {visibleSteps > 0 && (
-                <div className="rounded-xl border border-stone-100 bg-stone-50/70 p-3">
-                  <button className="mb-2 flex items-center gap-1.5 text-[10px] text-stone-400">
+                <div className="border-border bg-muted/70 rounded-xl border p-3">
+                  <button className="text-muted-foreground mb-2 flex items-center gap-1.5 text-[10px]">
                     <svg viewBox="0 0 12 12" fill="none" className="size-2.5">
                       <path
                         d="M2 4l4 4 4-4"
@@ -895,13 +905,13 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                         className="animate-fadeIn flex flex-col gap-0.5"
                         style={{ animationDuration: "0.3s" }}
                       >
-                        <div className="flex items-center gap-1.5 text-[10.5px] text-stone-700">
+                        <div className="text-foreground flex items-center gap-1.5 text-[10.5px]">
                           {step.type === "skill" ? <SkillIcon /> : <EditIcon />}
                           {step.label}
                           {i < visibleSteps - 1 && (
                             <svg
                               viewBox="0 0 12 12"
-                              className="ml-auto size-3 text-emerald-500"
+                              className="text-success ml-auto size-3"
                               fill="currentColor"
                             >
                               <path
@@ -918,7 +928,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                               {[0, 1, 2].map((j) => (
                                 <span
                                   key={j}
-                                  className="inline-block size-1 rounded-full bg-stone-400"
+                                  className="bg-muted-foreground/50 inline-block size-1 rounded-full"
                                   style={{
                                     animation: `bounce 0.9s ${j * 0.2}s ease-in-out infinite`,
                                   }}
@@ -927,7 +937,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                             </span>
                           )}
                         </div>
-                        <span className="ml-5 text-[9.5px] text-stone-400">
+                        <span className="text-muted-foreground ml-5 text-[9.5px]">
                           {step.path}
                         </span>
                       </div>
@@ -940,7 +950,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
               {showAgentMessage && (
                 <div
                   className={cn(
-                    "mt-3 text-[11px] leading-relaxed text-stone-700 transition-all duration-500",
+                    "text-foreground mt-3 text-[11px] leading-relaxed transition-all duration-500",
                     showAgentMessage
                       ? "translate-y-0 opacity-100"
                       : "translate-y-2 opacity-0",
@@ -949,10 +959,10 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                   <p className="font-medium">
                     The dashboard is complete and the dev server is running.
                   </p>
-                  <p className="mt-1.5 text-[10.5px] text-stone-500">
+                  <p className="text-muted-foreground mt-1.5 text-[10.5px]">
                     What I built
                   </p>
-                  <ul className="mt-1 space-y-0.5 text-[10.5px] text-stone-500">
+                  <ul className="text-muted-foreground mt-1 space-y-0.5 text-[10.5px]">
                     <li>• Next.js 14 app with Tailwind CSS</li>
                     <li>• SVG line chart with 4w/12w moving averages</li>
                     <li>• Anomaly detection with z-score markers</li>
@@ -966,8 +976,8 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                   className={cn(
                     "mt-3 cursor-pointer rounded-xl border transition-all duration-500",
                     artifactClicked
-                      ? "border-stone-900 bg-stone-900 shadow-md"
-                      : "border-stone-200 bg-white hover:border-stone-300",
+                      ? "border-foreground bg-foreground shadow-md"
+                      : "border-border bg-card hover:border-input",
                     showArtifactCard
                       ? "translate-y-0 opacity-100"
                       : "translate-y-4 opacity-0",
@@ -977,7 +987,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                     <div
                       className={cn(
                         "flex size-7 shrink-0 items-center justify-center rounded-lg",
-                        artifactClicked ? "bg-white/10" : "bg-stone-100",
+                        artifactClicked ? "bg-card/10" : "bg-muted",
                       )}
                     >
                       <span className={artifactClicked ? "text-white" : ""}>
@@ -988,7 +998,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                       <p
                         className={cn(
                           "truncate text-[11px] font-semibold",
-                          artifactClicked ? "text-white" : "text-stone-800",
+                          artifactClicked ? "text-white" : "text-foreground",
                         )}
                       >
                         Analytics Dashboard (Next.js 14)
@@ -997,8 +1007,8 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                         className={cn(
                           "mt-0.5 inline-block rounded px-1.5 py-0.5 text-[9px] font-medium",
                           artifactClicked
-                            ? "bg-white/15 text-white/80"
-                            : "bg-stone-100 text-stone-500",
+                            ? "bg-card/15 text-white/80"
+                            : "bg-muted text-muted-foreground",
                         )}
                       >
                         Live App
@@ -1007,7 +1017,9 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                     <button
                       className={cn(
                         "flex items-center gap-1 rounded px-1.5 py-1 text-[9.5px]",
-                        artifactClicked ? "text-white/60" : "text-stone-400",
+                        artifactClicked
+                          ? "text-white/60"
+                          : "text-muted-foreground",
                       )}
                     >
                       <DownloadIcon />
@@ -1018,13 +1030,13 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
             </div>
 
             {/* Chat input */}
-            <div className="border-t border-stone-100 px-3 py-2">
-              <div className="rounded-xl border border-stone-200 bg-white px-3 py-2">
-                <p className="text-[10.5px] text-stone-300">
+            <div className="border-border border-t px-3 py-2">
+              <div className="border-border bg-card rounded-xl border px-3 py-2">
+                <p className="text-muted-foreground text-[10.5px]">
                   How can I assist you today?
                 </p>
                 <div className="mt-2 flex items-center justify-between">
-                  <div className="flex items-center gap-1 text-[10px] font-medium text-red-500">
+                  <div className="text-destructive flex items-center gap-1 text-[10px] font-medium">
                     <svg
                       viewBox="0 0 12 12"
                       fill="currentColor"
@@ -1034,7 +1046,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                     </svg>
                     Ultra
                   </div>
-                  <div className="flex items-center gap-1 text-[10px] text-stone-400">
+                  <div className="text-muted-foreground flex items-center gap-1 text-[10px]">
                     <span className="size-1.5 rounded-full bg-blue-500" />
                     OpenAI / GPT-5
                   </div>
@@ -1043,15 +1055,15 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
             </div>
           </div>
 
-          <div className="flex min-h-[360px] flex-1 flex-col bg-white lg:min-h-0">
-            <div className="flex flex-wrap items-center gap-2 border-b border-stone-100 px-3 py-2">
-              <span className="truncate text-[11px] font-medium text-stone-700">
+          <div className="bg-card flex min-h-[360px] flex-1 flex-col lg:min-h-0">
+            <div className="border-border flex flex-wrap items-center gap-2 border-b px-3 py-2">
+              <span className="text-foreground truncate text-[11px] font-medium">
                 Analytics Dashboard
               </span>
               <svg
                 viewBox="0 0 12 12"
                 fill="none"
-                className="size-3 shrink-0 text-stone-400"
+                className="text-muted-foreground size-3 shrink-0"
               >
                 <path
                   d="M2 4l4 4 4-4"
@@ -1065,21 +1077,21 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 className={cn(
                   "flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] transition-all duration-500",
                   isRunning
-                    ? "bg-emerald-50 text-emerald-600"
-                    : "bg-stone-100 text-stone-400",
+                    ? "bg-success/10 text-success"
+                    : "bg-muted text-muted-foreground",
                 )}
               >
                 {isRunning ? (
                   <>
                     <span className="relative flex size-1.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+                      <span className="bg-success absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" />
+                      <span className="bg-success relative inline-flex size-1.5 rounded-full" />
                     </span>
                     running
                   </>
                 ) : (
                   <>
-                    <span className="size-1.5 rounded-full bg-stone-300" />
+                    <span className="bg-muted-foreground/30 size-1.5 rounded-full" />
                     not running
                   </>
                 )}
@@ -1096,14 +1108,14 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                     className={cn(
                       "rounded p-1",
                       active
-                        ? "bg-stone-100 text-stone-600"
-                        : "text-stone-400 hover:bg-stone-50",
+                        ? "bg-muted text-muted-foreground"
+                        : "text-muted-foreground hover:bg-muted",
                     )}
                   >
                     {icon}
                   </button>
                 ))}
-                <div className="mx-1 h-3.5 w-px bg-stone-200" />
+                <div className="bg-accent mx-1 h-3.5 w-px" />
                 {[
                   { icon: <ExternalLinkIcon /> },
                   {
@@ -1111,7 +1123,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                       <span
                         className={cn(
                           "transition-colors duration-300",
-                          phase === 4 ? "text-emerald-500" : "",
+                          phase === 4 ? "text-success" : "",
                         )}
                       >
                         <PlayIcon />
@@ -1122,7 +1134,7 @@ export function LivePreviewDemoSection({ className }: { className?: string }) {
                 ].map(({ icon }, i) => (
                   <button
                     key={i}
-                    className="rounded p-1 text-stone-400 hover:bg-stone-50"
+                    className="text-muted-foreground hover:bg-muted rounded p-1"
                   >
                     {icon}
                   </button>

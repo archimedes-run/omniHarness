@@ -24,6 +24,11 @@ export default defineConfig({
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
-    env: { SKIP_ENV_VALIDATION: "1", OMNI_HARNESS_AUTH_DISABLED: "1" },
+    env: {
+      SKIP_ENV_VALIDATION: "1",
+      OMNI_HARNESS_AUTH_DISABLED: "1",
+      // Workflows render on Automations only behind this build-time flag.
+      NEXT_PUBLIC_FEATURE_WORKFLOWS: "true",
+    },
   },
 });
