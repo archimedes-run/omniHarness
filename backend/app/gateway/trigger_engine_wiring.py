@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -213,7 +213,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     return TriggerLoop(
         loader=loader,
         runner=runner,
-        engine=SupervisedEngine(evaluate=lambda rule, now: None),
+        engine=SupervisedEngine(evaluate=lambda rule, now: None, rule_timeout=_rule_timeout()),
         scheduler=scheduler,
         fingerprints=fingerprints,
         evaluations=evaluations,
@@ -221,6 +221,25 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         presence=PresenceSignal(),
         now=lambda: datetime.now(UTC),
     )
+
+
+#: One gateway call, including a whole agent turn for runs/wait.
+GATEWAY_CALL_TIMEOUT_SECONDS = 120.0
+
+
+def _rule_timeout() -> timedelta:
+    """How long one rule's work may take before the engine reports it hung.
+
+    DERIVED, not chosen: create the rule's thread (one gateway call), run the
+    agent (one gateway call), deliver (the channel's bound). It was the engine's
+    30 s default, which never fired while rule work blocked the event loop —
+    wait_for cannot interrupt a blocking call — and fired on every ordinary
+    agent run once the work moved to a thread. Three of those mute a rule
+    (engine.BACKOFF_AFTER). Found in the live end-to-end check.
+    """
+    from app.gateway.trigger_destinations import DELIVERY_TIMEOUT_SECONDS
+
+    return timedelta(seconds=2 * GATEWAY_CALL_TIMEOUT_SECONDS + DELIVERY_TIMEOUT_SECONDS)
 
 
 def _gateway_base_url() -> str:
@@ -244,7 +263,7 @@ def _gateway_call(method: str):
         # Same double-submit pair the channel manager sends (channels/manager.py).
         csrf = generate_csrf_token()
         headers = {**create_internal_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
-        with httpx.Client(timeout=120.0) as client:
+        with httpx.Client(timeout=GATEWAY_CALL_TIMEOUT_SECONDS) as client:
             resp = client.request(method, url, json=body, headers=headers)
             if resp.is_error:
                 raise GatewayCallFailed(method, path, resp)
@@ -315,7 +334,11 @@ def _exchange_state(config: AppConfig, run_store, main_loop: asyncio.AbstractEve
         threads = dict.fromkeys(t for t in [thread_id, *_destination_conversations(config)] if t)
         active = []
         for tid in threads:
-            rows = asyncio.run_coroutine_threadsafe(run_store.list_by_thread(tid), main_loop).result(timeout=10)
+            # user_id=None, EXPLICITLY: every user's runs on this thread. The
+            # SQL store's default reads the caller's user context, and the
+            # engine has none, so it refused every query and each alert was
+            # held for the full five-minute bound (found in the live E2E).
+            rows = asyncio.run_coroutine_threadsafe(run_store.list_by_thread(tid, user_id=None), main_loop).result(timeout=10)
             active += [r["run_id"] for r in rows if r.get("status") in _ACTIVE_RUN_STATUSES]
         return {"status": "busy" if active else "idle", "active_runs": active}
 

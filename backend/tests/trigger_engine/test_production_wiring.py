@@ -29,6 +29,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import pytest_asyncio
 
 from app.channels.base import Channel
 from app.channels.message_bus import MessageBus, OutboundMessage
@@ -342,18 +343,31 @@ async def test_rule_work_does_not_block_the_event_loop(tmp_path, gateway) -> Non
 # -- FR-016: not talking over an exchange --------------------------------------
 
 
+@pytest_asyncio.fixture
+async def sql_run_store(tmp_path):
+    """The run store production uses: RunRepository on SQL. MemoryRunStore
+    let the busy check pass here while the real one refused every query —
+    'list_by_thread called with user_id=AUTO but no user context is set' —
+    found only in the live end-to-end check (Article XI)."""
+    from omniharness.persistence.engine import close_engine, get_session_factory, init_engine
+    from omniharness.persistence.run import RunRepository
+
+    await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path / 'runs.db'}", sqlite_dir=str(tmp_path))
+    yield RunRepository(get_session_factory())
+    await close_engine()
+
+
 async def _running(store, run_id: str, thread_id: str) -> None:
-    await store.put(run_id, thread_id=thread_id, status="running")
+    # As production records them: owned by a user, not by no one.
+    await store.put(run_id, thread_id=thread_id, user_id="the-user", status="running")
 
 
 @pytest.mark.asyncio
-async def test_an_exchange_in_the_destination_conversation_holds_the_message(tmp_path, telegram) -> None:
+async def test_an_exchange_in_the_destination_conversation_holds_the_message(tmp_path, telegram, sql_run_store) -> None:
     """The exchange a proactive message would interrupt is the one in the chat
     it lands in — the user's Telegram conversation — not only the rule's own
     thread, where the user never types."""
-    from omniharness.runtime.runs.store.memory import MemoryRunStore
-
-    store = MemoryRunStore()
+    store = sql_run_store
     telegram.store.set_thread_id("telegram", CHAT_ID, "conv-1")
     loop = _build(tmp_path, [WATCHER_RULE], run_store=store)
 
@@ -365,11 +379,9 @@ async def test_an_exchange_in_the_destination_conversation_holds_the_message(tmp
 
 
 @pytest.mark.asyncio
-async def test_a_run_on_the_rule_thread_holds_the_message(tmp_path) -> None:
+async def test_a_run_on_the_rule_thread_holds_the_message(tmp_path, sql_run_store) -> None:
     """FR-016 as written: the target thread."""
-    from omniharness.runtime.runs.store.memory import MemoryRunStore
-
-    store = MemoryRunStore()
+    store = sql_run_store
     loop = _build(tmp_path, [WATCHER_RULE], run_store=store)
     await _running(store, "r1", "rule-thread")
 
@@ -582,11 +594,9 @@ async def test_a_blocked_session_reaches_telegram_redacted(tmp_path, live_watche
 
 
 @pytest.mark.asyncio
-async def test_a_blocked_session_waits_while_the_user_is_mid_exchange_on_telegram(tmp_path, live_watcher, gateway, telegram) -> None:
-    from omniharness.runtime.runs.store.memory import MemoryRunStore
-
+async def test_a_blocked_session_waits_while_the_user_is_mid_exchange_on_telegram(tmp_path, live_watcher, gateway, telegram, sql_run_store) -> None:
     gateway.run_seconds = 0.0
-    store = MemoryRunStore()
+    store = sql_run_store
     telegram.store.set_thread_id("telegram", CHAT_ID, "conv-1")
     await _running(store, "r1", "conv-1")
     loop = _build(tmp_path, [AUTO_RULE], run_store=store, defaults={"coalesce_window_seconds": 0})
@@ -642,3 +652,18 @@ async def test_the_remote_destination_delivers_through_the_channel_boundary(tmp_
 
     [sent] = telegram.sent
     assert SECRET not in sent.text and "[redacted]" in sent.text
+
+
+@pytest.mark.asyncio
+async def test_the_rule_timeout_covers_a_rules_legitimate_work(tmp_path) -> None:
+    """Live E2E: 'rule blocked-session exceeded 0:00:30 and was cancelled' on an
+    ordinary agent run. The engine's 30 s default never fired while rule work
+    blocked the loop; off the loop it fires on every run, and three mute the
+    rule. A rule's work is: create its thread, run the agent, deliver."""
+    from app.gateway.trigger_destinations import DELIVERY_TIMEOUT_SECONDS
+    from app.gateway.trigger_engine_wiring import GATEWAY_CALL_TIMEOUT_SECONDS
+
+    loop = _build(tmp_path, [WATCHER_RULE])
+
+    needed = 2 * GATEWAY_CALL_TIMEOUT_SECONDS + DELIVERY_TIMEOUT_SECONDS
+    assert loop.engine.rule_timeout.total_seconds() >= needed, f"{loop.engine.rule_timeout} cannot cover a rule's work ({needed}s)"
