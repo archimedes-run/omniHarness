@@ -206,9 +206,9 @@ def _cron_rule_due_once() -> dict:
     return {"id": "morning-briefing", "type": "cron", "match": {"schedule": f"{at.minute} {at.hour} * * *"}, "prompt": "Brief me, as of {scheduled_at}.", "destination": "quiet"}
 
 
-def _config(tmp_path: Path, rules: list[dict]) -> SimpleNamespace:
+def _config(tmp_path: Path, rules: list[dict], **top) -> SimpleNamespace:
     rules_file = tmp_path / "rules.json"
-    rules_file.write_text(json.dumps({"quiet_hours": {"start": "22:00", "end": "07:30", "timezone": "UTC", "enabled": False}, "rules": rules}))
+    rules_file.write_text(json.dumps({"quiet_hours": {"start": "22:00", "end": "07:30", "timezone": "UTC", "enabled": False}, "rules": rules, **top}))
     return SimpleNamespace(
         trigger_engine=SimpleNamespace(
             enabled=True,
@@ -222,11 +222,11 @@ def _config(tmp_path: Path, rules: list[dict]) -> SimpleNamespace:
     )
 
 
-def _build(tmp_path: Path, rules: list[dict], *, run_store=None):
+def _build(tmp_path: Path, rules: list[dict], *, run_store=None, **top):
     """`build_production_loop` with what the gateway lifespan passes it."""
     from omniharness.runtime.runs.store.memory import MemoryRunStore
 
-    return build_production_loop(_config(tmp_path, rules), run_store=run_store if run_store is not None else MemoryRunStore())
+    return build_production_loop(_config(tmp_path, rules, **top), run_store=run_store if run_store is not None else MemoryRunStore())
 
 
 WATCHER_RULE = {"id": "blocked-session", "type": "watcher", "match": {"event": "waiting-on-user"}, "prompt": "{project} is waiting: {last_message}", "destination": "auto"}
@@ -423,3 +423,22 @@ async def test_a_run_with_no_reply_is_not_delivered_as_an_empty_message(tmp_path
     assert entry["outcome"] == "failed"
     assert "no reply" in entry["reason"]
     assert loop.runner.registry.quiet.delivered == []
+
+
+# -- FR-018: a missed schedule fires once, late, and says so -------------------
+
+
+@pytest.mark.asyncio
+async def test_a_frequent_schedule_does_not_replay_a_day_of_missed_runs(tmp_path, gateway) -> None:
+    """A gateway down overnight under a */5 rule used to come back to 288 runs,
+    each one a message to the user's phone."""
+    gateway.run_seconds = 0.0
+    every_five = {"id": "pulse", "type": "cron", "match": {"schedule": "*/5 * * * *"}, "prompt": "Status as of {scheduled_at}.", "destination": "quiet"}
+    loop = _build(tmp_path, [every_five], defaults={"coalesce_window_seconds": 0})
+
+    await loop.cycle()
+    await loop.cycle()  # and the skipped instants do not surface later
+
+    assert len(gateway.runs) == 1, f"{len(gateway.runs)} missed runs were replayed"
+    [message] = loop.runner.registry.quiet.delivered
+    assert "skipped rather than replayed" in message, message

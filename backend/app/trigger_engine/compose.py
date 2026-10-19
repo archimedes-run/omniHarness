@@ -60,4 +60,40 @@ def compose_proactive(rule: Rule, event: TriggerEvent, reply: str) -> str:
             head = f"{project}" if project else "A session"
         return f"{head}.\n\n{reply}" if reply else f"{head}."
 
-    return reply or "(the assistant returned nothing)"
+    note = late_note(event)
+    body = reply or "(the assistant returned nothing)"
+    return f"{note}\n\n{body}" if note else body
+
+
+#: A scheduled firing later than this says so. The loop wakes AT the scheduled
+#: instant, so anything past a few minutes means it was not running then.
+#: A stated threshold, not a measured one.
+LATE_AFTER_SECONDS = 5 * 60
+
+
+def late_note(event: TriggerEvent) -> str:
+    """Why a scheduled message is arriving now and not when it was due.
+
+    Without it a 08:30 briefing delivered at 10:05 reads as current, and runs
+    that were skipped are silently absent. Both are facts the engine OBSERVED,
+    so they are stated plainly (FR-018).
+    """
+    if event.type.value != "cron":
+        return ""
+    late = int(event.fields.get("late_by_seconds") or 0)
+    skipped = int(event.fields.get("skipped") or 0)
+    if late < LATE_AFTER_SECONDS and not skipped:
+        return ""
+    parts = []
+    if late >= LATE_AFTER_SECONDS:
+        parts.append(f"Running late: this was scheduled for {event.at:%H:%M} {event.at:%Z}".rstrip() + f", {_ago(late)} ago, when I was not running.")
+    if skipped:
+        parts.append(f"{skipped} earlier scheduled run{'s were' if skipped != 1 else ' was'} missed while I was not running, and skipped rather than replayed.")
+    return " ".join(parts)
+
+
+def _ago(seconds: int) -> str:
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60} min"

@@ -6,7 +6,8 @@ learn nothing, which Article VI forbids.
 
 Each scheduled instant fires AT MOST ONCE, including across restarts, sleep and
 wake, and clock adjustments. A missed instant fires once, late, rather than
-being skipped or fired once per tick missed.
+being skipped or fired once per tick missed — and when several were missed,
+only the newest fires, with a note saying how many were skipped.
 """
 
 from __future__ import annotations
@@ -47,22 +48,38 @@ class Scheduler:
         # de-duplication survive a clock jump.
         return f"{rule_id}@{instant.isoformat()}"
 
-    def due_instants(self, rule_id: str, expr: str, now: datetime, *, since: datetime | None = None) -> list[datetime]:
-        """Scheduled instants that have passed and not yet fired.
+    def catch_up(self, rule_id: str, expr: str, now: datetime, *, since: datetime | None = None) -> tuple[datetime | None, int]:
+        """(the most recent unfired instant, how many older ones were skipped).
 
-        `since` bounds how far back a restart looks. Without it, a rule that has
-        been off for a month would fire once per missed instant on resume —
-        which is the "fired once per missed tick" failure, not the "fires once,
-        late" behaviour FR-018 asks for.
+        FR-018: "fires once, late". This used to return EVERY unfired instant
+        in the look-back window — a */5 rule after a night's outage came back
+        to 288 firings, one message each. Now only the newest is fired; the
+        rest are reported as skipped, so the message can say so.
+
+        Skipped instants never resurface: the floor is raised to the newest
+        instant already fired (the watermark), so once the late firing is
+        marked, everything before it is behind the line.
+
+        `since` bounds how far back a restart looks; the default is one day.
         """
         floor = since or (now - timedelta(days=1))
-        out: list[datetime] = []
+        watermark = self._last_fired(rule_id)
+        if watermark is not None and watermark > floor:
+            floor = watermark
+        unfired: list[datetime] = []
         cursor = previous_due(expr, now)
         while cursor > floor:
             if not self.has_fired(rule_id, cursor):
-                out.append(cursor)
+                unfired.append(cursor)
             cursor = previous_due(expr, cursor)
-        return sorted(out)
+        if not unfired:
+            return None, 0
+        return max(unfired), len(unfired) - 1
+
+    def _last_fired(self, rule_id: str) -> datetime | None:
+        prefix = f"{rule_id}@"
+        stamps = [k[len(prefix) :] for k in self._store.keys() if k.startswith(prefix)]
+        return datetime.fromisoformat(max(stamps)) if stamps else None
 
     def next_wakeup(self, schedules: list[tuple[str, str]], now: datetime) -> datetime | None:
         """The earliest next due moment across all rules. None when none."""
