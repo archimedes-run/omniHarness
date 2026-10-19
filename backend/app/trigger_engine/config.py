@@ -154,11 +154,40 @@ def parse(doc: dict) -> EngineConfig:
     )
 
 
+#: What each trigger type needs connected before a rule of that type can fire.
+#: Named in the error, so the operator learns what is missing, not merely that
+#: something is.
+FEED_FOR: dict[TriggerType, str] = {
+    TriggerType.WATCHER: "session-watcher feed",
+    TriggerType.CRON: "scheduler",
+    TriggerType.CALENDAR: "calendar feed",
+    TriggerType.COMPLETION: "completion feed",
+}
+
+
+def check_sources(cfg: EngineConfig, supported: frozenset[TriggerType]) -> None:
+    """Reject an ENABLED rule whose type has no source in this engine.
+
+    Before this, such a rule loaded, was evaluated every cycle, and was skipped
+    with a debug log (runner.py) — "silently never fires", the worst of the
+    three options, and what happened to every calendar and completion rule.
+    A disabled rule is left alone: it does nothing either way, and a draft
+    kept for when its feed exists is a reasonable thing to keep.
+    """
+    for rule in cfg.rules:
+        if rule.enabled and rule.type not in supported:
+            feed = FEED_FOR.get(rule.type, f"{rule.type} source")
+            raise ConfigError(f"rule {rule.id!r}: a {rule.type} rule needs a {feed}, and no {feed} is connected to the trigger engine, so it would load and never fire. Disable or remove the rule until one is.")
+
+
 @dataclass
 class ConfigLoader:
     """Loads and hot-reloads the rule file, holding the last VALID config."""
 
     path: Path
+    #: Trigger types this engine has a source for. Production always passes it
+    #: (trigger_engine_wiring); None skips the check, for tests of parsing alone.
+    supported_types: frozenset[TriggerType] | None = None
     _config: EngineConfig | None = None
     _mtime: float | None = None
     last_error: str | None = None
@@ -184,6 +213,8 @@ class ConfigLoader:
         try:
             doc = json.loads(self.path.read_text())
             cfg = parse(doc)
+            if self.supported_types is not None:
+                check_sources(cfg, self.supported_types)
         except (json.JSONDecodeError, ConfigError, OSError) as exc:
             self.last_error = str(exc)
             logger.error(

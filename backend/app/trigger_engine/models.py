@@ -10,9 +10,11 @@ from enum import StrEnum
 class TriggerType(StrEnum):
     CRON = "cron"
     WATCHER = "watcher"
+    #: Parsed, but an ENABLED completion or calendar rule is rejected at load
+    #: unless the engine has a source for it (config.check_sources). Neither
+    #: has one in production yet: sources/completion.py and sources/calendar.py
+    #: exist, and nothing supplies them a feed.
     COMPLETION = "completion"
-    #: Reserved so adding it later is a new source rather than a schema
-    #: migration. Rejected at load with an explicit not-implemented error.
     CALENDAR = "calendar"
 
 

@@ -162,7 +162,14 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         create_thread=injector.create_thread,
     )
     destination = QuietDestination()
-    loader = ConfigLoader(path=_resolve_rules_path(cfg))
+    sources = {
+        TriggerType.WATCHER: WatcherSource(fetch_sessions=fetch_sessions),
+        TriggerType.CRON: CronSource(scheduler=scheduler),
+    }
+    # The loader rejects an enabled rule whose type is not a key here, on every
+    # reload — not only at startup, since a rule added to a running engine's
+    # file would otherwise load and be skipped silently.
+    loader = ConfigLoader(path=_resolve_rules_path(cfg), supported_types=frozenset(sources))
     engine_config = loader.load()
 
     # Article XIV. A missing rule file used to produce an empty config, a logged
@@ -175,10 +182,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         raise RuntimeError(f"trigger engine: no rules are in effect ({loader.last_error}). Expected a rule file at {_resolve_rules_path(cfg)}. The engine will not start rather than run with nothing to evaluate and report itself healthy.")
 
     runner = RuleRunner(
-        sources={
-            TriggerType.WATCHER: WatcherSource(fetch_sessions=fetch_sessions),
-            TriggerType.CRON: CronSource(scheduler=scheduler),
-        },
+        sources=sources,
         fingerprints=fingerprints,
         threads=threads,
         injector=injector,

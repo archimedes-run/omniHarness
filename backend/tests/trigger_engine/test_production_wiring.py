@@ -271,7 +271,6 @@ async def test_a_remote_delivery_reaches_the_configured_channel(tmp_path, telegr
     assert [(m.chat_id, m.text) for m in telegram.sent] == [(CHAT_ID, "darcy-repo is waiting on you.")]
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason="AUDIT T-4: a calendar rule loads, and is then skipped every cycle with a debug log")
 @pytest.mark.asyncio
 async def test_a_calendar_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
     rule = {"id": "standup", "type": "calendar", "match": {"minutes_before": 10}, "prompt": "{summary} starts soon", "destination": "auto"}
@@ -280,7 +279,6 @@ async def test_a_calendar_rule_is_rejected_naming_the_missing_feed(tmp_path) -> 
         _build(tmp_path, [rule])
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason="AUDIT T-4: a completion rule loads, and is then skipped every cycle with a debug log")
 @pytest.mark.asyncio
 async def test_a_completion_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
     rule = {"id": "done", "type": "completion", "match": {}, "prompt": "{task_id} finished: {summary}", "destination": "auto"}
@@ -474,3 +472,30 @@ async def test_a_deferred_alert_whose_session_moved_on_is_not_delivered(tmp_path
     answered = _watcher_firing(summary="an earlier question the user has since answered")
 
     assert await loop.runner.offload(loop.runner.releaser.still_true, answered) is False
+
+
+@pytest.mark.asyncio
+async def test_a_calendar_rule_added_to_a_running_engine_is_rejected_too(tmp_path, gateway) -> None:
+    """The loop hot-reloads the rule file every cycle. Rejecting only at startup
+    would let the same rule slip in later and be skipped silently."""
+    loop = _build(tmp_path, [WATCHER_RULE])
+    rules_file = Path(loop.loader.path)
+    standup = {"id": "standup", "type": "calendar", "match": {"minutes_before": 10}, "prompt": "{summary} soon", "destination": "auto"}
+    rules_file.write_text(json.dumps({"rules": [WATCHER_RULE, standup]}))
+    import os
+
+    os.utime(rules_file, (time.time() + 5, time.time() + 5))  # a different mtime, so the reload happens
+
+    cfg = loop.loader.load()
+
+    assert [r.id for r in cfg.rules] == ["blocked-session"], "the previous valid rules stay in force"
+    assert "calendar feed" in (loop.loader.last_error or ""), loop.loader.last_error
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_calendar_rule_is_allowed_to_wait_for_its_feed(tmp_path) -> None:
+    draft = {"id": "standup", "type": "calendar", "enabled": False, "match": {"minutes_before": 10}, "prompt": "{summary} soon", "destination": "auto"}
+
+    loop = _build(tmp_path, [WATCHER_RULE, draft])
+
+    assert {r.id for r in loop.loader.config.rules} == {"blocked-session", "standup"}
