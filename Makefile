@@ -185,10 +185,12 @@ up:
 
 # Day-to-day use: the dev stack's gateway, watcher, nginx and data, with a
 # production frontend (docker/docker-compose-daily.yaml). localhost:2026.
+# Names its services: a bare `up` also starts the provisioner, which only the
+# provisioner sandbox mode uses (scripts/docker.sh makes the same choice).
 DAILY_COMPOSE = cd docker && OMNI_HARNESS_ROOT=$(CURDIR) docker compose --env-file ../.env -p omni-harness-dev -f docker-compose-dev.yaml
 
 daily:
-	$(DAILY_COMPOSE) up -d
+	$(DAILY_COMPOSE) up -d gateway session-watcher nginx
 	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend
 
 # Back to the hot-reloading dev frontend, for frontend work.
