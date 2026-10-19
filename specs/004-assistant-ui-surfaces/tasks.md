@@ -212,7 +212,7 @@ feature exposed.
 - [X] T084 SABOTAGE T083: add a write to a read router and confirm the gate fails at the assertion naming the file
 - [X] T085 Promote the six accessibility rules from warn to error in `frontend/eslint.config.mjs` (FR-034)
 - [X] T086 SABOTAGE T085: introduce a deliberate a11y violation and confirm the build fails on it (SC-017), then remove it
-- [ ] T087 [P] Extend `frontend/tests/rendering/theme.spec.ts` to assert the computed background changes on every one of the four new surfaces (SC-013)
+- [X] T087 [P] Extend `frontend/tests/rendering/theme.spec.ts` to assert the computed background changes on every one of the four new surfaces (SC-013)
 - [ ] T088 [P] Assert no new surface hardcodes a colour utility, extending the existing token check to the four new component directories (FR-033)
 - [ ] T089 SABOTAGE T088: add a hardcoded colour utility to one of the four new component directories and confirm the check fails naming the file. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
 - [ ] T090 Confirm `backend/tests/test_shipped_paths.py` covers this feature's tests, including the frontend `join(__dirname, "..")` idiom, and that no test added here reads a gitignored path (FR-032, SC-016)

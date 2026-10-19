@@ -217,3 +217,176 @@ test.describe("the theme toggle changes what the user sees", () => {
     });
   }
 });
+
+/**
+ * T087 — SC-013 on every Feature 004 surface (and Tool sources), not only on
+ * `/`. A surface that hardcodes a colour, or never reaches the themed layer,
+ * would pass the landing-page test and still be wrong. Each surface is loaded
+ * with its API intercepted, so a failure here is about the theme, not a
+ * missing backend (Article XII).
+ */
+const ok = (body: unknown) => ({
+  status: 200,
+  contentType: "application/json",
+  body: JSON.stringify(body),
+});
+
+const SURFACES: {
+  path: string;
+  row: string;
+  routes: Record<string, unknown>;
+}[] = [
+  {
+    path: "/workspace/confirmations",
+    row: '[data-testid="pending-action"]',
+    routes: {
+      "**/api/confirmations": {
+        readable: true,
+        error: "",
+        actions: [
+          {
+            id: "a1",
+            tool_name: "calendar_decline",
+            plan_text: "I will decline 1 meeting: Standup",
+            targets: ["Standup"],
+            requester: "lead_agent",
+            delegation_chain: [],
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+            thread_id: "t1",
+            threshold_targets: 10,
+            requires_typed_count: false,
+          },
+        ],
+      },
+    },
+  },
+  {
+    path: "/workspace/tool-sources",
+    row: '[data-testid="tool-source"]',
+    routes: {
+      "**/api/tool-sources*": {
+        thread_id: null,
+        connectors_available: false,
+        failing: 0,
+        sources: [
+          {
+            id: "local:github",
+            name: "github",
+            kind: "local",
+            state: "live",
+            tool_count: 3,
+            error: null,
+            selected: null,
+          },
+        ],
+      },
+    },
+  },
+  {
+    path: "/workspace/sessions",
+    row: '[data-testid="session"]',
+    routes: {
+      "**/api/sessions": {
+        reachable: true,
+        unreachable_kind: null,
+        unreachable_detail: null,
+        observability: "live",
+        staleness_seconds: 1,
+        as_of: null,
+        observe_only: true,
+        observe_only_reason: "Observed only.",
+        sessions: [
+          {
+            session_id: "s1",
+            project: "p",
+            display_state: "working",
+            epistemic: "observed",
+            last_activity_at: null,
+            quiet_seconds: 1,
+            summary: "",
+            summary_provenance: "",
+            relay_suppressed: false,
+          },
+        ],
+      },
+    },
+  },
+  {
+    path: "/workspace/triggers",
+    row: '[data-testid="rule"]',
+    routes: {
+      "**/api/triggers/rules": {
+        engine_enabled: true,
+        rules_error: null,
+        rules: [
+          {
+            id: "r",
+            type: "cron",
+            enabled: true,
+            match: {},
+            activity: "never-evaluated",
+            last_evaluated_at: null,
+            last_evaluated: "never",
+            last_fired_at: null,
+            last_outcome: null,
+          },
+        ],
+      },
+      "**/api/triggers/firings": { firings: [] },
+    },
+  },
+  {
+    path: "/workspace/policy",
+    row: '[data-testid="rule"]',
+    routes: {
+      "**/api/policy/rules": {
+        source_file: "rules.yaml",
+        rules: [{ pattern: "x", tier: 1, exceptions: [], source_line: 1 }],
+        unreadable: false,
+        kept_previous: false,
+        error: null,
+        threshold_targets: 10,
+        expires_after_seconds: 14400,
+      },
+      "**/api/policy/audit": [],
+    },
+  },
+];
+
+for (const surface of SURFACES) {
+  test(`SC-013: the theme changes what ${surface.path} draws`, async ({
+    page,
+  }) => {
+    for (const [pattern, body] of Object.entries(surface.routes)) {
+      await page.route(pattern, (route) => route.fulfill(ok(body)));
+    }
+    const paint = async (theme: string) => {
+      await page.addInitScript(
+        (t) => window.localStorage.setItem("theme", t),
+        theme,
+      );
+      await page.goto(surface.path);
+      const row = page.locator(surface.row).first();
+      await row.waitFor();
+      return {
+        body: await computed(page, "background-color"),
+        row: await row.evaluate(
+          (el) =>
+            `${getComputedStyle(el).backgroundColor} ${getComputedStyle(el).borderTopColor} ${getComputedStyle(el).color}`,
+        ),
+      };
+    };
+
+    const light = await paint("light");
+    const dark = await paint("dark");
+
+    expect(
+      dark.body,
+      `${surface.path}: the page background did not change with the theme`,
+    ).not.toBe(light.body);
+    expect(
+      dark.row,
+      `${surface.path}: a row on the surface drew the same in both themes`,
+    ).not.toBe(light.row);
+  });
+}
