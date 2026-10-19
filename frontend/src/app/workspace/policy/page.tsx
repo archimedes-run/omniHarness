@@ -3,6 +3,7 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { TierCheckForm } from "@/components/workspace/policy/tier-check";
+import { WithheldNotice } from "@/components/workspace/withheld-notice";
 import { usePolicyRules, useTier3Audit } from "@/core/policy/hooks";
 
 export default function PolicyPage() {
@@ -96,9 +97,13 @@ export default function PolicyPage() {
               className="border-border space-y-1 rounded-md border p-3"
               data-testid="execution"
             >
-              <p className="text-foreground text-sm" data-testid="plan">
-                {run.plan_as_stated}
-              </p>
+              {run.withheld ? (
+                <WithheldNotice text={run.plan_as_stated} />
+              ) : (
+                <p className="text-foreground text-sm" data-testid="plan">
+                  {run.plan_as_stated}
+                </p>
+              )}
               <p className="text-muted-foreground text-xs">
                 {new Date(run.at).toLocaleString()} · {run.tool} · acted as{" "}
                 {run.actor} · authorised by{" "}

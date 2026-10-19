@@ -222,8 +222,8 @@ feature exposed.
 - [X] T090b Surface a load failure to the user rather than logging and skipping it (FR-041). The gateway logs `Skipping MCP server '<name>'` and carries on, and the only downstream symptom is an agent that behaves as though the feature does not exist
 - [X] T090c Distinguish an authorised-but-unselected connector from an unauthorised one (SC-024). Gmail was ACTIVE in Composio while the assistant asked the user to grant OAuth access, because connector toolkits load only when a conversation selects them
 - [X] T090d SABOTAGE T090a: point a configured MCP server at a dead port and confirm the surface reports it UNREACHABLE rather than showing the same empty state as a source nobody configured. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
-- [ ] T091 [P] Route all rendered session summaries, page content and email bodies through the existing redactor, suppressing display on failure rather than falling through (FR-031, SC-015)
-- [ ] T092 SABOTAGE T091: feed content that fails redaction and confirm the surface suppresses rather than renders, and that the suppression is visible as such rather than as absent data
+- [X] T091 [P] Route all rendered session summaries, page content and email bodies through the existing redactor, suppressing display on failure rather than falling through (FR-031, SC-015)
+- [X] T092 SABOTAGE T091: feed content that fails redaction and confirm the surface suppresses rather than renders, and that the suppression is visible as such rather than as absent data
 - [ ] T093 Run quickstart.md end to end and record which steps ran locally and which only in CI
 - [ ] T094 Update `specs/ROADMAP-FOLLOWUPS.md` with what this feature deliberately did not do: no rule editor, mobile out of scope, the browser worker still open, and any gate T078 judged not worth generalising
 

@@ -36,6 +36,8 @@ class SessionRow(BaseModel):
     summary: str = ""
     summary_provenance: str = ""
     relay_suppressed: bool = False
+    #: The summary failed redaction and is not shown (FR-031, SC-015).
+    withheld: bool = False
 
 
 class SessionsView(BaseModel):
@@ -64,7 +66,13 @@ def _display(row: dict) -> tuple[str, Epistemic]:
 
 
 def describe_sessions(payload: dict | None, failure: Exception | None = None) -> SessionsView:
-    """Pure. `payload` is the watcher's roll-up, or None with `failure` saying why not."""
+    """Pure. `payload` is the watcher's roll-up, or None with `failure` saying why not.
+
+    The watcher redacts its summaries before it sends them. They are redacted
+    again here, because this surface's guarantee cannot rest on another
+    process's (FR-031)."""
+    from app.gateway.display_redaction import for_display
+
     if payload is None:
         from app.gateway.watcher_client import WatcherDisabled, WatcherNotConfigured
 
@@ -74,17 +82,20 @@ def describe_sessions(payload: dict | None, failure: Exception | None = None) ->
     rows = []
     for s in payload.get("sessions", []):
         display, epistemic = _display(s)
+        summary, summary_withheld = for_display(s.get("summary") or "")
+        project, project_withheld = for_display(str(s.get("project", "")))
         rows.append(
             SessionRow(
                 session_id=str(s.get("session_id", "")),
-                project=str(s.get("project", "")),
+                project=project,
                 display_state=display,
                 epistemic=epistemic,
                 last_activity_at=s.get("last_activity_at"),
                 quiet_seconds=s.get("quiet_seconds"),
-                summary=s.get("summary") or "",
+                summary=summary,
                 summary_provenance=s.get("summary_provenance") or "",
                 relay_suppressed=bool(s.get("relay_suppressed")),
+                withheld=summary_withheld or project_withheld,
             )
         )
     return SessionsView(

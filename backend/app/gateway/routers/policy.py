@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.gateway.authz import require_permission
+from app.gateway.display_redaction import all_for_display, for_display
 from app.policy.inspect import RulesInForce, Tier3Execution, TierCheck, recent_tier3, rules_in_force, tier_check
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
@@ -59,4 +60,11 @@ async def policy_audit(request: Request) -> list[Tier3Execution]:
     from app.policy.audit import PolicyAuditLog
 
     policy = _policy_config()
-    return recent_tier3(PolicyAuditLog(path=Path(policy.state_dir) / "audit.jsonl", actor="default").entries())
+    return [_redacted(row) for row in recent_tier3(PolicyAuditLog(path=Path(policy.state_dir) / "audit.jsonl", actor="default").entries())]
+
+
+def _redacted(row: Tier3Execution) -> Tier3Execution:
+    """The plan as stated quotes what it acted on: email subjects, page text (FR-031)."""
+    plan, plan_withheld = for_display(row.plan_as_stated)
+    targets, targets_withheld = all_for_display(row.targets)
+    return row.model_copy(update={"plan_as_stated": plan, "targets": targets, "withheld": plan_withheld or targets_withheld})

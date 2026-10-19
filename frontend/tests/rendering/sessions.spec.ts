@@ -18,6 +18,7 @@ function session(state: string, epistemic: string, project: string) {
     summary: "",
     summary_provenance: "mechanical",
     relay_suppressed: false,
+    withheld: false,
   };
 }
 
@@ -122,4 +123,23 @@ test("observe-only is stated, so the missing controls read as a property (FR-015
   await expect(page.getByTestId("observe-only")).toContainText(
     "observed, never controlled",
   );
+});
+
+test("a summary that failed redaction shows as withheld, not as blank (FR-031, SC-015)", async ({
+  page,
+}) => {
+  await serve(page, {
+    ...LIVE,
+    sessions: [
+      {
+        ...session("working", "observed", "darcy-repo"),
+        summary:
+          "Withheld: this could not be safely redacted for display. Check it locally.",
+        withheld: true,
+      },
+    ],
+  });
+
+  await expect(page.getByTestId("withheld")).toBeVisible();
+  await expect(page.getByTestId("withheld")).toContainText("Withheld");
 });

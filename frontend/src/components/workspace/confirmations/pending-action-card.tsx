@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { WithheldNotice } from "@/components/workspace/withheld-notice";
 import {
   canConfirm,
   canDecline,
@@ -69,9 +70,13 @@ export function PendingActionCard({
       <CardContent className="space-y-4">
         {/* The plan EXACTLY as it was stated. Not a summary: confirming a
             description authorises whatever it later turns out to mean. */}
-        <pre className="text-foreground bg-muted overflow-x-auto rounded-md p-3 text-sm whitespace-pre-wrap">
-          {action.plan_text}
-        </pre>
+        {action.withheld ? (
+          <WithheldNotice text={action.plan_text} />
+        ) : (
+          <pre className="text-foreground bg-muted overflow-x-auto rounded-md p-3 text-sm whitespace-pre-wrap">
+            {action.plan_text}
+          </pre>
+        )}
 
         <div>
           <p className="text-muted-foreground mb-1 text-xs uppercase">
@@ -81,8 +86,8 @@ export function PendingActionCard({
             className="list-disc space-y-1 pl-5 text-sm"
             data-testid="targets"
           >
-            {action.targets.map((target) => (
-              <li key={target}>{target}</li>
+            {action.targets.map((target, index) => (
+              <li key={`${index}-${target}`}>{target}</li>
             ))}
           </ul>
         </div>

@@ -18,6 +18,8 @@ export interface SessionRow {
   summary: string;
   summary_provenance: string;
   relay_suppressed: boolean;
+  /** Failed redaction: the text fields carry a sentence saying so (FR-031). */
+  withheld: boolean;
 }
 
 export interface SessionsView {

@@ -29,6 +29,7 @@ function action(overrides: Record<string, unknown> = {}) {
     thread_id: "t1",
     threshold_targets: 10,
     requires_typed_count: false,
+    withheld: false,
     ...overrides,
   };
 }
@@ -181,4 +182,23 @@ test("an empty pending set says so plainly", async ({ page }) => {
 
   await expect(page.getByTestId("empty")).toBeVisible();
   await expect(page.getByTestId("unreadable")).toHaveCount(0);
+});
+
+test("a plan that failed redaction shows as withheld, not as the plan (FR-031, SC-015)", async ({
+  page,
+}) => {
+  await serve(page, {
+    actions: [
+      action({
+        plan_text:
+          "Withheld: this could not be safely redacted for display. Check it locally.",
+        withheld: true,
+      }),
+    ],
+    readable: true,
+    error: "",
+  });
+
+  await expect(page.getByTestId("withheld")).toBeVisible();
+  await expect(page.getByTestId("withheld")).toContainText("Withheld");
 });

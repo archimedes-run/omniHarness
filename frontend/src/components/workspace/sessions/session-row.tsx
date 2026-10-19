@@ -1,6 +1,7 @@
 import { CircleCheckIcon, CircleHelpIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { WithheldNotice } from "@/components/workspace/withheld-notice";
 import { STATE_LABEL } from "@/core/sessions/logic";
 import type { SessionRow as Row } from "@/core/sessions/types";
 import { cn } from "@/lib/utils";
@@ -41,8 +42,12 @@ export function SessionRow({ session }: { session: Row }) {
           </Badge>
         </span>
       </div>
-      {session.summary && (
-        <p className="text-muted-foreground text-sm">{session.summary}</p>
+      {session.withheld ? (
+        <WithheldNotice text={session.summary} />
+      ) : (
+        session.summary && (
+          <p className="text-muted-foreground text-sm">{session.summary}</p>
+        )
       )}
       {session.relay_suppressed && (
         <p className="text-muted-foreground text-xs" data-testid="suppressed">

@@ -61,6 +61,9 @@ class Tier3Execution(BaseModel):
     targets: list[str]
     authorised_by: str | None
     outcome: str | None = None
+    #: Set by the route when the plan or a target failed redaction and is not
+    #: shown (FR-031, SC-015).
+    withheld: bool = False
 
 
 def rules_in_force(loader: ConfigLoader) -> RulesInForce:

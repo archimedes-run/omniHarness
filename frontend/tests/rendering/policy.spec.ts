@@ -26,19 +26,20 @@ const RULES = {
   expires_after_seconds: 14400,
 };
 
-const AUDIT = [
-  {
-    at: "2026-10-20T13:00:00Z",
-    actor: "default",
-    tool: "calendar_delete_event",
-    plan_as_stated: "I will delete 1 event: Standup",
-    targets: ["Standup"],
-    authorised_by: "worker-1",
-    outcome: "executed",
-  },
-];
+const RUN = {
+  at: "2026-10-20T13:00:00Z",
+  actor: "default",
+  tool: "calendar_delete_event",
+  plan_as_stated: "I will delete 1 event: Standup",
+  targets: ["Standup"],
+  authorised_by: "worker-1",
+  outcome: "executed",
+  withheld: false,
+};
 
-async function serve(page: Page, rules = RULES) {
+const AUDIT = [RUN];
+
+async function serve(page: Page, rules = RULES, audit = AUDIT) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -48,7 +49,7 @@ async function serve(page: Page, rules = RULES) {
     route.fulfill(json(rules)),
   );
   await page.route("**/api/policy/audit", (route) =>
-    route.fulfill(json(AUDIT)),
+    route.fulfill(json(audit)),
   );
   await page.route("**/api/policy/explain*", (route) => {
     const tool = new URL(route.request().url()).searchParams.get("tool");
@@ -113,4 +114,23 @@ test("a Tier 3 action shows the plan as stated and who authorised it (FR-028)", 
     "I will delete 1 event: Standup",
   );
   await expect(run.getByTestId("authorised-by")).toHaveText("worker-1");
+});
+
+test("a recorded plan that failed redaction shows as withheld (FR-031, SC-015)", async ({
+  page,
+}) => {
+  await serve(page, RULES, [
+    {
+      ...RUN,
+      plan_as_stated:
+        "Withheld: this could not be safely redacted for display. Check it locally.",
+      targets: [
+        "Withheld: this could not be safely redacted for display. Check it locally.",
+      ],
+      withheld: true,
+    },
+  ]);
+
+  await expect(page.getByTestId("withheld")).toBeVisible();
+  await expect(page.getByTestId("plan")).toHaveCount(0);
 });

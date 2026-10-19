@@ -40,4 +40,6 @@ export interface Tier3Execution {
   targets: string[];
   authorised_by: string | null;
   outcome: string | null;
+  /** Failed redaction: the text fields carry a sentence saying so (FR-031). */
+  withheld: boolean;
 }
