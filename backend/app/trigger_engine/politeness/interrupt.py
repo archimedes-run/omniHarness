@@ -49,8 +49,8 @@ class InterruptQueue:
     max_wait: timedelta = DEFAULT_MAX_WAIT
     _queued: list[tuple[Firing, datetime]] = field(default_factory=list)
 
-    def hold(self, firing: Firing, now: datetime) -> None:
-        firing.resolve(Outcome.QUEUED, "user is mid-exchange on the target thread")
+    def hold(self, firing: Firing, now: datetime, reason: str = "user is mid-exchange on the target thread") -> None:
+        firing.resolve(Outcome.QUEUED, reason)
         self._queued.append((firing, now))
 
     def due(self, now: datetime, still_busy: Callable[[str], bool]) -> list[Firing]:

@@ -401,6 +401,8 @@ async def test_unknown_busyness_holds_rather_than_interrupts(tmp_path) -> None:
     loop = _build(tmp_path, [WATCHER_RULE], run_store=_Down())
 
     assert await loop.runner.offload(loop.runner._is_mid_exchange, "rule-thread") is True
+    # ...and the audit must not claim an exchange was SEEN.
+    assert "could not tell" in loop.runner._hold_reason and "ConnectionError" in loop.runner._hold_reason
 
 
 # -- a failed run is a failure, not a message ----------------------------------
@@ -563,9 +565,10 @@ async def test_an_absent_watcher_says_which_kind_of_absent(tmp_path, monkeypatch
     source = loop.runner.sources[TriggerType.WATCHER]
 
     started = time.monotonic()
-    with pytest.raises(SourceUnavailable, match=said):
+    with pytest.raises(SourceUnavailable, match=said) as raised:
         await loop.runner.offload(source.poll, loop.loader.config.rules[0], datetime.now(UTC))
     assert time.monotonic() - started < 12, "an unreachable watcher held the engine longer than its timeout"
+    assert "ExceptionGroup" not in str(raised.value), "the reason names the task group, not what went wrong"
 
 
 # -- the whole pipe: watcher -> agent -> Telegram ------------------------------

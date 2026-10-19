@@ -44,6 +44,15 @@ class WatcherUnreachable(WatcherUnavailable):
     pass
 
 
+def _root_cause(exc: BaseException) -> BaseException:
+    """The error worth reporting. The MCP client runs in a task group, so a
+    refused connection arrives as 'ExceptionGroup: unhandled errors in a
+    TaskGroup (1 sub-exception)' — true, and useless to an operator."""
+    while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
+        exc = exc.exceptions[0]
+    return exc
+
+
 @dataclass
 class WatcherClient:
     #: Bounds one whole call — connect, initialise, call. The engine polls on
@@ -78,7 +87,8 @@ class WatcherClient:
         try:
             result = await asyncio.wait_for(_call(), timeout=self.timeout)
         except Exception as exc:  # noqa: BLE001 — every failure here means "could not ask"
-            raise WatcherUnreachable(f"{url}: {type(exc).__name__}: {exc}") from exc
+            cause = _root_cause(exc)
+            raise WatcherUnreachable(f"{url}: {type(cause).__name__}: {cause}") from exc
         if result.isError or not result.content:
             raise WatcherUnreachable(f"{url}: {tool} returned an error or no content")
         return json.loads(result.content[0].text)

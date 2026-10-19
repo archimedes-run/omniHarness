@@ -184,7 +184,7 @@ class RuleRunner:
                 return
 
         if self.interrupts is not None and self._is_mid_exchange(firing.thread_id):
-            self.interrupts.hold(firing, now)
+            self.interrupts.hold(firing, now, self._hold_reason)
             self.audit.record(firing, now)
             return
 
@@ -196,9 +196,15 @@ class RuleRunner:
 
         self.releaser.release([firing], ReleaseReason.IMMEDIATE, self._destination_for(rule, now), now)
 
+    #: Why the last check said "hold" — an observed exchange, or one we could
+    #: not rule out. The audit says which (Article X): live, a store error was
+    #: recorded as "user is mid-exchange" when nothing had been observed.
+    _hold_reason: str = "user is mid-exchange on the target thread"
+
     def _is_mid_exchange(self, thread_id: str | None) -> bool:
         if not thread_id or self.thread_state is None:
             return False
+        self._hold_reason = "user is mid-exchange on the target thread"
         try:
             return is_busy(self.thread_state(thread_id))
         except Exception as exc:  # noqa: BLE001
@@ -209,6 +215,7 @@ class RuleRunner:
             # Held, it is released by the interrupt queue's bound (FR-016a).
             if not is_thread_busy_error(exc):
                 logger.warning("thread state unavailable for %s, holding: %s", thread_id, exc)
+                self._hold_reason = f"could not tell whether an exchange is in progress ({type(exc).__name__}); holding until it can, or for the queue's bound"
             return True
 
     def release_deferred(self, rule: Rule, now: datetime) -> str | None:
