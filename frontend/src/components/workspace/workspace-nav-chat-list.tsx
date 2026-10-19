@@ -8,6 +8,7 @@ import {
   MessagesSquare,
   PlugIcon,
   ShieldQuestionIcon,
+  ZapIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -84,6 +85,17 @@ export function WorkspaceNavChatList() {
               {waiting}
             </SidebarMenuBadge>
           )}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/triggers")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/triggers">
+              <ZapIcon />
+              <span>{t.sidebar.triggers}</span>
+            </Link>
+          </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton

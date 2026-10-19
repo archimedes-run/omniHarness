@@ -149,13 +149,13 @@ surface shows it evaluating and never firing — visibly different from never ev
 - [X] T051 [US2] Create `backend/app/gateway/routers/triggers.py` with `GET /api/triggers/rules` and `GET /api/triggers/firings`, and register it
 - [X] T052 [P] [US2] Pass outcome reasons through verbatim rather than summarising them into a status word (FR-019), tested
 - [X] T053 [P] [US2] Resolve batch siblings at read time so a coalesced firing can name what it was delivered with
-- [ ] T054 [P] [US2] Create `frontend/src/core/triggers/hooks.ts`
-- [ ] T055 [US2] Create the route at `frontend/src/app/workspace/triggers/page.tsx` with two panels: loaded rules, and a chronological firing log
-- [ ] T056 [US2] Render rules with id, type, enabled, last evaluated and last fired, with never-evaluated, evaluated-never-fired and fired-recently all visually distinct (FR-017)
-- [ ] T057 [US2] Render `null` timestamps as "not recorded", distinct from "never" (FR-022)
-- [ ] T058 [US2] Render a coalesced firing alongside the others in its batch, so "what it was merged with" is visible rather than only resolvable server-side — the second half of FR-021, which T053 alone does not deliver
-- [ ] T059 [US2] Render each outcome distinguishably — delivered, suppressed, queued, expired, failed — with its reason shown
-- [ ] T060 [P] [US2] Rendering assertions in `frontend/tests/rendering/triggers.spec.ts`: a quiet-hours suppression is distinguishable from a delivery and from a rule that never evaluated (SC-008), and firings coalesced into one message each name the others they were delivered with (SC-010)
+- [X] T054 [P] [US2] Create `frontend/src/core/triggers/hooks.ts`
+- [X] T055 [US2] Create the route at `frontend/src/app/workspace/triggers/page.tsx` with two panels: loaded rules, and a chronological firing log
+- [X] T056 [US2] Render rules with id, type, enabled, last evaluated and last fired, with never-evaluated, evaluated-never-fired and fired-recently all visually distinct (FR-017)
+- [X] T057 [US2] Render `null` timestamps as "not recorded", distinct from "never" (FR-022)
+- [X] T058 [US2] Render a coalesced firing alongside the others in its batch, so "what it was merged with" is visible rather than only resolvable server-side — the second half of FR-021, which T053 alone does not deliver
+- [X] T059 [US2] Render each outcome distinguishably — delivered, suppressed, queued, expired, failed — with its reason shown
+- [X] T060 [P] [US2] Rendering assertions in `frontend/tests/rendering/triggers.spec.ts`: a quiet-hours suppression is distinguishable from a delivery and from a rule that never evaluated (SC-008), and firings coalesced into one message each name the others they were delivered with (SC-010)
 
 **Checkpoint**: A silently-broken rule is findable.
 
