@@ -29,6 +29,7 @@ from app.gateway.routers import (
     openclaw_webhook,
     previews,
     runs,
+    sessions,
     skills,
     suggestions,
     thread_runs,
@@ -522,6 +523,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Tool source status: configured, disabled, unreachable or live (FR-040).
     app.include_router(tool_sources.router)
+
+    # Coding sessions, and whether they can be seen (Feature 004, US3).
+    app.include_router(sessions.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
