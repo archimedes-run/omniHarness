@@ -1,0 +1,59 @@
+"""When the rules change, stop asking about what no longer needs asking (FR-042).
+
+The occasion (ROADMAP-FOLLOWUPS, 2026-09-23): three read-only email calls were
+Tier 3 under rules that did not match the connector's tool names. The rules were
+fixed — those tools became Tier 1 — and the three pending actions became
+permanently un-confirmable: `recognise` correctly refuses a bare "approved"
+with several pending, and nothing resolved an action whose tool was no longer
+Tier 3. They blocked every confirmation for four hours.
+
+`PendingAction` records `tier_at_statement` so a later rule change cannot
+retroactively AUTHORISE anything. This is the other half: a rule change may
+retroactively REMOVE a demand for confirmation that the current rules say is
+unnecessary. Never grant one, and never act: superseding resolves the action
+and runs nothing. The user asked under rules that required approval; the answer
+is to stop asking, not to proceed unasked.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+
+from .classify import classify
+from .config import RuleSet
+from .models import Outcome, PendingAction, Tier
+from .pending import PendingStore
+
+logger = logging.getLogger(__name__)
+
+#: The claimant recorded on a superseded action, so the record says who
+#: resolved it.
+CLAIMANT = "rules-reload"
+
+
+def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> list[PendingAction]:
+    """Resolve SUPERSEDED every open action the current rules no longer make Tier 3."""
+    if ruleset.unreadable:
+        # Unreadable rules make every tool Tier 3; nothing is less demanding.
+        return []
+    superseded = []
+    for action in store.open_actions(now):
+        decision = classify(action.tool_name, action.arguments, ruleset)
+        if decision.tier is Tier.TIER_3:
+            continue
+        # Claimed first, through the same one-shot claim confirmation uses, so
+        # a supersede cannot race a confirmation on another worker into a
+        # double resolution.
+        claimed = store.claim(action.id, CLAIMANT)
+        if claimed is None:
+            continue
+        rule = decision.deciding_rule.pattern if decision.deciding_rule is not None else "the default"
+        store.resolve(
+            claimed,
+            Outcome.SUPERSEDED,
+            f"the rules changed: {action.tool_name} is now Tier {int(decision.tier)} (rule {rule!r}), so it no longer needs your confirmation. It was NOT run; ask again if you still want it.",
+        )
+        logger.info("policy: superseded %s (%s now Tier %d)", action.id, action.tool_name, int(decision.tier))
+        superseded.append(claimed)
+    return superseded

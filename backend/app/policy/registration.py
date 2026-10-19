@@ -22,6 +22,7 @@ from .config import ConfigLoader
 from .disclose import DisclosureLedger
 from .middleware import PolicyMiddleware
 from .pending import PendingStore
+from .supersede import supersede_unneeded
 from .targets import resolve_targets
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,9 @@ def build(app_config) -> PolicyMiddleware | None:
         return None
 
     state = Path(policy.state_dir)
-    return PolicyMiddleware(
-        loader=ConfigLoader(path=resolve_rules_path(policy)),
+    loader = ConfigLoader(path=resolve_rules_path(policy))
+    middleware = PolicyMiddleware(
+        loader=loader,
         # WITHOUT THIS, every plan said "exactly these 1 item(s)" and held a
         # repr of the whole call. FR-029 asks for the resolved SPECIFIC
         # targets, and FR-009's threshold compares a target COUNT — pinned at
@@ -71,6 +73,11 @@ def build(app_config) -> PolicyMiddleware | None:
         ledger=DisclosureLedger(),
         audit=PolicyAuditLog(path=state / "audit.jsonl", actor="default"),
     )
+    # FR-042: whenever the rules this agent loads differ from the last set it
+    # saw — the first load included — pending actions the new rules no longer
+    # make Tier 3 are superseded, and NOT run.
+    loader.on_change.append(lambda ruleset: supersede_unneeded(middleware.pending, ruleset, middleware.now()))
+    return middleware
 
 
 def install() -> None:

@@ -66,6 +66,11 @@ class ConfigLoader:
 
     path: Path
     _last_good: RuleSet | None = field(default=None, repr=False)
+    #: Told when a load produces rules whose content differs from the last set
+    #: this loader produced — including the first load, since a rules change
+    #: made while the gateway was down is a change too (FR-042).
+    on_change: list = field(default_factory=list, repr=False)
+    _last_text: str | None = field(default=None, repr=False)
 
     def load(self) -> RuleSet:
         try:
@@ -85,6 +90,13 @@ class ConfigLoader:
             return self._degrade(f"policy rules malformed: {exc}")
 
         self._last_good = ruleset
+        if raw != self._last_text:
+            self._last_text = raw
+            for listener in self.on_change:
+                try:
+                    listener(ruleset)
+                except Exception:  # noqa: BLE001 — a listener must not break classification
+                    logger.exception("a rules-changed listener failed")
         return ruleset
 
     def _degrade(self, message: str, *, found: bool = True) -> RuleSet:
