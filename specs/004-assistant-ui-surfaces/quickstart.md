@@ -39,8 +39,11 @@ pnpm vitest run                                       # units
 npx playwright test --config=playwright.theme.config.ts   # CI only
 ```
 
-Rendering assertions do not run locally — the browser bundle stalls at 448 KB here
-against 369 MB in CI. That was measured. Push and read the job.
+The pinned browser download stalls at 448 KB on this machine against 369 MB in CI (measured).
+That blocks `npx playwright install`, not the specs: pointing a local config at an
+already-installed `chrome-headless-shell` runs the same `tests/rendering` directory, and
+that is how the run record below was produced. CI (`theme-rendering.yml`) runs the same
+directory with the pinned browser and is the record of authority.
 
 Each surface must show, asserted against a rendered page:
 
@@ -51,7 +54,11 @@ Each surface must show, asserted against a rendered page:
 - **Triggers**: a quiet-hours suppression is distinguishable from a delivery and from a
   rule that never evaluated.
 - **Policy**: a tier and its deciding rule, with no side effect on the tool.
-- **All four**: toggling dark mode changes the computed background colour.
+- **Tool sources**: a source on a dead port reads "unreachable" with its error, not absent;
+  an authorised connector this conversation has not selected is not called unauthorised.
+- **Sessions, confirmations, policy**: content that failed redaction shows as *withheld*,
+  never blank and never raw (FR-031).
+- **All five**: toggling dark mode changes the computed background colour.
 
 ## Gates — each must be seen failing
 
@@ -63,3 +70,17 @@ Every gate ships with a step that deliberately breaks what it guards. A gate nev
 observed failing is indistinguishable from one that does nothing, and the sabotage must
 be confirmed to fail *at the gate* rather than upstream of it — a run reporting
 `skipped`, `error`, or a collection failure has not exercised anything.
+
+## Run record — 2026-10-19, branch `phase-2-ui-surfaces` (T093)
+
+| Step | Where it ran | Result |
+|---|---|---|
+| Phase 1 `test_confirm_flow.py` | locally | 9 passed |
+| Phase 1 `policy_multiworker/` | locally (production worker count) | 8 passed |
+| Phase 1 "before the phase it must fail" | not re-run: it was observed failing when Phase 1 was built, on the pre-fix code | — |
+| Phase 1 manual Tier 3 `yes` in chat | **not run**: it would perform a real Tier 3 action (delete or decline) on the owner's accounts. The confirm path is exercised end to end by `test_confirm_flow.py` and the multi-worker suite | — |
+| Phase 2 evaluation record and batch identity | locally | 15 passed |
+| `pnpm vitest run` | locally | 18 files, 90 passed |
+| `tests/rendering` (all five surfaces, dark mode, withheld) | locally against the installed headless shell; **and in CI** with the pinned browser | locally 43 passed; CI: see the PR's `theme-rendering` job |
+| `tests/gates/` | locally | 10 passed |
+| Each gate seen failing | locally, by sabotage, recorded in each commit message | every sabotage failed **at the gate** (reported `failed`, not skipped or errored), and was green again once reverted |
