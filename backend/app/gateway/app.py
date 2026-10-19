@@ -27,6 +27,7 @@ from app.gateway.routers import (
     memory,
     models,
     openclaw_webhook,
+    policy,
     previews,
     runs,
     sessions,
@@ -526,6 +527,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Coding sessions, and whether they can be seen (Feature 004, US3).
     app.include_router(sessions.router)
+
+    # The policy inspector: rules in force, tier check, Tier 3 audit (Feature 004, US4).
+    app.include_router(policy.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)

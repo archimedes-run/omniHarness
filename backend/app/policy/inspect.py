@@ -1,0 +1,105 @@
+"""What the policy inspector shows (Feature 004, US4). Pure reads.
+
+The tier check calls `explain()`, which calls `classify()` — the function live
+dispatch uses (FR-025). It runs nothing: it is given no tool, no runner and no
+store, so there is nothing it could execute or record.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel
+
+from .config import ConfigLoader, RuleSet
+from .explain import explain
+
+
+class ExceptionView(BaseModel):
+    tier: int
+    when: dict[str, Any]
+    unless: dict[str, str]
+
+
+class RuleView(BaseModel):
+    pattern: str
+    tier: int
+    exceptions: list[ExceptionView]
+    source_line: int | None = None
+
+
+class RulesInForce(BaseModel):
+    source_file: str
+    rules: list[RuleView]
+    #: The file could not be read and no earlier rules exist: every tool is Tier 3.
+    unreadable: bool
+    #: The last edit was REFUSED; the rules shown are the previous ones, still
+    #: in force (FR-029), and `error` says why.
+    kept_previous: bool
+    error: str | None = None
+    threshold_targets: int
+    expires_after_seconds: int
+
+
+class TierCheck(BaseModel):
+    tool: str
+    tier: int
+    #: The rule that decided it (FR-026). None only when nothing matched.
+    deciding_rule: str | None
+    #: True when no rule matched and the tier is the unknown-tool default
+    #: (FR-027): "defaults to Tier 3" and "classified Tier 3" read the same in a
+    #: tier alone and mean different things.
+    from_default: bool
+    raised_by: ExceptionView | None = None
+
+
+class Tier3Execution(BaseModel):
+    at: str
+    actor: str
+    tool: str
+    plan_as_stated: str
+    targets: list[str]
+    authorised_by: str | None
+    outcome: str | None = None
+
+
+def rules_in_force(loader: ConfigLoader) -> RulesInForce:
+    ruleset = loader.load()
+    return RulesInForce(
+        source_file=ruleset.source_file or str(loader.path),
+        rules=[RuleView(pattern=r.pattern, tier=int(r.tier), source_line=r.source_line, exceptions=[ExceptionView(tier=int(e.tier), when=dict(e.when), unless=dict(e.unless)) for e in r.exceptions]) for r in ruleset.rules],
+        unreadable=ruleset.unreadable,
+        kept_previous=loader.kept_previous,
+        error=loader.last_error or (ruleset.error or None),
+        threshold_targets=ruleset.threshold_targets,
+        expires_after_seconds=ruleset.expires_after_seconds,
+    )
+
+
+def tier_check(tool: str, arguments: dict[str, Any] | None, ruleset: RuleSet) -> TierCheck:
+    decision = explain(tool, arguments, ruleset)
+    raised = decision.raised_by
+    return TierCheck(
+        tool=tool,
+        tier=int(decision.tier),
+        deciding_rule=decision.deciding_rule.describe() if decision.deciding_rule else None,
+        from_default=decision.deciding_rule is None,
+        raised_by=ExceptionView(tier=int(raised.tier), when=dict(raised.when), unless=dict(raised.unless)) if raised else None,
+    )
+
+
+def recent_tier3(entries: list[dict], *, limit: int = 50) -> list[Tier3Execution]:
+    out = []
+    for e in sorted(entries, key=lambda e: e.get("at", ""), reverse=True)[:limit]:
+        out.append(
+            Tier3Execution(
+                at=e.get("at", ""),
+                actor=e.get("actor", ""),
+                tool=e.get("tool", ""),
+                plan_as_stated=e.get("plan_as_stated", ""),
+                targets=list(e.get("targets") or []),
+                authorised_by=e.get("authorised_by"),
+                outcome=e.get("outcome"),
+            )
+        )
+    return out

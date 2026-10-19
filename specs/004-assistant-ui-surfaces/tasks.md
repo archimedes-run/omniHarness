@@ -187,10 +187,10 @@ right state; stop the watcher and confirm the surface says sessions cannot be se
 **Goal**: Learn a tool's tier without triggering it, and close the gate gaps this
 feature exposed.
 
-- [ ] T070 [US4] Create `backend/app/gateway/routers/policy.py` with `GET /api/policy/rules`, `GET /api/policy/explain`, `GET /api/policy/audit`, and register it
-- [ ] T071 [P] [US4] Test that `explain` does not execute the tool it is asked about and uses the same `classify()` as live dispatch (SC-011)
-- [ ] T072 [P] [US4] Return `from_default` so unclassified-defaults-to-Tier-3 is distinguishable from explicitly-classified-as-Tier-3 (FR-027, SC-012)
-- [ ] T073 [US4] Serve the rules actually in force, including after a failed reload left previous rules active (FR-029), tested by forcing a bad reload
+- [X] T070 [US4] Create `backend/app/gateway/routers/policy.py` with `GET /api/policy/rules`, `GET /api/policy/explain`, `GET /api/policy/audit`, and register it
+- [X] T071 [P] [US4] Test that `explain` does not execute the tool it is asked about and uses the same `classify()` as live dispatch (SC-011)
+- [X] T072 [P] [US4] Return `from_default` so unclassified-defaults-to-Tier-3 is distinguishable from explicitly-classified-as-Tier-3 (FR-027, SC-012)
+- [X] T073 [US4] Serve the rules actually in force, including after a failed reload left previous rules active (FR-029), tested by forcing a bad reload
 - [ ] T074 [P] [US4] Create `frontend/src/core/policy/hooks.ts` and the route at `frontend/src/app/workspace/policy/page.tsx`
 - [ ] T075 [US4] Render the loaded rules, the tier check with its deciding rule, the default marker, and recent Tier 3 executions with actor, plan as stated and authorising confirmation
 - [ ] T076 [P] [US4] Rendering assertions in `frontend/tests/rendering/policy.spec.ts`

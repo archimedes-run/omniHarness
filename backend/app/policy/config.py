@@ -71,6 +71,11 @@ class ConfigLoader:
     #: made while the gateway was down is a change too (FR-042).
     on_change: list = field(default_factory=list, repr=False)
     _last_text: str | None = field(default=None, repr=False)
+    #: Why the most recent load did not produce new rules, or None when it did.
+    #: With `kept_previous`, the inspector can say the rules shown are the LAST
+    #: GOOD ones, still in force, and why the edit was refused (FR-029).
+    last_error: str | None = field(default=None, repr=False)
+    kept_previous: bool = field(default=False, repr=False)
 
     def load(self) -> RuleSet:
         try:
@@ -90,6 +95,7 @@ class ConfigLoader:
             return self._degrade(f"policy rules malformed: {exc}")
 
         self._last_good = ruleset
+        self.last_error, self.kept_previous = None, False
         if raw != self._last_text:
             self._last_text = raw
             for listener in self.on_change:
@@ -100,6 +106,8 @@ class ConfigLoader:
         return ruleset
 
     def _degrade(self, message: str, *, found: bool = True) -> RuleSet:
+        self.last_error = message
+        self.kept_previous = self._last_good is not None
         if self._last_good is not None:
             logger.error("%s — KEEPING PREVIOUS RULES (%d active)", message, len(self._last_good.rules))
             return self._last_good
