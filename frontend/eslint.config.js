@@ -39,6 +39,16 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_" },
       ],
+      // FR-034 (Feature 004). The six accessibility rules next/core-web-vitals
+      // ships at WARN — and `pnpm lint` passes no --max-warnings, so a warning
+      // never failed anything, the same trap no-unused-vars sat in through
+      // three features. Promoted with the UI they are meant to hold.
+      "jsx-a11y/alt-text": ["error", { elements: ["img"], img: ["Image"] }],
+      "jsx-a11y/aria-props": "error",
+      "jsx-a11y/aria-proptypes": "error",
+      "jsx-a11y/aria-unsupported-elements": "error",
+      "jsx-a11y/role-has-required-aria-props": "error",
+      "jsx-a11y/role-supports-aria-props": "error",
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/no-empty-object-type": "off",
       "@typescript-eslint/no-misused-promises": [

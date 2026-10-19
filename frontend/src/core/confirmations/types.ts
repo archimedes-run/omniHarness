@@ -23,6 +23,8 @@ export interface PendingAction {
   thread_id: string | null;
   threshold_targets: number;
   requires_typed_count: boolean;
+  /** Failed redaction: the text fields carry a sentence saying so (FR-031). */
+  withheld: boolean;
 }
 
 export interface PendingList {

@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_thread_tool_selection_repo
+from app.gateway.display_redaction import all_for_display, for_display
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ class PendingActionResponse(BaseModel):
     #: Above this many targets a bare confirmation is not enough (FR-009).
     threshold_targets: int
     requires_typed_count: bool
+    #: The plan or a target failed redaction and is not shown (FR-031, SC-015).
+    withheld: bool = False
 
 
 class PendingListResponse(BaseModel):
@@ -117,17 +120,21 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
 
 
 def _view(action, threshold: int) -> PendingActionResponse:
+    # The plan names what it acts on, often in the words of an email or a page.
+    plan_text, plan_withheld = for_display(action.plan_text)
+    targets, targets_withheld = all_for_display(list(action.targets))
     return PendingActionResponse(
         id=action.id,
         tool_name=action.tool_name,
-        plan_text=action.plan_text,
-        targets=list(action.targets),
+        plan_text=plan_text,
+        targets=targets,
         requester=action.requester,
         delegation_chain=list(action.delegation_chain),
         expires_at=action.expires_at.isoformat(),
         thread_id=action.thread_id,
         threshold_targets=threshold,
         requires_typed_count=len(action.targets) > threshold,
+        withheld=plan_withheld or targets_withheld,
     )
 
 

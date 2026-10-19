@@ -10,6 +10,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from omniharness.config.extensions_config import ExtensionsConfig
+from omniharness.mcp import load_report
 from omniharness.mcp.client import build_servers_config
 from omniharness.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 from omniharness.reflection import resolve_variable
@@ -131,8 +132,11 @@ async def get_mcp_tools() -> list[BaseTool]:
                 server_tools = _apply_tool_surface(extensions_config, server_name, server_tools)
                 logger.info(f"Loaded {len(server_tools)} tool(s) from '{server_name}'")
                 tools.extend(server_tools)
+                load_report.record_loaded(server_name, len(server_tools))
             except Exception as server_err:
                 logger.warning(f"Skipping MCP server '{server_name}': {server_err}")
+                # Kept, not only logged: GET /api/tool-sources reports it (FR-041).
+                load_report.record_failed(server_name, server_err)
 
         logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers")
 

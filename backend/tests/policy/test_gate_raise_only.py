@@ -8,6 +8,9 @@ The refusal happens AT LOAD, naming file and line, rather than at match time:
 
 Ignoring at match time produces correct behaviour and no understanding — the
 user keeps a rule they believe is in force, is not, and writes more like it.
+
+Scope (Feature 004 gate audit, T078): correctly narrow. Tiers exist only in the
+policy rules file, and app.policy.config.ConfigLoader is its only loader.
 """
 
 from __future__ import annotations

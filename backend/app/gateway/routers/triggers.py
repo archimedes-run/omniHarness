@@ -19,6 +19,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
+from app.gateway.triggers_view import FiringsView, RulesView, describe_firings, describe_rules
 
 router = APIRouter(prefix="/api/triggers", tags=["triggers"])
 
@@ -55,6 +56,42 @@ def describe_engine(app_state: Any) -> EngineStatus:
         rules=[{"id": r.id, "type": str(r.type), "enabled": r.enabled} for r in loop.loader.config.rules],
         sources={str(kind): source.describe() for kind, source in loop.runner.sources.items() if hasattr(source, "describe")},
     )
+
+
+def _engine_state(app_state):
+    """The rule file, evaluation log and audit log, read from disk — the same
+    files the engine writes, so any worker can answer."""
+    from pathlib import Path
+
+    from app.gateway.trigger_engine_wiring import _resolve_rules_path
+    from app.trigger_engine.audit import AuditLog
+    from app.trigger_engine.config import ConfigLoader
+    from app.trigger_engine.evaluations import EvaluationLog
+
+    cfg = app_state.config.trigger_engine
+    state = Path(cfg.state_dir)
+    loader = ConfigLoader(path=_resolve_rules_path(cfg))
+    rules = loader.load().rules
+    log = EvaluationLog(path=state / "evaluations.json")
+    evaluated = {r.id: (log.last_evaluated_at(r.id).isoformat() if log.last_evaluated_at(r.id) else None) for r in rules}
+    audit = AuditLog(path=state / "audit.jsonl", actor=cfg.actor).entries()
+    return rules, evaluated, audit, loader.last_error
+
+
+@router.get("/rules", response_model=RulesView)
+@require_permission("threads", "read")
+async def trigger_rules(request: Request) -> RulesView:
+    """T051. Every loaded rule, and whether it is evaluating, firing, or neither."""
+    rules, evaluated, audit, error = _engine_state(request.app.state)
+    return describe_rules(rules=list(rules), evaluated=evaluated, audit=audit, engine_enabled=request.app.state.config.trigger_engine.enabled, rules_error=error)
+
+
+@router.get("/firings", response_model=FiringsView)
+@require_permission("threads", "read")
+async def trigger_firings(request: Request) -> FiringsView:
+    """T051. The chronological firing log, newest first, reasons verbatim."""
+    _, _, audit, _ = _engine_state(request.app.state)
+    return describe_firings(audit)
 
 
 @router.get("/status", response_model=EngineStatus)

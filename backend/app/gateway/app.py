@@ -27,13 +27,16 @@ from app.gateway.routers import (
     memory,
     models,
     openclaw_webhook,
+    policy,
     previews,
     runs,
+    sessions,
     skills,
     suggestions,
     thread_runs,
     thread_tools,
     threads,
+    tool_sources,
     triggers,
     uploads,
     workflows,
@@ -518,6 +521,15 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
+
+    # Tool source status: configured, disabled, unreachable or live (FR-040).
+    app.include_router(tool_sources.router)
+
+    # Coding sessions, and whether they can be seen (Feature 004, US3).
+    app.include_router(sessions.router)
+
+    # The policy inspector: rules in force, tier check, Tier 3 audit (Feature 004, US4).
+    app.include_router(policy.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)

@@ -119,6 +119,10 @@ export interface Translations {
     agents: string;
     mcpSuite: string;
     confirmations: string;
+    toolSources: string;
+    sessions: string;
+    triggers: string;
+    policy: string;
   };
 
   // Agents

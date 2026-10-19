@@ -733,3 +733,69 @@ async def test_the_production_loop_wakes_for_a_zoned_brief(tmp_path) -> None:
     assert loop.scheduler.next_wakeup([("morning-briefing", "45 8 * * 1-5", "America/New_York")], friday_after_brief) == monday_brief_est
     # Within the 60 s idle pulse of the brief, the brief is the next wakeup.
     assert loop.next_wakeup(datetime(2026, 11, 2, 13, 44, 30, tzinfo=UTC)) == monday_brief_est
+
+
+# -- Feature 004 US2: the triggers surface, over state the REAL engine wrote --
+
+
+def _surface(cfg):
+    from _router_auth_helpers import make_authed_test_app
+    from fastapi.testclient import TestClient
+
+    from app.gateway.routers import triggers
+
+    app = make_authed_test_app()
+    app.include_router(triggers.router)
+    app.state.config = cfg
+    with TestClient(app) as client:
+        return client.get("/api/triggers/rules").json(), client.get("/api/triggers/firings").json()
+
+
+@pytest.mark.asyncio
+async def test_firings_coalesced_into_one_message_name_each_other(tmp_path, gateway, telegram) -> None:
+    """SC-010 / T053: two rules firing in one cycle are delivered as one message,
+    and each firing in the log names the other."""
+    gateway.run_seconds = 0.0
+    a, b = {**_cron_rule_due_once(), "id": "brief-a", "destination": "auto"}, {**_cron_rule_due_once(), "id": "brief-b", "destination": "auto"}
+    cfg = _config(tmp_path, [a, b], defaults={"coalesce_window_seconds": 0})
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    loop = build_production_loop(cfg, run_store=MemoryRunStore())
+    await loop.cycle()
+    assert len(telegram.sent) == 1, "positive control: the two firings were delivered as ONE message"
+
+    _, firings = _surface(cfg)
+
+    delivered = {f["rule_id"]: f for f in firings["firings"] if f["outcome"] == "delivered"}
+    assert delivered["brief-a"]["batch"] == "batched" and delivered["brief-a"]["batch_id"] == delivered["brief-b"]["batch_id"]
+    assert [m["rule_id"] for m in delivered["brief-a"]["delivered_with"]] == ["brief-b"]
+    assert [m["rule_id"] for m in delivered["brief-b"]["delivered_with"]] == ["brief-a"]
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_hours_suppression_a_delivery_and_a_never_evaluated_rule_differ(tmp_path, gateway, telegram) -> None:
+    """SC-008 / SC-009, over the real engine's own records."""
+    from datetime import UTC as _UTC
+
+    gateway.run_seconds = 0.0
+    now = datetime.now(_UTC)
+    start, end = (now - timedelta(hours=1)).strftime("%H:%M"), (now + timedelta(hours=1)).strftime("%H:%M")
+    hushed = {**_cron_rule_due_once(), "id": "hushed", "destination": "auto"}
+    dormant = {**_cron_rule_due_once(), "id": "dormant", "enabled": False}
+    cfg = _config(tmp_path, [hushed, dormant], defaults={"coalesce_window_seconds": 0})
+    cfg_rules = Path(cfg.trigger_engine.rules_path)
+    doc = json.loads(cfg_rules.read_text())
+    doc["quiet_hours"] = {"start": start, "end": end, "timezone": "UTC", "enabled": True}
+    cfg_rules.write_text(json.dumps(doc))
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    loop = build_production_loop(cfg, run_store=MemoryRunStore())
+    await loop.cycle()
+
+    rules, firings = _surface(cfg)
+
+    r = {x["id"]: x for x in rules["rules"]}
+    assert r["hushed"]["activity"] == "fired" and r["hushed"]["last_outcome"] == "suppressed"
+    assert r["dormant"]["activity"] == "never-evaluated" and r["dormant"]["last_evaluated"] == "never"
+    [f] = firings["firings"]
+    assert f["outcome"] == "suppressed" and f["reason"].startswith("quiet hours"), f  # verbatim, not a status word (FR-019)

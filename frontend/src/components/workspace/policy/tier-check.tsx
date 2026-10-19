@@ -1,0 +1,92 @@
+"use client";
+
+import { useState } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useTierCheck } from "@/core/policy/hooks";
+
+export function TierCheckForm() {
+  const [tool, setTool] = useState("");
+  const [args, setArgs] = useState("{}");
+  const check = useTierCheck();
+  const result = check.data;
+
+  return (
+    <section className="space-y-2" aria-labelledby="check-heading">
+      <h2 id="check-heading" className="text-sm font-semibold">
+        Check a tool&apos;s tier
+      </h2>
+      <p className="text-muted-foreground text-xs">
+        Classifies a call exactly as dispatch would, and runs nothing.
+      </p>
+      <form
+        className="flex flex-col gap-2 sm:flex-row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (tool.trim()) check.mutate({ tool: tool.trim(), args });
+        }}
+      >
+        <Input
+          aria-label="Tool name"
+          placeholder="calendar_delete_event"
+          value={tool}
+          onChange={(e) => setTool(e.target.value)}
+        />
+        <Input
+          aria-label="Arguments (JSON)"
+          placeholder="{}"
+          value={args}
+          onChange={(e) => setArgs(e.target.value)}
+        />
+        <Button type="submit" disabled={!tool.trim() || check.isPending}>
+          Check
+        </Button>
+      </form>
+      {check.error != null && (
+        <p className="text-destructive text-sm" data-testid="check-error">
+          {String(check.error)}
+        </p>
+      )}
+      {result && (
+        <div
+          className="border-border space-y-1 rounded-md border p-3"
+          data-testid="tier-result"
+          data-tier={result.tier}
+          data-from-default={String(result.from_default)}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-foreground font-medium">{result.tool}</span>
+            <Badge variant={result.tier === 3 ? "destructive" : "secondary"}>
+              Tier {result.tier}
+            </Badge>
+            {/* FR-027: the default is not a classification, and says so. */}
+            {result.from_default && (
+              <Badge variant="outline" data-testid="default-marker">
+                Default — no rule matched
+              </Badge>
+            )}
+          </div>
+          <p
+            className="text-muted-foreground text-sm"
+            data-testid="deciding-rule"
+          >
+            {result.deciding_rule
+              ? `Decided by: ${result.deciding_rule}`
+              : "No rule matched this tool; unknown tools are Tier 3."}
+          </p>
+          {result.raised_by && (
+            <p
+              className="text-muted-foreground text-sm"
+              data-testid="raised-by"
+            >
+              Raised to Tier {result.raised_by.tier} by an exception when{" "}
+              {JSON.stringify(result.raised_by.when)}.
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

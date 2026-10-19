@@ -146,16 +146,16 @@ observe it execute exactly once with the claiming worker named in the audit entr
 **Independent Test**: Load a rule that cannot fire, let the engine run, confirm the
 surface shows it evaluating and never firing — visibly different from never evaluated.
 
-- [ ] T051 [US2] Create `backend/app/gateway/routers/triggers.py` with `GET /api/triggers/rules` and `GET /api/triggers/firings`, and register it
-- [ ] T052 [P] [US2] Pass outcome reasons through verbatim rather than summarising them into a status word (FR-019), tested
-- [ ] T053 [P] [US2] Resolve batch siblings at read time so a coalesced firing can name what it was delivered with
-- [ ] T054 [P] [US2] Create `frontend/src/core/triggers/hooks.ts`
-- [ ] T055 [US2] Create the route at `frontend/src/app/workspace/triggers/page.tsx` with two panels: loaded rules, and a chronological firing log
-- [ ] T056 [US2] Render rules with id, type, enabled, last evaluated and last fired, with never-evaluated, evaluated-never-fired and fired-recently all visually distinct (FR-017)
-- [ ] T057 [US2] Render `null` timestamps as "not recorded", distinct from "never" (FR-022)
-- [ ] T058 [US2] Render a coalesced firing alongside the others in its batch, so "what it was merged with" is visible rather than only resolvable server-side — the second half of FR-021, which T053 alone does not deliver
-- [ ] T059 [US2] Render each outcome distinguishably — delivered, suppressed, queued, expired, failed — with its reason shown
-- [ ] T060 [P] [US2] Rendering assertions in `frontend/tests/rendering/triggers.spec.ts`: a quiet-hours suppression is distinguishable from a delivery and from a rule that never evaluated (SC-008), and firings coalesced into one message each name the others they were delivered with (SC-010)
+- [X] T051 [US2] Create `backend/app/gateway/routers/triggers.py` with `GET /api/triggers/rules` and `GET /api/triggers/firings`, and register it
+- [X] T052 [P] [US2] Pass outcome reasons through verbatim rather than summarising them into a status word (FR-019), tested
+- [X] T053 [P] [US2] Resolve batch siblings at read time so a coalesced firing can name what it was delivered with
+- [X] T054 [P] [US2] Create `frontend/src/core/triggers/hooks.ts`
+- [X] T055 [US2] Create the route at `frontend/src/app/workspace/triggers/page.tsx` with two panels: loaded rules, and a chronological firing log
+- [X] T056 [US2] Render rules with id, type, enabled, last evaluated and last fired, with never-evaluated, evaluated-never-fired and fired-recently all visually distinct (FR-017)
+- [X] T057 [US2] Render `null` timestamps as "not recorded", distinct from "never" (FR-022)
+- [X] T058 [US2] Render a coalesced firing alongside the others in its batch, so "what it was merged with" is visible rather than only resolvable server-side — the second half of FR-021, which T053 alone does not deliver
+- [X] T059 [US2] Render each outcome distinguishably — delivered, suppressed, queued, expired, failed — with its reason shown
+- [X] T060 [P] [US2] Rendering assertions in `frontend/tests/rendering/triggers.spec.ts`: a quiet-hours suppression is distinguishable from a delivery and from a rule that never evaluated (SC-008), and firings coalesced into one message each name the others they were delivered with (SC-010)
 
 **Checkpoint**: A silently-broken rule is findable.
 
@@ -168,15 +168,15 @@ surface shows it evaluating and never firing — visibly different from never ev
 **Independent Test**: Start sessions in two projects and confirm each appears with the
 right state; stop the watcher and confirm the surface says sessions cannot be seen.
 
-- [ ] T061 [US3] Create `backend/app/gateway/routers/sessions.py` reaching the watcher's SSE server per research R2, returning `{reachable, observability, staleness_seconds, sessions[]}`
-- [ ] T062 [US3] Keep `reachable` separate from `observability`. Unreachable is a transport fact; live, stale and never-observed arrive inside the watcher's envelope. Collapsing them would undo Feature 001's FR-011a, which exists to keep three conditions from becoming two
-- [ ] T063 [P] [US3] Test all four conditions in `backend/tests/gateway/test_sessions_router.py`, including watcher unreachable, with a stopped server rather than a mocked exception
-- [ ] T064 [P] [US3] Create `frontend/src/core/sessions/hooks.ts`
-- [ ] T065 [US3] Create the route at `frontend/src/app/workspace/sessions/page.tsx`
-- [ ] T066 [US3] Render watcher health first-class — live, stale with its age, unreachable — never inferable only from an empty list (FR-013)
-- [ ] T067 [US3] Render inferred states visually distinct from observed ones, and keep completed distinct from stalled (FR-011, FR-012)
-- [ ] T068 [US3] Label observe-only sessions, so the absence of controls reads as a property rather than a missing feature (FR-015)
-- [ ] T069 [P] [US3] Rendering assertions in `frontend/tests/rendering/sessions.spec.ts`: with the watcher stopped the page states sessions cannot be seen and renders no empty list (SC-006); a waiting session differs from a finished one without reading the text (SC-007)
+- [X] T061 [US3] Create `backend/app/gateway/routers/sessions.py` reaching the watcher's SSE server per research R2, returning `{reachable, observability, staleness_seconds, sessions[]}`
+- [X] T062 [US3] Keep `reachable` separate from `observability`. Unreachable is a transport fact; live, stale and never-observed arrive inside the watcher's envelope. Collapsing them would undo Feature 001's FR-011a, which exists to keep three conditions from becoming two
+- [X] T063 [P] [US3] Test all four conditions in `backend/tests/gateway/test_sessions_router.py`, including watcher unreachable, with a stopped server rather than a mocked exception
+- [X] T064 [P] [US3] Create `frontend/src/core/sessions/hooks.ts`
+- [X] T065 [US3] Create the route at `frontend/src/app/workspace/sessions/page.tsx`
+- [X] T066 [US3] Render watcher health first-class — live, stale with its age, unreachable — never inferable only from an empty list (FR-013)
+- [X] T067 [US3] Render inferred states visually distinct from observed ones, and keep completed distinct from stalled (FR-011, FR-012)
+- [X] T068 [US3] Label observe-only sessions, so the absence of controls reads as a property rather than a missing feature (FR-015)
+- [X] T069 [P] [US3] Rendering assertions in `frontend/tests/rendering/sessions.spec.ts`: with the watcher stopped the page states sessions cannot be seen and renders no empty list (SC-006); a waiting session differs from a finished one without reading the text (SC-007)
 
 **Checkpoint**: The watcher is visible, and so is its absence.
 
@@ -187,45 +187,45 @@ right state; stop the watcher and confirm the surface says sessions cannot be se
 **Goal**: Learn a tool's tier without triggering it, and close the gate gaps this
 feature exposed.
 
-- [ ] T070 [US4] Create `backend/app/gateway/routers/policy.py` with `GET /api/policy/rules`, `GET /api/policy/explain`, `GET /api/policy/audit`, and register it
-- [ ] T071 [P] [US4] Test that `explain` does not execute the tool it is asked about and uses the same `classify()` as live dispatch (SC-011)
-- [ ] T072 [P] [US4] Return `from_default` so unclassified-defaults-to-Tier-3 is distinguishable from explicitly-classified-as-Tier-3 (FR-027, SC-012)
-- [ ] T073 [US4] Serve the rules actually in force, including after a failed reload left previous rules active (FR-029), tested by forcing a bad reload
-- [ ] T074 [P] [US4] Create `frontend/src/core/policy/hooks.ts` and the route at `frontend/src/app/workspace/policy/page.tsx`
-- [ ] T075 [US4] Render the loaded rules, the tier check with its deciding rule, the default marker, and recent Tier 3 executions with actor, plan as stated and authorising confirmation
-- [ ] T076 [P] [US4] Rendering assertions in `frontend/tests/rendering/policy.spec.ts`
+- [X] T070 [US4] Create `backend/app/gateway/routers/policy.py` with `GET /api/policy/rules`, `GET /api/policy/explain`, `GET /api/policy/audit`, and register it
+- [X] T071 [P] [US4] Test that `explain` does not execute the tool it is asked about and uses the same `classify()` as live dispatch (SC-011)
+- [X] T072 [P] [US4] Return `from_default` so unclassified-defaults-to-Tier-3 is distinguishable from explicitly-classified-as-Tier-3 (FR-027, SC-012)
+- [X] T073 [US4] Serve the rules actually in force, including after a failed reload left previous rules active (FR-029), tested by forcing a bad reload
+- [X] T074 [P] [US4] Create `frontend/src/core/policy/hooks.ts` and the route at `frontend/src/app/workspace/policy/page.tsx`
+- [X] T075 [US4] Render the loaded rules, the tier check with its deciding rule, the default marker, and recent Tier 3 executions with actor, plan as stated and authorising confirmation
+- [X] T076 [P] [US4] Rendering assertions in `frontend/tests/rendering/policy.spec.ts`
 
 ### Gate sweep (addition) — report before changing
 
-- [ ] T077 Audit EVERY existing gate for hardcoded scope and write the finding to `specs/004-assistant-ui-surfaces/gate-scope-audit.md` BEFORE changing any of them (FR-039). Cover at least `tests/trigger_engine/test_wiring.py`, `tests/test_module_wiring.py`, `tests/policy/test_gate_single_dispatch.py`, `tests/policy/test_gate_raise_only.py`, `tests/policy/test_gate_structural.py`, `tests/workers/test_gate_tool_surface.py`, `tests/test_shipped_paths.py`, `tests/test_harness_boundary.py`. For each: is it general, or scoped to the module that motivated it?
-- [ ] T078 For each one-off found in T077, record what the next instance would look like and whether that instance is plausible. A gate scoped to its motivating module will miss the next occurrence exactly as Gate 4 missed `recognise` — but a gate whose subject genuinely is one module is not a defect, and the report must separate those two cases rather than counting all narrow scopes as bugs
-- [ ] T078a The generalised gate MUST catch the FOURTH instance specifically: `DisclosureLedger.apply()` was referenced only by `disclose.py` itself and by tests, so Gate 4's "referenced inside the module" question answered yes while nothing in production called it. A method referenced ONLY by its own defining module and by tests is unwired, and the gate must say so (FR-043)
-- [ ] T078b SABOTAGE T078a: unwire `apply()` from `wrap_model_call` — the exact state `main` was in — and confirm the gate names it. If the gate stays green, it is measuring the same thing Gate 4 was and would miss the fifth instance too
-- [ ] T079 Generalise `tests/trigger_engine/test_wiring.py` into `backend/tests/gates/test_wiring.py` covering every feature module, with: framework-invoked hooks exempt (`wrap_tool_call`, `awrap_tool_call`, `before_model`, `abefore_model`, `after_model`), references scanned across `app/` and `packages/`, and **both the alias and the original name recorded for `import ... as`** — the last is a real bug in the current gate, which reads `install` as unreferenced because the gateway imports it as `install_policy`
-- [ ] T080 Generalise any other one-off T078 judges worth generalising; leave the rest with a comment stating why their scope is correct
-- [ ] T081 SABOTAGE T079: add a function that nothing calls and confirm the gate names it. Then confirm the gate on today's tree is green **only** because of its whitelist, not because it finds nothing — a gate that cannot fail is the thing this feature exists to prevent (SC-022)
-- [ ] T082 Populate the new gate's whitelist with a mandatory reason per entry, and assert reasons are non-empty. Read APIs consumed by this feature must NOT be whitelisted — they have real consumers by Phase 6
+- [X] T077 Audit EVERY existing gate for hardcoded scope and write the finding to `specs/004-assistant-ui-surfaces/gate-scope-audit.md` BEFORE changing any of them (FR-039). Cover at least `tests/trigger_engine/test_wiring.py`, `tests/test_module_wiring.py`, `tests/policy/test_gate_single_dispatch.py`, `tests/policy/test_gate_raise_only.py`, `tests/policy/test_gate_structural.py`, `tests/workers/test_gate_tool_surface.py`, `tests/test_shipped_paths.py`, `tests/test_harness_boundary.py`. For each: is it general, or scoped to the module that motivated it?
+- [X] T078 For each one-off found in T077, record what the next instance would look like and whether that instance is plausible. A gate scoped to its motivating module will miss the next occurrence exactly as Gate 4 missed `recognise` — but a gate whose subject genuinely is one module is not a defect, and the report must separate those two cases rather than counting all narrow scopes as bugs
+- [X] T078a The generalised gate MUST catch the FOURTH instance specifically: `DisclosureLedger.apply()` was referenced only by `disclose.py` itself and by tests, so Gate 4's "referenced inside the module" question answered yes while nothing in production called it. A method referenced ONLY by its own defining module and by tests is unwired, and the gate must say so (FR-043)
+- [X] T078b SABOTAGE T078a: unwire `apply()` from `wrap_model_call` — the exact state `main` was in — and confirm the gate names it. If the gate stays green, it is measuring the same thing Gate 4 was and would miss the fifth instance too
+- [X] T079 Generalise `tests/trigger_engine/test_wiring.py` into `backend/tests/gates/test_wiring.py` covering every feature module, with: framework-invoked hooks exempt (`wrap_tool_call`, `awrap_tool_call`, `before_model`, `abefore_model`, `after_model`), references scanned across `app/` and `packages/`, and **both the alias and the original name recorded for `import ... as`** — the last is a real bug in the current gate, which reads `install` as unreferenced because the gateway imports it as `install_policy`
+- [X] T080 Generalise any other one-off T078 judges worth generalising; leave the rest with a comment stating why their scope is correct
+- [X] T081 SABOTAGE T079: add a function that nothing calls and confirm the gate names it. Then confirm the gate on today's tree is green **only** because of its whitelist, not because it finds nothing — a gate that cannot fail is the thing this feature exists to prevent (SC-022)
+- [X] T082 Populate the new gate's whitelist with a mandatory reason per entry, and assert reasons are non-empty. Read APIs consumed by this feature must NOT be whitelisted — they have real consumers by Phase 6
 
 ### Cross-cutting
 
-- [ ] T083 [P] Write `backend/tests/gates/test_read_surfaces_do_not_write.py` asserting the sessions, triggers and policy routers contain no write call (FR-030, SC-014). This also discharges FR-036 — a rule editor would have to write through one of these routers
-- [ ] T084 SABOTAGE T083: add a write to a read router and confirm the gate fails at the assertion naming the file
-- [ ] T085 Promote the six accessibility rules from warn to error in `frontend/eslint.config.mjs` (FR-034)
-- [ ] T086 SABOTAGE T085: introduce a deliberate a11y violation and confirm the build fails on it (SC-017), then remove it
-- [ ] T087 [P] Extend `frontend/tests/rendering/theme.spec.ts` to assert the computed background changes on every one of the four new surfaces (SC-013)
-- [ ] T088 [P] Assert no new surface hardcodes a colour utility, extending the existing token check to the four new component directories (FR-033)
-- [ ] T089 SABOTAGE T088: add a hardcoded colour utility to one of the four new component directories and confirm the check fails naming the file. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
-- [ ] T090 Confirm `backend/tests/test_shipped_paths.py` covers this feature's tests, including the frontend `join(__dirname, "..")` idiom, and that no test added here reads a gitignored path (FR-032, SC-016)
-- [ ] T090e On rule-set reload, supersede any pending action whose tool no longer classifies Tier 3, with a reason naming the change (FR-042). `Outcome.SUPERSEDED` exists and has no producer; this is its first
-- [ ] T090f SABOTAGE T090e: make the superseding path EXECUTE instead of resolve, and confirm a test fails. Superseding must only ever remove a confirmation demand the current rules say is unnecessary — never grant one (SC-025)
-- [ ] T090a Build a tool-source status view covering EVERY configured source, not only the watcher (FR-040): for each, whether it is configured, enabled, reachable, and how many tools it contributed
-- [ ] T090b Surface a load failure to the user rather than logging and skipping it (FR-041). The gateway logs `Skipping MCP server '<name>'` and carries on, and the only downstream symptom is an agent that behaves as though the feature does not exist
-- [ ] T090c Distinguish an authorised-but-unselected connector from an unauthorised one (SC-024). Gmail was ACTIVE in Composio while the assistant asked the user to grant OAuth access, because connector toolkits load only when a conversation selects them
-- [ ] T090d SABOTAGE T090a: point a configured MCP server at a dead port and confirm the surface reports it UNREACHABLE rather than showing the same empty state as a source nobody configured. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
-- [ ] T091 [P] Route all rendered session summaries, page content and email bodies through the existing redactor, suppressing display on failure rather than falling through (FR-031, SC-015)
-- [ ] T092 SABOTAGE T091: feed content that fails redaction and confirm the surface suppresses rather than renders, and that the suppression is visible as such rather than as absent data
-- [ ] T093 Run quickstart.md end to end and record which steps ran locally and which only in CI
-- [ ] T094 Update `specs/ROADMAP-FOLLOWUPS.md` with what this feature deliberately did not do: no rule editor, mobile out of scope, the browser worker still open, and any gate T078 judged not worth generalising
+- [X] T083 [P] Write `backend/tests/gates/test_read_surfaces_do_not_write.py` asserting the sessions, triggers and policy routers contain no write call (FR-030, SC-014). This also discharges FR-036 — a rule editor would have to write through one of these routers
+- [X] T084 SABOTAGE T083: add a write to a read router and confirm the gate fails at the assertion naming the file
+- [X] T085 Promote the six accessibility rules from warn to error in `frontend/eslint.config.mjs` (FR-034)
+- [X] T086 SABOTAGE T085: introduce a deliberate a11y violation and confirm the build fails on it (SC-017), then remove it
+- [X] T087 [P] Extend `frontend/tests/rendering/theme.spec.ts` to assert the computed background changes on every one of the four new surfaces (SC-013)
+- [X] T088 [P] Assert no new surface hardcodes a colour utility, extending the existing token check to the four new component directories (FR-033)
+- [X] T089 SABOTAGE T088: add a hardcoded colour utility to one of the four new component directories and confirm the check fails naming the file. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
+- [X] T090 Confirm `backend/tests/test_shipped_paths.py` covers this feature's tests, including the frontend `join(__dirname, "..")` idiom, and that no test added here reads a gitignored path (FR-032, SC-016)
+- [X] T090e On rule-set reload, supersede any pending action whose tool no longer classifies Tier 3, with a reason naming the change (FR-042). `Outcome.SUPERSEDED` exists and has no producer; this is its first
+- [X] T090f SABOTAGE T090e: make the superseding path EXECUTE instead of resolve, and confirm a test fails. Superseding must only ever remove a confirmation demand the current rules say is unnecessary — never grant one (SC-025)
+- [X] T090a Build a tool-source status view covering EVERY configured source, not only the watcher (FR-040): for each, whether it is configured, enabled, reachable, and how many tools it contributed
+- [X] T090b Surface a load failure to the user rather than logging and skipping it (FR-041). The gateway logs `Skipping MCP server '<name>'` and carries on, and the only downstream symptom is an agent that behaves as though the feature does not exist
+- [X] T090c Distinguish an authorised-but-unselected connector from an unauthorised one (SC-024). Gmail was ACTIVE in Composio while the assistant asked the user to grant OAuth access, because connector toolkits load only when a conversation selects them
+- [X] T090d SABOTAGE T090a: point a configured MCP server at a dead port and confirm the surface reports it UNREACHABLE rather than showing the same empty state as a source nobody configured. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
+- [X] T091 [P] Route all rendered session summaries, page content and email bodies through the existing redactor, suppressing display on failure rather than falling through (FR-031, SC-015)
+- [X] T092 SABOTAGE T091: feed content that fails redaction and confirm the surface suppresses rather than renders, and that the suppression is visible as such rather than as absent data
+- [X] T093 Run quickstart.md end to end and record which steps ran locally and which only in CI
+- [X] T094 Update `specs/ROADMAP-FOLLOWUPS.md` with what this feature deliberately did not do: no rule editor, mobile out of scope, the browser worker still open, and any gate T078 judged not worth generalising
 
 ---
 

@@ -24,6 +24,7 @@ function action(overrides: Partial<PendingAction> = {}): PendingAction {
     thread_id: "t1",
     threshold_targets: 10,
     requires_typed_count: false,
+    withheld: false,
     ...overrides,
   };
 }

@@ -17,6 +17,7 @@ thing that misleads.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -153,6 +154,82 @@ def test_a_path_a_test_reads_is_tracked(tracked, path, reader):
     assert path in tracked, f"{path} is not tracked, and it is read by: {reader}.\n\nOn a clean checkout that test asserts against a file that is not there. It passes where it was written and proves nothing anywhere else."
 
 
+#: Reads that are deliberate, each with the reason. A file may read a
+#: gitignored path as a PRECONDITION TO SKIP — that is the opposite failure
+#: mode: the test declines to run rather than pretending to have proved
+#: something. What is forbidden is reading one as a source of assertions.
+ALLOWED_GITIGNORED_READS = {
+    "backend/tests/test_client_live.py": "reads config.yaml to SKIP when real credentials are absent; a precondition, not an assertion source",
+    "backend/tests/test_shipped_paths.py": "this check itself: its docstrings name the shapes, and its control writes them to tmp_path",
+}
+_COMMENT_STARTS = ("#", "//", "*", '"""', "'''")
+_ANCHOR = re.compile(r"parents\[|__dirname")
+_LITERAL = re.compile(r"""["']([^"'\n]+)["']""")
+
+
+def _navigation_spans(text: str) -> list[tuple[int, str]]:
+    """(line, span) for each navigation to the repo root, the span running to
+    the end of the enclosing call or statement. Read by STATEMENT, not by
+    line: Prettier wraps `join(__dirname, "..", ..., "config.yaml")` one
+    argument per line, and a line-based scan read only `join(` and `__dirname,`."""
+    spans = []
+    for match in _ANCHOR.finditer(text):
+        inside_call = _inside_brackets(text, match.start())
+        depth, end = 0, match.start()
+        for end in range(match.start(), min(len(text), match.start() + 800)):
+            char = text[end]
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0 and (char == ";" or (char == "\n" and not inside_call)):
+                break
+        spans.append((text.count("\n", 0, match.start()) + 1, text[match.start() : end]))
+    return spans
+
+
+def _inside_brackets(text: str, at: int) -> bool:
+    """Is `at` inside an unclosed bracket — an argument of a call that may
+    continue over several lines?"""
+    depth = 0
+    window = text[max(0, at - 400) : at]
+    for offset, char in enumerate(reversed(window)):
+        index = len(window) - 1 - offset
+        if char == ";" or (char == "\n" and window[index + 1 : index + 2] not in ("", " ", "\t", ")", "]", "}")):
+            return False  # a statement boundary, or an unindented line starting one
+        if char in ")]}":
+            depth += 1
+        elif char in "([{":
+            if depth == 0:
+                return True
+            depth -= 1
+    return False
+
+
+def _gitignored(candidates: set[str]) -> set[str]:
+    """Which of these repo-root-relative names git ignores. Asking git, not a
+    hand list: the hand list had config.yaml, extensions_config.json and
+    .omni-harness, and not .env or mcp_config.json."""
+    if not candidates:
+        return set()
+    out = subprocess.run(["git", "check-ignore", "--no-index", "--stdin"], input="\n".join(sorted(candidates)), capture_output=True, text=True, cwd=REPO)
+    return set(out.stdout.split())
+
+
+def _gitignored_reads(files: list[Path]) -> list[str]:
+    found: list[tuple[str, int, str, set[str]]] = []
+    for path in files:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        text = "\n".join("" if line.lstrip().startswith(_COMMENT_STARTS) else line for line in lines)
+        for number, span in _navigation_spans(text):
+            literals = {lit for lit in _LITERAL.findall(span) if lit.strip(".") and not lit.startswith("..")}
+            found.append((str(path.relative_to(REPO)) if path.is_relative_to(REPO) else path.name, number, span, literals))
+    ignored = _gitignored({lit for *_, lits in found for lit in lits})
+    return [f"{where}:{number}: {' '.join(span.split())[:90]}" for where, number, span, lits in found if lits & ignored and where not in ALLOWED_GITIGNORED_READS]
+
+
 def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
     """Scans the test suites for reads of a REPO-ROOT gitignored path.
 
@@ -163,57 +240,36 @@ def test_no_test_reads_a_gitignored_path_from_the_repo_root(tracked):
     deleted.
 
     What it looks for is the shape that actually occurred: navigating UP to the
-    repository root with ``parents[...]`` and reading a gitignored file from
-    there. That is the only way a test picks up the developer's real config
-    rather than one it made itself.
+    repository root with ``parents[...]`` (Python) or ``join(__dirname, "..")``
+    (TypeScript) and reading a gitignored file from there. That is the only way
+    a test picks up the developer's real config rather than one it made itself.
 
-    LIMIT, stated rather than implied: a computed path defeats this. It catches
-    the literal form, which is the form the bug took — twice, once in each
-    language.
+    LIMIT, stated rather than implied: a path computed in one statement and
+    joined in another (``ROOT = parents[2]`` ... ``ROOT / "config.yaml"``)
+    defeats this. It catches the literal form, which is the form the bug took —
+    twice, once in each language.
     """
-    import re
-
-    #: Reads that are deliberate, each with the reason. A file may read a
-    #: gitignored path as a PRECONDITION TO SKIP — that is the opposite failure
-    #: mode: the test declines to run rather than pretending to have proved
-    #: something. What is forbidden is reading one as a source of assertions.
-    allowed = {
-        "backend/tests/test_client_live.py": "reads config.yaml to SKIP when real credentials are absent; a precondition, not an assertion source",
-    }
-
-    gitignored = ("config.yaml", "extensions_config.json", ".omni-harness")
-    pattern = re.compile(r"""["'][^"']*(?:""" + "|".join(re.escape(g) for g in gitignored) + r")")
-    comment_starts = ("#", "//", "*", '"""', "'''")
-    offenders: list[str] = []
-
-    for root in (REPO / "backend" / "tests", REPO / "frontend" / "tests"):
-        if not root.exists():
-            continue
-        for path in sorted(root.rglob("*")):
-            if path.suffix not in (".py", ".ts", ".tsx") or not path.is_file():
-                continue
-            for number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                stripped = line.lstrip()
-                if stripped.startswith(comment_starts) or "example" in line:
-                    continue
-                # BOTH navigation idioms. Python tests use `parents[N]`;
-                # TypeScript tests use `join(__dirname, "..")`. An earlier
-                # version checked only the first and missed a frontend test
-                # reading gitignored config — the exact bug this exists for,
-                # found by CI instead.
-                if "parents[" not in line and "__dirname" not in line:
-                    continue
-                if not pattern.search(line):
-                    continue
-                if str(path.relative_to(REPO)) in allowed:
-                    continue
-                offenders.append(f"{path.relative_to(REPO)}:{number}: {stripped[:70]}")
-
+    files = [p for root in (REPO / "backend" / "tests", REPO / "frontend" / "tests") if root.exists() for p in sorted(root.rglob("*")) if p.suffix in (".py", ".ts", ".tsx") and p.is_file()]
+    offenders = _gitignored_reads(files)
     assert not offenders, (
         "these tests navigate to the repo root and read a gitignored path, so they assert "
         "against a file that does not exist on a clean checkout:\n  " + "\n  ".join(offenders) + "\n\nIf the read is a PRECONDITION TO SKIP rather than a source of assertions, add the "
-        "file to `allowed` with that reason."
+        "file to ALLOWED_GITIGNORED_READS with that reason."
     )
+
+
+def test_the_scan_sees_a_wrapped_join_and_reads_gitignore(tmp_path):
+    """CONTROL (Article XII, T090). The shapes the line-based scan missed: a
+    Prettier-wrapped join, and a gitignored name it had no entry for. And the
+    legitimate shapes it must leave alone."""
+    spec = tmp_path / "wrapped.test.ts"
+    spec.write_text('const cfg = readFileSync(\n  join(\n    __dirname,\n    "..",\n    "..",\n    "config.yaml",\n  ),\n  "utf8",\n);\n')
+    env = tmp_path / "env_test.py"
+    env.write_text('SECRET = (Path(__file__).resolve().parents[2] / ".env").read_text()\n')
+    fine = tmp_path / "fine_test.py"
+    fine.write_text('SHIPPED = Path(__file__).resolve().parents[2] / "config.example.yaml"\nOWN = tmp_path / "config.yaml"\n')
+
+    assert [line.split(":")[0] for line in _gitignored_reads([spec, env, fine])] == ["wrapped.test.ts", "env_test.py"]
 
 
 def test_the_check_would_notice_an_untracked_requirement_file(tracked, tmp_path):

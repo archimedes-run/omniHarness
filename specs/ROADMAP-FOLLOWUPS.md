@@ -22,7 +22,9 @@ Items deliberately not built, each with the reason and the condition that reopen
 
 ---
 
-## Accessibility lint rules — Feature 004 task
+## Accessibility lint rules — DONE in Feature 004 (T085/T086, 0b8b0b7)
+
+The six rules below are `error` in `frontend/eslint.config.js`; CI `lint-frontend` is the blocking gate (the Next 16 build does not lint). The rest of this entry is kept for the non-promoted list at its end, which is still open.
 
 **Six `jsx-a11y` rules are configured at `warn` and cannot fail a build**, because `pnpm lint` passes no `--max-warnings`: `alt-text`, `aria-props`, `aria-proptypes`, `aria-unsupported-elements`, `role-has-required-aria-props`, `role-supports-aria-props`.
 
@@ -114,9 +116,9 @@ schemas — so it would not catch this. Worth widening its scope, or noting the 
 
 ---
 
-## A rules change orphans the actions already pending under the old rules — OPEN, Feature 004 T090e/f (Phase 2)
+## A rules change orphans the actions already pending under the old rules — FIXED in Feature 004 (T090e/f: 1c7af03, 7d1c786)
 
-Unchanged by Phase 1 by decision: `Outcome.SUPERSEDED` still has no producer. First item of Phase 2.
+A rules change now supersedes every pending action the new rules no longer require confirmation for, on the next use of the rules. It is claimed through the single confirmation path and NOT run. A read surface (the inspector) never triggers the sweep, nor consumes the change (7f0e683). The history below is kept as the occasion.
 
 
 **Found 2026-09-23, by walking into it.** A user asked the assistant to read their email.
@@ -229,3 +231,45 @@ With the 24 h catch-up window, enabling a daily rule two minutes before its time
 ## The dev gateway reloads on any change under backend/, tests included
 
 `uvicorn --reload` watches all of `backend/`, so editing a test restarts the gateway, and with it the trigger engine and any held message (see above). **Reopens with**: the first time it costs a held message; `--reload-dir app --reload-dir packages` would narrow it.
+
+---
+
+## Feature 004 — what it deliberately did not do (T094)
+
+- **No rule editor** (FR-036). The policy and trigger surfaces are read-only. `tests/gates/test_read_surfaces_do_not_write.py` enforces that the read routers and views write nothing. An editor would have to write through one of them. **Reopen** when editing rules by hand in the file is the thing the owner actually complains about.
+- **Mobile is out of scope.** The surfaces are laid out for a desktop browser. They are not tested at phone width.
+- **The browser worker is still open** (its own entry above). Feature 004 neither built nor unblocked it.
+- **Trigger firing reasons are shown verbatim, not redacted** (FR-019 says verbatim). They are written by the engine, not taken from sessions, pages or email. If a reason ever quotes outside content, route it through `app/gateway/display_redaction.py` like the others.
+
+## Gates the Feature 004 audit judged one-off and did not generalise
+
+From `specs/004-assistant-ui-surfaces/gate-scope-audit.md`. Each is a real gap and none is in 004's scope. **Reopen any one** when its "next instance" occurs, or when the code it guards is next touched.
+
+- **Single dispatch** (`tests/policy/test_gate_single_dispatch.py`). It matches only a bare-name `create_agent(` call, and compliance is a substring anywhere in the file. An aliased or attribute call, or a second bypass in a compliant file, slips through.
+- **Tool surface** (`tests/workers/test_gate_tool_surface.py`). It covers Gmail only, calls the filters directly although its docstring says "final assembled list", and supplies its own deny list rather than the shipped one. A non-Gmail email toolkit with no `mcpServers` entry would keep every tool.
+- **Transitive import lists** (`test_no_banned_imports.py`, `test_no_core_imports.py`). Hand lists: the engine's misses `election.py` and the sources; the watcher's misses `server.py`. Fix: import every submodule.
+- **Channel send boundary** (`tests/test_channel_redaction_boundary.py`). It checks only `self.send` in direct `Channel` subclasses. Not covered: `send_file`, calls from outside the class, and raw client calls (`telegram.py:183`, `slack.py:194`, fixed text today).
+- **Read surfaces** (`tests/gates/test_read_surfaces_do_not_write.py`). An enumerated list, one call deep. A new read router not added to the list, or a write two calls deep, would pass.
+- **Zero writes** (`tests/session_watcher/test_zero_writes.py`). One adapter. Parametrise it when Feature 005's Codex adapter lands.
+- **MCP page colours.** `components/workspace/mcp/mcp-server-detail.tsx` hardcodes `bg-white` and hex colours with no dark variant. The T088 token check covers the Feature 004 surfaces only. Extend its surface list when that page is next touched.
+- **Frontend exports nothing imports.** ESLint's `no-unused-vars` cannot see one. That needs knip or ts-prune.
+
+## Unwired code the generalised wiring gate found — wire it or delete it
+
+`tests/gates/test_wiring.py` (T079) found **54 public definitions that nothing in production reaches**. Each is whitelisted as `UNWIRED` in `tests/gates/wiring-whitelist.txt`, so the gate is green today only because of them. They are not all bugs: some are leftovers, some unfinished work. The notable ones:
+
+- `app.policy.limits` (6): the FR-023 honest-limits wording, `describe_absent`, `describe_tier` and `describe_expiry`, plus their constants. This is the fifth "built and never called" instance.
+- `app.trigger_engine.sources.calendar` / `completion`: sources whose rules are rejected at load since Phase 1. Delete the modules, or wire them with the feature that needs them.
+- `app.policy.confirm.restate`, `explain.render`, `lineage.latest_user_turn`, `provenance.firing_rule`, and `PolicyDecision.explain`.
+- `session_watcher.reply.observe_only_notice`, `summarize.on_demand_model.OnDemandModelSummarizer`, and two registry predicates.
+- Harness helpers: memory queue introspection, OpenAI converters, idempotency helpers, `skill_storage` archive install.
+
+**Rule:** removing an entry is the only way to resolve one, by wiring the definition or deleting it. The gate fails a stale entry, so neither can be forgotten.
+
+## `tests/test_mcp*.py` fail in isolation (27 tests, NoReferencedTableError)
+
+Run alone, they fail with `NoReferencedTableError`. In the full suite they pass, because another test's import registers the referenced table's model first. This is the same on `main`, so it was not introduced here. It is a test-isolation defect, not a production one: the gateway imports every model at startup. **Fix:** import the models in the MCP tests' conftest. **Reopen** if CI ever shards the suite.
+
+## `e2e-tests` fails on main: two landing-page specs
+
+`tests/e2e/landing.spec.ts` fails twice: "renders the header and hero section" (element not found) and "Get Started link navigates to workspace" (click timeout). It fails the same way on main's last three runs (7daced7, 14e857e, e3e23e2, back to 2026-08-25), and on PR #39, which touches no landing or e2e file. The job runs only when `frontend/**` changes, so a backend-only PR never shows it. It is red on every frontend PR, and that is the "red build that tells you nothing" problem the backend config step was added to fix. **Fix**: update the spec to the current landing page, or delete it if the landing page is no longer the product's entry.

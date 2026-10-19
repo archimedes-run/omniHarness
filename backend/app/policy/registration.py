@@ -13,6 +13,7 @@ into `app/` would make it unimportable outside this repository.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from omniharness.agents.middlewares.policy_hook import register_policy_middleware_builder
@@ -22,6 +23,7 @@ from .config import ConfigLoader
 from .disclose import DisclosureLedger
 from .middleware import PolicyMiddleware
 from .pending import PendingStore
+from .supersede import supersede_unneeded
 from .targets import resolve_targets
 
 logger = logging.getLogger(__name__)
@@ -59,18 +61,45 @@ def build(app_config) -> PolicyMiddleware | None:
         return None
 
     state = Path(policy.state_dir)
-    return PolicyMiddleware(
-        loader=ConfigLoader(path=resolve_rules_path(policy)),
+    pending = PendingStore(directory=state / "pending")
+    middleware = PolicyMiddleware(
+        loader=shared_loader(policy),
         # WITHOUT THIS, every plan said "exactly these 1 item(s)" and held a
         # repr of the whole call. FR-029 asks for the resolved SPECIFIC
         # targets, and FR-009's threshold compares a target COUNT — pinned at
         # one, it could never fire. The parameter existed, was used correctly
         # when supplied, and was never supplied.
         resolve_targets=resolve_targets,
-        pending=PendingStore(directory=state / "pending"),
+        pending=pending,
         ledger=DisclosureLedger(),
         audit=PolicyAuditLog(path=state / "audit.jsonl", actor="default"),
     )
+    return middleware
+
+
+#: One loader per (rules file, state dir) in this process. It was one per
+#: AGENT: a new conversation built after a bad edit had no "previous rules" to
+#: keep and fell to Tier 3 for everything, while older ones kept the old rules —
+#: so "the rules in force" had no single answer for the inspector to give
+#: (004 FR-029), and "a failed reload keeps the previous rules" held only by
+#: accident of timing. Shared, a refused edit leaves the last good rules in force
+#: for every agent and the inspector alike.
+_LOADERS: dict[tuple[str, str], ConfigLoader] = {}
+
+
+def shared_loader(policy) -> ConfigLoader:
+    rules_path = resolve_rules_path(policy)
+    key = (str(rules_path), str(Path(policy.state_dir)))
+    loader = _LOADERS.get(key)
+    if loader is None:
+        loader = ConfigLoader(path=rules_path)
+        pending = PendingStore(directory=Path(policy.state_dir) / "pending")
+        # FR-042, registered ONCE per loader: whenever the rules differ from the
+        # last set loaded — the first load included — pending actions the new
+        # rules no longer make Tier 3 are superseded, and NOT run.
+        loader.on_change.append(lambda ruleset: supersede_unneeded(pending, ruleset, datetime.now(UTC)))
+        _LOADERS[key] = loader
+    return loader
 
 
 def install() -> None:

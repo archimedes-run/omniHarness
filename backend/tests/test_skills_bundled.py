@@ -4,6 +4,9 @@ Catches regressions like #2443 — a SKILL.md whose YAML front-matter fails to
 parse (e.g. an unquoted description containing a colon, which YAML interprets
 as a nested mapping). Each bundled skill is checked individually so the
 failure message identifies the exact file.
+
+Scope (Feature 004 gate audit, T078): general for its subject. It globs every
+SKILL.md under skills/public rather than naming them.
 """
 
 from pathlib import Path

@@ -175,6 +175,10 @@ export const enUS: Translations = {
     agents: "Agents",
     mcpSuite: "MCP Suite",
     confirmations: "Confirmations",
+    toolSources: "Tool sources",
+    sessions: "Coding sessions",
+    triggers: "Triggers",
+    policy: "Policy",
   },
 
   // Agents
