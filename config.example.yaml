@@ -626,6 +626,41 @@ run_events:
 #
 
 # ============================================================================
+# Permission Policy (three-tier action policy)
+# ============================================================================
+# Every tool call is classified before it runs: Tier 1 runs silently, Tier 2
+# runs and is disclosed in the reply, Tier 3 states a plan and waits for your
+# confirmation. ON by default. If the policy cannot be loaded, tool calls are
+# REFUSED with the reason, never run unchecked. `enabled: false` is the one
+# way to run without it.
+#
+# policy:
+#   enabled: true
+#   rules_path: ""                     # empty = backend/app/policy/default_rules.yaml
+#   state_dir: .omni-harness/policy    # pending confirmations and the Tier 3 audit log
+
+# ============================================================================
+# Trigger Engine (proactive messages)
+# ============================================================================
+# The assistant speaking first: a coding session waiting on you, a morning
+# briefing. Off by default — it messages people, so it is never on because a
+# config file was copied. Rules live in a separate, hot-reloaded file; with
+# rules_path empty the shipped defaults load, all DISABLED.
+#
+# Remote delivery goes to ONE configured chat, never a guessed one. Without
+# `remote`, every remote delivery fails and the reason is recorded. The channel
+# named here must be enabled and running (see `channels:` above). Status and
+# the reason for any failure: GET /api/triggers/status.
+#
+# trigger_engine:
+#   enabled: false
+#   rules_path: ""                     # empty = backend/app/trigger_engine/default_rules.json
+#   state_dir: .omni-harness/triggers
+#   remote:
+#     channel: telegram
+#     chat_id: "123456789"             # Telegram: your numeric user id
+
+# ============================================================================
 # Guardrails Configuration
 # ============================================================================
 # Optional pre-execution authorization for tool calls.

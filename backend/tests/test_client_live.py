@@ -33,6 +33,11 @@ if _skip_reason:
 
 @pytest.fixture(scope="module")
 def client():
+    # As the gateway does at startup. The policy is on by default and fails
+    # closed: without a policy layer installed, every tool call is refused.
+    from app.policy.registration import install
+
+    install()
     """Create a real OmniHarnessClient (no mocks)."""
     return OmniHarnessClient(thinking_enabled=False)
 

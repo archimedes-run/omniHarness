@@ -34,6 +34,7 @@ from app.gateway.routers import (
     thread_runs,
     thread_tools,
     threads,
+    triggers,
     uploads,
     workflows,
 )
@@ -188,33 +189,20 @@ async def _start_trigger_engine(app: FastAPI):
         if lock is None:
             return None
 
-        from app.gateway.internal_auth import create_internal_auth_headers
-
-        def _gateway_call(method: str):
-            def _call(path: str, body: dict | None = None) -> dict:
-                import httpx
-
-                url = f"http://127.0.0.1:8001{path}"
-                with httpx.Client(timeout=120.0) as client:
-                    resp = client.request(method, url, json=body, headers=create_internal_auth_headers())
-                    resp.raise_for_status()
-                    return resp.json() if resp.content else {}
-
-            return _call
-
         handle = await engine_lifespan.start(
-            lambda: wiring.build_loop(
-                config,
-                gateway_post=_gateway_call("POST"),
-                gateway_put=_gateway_call("PUT"),
-                gateway_get=_gateway_call("GET"),
-                fetch_sessions=_fetch_watcher_sessions,
-            ),
+            # The SAME call the Article XI integration test makes
+            # (tests/trigger_engine/test_production_wiring.py). Argument
+            # construction lives in the wiring module so that a test cannot
+            # exercise a different argument list from the one that ships.
+            lambda: wiring.build_production_loop(config, run_store=app.state.run_store),
             enabled=True,
         )
         if handle.error:
+            # Kept, not dropped: the handle carries WHY the engine is not
+            # running (e.g. a rule whose feed is not connected), and
+            # GET /api/triggers/status is where a person reads it.
             _release_engine_lock(lock)
-            return None
+            return handle
         handle.lock = lock
         logger.info("Trigger engine: %s", wiring.describe(config, lock))
         return handle
@@ -230,13 +218,6 @@ def _release_engine_lock(lock) -> None:
             lock.release()
         except Exception:
             logger.warning("releasing the trigger-engine lock failed", exc_info=True)
-
-
-def _fetch_watcher_sessions() -> dict:
-    """Session state from the Feature 001 watcher, or an explicit unobservable
-    result. Never an empty session list on failure — an empty registry reads as
-    'you have no sessions running', which is a false negative stated as fact."""
-    return {"observable": False, "sessions": []}
 
 
 async def _stop_trigger_engine(app: FastAPI) -> None:
@@ -384,6 +365,12 @@ def create_app() -> FastAPI:
     Returns:
         Configured FastAPI application instance.
     """
+    # Before anything can make an outbound request: Telegram's bot token rides in
+    # the URL path, and httpx logs every URL at INFO (app/gateway/log_redaction.py).
+    from app.gateway import log_redaction
+
+    log_redaction.install()
+
     config = get_gateway_config()
     docs_kwargs = {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"} if config.enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
@@ -528,6 +515,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(threads.router)
     # Surface 1: pending Tier 3 confirmations (Feature 004).
     app.include_router(confirmations.router)
+
+    # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
+    app.include_router(triggers.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)

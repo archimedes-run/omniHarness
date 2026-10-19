@@ -159,6 +159,11 @@ def e2e_env(tmp_path, monkeypatch):
 @pytest.fixture()
 def client(e2e_env):
     """A OmniHarnessClient wired to the isolated e2e_env."""
+    # As the gateway does at startup: the policy is on by default and fails
+    # closed, so an embedded client with no policy layer has every tool refused.
+    from app.policy.registration import install
+
+    install()
     return OmniHarnessClient(checkpointer=None, thinking_enabled=False)
 
 

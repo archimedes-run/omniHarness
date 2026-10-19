@@ -88,14 +88,15 @@ class TelegramChannel(Channel):
         logger.info("Telegram channel stopped")
 
     async def send(self, msg: OutboundMessage, *, _max_retries: int = 3) -> None:
+        # Both of these RETURNED, which reported a message that was never sent
+        # as sent to any caller that checks — the trigger engine does.
         if not self._application:
-            return
+            raise RuntimeError("Telegram is not connected")
 
         try:
             chat_id = int(msg.chat_id)
-        except (ValueError, TypeError):
-            logger.error("Invalid Telegram chat_id: %s", msg.chat_id)
-            return
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"invalid Telegram chat_id {msg.chat_id!r}: it must be numeric") from exc
 
         kwargs: dict[str, Any] = {"chat_id": chat_id, "text": msg.text}
 

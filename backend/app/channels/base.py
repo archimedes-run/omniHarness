@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import Any
+
+from session_watcher.redaction import Channel as RedactionLevel
+from session_watcher.redaction import redact_or_suppress
 
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 
 logger = logging.getLogger(__name__)
+
+#: Sent in place of a message whose redaction failed. Says that something was
+#: withheld and where to read it, and nothing of what it was.
+WITHHELD_NOTICE = "A message was withheld: it could not be checked for credentials before leaving this machine, so it was not sent here. Open the conversation in OmniHarness to read it."
 
 
 class Channel(ABC):
@@ -50,6 +58,37 @@ class Channel(ABC):
         The implementation should use ``msg.chat_id`` and ``msg.thread_ts``
         to route the reply to the correct conversation/thread.
         """
+
+    async def deliver(self, msg: OutboundMessage) -> bool:
+        """THE way a message leaves through this channel. Redacts, then sends.
+
+        Returns True when the message's content was sent, False when it was
+        withheld. Raises whatever `send` raises, so a caller that must know
+        whether delivery happened — the trigger engine — finds out.
+
+        Every outbound message passes here: chat replies via `_on_outbound`,
+        proactive messages via the trigger engine's remote destination. Before
+        this existed `app/channels/` redacted nothing, and an agent reply quoting
+        a .env went to Telegram verbatim (audit P-4). A gate test keeps this the
+        only caller of `send`.
+
+        FAILS CLOSED. If redaction raises, the content is not sent — a fixed
+        notice goes instead, and the caller skips the attachments.
+
+        The pattern set, not the REMOTE level: REMOTE also replaces code fences
+        with "[code]" and shortens paths, which suits an unbidden session
+        summary and would wreck a coding answer the user asked for. Proactive
+        messages still get REMOTE, upstream in the trigger engine's Releaser.
+        Patterns catch RECOGNISED secret shapes only; that limit is the
+        redactor's, and is stated there.
+        """
+        safe, ok = redact_or_suppress(msg.text, RedactionLevel.LOCAL)
+        if not ok:
+            logger.error("[%s] redaction failed; withholding a message to chat %s", self.name, msg.chat_id)
+            await self.send(replace(msg, text=WITHHELD_NOTICE, attachments=[], artifacts=[]))
+            return False
+        await self.send(msg if safe == msg.text else replace(msg, text=safe))
+        return True
 
     async def send_file(self, msg: OutboundMessage, attachment: ResolvedAttachment) -> bool:
         """Upload a single file attachment to the platform.
@@ -94,10 +133,12 @@ class Channel(ABC):
         """
         if msg.channel_name == self.name:
             try:
-                await self.send(msg)
+                sent = await self.deliver(msg)
             except Exception:
                 logger.exception("Failed to send outbound message on channel %s", self.name)
                 return  # Do not attempt file uploads when the text message failed
+            if not sent:
+                return  # withheld: its attachments are withheld with it
 
             for attachment in msg.attachments:
                 try:

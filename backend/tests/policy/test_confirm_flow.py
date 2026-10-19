@@ -58,7 +58,8 @@ def test_expired(system, make_pending):
 
 def test_targets_drifted(system, make_pending):
     make_pending(system, targets=["Standup", "Review"])
-    result = system.flow.from_message(HumanMessage(content="yes"), run_tool=system.run_tool, current_targets=["Standup"])
+    system.middleware.recheck_targets = lambda action: ["Standup"]  # the world moved: Review is gone
+    result = system.flow.from_message(HumanMessage(content="yes"), run_tool=system.run_tool)
     assert result.outcome == cf.TARGETS_DRIFTED
     assert system.ran == [], "drifted targets must not execute"
     assert result.detail["confirmed"] == ["Standup", "Review"]

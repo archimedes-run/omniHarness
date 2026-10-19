@@ -18,6 +18,12 @@ dependencies = [
     "bcrypt>=4.0.0",
     "pyjwt>=2.9.0",
     "email-validator>=2.0.0",
+    # Imported by production code, not only by tests: the gateway redacts every
+    # channel message and every proactive one with session_watcher.redaction,
+    # and the trigger engine schedules with croniter. Both sat in the dev group,
+    # so a --no-dev install shipped a gateway that could not import them.
+    "session-watcher",
+    "croniter>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -31,8 +37,6 @@ dev = [
     # Pinned, not floating: `>=` lets a new ruff add rules and turn CI red
     # without a code change. Upgrading is a deliberate bump.
     "ruff==0.15.12",
-    "session-watcher",
-    "croniter>=6.0.0",
     "vulture>=2.14",
     "mypy>=2.3.1",
 ]

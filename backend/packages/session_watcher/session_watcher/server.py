@@ -23,7 +23,7 @@ import uvicorn
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from .adapters.claude_code import ClaudeCodeAdapter
@@ -210,6 +210,11 @@ def build_app(service: WatcherService) -> Starlette:
     async def handle_sse(request):
         async with sse.connect_sse(request.scope, request.receive, request._send) as (r, w):
             await server.run(r, w, server.create_initialization_options())
+        # A Starlette endpoint must return a response. Returning None raised
+        # "'NoneType' object is not callable" when every client disconnected:
+        # one traceback per tool call, which with the trigger engine polling
+        # each minute would be ~1,440 a day in the watcher's log.
+        return Response()
 
     async def health(request):
         now = datetime.now(UTC)

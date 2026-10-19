@@ -1,6 +1,7 @@
 """Output destinations (FR-019, FR-020, FR-021).
 
-A port with two implementations here. The local spoken destination registers
+A port. The quiet implementation is here; the remote one reaches an IM channel
+and so lives gateway-side (app/gateway/trigger_destinations.py). The local spoken destination registers
 against this same port in the voice feature — the abstraction must exist now,
 the voice implementation must not be required.
 """
@@ -29,20 +30,6 @@ class QuietDestination(OutputDestination):
     delivered: list[str] = field(default_factory=list)
 
     def deliver(self, text: str) -> None:
-        self.delivered.append(text)
-
-
-@dataclass
-class RemoteDestination(OutputDestination):
-    """Telegram. `send` is injected so tests need no network."""
-
-    send: object = None
-    kind: Destination = Destination.REMOTE
-    delivered: list[str] = field(default_factory=list)
-
-    def deliver(self, text: str) -> None:
-        if self.send is not None:
-            self.send(text)
         self.delivered.append(text)
 
 

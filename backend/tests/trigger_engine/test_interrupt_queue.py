@@ -95,3 +95,59 @@ def test_only_the_finished_thread_releases() -> None:
     ready = q.due(NOW + timedelta(seconds=30), still_busy=lambda t: t == "busy-thread")
     assert [f.rule_id for f in ready] == ["b"]
     assert len(q) == 1
+
+
+# --- FR-016d: a scheduled message held behind an exchange --------------------
+
+
+def _cron_firing(rid="morning-briefing", thread="t1", at=NOW):
+    ev = TriggerEvent(type=TriggerType.CRON, event_id=at.isoformat(), at=at, fields={"scheduled_at": at.isoformat()})
+    return Firing(rule_id=rid, event=ev, prompt="p", thread_id=thread, reply="Brief.", body="Brief.")
+
+
+def test_a_held_brief_is_not_released_by_the_five_minute_bound() -> None:
+    """The 5-minute bound releases a watcher alert even mid-exchange. A brief
+    waits for the conversation to end: it is not re-checkable, so releasing it
+    at the bound used to mean expiring it."""
+    q = InterruptQueue(max_wait=timedelta(minutes=5))
+    q.hold(_cron_firing(), NOW)
+
+    assert q.due(NOW + timedelta(minutes=30), still_busy=lambda t: True) == []
+    assert len(q) == 1
+
+
+def test_a_held_brief_is_released_for_delivery_when_the_exchange_ends() -> None:
+    q = InterruptQueue(max_wait=timedelta(minutes=5))
+    q.hold(_cron_firing(), NOW)
+
+    [ready] = q.due(NOW + timedelta(minutes=40), still_busy=lambda t: False)
+
+    assert ready.release_reason is ReleaseReason.EXCHANGE_ENDED
+    dest = QuietDestination()
+    Releaser(redact=lambda t: (t, True), still_true=lambda f: False, audit=lambda f, n: None).release([ready], ReleaseReason.EXCHANGE_ENDED, dest, NOW)
+    assert dest.delivered == ["Brief."], "a brief held behind a conversation was dropped"
+
+
+def test_a_brief_held_past_its_window_expires_and_says_why() -> None:
+    expired = []
+    q = InterruptQueue(max_wait=timedelta(minutes=5), schedule_max_wait=timedelta(hours=2))
+    q.hold(_cron_firing(), NOW)
+
+    assert q.due(NOW + timedelta(hours=1, minutes=59), still_busy=lambda t: True, on_expire=expired.append) == []
+    assert q.due(NOW + timedelta(hours=2), still_busy=lambda t: True, on_expire=expired.append) == []
+
+    [f] = expired
+    assert f.outcome is Outcome.EXPIRED and "behind an exchange" in f.reason
+    assert len(q) == 0
+
+
+def test_a_brief_delivered_late_after_a_conversation_says_so() -> None:
+    from app.trigger_engine.compose import with_late_note
+
+    at = datetime(2026, 10, 20, 12, 45, tzinfo=UTC)
+    f = _cron_firing(at=at)
+
+    note = with_late_note(f.event, f.body, now=at + timedelta(minutes=40), held=True)
+
+    assert note.startswith("Running late") and "40 min ago" in note and "mid-conversation" in note, note
+    assert with_late_note(f.event, f.body, now=at + timedelta(minutes=2), held=True) == "Brief.", "on time needs no note"

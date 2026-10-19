@@ -159,14 +159,16 @@ async def test_a_broken_rule_does_not_stop_the_cycle(tmp_path) -> None:
             {"id": "broken", "type": "watcher", "match": {"event": "waiting-on-user"}, "prompt": "{project}", "destination": "quiet"},
         ],
     )
-    original = loop.runner.run
+    # The seam the loop drives: rule work runs as run_blocking on the engine's
+    # worker thread (FR-031), so that is where a rule breaks in production.
+    original = loop.runner.run_blocking
 
-    async def selective(rule, now):
+    def selective(rule, now):
         if rule.id == "broken":
             raise RuntimeError("boom")
-        return await original(rule, now)
+        return original(rule, now)
 
-    loop.runner.run = selective
+    loop.runner.run_blocking = selective
     results = await loop.cycle()
     assert results["good"] is True and results["broken"] is False
     assert len(dest.delivered) == 1

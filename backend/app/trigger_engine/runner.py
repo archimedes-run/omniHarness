@@ -8,13 +8,15 @@ the way down rather than only at the injection call.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from concurrent.futures import Executor, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from .audit import AuditLog
-from .compose import compose_proactive, render_prompt
+from .compose import compose_proactive, render_prompt, with_late_note
 from .config import EngineConfig
 from .fingerprint import FingerprintStore, compute
 from .injector import TurnInjector
@@ -28,6 +30,13 @@ from .sources.base import SourceUnavailable, TriggerSource
 from .threads import RuleThreadMap
 
 logger = logging.getLogger(__name__)
+
+#: Tries an event gets before it is settled as FAILED. See RuleRunner._give_up.
+MAX_ATTEMPTS = 3
+
+
+class EmptyReply(RuntimeError):
+    """The run succeeded and said nothing a person could be sent."""
 
 
 @dataclass
@@ -52,8 +61,35 @@ class RuleRunner:
     interrupts: InterruptQueue | None = None
     #: Reads a thread's live status so we do not talk over an exchange (FR-016).
     thread_state: Callable[[str], dict] | None = None
+    #: Where a rule's work runs. NOT the event loop (FR-031): that work is
+    #: blocking HTTP to the gateway this engine lives in, so running it inline
+    #: stalls every request the worker serves for the length of an agent run —
+    #: and under one uvicorn worker, stalls the very `runs/wait` it is waiting
+    #: on. ONE thread, deliberately: the engine's stores are plain files and
+    #: dicts written without locks, and a single thread keeps every write as
+    #: sequential as it was when the work (accidentally) ran on the loop.
+    #:
+    #: The cost, stated: `asyncio.wait_for` in the supervised engine stops
+    #: WAITING for a rule that overruns, but cannot stop the thread. A hung rule
+    #: delays the rules queued behind it until its HTTP timeout, instead of
+    #: hanging the gateway — which is what it did before.
+    #: Failed attempts per event fingerprint, for the retry rule in `_give_up`.
+    attempts: dict[str, int] = field(default_factory=dict)
+    worker: Executor = field(default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="trigger-engine"))
+
+    async def offload(self, fn: Callable, *args):
+        """Run blocking engine work on the engine's worker thread."""
+        return await asyncio.get_running_loop().run_in_executor(self.worker, fn, *args)
 
     async def run(self, rule: Rule, now: datetime) -> list[Firing]:
+        return await self.offload(self.run_blocking, rule, now)
+
+    def run_blocking(self, rule: Rule, now: datetime) -> list[Firing]:
+        """`run`, on the calling thread. Only the worker thread should call this.
+
+        Returns the firings this call SETTLED: routed toward delivery, or given
+        up on after the last retry. The loop marks a cron instant done for each.
+        """
         source = self.sources.get(rule.type)
         if source is None:
             logger.debug("rule %s: no source for %s", rule.id, rule.type)
@@ -80,11 +116,16 @@ class RuleRunner:
                 if self.default_tools:
                     self.injector.configure_tools(firing.thread_id, list(self.default_tools))
                 raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
-                firing.reply = compose_proactive(rule, event, raw)
+                if not raw.strip() and rule.type is not TriggerType.WATCHER:
+                    # A watcher alert still says something without a reply (its
+                    # header names the session); anything else would arrive as
+                    # "(the assistant returned nothing)", which is not a message.
+                    raise EmptyReply("the run completed with no reply")
+                firing.body = compose_proactive(rule, event, raw, late=False)
+                firing.reply = with_late_note(event, firing.body)
             except Exception as exc:  # noqa: BLE001 — one firing, not the rule
-                firing.resolve(Outcome.FAILED, f"{type(exc).__name__}: {exc}")
-                self.audit.record(firing, now)
-                logger.exception("rule %s: firing failed", rule.id)
+                if self._give_up(rule, firing, key, exc, now):
+                    fired.append(firing)
                 continue
 
             # Recorded BEFORE delivery: a crash between injection and delivery
@@ -96,6 +137,35 @@ class RuleRunner:
             self._route(rule, firing, now)
             fired.append(firing)
         return fired
+
+    def _give_up(self, rule: Rule, firing: Firing, key: str, exc: Exception, now: datetime) -> bool:
+        """Resolve a failed firing. Returns True when the event is settled.
+
+        THE RETRY RULE, stated because a failed run used to be delivered as an
+        empty message and then never retried: an event gets MAX_ATTEMPTS tries,
+        one per cycle. Each failure is recorded FAILED with the run's own
+        reason, and nothing is delivered. The event is retried only if its
+        source still produces it on the next cycle — a watcher session that
+        stopped waiting is not retried. After the last attempt the event is
+        fingerprinted, so it never fires again, and returned as settled, so a
+        cron instant is marked done rather than retried forever.
+
+        Attempt counts are held in memory: a restart grants an event up to
+        MAX_ATTEMPTS more tries. Bounded, and cheaper than another store.
+        """
+        n = self.attempts.get(key, 0) + 1
+        reason = f"{type(exc).__name__}: {exc}"
+        if n >= MAX_ATTEMPTS:
+            self.attempts.pop(key, None)
+            self.fingerprints.record(key, now)
+            firing.resolve(Outcome.FAILED, f"gave up after {n} attempts: {reason}")
+            logger.error("rule %s: gave up on %s after %d attempts: %s", rule.id, firing.event.event_id, n, reason)
+        else:
+            self.attempts[key] = n
+            firing.resolve(Outcome.FAILED, f"attempt {n} of {MAX_ATTEMPTS}: {reason}; retrying on the next cycle")
+            logger.warning("rule %s: attempt %d of %d failed: %s", rule.id, n, MAX_ATTEMPTS, reason)
+        self.audit.record(firing, now)
+        return n >= MAX_ATTEMPTS
 
     # -- politeness (Article VII) ------------------------------------------
 
@@ -115,7 +185,7 @@ class RuleRunner:
                 return
 
         if self.interrupts is not None and self._is_mid_exchange(firing.thread_id):
-            self.interrupts.hold(firing, now)
+            self.interrupts.hold(firing, now, self._hold_reason)
             self.audit.record(firing, now)
             return
 
@@ -127,18 +197,27 @@ class RuleRunner:
 
         self.releaser.release([firing], ReleaseReason.IMMEDIATE, self._destination_for(rule, now), now)
 
+    #: Why the last check said "hold" — an observed exchange, or one we could
+    #: not rule out. The audit says which (Article X): live, a store error was
+    #: recorded as "user is mid-exchange" when nothing had been observed.
+    _hold_reason: str = "user is mid-exchange on the target thread"
+
     def _is_mid_exchange(self, thread_id: str | None) -> bool:
         if not thread_id or self.thread_state is None:
             return False
+        self._hold_reason = "user is mid-exchange on the target thread"
         try:
             return is_busy(self.thread_state(thread_id))
         except Exception as exc:  # noqa: BLE001
             # Unknown busyness is not "free". Erring toward holding costs a
             # short delay; erring toward sending talks over the user.
-            if is_thread_busy_error(exc):
-                return True
-            logger.debug("thread state unavailable for %s: %s", thread_id, exc)
-            return False
+            # Returning False here used to contradict the comment above: every
+            # lookup failure read as "free" and the firing went straight out.
+            # Held, it is released by the interrupt queue's bound (FR-016a).
+            if not is_thread_busy_error(exc):
+                logger.warning("thread state unavailable for %s, holding: %s", thread_id, exc)
+                self._hold_reason = f"could not tell whether an exchange is in progress ({type(exc).__name__}); holding until it can, or for the queue's bound"
+            return True
 
     def release_deferred(self, rule: Rule, now: datetime) -> str | None:
         """Quiet hours ended — one of the three entry conditions (FR-013d)."""
@@ -157,10 +236,20 @@ class RuleRunner:
         """A held exchange ended or the bound expired (FR-016c)."""
         if self.interrupts is None:
             return None
-        ready = self.interrupts.due(now, still_busy=lambda t: self._is_mid_exchange(t))
+        ready = self.interrupts.due(now, still_busy=lambda t: self._is_mid_exchange(t), on_expire=lambda f: self.audit.record(f, now))
         if not ready:
             return None
-        return self.releaser.release(ready, ReleaseReason.QUEUE_EXPIRED, self._destination_for(rule, now), now)
+        for f in ready:
+            if f.body is not None and f.event.type is not TriggerType.WATCHER:
+                # The note is rewritten for NOW: the firing may have been on
+                # time when composed and late by the time the exchange ended.
+                f.reply = with_late_note(f.event, f.body, now=now, held=True)
+        delivered = None
+        for reason in (ReleaseReason.EXCHANGE_ENDED, ReleaseReason.QUEUE_EXPIRED):
+            group = [f for f in ready if f.release_reason is reason]
+            if group:
+                delivered = self.releaser.release(group, reason, self._destination_for(rule, now), now) or delivered
+        return delivered
 
     def _destination_for(self, rule: Rule, now: datetime):
         return self.registry.resolve(

@@ -53,7 +53,10 @@ mypy is configured — permissive globally, strict on `app.policy`, `app.trigger
 
 ---
 
-## A run that errors returns HTTP 200 with an empty body
+## A run that errors returns HTTP 200 with an empty body — FIXED 2026-10-19 (a82e705)
+
+**Closed** in the Phase 1 wiring pass. Both `runs/wait` routes now share `services.wait_result`, which raises for a run that did not succeed: `error` → 500, `timeout` → 504, `interrupted` → 409, each with `{run_id, status, error}`. The trigger engine, the in-repo consumer, resolves such a firing FAILED with the run's own reason and retries it up to three times; it no longer delivers "(the assistant returned nothing)". The original report follows.
+
 
 **Found 2026-08-25 during Feature 004's T027 walkthrough.** Opened as a follow-up rather
 than fixed inline: it is a gateway concern, not a policy one.
@@ -84,7 +87,10 @@ an explicit error the caller can read. Either is fine; silence is not.
 
 ---
 
-## `policy.expires_after_seconds` is declared in config.yaml and never read
+## `policy.expires_after_seconds` is declared in config.yaml and never read — FIXED 2026-10-19 (c7e4275)
+
+**Decided: the rules file wins.** The config key is deleted, and setting `expires_after_seconds` or `threshold_targets` in config.yaml is now a validation error naming the rules file's `confirmation:` block — rejected, not ignored, since pydantic ignores unknown keys and a silently inert key is the defect. Reasons: `threshold_targets` already lived only there, the rules file hot-reloads, and it is what enforcement already read. The original report follows.
+
 
 **Found 2026-08-25 while enabling the engine.** `PolicyConfig` declares
 `expires_after_seconds`, and nothing reads it: `PolicyMiddleware` takes expiry from
@@ -108,7 +114,10 @@ schemas — so it would not catch this. Worth widening its scope, or noting the 
 
 ---
 
-## A rules change orphans the actions already pending under the old rules
+## A rules change orphans the actions already pending under the old rules — OPEN, Feature 004 T090e/f (Phase 2)
+
+Unchanged by Phase 1 by decision: `Outcome.SUPERSEDED` still has no producer. First item of Phase 2.
+
 
 **Found 2026-09-23, by walking into it.** A user asked the assistant to read their email.
 The classification rules did not match the connector tool names, so three read-only calls
@@ -141,3 +150,82 @@ unasked.
 **Related**: this is also the second time in one day that the unbuilt pending-confirmations
 surface (Feature 004, Surface 1, Phase 3) was the thing standing between the user and a
 working feature. A decline control would have cleared this in one click.
+
+
+---
+
+# Carried forward from the October audit (specs/AUDIT-2026-10.md)
+
+Phase 1 (branch `phase-1-wiring`) fixed the items listed in the audit's Decisions section. These were found and deliberately not fixed in it. Each has the condition that reopens it.
+
+## Real-world target drift needs live resolvers — DEFERRED (owner, 2026-10-19)
+
+Phase 1 (a214aaf) made the FR-029 re-check run on both confirmation routes, computed in one place. But targets are resolved from a call's ARGUMENTS, which are frozen into the pending action, so the re-check catches a changed resolver or an altered record and **cannot see the world move**. That needs a live, per-tool resolver, plugged in at `PolicyMiddleware.recheck_targets`.
+
+**Scope, as decided**: two tools only, the ones where acting on a stale set does damage:
+- **calendar decline / delete**: re-read the named events and confirm each still exists, unchanged, before acting;
+- **email send**: re-read the draft and recipients and confirm they are what was stated.
+
+**Reopens when**: those workers (calendar, email) are in daily use. Not before: a resolver for a worker nobody runs is code with no production caller.
+
+## Subagent provenance: `delegation_chain` is never set (audit P-5)
+
+Nothing in production sets it; the subagent executor's context is `{thread_id, app_config}`, so a subagent's Tier 3 request is recorded as `lead_agent` with an empty chain (FR-033 unmet). `PolicyMiddleware` also never suspends, so confirming a subagent-only tool raises `LookupError`. **Reopens with**: the subagent suspend/resume work (003 FR-031/032).
+
+## The watcher's UNKNOWN state is unreachable (audit W-2)
+
+The Claude adapter drops undated records, so every discovered session has dated records, and a session whose records are all uninterpretable resolves to a confident WORKING/STALLED — what FR-006 forbids. **Reopens with**: Feature 005's Codex adapter, which touches the same resolution path.
+
+## The live e2e test inherits its condition (audit §3)
+
+`test_client_e2e.py::...test_a_requested_tool_is_called_and_its_result_comes_back` runs only when `OPENAI_API_KEY` is set and defaults to model `ep-20251211175242-llcmh`, which does not exist on OpenAI. Skipped in CI, red on any machine with a key: Article XIV's "a test must not inherit the condition it asserts". **Fix**: a deterministic fake model, or delete.
+
+## Presence is never observed (audit T-7)
+
+`TriggerLoop.recent_runs` is not wired and two `PresenceSignal` objects are built. Harmless until a local destination exists (`auto` resolves remote with no local one). The run store has no cross-thread "recent runs" query to feed it. **Reopens with**: the voice / local destination feature.
+
+## A cron firing held behind an exchange is expired, not delivered — QUESTION
+
+`release_queued` releases with `QUEUE_EXPIRED` whether the exchange ended or the bound ran out, and FR-013c expires un-recheckable types (cron) on any non-immediate release. So a morning briefing that waited for an exchange to end is dropped. Literal FR-016c; probably not the intent for "the exchange ended". **Reopens when**: the owner rules on it.
+
+## The embedded Python client now refuses tools by default
+
+With the policy on by default and failing closed (4dd013c), the embedded client — which builds agents without the gateway — refuses every tool call until it calls `app.policy.registration.install()` or sets `policy.enabled: false`. Intended, and a visible change for library users. **Reopens if**: the client should install the policy layer itself (it lives in the harness, which must not import `app`).
+
+## Smaller engine items not taken in Phase 1
+
+- T-9: `RuleRunner.default_tools` is never set, so `configure_tools` never runs.
+- T-10: hot reload covers rules only; `quiet_hours` and `coalesce_window` need a restart.
+- T-12: the firing-retention window is never read; a deleted rule thread fails forever rather than being recreated.
+- A delivery failure is recorded FAILED and not retried (FR-017's trade). A proactive message is not added to the destination conversation's thread, so a reply to it in Telegram lacks its context.
+
+## Smaller policy and watcher items not taken in Phase 1
+
+- P-6: `explain()`/`render()` and `limits.describe_*` have no production caller — Feature 004 Phase 6 (T070, the policy inspector).
+- P-7: lazy expiry is read-check-resolve without a claim; two workers can both announce an expiry.
+- P-8 (unverified): the web confirm route invokes tools without the injected runtime the chat path adds.
+- W-3/W-4: `OnDemandModelSummarizer` and `observe_only_notice` have no production caller. W-5: `SessionState.FAILED` is never produced.
+
+## An intermittent multi-worker failure, seen once
+
+`tests/policy_multiworker/test_cross_worker_confirmation.py::test_confirming_through_both_routes_at_once_executes_once` failed once inside a long `-x` run on 2026-10-19, before any Phase 1 policy change. Not reproduced in 24 runs since. Because it is a concurrency test, a flake may be a real double-execution race. **Reopens on**: a second occurrence; capture the assertion.
+
+---
+
+# Found in the Phase 1 live end-to-end check (2026-10-19)
+
+Fixed in Phase 1 and recorded here because the suite could not have found them, since its test world lacked the condition: the Telegram token written to the gateway log by httpx (9ee53cc); the engine's own gateway calls rejected by CSRF (d99cf1a); the busy check refused by the SQL run store for want of a user context, and the 30 s rule timeout cancelling ordinary agent runs (0bffde7); an unhelpful watcher error and a hold reason that claimed an observation it had not made (540cf5e). Each test world now includes the condition: the fake gateway mounts the real CSRF middleware; the busy tests use RunRepository.
+
+Still open:
+
+## Held proactive messages live in memory
+
+`InterruptQueue` (messages held behind an exchange) and the coalescing window's in-flight firings are not persisted across a gateway restart, and the event is already fingerprinted when it is held. A restart — including the dev server's `--reload` — while a message is held loses it silently. **Reopens with**: Feature 004 T051 (triggers surface), which needs held firings to be readable anyway.
+
+## A newly enabled daily rule fires its previous instant, late
+
+With the 24 h catch-up window, enabling a daily rule two minutes before its time also fires yesterday's instant immediately, labelled late. Seen while preparing the E2E (worked around with a date-pinned schedule). **Reopens with**: the cron catch-up question above; recording a rule's first-seen time would fix it.
+
+## The dev gateway reloads on any change under backend/, tests included
+
+`uvicorn --reload` watches all of `backend/`, so editing a test restarts the gateway, and with it the trigger engine and any held message (see above). **Reopens with**: the first time it costs a held message; `--reload-dir app --reload-dir packages` would narrow it.

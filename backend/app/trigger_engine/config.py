@@ -38,6 +38,8 @@ DEFAULTS = {
     "coalesce_window_seconds": 60,
     "presence_threshold_seconds": 300,
     "queued_turn_max_wait_seconds": 300,
+    #: FR-016d: how long a scheduled message waits behind an exchange.
+    "held_schedule_max_wait_seconds": 7200,
     "fingerprint_retention_seconds": 86400,
 }
 
@@ -64,6 +66,7 @@ class EngineConfig:
     coalesce_window: timedelta = timedelta(seconds=DEFAULTS["coalesce_window_seconds"])
     presence_threshold: timedelta = timedelta(seconds=DEFAULTS["presence_threshold_seconds"])
     queued_turn_max_wait: timedelta = timedelta(seconds=DEFAULTS["queued_turn_max_wait_seconds"])
+    held_schedule_max_wait: timedelta = timedelta(seconds=DEFAULTS["held_schedule_max_wait_seconds"])
     fingerprint_retention: timedelta = timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"])
 
 
@@ -103,6 +106,15 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         raise ConfigError(f"rule {rid!r}: match must be an object")
     if rtype is TriggerType.CRON and not match.get("schedule"):
         raise ConfigError(f"rule {rid!r}: a cron rule needs match.schedule")
+    if rtype is TriggerType.CRON and match.get("timezone"):
+        # Rejected at load, like any other invalid rule: an unknown zone would
+        # otherwise raise on every evaluation, or worse, be read as UTC.
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(match["timezone"])
+        except Exception as exc:  # noqa: BLE001 — any failure means "not a zone"
+            raise ConfigError(f"rule {rid!r}: match.timezone {match['timezone']!r} is not an IANA time zone (e.g. America/New_York)") from exc
     if rtype is TriggerType.WATCHER and not match.get("event"):
         raise ConfigError(f"rule {rid!r}: a watcher rule needs match.event")
 
@@ -139,7 +151,10 @@ def parse(doc: dict) -> EngineConfig:
     d = doc.get("defaults") or {}
 
     def secs(key: str) -> timedelta:
-        return timedelta(seconds=int(d.get(key, DEFAULTS.get(key, 0)) or DEFAULTS.get(key, 0)))
+        # `d.get(key)` alone decides presence. `int(v) or DEFAULT` read an
+        # explicit 0 as unset, so "coalesce_window_seconds: 0" became 60.
+        value = d.get(key)
+        return timedelta(seconds=int(DEFAULTS.get(key, 0) if value is None else value))
 
     return EngineConfig(
         rules=rules,
@@ -147,8 +162,35 @@ def parse(doc: dict) -> EngineConfig:
         coalesce_window=secs("coalesce_window_seconds"),
         presence_threshold=secs("presence_threshold_seconds"),
         queued_turn_max_wait=secs("queued_turn_max_wait_seconds"),
+        held_schedule_max_wait=secs("held_schedule_max_wait_seconds"),
         fingerprint_retention=timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"]),
     )
+
+
+#: What each trigger type needs connected before a rule of that type can fire.
+#: Named in the error, so the operator learns what is missing, not merely that
+#: something is.
+FEED_FOR: dict[TriggerType, str] = {
+    TriggerType.WATCHER: "session-watcher feed",
+    TriggerType.CRON: "scheduler",
+    TriggerType.CALENDAR: "calendar feed",
+    TriggerType.COMPLETION: "completion feed",
+}
+
+
+def check_sources(cfg: EngineConfig, supported: frozenset[TriggerType]) -> None:
+    """Reject an ENABLED rule whose type has no source in this engine.
+
+    Before this, such a rule loaded, was evaluated every cycle, and was skipped
+    with a debug log (runner.py) — "silently never fires", the worst of the
+    three options, and what happened to every calendar and completion rule.
+    A disabled rule is left alone: it does nothing either way, and a draft
+    kept for when its feed exists is a reasonable thing to keep.
+    """
+    for rule in cfg.rules:
+        if rule.enabled and rule.type not in supported:
+            feed = FEED_FOR.get(rule.type, f"{rule.type} source")
+            raise ConfigError(f"rule {rule.id!r}: a {rule.type} rule needs a {feed}, and no {feed} is connected to the trigger engine, so it would load and never fire. Disable or remove the rule until one is.")
 
 
 @dataclass
@@ -156,6 +198,9 @@ class ConfigLoader:
     """Loads and hot-reloads the rule file, holding the last VALID config."""
 
     path: Path
+    #: Trigger types this engine has a source for. Production always passes it
+    #: (trigger_engine_wiring); None skips the check, for tests of parsing alone.
+    supported_types: frozenset[TriggerType] | None = None
     _config: EngineConfig | None = None
     _mtime: float | None = None
     last_error: str | None = None
@@ -181,6 +226,8 @@ class ConfigLoader:
         try:
             doc = json.loads(self.path.read_text())
             cfg = parse(doc)
+            if self.supported_types is not None:
+                check_sources(cfg, self.supported_types)
         except (json.JSONDecodeError, ConfigError, OSError) as exc:
             self.last_error = str(exc)
             logger.error(

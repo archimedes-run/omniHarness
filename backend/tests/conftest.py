@@ -69,6 +69,23 @@ def provisioner_module():
 
 
 @pytest.fixture(autouse=True)
+def _restore_policy_builder():
+    """Keep the policy-builder registration from leaking between tests.
+
+    `policy_hook._builder` is process-global, and anything that runs the
+    gateway lifespan or `app.policy.registration.install()` sets it. Leaked,
+    the next test's agents get a real policy gate or a refusing one depending
+    on which tests ran first — a result inherited from ambient state (Article
+    XIV). Found when a test passed alone and failed in the full run.
+    """
+    from omniharness.agents.middlewares import policy_hook
+
+    saved = policy_hook._builder
+    yield
+    policy_hook._builder = saved
+
+
+@pytest.fixture(autouse=True)
 def _reset_skill_storage_singleton():
     """Reset the SkillStorage singleton between tests to prevent cross-test contamination."""
     try:

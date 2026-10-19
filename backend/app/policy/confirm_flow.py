@@ -79,7 +79,7 @@ class ConfirmationFlow:
 
     # ---- entry points ---------------------------------------------------
 
-    def from_message(self, message: Any, *, run_tool: Callable[[str, dict], Any], runtime_context: dict | None = None, current_targets: list[str] | None = None) -> FlowResult:
+    def from_message(self, message: Any, *, run_tool: Callable[[str, dict], Any], runtime_context: dict | None = None) -> FlowResult:
         """The chat route. Always returns a result; NO_VERDICT is the usual one.
 
         A turn that says nothing about a pending action must not produce a
@@ -118,9 +118,9 @@ class ConfirmationFlow:
                 f"that action was already resolved ({action.outcome if action else 'unknown'})",
                 expired_meanwhile=expired,
             )
-        return self._apply(action, verdict.verdict, supplied, run_tool, current_targets, expired)
+        return self._apply(action, verdict.verdict, supplied, run_tool, expired)
 
-    def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None, current_targets: list[str] | None = None) -> FlowResult:
+    def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None) -> FlowResult:
         """The UI route (Phase 3). Same claim, same execution, same outcomes."""
         now = self.now()
         expired = self._expire(now)
@@ -132,11 +132,11 @@ class ConfirmationFlow:
         if action.is_expired(now):
             return FlowResult(EXPIRED, action_id, "that action expired before it was confirmed", expired_meanwhile=expired)
         verdict = Verdict.CONFIRM if confirm else Verdict.DECLINE
-        return self._apply(action, verdict, supplied_count, run_tool, current_targets, expired)
+        return self._apply(action, verdict, supplied_count, run_tool, expired)
 
     # ---- the shared middle ----------------------------------------------
 
-    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], current_targets: list[str] | None, expired: tuple[PendingAction, ...]) -> FlowResult:
+    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...]) -> FlowResult:
         if verdict is Verdict.DECLINE:
             self.store.resolve(action, Outcome.DECLINED, "declined by the user")
             return FlowResult(DECLINED, action.id, "Understood — I have not done it.", expired_meanwhile=expired)
@@ -161,7 +161,7 @@ class ConfirmationFlow:
 
         before = list(claimed.targets)
         try:
-            result = self.middleware.execute_confirmed(claimed, run_tool=run_tool, current_targets=current_targets)
+            result = self.middleware.execute_confirmed(claimed, run_tool=run_tool)
         except Exception as exc:  # noqa: BLE001 — see below
             # A CLAIMED ACTION MUST NEVER BE LEFT UNRESOLVED. The claim is a
             # one-shot file link, so an action that is claimed and still open
@@ -183,7 +183,7 @@ class ConfirmationFlow:
                 TARGETS_DRIFTED,
                 claimed.id,
                 "The items changed since I described them, so I have not acted. Here is the plan again.",
-                detail={"confirmed": before, "current": list(current_targets or [])},
+                detail={"confirmed": before, "current": self.middleware.targets_now(claimed)},
                 expired_meanwhile=expired,
             )
         return FlowResult(EXECUTED, claimed.id, "Done.", detail={"result": result}, expired_meanwhile=expired)

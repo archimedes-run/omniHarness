@@ -52,6 +52,12 @@ class Releaser:
             if reason is ReleaseReason.IMMEDIATE:
                 survivors.append(f)
                 continue
+            if f.event.type not in RECHECKABLE and reason is ReleaseReason.EXCHANGE_ENDED:
+                # Held behind a conversation that has now ended. Nothing to
+                # re-check, and nothing went stale while the user was present:
+                # deliver (with the late note the caller wrote). FR-016d.
+                survivors.append(f)
+                continue
             if f.event.type not in RECHECKABLE:
                 # FR-013c — without this, "re-check" degrades into "deliver
                 # anything we cannot disprove".
@@ -81,7 +87,20 @@ class Releaser:
             logger.warning("release(%s): redaction failed, suppressed", reason)
             return None
 
-        destination.deliver(safe)
+        try:
+            destination.deliver(safe)
+        except Exception as exc:  # noqa: BLE001 — every delivery failure is recorded, none escapes
+            # It used to escape: release() raised after the event was
+            # fingerprinted and the window drained, before anything was audited,
+            # so the message vanished without a record. Not retried — FR-017's
+            # trade: a missed message is recoverable, a repeat gets the feature
+            # muted. The reason is on the firing, where the status surface and
+            # the audit log show it.
+            for f in survivors:
+                f.resolve(Outcome.FAILED, f"delivery failed: {exc}")
+                self.audit(f, now)
+            logger.error("release(%s): delivery failed: %s", reason, exc)
+            return None
         # One id across the firings that became ONE message, so "what was this
         # merged with" is answerable afterwards. Only when there is more than
         # one: a solo delivery gets None, which is what makes the field's
