@@ -17,6 +17,7 @@ why, and for what is lost when the holder dies mid-window.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import UTC, datetime
@@ -111,7 +112,7 @@ def _quiet_hours(engine_config) -> EnforcedQuietHours:
     )
 
 
-def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions) -> TriggerLoop:
+def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state) -> TriggerLoop:
     """Construct the engine. Raises on misconfiguration — the caller decides
     whether that is fatal (it is not; see lifespan.start)."""
     cfg = config.trigger_engine
@@ -165,7 +166,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         quiet=_quiet_hours(engine_config),
         deferrals=DeferralQueue(store=pending),
         interrupts=InterruptQueue(),
-        thread_state=gateway_get,
+        thread_state=exchange_state,
         window=CoalesceWindow(window=engine_config.coalesce_window, store=pending),
     )
 
@@ -211,7 +212,56 @@ def _fetch_watcher_sessions() -> dict:
     return {"observable": False, "sessions": []}
 
 
-def build_production_loop(config: AppConfig) -> TriggerLoop:
+#: Run statuses that mean an exchange is under way. From RunStatus; the engine
+#: holds a proactive message while any of these is open.
+_ACTIVE_RUN_STATUSES = frozenset({"pending", "running"})
+
+
+def _destination_conversations(config: AppConfig) -> list[str]:
+    """Threads behind the chat a remote delivery lands in.
+
+    The exchange a proactive message would interrupt is in THAT conversation —
+    the user's Telegram chat — not in the rule's own thread, where the user
+    never types. Every topic of the chat counts. No channel service, or no
+    recipient configured, means there is no such conversation to protect.
+    """
+    from app.channels.service import get_channel_service
+
+    remote = getattr(config.trigger_engine, "remote", None)
+    service = get_channel_service()
+    if remote is None or service is None:
+        return []
+    return [e["thread_id"] for e in service.store.list_entries(remote.channel) if str(e.get("chat_id")) == str(remote.chat_id) and e.get("thread_id")]
+
+
+def _exchange_state(config: AppConfig, run_store, main_loop: asyncio.AbstractEventLoop):
+    """Whether an exchange is in progress where this firing would land (FR-016).
+
+    Read from the RUN STORE, not `GET /api/threads/{id}/runs`: that route reads
+    one worker's in-memory RunManager, so under `--workers 4` a run on another
+    worker is invisible — every politeness check per-process, Article XI's
+    first row. The SQL run store is shared by every worker.
+
+    It replaces a call that could never work: the engine passed `gateway_get`
+    a bare thread id (URL `http://127.0.0.1:8001<uuid>`), and read a `status`
+    field the thread-state response does not have.
+
+    Runs on the engine's worker thread; the store's sessions belong to the
+    gateway's loop, so the query is sent there and awaited from here.
+    """
+
+    def _state(thread_id: str) -> dict:
+        threads = dict.fromkeys(t for t in [thread_id, *_destination_conversations(config)] if t)
+        active = []
+        for tid in threads:
+            rows = asyncio.run_coroutine_threadsafe(run_store.list_by_thread(tid), main_loop).result(timeout=10)
+            active += [r["run_id"] for r in rows if r.get("status") in _ACTIVE_RUN_STATUSES]
+        return {"status": "busy" if active else "idle", "active_runs": active}
+
+    return _state
+
+
+def build_production_loop(config: AppConfig, *, run_store) -> TriggerLoop:
     """The engine exactly as the gateway starts it.
 
     The ONLY place production's arguments to `build_loop` are chosen. The
@@ -227,6 +277,7 @@ def build_production_loop(config: AppConfig) -> TriggerLoop:
         gateway_put=_gateway_call("PUT"),
         gateway_get=_gateway_call("GET"),
         fetch_sessions=_fetch_watcher_sessions,
+        exchange_state=_exchange_state(config, run_store, asyncio.get_running_loop()),
     )
 
 

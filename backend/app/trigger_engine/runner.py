@@ -158,10 +158,12 @@ class RuleRunner:
         except Exception as exc:  # noqa: BLE001
             # Unknown busyness is not "free". Erring toward holding costs a
             # short delay; erring toward sending talks over the user.
-            if is_thread_busy_error(exc):
-                return True
-            logger.debug("thread state unavailable for %s: %s", thread_id, exc)
-            return False
+            # Returning False here used to contradict the comment above: every
+            # lookup failure read as "free" and the firing went straight out.
+            # Held, it is released by the interrupt queue's bound (FR-016a).
+            if not is_thread_busy_error(exc):
+                logger.warning("thread state unavailable for %s, holding: %s", thread_id, exc)
+            return True
 
     def release_deferred(self, rule: Rule, now: datetime) -> str | None:
         """Quiet hours ended — one of the three entry conditions (FR-013d)."""

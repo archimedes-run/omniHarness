@@ -193,7 +193,7 @@ async def _start_trigger_engine(app: FastAPI):
             # (tests/trigger_engine/test_production_wiring.py). Argument
             # construction lives in the wiring module so that a test cannot
             # exercise a different argument list from the one that ships.
-            lambda: wiring.build_production_loop(config),
+            lambda: wiring.build_production_loop(config, run_store=app.state.run_store),
             enabled=True,
         )
         if handle.error:

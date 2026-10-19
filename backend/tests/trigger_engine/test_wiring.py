@@ -220,7 +220,7 @@ def test_a_missing_rule_file_stops_the_engine_rather_than_running_empty(tmp_path
     )
 
     with pytest.raises(RuntimeError, match="no rules are in effect"):
-        build_loop(cfg, gateway_post=lambda *a: {}, gateway_put=lambda *a: {}, gateway_get=lambda *a: {}, fetch_sessions=lambda: {})
+        build_loop(cfg, gateway_post=lambda *a: {}, gateway_put=lambda *a: {}, gateway_get=lambda *a: {}, fetch_sessions=lambda: {}, exchange_state=lambda tid: {})
 
 
 def test_the_shipped_defaults_load_and_are_all_disabled():

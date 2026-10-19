@@ -131,13 +131,16 @@ class _NetworklessTelegram(Channel):
 
 
 @pytest.fixture
-def telegram(monkeypatch):
+def telegram(tmp_path, monkeypatch):
     """A running channel service with Telegram up, installed where production
-    looks for it (the service singleton)."""
+    looks for it (the service singleton). Its conversation store is the real
+    ChannelStore, so chat -> thread mapping is production code."""
     import app.channels.service as service_module
+    from app.channels.store import ChannelStore
 
     channel = _NetworklessTelegram()
-    monkeypatch.setattr(service_module, "_channel_service", SimpleNamespace(get_channel=lambda name: channel if name == "telegram" else None))
+    channel.store = ChannelStore(path=tmp_path / "channels.json")
+    monkeypatch.setattr(service_module, "_channel_service", SimpleNamespace(get_channel=lambda name: channel if name == "telegram" else None, store=channel.store))
     return channel
 
 
@@ -211,26 +214,36 @@ def _config(tmp_path: Path, rules: list[dict]) -> SimpleNamespace:
     )
 
 
+def _build(tmp_path: Path, rules: list[dict], *, run_store=None):
+    """`build_production_loop` with what the gateway lifespan passes it."""
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    return build_production_loop(_config(tmp_path, rules), run_store=run_store if run_store is not None else MemoryRunStore())
+
+
 WATCHER_RULE = {"id": "blocked-session", "type": "watcher", "match": {"event": "waiting-on-user"}, "prompt": "{project} is waiting: {last_message}", "destination": "auto"}
 
 
 # -- the production shape ------------------------------------------------------
 
 
-def test_the_production_engine_can_be_constructed(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_the_production_engine_can_be_constructed(tmp_path) -> None:
     """Before anything about what the engine does: that it exists. Since #32 the
     gateway's start raised TypeError on every attempt, recorded only as
     `handle.error`. No test called `build_loop` past its rules check."""
-    loop = build_production_loop(_config(tmp_path, [WATCHER_RULE]))
+    loop = _build(tmp_path, [WATCHER_RULE])
 
     assert loop.runner is not None
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-1: production's watcher feed is a stub that always reports observable=False")
-def test_the_watcher_feed_reports_what_a_live_watcher_sees(tmp_path, live_watcher) -> None:
-    loop = build_production_loop(_config(tmp_path, [WATCHER_RULE]))
+@pytest.mark.asyncio
+async def test_the_watcher_feed_reports_what_a_live_watcher_sees(tmp_path, live_watcher) -> None:
+    loop = _build(tmp_path, [WATCHER_RULE])
 
-    payload = loop.runner.sources[TriggerType.WATCHER].fetch_sessions()
+    # Called where production calls it: on the engine's worker thread.
+    payload = await loop.runner.offload(loop.runner.sources[TriggerType.WATCHER].fetch_sessions)
 
     assert payload["observable"] is True, f"a live watcher is serving, and production's feed reported: {payload}"
     states = {s["session_id"]: s["state"] for s in payload["sessions"]}
@@ -240,7 +253,7 @@ def test_the_watcher_feed_reports_what_a_live_watcher_sees(tmp_path, live_watche
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-2: QuietDestination fills the remote slot; nothing reaches a channel")
 @pytest.mark.asyncio
 async def test_a_remote_delivery_reaches_the_configured_channel(tmp_path, telegram) -> None:
-    loop = build_production_loop(_config(tmp_path, [WATCHER_RULE]))
+    loop = _build(tmp_path, [WATCHER_RULE])
     remote = loop.runner.registry.resolve(Destination.REMOTE, present=False)
 
     # Delivery runs on the engine's worker thread in production, never on the
@@ -251,19 +264,21 @@ async def test_a_remote_delivery_reaches_the_configured_channel(tmp_path, telegr
 
 
 @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason="AUDIT T-4: a calendar rule loads, and is then skipped every cycle with a debug log")
-def test_a_calendar_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_a_calendar_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
     rule = {"id": "standup", "type": "calendar", "match": {"minutes_before": 10}, "prompt": "{summary} starts soon", "destination": "auto"}
 
     with pytest.raises(RuntimeError, match="calendar feed"):
-        build_production_loop(_config(tmp_path, [rule]))
+        _build(tmp_path, [rule])
 
 
 @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason="AUDIT T-4: a completion rule loads, and is then skipped every cycle with a debug log")
-def test_a_completion_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_a_completion_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
     rule = {"id": "done", "type": "completion", "match": {}, "prompt": "{task_id} finished: {summary}", "destination": "auto"}
 
     with pytest.raises(RuntimeError, match="completion feed"):
-        build_production_loop(_config(tmp_path, [rule]))
+        _build(tmp_path, [rule])
 
 
 @pytest.mark.asyncio
@@ -272,7 +287,7 @@ async def test_rule_work_does_not_block_the_event_loop(tmp_path, gateway) -> Non
     HTTP calls to that same gateway — a blocking one stalls every request this
     worker serves for as long as the agent run takes, and with one worker it
     stalls the very request it is waiting on."""
-    loop = build_production_loop(_config(tmp_path, [_cron_rule_due_once()]))
+    loop = _build(tmp_path, [_cron_rule_due_once()])
     lags: list[float] = []
 
     async def heartbeat() -> None:
@@ -295,3 +310,55 @@ async def test_rule_work_does_not_block_the_event_loop(tmp_path, gateway) -> Non
     # Positive control: the slow call happened, so there was something to block on.
     assert len(gateway.runs) == 1, f"the rule did not reach the gateway (runs={gateway.runs})"
     assert max(lags) < 0.2, f"the event loop stalled for {max(lags):.2f}s while a rule ran"
+
+
+# -- FR-016: not talking over an exchange --------------------------------------
+
+
+async def _running(store, run_id: str, thread_id: str) -> None:
+    await store.put(run_id, thread_id=thread_id, status="running")
+
+
+@pytest.mark.asyncio
+async def test_an_exchange_in_the_destination_conversation_holds_the_message(tmp_path, telegram) -> None:
+    """The exchange a proactive message would interrupt is the one in the chat
+    it lands in — the user's Telegram conversation — not only the rule's own
+    thread, where the user never types."""
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    store = MemoryRunStore()
+    telegram.store.set_thread_id("telegram", CHAT_ID, "conv-1")
+    loop = _build(tmp_path, [WATCHER_RULE], run_store=store)
+
+    # Positive control: with nothing running, the check says free.
+    assert await loop.runner.offload(loop.runner._is_mid_exchange, "rule-thread") is False
+
+    await _running(store, "r1", "conv-1")
+    assert await loop.runner.offload(loop.runner._is_mid_exchange, "rule-thread") is True
+
+
+@pytest.mark.asyncio
+async def test_a_run_on_the_rule_thread_holds_the_message(tmp_path) -> None:
+    """FR-016 as written: the target thread."""
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    store = MemoryRunStore()
+    loop = _build(tmp_path, [WATCHER_RULE], run_store=store)
+    await _running(store, "r1", "rule-thread")
+
+    assert await loop.runner.offload(loop.runner._is_mid_exchange, "rule-thread") is True
+
+
+@pytest.mark.asyncio
+async def test_unknown_busyness_holds_rather_than_interrupts(tmp_path) -> None:
+    """When the check cannot be made, hold: the interrupt queue's bound
+    (FR-016a) releases it, so holding costs minutes; sending talks over the
+    user. The comment in RuleRunner said this; the code returned 'free'."""
+
+    class _Down:
+        async def list_by_thread(self, thread_id, **_):
+            raise ConnectionError("run store unreachable")
+
+    loop = _build(tmp_path, [WATCHER_RULE], run_store=_Down())
+
+    assert await loop.runner.offload(loop.runner._is_mid_exchange, "rule-thread") is True
