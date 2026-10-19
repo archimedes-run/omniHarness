@@ -131,6 +131,9 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
         _module("omniharness.agents.middlewares.sandbox_audit_middleware", SandboxAuditMiddleware=FakeMiddleware),
     )
 
+    from omniharness.agents.middlewares import policy_hook
+
+    monkeypatch.setattr(policy_hook, "_builder", None)  # the state asserted below, made rather than inherited
     middlewares = build_subagent_runtime_middlewares(app_config=app_config, lazy_init=False)
 
     assert captured["app_config"] is app_config
