@@ -34,6 +34,7 @@ from app.gateway.routers import (
     thread_runs,
     thread_tools,
     threads,
+    tool_sources,
     triggers,
     uploads,
     workflows,
@@ -518,6 +519,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
+
+    # Tool source status: configured, disabled, unreachable or live (FR-040).
+    app.include_router(tool_sources.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
