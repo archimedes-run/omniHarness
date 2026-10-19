@@ -164,6 +164,7 @@ export function MessageList({
   hasMoreHistory,
   loadMoreHistory,
   isHistoryLoading,
+  footer,
 }: {
   className?: string;
   threadId: string;
@@ -173,6 +174,9 @@ export function MessageList({
   hasMoreHistory?: boolean;
   loadMoreHistory?: () => void;
   isHistoryLoading?: boolean;
+  /** Rendered after the last message, inside the conversation: where a
+   * pending approval for this thread appears (Phase 2.5). */
+  footer?: React.ReactNode;
 }) {
   const { t } = useI18n();
   const updateSubtask = useUpdateSubtask();
@@ -484,6 +488,7 @@ export function MessageList({
           );
         })}
         {thread.isLoading && <StreamingIndicator className="my-4" />}
+        {footer}
         <div style={{ height: `${paddingBottom}px` }} />
       </ConversationContent>
     </Conversation>
