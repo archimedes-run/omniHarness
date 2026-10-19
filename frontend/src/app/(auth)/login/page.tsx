@@ -132,7 +132,7 @@ export default function LoginPage() {
   return (
     <div className="bg-background flex min-h-screen items-center justify-center">
       <FlickeringGrid
-        className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
+        className="absolute inset-0 z-0 mask-[url(/images/mark.svg)] mask-size-[80vw] mask-center mask-no-repeat md:mask-size-[60vh]"
         squareSize={4}
         gridGap={4}
         color={actualTheme === "dark" ? "white" : "black"}
@@ -176,7 +176,7 @@ export default function LoginPage() {
             />
           </div>
 
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && <p className="text-destructive text-sm">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={loading}>
             {loading
@@ -194,7 +194,7 @@ export default function LoginPage() {
               setIsLogin(!isLogin);
               setError("");
             }}
-            className="text-blue-500 hover:underline"
+            className="text-highlight hover:underline"
           >
             {isLogin
               ? "Don't have an account? Sign up"
