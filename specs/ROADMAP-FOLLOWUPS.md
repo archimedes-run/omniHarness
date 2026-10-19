@@ -203,3 +203,23 @@ With the policy on by default and failing closed (4dd013c), the embedded client 
 ## An intermittent multi-worker failure, seen once
 
 `tests/policy_multiworker/test_cross_worker_confirmation.py::test_confirming_through_both_routes_at_once_executes_once` failed once inside a long `-x` run on 2026-10-19, before any Phase 1 policy change. Not reproduced in 24 runs since. Because it is a concurrency test, a flake may be a real double-execution race. **Reopens on**: a second occurrence; capture the assertion.
+
+---
+
+# Found in the Phase 1 live end-to-end check (2026-10-19)
+
+Fixed in Phase 1 and recorded here because the suite could not have found them, since its test world lacked the condition: the Telegram token written to the gateway log by httpx (9ee53cc); the engine's own gateway calls rejected by CSRF (d99cf1a); the busy check refused by the SQL run store for want of a user context, and the 30 s rule timeout cancelling ordinary agent runs (0bffde7); an unhelpful watcher error and a hold reason that claimed an observation it had not made (540cf5e). Each test world now includes the condition: the fake gateway mounts the real CSRF middleware; the busy tests use RunRepository.
+
+Still open:
+
+## Held proactive messages live in memory
+
+`InterruptQueue` (messages held behind an exchange) and the coalescing window's in-flight firings are not persisted across a gateway restart, and the event is already fingerprinted when it is held. A restart — including the dev server's `--reload` — while a message is held loses it silently. **Reopens with**: Feature 004 T051 (triggers surface), which needs held firings to be readable anyway.
+
+## A newly enabled daily rule fires its previous instant, late
+
+With the 24 h catch-up window, enabling a daily rule two minutes before its time also fires yesterday's instant immediately, labelled late. Seen while preparing the E2E (worked around with a date-pinned schedule). **Reopens with**: the cron catch-up question above; recording a rule's first-seen time would fix it.
+
+## The dev gateway reloads on any change under backend/, tests included
+
+`uvicorn --reload` watches all of `backend/`, so editing a test restarts the gateway, and with it the trigger engine and any held message (see above). **Reopens with**: the first time it costs a held message; `--reload-dir app --reload-dir packages` would narrow it.
