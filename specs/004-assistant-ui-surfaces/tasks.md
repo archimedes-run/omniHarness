@@ -168,15 +168,15 @@ surface shows it evaluating and never firing — visibly different from never ev
 **Independent Test**: Start sessions in two projects and confirm each appears with the
 right state; stop the watcher and confirm the surface says sessions cannot be seen.
 
-- [ ] T061 [US3] Create `backend/app/gateway/routers/sessions.py` reaching the watcher's SSE server per research R2, returning `{reachable, observability, staleness_seconds, sessions[]}`
-- [ ] T062 [US3] Keep `reachable` separate from `observability`. Unreachable is a transport fact; live, stale and never-observed arrive inside the watcher's envelope. Collapsing them would undo Feature 001's FR-011a, which exists to keep three conditions from becoming two
-- [ ] T063 [P] [US3] Test all four conditions in `backend/tests/gateway/test_sessions_router.py`, including watcher unreachable, with a stopped server rather than a mocked exception
-- [ ] T064 [P] [US3] Create `frontend/src/core/sessions/hooks.ts`
-- [ ] T065 [US3] Create the route at `frontend/src/app/workspace/sessions/page.tsx`
-- [ ] T066 [US3] Render watcher health first-class — live, stale with its age, unreachable — never inferable only from an empty list (FR-013)
-- [ ] T067 [US3] Render inferred states visually distinct from observed ones, and keep completed distinct from stalled (FR-011, FR-012)
-- [ ] T068 [US3] Label observe-only sessions, so the absence of controls reads as a property rather than a missing feature (FR-015)
-- [ ] T069 [P] [US3] Rendering assertions in `frontend/tests/rendering/sessions.spec.ts`: with the watcher stopped the page states sessions cannot be seen and renders no empty list (SC-006); a waiting session differs from a finished one without reading the text (SC-007)
+- [X] T061 [US3] Create `backend/app/gateway/routers/sessions.py` reaching the watcher's SSE server per research R2, returning `{reachable, observability, staleness_seconds, sessions[]}`
+- [X] T062 [US3] Keep `reachable` separate from `observability`. Unreachable is a transport fact; live, stale and never-observed arrive inside the watcher's envelope. Collapsing them would undo Feature 001's FR-011a, which exists to keep three conditions from becoming two
+- [X] T063 [P] [US3] Test all four conditions in `backend/tests/gateway/test_sessions_router.py`, including watcher unreachable, with a stopped server rather than a mocked exception
+- [X] T064 [P] [US3] Create `frontend/src/core/sessions/hooks.ts`
+- [X] T065 [US3] Create the route at `frontend/src/app/workspace/sessions/page.tsx`
+- [X] T066 [US3] Render watcher health first-class — live, stale with its age, unreachable — never inferable only from an empty list (FR-013)
+- [X] T067 [US3] Render inferred states visually distinct from observed ones, and keep completed distinct from stalled (FR-011, FR-012)
+- [X] T068 [US3] Label observe-only sessions, so the absence of controls reads as a property rather than a missing feature (FR-015)
+- [X] T069 [P] [US3] Rendering assertions in `frontend/tests/rendering/sessions.spec.ts`: with the watcher stopped the page states sessions cannot be seen and renders no empty list (SC-006); a waiting session differs from a finished one without reading the text (SC-007)
 
 **Checkpoint**: The watcher is visible, and so is its absence.
 

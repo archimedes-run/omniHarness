@@ -3,6 +3,7 @@
 import {
   BotIcon,
   BoxIcon,
+  CodeIcon,
   GitBranchIcon,
   MessagesSquare,
   PlugIcon,
@@ -83,6 +84,17 @@ export function WorkspaceNavChatList() {
               {waiting}
             </SidebarMenuBadge>
           )}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/sessions")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/sessions">
+              <CodeIcon />
+              <span>{t.sidebar.sessions}</span>
+            </Link>
+          </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
