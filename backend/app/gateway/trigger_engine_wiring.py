@@ -18,6 +18,7 @@ why, and for what is lost when the holder dies mid-window.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -181,13 +182,20 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     )
 
 
+def _gateway_base_url() -> str:
+    """This process's own gateway. Read from the same variable the gateway binds
+    with (app/gateway/config.py), rather than a hard-coded 8001 that silently
+    pointed elsewhere whenever GATEWAY_PORT was set."""
+    return f"http://127.0.0.1:{os.getenv('GATEWAY_PORT', '8001')}"
+
+
 def _gateway_call(method: str):
     def _call(path: str, body: dict | None = None) -> dict:
         import httpx
 
         from app.gateway.internal_auth import create_internal_auth_headers
 
-        url = f"http://127.0.0.1:8001{path}"
+        url = f"{_gateway_base_url()}{path}"
         with httpx.Client(timeout=120.0) as client:
             resp = client.request(method, url, json=body, headers=create_internal_auth_headers())
             resp.raise_for_status()

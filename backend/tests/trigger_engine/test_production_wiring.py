@@ -141,6 +141,60 @@ def telegram(monkeypatch):
     return channel
 
 
+class _FakeGateway:
+    """The gateway's HTTP surface, served for real on a free port, so the
+    engine's own HTTP client is the code under test. `runs/wait` is slow on
+    purpose: a blocking call on the event loop shows up as loop lag."""
+
+    RUN_SECONDS = 0.6
+
+    def __init__(self) -> None:
+        self.threads: list[dict] = []
+        self.runs: list[tuple[str, dict]] = []
+        self.reply: dict = {"messages": [{"type": "ai", "content": "darcy-repo needs a decision on the fixture."}]}
+
+    def app(self):
+        from starlette.applications import Starlette
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
+        async def create_thread(request: Request):
+            self.threads.append(await request.json())
+            return JSONResponse({"thread_id": f"t-{len(self.threads)}"})
+
+        async def runs_wait(request: Request):
+            self.runs.append((request.path_params["tid"], await request.json()))
+            await asyncio.sleep(self.RUN_SECONDS)
+            return JSONResponse(self.reply)
+
+        return Starlette(
+            routes=[
+                Route("/api/threads", create_thread, methods=["POST"]),
+                Route("/api/threads/{tid}/runs/wait", runs_wait, methods=["POST"]),
+            ]
+        )
+
+
+@pytest.fixture
+def gateway(monkeypatch):
+    fake = _FakeGateway()
+    port = _free_port()
+    server, thread = _serve(fake.app(), port)
+    # The engine finds the gateway the way the gateway finds its own port.
+    monkeypatch.setenv("GATEWAY_PORT", str(port))
+    yield fake
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+def _cron_rule_due_once() -> dict:
+    """A daily schedule whose one instant in the catch-up window is the minute
+    that just passed — due exactly once, whatever the catch-up policy."""
+    at = datetime.now(UTC) - timedelta(minutes=1)
+    return {"id": "morning-briefing", "type": "cron", "match": {"schedule": f"{at.minute} {at.hour} * * *"}, "prompt": "Brief me, as of {scheduled_at}.", "destination": "quiet"}
+
+
 def _config(tmp_path: Path, rules: list[dict]) -> SimpleNamespace:
     rules_file = tmp_path / "rules.json"
     rules_file.write_text(json.dumps({"quiet_hours": {"start": "22:00", "end": "07:30", "timezone": "UTC", "enabled": False}, "rules": rules}))
@@ -210,3 +264,34 @@ def test_a_completion_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None
 
     with pytest.raises(RuntimeError, match="completion feed"):
         build_production_loop(_config(tmp_path, [rule]))
+
+
+@pytest.mark.asyncio
+async def test_rule_work_does_not_block_the_event_loop(tmp_path, gateway) -> None:
+    """FR-031. The engine shares the gateway's event loop, and a rule's work is
+    HTTP calls to that same gateway — a blocking one stalls every request this
+    worker serves for as long as the agent run takes, and with one worker it
+    stalls the very request it is waiting on."""
+    loop = build_production_loop(_config(tmp_path, [_cron_rule_due_once()]))
+    lags: list[float] = []
+
+    async def heartbeat() -> None:
+        tick = 0.01
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(tick)
+            now = time.monotonic()
+            lags.append(now - last - tick)
+            last = now
+
+    beat = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0.05)  # the heartbeat is ticking before the cycle starts
+    try:
+        await loop.cycle()
+        await asyncio.sleep(0.05)  # ...and ticks once after, so a stall is measured
+    finally:
+        beat.cancel()
+
+    # Positive control: the slow call happened, so there was something to block on.
+    assert len(gateway.runs) == 1, f"the rule did not reach the gateway (runs={gateway.runs})"
+    assert max(lags) < 0.2, f"the event loop stalled for {max(lags):.2f}s while a rule ran"

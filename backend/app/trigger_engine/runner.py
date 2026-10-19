@@ -8,9 +8,11 @@ the way down rather than only at the injection call.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from concurrent.futures import Executor, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from .audit import AuditLog
@@ -52,8 +54,29 @@ class RuleRunner:
     interrupts: InterruptQueue | None = None
     #: Reads a thread's live status so we do not talk over an exchange (FR-016).
     thread_state: Callable[[str], dict] | None = None
+    #: Where a rule's work runs. NOT the event loop (FR-031): that work is
+    #: blocking HTTP to the gateway this engine lives in, so running it inline
+    #: stalls every request the worker serves for the length of an agent run —
+    #: and under one uvicorn worker, stalls the very `runs/wait` it is waiting
+    #: on. ONE thread, deliberately: the engine's stores are plain files and
+    #: dicts written without locks, and a single thread keeps every write as
+    #: sequential as it was when the work (accidentally) ran on the loop.
+    #:
+    #: The cost, stated: `asyncio.wait_for` in the supervised engine stops
+    #: WAITING for a rule that overruns, but cannot stop the thread. A hung rule
+    #: delays the rules queued behind it until its HTTP timeout, instead of
+    #: hanging the gateway — which is what it did before.
+    worker: Executor = field(default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="trigger-engine"))
+
+    async def offload(self, fn: Callable, *args):
+        """Run blocking engine work on the engine's worker thread."""
+        return await asyncio.get_running_loop().run_in_executor(self.worker, fn, *args)
 
     async def run(self, rule: Rule, now: datetime) -> list[Firing]:
+        return await self.offload(self.run_blocking, rule, now)
+
+    def run_blocking(self, rule: Rule, now: datetime) -> list[Firing]:
+        """`run`, on the calling thread. Only the worker thread should call this."""
         source = self.sources.get(rule.type)
         if source is None:
             logger.debug("rule %s: no source for %s", rule.id, rule.type)

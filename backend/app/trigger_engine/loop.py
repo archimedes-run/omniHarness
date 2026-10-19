@@ -63,17 +63,25 @@ class TriggerLoop:
         return min(candidates)
 
     async def cycle(self) -> dict[str, bool]:
-        """One pass: reload config, refresh presence, evaluate, sweep."""
+        """One pass: reload config, refresh presence, evaluate, sweep.
+
+        Everything that does I/O beyond the rule file goes through
+        `runner.offload` — the engine's one worker thread — never the event
+        loop the gateway serves requests on (FR-031). See `RuleRunner.worker`.
+        """
         now = self.now()
         cfg = self.loader.load()  # hot reload; invalid keeps the previous
         if self.recent_runs is not None:
-            self.presence.observe_runs(self.recent_runs())
+            await self.runner.offload(lambda: self.presence.observe_runs(self.recent_runs()))
 
-        async def _run(rule: Rule, at: datetime) -> None:
-            fired = await self.runner.run(rule, at)
+        def _run_blocking(rule: Rule, at: datetime) -> None:
+            fired = self.runner.run_blocking(rule, at)
             if rule.type is TriggerType.CRON:
                 for f in fired:
                     self.scheduler.mark_fired(rule.id, f.event.at, at)
+
+        async def _run(rule: Rule, at: datetime) -> None:
+            await self.runner.offload(_run_blocking, rule, at)
 
         self.engine.evaluate = _run
         # FR-020. Recorded for every rule the engine actually evaluates,
@@ -86,14 +94,16 @@ class TriggerLoop:
         # The three release entry conditions, all reaching the one release()
         # path. Gate 4 caught these being implemented and never called — quiet
         # hours would have deferred firings that nothing ever released.
-        for rule in cfg.rules:
-            if not rule.enabled:
-                continue
-            self.runner.release_deferred(rule, now)
-            self.runner.release_queued(rule, now)
-            self.runner.flush_window(now, rule)
+        def _release_and_sweep() -> None:
+            for rule in cfg.rules:
+                if not rule.enabled:
+                    continue
+                self.runner.release_deferred(rule, now)
+                self.runner.release_queued(rule, now)
+                self.runner.flush_window(now, rule)
+            self._maybe_sweep(now)
 
-        self._maybe_sweep(now)
+        await self.runner.offload(_release_and_sweep)
         return results
 
     def _maybe_sweep(self, now: datetime) -> None:
