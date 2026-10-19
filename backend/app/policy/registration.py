@@ -55,7 +55,7 @@ def build(app_config) -> PolicyMiddleware | None:
     surprise if it switched itself on because a config file was copied.
     """
     policy = getattr(app_config, "policy", None)
-    if not getattr(policy, "enabled", False):
+    if not getattr(policy, "enabled", True):
         return None
 
     state = Path(policy.state_dir)

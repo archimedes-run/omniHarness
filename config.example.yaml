@@ -626,6 +626,20 @@ run_events:
 #
 
 # ============================================================================
+# Permission Policy (three-tier action policy)
+# ============================================================================
+# Every tool call is classified before it runs: Tier 1 runs silently, Tier 2
+# runs and is disclosed in the reply, Tier 3 states a plan and waits for your
+# confirmation. ON by default. If the policy cannot be loaded, tool calls are
+# REFUSED with the reason, never run unchecked. `enabled: false` is the one
+# way to run without it.
+#
+# policy:
+#   enabled: true
+#   rules_path: ""                     # empty = backend/app/policy/default_rules.yaml
+#   state_dir: .omni-harness/policy    # pending confirmations and the Tier 3 audit log
+
+# ============================================================================
 # Trigger Engine (proactive messages)
 # ============================================================================
 # The assistant speaking first: a coding session waiting on you, a morning

@@ -13,11 +13,10 @@ nothing about tiers, rules, or confirmation.
 This mirrors how the project already handles extension points — config-loaded
 `use:` paths, MCP tool interceptors — rather than inventing a new mechanism.
 
-REGISTERING IS NOT OPTIONAL FOR THE PRODUCT. `app/` registers at gateway
-startup. If nothing registers, agents run with no policy layer, which is the
-correct behaviour for a bare library consumer and would be a defect in the
-gateway. The repo-level wiring gate is what notices if the registration is ever
-dropped.
+REGISTERING IS NOT OPTIONAL. `app/` registers at gateway startup. If nothing
+registers while the policy is enabled — the default — every tool call is
+refused with the reason, rather than run unchecked. A bare library consumer
+either registers a builder or opts out with `policy.enabled: false`.
 """
 
 from __future__ import annotations
@@ -41,16 +40,65 @@ def register_policy_middleware_builder(builder: Callable[[Any], Any] | None) -> 
 
 
 def build_policy_middleware(app_config: Any):
-    """The middleware for this agent, or None.
+    """The policy gate for this agent. None ONLY when the operator opted out.
 
-    Returns None rather than raising when the builder fails. Note the direction:
-    None means NO GATE and a logged error, not a gate that permits everything. A
-    broken policy layer must not silently become one that looks like protection.
+    FAILS CLOSED. It used to return None when the builder raised, or when no
+    builder was registered — and None means NO GATE: every tool ran unchecked
+    behind one log line (audit P-2; Article II: no feature may bypass the
+    policy engine). Now, with the policy enabled, a gate that cannot be built
+    is replaced by one that refuses every tool call and says why. A broken
+    policy layer stops the agent's actions; it never removes their check.
+
+    `policy.enabled: false` is the one way to run without a gate, and it is an
+    explicit choice, not a fallback.
     """
+    policy = getattr(app_config, "policy", None)
+    if not getattr(policy, "enabled", True):
+        return None
     if _builder is None:
-        return None
+        reason = (
+            "the permission policy is enabled, but no policy layer is installed in this process (the gateway installs it at startup with app.policy.registration.install(); an embedded client must do the same, or set policy.enabled: false)"
+        )
+        logger.error("refusing tool calls: %s", reason)
+        return RefuseToolCalls(reason)
     try:
-        return _builder(app_config)
-    except Exception:  # noqa: BLE001 — see the docstring
-        logger.exception("the permission policy middleware failed to build; agents run WITHOUT it")
-        return None
+        gate = _builder(app_config)
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        logger.exception("the permission policy failed to build; REFUSING tool calls until it is fixed")
+        return RefuseToolCalls(f"the permission policy failed to load: {type(exc).__name__}: {exc}")
+    if gate is None:
+        return RefuseToolCalls("the permission policy is enabled, but its builder produced no gate")
+    return gate
+
+
+def _refusal(request: Any, reason: str):
+    from langchain_core.messages import ToolMessage
+
+    call = getattr(request, "tool_call", None) or {}
+    name = call.get("name", "this tool")
+    return ToolMessage(
+        content=f"Refused: {name} was not run, because {reason}. No tool can run until the permission policy is working.",
+        tool_call_id=call.get("id", ""),
+        name=name,
+        status="error",
+    )
+
+
+def _middleware_base():
+    from langchain.agents.middleware import AgentMiddleware
+
+    return AgentMiddleware
+
+
+class RefuseToolCalls(_middleware_base()):
+    """The gate when the real one cannot be built: every tool call refused."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+    def wrap_tool_call(self, request, handler):
+        return _refusal(request, self.reason)
+
+    async def awrap_tool_call(self, request, handler):
+        return _refusal(request, self.reason)

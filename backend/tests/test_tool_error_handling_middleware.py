@@ -134,8 +134,14 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     middlewares = build_subagent_runtime_middlewares(app_config=app_config, lazy_init=False)
 
     assert captured["app_config"] is app_config
-    assert len(middlewares) == 6
-    assert isinstance(middlewares[-1], ToolErrorHandlingMiddleware)
+    # The policy gate is always present unless policy.enabled is false, and is
+    # OUTERMOST at the tool-call chokepoint. Nothing registered a builder here,
+    # so it is the fail-closed refusing gate.
+    from omniharness.agents.middlewares.policy_hook import RefuseToolCalls
+
+    assert len(middlewares) == 7
+    assert isinstance(middlewares[-1], RefuseToolCalls)
+    assert isinstance(middlewares[-2], ToolErrorHandlingMiddleware)
 
 
 def test_wrap_tool_call_passthrough_on_success():

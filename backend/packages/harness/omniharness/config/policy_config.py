@@ -10,7 +10,10 @@ class PolicyConfig(BaseModel):
     correct, and not what someone wants to discover by copying a config file.
     """
 
-    enabled: bool = Field(default=False, description="Classify tool calls before dispatch. When off, no policy middleware is installed.")
+    # ON by default, in tracked code. It was False here and True only in the
+    # gitignored config.yaml, so a fresh clone ran every tool ungated (Article
+    # XIV; audit P-1). Off is an explicit choice.
+    enabled: bool = Field(default=True, description="Classify tool calls before dispatch. On by default. `false` is the one way to run with no permission policy; when on but unbuildable, tool calls are refused.")
     rules_path: str = Field(
         default="",
         description=(
