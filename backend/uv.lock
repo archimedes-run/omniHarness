@@ -4210,7 +4210,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=1.2.0" },
+    { name = "mcp", specifier = ">=1.2.0,<2" },
     { name = "watchdog", specifier = ">=6.0.0" },
 ]
 
