@@ -96,8 +96,9 @@ class SlackChannel(Channel):
         logger.info("Slack channel stopped")
 
     async def send(self, msg: OutboundMessage, *, _max_retries: int = 3) -> None:
+        # Returned, which reported an unsent message as sent (see telegram.py).
         if not self._web_client:
-            return
+            raise RuntimeError("Slack is not connected")
 
         kwargs: dict[str, Any] = {
             "channel": msg.chat_id,

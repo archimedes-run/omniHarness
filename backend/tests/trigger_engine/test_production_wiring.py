@@ -272,7 +272,6 @@ async def test_the_watcher_feed_reports_what_a_live_watcher_sees(tmp_path, live_
     assert states.get(SESSION_ID) == "waiting-on-user", states
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-2: QuietDestination fills the remote slot; nothing reaches a channel")
 @pytest.mark.asyncio
 async def test_a_remote_delivery_reaches_the_configured_channel(tmp_path, telegram) -> None:
     loop = _build(tmp_path, [WATCHER_RULE])
@@ -547,3 +546,91 @@ async def test_an_absent_watcher_says_which_kind_of_absent(tmp_path, monkeypatch
     with pytest.raises(SourceUnavailable, match=said):
         await loop.runner.offload(source.poll, loop.loader.config.rules[0], datetime.now(UTC))
     assert time.monotonic() - started < 12, "an unreachable watcher held the engine longer than its timeout"
+
+
+# -- the whole pipe: watcher -> agent -> Telegram ------------------------------
+
+SECRET = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+AUTO_RULE = {**WATCHER_RULE, "destination": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_session_reaches_telegram_redacted(tmp_path, live_watcher, gateway, telegram) -> None:
+    """End to end in the production shape: the real watcher sees a waiting
+    session, the engine asks the agent (over real HTTP), and the reply arrives
+    on the configured chat through the channel boundary, redacted."""
+    gateway.run_seconds = 0.0
+    gateway.reply = {"messages": [{"type": "ai", "content": f"They asked whether to pin the version. The deploy token is {SECRET}."}]}
+    loop = _build(tmp_path, [AUTO_RULE], defaults={"coalesce_window_seconds": 0})
+
+    await loop.cycle()
+
+    [sent] = telegram.sent
+    assert sent.chat_id == CHAT_ID
+    assert "darcy-repo" in sent.text and "waiting on you" in sent.text, sent.text
+    assert SECRET not in sent.text and "[redacted]" in sent.text, sent.text
+    # Through the coalescing window: queued, then delivered as one message.
+    assert [e["outcome"] for e in _audit(loop)] == ["queued", "delivered"]
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_session_waits_while_the_user_is_mid_exchange_on_telegram(tmp_path, live_watcher, gateway, telegram) -> None:
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    gateway.run_seconds = 0.0
+    store = MemoryRunStore()
+    telegram.store.set_thread_id("telegram", CHAT_ID, "conv-1")
+    await _running(store, "r1", "conv-1")
+    loop = _build(tmp_path, [AUTO_RULE], run_store=store, defaults={"coalesce_window_seconds": 0})
+
+    await loop.cycle()
+
+    assert telegram.sent == [], "delivered over an exchange in progress"
+    assert [e["outcome"] for e in _audit(loop)] == ["queued"]
+
+    await store.update_status("r1", "success")
+    await loop.cycle()
+    assert len(telegram.sent) == 1, "held message was not released when the exchange ended"
+
+
+@pytest.mark.asyncio
+async def test_no_recipient_configured_is_a_failure_that_says_what_to_set(tmp_path, live_watcher, gateway, telegram) -> None:
+    gateway.run_seconds = 0.0
+    cfg = _config(tmp_path, [AUTO_RULE], defaults={"coalesce_window_seconds": 0})
+    cfg.trigger_engine.remote = None
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    loop = build_production_loop(cfg, run_store=MemoryRunStore())
+
+    await loop.cycle()
+
+    assert telegram.sent == []
+    entry = _audit(loop)[-1]
+    assert entry["outcome"] == "failed" and "trigger_engine.remote" in entry["reason"], entry
+
+
+@pytest.mark.asyncio
+async def test_a_channel_that_is_not_running_is_a_recorded_failure(tmp_path, live_watcher, gateway, telegram) -> None:
+    """It used to vanish: deliver() raised out of release() after the event was
+    fingerprinted, before anything was audited."""
+    gateway.run_seconds = 0.0
+    telegram._running = False
+    loop = _build(tmp_path, [AUTO_RULE], defaults={"coalesce_window_seconds": 0})
+
+    await loop.cycle()
+
+    entry = _audit(loop)[-1]
+    assert entry["outcome"] == "failed" and "not running" in entry["reason"], entry
+
+
+@pytest.mark.asyncio
+async def test_the_remote_destination_delivers_through_the_channel_boundary(tmp_path, telegram) -> None:
+    """Independent of the Releaser's own redaction upstream: text handed to the
+    remote destination leaves only through Channel.deliver, which redacts."""
+    loop = _build(tmp_path, [WATCHER_RULE])
+    remote = loop.runner.registry.resolve(Destination.REMOTE, present=False)
+
+    await asyncio.to_thread(remote.deliver, f"token {SECRET}")
+
+    [sent] = telegram.sent
+    assert SECRET not in sent.text and "[redacted]" in sent.text

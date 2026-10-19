@@ -12,7 +12,7 @@ from app.trigger_engine.config import EngineConfig
 from app.trigger_engine.destinations.base import DestinationRegistry, QuietDestination
 from app.trigger_engine.fingerprint import FingerprintStore
 from app.trigger_engine.injector import TurnInjector
-from app.trigger_engine.models import Destination, Rule, TriggerType
+from app.trigger_engine.models import Destination, Outcome, Rule, TriggerType
 from app.trigger_engine.politeness.release import Releaser
 from app.trigger_engine.presence import PresenceSignal
 from app.trigger_engine.runner import RuleRunner
@@ -160,8 +160,10 @@ async def test_the_fingerprint_is_recorded_before_delivery(tmp_path) -> None:
 
     runner, _, _, _ = _runner(tmp_path, _payload)
     runner.registry = DestinationRegistry(remote=FailingDest(), quiet=FailingDest())
-    with pytest.raises(RuntimeError):
-        await runner.run(RULE, NOW)
+    [firing] = await runner.run(RULE, NOW)
+    # The failure is RECORDED on the firing. It used to raise out of release()
+    # unaudited, so the message vanished without a trace.
+    assert firing.outcome is Outcome.FAILED and "telegram down" in firing.reason
     # The event is remembered, so the next cycle does not send a duplicate.
     runner.registry = DestinationRegistry(remote=QuietDestination(), quiet=QuietDestination())
     await runner.run(RULE, NOW)

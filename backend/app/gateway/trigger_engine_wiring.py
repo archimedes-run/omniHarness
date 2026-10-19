@@ -146,7 +146,7 @@ def _quiet_hours(engine_config) -> EnforcedQuietHours:
     )
 
 
-def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state) -> TriggerLoop:
+def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state, remote) -> TriggerLoop:
     """Construct the engine. Raises on misconfiguration — the caller decides
     whether that is fatal (it is not; see lifespan.start)."""
     cfg = config.trigger_engine
@@ -162,7 +162,6 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         path=state / "threads.json",
         create_thread=injector.create_thread,
     )
-    destination = QuietDestination()
     sources = {
         TriggerType.WATCHER: WatcherSource(fetch_sessions=fetch_sessions),
         TriggerType.CRON: CronSource(scheduler=scheduler),
@@ -192,7 +191,10 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
             still_true=_still_true(fetch_sessions),
             audit=lambda firing, now: audit.record(firing, now),
         ),
-        registry=DestinationRegistry(remote=destination, quiet=destination),
+        # `remote` is the IM channel (trigger_destinations.ChannelDestination).
+        # It was a QuietDestination — the same object as `quiet` — so every
+        # remote and auto delivery went to an in-memory list (audit T-2).
+        registry=DestinationRegistry(remote=remote, quiet=QuietDestination()),
         presence=PresenceSignal(),
         audit=audit,
         config=engine_config,
@@ -313,6 +315,17 @@ def _exchange_state(config: AppConfig, run_store, main_loop: asyncio.AbstractEve
     return _state
 
 
+def _remote_destination(config: AppConfig, main_loop: asyncio.AbstractEventLoop):
+    """The configured chat, or a destination that fails naming the missing setting."""
+    from app.gateway.trigger_destinations import ChannelDestination, UnconfiguredRemote
+
+    remote = getattr(config.trigger_engine, "remote", None)
+    if remote is None:
+        logger.warning("trigger engine: no trigger_engine.remote recipient configured; remote deliveries will fail and say so")
+        return UnconfiguredRemote()
+    return ChannelDestination(channel=remote.channel, chat_id=str(remote.chat_id), main_loop=main_loop)
+
+
 def build_production_loop(config: AppConfig, *, run_store) -> TriggerLoop:
     """The engine exactly as the gateway starts it.
 
@@ -332,6 +345,7 @@ def build_production_loop(config: AppConfig, *, run_store) -> TriggerLoop:
         # stub returning observable=False, so no watcher rule ever fired.
         fetch_sessions=WatcherClient().list_sessions_blocking,
         exchange_state=_exchange_state(config, run_store, asyncio.get_running_loop()),
+        remote=_remote_destination(config, asyncio.get_running_loop()),
     )
 
 
