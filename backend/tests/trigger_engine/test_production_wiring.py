@@ -82,6 +82,21 @@ def _write_blocked_session(root: Path) -> None:
     (project / f"{SESSION_ID}.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_extensions(tmp_path, monkeypatch):
+    """Article XIV: nothing here may read the developer's untracked
+    extensions_config.json. Every test starts with none configured; a test
+    that needs the watcher registers one."""
+    from omniharness.config.extensions_config import reset_extensions_config
+
+    empty = tmp_path / "no_extensions.json"
+    empty.write_text(json.dumps({"mcpServers": {}, "skills": {}}))
+    monkeypatch.setenv("OMNI_HARNESS_EXTENSIONS_CONFIG_PATH", str(empty))
+    reset_extensions_config()
+    yield
+    reset_extensions_config()
+
+
 @pytest.fixture
 def live_watcher(tmp_path, monkeypatch):
     """The real watcher server, registered the way production finds it."""
@@ -245,7 +260,6 @@ async def test_the_production_engine_can_be_constructed(tmp_path) -> None:
     assert loop.runner is not None
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-1: production's watcher feed is a stub that always reports observable=False")
 @pytest.mark.asyncio
 async def test_the_watcher_feed_reports_what_a_live_watcher_sees(tmp_path, live_watcher) -> None:
     loop = _build(tmp_path, [WATCHER_RULE])
@@ -452,7 +466,6 @@ def _watcher_firing(state: str = "waiting-on-user", summary: str = "Should I pin
     return Firing(rule_id="blocked-session", event=event, prompt="p")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-1: needs the real watcher feed; with the stub nothing can be confirmed still true")
 @pytest.mark.asyncio
 async def test_a_deferred_alert_whose_session_is_still_waiting_is_delivered(tmp_path, live_watcher) -> None:
     """Positive control for the re-check: it can say yes."""
@@ -465,9 +478,7 @@ async def test_a_deferred_alert_whose_session_is_still_waiting_is_delivered(tmp_
 async def test_a_deferred_alert_whose_session_moved_on_is_not_delivered(tmp_path, live_watcher) -> None:
     """The session that blocked overnight and was answered before 07:30 must
     not be reported at 07:30 (FR-013b). It was: still_true was `lambda: True`.
-
-    Meaningful only alongside the positive control above — until the watcher
-    feed is real, this passes because nothing can be confirmed at all."""
+    The positive control above shows the same check can say yes."""
     loop = _build(tmp_path, [WATCHER_RULE])
     answered = _watcher_firing(summary="an earlier question the user has since answered")
 
@@ -499,3 +510,40 @@ async def test_a_disabled_calendar_rule_is_allowed_to_wait_for_its_feed(tmp_path
     loop = _build(tmp_path, [WATCHER_RULE, draft])
 
     assert {r.id for r in loop.loader.config.rules} == {"blocked-session", "standup"}
+
+
+# -- the watcher's absences are told apart -------------------------------------
+
+
+def _extensions(tmp_path, monkeypatch, servers: dict) -> None:
+    from omniharness.config.extensions_config import reset_extensions_config
+
+    ext = tmp_path / "extensions_config.json"
+    ext.write_text(json.dumps({"mcpServers": servers, "skills": {}}))
+    monkeypatch.setenv("OMNI_HARNESS_EXTENSIONS_CONFIG_PATH", str(ext))
+    reset_extensions_config()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("servers", "said"),
+    [
+        ({}, "never been configured"),
+        ({"session-watcher": {"enabled": False, "type": "sse", "url": "http://127.0.0.1:9/sse"}}, "disabled"),
+        ({"session-watcher": {"enabled": True, "type": "sse", "url": "http://127.0.0.1:9/sse"}}, "127.0.0.1:9"),
+    ],
+    ids=["never-configured", "disabled", "unreachable"],
+)
+async def test_an_absent_watcher_says_which_kind_of_absent(tmp_path, monkeypatch, servers, said) -> None:
+    """Not configured, disabled and unreachable are fixed differently, so the
+    rule's recorded reason names which. None of them is an empty session list."""
+    from app.trigger_engine.sources.base import SourceUnavailable
+
+    _extensions(tmp_path, monkeypatch, servers)
+    loop = _build(tmp_path, [WATCHER_RULE])
+    source = loop.runner.sources[TriggerType.WATCHER]
+
+    started = time.monotonic()
+    with pytest.raises(SourceUnavailable, match=said):
+        await loop.runner.offload(source.poll, loop.loader.config.rules[0], datetime.now(UTC))
+    assert time.monotonic() - started < 12, "an unreachable watcher held the engine longer than its timeout"

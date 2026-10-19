@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.gateway.watcher_client import WatcherClient
 from app.trigger_engine.audit import AuditLog
 from app.trigger_engine.config import ConfigLoader
 from app.trigger_engine.destinations.base import DestinationRegistry, QuietDestination
@@ -263,13 +264,6 @@ class GatewayCallFailed(RuntimeError):
         super().__init__(explained)
 
 
-def _fetch_watcher_sessions() -> dict:
-    """Session state from the Feature 001 watcher, or an explicit unobservable
-    result. Never an empty session list on failure — an empty registry reads as
-    'you have no sessions running', which is a false negative stated as fact."""
-    return {"observable": False, "sessions": []}
-
-
 #: Run statuses that mean an exchange is under way. From RunStatus; the engine
 #: holds a proactive message while any of these is open.
 _ACTIVE_RUN_STATUSES = frozenset({"pending", "running"})
@@ -334,7 +328,9 @@ def build_production_loop(config: AppConfig, *, run_store) -> TriggerLoop:
         gateway_post=_gateway_call("POST"),
         gateway_put=_gateway_call("PUT"),
         gateway_get=_gateway_call("GET"),
-        fetch_sessions=_fetch_watcher_sessions,
+        # Feature 001's watcher over MCP, at the URL in extensions_config. Was a
+        # stub returning observable=False, so no watcher rule ever fired.
+        fetch_sessions=WatcherClient().list_sessions_blocking,
         exchange_state=_exchange_state(config, run_store, asyncio.get_running_loop()),
     )
 
