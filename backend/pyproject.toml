@@ -24,6 +24,13 @@ dependencies = [
     # so a --no-dev install shipped a gateway that could not import them.
     "session-watcher",
     "croniter>=6.0.0",
+    # Imported directly by app/ and previously installed only because other
+    # packages pulled them in (tests/test_runtime_dependencies.py, T080):
+    # mcp_secrets encrypts with cryptography, auth/config loads .env with
+    # python-dotenv, the suggestions router builds langchain-core messages.
+    "cryptography>=46.0.0",
+    "python-dotenv>=1.2.0",
+    "langchain-core>=1.3.0",
 ]
 
 [project.optional-dependencies]

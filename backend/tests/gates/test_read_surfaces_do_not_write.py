@@ -11,6 +11,10 @@ moved one call deeper is still a write. Three checks:
 
 FR-036 (no rule editor) follows: an editor would have to write through one of
 these modules.
+
+Scope (Feature 004 gate audit, T078): correctly narrow. FR-030 names these
+surfaces. The list is enumerated, and a write two calls deep is not seen; both
+are logged in ROADMAP-FOLLOWUPS.
 """
 
 from __future__ import annotations

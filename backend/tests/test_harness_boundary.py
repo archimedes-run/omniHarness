@@ -5,6 +5,10 @@ publishable agent framework. It must never depend on the app layer (app/).
 
 This test scans all Python files in the harness package and fails if any
 ``from app.`` or ``import app.`` statement is found.
+
+Scope (Feature 004 gate audit, T078): correctly narrow. The subject is the
+harness layer itself. String loading of app code (config ``use:`` paths) is by
+design and is not an import.
 """
 
 import ast
