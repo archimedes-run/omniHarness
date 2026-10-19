@@ -213,8 +213,8 @@ feature exposed.
 - [X] T085 Promote the six accessibility rules from warn to error in `frontend/eslint.config.mjs` (FR-034)
 - [X] T086 SABOTAGE T085: introduce a deliberate a11y violation and confirm the build fails on it (SC-017), then remove it
 - [X] T087 [P] Extend `frontend/tests/rendering/theme.spec.ts` to assert the computed background changes on every one of the four new surfaces (SC-013)
-- [ ] T088 [P] Assert no new surface hardcodes a colour utility, extending the existing token check to the four new component directories (FR-033)
-- [ ] T089 SABOTAGE T088: add a hardcoded colour utility to one of the four new component directories and confirm the check fails naming the file. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
+- [X] T088 [P] Assert no new surface hardcodes a colour utility, extending the existing token check to the four new component directories (FR-033)
+- [X] T089 SABOTAGE T088: add a hardcoded colour utility to one of the four new component directories and confirm the check fails naming the file. Confirm the run reports `failed` — `skipped`, `error` or a collection failure has exercised nothing
 - [ ] T090 Confirm `backend/tests/test_shipped_paths.py` covers this feature's tests, including the frontend `join(__dirname, "..")` idiom, and that no test added here reads a gitignored path (FR-032, SC-016)
 - [X] T090e On rule-set reload, supersede any pending action whose tool no longer classifies Tier 3, with a reason naming the change (FR-042). `Outcome.SUPERSEDED` exists and has no producer; this is its first
 - [X] T090f SABOTAGE T090e: make the superseding path EXECUTE instead of resolve, and confirm a test fails. Superseding must only ever remove a confirmation demand the current rules say is unnecessary — never grant one (SC-025)
