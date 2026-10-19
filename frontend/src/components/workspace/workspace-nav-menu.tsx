@@ -28,7 +28,7 @@ import {
 import { useI18n } from "@/core/i18n/hooks";
 
 import { GithubIcon } from "./github-icon";
-import { SettingsDialog } from "./settings";
+import { LazySettingsDialog as SettingsDialog } from "./settings/lazy-settings-dialog";
 
 function NavMenuButtonContent({
   isSidebarOpen,

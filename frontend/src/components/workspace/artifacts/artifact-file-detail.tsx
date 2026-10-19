@@ -18,6 +18,7 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import {
   Component,
   type ReactNode,
@@ -47,7 +48,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { CodeEditor } from "@/components/workspace/code-editor";
 import type { ArtifactManifest, ProjectFileEntry } from "@/core/artifacts/api";
 import {
   useArtifactContent,
@@ -98,6 +98,18 @@ function statusBadgeClass(status: PreviewStatus | "not running" | undefined) {
 }
 
 import { useArtifacts } from "./context";
+
+// codemirror is ~470 KB; it loads when an artifact's editor is shown, not with
+// every chat page (Phase 2.5).
+const CodeEditor = dynamic(
+  () => import("@/components/workspace/code-editor").then((m) => m.CodeEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-muted-foreground p-4 text-sm">Loading editor…</div>
+    ),
+  },
+);
 
 class ArtifactErrorBoundary extends Component<
   { children: ReactNode },

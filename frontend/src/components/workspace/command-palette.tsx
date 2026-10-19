@@ -27,7 +27,7 @@ import {
 import { useI18n } from "@/core/i18n/hooks";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
-import { SettingsDialog } from "./settings";
+import { LazySettingsDialog as SettingsDialog } from "./settings/lazy-settings-dialog";
 
 export function CommandPalette() {
   const { t } = useI18n();
