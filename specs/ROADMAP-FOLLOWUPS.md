@@ -273,3 +273,12 @@ Run alone, they fail with `NoReferencedTableError`. In the full suite they pass,
 ## `e2e-tests` fails on main: two landing-page specs
 
 `tests/e2e/landing.spec.ts` fails twice: "renders the header and hero section" (element not found) and "Get Started link navigates to workspace" (click timeout). It fails the same way on main's last three runs (7daced7, 14e857e, e3e23e2, back to 2026-08-25), and on PR #39, which touches no landing or e2e file. The job runs only when `frontend/**` changes, so a backend-only PR never shows it. It is red on every frontend PR, and that is the "red build that tells you nothing" problem the backend config step was added to fix. **Fix**: update the spec to the current landing page, or delete it if the landing page is no longer the product's entry.
+
+## Phase 2.5 (navigation and speed) — left open
+
+- **Creating automations from chat** ("every weekday at 9, brief me"): Feature 005. The write path it would use exists (`/api/automations`, validated, atomic, version-checked).
+- **The Button `outline` variant is a solid black fill**, and was before Phase 2.5 too; the colour pass kept it, mapped to `primary`. Rows with an action (Connections, Automations' delete) therefore show solid buttons. A real outline (`border bg-background hover:bg-accent`) is the shadcn default; changing it touches every outline button, so it is a design call for the owner.
+- **Contrast coverage**: `tests/rendering/contrast.spec.ts` covers the landing page and twelve workspace pages in both themes, but not a deployed MCP server's page (`/workspace/mcp/[id]`, which needs a running build to render) or the chat thread with real messages. The source check (`colour-tokens.test.ts`) covers every file.
+- **Chat pages still ship katex and shiki** (~2.6 MB parsed): streamdown imports them statically. Lazy-loading them means patching or replacing the markdown renderer.
+- **Dev mode** (`make daily-dev`) still sits at ~2.6 GiB at boot; with no Turbopack disk cache it can no longer grow and OOM-loop. Recommended Docker Desktop memory for dev mode: 12 GB. `make daily` needs well under the current 7.75 GiB.
+- **The trigger engine's watcher client keeps its 10 s timeout**; the sessions page uses 2 s with a labelled last-known fallback. With the watcher now reading appends only (67 ms answers), the engine's timeout is not exercised; revisit if it is.
