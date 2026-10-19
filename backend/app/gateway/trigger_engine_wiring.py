@@ -182,6 +182,47 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     )
 
 
+def _gateway_call(method: str):
+    def _call(path: str, body: dict | None = None) -> dict:
+        import httpx
+
+        from app.gateway.internal_auth import create_internal_auth_headers
+
+        url = f"http://127.0.0.1:8001{path}"
+        with httpx.Client(timeout=120.0) as client:
+            resp = client.request(method, url, json=body, headers=create_internal_auth_headers())
+            resp.raise_for_status()
+            return resp.json() if resp.content else {}
+
+    return _call
+
+
+def _fetch_watcher_sessions() -> dict:
+    """Session state from the Feature 001 watcher, or an explicit unobservable
+    result. Never an empty session list on failure — an empty registry reads as
+    'you have no sessions running', which is a false negative stated as fact."""
+    return {"observable": False, "sessions": []}
+
+
+def build_production_loop(config: AppConfig) -> TriggerLoop:
+    """The engine exactly as the gateway starts it.
+
+    The ONLY place production's arguments to `build_loop` are chosen. The
+    gateway lifespan calls this, and so does the Article XI integration test —
+    so a stub passed here is a stub the test sees. Before this function existed
+    the arguments were closures inside `app.py`, every engine test built its own
+    loop by hand, and four stub arguments shipped with a green suite
+    (specs/AUDIT-2026-10.md, §1.1).
+    """
+    return build_loop(
+        config,
+        gateway_post=_gateway_call("POST"),
+        gateway_put=_gateway_call("PUT"),
+        gateway_get=_gateway_call("GET"),
+        fetch_sessions=_fetch_watcher_sessions,
+    )
+
+
 def elect(config: AppConfig) -> SingleRunnerLock | None:
     """Contend for leadership. Returns the held lock, or None on losing.
 
