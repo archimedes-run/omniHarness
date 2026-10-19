@@ -116,3 +116,28 @@ def test_end_of_turn_marker_is_observed_not_inferred(corpus: Path) -> None:
 def test_no_crash_on_empty_directory(tmp_path: Path) -> None:
     refs, _ = _discover(tmp_path / "nothing-here")
     assert refs == []
+
+
+def test_an_unknown_type_is_reported_at_info_once_then_rate_limited(tmp_path, caplog) -> None:
+    """The drift signal stays at INFO, but not once per record: per-record INFO
+    logging, on every re-read, was 27,000 lines a minute."""
+    import json
+    import logging
+    from datetime import timedelta
+
+    from session_watcher.adapters.claude_code import ClaudeCodeAdapter
+    from session_watcher.record_source import RecordSource
+
+    root = tmp_path / "projects" / "-p"
+    root.mkdir(parents=True)
+    # The real shape that flooded the log: Claude Code's `api-request-blob`, a
+    # session id and a type, no timestamp (720 of them in one transcript).
+    (root / "s.jsonl").write_text("".join(json.dumps({"type": "brand-new-type", "sessionId": "s", "hash": "h"}) + "\n" for _ in range(50)))
+    src = RecordSource(root=tmp_path / "projects")
+
+    with caplog.at_level(logging.INFO, logger="session_watcher.record_source"):
+        ClaudeCodeAdapter(src).discover(timedelta(hours=1))
+
+    info = [r for r in caplog.records if r.levelno == logging.INFO and "brand-new-type" in r.getMessage()]
+    assert len(info) == 1, f"{len(info)} INFO lines for one unknown type"
+    assert src.stats.unknown_types["brand-new-type"] == 50, "rate limiting the log must not undercount the drift"

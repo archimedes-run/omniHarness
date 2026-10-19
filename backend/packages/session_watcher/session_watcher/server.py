@@ -50,8 +50,15 @@ class WatcherService:
         self.summarizer = MechanicalSummarizer()
         self.state_config = StateConfig()
         self.channel = channel
+        # The adapter keeps per-file read offsets; the background loop and an
+        # MCP request can both refresh, and must not interleave.
+        self._refresh_lock = threading.Lock()
 
     def refresh(self, *, now: datetime | None = None) -> None:
+        with self._refresh_lock:
+            self._refresh(now=now)
+
+    def _refresh(self, *, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)
         refs = self.discovery.sweep(now=now)
         sessions = [resolve(r, now=now, config=self.state_config) for r in refs]

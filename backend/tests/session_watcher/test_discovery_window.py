@@ -183,3 +183,118 @@ def test_sticky_set_does_not_grow_without_bound(tmp_session_dir, make_record, ag
     disc.last_reset_at = datetime.now(UTC) - timedelta(days=2)
     disc.sweep()
     assert len(disc.sticky_ids) <= 1
+
+
+# --- Gate 3, extended: an append costs the appended bytes (Phase 2.5) ---------
+#
+# The bound above is on STARTUP. Steady state had no bound, and it re-read
+# every file in the window from byte 0 on every sweep: an 85 MB transcript,
+# appended to constantly, held a core at 100% and timed the gateway out at 10 s.
+
+
+def _line(sid: str, text: str, *, kind: str = "assistant", at: datetime | None = None) -> str:
+    at = at or datetime.now(UTC)
+    return json.dumps({"type": kind, "sessionId": sid, "timestamp": at.isoformat(), "cwd": "/Users/dev/projects/live", "message": {"role": kind, "content": [{"type": "text", "text": text}]}}) + "\n"
+
+
+@pytest.fixture
+def live(tmp_path):
+    root = tmp_path / "projects" / "-Users-dev-projects-live"
+    root.mkdir(parents=True)
+    src = RecordSource(root=tmp_path / "projects")
+    return root, src, ClaudeCodeAdapter(src)
+
+
+def _texts(refs, sid: str) -> list[str]:
+    [ref] = [r for r in refs if r.session_id == sid]
+    return [r.text for r in ref.records]
+
+
+def test_an_append_reads_only_the_appended_bytes(live) -> None:
+    root, src, adapter = live
+    f = root / "s1.jsonl"
+    f.write_text("".join(_line("s1", f"turn {i}") for i in range(200)))
+    adapter.discover(WINDOW)
+    assert src.stats.bytes_read == f.stat().st_size  # the first read is the whole file
+
+    appended = _line("s1", "the new turn")
+    with f.open("a") as fh:
+        fh.write(appended)
+    before = src.stats.bytes_read
+    refs = adapter.discover(WINDOW)
+
+    assert src.stats.bytes_read - before == len(appended.encode()), "an append re-read more than the appended bytes"
+    assert _texts(refs, "s1")[-1] == "the new turn"
+
+
+def test_an_unchanged_file_is_not_opened(live) -> None:
+    root, src, adapter = live
+    (root / "s1.jsonl").write_text(_line("s1", "hello"))
+    adapter.discover(WINDOW)
+    opened = src.stats.records_opened
+
+    adapter.discover(WINDOW)
+
+    assert src.stats.records_opened == opened, "a sweep with nothing new still opened the file"
+
+
+def test_a_partial_last_line_waits_for_its_newline(live) -> None:
+    root, src, adapter = live
+    f = root / "s1.jsonl"
+    f.write_text(_line("s1", "complete"))
+    adapter.discover(WINDOW)
+    whole = _line("s1", "arrives in two writes")
+    with f.open("a") as fh:
+        fh.write(whole[:30])
+
+    assert _texts(adapter.discover(WINDOW), "s1") == ["complete"], "half a line was parsed"
+    assert src.stats.skips == {}, "half a line was counted as damage"
+
+    with f.open("a") as fh:
+        fh.write(whole[30:])
+    assert _texts(adapter.discover(WINDOW), "s1") == ["complete", "arrives in two writes"]
+
+
+def test_a_shrunk_or_replaced_file_is_read_again_from_the_start(live) -> None:
+    root, src, adapter = live
+    f = root / "s1.jsonl"
+    f.write_text(_line("s1", "a") + _line("s1", "b") + _line("s1", "c"))
+    adapter.discover(WINDOW)
+
+    f.write_text(_line("s1", "rewritten"))  # shorter than our offset: truncated or rewritten
+    assert _texts(adapter.discover(WINDOW), "s1") == ["rewritten"]
+
+    replacement = root / "s1.jsonl.tmp"
+    replacement.write_text(_line("s1", "replaced") + _line("s1", "and longer than before, so size alone would not tell"))
+    replacement.replace(f)  # new inode, larger size
+    assert _texts(adapter.discover(WINDOW), "s1") == ["replaced", "and longer than before, so size alone would not tell"]
+
+
+def test_a_new_file_is_picked_up(live) -> None:
+    root, src, adapter = live
+    (root / "s1.jsonl").write_text(_line("s1", "first session"))
+    adapter.discover(WINDOW)
+
+    (root / "s2.jsonl").write_text(_line("s2", "second session"))
+    refs = adapter.discover(WINDOW)
+
+    assert {r.session_id for r in refs} == {"s1", "s2"}
+
+
+def test_steady_state_matches_a_fresh_read(live) -> None:
+    """The incremental result is the same as reading from scratch, including
+    STARTED on only the first record of a session spread over two files."""
+    from session_watcher.models import EventKind
+
+    root, src, adapter = live
+    f = root / "a.jsonl"
+    f.write_text(_line("s1", "one"))
+    adapter.discover(WINDOW)
+    with f.open("a") as fh:
+        fh.write(_line("s1", "two") + _line("s1", "three?"))
+    (root / "b.jsonl").write_text(_line("s1", "sidechain"))
+    incremental = adapter.discover(WINDOW)
+    fresh = ClaudeCodeAdapter(RecordSource(root=src.root)).discover(WINDOW)
+
+    assert [(r.text, r.kind) for r in incremental[0].records] == [(r.text, r.kind) for r in fresh[0].records]
+    assert [r.kind for r in incremental[0].records].count(EventKind.STARTED) <= 1
