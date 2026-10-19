@@ -47,9 +47,10 @@ Memory Section Guidelines:
   Example: Core contributor, project names with metrics (16k+ stars), technical stack
 - personalContext: Languages, communication preferences, key interests (1-2 sentences)
   Example: Bilingual capabilities, specific interest areas, expertise domains
-- topOfMind: Multiple ongoing focus areas and priorities (3-5 sentences, detailed paragraph)
-  Example: Primary project work, parallel technical investigations, ongoing learning/tracking
-  Include: Active implementation work, troubleshooting issues, market/research interests
+- topOfMind: Multiple ongoing focus areas and priorities (3-5 sentences)
+  Example: Primary project and its goal, a parallel investigation, something being learned
+  Describe each theme at the level of the project or goal ("building an analytics
+  dashboard for retention"), never the steps or artifacts of one task
   Note: This captures SEVERAL concurrent focus areas, not just one task
 
 **History** (Temporal context - rich paragraphs):
@@ -87,6 +88,19 @@ Memory Section Guidelines:
 - recentMonths: Detailed account of recent technical explorations and work
 - earlierContext: Patterns from slightly older interactions still relevant
 - longTermBackground: Unchanging foundational facts about the user
+
+**What Memory Is NOT For** (this is task residue, not memory — leave it out of
+every summary and every fact):
+- File paths or locations of outputs (e.g. /mnt/user-data/outputs/report.md,
+  ~/Documents/x, C:\\Users\\...), file names produced by a task
+- Commands, code snippets, CLI flags, tool names, or tool calls
+- Step-by-step task details: what the agent did first, then, next
+- One-off searches, lookups, or questions that do not reveal a lasting interest
+- Anything that is only true until the current task finishes
+Keep instead: preferences, ongoing projects at a high level, people and
+relationships, roles, recurring context, goals, and corrections to the agent.
+If the only new information in a conversation is task residue, set
+shouldUpdate=false everywhere.
 
 **Multilingual Content**:
 - Preserve original language for proper nouns and company names
@@ -361,3 +375,21 @@ def format_conversation_for_update(messages: list[Any]) -> str:
             lines.append(f"Assistant: {content}")
 
     return "\n\n".join(lines)
+
+
+# Prompt for the one-time "clean up memory" action (Phase 2.6): rewrite the
+# existing summaries under the durability rules, adding nothing new.
+MEMORY_CLEANUP_PROMPT = """You maintain a user's long-term memory. Rewrite each memory section below so it keeps only durable information, under these rules:
+
+Keep: preferences, ongoing projects described at the level of the project or goal, people and relationships, roles, recurring context, goals, corrections to the assistant.
+Remove: file paths and output locations, file names produced by a task, commands, code, CLI flags, tool names or tool calls, step-by-step task details, one-off searches or lookups, anything only true until a task finished.
+
+Do not add information that is not already in the section. Do not merge sections. Keep each section about as long as it needs to be and no longer; an empty string is right for a section that held only task residue.
+
+Current sections:
+<sections>
+{sections}
+</sections>
+
+Return ONLY valid JSON mapping each section name to its rewritten text, for example:
+{{"user.workContext": "...", "user.topOfMind": "...", "history.recentMonths": "..."}}"""
