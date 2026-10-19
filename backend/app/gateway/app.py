@@ -34,6 +34,7 @@ from app.gateway.routers import (
     thread_runs,
     thread_tools,
     threads,
+    triggers,
     uploads,
     workflows,
 )
@@ -197,8 +198,11 @@ async def _start_trigger_engine(app: FastAPI):
             enabled=True,
         )
         if handle.error:
+            # Kept, not dropped: the handle carries WHY the engine is not
+            # running (e.g. a rule whose feed is not connected), and
+            # GET /api/triggers/status is where a person reads it.
             _release_engine_lock(lock)
-            return None
+            return handle
         handle.lock = lock
         logger.info("Trigger engine: %s", wiring.describe(config, lock))
         return handle
@@ -505,6 +509,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(threads.router)
     # Surface 1: pending Tier 3 confirmations (Feature 004).
     app.include_router(confirmations.router)
+
+    # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
+    app.include_router(triggers.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
