@@ -58,6 +58,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_RULES = Path(__file__).resolve().parents[1] / "trigger_engine" / "default_rules.json"
 
 
+#: The trigger types this gateway supplies a source for. The engine's loader
+#: rejects an enabled rule of any other type, and the automations write path
+#: validates against the same set, so an edit is refused for exactly the reasons
+#: the engine would refuse it.
+SUPPORTED_SOURCE_TYPES = frozenset({TriggerType.WATCHER, TriggerType.CRON})
+
+
 def _resolve_rules_path(cfg) -> Path:
     """The rule file to load.
 
@@ -169,7 +176,9 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     # The loader rejects an enabled rule whose type is not a key here, on every
     # reload — not only at startup, since a rule added to a running engine's
     # file would otherwise load and be skipped silently.
-    loader = ConfigLoader(path=_resolve_rules_path(cfg), supported_types=frozenset(sources))
+    if frozenset(sources) != SUPPORTED_SOURCE_TYPES:
+        raise RuntimeError("SUPPORTED_SOURCE_TYPES must name exactly the sources built here")
+    loader = ConfigLoader(path=_resolve_rules_path(cfg), supported_types=SUPPORTED_SOURCE_TYPES)
     engine_config = loader.load()
 
     # Article XIV. A missing rule file used to produce an empty config, a logged

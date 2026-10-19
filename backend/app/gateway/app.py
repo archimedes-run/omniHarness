@@ -18,6 +18,7 @@ from app.gateway.routers import (
     artifacts,
     assistants_compat,
     auth,
+    automations,
     channels,
     composio,
     confirmations,
@@ -521,6 +522,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
+
+    # Automations: the one write path for trigger rules (Phase 2.5).
+    app.include_router(automations.router)
 
     # Tool source status: configured, disabled, unreachable or live (FR-040).
     app.include_router(tool_sources.router)

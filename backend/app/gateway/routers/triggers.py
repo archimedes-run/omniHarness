@@ -70,27 +70,44 @@ def _engine_state(app_state):
 
     cfg = app_state.config.trigger_engine
     state = Path(cfg.state_dir)
-    loader = ConfigLoader(path=_resolve_rules_path(cfg))
+    rules_path = _resolve_rules_path(cfg)
+    loader = ConfigLoader(path=rules_path)
     rules = loader.load().rules
     log = EvaluationLog(path=state / "evaluations.json")
     evaluated = {r.id: (log.last_evaluated_at(r.id).isoformat() if log.last_evaluated_at(r.id) else None) for r in rules}
     audit = AuditLog(path=state / "audit.jsonl", actor=cfg.actor).entries()
-    return rules, evaluated, audit, loader.last_error
+    return rules, evaluated, audit, loader.last_error, rules_path, bool(getattr(cfg, "rules_path", ""))
 
 
 @router.get("/rules", response_model=RulesView)
 @require_permission("threads", "read")
 async def trigger_rules(request: Request) -> RulesView:
     """T051. Every loaded rule, and whether it is evaluating, firing, or neither."""
-    rules, evaluated, audit, error = _engine_state(request.app.state)
-    return describe_rules(rules=list(rules), evaluated=evaluated, audit=audit, engine_enabled=request.app.state.config.trigger_engine.enabled, rules_error=error)
+    from app.gateway.automations_store import version_of
+
+    rules, evaluated, audit, error, path, configured = _engine_state(request.app.state)
+    try:
+        version = version_of(path.read_bytes())
+    except OSError:
+        version = None
+    reason = None if configured else "No rules file is configured; the engine is running the shipped defaults. Set trigger_engine.rules_path in config.yaml to edit rules here."
+    return describe_rules(
+        rules=list(rules),
+        evaluated=evaluated,
+        audit=audit,
+        engine_enabled=request.app.state.config.trigger_engine.enabled,
+        rules_error=error,
+        version=version,
+        writable=configured and version is not None,
+        not_writable_reason=reason,
+    )
 
 
 @router.get("/firings", response_model=FiringsView)
 @require_permission("threads", "read")
 async def trigger_firings(request: Request) -> FiringsView:
     """T051. The chronological firing log, newest first, reasons verbatim."""
-    _, _, audit, _ = _engine_state(request.app.state)
+    _, _, audit, _, _, _ = _engine_state(request.app.state)
     return describe_firings(audit)
 
 
