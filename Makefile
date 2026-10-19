@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help config config-upgrade check install setup doctor dev dev-daemon start start-daemon stop up down clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
+.PHONY: help config config-upgrade check install setup doctor dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -35,6 +35,8 @@ help:
 	@echo "Docker Production Commands:"
 	@echo "  make up              - Build and start production Docker services (localhost:2026)"
 	@echo "  make down            - Stop and remove production Docker containers"
+	@echo "  make daily           - Day-to-day: production frontend on the dev stack's gateway, watcher and data"
+	@echo "  make daily-dev       - Put the hot-reloading dev frontend back (for frontend work)"
 	@echo ""
 	@echo "Docker Development Commands:"
 	@echo "  make docker-init     - Pull the sandbox image"
@@ -180,6 +182,18 @@ docker-logs-gateway:
 # Build and start production services
 up:
 	@$(RUN_WITH_GIT_BASH) ./scripts/deploy.sh
+
+# Day-to-day use: the dev stack's gateway, watcher, nginx and data, with a
+# production frontend (docker/docker-compose-daily.yaml). localhost:2026.
+DAILY_COMPOSE = cd docker && OMNI_HARNESS_ROOT=$(CURDIR) docker compose --env-file ../.env -p omni-harness-dev -f docker-compose-dev.yaml
+
+daily:
+	$(DAILY_COMPOSE) up -d
+	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend
+
+# Back to the hot-reloading dev frontend, for frontend work.
+daily-dev:
+	$(DAILY_COMPOSE) up -d --build --no-deps --force-recreate frontend
 
 # Stop and remove production containers
 down:

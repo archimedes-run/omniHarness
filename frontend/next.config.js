@@ -21,6 +21,13 @@ const config = {
     defaultLocale: "en",
   },
   devIndicators: false,
+  experimental: {
+    // `next dev` only. Turbopack's on-disk dev cache grew to 4 GB, was read
+    // back at every boot, and the dev container was OOM-killed in a loop on a
+    // 7.75 GiB Docker VM (Phase 2.5). Without it, a restart compiles routes
+    // from scratch, which dev mode does on first visit anyway.
+    turbopackFileSystemCacheForDev: false,
+  },
   async rewrites() {
     const rewrites = [];
     const gatewayURL = getInternalServiceURL(

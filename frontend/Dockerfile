@@ -30,9 +30,12 @@ EXPOSE 3000
 
 # ── Builder: install + compile Next.js ───────────────────────────────────────
 FROM base AS builder
+# NEXT_PUBLIC_* values are compiled into the bundle, so they must be present at
+# build time (docker/docker-compose-daily.yaml passes them from the root .env).
+ARG NEXT_PUBLIC_FEATURE_WORKFLOWS=""
 RUN cd /app/frontend && pnpm install --frozen-lockfile
 # Skip env validation — runtime vars are injected by nginx/container
-RUN cd /app/frontend && SKIP_ENV_VALIDATION=1 pnpm build
+RUN cd /app/frontend && SKIP_ENV_VALIDATION=1 NEXT_PUBLIC_FEATURE_WORKFLOWS="${NEXT_PUBLIC_FEATURE_WORKFLOWS}" pnpm build
 
 # ── Prod: minimal runtime with pre-built output ───────────────────────────────
 FROM node:22-alpine AS prod
