@@ -234,11 +234,18 @@ def _gateway_call(method: str):
     def _call(path: str, body: dict | None = None) -> dict:
         import httpx
 
+        from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
         from app.gateway.internal_auth import create_internal_auth_headers
 
         url = f"{_gateway_base_url()}{path}"
+        # The gateway's CSRF middleware checks every POST/PUT, internal calls
+        # included, and answered the engine's 403 'CSRF token missing' — so no
+        # rule could ever create its thread. Found in the live end-to-end check.
+        # Same double-submit pair the channel manager sends (channels/manager.py).
+        csrf = generate_csrf_token()
+        headers = {**create_internal_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
         with httpx.Client(timeout=120.0) as client:
-            resp = client.request(method, url, json=body, headers=create_internal_auth_headers())
+            resp = client.request(method, url, json=body, headers=headers)
             if resp.is_error:
                 raise GatewayCallFailed(method, path, resp)
             return resp.json() if resp.content else {}

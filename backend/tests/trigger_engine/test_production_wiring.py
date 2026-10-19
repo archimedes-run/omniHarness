@@ -194,11 +194,19 @@ class _FakeGateway:
             await asyncio.sleep(self.run_seconds)
             return JSONResponse(self.reply, status_code=self.status_code)
 
+        from starlette.middleware import Middleware
+
+        from app.gateway.csrf_middleware import CSRFMiddleware
+
+        # The gateway's REAL CSRF middleware. Without it this fake accepted the
+        # engine's calls that the real gateway rejects with 403 — found only in
+        # the live end-to-end check, because the test world lacked the check.
         return Starlette(
             routes=[
                 Route("/api/threads", create_thread, methods=["POST"]),
                 Route("/api/threads/{tid}/runs/wait", runs_wait, methods=["POST"]),
-            ]
+            ],
+            middleware=[Middleware(CSRFMiddleware)],
         )
 
 
