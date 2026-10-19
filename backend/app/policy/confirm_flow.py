@@ -60,6 +60,17 @@ NO_VERDICT = "no_verdict"
 _COUNT = re.compile(r"(?<![0-9a-f])([0-9]{1,4})(?![0-9a-f])")
 
 
+def take_claim(store: PendingStore, action_id: str, claimant: str) -> PendingAction | None:
+    """THE one place a pending action is claimed (Gate T023, FR-004/FR-030).
+
+    Confirmation claims to EXECUTE; the FR-042 supersede sweep
+    (app/policy/supersede.py) claims to resolve WITHOUT executing, so that it
+    cannot race a confirmation on another worker. Both come through here, so
+    there is still exactly one claim site and one claim semantics.
+    """
+    return store.claim(action_id, claimant)
+
+
 @dataclass(frozen=True)
 class FlowResult:
     outcome: str
@@ -155,7 +166,7 @@ class ConfirmationFlow:
                     expired_meanwhile=expired,
                 )
 
-        claimed = self.store.claim(action.id, self._claimant())
+        claimed = take_claim(self.store, action.id, self._claimant())
         if claimed is None:
             return FlowResult(ALREADY_RESOLVED, action.id, "another route confirmed that first", expired_meanwhile=expired)
 

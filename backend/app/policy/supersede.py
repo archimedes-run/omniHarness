@@ -22,6 +22,7 @@ from datetime import datetime
 
 from .classify import classify
 from .config import RuleSet
+from .confirm_flow import take_claim
 from .models import Outcome, PendingAction, Tier
 from .pending import PendingStore
 
@@ -45,7 +46,7 @@ def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> 
         # Claimed first, through the same one-shot claim confirmation uses, so
         # a supersede cannot race a confirmation on another worker into a
         # double resolution.
-        claimed = store.claim(action.id, CLAIMANT)
+        claimed = take_claim(store, action.id, CLAIMANT)
         if claimed is None:
             continue
         rule = decision.deciding_rule.pattern if decision.deciding_rule is not None else "the default"
