@@ -158,9 +158,15 @@ working feature. A decline control would have cleared this in one click.
 
 Phase 1 (branch `phase-1-wiring`) fixed the items listed in the audit's Decisions section. These were found and deliberately not fixed in it. Each has the condition that reopens it.
 
-## Real-world target drift needs live resolvers — DECISION NEEDED
+## Real-world target drift needs live resolvers — DEFERRED (owner, 2026-10-19)
 
-Phase 1 (a214aaf) made the FR-029 re-check run on both confirmation routes, computed in one place. But targets are resolved from a call's ARGUMENTS, which are frozen into the pending action, so the re-check catches a changed resolver or an altered record and **cannot see the world move** (a meeting deleted after the plan was stated). That needs a live, per-tool resolver; `PolicyMiddleware.recheck_targets` is where one plugs in. None exists. **Reopens when**: the owner decides whether to build resolvers for the configured workers (calendar first, being where drift is likeliest).
+Phase 1 (a214aaf) made the FR-029 re-check run on both confirmation routes, computed in one place. But targets are resolved from a call's ARGUMENTS, which are frozen into the pending action, so the re-check catches a changed resolver or an altered record and **cannot see the world move**. That needs a live, per-tool resolver, plugged in at `PolicyMiddleware.recheck_targets`.
+
+**Scope, as decided**: two tools only, the ones where acting on a stale set does damage:
+- **calendar decline / delete**: re-read the named events and confirm each still exists, unchanged, before acting;
+- **email send**: re-read the draft and recipients and confirm they are what was stated.
+
+**Reopens when**: those workers (calendar, email) are in daily use. Not before: a resolver for a worker nobody runs is code with no production caller.
 
 ## Subagent provenance: `delegation_chain` is never set (audit P-5)
 
