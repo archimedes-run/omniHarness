@@ -5,6 +5,7 @@ import {
   BoxIcon,
   GitBranchIcon,
   MessagesSquare,
+  PlugIcon,
   ShieldQuestionIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -19,6 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 import { usePendingConfirmations } from "@/core/confirmations/hooks";
 import { useI18n } from "@/core/i18n/hooks";
+import { useToolSources } from "@/core/tool-sources/hooks";
 
 export function WorkspaceNavChatList() {
   const { t } = useI18n();
@@ -27,6 +29,10 @@ export function WorkspaceNavChatList() {
   // Only a real count. An unreadable pending set must not render as "0
   // waiting" — that is the same collapse the surface itself refuses to make.
   const waiting = pending?.readable ? pending.actions.length : null;
+  // FR-041: a source that failed to load reaches the user here, rather than
+  // waiting for them to open the page.
+  const { view: sources } = useToolSources();
+  const failing = sources?.failing ?? 0;
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
@@ -75,6 +81,22 @@ export function WorkspaceNavChatList() {
           {waiting !== null && waiting > 0 && (
             <SidebarMenuBadge data-testid="pending-count">
               {waiting}
+            </SidebarMenuBadge>
+          )}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/tool-sources")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/tool-sources">
+              <PlugIcon />
+              <span>{t.sidebar.toolSources}</span>
+            </Link>
+          </SidebarMenuButton>
+          {failing > 0 && (
+            <SidebarMenuBadge data-testid="failing-sources">
+              {failing}
             </SidebarMenuBadge>
           )}
         </SidebarMenuItem>
