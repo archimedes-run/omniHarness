@@ -237,9 +237,10 @@ const SURFACES: {
   routes: Record<string, unknown>;
 }[] = [
   {
-    path: "/workspace/confirmations",
+    path: "/workspace/inbox",
     row: '[data-testid="pending-action"]',
     routes: {
+      "**/api/inbox/alerts": { alerts: [], waiting_count: 0 },
       "**/api/confirmations": {
         readable: true,
         error: "",
@@ -262,7 +263,7 @@ const SURFACES: {
     },
   },
   {
-    path: "/workspace/tool-sources",
+    path: "/workspace/settings/connections",
     row: '[data-testid="tool-source"]',
     routes: {
       "**/api/tool-sources*": {
@@ -314,18 +315,24 @@ const SURFACES: {
     },
   },
   {
-    path: "/workspace/triggers",
+    path: "/workspace/automations",
     row: '[data-testid="rule"]',
     routes: {
       "**/api/triggers/rules": {
         engine_enabled: true,
         rules_error: null,
+        version: "v1",
+        writable: true,
+        not_writable_reason: null,
         rules: [
           {
             id: "r",
             type: "cron",
             enabled: true,
-            match: {},
+            match: { schedule: "0 9 * * *" },
+            prompt: "p",
+            destination: "auto",
+            urgent: false,
             activity: "never-evaluated",
             last_evaluated_at: null,
             last_evaluated: "never",
@@ -338,7 +345,7 @@ const SURFACES: {
     },
   },
   {
-    path: "/workspace/policy",
+    path: "/workspace/settings/safety",
     row: '[data-testid="rule"]',
     routes: {
       "**/api/policy/rules": {

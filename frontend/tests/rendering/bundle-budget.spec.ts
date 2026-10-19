@@ -21,16 +21,20 @@ const HEAVY: Record<string, RegExp> = {
   xterm: /xterm/,
 };
 
+// Every sidebar destination and settings section that is not a chat. Memory
+// and About render markdown on purpose, so they are listed separately below.
 const NON_CHAT = [
   "/workspace/chats",
+  "/workspace/inbox",
+  "/workspace/automations",
   "/workspace/agents",
-  "/workspace/mcp",
-  "/workspace/confirmations",
-  "/workspace/policy",
-  "/workspace/triggers",
   "/workspace/sessions",
-  "/workspace/tool-sources",
-  "/workspace/workflows",
+  "/workspace/settings/connections",
+  "/workspace/settings/safety",
+  "/workspace/settings/activity",
+  "/workspace/settings/appearance",
+  "/workspace/settings/account",
+  "/workspace/settings/tools",
 ];
 
 async function scriptsOf(page: Page, route: string): Promise<string[]> {

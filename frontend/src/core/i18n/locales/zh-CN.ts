@@ -167,12 +167,9 @@ export const zhCN: Translations = {
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
-    mcpSuite: "MCP 套件",
-    confirmations: "待确认",
-    toolSources: "工具来源",
-    sessions: "编码会话",
-    triggers: "触发器",
-    policy: "权限策略",
+    inbox: "收件箱",
+    automations: "自动化",
+    settings: "设置",
   },
 
   // Agents

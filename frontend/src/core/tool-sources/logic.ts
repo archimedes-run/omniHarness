@@ -10,6 +10,11 @@ export interface StateDescription {
 }
 
 /**
+ * Settings → Connections shows four statuses (Phase 2.5): Not configured, Off,
+ * Unreachable, Live. "Not loaded yet" stays apart because it means "cannot
+ * tell yet", not off; and inside a conversation a connector also says whether
+ * that conversation selected it.
+ *
  * One description per state, and every state distinct (FR-040). The four
  * that used to look identical — never configured, switched off, failing,
  * working — each say what they are and what it means for the agent, because
@@ -32,7 +37,7 @@ export function describeState(source: ToolSource): StateDescription {
       };
     case "disabled":
       return {
-        label: "Disabled",
+        label: "Off",
         meaning: "Configured, and switched off.",
         tone: "off",
       };
@@ -63,14 +68,14 @@ export function describeState(source: ToolSource): StateDescription {
       };
     case "authorised":
       return {
-        label: "Authorised",
+        label: "Live",
         meaning: "Connected. A conversation must select it to use it.",
         tone: "ok",
       };
     case "not-authorised":
       return {
-        label: "Not authorised",
-        meaning: "No connection. Authorise it to use it.",
+        label: "Not configured",
+        meaning: "No connection yet. Connect it to use it.",
         tone: "off",
       };
   }

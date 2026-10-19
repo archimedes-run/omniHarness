@@ -1,1 +1,1 @@
-export { SettingsDialog } from "./settings-dialog";
+export { SettingsNav, settingsHref } from "./settings-nav";

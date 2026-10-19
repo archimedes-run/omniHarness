@@ -13,12 +13,16 @@ import { describe, expect, it } from "vitest";
  */
 
 const SRC = join(__dirname, "..", "..", "src");
+// Phase 2.5 moved these: tool sources into settings/connections, policy into
+// settings/safety and the activity log, triggers into automations.
 const SURFACES = [
   "confirmations",
-  "tool-sources",
+  "connections",
   "sessions",
   "triggers",
   "policy",
+  "inbox",
+  "automations",
 ];
 const DIRS = SURFACES.flatMap((s) => [
   join(SRC, "components", "workspace", s),

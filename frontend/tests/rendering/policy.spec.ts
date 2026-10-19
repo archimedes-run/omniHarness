@@ -39,7 +39,10 @@ const RUN = {
 
 const AUDIT = [RUN];
 
-async function serve(page: Page, rules = RULES, audit = AUDIT) {
+const SAFETY = "/workspace/settings/safety";
+const ACTIVITY = "/workspace/settings/activity";
+
+async function serve(page: Page, rules = RULES, audit = AUDIT, path = SAFETY) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -64,7 +67,10 @@ async function serve(page: Page, rules = RULES, audit = AUDIT) {
       }),
     );
   });
-  await page.goto("/workspace/policy");
+  await page.route("**/api/triggers/firings", (route) =>
+    route.fulfill(json({ firings: [] })),
+  );
+  await page.goto(path);
 }
 
 async function check(page: Page, tool: string) {
@@ -107,7 +113,7 @@ test("a refused edit is stated, above the rules still in force (FR-029)", async 
 test("a Tier 3 action shows the plan as stated and who authorised it (FR-028)", async ({
   page,
 }) => {
-  await serve(page);
+  await serve(page, RULES, AUDIT, ACTIVITY);
 
   const run = page.getByTestId("execution");
   await expect(run.getByTestId("plan")).toHaveText(
@@ -119,17 +125,22 @@ test("a Tier 3 action shows the plan as stated and who authorised it (FR-028)", 
 test("a recorded plan that failed redaction shows as withheld (FR-031, SC-015)", async ({
   page,
 }) => {
-  await serve(page, RULES, [
-    {
-      ...RUN,
-      plan_as_stated:
-        "Withheld: this could not be safely redacted for display. Check it locally.",
-      targets: [
-        "Withheld: this could not be safely redacted for display. Check it locally.",
-      ],
-      withheld: true,
-    },
-  ]);
+  await serve(
+    page,
+    RULES,
+    [
+      {
+        ...RUN,
+        plan_as_stated:
+          "Withheld: this could not be safely redacted for display. Check it locally.",
+        targets: [
+          "Withheld: this could not be safely redacted for display. Check it locally.",
+        ],
+        withheld: true,
+      },
+    ],
+    ACTIVITY,
+  );
 
   await expect(page.getByTestId("withheld")).toBeVisible();
   await expect(page.getByTestId("plan")).toHaveCount(0);

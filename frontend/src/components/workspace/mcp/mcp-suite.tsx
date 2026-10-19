@@ -27,10 +27,9 @@ import { fetch as apiFetch } from "@/core/api/fetcher";
 import {
   disconnectComposioToolkit,
   getComposioCatalog,
-  getComposioConnectionStatus,
-  initiateComposioConnection,
   listComposioConnections,
 } from "@/core/mcp/api";
+import { connectComposioToolkit } from "@/core/mcp/connect";
 import {
   type ComposioConnection,
   type ComposioToolkit,
@@ -485,70 +484,18 @@ function ConnectionsTab() {
     async (toolkit: string) => {
       setBusy(toolkit);
       try {
-        const callbackUrl = `${window.location.origin}/workspace/mcp/callback?toolkit=${toolkit}`;
-        const result = await initiateComposioConnection(toolkit, callbackUrl);
-
-        if ("status" in result && result.status === "already_connected") {
-          await refreshCatalog();
-          return;
-        }
-
-        // Mark as pending locally for immediate feedback.
-        setToolkits((prev) =>
-          prev.map((t) =>
-            t.slug === toolkit ? { ...t, status: "pending" } : t,
-          ),
-        );
-
-        const popup = window.open(
-          (result as { composio_redirect_url: string }).composio_redirect_url,
-          "composio_oauth",
-          "width=600,height=700",
-        );
-
-        // connect.composio.dev sends Cross-Origin-Opener-Policy headers that
-        // sever the opener-popup link, making popup.closed inaccessible.
-        // Poll our own API instead — it auto-syncs from Composio when pending.
-        const poll = {
-          timer: undefined as ReturnType<typeof setInterval> | undefined,
-        };
-
-        const handler = (ev: MessageEvent) => {
-          const data = ev.data as { type?: string; toolkit?: string } | null;
-          if (
-            data?.type === "composio_connected" &&
-            data?.toolkit === toolkit
-          ) {
-            clearInterval(poll.timer);
-            window.removeEventListener("message", handler);
-            popup?.close();
-            void refreshCatalog();
-          }
-        };
-        window.addEventListener("message", handler);
-
-        let pollAttempts = 0;
-        poll.timer = setInterval(() => {
-          pollAttempts++;
-          void (async () => {
-            try {
-              const status = await getComposioConnectionStatus(toolkit);
-              if (status.status === "active" || status.status === "connected") {
-                clearInterval(poll.timer);
-                window.removeEventListener("message", handler);
-                popup?.close();
-                void refreshCatalog();
-                return;
-              }
-            } catch {
-              /* retry on transient error */
-            }
-            if (pollAttempts >= 40) {
-              clearInterval(poll.timer);
-              window.removeEventListener("message", handler);
-            }
-          })();
-        }, 2000);
+        // Mark as pending locally for immediate feedback while OAuth runs;
+        // the button is busy only until the popup opens, as before.
+        const outcome = connectComposioToolkit(toolkit, () => {
+          setBusy(null);
+          setToolkits((prev) =>
+            prev.map((t) =>
+              t.slug === toolkit ? { ...t, status: "pending" } : t,
+            ),
+          );
+        });
+        await outcome;
+        await refreshCatalog();
       } catch (err: unknown) {
         setError(
           err instanceof Error ? err.message : "Failed to start connection",

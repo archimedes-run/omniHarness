@@ -37,7 +37,7 @@ export default function ComposioCallbackPage() {
                 );
                 window.close();
               } else {
-                router.push("/workspace/mcp");
+                router.push("/workspace/settings/connections");
               }
             }, 1500);
             return;

@@ -1,5 +1,6 @@
-import { McpSuite } from "@/components/workspace/mcp/mcp-suite";
+import { redirect } from "next/navigation";
 
-export default function McpPage() {
-  return <McpSuite />;
+// Phase 2.5 navigation: The MCP Suite moved to Settings → Connections; server detail pages stay under /workspace/mcp/[id].
+export default function MovedPage() {
+  redirect("/workspace/settings/connections");
 }

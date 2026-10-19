@@ -117,12 +117,9 @@ export interface Translations {
     chats: string;
     demoChats: string;
     agents: string;
-    mcpSuite: string;
-    confirmations: string;
-    toolSources: string;
-    sessions: string;
-    triggers: string;
-    policy: string;
+    inbox: string;
+    automations: string;
+    settings: string;
   };
 
   // Agents
