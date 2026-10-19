@@ -40,7 +40,11 @@ async def _run_lifespan_with_hanging_stop() -> float:
         return fake_service
 
     with (
-        patch("app.gateway.app.get_app_config"),
+        # The trigger engine OFF: a bare MagicMock config has a truthy
+        # `trigger_engine.enabled`, so the lifespan held a real election and
+        # wrote a lock file under a directory named after the mock's repr —
+        # inside the repository, on every run, and some were committed.
+        patch("app.gateway.app.get_app_config", return_value=MagicMock(**{"trigger_engine.enabled": False})),
         patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
         patch("app.channels.service.start_channel_service", side_effect=fake_start),
