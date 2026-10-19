@@ -145,7 +145,6 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
             TriggerType.CRON: CronSource(scheduler=scheduler),
         },
         fingerprints=fingerprints,
-        evaluations=evaluations,
         threads=threads,
         injector=injector,
         releaser=Releaser(

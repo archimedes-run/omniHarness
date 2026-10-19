@@ -19,6 +19,7 @@ gateway lifespan calls, and replaces only what sits OUTSIDE the process:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import threading
@@ -32,6 +33,7 @@ import pytest
 from app.channels.base import Channel
 from app.channels.message_bus import MessageBus, OutboundMessage
 from app.gateway.trigger_engine_wiring import build_production_loop
+from app.trigger_engine.models import Destination, TriggerType
 
 SESSION_ID = "sess-blocked"
 CHAT_ID = "4242"
@@ -91,6 +93,10 @@ def live_watcher(tmp_path, monkeypatch):
     _write_blocked_session(root)
     service = WatcherService(root=root)
     service.refresh()
+    # Positive control (Article XII): the watcher itself must see the session as
+    # waiting before a feed reporting otherwise means anything about the feed.
+    seen = {s["session_id"]: s["state"] for s in service.list_sessions()["sessions"]}
+    assert seen.get(SESSION_ID) == "waiting-on-user", f"fixture is wrong, not the feed: the watcher sees {seen}"
 
     port = _free_port()
     server, thread = _serve(build_app(service), port)
@@ -157,7 +163,6 @@ WATCHER_RULE = {"id": "blocked-session", "type": "watcher", "match": {"event": "
 # -- the production shape ------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason="AUDIT T-0: build_loop passes `evaluations=` to RuleRunner, which has no such field; every production start raises")
 def test_the_production_engine_can_be_constructed(tmp_path) -> None:
     """Before anything about what the engine does: that it exists. Since #32 the
     gateway's start raised TypeError on every attempt, recorded only as
@@ -165,3 +170,43 @@ def test_the_production_engine_can_be_constructed(tmp_path) -> None:
     loop = build_production_loop(_config(tmp_path, [WATCHER_RULE]))
 
     assert loop.runner is not None
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-1: production's watcher feed is a stub that always reports observable=False")
+def test_the_watcher_feed_reports_what_a_live_watcher_sees(tmp_path, live_watcher) -> None:
+    loop = build_production_loop(_config(tmp_path, [WATCHER_RULE]))
+
+    payload = loop.runner.sources[TriggerType.WATCHER].fetch_sessions()
+
+    assert payload["observable"] is True, f"a live watcher is serving, and production's feed reported: {payload}"
+    states = {s["session_id"]: s["state"] for s in payload["sessions"]}
+    assert states.get(SESSION_ID) == "waiting-on-user", states
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-2: QuietDestination fills the remote slot; nothing reaches a channel")
+@pytest.mark.asyncio
+async def test_a_remote_delivery_reaches_the_configured_channel(tmp_path, telegram) -> None:
+    loop = build_production_loop(_config(tmp_path, [WATCHER_RULE]))
+    remote = loop.runner.registry.resolve(Destination.REMOTE, present=False)
+
+    # Delivery runs on the engine's worker thread in production, never on the
+    # event loop; calling it from a thread here is that shape.
+    await asyncio.to_thread(remote.deliver, "darcy-repo is waiting on you.")
+
+    assert [(m.chat_id, m.text) for m in telegram.sent] == [(CHAT_ID, "darcy-repo is waiting on you.")]
+
+
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason="AUDIT T-4: a calendar rule loads, and is then skipped every cycle with a debug log")
+def test_a_calendar_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
+    rule = {"id": "standup", "type": "calendar", "match": {"minutes_before": 10}, "prompt": "{summary} starts soon", "destination": "auto"}
+
+    with pytest.raises(RuntimeError, match="calendar feed"):
+        build_production_loop(_config(tmp_path, [rule]))
+
+
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason="AUDIT T-4: a completion rule loads, and is then skipped every cycle with a debug log")
+def test_a_completion_rule_is_rejected_naming_the_missing_feed(tmp_path) -> None:
+    rule = {"id": "done", "type": "completion", "match": {}, "prompt": "{task_id} finished: {summary}", "destination": "auto"}
+
+    with pytest.raises(RuntimeError, match="completion feed"):
+        build_production_loop(_config(tmp_path, [rule]))
