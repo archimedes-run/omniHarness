@@ -34,7 +34,7 @@ export function SandboxSection({ className }: { className?: string }) {
             <TypingAnimation delay={1200}>
               $ pip install -r requirements.txt
             </TypingAnimation>
-            <AnimatedSpan delay={2000} className="text-green-500">
+            <AnimatedSpan delay={2000} className="text-success">
               ✔ Installed pygame
             </AnimatedSpan>
 
@@ -48,13 +48,13 @@ export function SandboxSection({ className }: { className?: string }) {
             <TypingAnimation delay={3600}>
               $ python game.py --test
             </TypingAnimation>
-            <AnimatedSpan delay={4200} className="text-green-500">
+            <AnimatedSpan delay={4200} className="text-success">
               ✔ All sprites loaded
             </AnimatedSpan>
-            <AnimatedSpan delay={4500} className="text-green-500">
+            <AnimatedSpan delay={4500} className="text-success">
               ✔ Physics engine OK
             </AnimatedSpan>
-            <AnimatedSpan delay={4800} className="text-green-500">
+            <AnimatedSpan delay={4800} className="text-success">
               ✔ 60 FPS stable
             </AnimatedSpan>
 

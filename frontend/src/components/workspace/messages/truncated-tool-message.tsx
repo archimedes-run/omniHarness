@@ -28,14 +28,14 @@ export function TruncationBadge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded px-1.5 py-0.5",
-        "bg-stone-800 font-mono text-[10px] text-stone-400",
+        "bg-muted text-muted-foreground font-mono text-[10px]",
         className,
       )}
       title={`${truncatedChars.toLocaleString()} characters were removed to stay within the model context window`}
     >
-      <span className="text-stone-500">[truncated</span>
+      <span className="text-muted-foreground">[truncated</span>
       <span>{kb} KB</span>
-      <span className="text-stone-500">removed]</span>
+      <span className="text-muted-foreground">removed]</span>
     </span>
   );
 }

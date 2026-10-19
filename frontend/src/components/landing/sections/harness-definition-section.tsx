@@ -94,13 +94,13 @@ export function HarnessDefinitionSection({
           <div className="grid items-center gap-14 lg:grid-cols-[0.9fr_1.1fr]">
             {/* ── Left: static description + progress indicators ─── */}
             <div>
-              <p className="text-xs font-semibold tracking-[0.18em] text-stone-400 uppercase">
+              <p className="text-muted-foreground text-xs font-semibold tracking-[0.18em] uppercase">
                 What is a harness?
               </p>
-              <h2 className="mt-4 text-3xl font-bold tracking-tight text-balance text-stone-950 sm:text-4xl">
+              <h2 className="text-foreground mt-4 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
                 A harness is the full operating environment behind an AI worker.
               </h2>
-              <p className="mt-5 text-base leading-relaxed text-pretty text-stone-500">
+              <p className="text-muted-foreground mt-5 text-base leading-relaxed text-pretty">
                 It wraps the worker together with its connected systems,
                 runtime, permissions, and outputs so the result can be run,
                 inspected, repaired, scheduled, and shared like a real product.
@@ -114,20 +114,20 @@ export function HarnessDefinitionSection({
                       className={cn(
                         "h-[2px] shrink-0 rounded-full transition-all duration-500 ease-out",
                         i === activeIndex
-                          ? "w-8 bg-stone-900"
+                          ? "bg-foreground w-8"
                           : i < activeIndex
-                            ? "w-4 bg-stone-400"
-                            : "w-4 bg-stone-200",
+                            ? "bg-muted-foreground/50 w-4"
+                            : "bg-accent w-4",
                       )}
                     />
                     <span
                       className={cn(
                         "text-xs font-medium transition-colors duration-300",
                         i === activeIndex
-                          ? "text-stone-900"
+                          ? "text-foreground"
                           : i < activeIndex
-                            ? "text-stone-400"
-                            : "text-stone-300",
+                            ? "text-muted-foreground"
+                            : "text-muted-foreground",
                       )}
                     >
                       {layer.title}
@@ -157,7 +157,7 @@ export function HarnessDefinitionSection({
                     pointerEvents: activeIndex === index ? "auto" : "none",
                   }}
                 >
-                  <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-stone-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
+                  <div className="border-border bg-card flex h-full flex-col overflow-hidden rounded-[28px] border shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
                     {/* Accent line */}
                     <div className="h-[3px] shrink-0 bg-gradient-to-r from-stone-900 via-stone-500 to-stone-200" />
 
@@ -165,7 +165,7 @@ export function HarnessDefinitionSection({
                       {/* Watermark */}
                       <span
                         aria-hidden
-                        className="pointer-events-none absolute right-5 bottom-2 leading-none font-black text-stone-100 select-none"
+                        className="text-muted-foreground pointer-events-none absolute right-5 bottom-2 leading-none font-black select-none"
                         style={{ fontSize: "6.5rem" }}
                       >
                         {layer.id}
@@ -173,21 +173,21 @@ export function HarnessDefinitionSection({
 
                       {/* Header row */}
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-semibold tracking-[0.2em] text-stone-400 uppercase">
+                        <span className="text-muted-foreground text-[10px] font-semibold tracking-[0.2em] uppercase">
                           Layer {layer.id}
                         </span>
-                        <span className="text-[10px] font-medium text-stone-300 tabular-nums">
+                        <span className="text-muted-foreground text-[10px] font-medium tabular-nums">
                           {index + 1}&thinsp;/&thinsp;{HARNESS_LAYERS.length}
                         </span>
                       </div>
 
                       {/* Title */}
-                      <h3 className="mt-4 text-2xl font-bold tracking-tight text-stone-950 sm:text-[1.75rem]">
+                      <h3 className="text-foreground mt-4 text-2xl font-bold tracking-tight sm:text-[1.75rem]">
                         {layer.title}
                       </h3>
 
                       {/* Description */}
-                      <p className="mt-2.5 max-w-sm text-sm leading-relaxed text-stone-500">
+                      <p className="text-muted-foreground mt-2.5 max-w-sm text-sm leading-relaxed">
                         {layer.description}
                       </p>
 
@@ -196,9 +196,9 @@ export function HarnessDefinitionSection({
                         {layer.items.map((item) => (
                           <span
                             key={item}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-stone-700"
+                            className="border-border bg-muted text-foreground inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium"
                           >
-                            <span className="size-1 rounded-full bg-stone-400" />
+                            <span className="bg-muted-foreground/50 size-1 rounded-full" />
                             {item}
                           </span>
                         ))}

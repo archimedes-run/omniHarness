@@ -225,7 +225,7 @@ export const zhCN: Translations = {
   workspace: {
     officialWebsite: "访问 OmniHarness 官方网站",
     githubTooltip: "访问 OmniHarness 的 Github 仓库",
-    settingsAndMore: "设置和更多",
+    settingsAndMore: "更多",
     visitGithub: "在 Github 上查看 OmniHarness",
     reportIssue: "报告问题",
     contactUs: "联系我们",

@@ -57,13 +57,13 @@ function formatDateTime(iso: string): string {
 
 function StatusIcon({ status }: { status: string }) {
   if (status === "succeeded")
-    return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
+    return <CheckCircleIcon className="text-success h-4 w-4" />;
   if (status === "failed")
     return <AlertCircleIcon className="text-destructive h-4 w-4" />;
   if (status === "canceled" || status === "expired")
     return <XCircleIcon className="text-muted-foreground h-4 w-4" />;
   if (status === "running" || status === "queued")
-    return <Loader2Icon className="h-4 w-4 animate-spin text-blue-500" />;
+    return <Loader2Icon className="text-highlight h-4 w-4 animate-spin" />;
   return <ClockIcon className="text-muted-foreground h-4 w-4" />;
 }
 
@@ -419,11 +419,9 @@ export function RunTimeline({ workflowId, runId }: RunTimelineProps) {
 
       {/* Final summary */}
       {run.status === "succeeded" && run.final_summary ? (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-900 dark:bg-green-950/30">
-          <h2 className="mb-2 text-sm font-semibold text-green-800 dark:text-green-300">
-            Summary
-          </h2>
-          <p className="text-sm whitespace-pre-wrap text-green-900 dark:text-green-200">
+        <div className="border-success/30 bg-success/10 rounded-lg border p-4">
+          <h2 className="text-success mb-2 text-sm font-semibold">Summary</h2>
+          <p className="text-success text-sm whitespace-pre-wrap">
             {run.final_summary}
           </p>
         </div>

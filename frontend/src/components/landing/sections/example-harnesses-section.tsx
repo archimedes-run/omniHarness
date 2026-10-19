@@ -42,13 +42,13 @@ export function ExampleHarnessesSection({ className }: { className?: string }) {
       )}
     >
       <div className="mb-12 flex flex-col items-center gap-3 text-center">
-        <p className="text-xs font-semibold tracking-[0.18em] text-stone-400 uppercase">
+        <p className="text-muted-foreground text-xs font-semibold tracking-[0.18em] uppercase">
           Example harnesses
         </p>
-        <h2 className="max-w-3xl text-4xl font-bold tracking-tight text-balance text-stone-950 md:text-5xl">
+        <h2 className="text-foreground max-w-3xl text-4xl font-bold tracking-tight text-balance md:text-5xl">
           Start with a chat. End with a runnable AI capability.
         </h2>
-        <p className="max-w-2xl text-base leading-relaxed text-pretty text-stone-500">
+        <p className="text-muted-foreground max-w-2xl text-base leading-relaxed text-pretty">
           Most AI products give you a chat box. OmniHarness gives you an
           operating layer you can build on, preview, automate, and control.
         </p>
@@ -58,15 +58,15 @@ export function ExampleHarnessesSection({ className }: { className?: string }) {
         {HARNESS_EXAMPLES.map((example, index) => (
           <div
             key={example.title}
-            className="rounded-3xl border border-stone-200 bg-white p-6 shadow-[0_14px_36px_rgba(15,23,42,0.04)]"
+            className="border-border bg-card rounded-3xl border p-6 shadow-[0_14px_36px_rgba(15,23,42,0.04)]"
           >
-            <span className="inline-flex rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-[10px] font-semibold tracking-[0.16em] text-stone-500 uppercase">
+            <span className="border-border bg-muted text-muted-foreground inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.16em] uppercase">
               Harness {index + 1}
             </span>
-            <h3 className="mt-4 text-xl font-semibold text-stone-950">
+            <h3 className="text-foreground mt-4 text-xl font-semibold">
               {example.title}
             </h3>
-            <p className="mt-3 text-sm leading-relaxed text-stone-500">
+            <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
               {example.description}
             </p>
           </div>

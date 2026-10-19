@@ -75,7 +75,7 @@ function AsciiBackground() {
     <pre
       ref={preRef}
       aria-hidden
-      className="pointer-events-none absolute inset-0 overflow-hidden font-mono text-[9px] leading-[13px] tracking-[0.01em] whitespace-pre text-stone-900/[0.045] select-none"
+      className="text-foreground/[0.045] pointer-events-none absolute inset-0 overflow-hidden font-mono text-[9px] leading-[13px] tracking-[0.01em] whitespace-pre select-none"
     />
   );
 }
@@ -100,23 +100,23 @@ export function Hero({ className }: { className?: string }) {
       />
 
       <div className="relative z-10 mx-auto flex max-w-6xl flex-col items-center gap-8 text-center">
-        <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white/90 px-4 py-1.5 text-xs font-medium text-stone-500 shadow-sm backdrop-blur-sm">
-          <span className="size-1.5 rounded-full bg-stone-900" />
+        <div className="border-border bg-card/90 text-muted-foreground inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium shadow-sm backdrop-blur-sm">
+          <span className="bg-foreground size-1.5 rounded-full" />
           Autonomous AI workers on your infrastructure
         </div>
 
-        <h1 className="max-w-5xl text-4xl leading-[1.04] font-bold tracking-tight text-balance text-stone-950 sm:text-5xl lg:text-[4.6rem]">
+        <h1 className="text-foreground max-w-5xl text-4xl leading-[1.04] font-bold tracking-tight text-balance sm:text-5xl lg:text-[4.6rem]">
           Build autonomous AI workers that run, inspect, and repair real
           workflows.
         </h1>
 
-        <p className="max-w-3xl text-base leading-relaxed text-pretty text-stone-600 sm:text-lg">
+        <p className="text-muted-foreground max-w-3xl text-base leading-relaxed text-pretty sm:text-lg">
           OmniHarness packages agents, MCP tools, memory, workflows, and
           sandboxed execution into durable harnesses you can run, inspect,
           reuse, and govern.
         </p>
 
-        <p className="max-w-3xl text-sm leading-relaxed text-pretty text-stone-500 sm:text-base">
+        <p className="text-muted-foreground max-w-3xl text-sm leading-relaxed text-pretty sm:text-base">
           Ship research workers, coding workbenches, approval-driven
           automations, dashboard generators, and live project previews from one
           self-hosted workspace.
@@ -124,7 +124,7 @@ export function Hero({ className }: { className?: string }) {
 
         <div className="mt-1 flex flex-col items-center gap-3 sm:flex-row">
           <Link href="/workspace">
-            <span className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg bg-stone-950 px-7 text-sm font-semibold text-white transition-colors hover:bg-stone-800">
+            <span className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg px-7 text-sm font-semibold transition-colors">
               Start building
               <ArrowRightIcon className="size-4" />
             </span>
@@ -133,14 +133,14 @@ export function Hero({ className }: { className?: string }) {
             href="https://github.com/archimedes-run/omniHarness"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-11 items-center gap-2 rounded-lg border border-stone-300 bg-white/90 px-7 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-stone-50"
+            className="border-border bg-card/90 text-foreground hover:border-input hover:bg-muted inline-flex h-11 items-center gap-2 rounded-lg border px-7 text-sm font-semibold transition-colors"
           >
             <GitHubLogoIcon className="size-4" />
             View on GitHub
           </a>
         </div>
 
-        <p className="text-xs font-medium tracking-[0.18em] text-stone-400 uppercase">
+        <p className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
           Open source · Self-hosted · Sandbox-native · MCP-ready
         </p>
       </div>

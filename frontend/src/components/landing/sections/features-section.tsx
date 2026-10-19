@@ -64,13 +64,13 @@ export function FeaturesSection({ className }: { className?: string }) {
       )}
     >
       <div className="mb-14 flex flex-col items-center gap-3 text-center">
-        <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
+        <p className="text-muted-foreground text-xs font-semibold tracking-widest uppercase">
           Built for real AI operations
         </p>
-        <h2 className="max-w-3xl text-4xl font-bold tracking-tight text-balance text-stone-950 md:text-5xl">
+        <h2 className="text-foreground max-w-3xl text-4xl font-bold tracking-tight text-balance md:text-5xl">
           The suite you need to build, run, and govern harnesses
         </h2>
-        <p className="max-w-2xl text-base leading-relaxed text-pretty text-stone-500">
+        <p className="text-muted-foreground max-w-2xl text-base leading-relaxed text-pretty">
           OmniHarness is not just a chat surface. It is an operational layer for
           agents, tools, workflows, execution, previews, and governed
           infrastructure.
@@ -81,19 +81,19 @@ export function FeaturesSection({ className }: { className?: string }) {
         {features.map(({ icon: Icon, kicker, title, description }) => (
           <div
             key={title}
-            className="group flex h-full flex-col gap-5 rounded-3xl border border-stone-200 bg-white p-6 transition-all duration-200 hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-[0_16px_40px_rgba(15,23,42,0.08)]"
+            className="group border-border bg-card hover:border-input flex h-full flex-col gap-5 rounded-3xl border p-6 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_16px_40px_rgba(15,23,42,0.08)]"
           >
             <div className="flex items-start justify-between gap-4">
-              <div className="flex size-11 items-center justify-center rounded-2xl border border-stone-200 bg-stone-50 text-stone-900">
+              <div className="border-border bg-muted text-foreground flex size-11 items-center justify-center rounded-2xl border">
                 <Icon className="size-5" />
               </div>
-              <span className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-[10px] font-semibold tracking-[0.18em] text-stone-500 uppercase">
+              <span className="border-border bg-muted text-muted-foreground rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.18em] uppercase">
                 {kicker}
               </span>
             </div>
             <div className="flex flex-1 flex-col gap-2">
-              <h3 className="text-lg font-semibold text-stone-950">{title}</h3>
-              <p className="text-sm leading-relaxed text-stone-500">
+              <h3 className="text-foreground text-lg font-semibold">{title}</h3>
+              <p className="text-muted-foreground text-sm leading-relaxed">
                 {description}
               </p>
             </div>

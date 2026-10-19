@@ -7,7 +7,7 @@ import {
   InfoIcon,
   MailIcon,
   Settings2Icon,
-  SettingsIcon,
+  EllipsisIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -42,13 +42,13 @@ function NavMenuButtonContent({
 }) {
   return isSidebarOpen ? (
     <div className="flex w-full items-center gap-2 text-left text-sm text-inherit">
-      <SettingsIcon className="size-4" />
+      <EllipsisIcon className="size-4" />
       <span>{t.workspace.settingsAndMore}</span>
       <ChevronsUpDown className="ml-auto size-4 text-current" />
     </div>
   ) : (
     <div className="flex size-full items-center justify-center">
-      <SettingsIcon className="size-4 text-current" />
+      <EllipsisIcon className="size-4 text-current" />
     </div>
   );
 }

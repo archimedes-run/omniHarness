@@ -237,7 +237,7 @@ export const enUS: Translations = {
   workspace: {
     officialWebsite: "OmniHarness's official website",
     githubTooltip: "OmniHarness on Github",
-    settingsAndMore: "Settings and more",
+    settingsAndMore: "More",
     visitGithub: "OmniHarness on GitHub",
     reportIssue: "Report a issue",
     contactUs: "Contact us",
