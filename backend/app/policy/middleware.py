@@ -58,6 +58,13 @@ class PolicyMiddleware(AgentMiddleware):
     #: rather than describing a category (FR-021, FR-029). Injected because
     #: target resolution is worker-specific.
     resolve_targets: Any = None
+    #: Re-reads, AT CONFIRMATION, the items an action would act on now (FR-029).
+    #: None re-resolves from the stored arguments with the same resolver the
+    #: plan was stated with — which catches a changed resolver or a tampered
+    #: record, and CANNOT see the world move: today's resolver reads arguments,
+    #: not calendars. A live, per-tool resolver plugs in here; none exists yet,
+    #: and that limit is stated rather than simulated.
+    recheck_targets: Any = None
     audit: Any = None
     actor: str = "default"
     now: Any = _now
@@ -200,7 +207,6 @@ class PolicyMiddleware(AgentMiddleware):
             messages[-1],
             run_tool=self._runner(request),
             runtime_context=self._runtime_context(request),
-            current_targets=None,
         )
         note = None
         if result.expired_meanwhile:
@@ -369,12 +375,27 @@ class PolicyMiddleware(AgentMiddleware):
 
     # -- execution after confirmation --------------------------------------
 
-    def execute_confirmed(self, action: PendingAction, run_tool, current_targets: list[str] | None = None) -> Any:
+    def targets_now(self, action: PendingAction) -> list[str]:
+        """The items this action would act on if run now. See `recheck_targets`."""
+        if self.recheck_targets is not None:
+            return list(self.recheck_targets(action))
+        if self.resolve_targets is not None:
+            return list(self.resolve_targets(action.tool_name, action.arguments))
+        return [f"{action.tool_name}({action.arguments})"]
+
+    def execute_confirmed(self, action: PendingAction, run_tool) -> Any:
         """Run a confirmed action, re-checking its targets first (FR-029).
 
         The claim is taken by the caller; this is what happens after it wins.
+
+        The re-check happens HERE, for every route, and a caller cannot supply
+        it. It used to be a parameter: the web route passed the action's own
+        recorded targets (comparing the record with itself), and chat passed
+        None (skipping the check), so drift was detectable only in tests that
+        injected a list (audit P-3).
         """
-        if current_targets is not None and not targets_still_match(action, current_targets):
+        current_targets = self.targets_now(action)
+        if not targets_still_match(action, current_targets):
             self.pending.resolve(
                 action,
                 Outcome.TARGETS_DRIFTED,

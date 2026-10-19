@@ -170,15 +170,11 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     user_id = getattr(ctx, "user_id", None) or "default"
 
     run_tool = await _runner(request, action.thread_id if action else None, user_id)
-    current = list(action.targets) if action else None
 
-    result = flow.explicit(
-        action_id,
-        confirm=confirm,
-        run_tool=run_tool,
-        supplied_count=body.typed_count,
-        current_targets=current,
-    )
+    # No targets passed: the flow re-checks them itself (FR-029). This route
+    # used to pass the action's own recorded targets, so the check compared the
+    # record with itself and drift could never be detected here.
+    result = flow.explicit(action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count)
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail=result.detail)
 
 

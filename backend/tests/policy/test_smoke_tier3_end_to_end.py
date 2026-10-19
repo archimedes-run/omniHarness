@@ -102,7 +102,6 @@ def test_one_tier3_action_from_statement_to_audit(system):
     result = system.middleware.execute_confirmed(
         claimed,
         run_tool=lambda name, args: executed.append((name, args)) or "declined 2 meetings",
-        current_targets=["Standup 9am", "Review 2pm"],
     )
 
     assert result == "declined 2 meetings"
@@ -141,11 +140,11 @@ def test_target_drift_between_statement_and_execution_declines(system):
     system.middleware.wrap_tool_call(_request("calendar_decline", {"meetings": ["Standup 9am", "Review 2pm"]}), lambda r: executed.append(r))
     action = system.store.open_actions(NOW)[0]
     system.store.claim(action.id, "worker-1")
+    system.middleware.recheck_targets = lambda action: ["Standup 9am"]  # one already gone
 
     result = system.middleware.execute_confirmed(
         system.store.get(action.id),
         run_tool=lambda name, args: executed.append((name, args)) or "ran",
-        current_targets=["Standup 9am"],  # one already gone
     )
 
     assert result is None

@@ -114,3 +114,22 @@ def test_the_proposal_turn_is_not_read_as_an_answer_to_itself(build_flow):
     assert RAN == []
     assert not any("did not recognise" in getattr(m, "content", "") for m in out["messages"])
     assert len(system.store.open_actions(NOW)) == 1
+
+
+def test_the_chat_route_rechecks_targets_before_executing(build_flow):
+    """Audit P-3. Chat passed current_targets=None, which skipped the FR-029
+    re-check entirely. The recorded plan named two meetings; the record now
+    resolves to one. A 'yes' in chat must not execute against a different set."""
+    from app.policy.models import Outcome
+
+    system = build_flow()
+    agent = _agent(system)
+    first = agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    [action] = system.store.open_actions(NOW)
+    action.arguments = {"meetings": ["Standup"]}
+    system.store.save(action)
+
+    agent.invoke({"messages": [*first["messages"], HumanMessage(content="yes")]})
+
+    assert RAN == [], "executed against targets other than the ones confirmed"
+    assert system.store.get(action.id).outcome is Outcome.TARGETS_DRIFTED
