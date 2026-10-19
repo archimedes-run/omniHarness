@@ -7,6 +7,7 @@ import {
   GitBranchIcon,
   MessagesSquare,
   PlugIcon,
+  ScaleIcon,
   ShieldQuestionIcon,
   ZapIcon,
 } from "lucide-react";
@@ -85,6 +86,17 @@ export function WorkspaceNavChatList() {
               {waiting}
             </SidebarMenuBadge>
           )}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/policy")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/policy">
+              <ScaleIcon />
+              <span>{t.sidebar.policy}</span>
+            </Link>
+          </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton

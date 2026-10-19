@@ -1,0 +1,116 @@
+import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * T076 — the policy inspector, asserted against what renders.
+ *
+ * NO BACKEND: the three routes are intercepted. That explain runs nothing and
+ * uses live dispatch's classify, and that a refused edit keeps the rules in
+ * force, are pytest's (tests/test_policy_inspector.py).
+ */
+
+const RULES = {
+  source_file: "default_rules.yaml",
+  rules: [
+    { pattern: "gmail_fetch_*", tier: 1, exceptions: [], source_line: 10 },
+    {
+      pattern: "calendar_delete_event",
+      tier: 3,
+      exceptions: [],
+      source_line: 20,
+    },
+  ],
+  unreadable: false,
+  kept_previous: false,
+  error: null as string | null,
+  threshold_targets: 10,
+  expires_after_seconds: 14400,
+};
+
+const AUDIT = [
+  {
+    at: "2026-10-20T13:00:00Z",
+    actor: "default",
+    tool: "calendar_delete_event",
+    plan_as_stated: "I will delete 1 event: Standup",
+    targets: ["Standup"],
+    authorised_by: "worker-1",
+    outcome: "executed",
+  },
+];
+
+async function serve(page: Page, rules = RULES) {
+  const json = (body: unknown) => ({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+  await page.route("**/api/policy/rules", (route) =>
+    route.fulfill(json(rules)),
+  );
+  await page.route("**/api/policy/audit", (route) =>
+    route.fulfill(json(AUDIT)),
+  );
+  await page.route("**/api/policy/explain*", (route) => {
+    const tool = new URL(route.request().url()).searchParams.get("tool");
+    const known = tool === "calendar_delete_event";
+    return route.fulfill(
+      json({
+        tool,
+        tier: 3,
+        deciding_rule: known ? "calendar_delete_event → Tier 3" : null,
+        from_default: !known,
+        raised_by: null,
+      }),
+    );
+  });
+  await page.goto("/workspace/policy");
+}
+
+async function check(page: Page, tool: string) {
+  await page.getByLabel("Tool name").fill(tool);
+  await page.getByRole("button", { name: "Check" }).click();
+  return page.getByTestId("tier-result");
+}
+
+test("a Tier 3 from the default is marked apart from a classified Tier 3 (FR-027, SC-012)", async ({
+  page,
+}) => {
+  await serve(page);
+
+  const classified = await check(page, "calendar_delete_event");
+  await expect(classified).toHaveAttribute("data-from-default", "false");
+  await expect(classified.getByTestId("deciding-rule")).toContainText(
+    "calendar_delete_event",
+  );
+  await expect(classified.getByTestId("default-marker")).toHaveCount(0);
+
+  const unknown = await check(page, "some_tool_nobody_classified");
+  await expect(unknown).toHaveAttribute("data-from-default", "true");
+  await expect(unknown.getByTestId("default-marker")).toBeVisible();
+});
+
+test("a refused edit is stated, above the rules still in force (FR-029)", async ({
+  page,
+}) => {
+  await serve(page, {
+    ...RULES,
+    kept_previous: true,
+    error: "policy rules malformed: while parsing a flow sequence",
+  });
+
+  await expect(page.getByTestId("kept-previous")).toContainText("refused");
+  await expect(page.getByTestId("kept-previous")).toContainText("malformed");
+  await expect(page.getByTestId("rule")).toHaveCount(2);
+});
+
+test("a Tier 3 action shows the plan as stated and who authorised it (FR-028)", async ({
+  page,
+}) => {
+  await serve(page);
+
+  const run = page.getByTestId("execution");
+  await expect(run.getByTestId("plan")).toHaveText(
+    "I will delete 1 event: Standup",
+  );
+  await expect(run.getByTestId("authorised-by")).toHaveText("worker-1");
+});
