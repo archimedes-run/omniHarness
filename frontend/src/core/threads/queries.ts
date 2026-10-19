@@ -92,7 +92,9 @@ export function useDeleteThread() {
         },
       );
 
-      if (!response.ok) {
+      // 404: no local data was ever written (a thread that never ran), so
+      // there is nothing left to delete. Not a failure.
+      if (!response.ok && response.status !== 404) {
         const error = await response
           .json()
           .catch(() => ({ detail: "Failed to delete local thread data." }));
