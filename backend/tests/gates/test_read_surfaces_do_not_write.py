@@ -32,6 +32,8 @@ READ_SURFACES = [
     "gateway/routers/triggers.py",
     "gateway/routers/policy.py",
     "gateway/routers/tool_sources.py",
+    "gateway/routers/inbox.py",
+    "gateway/inbox_view.py",
     "gateway/sessions_view.py",
     "gateway/triggers_view.py",
     "gateway/tool_sources.py",
