@@ -205,7 +205,9 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         # See _quiet_hours for why an adapter is needed at all.
         quiet=_quiet_hours(engine_config),
         deferrals=DeferralQueue(store=pending),
-        interrupts=InterruptQueue(),
+        # From the rule file. InterruptQueue() used its built-in 5 minutes, so
+        # queued_turn_max_wait_seconds was parsed and never reached the queue.
+        interrupts=InterruptQueue(max_wait=engine_config.queued_turn_max_wait, schedule_max_wait=engine_config.held_schedule_max_wait),
         thread_state=exchange_state,
         window=CoalesceWindow(window=engine_config.coalesce_window, store=pending),
     )

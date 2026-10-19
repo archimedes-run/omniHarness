@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .audit import AuditLog
-from .compose import compose_proactive, render_prompt
+from .compose import compose_proactive, render_prompt, with_late_note
 from .config import EngineConfig
 from .fingerprint import FingerprintStore, compute
 from .injector import TurnInjector
@@ -121,7 +121,8 @@ class RuleRunner:
                     # header names the session); anything else would arrive as
                     # "(the assistant returned nothing)", which is not a message.
                     raise EmptyReply("the run completed with no reply")
-                firing.reply = compose_proactive(rule, event, raw)
+                firing.body = compose_proactive(rule, event, raw, late=False)
+                firing.reply = with_late_note(event, firing.body)
             except Exception as exc:  # noqa: BLE001 — one firing, not the rule
                 if self._give_up(rule, firing, key, exc, now):
                     fired.append(firing)
@@ -235,10 +236,20 @@ class RuleRunner:
         """A held exchange ended or the bound expired (FR-016c)."""
         if self.interrupts is None:
             return None
-        ready = self.interrupts.due(now, still_busy=lambda t: self._is_mid_exchange(t))
+        ready = self.interrupts.due(now, still_busy=lambda t: self._is_mid_exchange(t), on_expire=lambda f: self.audit.record(f, now))
         if not ready:
             return None
-        return self.releaser.release(ready, ReleaseReason.QUEUE_EXPIRED, self._destination_for(rule, now), now)
+        for f in ready:
+            if f.body is not None and f.event.type is not TriggerType.WATCHER:
+                # The note is rewritten for NOW: the firing may have been on
+                # time when composed and late by the time the exchange ended.
+                f.reply = with_late_note(f.event, f.body, now=now, held=True)
+        delivered = None
+        for reason in (ReleaseReason.EXCHANGE_ENDED, ReleaseReason.QUEUE_EXPIRED):
+            group = [f for f in ready if f.release_reason is reason]
+            if group:
+                delivered = self.releaser.release(group, reason, self._destination_for(rule, now), now) or delivered
+        return delivered
 
     def _destination_for(self, rule: Rule, now: datetime):
         return self.registry.resolve(

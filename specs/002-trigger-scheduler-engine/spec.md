@@ -10,6 +10,19 @@
 
 ## Clarifications
 
+### Session 2026-10-19
+
+- Q: A scheduled message (the morning brief) fires while the user is mid-conversation with the
+  assistant. FR-016c released queued items at the FR-016a bound and FR-013c expired every
+  non-re-checkable item on a non-immediate release, so the brief was held for five minutes and
+  then dropped. Is that the intended behaviour? → A: **No.** Hold it and deliver it when the
+  exchange ends, as for a blocked session; expire it only after a bounded window (default 2 h,
+  configurable); if delivered late, it carries the late note. Owner's reason: *"A morning brief
+  I miss because I was chatting is a worse failure than a late one."* Recorded as **FR-016d**;
+  FR-013c now covers quiet-hours deferral only, and FR-016c re-checkable items only. The
+  quiet-hours rule is unchanged: a brief deferred overnight still expires, because there the
+  user was away rather than present, which is the asymmetry FR-013c's rationale rests on.
+
 ### Session 2026-08-21
 
 - Q: What makes two trigger events "the same event", for the purpose of not firing twice? → A:
@@ -314,8 +327,9 @@ change takes effect on the next evaluation without a restart.
 - **FR-013b**: At release, each deferred item's condition MUST be re-evaluated. Only items whose
   condition still holds MUST be delivered; the rest MUST expire with the reason recorded.
 - **FR-013c**: For trigger types carrying no re-checkable condition — cron and completion, which
-  describe something that already happened — deferred items MUST **expire** rather than be
-  delivered unverified. Rationale: without this, "re-check" degrades into "deliver anything we
+  describe something that already happened — items deferred by **quiet hours** MUST **expire**
+  rather than be delivered unverified. (An item held behind an exchange is governed by FR-016d
+  instead; amended 2026-10-19, see Clarifications.) Rationale: without this, "re-check" degrades into "deliver anything we
   cannot disprove", and the asymmetry is real — a missed briefing is worthless by morning while
   a blocked session is still blocked and still worth knowing about.
 - **FR-013d**: The quiet-hours release MUST pass through the same coalescing path as ordinary
@@ -338,11 +352,19 @@ change takes effect on the next evaluation without a restart.
   or abandoned run may emit nothing at all, in which case the FR-016a bound is the **only**
   mechanism that will ever release the queued item. It MUST therefore be implemented as the
   primary release path and not as a rarely-exercised fallback.
-- **FR-016c**: On expiry, a queued item MUST be re-checked and released through the **same**
-  re-check-then-coalesce mechanism used for quiet-hours release (FR-013b, FR-013d). Quiet hours
+- **FR-016c**: On expiry, a queued **re-checkable** item MUST be re-checked and released through
+  the **same** re-check-then-coalesce mechanism used for quiet-hours release (FR-013b, FR-013d). Quiet hours
   and queue expiry are two entry conditions into one mechanism, not two implementations of the
   same idea. Rationale: a second implementation acquires its own defects in the path that runs
   least often and is observed least.
+- **FR-016d** *(added 2026-10-19)*: A queued item with no re-checkable condition (cron,
+  completion) MUST NOT be dropped because the user was mid-exchange. It MUST be held until the
+  exchange ends and then **delivered**, through the same release-and-coalesce path. If its
+  delivery is later than the late threshold, it MUST carry the late note, naming the
+  conversation as the reason. It MUST NOT be released by the FR-016a bound while the exchange is
+  still in progress; it expires — with the reason recorded — only after a separate, configurable
+  window (`held_schedule_max_wait_seconds`, default 7200 s, a stated choice rather than a
+  measured value).
 - **FR-017**: A rule that has fired for a given event MUST NOT fire again for that same event.
   Re-firing on an unchanged condition is a defect, not a tuning matter.
 - **FR-017a**: Event sameness MUST be determined by the triple of rule id, event identifier, and

@@ -38,6 +38,8 @@ DEFAULTS = {
     "coalesce_window_seconds": 60,
     "presence_threshold_seconds": 300,
     "queued_turn_max_wait_seconds": 300,
+    #: FR-016d: how long a scheduled message waits behind an exchange.
+    "held_schedule_max_wait_seconds": 7200,
     "fingerprint_retention_seconds": 86400,
 }
 
@@ -64,6 +66,7 @@ class EngineConfig:
     coalesce_window: timedelta = timedelta(seconds=DEFAULTS["coalesce_window_seconds"])
     presence_threshold: timedelta = timedelta(seconds=DEFAULTS["presence_threshold_seconds"])
     queued_turn_max_wait: timedelta = timedelta(seconds=DEFAULTS["queued_turn_max_wait_seconds"])
+    held_schedule_max_wait: timedelta = timedelta(seconds=DEFAULTS["held_schedule_max_wait_seconds"])
     fingerprint_retention: timedelta = timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"])
 
 
@@ -150,6 +153,7 @@ def parse(doc: dict) -> EngineConfig:
         coalesce_window=secs("coalesce_window_seconds"),
         presence_threshold=secs("presence_threshold_seconds"),
         queued_turn_max_wait=secs("queued_turn_max_wait_seconds"),
+        held_schedule_max_wait=secs("held_schedule_max_wait_seconds"),
         fingerprint_retention=timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"]),
     )
 

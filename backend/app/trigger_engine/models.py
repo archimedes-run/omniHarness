@@ -40,6 +40,11 @@ class ReleaseReason(StrEnum):
     IMMEDIATE = "immediate"
     QUIET_HOURS_ENDED = "quiet-hours-ended"
     QUEUE_EXPIRED = "queue-expired"
+    #: The exchange a firing was held behind finished. Unlike the two above,
+    #: an event that already happened (cron) is DELIVERED here, not expired:
+    #: the user was talking, not away, and a morning brief missed for that is
+    #: a worse failure than a late one (002 clarification, 2026-10-19).
+    EXCHANGE_ENDED = "exchange-ended"
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,11 @@ class Firing:
     #: None means this firing was delivered on its own. The field's presence is
     #: therefore meaningful, and a test asserts a solo delivery leaves it unset.
     batch_id: str | None = None
+    #: The composed message WITHOUT a late note, so the note can be rewritten
+    #: for the moment of delivery when a firing is held.
+    body: str | None = None
+    #: Set by InterruptQueue.due: why a held firing is being released.
+    release_reason: ReleaseReason | None = None
 
     def resolve(self, outcome: Outcome, reason: str = "") -> Firing:
         """Set the outcome. Every non-DELIVERED outcome MUST carry a reason.

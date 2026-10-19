@@ -670,3 +670,53 @@ async def test_the_rule_timeout_covers_a_rules_legitimate_work(tmp_path) -> None
 
     needed = 2 * GATEWAY_CALL_TIMEOUT_SECONDS + DELIVERY_TIMEOUT_SECONDS
     assert loop.engine.rule_timeout.total_seconds() >= needed, f"{loop.engine.rule_timeout} cannot cover a rule's work ({needed}s)"
+
+
+@pytest.mark.asyncio
+async def test_a_brief_held_behind_a_conversation_is_delivered_when_it_ends(tmp_path, gateway, telegram, sql_run_store) -> None:
+    """FR-016d end to end, in the production shape. It used to be held, then
+    released at the bound as 'queue-expired', and expired as un-recheckable."""
+    gateway.run_seconds = 0.0
+    store = sql_run_store
+    telegram.store.set_thread_id("telegram", CHAT_ID, "conv-1")
+    await _running(store, "r1", "conv-1")
+    brief = {**_cron_rule_due_once(), "destination": "auto"}
+    loop = _build(tmp_path, [brief], run_store=store, defaults={"coalesce_window_seconds": 0})
+
+    await loop.cycle()
+    assert telegram.sent == [] and [e["outcome"] for e in _audit(loop)] == ["queued"]
+
+    await store.update_status("r1", "success")
+    await loop.cycle()
+
+    assert len(telegram.sent) == 1, "the brief held behind a conversation was not delivered"
+    assert [e["outcome"] for e in _audit(loop)] == ["queued", "delivered"]
+
+
+@pytest.mark.asyncio
+async def test_the_queue_bounds_come_from_the_rule_file(tmp_path) -> None:
+    """InterruptQueue() was built with its own 5 minutes, so
+    queued_turn_max_wait_seconds was parsed and never reached the queue."""
+    loop = _build(tmp_path, [WATCHER_RULE], defaults={"queued_turn_max_wait_seconds": 90, "held_schedule_max_wait_seconds": 3600})
+
+    assert loop.runner.interrupts.max_wait.total_seconds() == 90
+    assert loop.runner.interrupts.schedule_max_wait.total_seconds() == 3600
+
+
+@pytest.mark.asyncio
+async def test_a_brief_released_late_after_a_conversation_carries_the_late_note(tmp_path, gateway, telegram, sql_run_store) -> None:
+    """Composed on time, so composed WITHOUT a note; the conversation ran long.
+    The note is written for the moment of delivery, naming why it is late."""
+    gateway.run_seconds = 0.0
+    telegram.store.set_thread_id("telegram", CHAT_ID, "conv-1")
+    await _running(sql_run_store, "r1", "conv-1")
+    brief = {**_cron_rule_due_once(), "destination": "auto"}
+    loop = _build(tmp_path, [brief], run_store=sql_run_store, defaults={"coalesce_window_seconds": 0})
+    await loop.cycle()
+    await sql_run_store.update_status("r1", "success")
+    [rule] = loop.loader.config.rules
+
+    await loop.runner.offload(loop.runner.release_queued, rule, datetime.now(UTC) + timedelta(minutes=40))
+
+    [sent] = telegram.sent
+    assert sent.text.startswith("Running late") and "mid-conversation" in sent.text, sent.text

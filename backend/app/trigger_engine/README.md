@@ -66,9 +66,12 @@ Decisions are made in this order, and the order is asserted by a test:
 3. **Coalescing** — several firings become one message.
 4. **Delivery** — through `release()`, the only thing that delivers.
 
-Event types with no re-checkable condition (cron, completion) **expire** rather
-than delivering unverified, so "re-check" never degrades into "deliver anything
-we cannot disprove".
+Event types with no re-checkable condition (cron, completion) **expire** at the
+end of quiet hours rather than delivering unverified, so "re-check" never
+degrades into "deliver anything we cannot disprove". Held behind a conversation,
+they are different (FR-016d): the user was present, not away, so the message is
+delivered when the exchange ends — with a late note if it is late — and expires
+only after `held_schedule_max_wait_seconds` (default 2 h).
 
 ## Not firing twice
 
