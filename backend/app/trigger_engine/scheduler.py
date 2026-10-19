@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
@@ -24,12 +25,20 @@ from ._store import JsonStore
 logger = logging.getLogger(__name__)
 
 
-def next_due(expr: str, after: datetime) -> datetime:
-    return croniter(expr, after).get_next(datetime)
+def _local(t: datetime, tz: str | None) -> datetime:
+    """`t` in the rule's zone. croniter evaluates the expression in the zone of
+    the datetime it is given, so "45 8 * * 1-5" in America/New_York is 12:45
+    UTC in summer and 13:45 UTC in winter — DST handled by the zone, not by
+    hand-converting the schedule to UTC (which is wrong half the year)."""
+    return t.astimezone(ZoneInfo(tz)) if tz else t
 
 
-def previous_due(expr: str, before: datetime) -> datetime:
-    return croniter(expr, before).get_prev(datetime)
+def next_due(expr: str, after: datetime, tz: str | None = None) -> datetime:
+    return croniter(expr, _local(after, tz)).get_next(datetime)
+
+
+def previous_due(expr: str, before: datetime, tz: str | None = None) -> datetime:
+    return croniter(expr, _local(before, tz)).get_prev(datetime)
 
 
 @dataclass
@@ -46,9 +55,12 @@ class Scheduler:
     def _key(rule_id: str, instant: datetime) -> str:
         # The scheduled INSTANT, not the evaluation time — that is what makes
         # de-duplication survive a clock jump.
-        return f"{rule_id}@{instant.isoformat()}"
+        # Normalised to UTC: the same instant computed in a rule's zone and
+        # read back in UTC must be ONE key (FR-018), and keys written before
+        # zones existed were already UTC.
+        return f"{rule_id}@{instant.astimezone(UTC).isoformat()}"
 
-    def catch_up(self, rule_id: str, expr: str, now: datetime, *, since: datetime | None = None) -> tuple[datetime | None, int]:
+    def catch_up(self, rule_id: str, expr: str, now: datetime, *, tz: str | None = None, since: datetime | None = None) -> tuple[datetime | None, int]:
         """(the most recent unfired instant, how many older ones were skipped).
 
         FR-018: "fires once, late". This used to return EVERY unfired instant
@@ -67,11 +79,11 @@ class Scheduler:
         if watermark is not None and watermark > floor:
             floor = watermark
         unfired: list[datetime] = []
-        cursor = previous_due(expr, now)
+        cursor = previous_due(expr, now, tz)
         while cursor > floor:
             if not self.has_fired(rule_id, cursor):
                 unfired.append(cursor)
-            cursor = previous_due(expr, cursor)
+            cursor = previous_due(expr, cursor, tz)
         if not unfired:
             return None, 0
         return max(unfired), len(unfired) - 1
@@ -81,9 +93,11 @@ class Scheduler:
         stamps = [k[len(prefix) :] for k in self._store.keys() if k.startswith(prefix)]
         return datetime.fromisoformat(max(stamps)) if stamps else None
 
-    def next_wakeup(self, schedules: list[tuple[str, str]], now: datetime) -> datetime | None:
-        """The earliest next due moment across all rules. None when none."""
-        candidates = [next_due(expr, now) for _, expr in schedules if expr]
+    def next_wakeup(self, schedules: list[tuple], now: datetime) -> datetime | None:
+        """The earliest next due moment across all rules. None when none.
+
+        Each schedule is (rule_id, expr) or (rule_id, expr, timezone)."""
+        candidates = [next_due(s[1], now, s[2] if len(s) > 2 else None) for s in schedules if s[1]]
         return min(candidates) if candidates else None
 
     def has_fired(self, rule_id: str, instant: datetime) -> bool:

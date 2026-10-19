@@ -137,3 +137,54 @@ def test_the_late_note_states_only_what_is_true() -> None:
     assert note(30, 0) == ""
     assert note(95 * 60, 0).startswith("Running late") and "missed" not in note(95 * 60, 0)
     assert "Running late" not in note(4 * 60, 11) and "11 earlier scheduled runs were missed" in note(4 * 60, 11)
+
+
+# --- per-rule time zones (owner: "08:45 America/New_York on weekdays") --------
+
+NY_BRIEF = "45 8 * * 1-5"
+
+
+def test_a_zoned_schedule_follows_the_zone_across_dst(tmp_path) -> None:
+    """New York leaves EDT on 2026-11-01. 08:45 there is 12:45 UTC before and
+    13:45 UTC after: a schedule hand-converted to UTC is wrong half the year."""
+    s = _sched(tmp_path)
+    friday_edt = datetime(2026, 10, 30, 13, 0, tzinfo=UTC)
+    monday_est = datetime(2026, 11, 2, 14, 0, tzinfo=UTC)
+
+    assert s.catch_up("b", NY_BRIEF, friday_edt, tz="America/New_York")[0] == datetime(2026, 10, 30, 12, 45, tzinfo=UTC)
+    assert s.catch_up("b", NY_BRIEF, monday_est, tz="America/New_York")[0] == datetime(2026, 11, 2, 13, 45, tzinfo=UTC)
+    # and the wakeup skips the weekend into EST
+    assert s.next_wakeup([("b", NY_BRIEF, "America/New_York")], friday_edt) == datetime(2026, 11, 2, 13, 45, tzinfo=UTC)
+
+
+def test_a_zoned_instant_once_fired_is_not_due_again(tmp_path) -> None:
+    """The key is normalised to UTC, so the zoned instant and its UTC self are one."""
+    s = _sched(tmp_path)
+    now = datetime(2026, 10, 30, 13, 0, tzinfo=UTC)
+    instant, _ = s.catch_up("b", NY_BRIEF, now, tz="America/New_York")
+    s.mark_fired("b", instant, now)
+
+    assert s.catch_up("b", NY_BRIEF, now, tz="America/New_York") == (None, 0)
+
+
+def test_a_rule_with_an_unknown_zone_is_rejected_at_load(tmp_path) -> None:
+    import json
+
+    import pytest
+
+    from app.trigger_engine.config import ConfigError, parse
+
+    with pytest.raises(ConfigError, match="IANA"):
+        parse(json.loads('{"rules": [{"id": "b", "type": "cron", "match": {"schedule": "45 8 * * 1-5", "timezone": "Mars/Olympus"}, "prompt": "x"}]}'))
+
+
+def test_a_zoned_instant_and_its_utc_self_are_one_fired_event(tmp_path) -> None:
+    """FR-018 'at most once' must not depend on which zone an instant is
+    written in: fired as 08:45 EDT, it is fired as 12:45 UTC too."""
+    from zoneinfo import ZoneInfo
+
+    s = _sched(tmp_path)
+    zoned = datetime(2026, 10, 30, 8, 45, tzinfo=ZoneInfo("America/New_York"))
+    s.mark_fired("b", zoned, zoned)
+
+    assert s.has_fired("b", datetime(2026, 10, 30, 12, 45, tzinfo=UTC))

@@ -720,3 +720,16 @@ async def test_a_brief_released_late_after_a_conversation_carries_the_late_note(
 
     [sent] = telegram.sent
     assert sent.text.startswith("Running late") and "mid-conversation" in sent.text, sent.text
+
+
+@pytest.mark.asyncio
+async def test_the_production_loop_wakes_for_a_zoned_brief(tmp_path) -> None:
+    """The loop's own wakeup computation, from the rule file, honours the zone."""
+    brief = {"id": "morning-briefing", "type": "cron", "match": {"schedule": "45 8 * * 1-5", "timezone": "America/New_York"}, "prompt": "Brief me as of {scheduled_at}.", "destination": "auto"}
+    loop = _build(tmp_path, [brief])
+
+    friday_after_brief = datetime(2026, 10, 30, 13, 0, tzinfo=UTC)
+    monday_brief_est = datetime(2026, 11, 2, 13, 45, tzinfo=UTC)
+    assert loop.scheduler.next_wakeup([("morning-briefing", "45 8 * * 1-5", "America/New_York")], friday_after_brief) == monday_brief_est
+    # Within the 60 s idle pulse of the brief, the brief is the next wakeup.
+    assert loop.next_wakeup(datetime(2026, 11, 2, 13, 44, 30, tzinfo=UTC)) == monday_brief_est

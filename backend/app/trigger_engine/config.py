@@ -106,6 +106,15 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         raise ConfigError(f"rule {rid!r}: match must be an object")
     if rtype is TriggerType.CRON and not match.get("schedule"):
         raise ConfigError(f"rule {rid!r}: a cron rule needs match.schedule")
+    if rtype is TriggerType.CRON and match.get("timezone"):
+        # Rejected at load, like any other invalid rule: an unknown zone would
+        # otherwise raise on every evaluation, or worse, be read as UTC.
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(match["timezone"])
+        except Exception as exc:  # noqa: BLE001 — any failure means "not a zone"
+            raise ConfigError(f"rule {rid!r}: match.timezone {match['timezone']!r} is not an IANA time zone (e.g. America/New_York)") from exc
     if rtype is TriggerType.WATCHER and not match.get("event"):
         raise ConfigError(f"rule {rid!r}: a watcher rule needs match.event")
 

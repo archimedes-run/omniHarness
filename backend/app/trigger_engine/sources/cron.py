@@ -18,7 +18,7 @@ class CronSource(TriggerSource):
         expr = rule.match.get("schedule")
         if not expr:
             return []
-        instant, skipped = self.scheduler.catch_up(rule.id, expr, now)
+        instant, skipped = self.scheduler.catch_up(rule.id, expr, now, tz=rule.match.get("timezone"))
         if instant is None:
             return []
         return [

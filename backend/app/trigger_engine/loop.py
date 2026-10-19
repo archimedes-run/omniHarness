@@ -52,7 +52,7 @@ class TriggerLoop:
     def next_wakeup(self, now: datetime) -> datetime:
         """Earliest of: the next scheduled instant, or the idle pulse."""
         cfg = self.loader.config
-        schedules = [(r.id, r.match.get("schedule", "")) for r in cfg.rules if r.enabled and r.type is TriggerType.CRON]
+        schedules = [(r.id, r.match.get("schedule", ""), r.match.get("timezone")) for r in cfg.rules if r.enabled and r.type is TriggerType.CRON]
         due = self.scheduler.next_wakeup(schedules, now) if schedules else None
         pulse = now + IDLE_PULSE
         candidates = [pulse] + ([due] if due else [])
