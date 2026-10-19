@@ -13,6 +13,9 @@ export interface RuleView {
   type: string;
   enabled: boolean;
   match: Record<string, unknown>;
+  prompt: string;
+  destination: string;
+  urgent: boolean;
   activity: Activity;
   last_evaluated_at: string | null;
   last_evaluated: Recorded;
@@ -24,6 +27,10 @@ export interface RulesView {
   engine_enabled: boolean;
   rules: RuleView[];
   rules_error: string | null;
+  /** Hash of the rule file; an edit names it, and is refused if stale. */
+  version: string | null;
+  writable: boolean;
+  not_writable_reason: string | null;
 }
 
 export interface FiringView {

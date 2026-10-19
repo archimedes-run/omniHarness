@@ -45,7 +45,8 @@ test("the workflow list makes no per-workflow runs request", async ({
   await page.route("**/api/workflows", (route) =>
     route.fulfill(json([1, 2, 3].map(workflow))),
   );
-  await page.goto("/workspace/workflows");
+  // Phase 2.5: workflows are listed on Automations.
+  await page.goto("/workspace/automations");
 
   await expect(page.getByText("Workflow 3")).toBeVisible();
   await page.waitForTimeout(500);
