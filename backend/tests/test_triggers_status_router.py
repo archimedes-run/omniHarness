@@ -103,4 +103,5 @@ def test_the_gateway_serves_the_status_route() -> None:
     """Registered on the app the gateway actually runs, not only on a test app."""
     from app.gateway.app import create_app
 
-    assert "/api/triggers/status" in {getattr(r, "path", None) for r in create_app().routes}
+    paths = {getattr(r, "path", None) for r in create_app().routes}
+    assert {"/api/triggers/status", "/api/triggers/rules", "/api/triggers/firings"} <= paths

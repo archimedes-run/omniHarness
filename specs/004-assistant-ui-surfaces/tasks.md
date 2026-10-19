@@ -146,9 +146,9 @@ observe it execute exactly once with the claiming worker named in the audit entr
 **Independent Test**: Load a rule that cannot fire, let the engine run, confirm the
 surface shows it evaluating and never firing — visibly different from never evaluated.
 
-- [ ] T051 [US2] Create `backend/app/gateway/routers/triggers.py` with `GET /api/triggers/rules` and `GET /api/triggers/firings`, and register it
-- [ ] T052 [P] [US2] Pass outcome reasons through verbatim rather than summarising them into a status word (FR-019), tested
-- [ ] T053 [P] [US2] Resolve batch siblings at read time so a coalesced firing can name what it was delivered with
+- [X] T051 [US2] Create `backend/app/gateway/routers/triggers.py` with `GET /api/triggers/rules` and `GET /api/triggers/firings`, and register it
+- [X] T052 [P] [US2] Pass outcome reasons through verbatim rather than summarising them into a status word (FR-019), tested
+- [X] T053 [P] [US2] Resolve batch siblings at read time so a coalesced firing can name what it was delivered with
 - [ ] T054 [P] [US2] Create `frontend/src/core/triggers/hooks.ts`
 - [ ] T055 [US2] Create the route at `frontend/src/app/workspace/triggers/page.tsx` with two panels: loaded rules, and a chronological firing log
 - [ ] T056 [US2] Render rules with id, type, enabled, last evaluated and last fired, with never-evaluated, evaluated-never-fired and fired-recently all visually distinct (FR-017)
