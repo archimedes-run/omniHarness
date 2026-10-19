@@ -365,6 +365,12 @@ def create_app() -> FastAPI:
     Returns:
         Configured FastAPI application instance.
     """
+    # Before anything can make an outbound request: Telegram's bot token rides in
+    # the URL path, and httpx logs every URL at INFO (app/gateway/log_redaction.py).
+    from app.gateway import log_redaction
+
+    log_redaction.install()
+
     config = get_gateway_config()
     docs_kwargs = {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"} if config.enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
