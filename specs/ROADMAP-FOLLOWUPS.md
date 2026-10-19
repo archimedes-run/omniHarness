@@ -269,3 +269,7 @@ From `specs/004-assistant-ui-surfaces/gate-scope-audit.md`. Each is a real gap a
 ## `tests/test_mcp*.py` fail in isolation (27 tests, NoReferencedTableError)
 
 Run alone, they fail with `NoReferencedTableError`. In the full suite they pass, because another test's import registers the referenced table's model first. This is the same on `main`, so it was not introduced here. It is a test-isolation defect, not a production one: the gateway imports every model at startup. **Fix:** import the models in the MCP tests' conftest. **Reopen** if CI ever shards the suite.
+
+## `e2e-tests` fails on main: two landing-page specs
+
+`tests/e2e/landing.spec.ts` fails twice: "renders the header and hero section" (element not found) and "Get Started link navigates to workspace" (click timeout). It fails the same way on main's last three runs (7daced7, 14e857e, e3e23e2, back to 2026-08-25), and on PR #39, which touches no landing or e2e file. The job runs only when `frontend/**` changes, so a backend-only PR never shows it. It is red on every frontend PR, and that is the "red build that tells you nothing" problem the backend config step was added to fix. **Fix**: update the spec to the current landing page, or delete it if the landing page is no longer the product's entry.

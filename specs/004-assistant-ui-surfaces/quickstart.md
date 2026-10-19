@@ -81,6 +81,6 @@ be confirmed to fail *at the gate* rather than upstream of it — a run reportin
 | Phase 1 manual Tier 3 `yes` in chat | **not run**: it would perform a real Tier 3 action (delete or decline) on the owner's accounts. The confirm path is exercised end to end by `test_confirm_flow.py` and the multi-worker suite | — |
 | Phase 2 evaluation record and batch identity | locally | 15 passed |
 | `pnpm vitest run` | locally | 18 files, 90 passed |
-| `tests/rendering` (all five surfaces, dark mode, withheld) | locally against the installed headless shell; **and in CI** with the pinned browser | locally 43 passed; CI: see the PR's `theme-rendering` job |
+| `tests/rendering` (all five surfaces, dark mode, withheld) | locally against the installed headless shell; **and in CI** with the pinned browser | locally 43 passed; CI (PR #39, 'Does the theme change what the user sees?'): pass |
 | `tests/gates/` | locally | 10 passed |
 | Each gate seen failing | locally, by sabotage, recorded in each commit message | every sabotage failed **at the gate** (reported `failed`, not skipped or errored), and was green again once reverted |
