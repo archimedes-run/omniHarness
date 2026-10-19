@@ -192,3 +192,22 @@ def test_a_hold_that_emails_other_people_is_tier_3(shipped):
 
 def test_the_shipped_expiry_is_the_documented_guess(shipped):
     assert shipped.expires_after_seconds == 14400
+
+
+def test_confirmation_settings_in_config_yaml_are_rejected_not_ignored() -> None:
+    """ROADMAP-FOLLOWUPS: policy.expires_after_seconds was declared in the config
+    schema and never read. Setting it to 40 left actions confirmable for four
+    hours. Its home is the rules file; config.yaml setting it is an error."""
+    import pytest
+    from pydantic import ValidationError
+
+    from omniharness.config.app_config import AppConfig
+    from omniharness.config.database_config import DatabaseConfig
+    from omniharness.config.policy_config import PolicyConfig
+    from omniharness.config.sandbox_config import SandboxConfig
+
+    assert PolicyConfig(enabled=True).enabled  # positive control: a valid policy section loads
+
+    for key in ("expires_after_seconds", "threshold_targets"):
+        with pytest.raises(ValidationError, match="confirmation:"):
+            AppConfig(sandbox=SandboxConfig(use="omniharness.sandbox.local:LocalSandboxProvider"), database=DatabaseConfig(), policy={"enabled": True, key: 40})
