@@ -89,6 +89,39 @@ def _redactor():
     return _redact
 
 
+def _still_true(fetch_sessions):
+    """FR-013b: is a deferred watcher alert's condition still true at release?
+
+    Asks the watcher again. True only when the same session is still in the
+    same state over the same question; a session that was answered, finished,
+    or moved on to a different question is not re-announced at 07:30 for
+    something resolved at 02:00. (A new question is a new event, with its own
+    fingerprint, and fires on its own.)
+
+    When the watcher cannot be reached, or reports itself unobservable, the
+    answer is NO: unverifiable is not true, and FR-013c's rule — expire rather
+    than deliver blind — applies to "could not look" as much as to "nothing to
+    look at". This was `lambda firing: True`.
+    """
+
+    def _check(firing) -> bool:
+        wanted = firing.event.fields
+        try:
+            payload = fetch_sessions()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("re-check of %s: watcher unreachable, not delivering unverified: %s", firing.event.event_id, exc)
+            return False
+        if not payload.get("observable", False):
+            logger.info("re-check of %s: watcher not observable, not delivering unverified", firing.event.event_id)
+            return False
+        for session in payload.get("sessions", []):
+            if str(session.get("session_id")) == str(firing.event.event_id):
+                return session.get("state") == wanted.get("state") and (session.get("summary") or "") == (wanted.get("last_message") or "")
+        return False
+
+    return _check
+
+
 def _quiet_hours(engine_config) -> EnforcedQuietHours:
     """Adapt the CONFIG QuietHours to the ENFORCING QuietHours.
 
@@ -151,7 +184,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         injector=injector,
         releaser=Releaser(
             redact=_redactor(),
-            still_true=lambda firing: True,
+            still_true=_still_true(fetch_sessions),
             audit=lambda firing, now: audit.record(firing, now),
         ),
         registry=DestinationRegistry(remote=destination, quiet=destination),

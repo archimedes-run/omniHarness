@@ -442,3 +442,35 @@ async def test_a_frequent_schedule_does_not_replay_a_day_of_missed_runs(tmp_path
     assert len(gateway.runs) == 1, f"{len(gateway.runs)} missed runs were replayed"
     [message] = loop.runner.registry.quiet.delivered
     assert "skipped rather than replayed" in message, message
+
+
+# -- FR-013b: re-check at release ----------------------------------------------
+
+
+def _watcher_firing(state: str = "waiting-on-user", summary: str = "Should I pin the version or rewrite the fixture?"):
+    from app.trigger_engine.models import Firing, TriggerEvent
+
+    event = TriggerEvent(type=TriggerType.WATCHER, event_id=SESSION_ID, at=datetime.now(UTC), fields={"session_id": SESSION_ID, "state": state, "last_message": summary, "project": "darcy-repo"})
+    return Firing(rule_id="blocked-session", event=event, prompt="p")
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AUDIT T-1: needs the real watcher feed; with the stub nothing can be confirmed still true")
+@pytest.mark.asyncio
+async def test_a_deferred_alert_whose_session_is_still_waiting_is_delivered(tmp_path, live_watcher) -> None:
+    """Positive control for the re-check: it can say yes."""
+    loop = _build(tmp_path, [WATCHER_RULE])
+
+    assert await loop.runner.offload(loop.runner.releaser.still_true, _watcher_firing()) is True
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_alert_whose_session_moved_on_is_not_delivered(tmp_path, live_watcher) -> None:
+    """The session that blocked overnight and was answered before 07:30 must
+    not be reported at 07:30 (FR-013b). It was: still_true was `lambda: True`.
+
+    Meaningful only alongside the positive control above — until the watcher
+    feed is real, this passes because nothing can be confirmed at all."""
+    loop = _build(tmp_path, [WATCHER_RULE])
+    answered = _watcher_firing(summary="an earlier question the user has since answered")
+
+    assert await loop.runner.offload(loop.runner.releaser.still_true, answered) is False
