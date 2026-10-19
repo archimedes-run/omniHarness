@@ -33,6 +33,9 @@ export interface SessionsView {
   as_of: string | null;
   /** Null when the watcher could not be asked — never [] for that (SC-006). */
   sessions: SessionRow[] | null;
+  /** Set when the watcher did not answer in time and `sessions` is its last
+   * answer, this many seconds old. `reachable` is false alongside it. */
+  last_known_age_seconds?: number | null;
   observe_only: boolean;
   observe_only_reason: string;
 }

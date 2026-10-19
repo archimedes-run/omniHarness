@@ -177,3 +177,83 @@ def test_the_gateway_serves_the_route() -> None:
     from app.gateway.app import create_app
 
     assert "/api/sessions" in {getattr(r, "path", None) for r in create_app().routes}
+
+
+# --- a slow watcher answers fast, with what it last said (Phase 2.5) -----------
+
+
+@pytest.fixture
+def fresh_cache(monkeypatch):
+    from app.gateway.routers import sessions
+
+    monkeypatch.setattr(sessions, "_last_good", None)
+
+
+def _black_hole(port: int):
+    """Accepts connections and never answers: a watcher too busy to reply."""
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", port))
+    srv.listen(16)
+    held: list[socket.socket] = []
+    stop = threading.Event()
+
+    def accept() -> None:
+        srv.settimeout(0.1)
+        while not stop.is_set():
+            try:
+                held.append(srv.accept()[0])
+            except OSError:
+                continue
+
+    threading.Thread(target=accept, daemon=True).start()
+
+    def close() -> None:
+        stop.set()
+        for c in held:
+            c.close()
+        srv.close()
+
+    return close
+
+
+def test_a_silent_watcher_costs_about_two_seconds_not_ten(tmp_path, point_at, fresh_cache) -> None:
+    port = _free_port()
+    close = _black_hole(port)
+    point_at(port)
+    started = time.monotonic()
+    try:
+        body = _get()
+    finally:
+        close()
+
+    assert time.monotonic() - started < 4, "the page waited for the watcher's old 10 s timeout"
+    assert body["reachable"] is False and body["sessions"] is None, "nothing was ever seen, so nothing may be shown"
+    assert body["last_known_age_seconds"] is None
+
+
+def test_a_silent_watcher_shows_the_last_answer_labelled_with_its_age(tmp_path, point_at, fresh_cache) -> None:
+    from session_watcher.server import WatcherService
+
+    _write_session(tmp_path / "root")
+    port = _free_port()
+    server = _serve_watcher(WatcherService(root=tmp_path / "root"), port)
+    point_at(port)
+    try:
+        assert _get()["reachable"] is True  # the last good answer
+    finally:
+        server.should_exit = True
+    time.sleep(0.5)
+
+    dead = _free_port()
+    close = _black_hole(dead)
+    point_at(dead)
+    try:
+        body = _get()
+    finally:
+        close()
+
+    assert body["reachable"] is False, "a stale answer must not claim the watcher answered"
+    assert body["unreachable_detail"], "and must say why it is stale"
+    assert body["last_known_age_seconds"] is not None and body["last_known_age_seconds"] >= 0
+    assert [r["display_state"] for r in body["sessions"]] == ["waiting-on-user"]
