@@ -70,14 +70,23 @@ class ConfigLoader:
     #: this loader produced — including the first load, since a rules change
     #: made while the gateway was down is a change too (FR-042).
     on_change: list = field(default_factory=list, repr=False)
-    _last_text: str | None = field(default=None, repr=False)
+    #: The rules text listeners were last TOLD about — not merely the last
+    #: loaded. A non-notifying read (the inspector) must not swallow a change
+    #: that dispatch has yet to announce.
+    _notified_text: str | None = field(default=None, repr=False)
     #: Why the most recent load did not produce new rules, or None when it did.
     #: With `kept_previous`, the inspector can say the rules shown are the LAST
     #: GOOD ones, still in force, and why the edit was refused (FR-029).
     last_error: str | None = field(default=None, repr=False)
     kept_previous: bool = field(default=False, repr=False)
 
-    def load(self) -> RuleSet:
+    def load(self, *, notify: bool = True) -> RuleSet:
+        """The rules in force, reloaded from the file.
+
+        `notify=False` is for READ surfaces (004 FR-030, SC-014): the policy
+        inspector reads the rules without triggering on_change listeners, whose
+        supersede sweep writes to the pending store. The change is still
+        announced at the next notifying load."""
         try:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -96,8 +105,8 @@ class ConfigLoader:
 
         self._last_good = ruleset
         self.last_error, self.kept_previous = None, False
-        if raw != self._last_text:
-            self._last_text = raw
+        if notify and raw != self._notified_text:
+            self._notified_text = raw
             for listener in self.on_change:
                 try:
                     listener(ruleset)

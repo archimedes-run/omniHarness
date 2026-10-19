@@ -109,3 +109,23 @@ def test_the_gateway_serves_the_routes() -> None:
 
     paths = {getattr(r, "path", None) for r in create_app().routes}
     assert {"/api/policy/rules", "/api/policy/explain", "/api/policy/audit"} <= paths
+
+
+def test_reading_the_inspector_writes_nothing_and_swallows_nothing(inspector) -> None:
+    """FR-030, SC-014. Reading the rules after a change must not run the
+    FR-042 supersede (it writes the pending store) — and must not consume the
+    change either: the next real use still supersedes."""
+    from app.policy.models import Outcome
+
+    middleware = registration.build(inspector.app_config)
+    request = SimpleNamespace(tool_call={"name": "calendar_delete_event", "args": {"event_id": "e1"}, "id": "tc1"}, runtime=None, state={"messages": []})
+    middleware.wrap_tool_call(request, lambda r: pytest.fail("ran at statement"))
+    [action] = middleware.pending.open_actions(middleware.now())
+    inspector.rules.write_text(RULES.replace('calendar_delete_event"\n      tier: 3', 'calendar_delete_event"\n      tier: 1'))
+
+    inspector.client.get("/api/policy/rules")
+    _explain(inspector.client, "calendar_delete_event")
+
+    assert middleware.pending.get(action.id).outcome is None, "a read surface resolved a pending action"
+    middleware.loader.load()  # the next real use, as dispatch does it
+    assert middleware.pending.get(action.id).outcome is Outcome.SUPERSEDED, "the read swallowed the change"

@@ -50,7 +50,7 @@ async def policy_explain(request: Request, tool: str = Query(..., min_length=1),
         raise HTTPException(status_code=422, detail=f"args must be a JSON object: {exc}") from exc
     if not isinstance(arguments, dict):
         raise HTTPException(status_code=422, detail="args must be a JSON object")
-    return tier_check(tool, arguments, shared_loader(_policy_config()).load())
+    return tier_check(tool, arguments, shared_loader(_policy_config()).load(notify=False))
 
 
 @router.get("/audit", response_model=list[Tier3Execution])

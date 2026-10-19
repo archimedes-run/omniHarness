@@ -208,8 +208,8 @@ feature exposed.
 
 ### Cross-cutting
 
-- [ ] T083 [P] Write `backend/tests/gates/test_read_surfaces_do_not_write.py` asserting the sessions, triggers and policy routers contain no write call (FR-030, SC-014). This also discharges FR-036 — a rule editor would have to write through one of these routers
-- [ ] T084 SABOTAGE T083: add a write to a read router and confirm the gate fails at the assertion naming the file
+- [X] T083 [P] Write `backend/tests/gates/test_read_surfaces_do_not_write.py` asserting the sessions, triggers and policy routers contain no write call (FR-030, SC-014). This also discharges FR-036 — a rule editor would have to write through one of these routers
+- [X] T084 SABOTAGE T083: add a write to a read router and confirm the gate fails at the assertion naming the file
 - [ ] T085 Promote the six accessibility rules from warn to error in `frontend/eslint.config.mjs` (FR-034)
 - [ ] T086 SABOTAGE T085: introduce a deliberate a11y violation and confirm the build fails on it (SC-017), then remove it
 - [ ] T087 [P] Extend `frontend/tests/rendering/theme.spec.ts` to assert the computed background changes on every one of the four new surfaces (SC-013)

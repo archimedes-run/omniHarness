@@ -64,7 +64,7 @@ class Tier3Execution(BaseModel):
 
 
 def rules_in_force(loader: ConfigLoader) -> RulesInForce:
-    ruleset = loader.load()
+    ruleset = loader.load(notify=False)  # a read surface writes nothing (FR-030)
     return RulesInForce(
         source_file=ruleset.source_file or str(loader.path),
         rules=[RuleView(pattern=r.pattern, tier=int(r.tier), source_line=r.source_line, exceptions=[ExceptionView(tier=int(e.tier), when=dict(e.when), unless=dict(e.unless)) for e in r.exceptions]) for r in ruleset.rules],
