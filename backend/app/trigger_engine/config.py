@@ -139,7 +139,10 @@ def parse(doc: dict) -> EngineConfig:
     d = doc.get("defaults") or {}
 
     def secs(key: str) -> timedelta:
-        return timedelta(seconds=int(d.get(key, DEFAULTS.get(key, 0)) or DEFAULTS.get(key, 0)))
+        # `d.get(key)` alone decides presence. `int(v) or DEFAULT` read an
+        # explicit 0 as unset, so "coalesce_window_seconds: 0" became 60.
+        value = d.get(key)
+        return timedelta(seconds=int(DEFAULTS.get(key, 0) if value is None else value))
 
     return EngineConfig(
         rules=rules,

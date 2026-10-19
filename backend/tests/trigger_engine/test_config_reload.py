@@ -120,3 +120,18 @@ def test_unreadable_file_keeps_previous_config(rule_file, a_rule) -> None:
     f.unlink()
     assert [r.id for r in loader.load().rules] == ["r1"]
     assert loader.last_error
+
+
+def test_a_zero_in_defaults_means_zero_not_the_default(tmp_path) -> None:
+    """`int(value) or DEFAULT` read an explicit 0 as 'unset', so a rule file
+    could not turn coalescing off: 0 seconds silently became 60."""
+    import json
+
+    from app.trigger_engine.config import ConfigLoader
+
+    f = tmp_path / "rules.json"
+    f.write_text(json.dumps({"defaults": {"coalesce_window_seconds": 0}, "rules": []}))
+
+    cfg = ConfigLoader(path=f).load()
+
+    assert cfg.coalesce_window.total_seconds() == 0
