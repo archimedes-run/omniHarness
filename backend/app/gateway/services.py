@@ -31,6 +31,7 @@ from omniharness.runtime import (
     StreamBridge,
     UnsupportedStrategyError,
     run_agent,
+    serialize_channel_values,
 )
 
 logger = logging.getLogger(__name__)
@@ -464,3 +465,50 @@ async def sse_consumer(
         if record.status in (RunStatus.pending, RunStatus.running):
             if record.on_disconnect == DisconnectMode.cancel:
                 await run_mgr.cancel(record.run_id)
+
+
+#: How a run that did not succeed is reported by the wait routes. Non-2xx, so a
+#: caller checking only the status code is not told a failed run succeeded.
+_UNSUCCESSFUL_RUN_STATUS_CODES: dict[str, int] = {
+    "error": 500,
+    "timeout": 504,
+    "interrupted": 409,
+}
+
+
+async def wait_result(record: RunRecord, thread_id: str, request: Request) -> dict:
+    """Block until the run finishes; return its final state, or raise.
+
+    The body of both `runs/wait` routes. Each used to return the thread's
+    checkpoint whenever one existed, without looking at the run — so a run that
+    died before starting answered `200 {}`, indistinguishable from "the run
+    produced no messages" (ROADMAP-FOLLOWUPS, "A run that errors returns HTTP
+    200"). A run that did not succeed now raises with its status and error.
+    """
+    from app.gateway.deps import get_checkpointer
+
+    if record.task is not None:
+        try:
+            await record.task
+        except asyncio.CancelledError:
+            pass
+
+    status = getattr(record.status, "value", record.status)
+    if status in _UNSUCCESSFUL_RUN_STATUS_CODES:
+        raise HTTPException(
+            status_code=_UNSUCCESSFUL_RUN_STATUS_CODES[status],
+            detail={"run_id": record.run_id, "status": status, "error": record.error or ""},
+        )
+
+    checkpointer = get_checkpointer(request)
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+        if checkpoint_tuple is not None:
+            checkpoint = getattr(checkpoint_tuple, "checkpoint", {}) or {}
+            channel_values = checkpoint.get("channel_values", {})
+            return serialize_channel_values(channel_values)
+    except Exception:
+        logger.exception("Failed to fetch final state for run %s", record.run_id)
+
+    return {"status": status, "error": record.error}

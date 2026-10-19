@@ -21,9 +21,9 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
-from app.gateway.deps import get_checkpointer, get_current_user, get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
-from app.gateway.services import sse_consumer, start_run
-from omniharness.runtime import RunRecord, serialize_channel_values
+from app.gateway.deps import get_current_user, get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
+from app.gateway.services import sse_consumer, start_run, wait_result
+from omniharness.runtime import RunRecord
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/threads", tags=["runs"])
@@ -143,24 +143,7 @@ async def wait_run(thread_id: str, body: RunCreateRequest, request: Request) -> 
     """Create a run and block until it completes, returning the final state."""
     record = await start_run(body, thread_id, request)
 
-    if record.task is not None:
-        try:
-            await record.task
-        except asyncio.CancelledError:
-            pass
-
-    checkpointer = get_checkpointer(request)
-    config = {"configurable": {"thread_id": thread_id}}
-    try:
-        checkpoint_tuple = await checkpointer.aget_tuple(config)
-        if checkpoint_tuple is not None:
-            checkpoint = getattr(checkpoint_tuple, "checkpoint", {}) or {}
-            channel_values = checkpoint.get("channel_values", {})
-            return serialize_channel_values(channel_values)
-    except Exception:
-        logger.exception("Failed to fetch final state for run %s", record.run_id)
-
-    return {"status": record.status.value, "error": record.error}
+    return await wait_result(record, thread_id, request)
 
 
 @router.get("/{thread_id}/runs", response_model=list[RunResponse])

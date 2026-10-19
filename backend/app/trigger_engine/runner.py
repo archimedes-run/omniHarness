@@ -31,6 +31,13 @@ from .threads import RuleThreadMap
 
 logger = logging.getLogger(__name__)
 
+#: Tries an event gets before it is settled as FAILED. See RuleRunner._give_up.
+MAX_ATTEMPTS = 3
+
+
+class EmptyReply(RuntimeError):
+    """The run succeeded and said nothing a person could be sent."""
+
 
 @dataclass
 class RuleRunner:
@@ -66,6 +73,8 @@ class RuleRunner:
     #: WAITING for a rule that overruns, but cannot stop the thread. A hung rule
     #: delays the rules queued behind it until its HTTP timeout, instead of
     #: hanging the gateway — which is what it did before.
+    #: Failed attempts per event fingerprint, for the retry rule in `_give_up`.
+    attempts: dict[str, int] = field(default_factory=dict)
     worker: Executor = field(default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="trigger-engine"))
 
     async def offload(self, fn: Callable, *args):
@@ -76,7 +85,11 @@ class RuleRunner:
         return await self.offload(self.run_blocking, rule, now)
 
     def run_blocking(self, rule: Rule, now: datetime) -> list[Firing]:
-        """`run`, on the calling thread. Only the worker thread should call this."""
+        """`run`, on the calling thread. Only the worker thread should call this.
+
+        Returns the firings this call SETTLED: routed toward delivery, or given
+        up on after the last retry. The loop marks a cron instant done for each.
+        """
         source = self.sources.get(rule.type)
         if source is None:
             logger.debug("rule %s: no source for %s", rule.id, rule.type)
@@ -103,11 +116,15 @@ class RuleRunner:
                 if self.default_tools:
                     self.injector.configure_tools(firing.thread_id, list(self.default_tools))
                 raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
+                if not raw.strip() and rule.type is not TriggerType.WATCHER:
+                    # A watcher alert still says something without a reply (its
+                    # header names the session); anything else would arrive as
+                    # "(the assistant returned nothing)", which is not a message.
+                    raise EmptyReply("the run completed with no reply")
                 firing.reply = compose_proactive(rule, event, raw)
             except Exception as exc:  # noqa: BLE001 — one firing, not the rule
-                firing.resolve(Outcome.FAILED, f"{type(exc).__name__}: {exc}")
-                self.audit.record(firing, now)
-                logger.exception("rule %s: firing failed", rule.id)
+                if self._give_up(rule, firing, key, exc, now):
+                    fired.append(firing)
                 continue
 
             # Recorded BEFORE delivery: a crash between injection and delivery
@@ -119,6 +136,35 @@ class RuleRunner:
             self._route(rule, firing, now)
             fired.append(firing)
         return fired
+
+    def _give_up(self, rule: Rule, firing: Firing, key: str, exc: Exception, now: datetime) -> bool:
+        """Resolve a failed firing. Returns True when the event is settled.
+
+        THE RETRY RULE, stated because a failed run used to be delivered as an
+        empty message and then never retried: an event gets MAX_ATTEMPTS tries,
+        one per cycle. Each failure is recorded FAILED with the run's own
+        reason, and nothing is delivered. The event is retried only if its
+        source still produces it on the next cycle — a watcher session that
+        stopped waiting is not retried. After the last attempt the event is
+        fingerprinted, so it never fires again, and returned as settled, so a
+        cron instant is marked done rather than retried forever.
+
+        Attempt counts are held in memory: a restart grants an event up to
+        MAX_ATTEMPTS more tries. Bounded, and cheaper than another store.
+        """
+        n = self.attempts.get(key, 0) + 1
+        reason = f"{type(exc).__name__}: {exc}"
+        if n >= MAX_ATTEMPTS:
+            self.attempts.pop(key, None)
+            self.fingerprints.record(key, now)
+            firing.resolve(Outcome.FAILED, f"gave up after {n} attempts: {reason}")
+            logger.error("rule %s: gave up on %s after %d attempts: %s", rule.id, firing.event.event_id, n, reason)
+        else:
+            self.attempts[key] = n
+            firing.resolve(Outcome.FAILED, f"attempt {n} of {MAX_ATTEMPTS}: {reason}; retrying on the next cycle")
+            logger.warning("rule %s: attempt %d of %d failed: %s", rule.id, n, MAX_ATTEMPTS, reason)
+        self.audit.record(firing, now)
+        return n >= MAX_ATTEMPTS
 
     # -- politeness (Article VII) ------------------------------------------
 

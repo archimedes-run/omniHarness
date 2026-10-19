@@ -155,6 +155,14 @@ class _FakeGateway:
         self.threads: list[dict] = []
         self.runs: list[tuple[str, dict]] = []
         self.reply: dict = {"messages": [{"type": "ai", "content": "darcy-repo needs a decision on the fixture."}]}
+        self.status_code = 200
+        self.run_seconds = self.RUN_SECONDS
+
+    def fail_runs(self, error: str) -> None:
+        """Answer runs/wait the way the gateway does for a failed run."""
+        self.status_code = 500
+        self.reply = {"detail": {"run_id": "run-x", "status": "error", "error": error}}
+        self.run_seconds = 0.0
 
     def app(self):
         from starlette.applications import Starlette
@@ -168,8 +176,8 @@ class _FakeGateway:
 
         async def runs_wait(request: Request):
             self.runs.append((request.path_params["tid"], await request.json()))
-            await asyncio.sleep(self.RUN_SECONDS)
-            return JSONResponse(self.reply)
+            await asyncio.sleep(self.run_seconds)
+            return JSONResponse(self.reply, status_code=self.status_code)
 
         return Starlette(
             routes=[
@@ -362,3 +370,56 @@ async def test_unknown_busyness_holds_rather_than_interrupts(tmp_path) -> None:
     loop = _build(tmp_path, [WATCHER_RULE], run_store=_Down())
 
     assert await loop.runner.offload(loop.runner._is_mid_exchange, "rule-thread") is True
+
+
+# -- a failed run is a failure, not a message ----------------------------------
+
+
+def _audit(loop) -> list[dict]:
+    return loop.runner.audit.entries()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_resolves_failed_with_its_reason_and_is_not_delivered(tmp_path, gateway) -> None:
+    """It used to arrive as '(the assistant returned nothing)', and the event
+    was fingerprinted so it never fired again."""
+    gateway.fail_runs("FileNotFoundError: Agent directory not found")
+    loop = _build(tmp_path, [_cron_rule_due_once()])
+
+    await loop.cycle()
+
+    assert len(gateway.runs) == 1, "positive control: the run was attempted"
+    [entry] = _audit(loop)
+    assert entry["outcome"] == "failed"
+    assert "Agent directory not found" in entry["reason"]
+    assert "attempt 1 of 3" in entry["reason"]
+    assert loop.runner.registry.quiet.delivered == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_is_retried_three_times_then_given_up(tmp_path, gateway) -> None:
+    """The stated retry rule: up to three attempts per event, one per cycle,
+    then the event is settled as FAILED and never attempted again."""
+    gateway.fail_runs("RuntimeError: model unavailable")
+    loop = _build(tmp_path, [_cron_rule_due_once()])
+
+    for _ in range(5):
+        await loop.cycle()
+
+    assert len(gateway.runs) == 3, f"expected exactly three attempts, saw {len(gateway.runs)}"
+    reasons = [e["reason"] for e in _audit(loop)]
+    assert reasons[-1].startswith("gave up after 3 attempts"), reasons
+    assert loop.runner.registry.quiet.delivered == []
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_no_reply_is_not_delivered_as_an_empty_message(tmp_path, gateway) -> None:
+    gateway.reply = {"messages": [{"type": "human", "content": "Brief me"}]}
+    loop = _build(tmp_path, [_cron_rule_due_once()])
+
+    await loop.cycle()
+
+    [entry] = _audit(loop)
+    assert entry["outcome"] == "failed"
+    assert "no reply" in entry["reason"]
+    assert loop.runner.registry.quiet.delivered == []

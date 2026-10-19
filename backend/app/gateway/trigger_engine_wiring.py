@@ -199,10 +199,31 @@ def _gateway_call(method: str):
         url = f"{_gateway_base_url()}{path}"
         with httpx.Client(timeout=120.0) as client:
             resp = client.request(method, url, json=body, headers=create_internal_auth_headers())
-            resp.raise_for_status()
+            if resp.is_error:
+                raise GatewayCallFailed(method, path, resp)
             return resp.json() if resp.content else {}
 
     return _call
+
+
+class GatewayCallFailed(RuntimeError):
+    """A gateway call answered non-2xx, with the gateway's own explanation.
+
+    For a run, that is the run's status and error (services.wait_result) — the
+    reason a user reads in the audit, rather than httpx's 'Server error 500 for
+    url ...', which names the transport and not what went wrong.
+    """
+
+    def __init__(self, method: str, path: str, resp) -> None:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except ValueError:
+            detail = resp.text
+        if isinstance(detail, dict) and "status" in detail:
+            explained = f"the agent run ended '{detail['status']}': {detail.get('error') or 'no error recorded'}"
+        else:
+            explained = f"{method} {path} answered {resp.status_code}: {detail}"
+        super().__init__(explained)
 
 
 def _fetch_watcher_sessions() -> dict:
