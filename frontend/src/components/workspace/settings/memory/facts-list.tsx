@@ -66,7 +66,10 @@ export function FactsList({ facts }: { facts: MemoryFact[] }) {
           No fact matches “{query}”.
         </p>
       ) : (
-        <ul className="divide-border divide-y" data-testid="facts">
+        <ul
+          className="bg-card border-border divide-border divide-y overflow-hidden rounded-xl border"
+          data-testid="facts"
+        >
           {shown.map((fact) => (
             <FactRow key={fact.id} fact={fact} />
           ))}
@@ -107,7 +110,10 @@ function FactRow({ fact }: { fact: MemoryFact }) {
     });
 
   return (
-    <li className="group flex items-start gap-3 py-3" data-testid="fact">
+    <li
+      className="group flex items-start gap-3 px-[18px] py-3"
+      data-testid="fact"
+    >
       <div className="min-w-0 flex-1 space-y-1">
         {editing ? (
           <form

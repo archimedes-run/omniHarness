@@ -22,7 +22,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import {
+  UnderlineTab,
+  UnderlineTabsList,
+} from "@/components/workspace/page-kit";
 import { useI18n } from "@/core/i18n/hooks";
 import { exportMemory } from "@/core/memory/api";
 import { useImportMemory, useMemory } from "@/core/memory/hooks";
@@ -118,87 +122,91 @@ export function MemoryPage() {
     : [];
 
   return (
-    <div className="space-y-5" data-testid="memory-page">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">{t.settings.memory.title}</h1>
-        <p className="text-muted-foreground text-sm">
-          {t.settings.memory.description}
-        </p>
-      </header>
-
-      <Tabs value={tab} onValueChange={setTab} className="gap-4">
-        {/* The toolbar: tabs on the left, actions on the right, wrapping as a
-            whole when the width runs out, never overlapping. */}
-        <div
-          className="flex flex-wrap items-center justify-between gap-3"
-          data-testid="memory-toolbar"
-        >
-          <TabsList>
-            <TabsTrigger value="summary">Summary</TabsTrigger>
-            <TabsTrigger value="facts">
-              Facts
-              {memory && memory.facts.length > 0 && (
-                <span className="text-muted-foreground ml-1 tabular-nums">
-                  {memory.facts.length}
-                </span>
-              )}
-            </TabsTrigger>
-          </TabsList>
-          <div className="flex items-center gap-2">
-            <Button onClick={() => setAdding(true)} disabled={!memory}>
-              <PlusIcon />
-              Add fact
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  aria-label="More memory actions"
-                >
-                  <EllipsisIcon />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-52">
-                <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
-                  <UploadIcon />
-                  Import…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void handleExport()}>
-                  <DownloadIcon />
-                  Export
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => setCleaning(true)}
-                  disabled={!memory || isEmpty(memory)}
-                >
-                  <SparklesIcon />
-                  Clean up memory…
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() => setClearing(true)}
-                  disabled={!memory || isEmpty(memory)}
-                >
-                  <Trash2Icon />
-                  Clear all memory…
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <input
-              ref={fileInput}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void handleImport(file);
-                e.target.value = "";
-              }}
-            />
-          </div>
+    <div className="flex flex-col gap-5" data-testid="memory-page">
+      {/* The board's header: title and line on the left, one primary action
+          and the ⋯ menu on the right, wrapping as a whole, never overlapping
+          the tabs below. */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-0 flex-[1_1_320px]">
+          <h1 className="text-2xl font-semibold">{t.settings.memory.title}</h1>
+          <p className="text-muted-foreground mt-1">
+            What OmniHarness has learned about you. Edit anything that&apos;s
+            wrong.
+          </p>
         </div>
+        <div className="flex items-center gap-2" data-testid="memory-toolbar">
+          <Button
+            className="rounded-lg font-semibold max-md:min-h-11"
+            onClick={() => setAdding(true)}
+            disabled={!memory}
+          >
+            <PlusIcon />
+            Add fact
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="border-border-strong rounded-lg max-md:size-11"
+                aria-label="More memory actions"
+              >
+                <EllipsisIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
+                <UploadIcon />
+                Import…
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleExport()}>
+                <DownloadIcon />
+                Export
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => setCleaning(true)}
+                disabled={!memory || isEmpty(memory)}
+              >
+                <SparklesIcon />
+                Clean up memory…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => setClearing(true)}
+                disabled={!memory || isEmpty(memory)}
+              >
+                <Trash2Icon />
+                Clear all memory…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleImport(file);
+              e.target.value = "";
+            }}
+          />
+        </div>
+      </div>
+
+      <Tabs value={tab} onValueChange={setTab} className="gap-5">
+        <UnderlineTabsList aria-label="Memory views">
+          <UnderlineTab value="summary">Summary</UnderlineTab>
+          <UnderlineTab value="facts">
+            Facts
+            {memory && memory.facts.length > 0 && (
+              <span className="text-muted-foreground tabular-nums">
+                · {memory.facts.length}
+              </span>
+            )}
+          </UnderlineTab>
+        </UnderlineTabsList>
 
         {error != null && (
           <Alert variant="destructive">
@@ -228,7 +236,7 @@ export function MemoryPage() {
 
         {memory && !isEmpty(memory) && (
           <>
-            <TabsContent value="summary" className="space-y-3">
+            <TabsContent value="summary" className="space-y-5">
               {MAIN.map((s) => (
                 <SummaryCard
                   key={s.key}

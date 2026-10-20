@@ -21,7 +21,8 @@ export function PageColumn({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full flex-col gap-[22px] px-4 pt-8 pb-10 md:px-8",
+        // 14 px body, as the boards: explicit sizes override it.
+        "mx-auto flex w-full flex-col gap-[22px] px-4 pt-8 pb-10 text-sm md:px-8",
         width === "wide" ? "max-w-[1040px]" : "max-w-[760px] gap-5",
         className,
       )}

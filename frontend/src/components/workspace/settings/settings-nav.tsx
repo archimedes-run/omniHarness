@@ -1,72 +1,51 @@
 "use client";
 
-import {
-  ActivityIcon,
-  BellIcon,
-  BrainIcon,
-  InfoIcon,
-  PaletteIcon,
-  ShieldIcon,
-  SparklesIcon,
-  UserIcon,
-  WrenchIcon,
-  type LucideIcon,
-} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useI18n } from "@/core/i18n/hooks";
+import { usePolicyRules } from "@/core/policy/hooks";
 import { cn } from "@/lib/utils";
 
+/** The board's order (Feature 006 "Settings"). Tools and Skills keep their
+ * routes (/workspace/settings/tools, /skills: the command palette links the
+ * latter) but are not listed: MCP Suite and the Skills panel own them now. */
 export const SETTINGS_SECTIONS = [
-  "safety",
-  "activity",
   "account",
-  "appearance",
-  "notification",
   "memory",
-  "tools",
-  "skills",
+  "safety",
+  "notification",
+  "activity",
+  "appearance",
   "about",
 ] as const;
 export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number];
-
-const ICONS: Record<SettingsSectionId, LucideIcon> = {
-  safety: ShieldIcon,
-  activity: ActivityIcon,
-  account: UserIcon,
-  appearance: PaletteIcon,
-  notification: BellIcon,
-  memory: BrainIcon,
-  tools: WrenchIcon,
-  skills: SparklesIcon,
-  about: InfoIcon,
-};
 
 export function settingsHref(section: SettingsSectionId) {
   return `/workspace/settings/${section}`;
 }
 
 /** The settings sub-navigation: one page per section, so each section's code
- * loads with its route (the old dialog loaded all of them, everywhere). */
+ * loads with its route. */
 export function SettingsNav() {
   const { t } = useI18n();
   const pathname = usePathname();
+  // The rules in force are not the ones last written, or cannot be read:
+  // Safety says so without being opened.
+  const { rules } = usePolicyRules();
+  const attention = rules?.kept_previous === true || rules?.unreadable === true;
   const label: Record<SettingsSectionId, string> = {
-    safety: "Safety",
-    activity: "Activity log",
     account: t.settings.sections.account,
-    appearance: t.settings.sections.appearance,
-    notification: t.settings.sections.notification,
     memory: t.settings.sections.memory,
-    tools: t.settings.sections.tools,
-    skills: t.settings.sections.skills,
+    safety: "Safety",
+    notification: "Notifications",
+    activity: "Activity log",
+    appearance: t.settings.sections.appearance,
     about: t.settings.sections.about,
   };
   return (
     <nav aria-label="Settings" className="flex flex-col gap-0.5">
       {SETTINGS_SECTIONS.map((id) => {
-        const Icon = ICONS[id];
         const active = pathname === settingsHref(id);
         return (
           <Link
@@ -74,14 +53,20 @@ export function SettingsNav() {
             href={settingsHref(id)}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "flex items-center gap-2 rounded-md px-3 py-2 text-sm",
+              "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm max-md:min-h-11",
               active
-                ? "bg-accent text-accent-foreground font-medium"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                ? "bg-surface-raised text-foreground font-medium"
+                : "text-foreground-2 hover:bg-accent hover:text-foreground",
             )}
           >
-            <Icon className="size-4" />
-            {label[id]}
+            <span className="flex-1">{label[id]}</span>
+            {id === "safety" && attention && (
+              <span
+                className="bg-destructive size-1.5 rounded-full"
+                role="img"
+                aria-label="needs attention"
+              />
+            )}
           </Link>
         );
       })}

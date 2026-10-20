@@ -2,6 +2,7 @@
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertRow } from "@/components/workspace/inbox/alert-row";
+import { PageColumn, PageHeader } from "@/components/workspace/page-kit";
 import { Tier3AuditList } from "@/components/workspace/policy/tier3-audit";
 import { FiringRow } from "@/components/workspace/triggers/firing-row";
 import { useInboxAlerts } from "@/core/inbox/hooks";
@@ -21,17 +22,14 @@ export default function ActivityLogPage() {
     (a) => a.state === "delivered" || a.state === "suppressed",
   );
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-8 p-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Activity log</h1>
-        <p className="text-muted-foreground text-sm">
-          What I did on my own initiative, and what I did with your
-          confirmation.
-        </p>
-      </header>
+    <PageColumn width="narrow">
+      <PageHeader
+        title="Activity log"
+        description="What I did on my own initiative, and what I did with your confirmation."
+      />
 
-      <section className="space-y-2" aria-labelledby="firings-heading">
-        <h2 id="firings-heading" className="text-sm font-semibold">
+      <section className="space-y-3" aria-labelledby="firings-heading">
+        <h2 id="firings-heading" className="text-[15px] font-semibold">
           Automation firings
         </h2>
         {firings.error != null && (
@@ -55,8 +53,8 @@ export default function ActivityLogPage() {
         </ul>
       </section>
 
-      <section className="space-y-2" aria-labelledby="alerts-heading">
-        <h2 id="alerts-heading" className="text-sm font-semibold">
+      <section className="space-y-3" aria-labelledby="alerts-heading">
+        <h2 id="alerts-heading" className="text-[15px] font-semibold">
           Alerts, last 24 hours
         </h2>
         {alertsError != null && (
@@ -83,6 +81,6 @@ export default function ActivityLogPage() {
       </section>
 
       <Tier3AuditList />
-    </div>
+    </PageColumn>
   );
 }

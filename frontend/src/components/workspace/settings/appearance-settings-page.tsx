@@ -116,7 +116,7 @@ export function AppearanceSettingsPage() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <SettingsSection
         title={t.settings.appearance.themeTitle}
         description={t.settings.appearance.themeDescription}
