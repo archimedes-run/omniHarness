@@ -175,7 +175,8 @@ class ConfirmationFlow:
         if action is None:
             return FlowResult(UNRECOGNISED, action_id, "no such action", expired_meanwhile=expired)
         if action.outcome is not None:
-            return FlowResult(ALREADY_RESOLVED, action_id, f"already resolved ({action.outcome})", expired_meanwhile=expired)
+            why = f": {action.outcome_reason}" if action.outcome == Outcome.DECLINED and action.outcome_reason else ""
+            return FlowResult(ALREADY_RESOLVED, action_id, f"already resolved ({action.outcome}){why}", expired_meanwhile=expired)
         if action.is_expired(now):
             return FlowResult(EXPIRED, action_id, "that action expired before it was confirmed", expired_meanwhile=expired)
         verdict = Verdict.CONFIRM if confirm else Verdict.DECLINE

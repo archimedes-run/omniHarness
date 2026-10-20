@@ -172,8 +172,13 @@ def unavailable_reason(action: PendingAction, selection: list[str] | None, *, ap
     if not action.surface:
         return None
     config = app_config or get_app_config()
-    if action.tool_name in _names(surface_now(action.surface, selection), config):
-        return None
+    try:
+        if action.tool_name in _names(surface_now(action.surface, selection), config):
+            return None
+    except LookupError as exc:
+        # The proposing agent was deleted (or its surface cannot be rebuilt):
+        # a refusal with the reason, not an exception out of the route (500).
+        return f"{action.tool_name} cannot run: {exc}. Nothing has run."
     if selection is not None and action.tool_name in _names(action.surface, config):
         return f"{action.tool_name} is no longer available in this chat: its source was removed from the chat after this was proposed. Nothing has run. Add it back to confirm."
     return f"{action.tool_name} is not available right now: its source is disconnected or cannot be reached. Nothing has run."

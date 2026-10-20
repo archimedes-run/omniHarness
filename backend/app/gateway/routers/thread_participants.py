@@ -44,6 +44,9 @@ class Participant(BaseModel):
 class ParticipantsResponse(BaseModel):
     thread_id: str
     participants: list[Participant] = Field(default_factory=list)
+    #: Removing an agent refuses what it was waiting on: these pending actions
+    #: (ids) were resolved, never run.
+    refused_actions: list[str] = Field(default_factory=list)
 
 
 class AddParticipantRequest(BaseModel):
@@ -128,4 +131,21 @@ async def remove_participant(thread_id: str, agent: str, request: Request) -> Pa
     names = [name for name in await stored_participants(store, thread_id, user_id) if name != agent]
     if await store.get(thread_id, user_id=user_id) is not None:
         await store.update_metadata(thread_id, {PARTICIPANTS_KEY: names}, user_id=user_id)
-    return _view(thread_id, names, user_id)
+    view = _view(thread_id, names, user_id)
+    view.refused_actions = _refuse_pending(thread_id, agent)
+    return view
+
+
+def _refuse_pending(thread_id: str, agent: str) -> list[str]:
+    """Taking an agent out of a chat refuses what it is waiting on there: a
+    removed agent's confirmation card must not stay a way to run its call."""
+    from datetime import UTC, datetime
+
+    from app.policy.registration import build
+    from app.policy.supersede import refuse_removed_agent
+    from omniharness.config import get_app_config
+
+    middleware = build(get_app_config())
+    if middleware is None:
+        return []  # no policy layer: nothing can be pending
+    return [action.id for action in refuse_removed_agent(middleware.pending, thread_id, agent, datetime.now(UTC))]
