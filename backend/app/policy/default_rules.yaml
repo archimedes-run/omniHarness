@@ -38,7 +38,8 @@
 # undo what the call does? A standing grant (app/policy/grants.py) only ever
 # covers a reversible Tier 2 call, and only matters in a scheduled run: there,
 # a grant-governed Tier 2 call runs only under a grant. Tier 3 always asks.
-# Every rule carries one; a rule without it counts as irreversible. An
+# Hand-written rules carry one; the generated connector rules below do not,
+# and a rule without it counts as irreversible. An
 # exception that raises the tier makes that call irreversible too.
 
 policy:
