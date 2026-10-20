@@ -202,8 +202,7 @@ class PolicyMiddleware(AgentMiddleware):
         agent read caused (a tool result, an email, a page, a subagent's
         output; feature 003's lineage, FR-006) is a SUGGESTION: it is stated
         on a card and runs only if the user confirms it there. None: run it."""
-        from .grants import governed_by_grants
-        from .lineage import untrusted_in_history
+        from .grants import change_signatures, governed_by_grants
 
         if not governed_by_grants(decision.tool_name):
             return None
@@ -216,11 +215,15 @@ class PolicyMiddleware(AgentMiddleware):
         if origin != "user":
             logger.info("policy: %s was suggested by %s (%s); it waits on its card", decision.tool_name, origin, source or via or "-")
             return "This is a suggestion: it came from something I read, not from your message, so I did not do it. It runs only if you confirm it here."
-        state = getattr(request, "state", None) or {}
-        earlier = untrusted_in_history(state.get("messages") if isinstance(state, dict) else None)
-        if earlier:
-            logger.info("policy: %s in a conversation that read untrusted content (%s); it waits on its card", decision.tool_name, ", ".join(earlier))
-            return f"This is a suggestion: earlier in this conversation I read content from {', '.join(earlier)}, which could be steering me, so I did not do it. It runs only if you confirm it here."
+        # Per turn (user decision 2026-10-20): content an EARLIER turn read does
+        # not taint this one. But a write the user declined in this chat stays
+        # declined: the same write (same op, target and text, normalised) can
+        # never run later as if the user had asked for it.
+        wanted = change_signatures(self._arguments(request))
+        for declined in self.pending.declined_in_thread(self._thread_id(request), self._owner_id(request)):
+            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments):
+                logger.info("policy: %s matches a write declined earlier (%s); it waits on its card", decision.tool_name, declined.id)
+                return "This is a suggestion: you declined this earlier in this chat, so I did not do it. It runs only if you confirm it here."
         return None
 
     @contextmanager

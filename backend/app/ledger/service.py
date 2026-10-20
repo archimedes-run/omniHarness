@@ -202,8 +202,10 @@ class LedgerService:
     # ---- undo: a write the assistant made without a confirmation -----------
 
     #: Who may have made a write that Undo reverts: the assistant at Tier 2
-    #: (disclosed in its reply) or under a standing grant.
-    UNDOABLE_ACTORS = ("assistant_disclosed", "assistant_granted")
+    #: (disclosed in its reply), under a standing grant, or a confirmed
+    #: "Apply all" batch. Only changes carrying a "w-" write id are reachable,
+    #: so a plan confirmed on its own card is not.
+    UNDOABLE_ACTORS = ("assistant_disclosed", "assistant_granted", "assistant_confirmed")
 
     def undo_write(self, *, user_id: str, write_id: str) -> list[str]:
         """Revert every change one assistant write made, newest first, in one

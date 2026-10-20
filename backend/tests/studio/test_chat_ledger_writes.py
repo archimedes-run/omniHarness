@@ -46,7 +46,7 @@ def _create(title: str, call_id: str = "c1") -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_task", "project": "Launch", "title": title}]}, "id": call_id}])
 
 
-def _chat(studio, steps: list[AIMessage], said: str, thread: str = "t-chat") -> dict:
+def _chat(studio, steps: list[AIMessage], said: str, thread: str = "t-chat", checkpointer=None) -> dict:
     from omniharness.agents.middlewares.policy_hook import build_policy_middleware
     from omniharness.config import get_app_config
     from omniharness.tools.tools import get_available_tools
@@ -54,8 +54,9 @@ def _chat(studio, steps: list[AIMessage], said: str, thread: str = "t-chat") -> 
     config = get_app_config()
     ledger = [t for t in get_available_tools(app_config=config, include_mcp=False) if t.name == "ledger_apply"]
     model = ToolCapableFake(messages=iter([*steps, AIMessage(content="Done."), AIMessage(content="unused")]))
-    agent = create_agent(model=model, tools=[web_fetch, gmail_read, *ledger], middleware=[build_policy_middleware(config)])
-    return agent.invoke({"messages": [user_turn(said)]}, context={"thread_id": thread, "user_id": studio.user_id})
+    agent = create_agent(model=model, tools=[web_fetch, gmail_read, *ledger], middleware=[build_policy_middleware(config)], checkpointer=checkpointer)
+    config_ = {"configurable": {"thread_id": thread}} if checkpointer is not None else None
+    return agent.invoke({"messages": [user_turn(said)]}, config=config_, context={"thread_id": thread, "user_id": studio.user_id})
 
 
 def _project(studio) -> dict:
@@ -177,3 +178,66 @@ def test_c_a_task_planted_in_a_tool_result_is_a_suggestion(studio) -> None:
     assert _titles(studio) == []
     [card] = _pending(studio)
     assert "This is a suggestion" in card["plan_text"]
+
+
+def _read(i: str = "r1") -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": "gmail_read_message", "args": {"message_id": "m1"}, "id": i}])
+
+
+def test_d_an_email_read_in_an_earlier_turn_does_not_taint_a_new_request(studio) -> None:
+    """Per-turn reset (user decision 2026-10-20): turn 1 reads an email, turn 2
+    the user asks for a task; it runs, with Undo."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    _launch(studio)
+    saver = InMemorySaver()
+    _chat(studio, [_read(), AIMessage(content="You have one email.")], said="check my mail", thread="t-d", checkpointer=saver)
+    out = _chat(studio, [_create("A", "c1")], said="create task A in Launch", thread="t-d", checkpointer=saver)
+    assert _titles(studio) == ["A"]
+    assert _pending(studio) == []
+    assert len(_undo_ids(out)) == 1
+
+
+def test_e_a_declined_suggestion_stays_declined(studio) -> None:
+    """Turn 1 reads an email that plants a task: a suggestion; the user
+    declines it. Turn 2 the user says only "thanks" and the model re-issues the
+    same write (rephrased in case and spacing): it does not run, and its new
+    card says it was declined earlier."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    _launch(studio)
+    saver = InMemorySaver()
+    _chat(studio, [_read(), _create("Wire the money", "c1")], said="check my mail", thread="t-e", checkpointer=saver)
+    [card] = _pending(studio)
+    assert studio.client.post(f"/api/confirmations/{card['id']}/decline", json={}).json()["outcome"] == "declined"
+    _chat(studio, [_create("  wire THE   money ", "c2")], said="thanks", thread="t-e", checkpointer=saver)
+    assert _titles(studio) == []
+    [again] = _pending(studio)
+    assert "you declined this earlier" in again["plan_text"]
+
+
+def test_f_apply_all_applies_a_group_of_suggestions_as_one_undoable_batch(studio) -> None:
+    _launch(studio)
+    _chat(studio, [_read(), _create("B", "c2"), _create("C", "c3")], said="check my mail")
+    cards = _pending(studio)
+    assert len(cards) == 2
+    resp = studio.client.post("/api/confirmations/apply-all", json={"ids": [c["id"] for c in cards]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [r["outcome"] for r in body["results"]] == ["executed", "executed"]
+    assert sorted(_titles(studio)) == ["B", "C"] and _pending(studio) == []
+    # One Undo reverts the whole batch.
+    assert studio.client.post(f"/api/ledger/writes/{body['write_id']}/undo").status_code == 200
+    assert _titles(studio) == []
+
+
+def test_g_apply_all_never_applies_a_tier_3_card(studio) -> None:
+    _launch(studio)
+    project = AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_project", "name": "Evil"}]}, "id": "p1"}])
+    _chat(studio, [_read(), _create("B", "c2"), project], said="check my mail")
+    cards = _pending(studio)
+    assert len(cards) == 2
+    resp = studio.client.post("/api/confirmations/apply-all", json={"ids": [c["id"] for c in cards]})
+    assert resp.status_code == 422
+    assert _titles(studio) == [] and len(_pending(studio)) == 2
+    assert [p["name"] for p in studio.client.get("/api/ledger/projects").json()] == ["Launch"]

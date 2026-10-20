@@ -160,6 +160,25 @@ def _report_unversioned_grants(user_id: str, agent: str) -> None:
         logging.getLogger(__name__).warning("agent %s has grants %s in its config.yaml but no versioned Autonomy record; they are ignored until granted on its Autonomy tab", agent, on_disk)
 
 
+def _norm(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def change_signatures(arguments: dict[str, Any]) -> set[tuple[str, ...]]:
+    """What a ledger_apply would do, normalised (case and whitespace): one
+    (op, project, task, title-or-note, status) per change. Two calls that
+    share any signature are "the same write" for the declined-stays-declined
+    rule, however the model rephrased the rest."""
+    changes = arguments.get("changes")
+    if not isinstance(changes, list):
+        return set()
+    out = set()
+    for c in changes:
+        if isinstance(c, dict):
+            out.add((_norm(c.get("op")), _norm(c.get("project")), _norm(c.get("task")), _norm(c.get("title") or c.get("decided")), _norm(c.get("status"))))
+    return out
+
+
 def governed_by_grants(tool_name: str) -> bool:
     """A tool some action class names: in a scheduled run, its Tier 2 calls
     run only under a grant."""

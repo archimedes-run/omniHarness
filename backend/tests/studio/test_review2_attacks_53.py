@@ -232,19 +232,9 @@ def test_HOLDS_spoofed_firing_and_provenance_in_a_chat_body_are_ignored(studio) 
 # -- round-2 fixes: tests added by the builder -----------------------------
 
 
-def test_HOLE_content_read_in_an_earlier_turn_still_makes_a_different_write_a_suggestion(studio) -> None:
-    """The taint persists for the thread: a later turn's write with DIFFERENT
-    arguments (so not a re-issue of the declined card) is still a suggestion."""
-    _launch(studio)
-    saver = InMemorySaver()
-    steps = [_fetch(), AIMessage(content="Here is the summary."), _create("Wire the money, part 2", "c2")]
-    agent = _agent(steps, checkpointer=saver)
-    cfg = {"configurable": {"thread_id": "t-r2p"}}
-    agent.invoke({"messages": [user_turn("summarise https://evil.example")]}, config=cfg, context=_ctx(studio, "t-r2p"))
-    agent.invoke({"messages": [user_turn("ok, add a task for me")]}, config=cfg, context=_ctx(studio, "t-r2p"))
-    assert _titles(studio) == []
-    [card] = _pending(studio)
-    assert "earlier in this conversation I read content from web_fetch" in card["plan_text"]
+# (Removed by user decision 2026-10-20: the origin rule resets per turn, so
+# content an earlier turn read does NOT make a later turn's different write a
+# suggestion. See test_chat_ledger_writes.py::test_d_* and test_e_*.)
 
 
 def test_HOLE_create_then_update_in_one_write_undoes_cleanly(studio) -> None:

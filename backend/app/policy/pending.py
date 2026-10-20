@@ -309,6 +309,18 @@ class PendingStore:
         self.save(action)
         return action
 
+    def declined_in_thread(self, thread_id: str | None, owner_id: str | None) -> list[PendingAction]:
+        """Actions this owner DECLINED in this thread (005 FR-009 Amendment 1:
+        a declined suggestion stays declined in that chat)."""
+        if not thread_id:
+            return []
+        out = []
+        for path in sorted(self.directory.glob("*.json")):
+            action = self.get(path.stem)
+            if action and action.outcome is Outcome.DECLINED and action.thread_id == thread_id and (action.owner_id or None) == (owner_id or None):
+                out.append(action)
+        return out
+
     def resolve(self, action: PendingAction, outcome: Outcome, reason: str = "") -> PendingAction:
         action.resolve(outcome, reason)
         return self.save(action)
