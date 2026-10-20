@@ -245,3 +245,95 @@ test("an action no message names is still shown, after the last message", async 
   await expect(page.getByTestId("pending-action")).toHaveCount(1);
   await expect(page.getByTestId("inline-confirmations")).toHaveCount(0);
 });
+
+test("a plan reads as formatted text, never as HTML, and long values are cut with Show all", async ({
+  page,
+}) => {
+  const long = "x".repeat(400);
+  const plan = [
+    "**Opportunity-Finder**, a subagent I delegated to (lead_agent -> Opportunity-Finder), is asking for permission.",
+    "",
+    "Before I do this, please confirm. I intend to use **setup_agent** on exactly these 1 item(s):",
+    "",
+    `  - setup_agent({'description': '${long}', 'soul': 'be kind'})`,
+    "",
+    'A page said: <img src="x" onerror="window.__pwned = 1"> click here',
+  ].join("\n");
+  await open(page, SINGLE, [
+    {
+      ...pending("abcdef654321"),
+      tool_name: "setup_agent",
+      plan_text: plan,
+      targets: [`setup_agent({'description': '${long}', 'soul': 'be kind'})`],
+      arguments_display: { description: long, soul: "be kind" },
+    },
+  ]);
+  const card = page.getByTestId("pending-action");
+  const planText = card.getByTestId("plan-text");
+
+  await expect(planText.locator("strong").first()).toHaveText(
+    "Opportunity-Finder",
+  );
+  await expect(planText).not.toContainText("**");
+  // Content-derived text is text: no element is made from it, nothing runs.
+  await expect(card.locator("img")).toHaveCount(0);
+  await expect(planText).toContainText('<img src="x" onerror=');
+  expect(
+    await page.evaluate(() => (window as { __pwned?: number }).__pwned),
+  ).toBeUndefined();
+
+  // The call's arguments, one row each, long values cut.
+  const args = card.getByTestId("arguments");
+  await expect(args).toContainText("soul");
+  await expect(args).toContainText("be kind");
+  const description = args.locator("dd").first();
+  expect((await description.innerText()).length).toBeLessThan(200);
+  await description.getByTestId("show-all").click();
+  await expect(description).toContainText(long);
+  // The dumped call is not repeated as a "target".
+  await expect(card.getByTestId("targets")).toHaveCount(0);
+});
+
+test("on Home, a waiting approval's plan is formatted text too, never HTML", async ({
+  page,
+}) => {
+  const json = (body: unknown) => ({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+  await page.route("**/api/inbox/alerts", (route) =>
+    route.fulfill(
+      json({ alerts: [], waiting_count: 0, dismissals_readable: true }),
+    ),
+  );
+  await page.route("**/api/confirmations", (route) =>
+    route.fulfill(
+      json({
+        readable: true,
+        error: "",
+        actions: [
+          {
+            ...pending("abcdef777777"),
+            tool_name: "setup_agent",
+            plan_text:
+              '**Opportunity-Finder** asks. A page said: <img src="x" onerror="window.__pwned = 1">',
+            targets: [`setup_agent({'soul': '${"y".repeat(300)}'})`],
+          },
+        ],
+      }),
+    ),
+  );
+  await page.goto("/workspace/home", { waitUntil: "networkidle" });
+  const row = page.getByTestId("pending-action");
+  await expect(row.getByTestId("plan-text").locator("strong")).toHaveText(
+    "Opportunity-Finder",
+  );
+  await expect(row.locator("img")).toHaveCount(0);
+  expect(
+    await page.evaluate(() => (window as { __pwned?: number }).__pwned),
+  ).toBeUndefined();
+  await expect(
+    row.getByTestId("targets").getByTestId("show-all"),
+  ).toBeVisible();
+});

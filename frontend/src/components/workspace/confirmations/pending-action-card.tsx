@@ -19,6 +19,8 @@ import {
 } from "@/core/confirmations/logic";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
 
+import { ArgumentsSummary, LongText, PlanText } from "./plan-text";
+
 /** Colours come from theme tokens only. A literal here would be invisible in
  *  one theme, which is how the sidebar label ended up unreadable until it was
  *  hovered. */
@@ -60,6 +62,14 @@ export function PendingActionCard({
   const expired = isExpired(action, now);
   const needsCount = requiresTypedCount(action);
   const suggestedBy = originLabel(action);
+  // Arguments for display, when the gateway sends them (never for a ledger
+  // plan, which has its own list), and whether the only "target" is the call
+  // itself (nothing more specific could be named).
+  const args =
+    !ledger && action.arguments_display ? action.arguments_display : null;
+  const callOnly =
+    action.targets.length === 1 &&
+    action.targets[0]!.startsWith(`${action.tool_name}(`);
 
   // Who asked, and how the request reached the user (FR-033): the board's
   // "via lead_agent → researcher".
@@ -124,9 +134,7 @@ export function PendingActionCard({
             Nothing is saved until you confirm.
           </p>
         ) : (
-          <p className="text-foreground text-sm whitespace-pre-wrap">
-            {action.plan_text}
-          </p>
+          <PlanText text={action.plan_text} />
         )}
 
         {draft && !settled ? (
@@ -137,19 +145,40 @@ export function PendingActionCard({
           <p className="text-foreground text-sm" data-testid="applied">
             {result.detail.result}
           </p>
-        ) : (
+        ) : args && callOnly ? (
+          // No specific items could be named, so the "target" is the whole
+          // call: shown as its arguments, one readable row each.
           <div>
             <p className="text-muted-foreground mb-1 text-xs uppercase">
-              {action.targets.length} item(s) this authorises
+              What it will run with
             </p>
-            <ul
-              className="list-disc space-y-1 pl-5 text-sm"
-              data-testid="targets"
-            >
-              {action.targets.map((target, index) => (
-                <li key={`${index}-${target}`}>{target}</li>
-              ))}
-            </ul>
+            <ArgumentsSummary args={args} />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="text-muted-foreground mb-1 text-xs uppercase">
+                {action.targets.length} item(s) this authorises
+              </p>
+              <ul
+                className="list-disc space-y-1 pl-5 text-sm"
+                data-testid="targets"
+              >
+                {action.targets.map((target, index) => (
+                  <li key={`${index}-${target}`} className="break-words">
+                    <LongText text={target} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+            {args && (
+              <div>
+                <p className="text-muted-foreground mb-1 text-xs uppercase">
+                  What it will run with
+                </p>
+                <ArgumentsSummary args={args} />
+              </div>
+            )}
           </div>
         )}
 
