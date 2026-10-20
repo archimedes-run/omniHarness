@@ -74,7 +74,7 @@ Date: 2026-10-19. Each item below gives the decision, the rationale, and the alt
 - **Decision**:
   - A host-side command, `python scripts/claude_hooks.py install|uninstall|status`, does the writing. Settings shows its exact diff and the one command to run.
   - The command writes atomically (temp file and rename), keeps a backup, and adds one tagged matcher group per event: Notification (`permission_prompt`, `idle_prompt`), TaskCreated, TaskCompleted, SessionStart and SessionEnd. Each handler is `{"type":"command","command":"<tracked script>","async":true,"timeout":2}`.
-  - The script POSTs the hook's JSON to `http://127.0.0.1:18101/hooks/claude` with a 1 s timeout. It always exits 0 and prints nothing.
+  - The script keeps only allowlisted fields (`hook_event_name`, `session_id`, `cwd`, `notification_type`, `task_id`, `task_subject`), drops everything else (prompt, message, tool text) before sending, and POSTs them to `http://127.0.0.1:18101/hooks/claude` with a 1 s timeout. It always exits 0 and prints nothing.
   - Uninstall removes only the tagged groups.
   - It installs at user level (default, pending Q3).
 - **Rationale**: the watcher's mount of `~/.claude` is read-only, and must stay so (001 FR-019). Hooks from all settings files are merged and run in parallel, so adding ours never displaces the user's. Silent, async, exit 0 means Claude Code is never blocked, and the UserPromptSubmit/SessionStart context-injection channel is never used.

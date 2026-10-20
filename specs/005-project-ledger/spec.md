@@ -178,7 +178,7 @@ In Settings, the user turns on "Report Claude Code prompts precisely". The page 
 ### Edge Cases
 
 - The same commit, session or run is seen twice (restart, re-scan): it is recorded once.
-- A session's cwd matches two projects' linked folders: the evidence attaches to both, or to the more specific folder. See Q2.
+- A session's cwd matches two projects' linked folders: the evidence attaches to the more specific folder, ties attach to both, and each attachment says why (FR-044).
 - An agent's todo item and a ledger task have the same title but are different work: nothing is matched by title alone. Links are explicit (made by promotion or by the user).
 - A todo update's result never arrives (the session was killed): the last confirmed list stands, and the pending update is never applied.
 - A Codex file is half-written when read: the partial last line is not parsed until it is complete. Malformed complete lines count as drift.
@@ -241,6 +241,7 @@ In Settings, the user turns on "Report Claude Code prompts precisely". The page 
   - for Codex, from `update_plan`.
 
   Titles and statuses only. Descriptions MUST be dropped at the point of reading.
+- **FR-030a**: Todo lists MUST be derived from session records only. Claude Code's on-disk task store MUST NOT be read.
 - **FR-031**: A todo change MUST be applied only after the matching tool result confirms success:
   - Claude: a result that is not an error.
   - Codex: an acknowledgement for `update_plan`, and the tool's own success signal otherwise.
@@ -258,6 +259,10 @@ In Settings, the user turns on "Report Claude Code prompts precisely". The page 
   - be fully reversible: disabling removes exactly what was added;
   - never block, slow or print to Claude Code. Handlers run in the background, produce no output, and exit successfully even when OmniHarness is unreachable.
 
+  - send **only allowlisted fields**: event name, session id, working folder, notification type, and task id and title. Prompt, message and tool text MUST be dropped by the handler itself, before anything leaves the machine's Claude Code process;
+  - be installed only by a command the user runs, never automatically;
+  - uninstall with a single command that restores the previous settings exactly. If the user edited the settings after installing, uninstall removes only our entries and says so.
+
   Hook fields relied on MUST be checked against the current Claude Code hooks reference when this is built, and recorded with the date checked.
 
 ### Declared vs observed scope
@@ -271,6 +276,7 @@ In Settings, the user turns on "Report Claude Code prompts precisely". The page 
 - **FR-040**: The user MUST be able to link local repository folders to a project. A linked repository is read only with the user's explicit read-only access. A linked but unreadable repository MUST say so and why.
 - **FR-041**: Commits on a linked repository MUST be recorded as observed evidence on the project, and on a task when the commit message names it by its short id. Author, time, subject and files changed are recorded; the body only after redaction (FR-019).
 - **FR-042**: A workflow run that is linked or assigned to a task MUST record its outcome as observed evidence on that task, once.
+- **FR-044**: Every evidence attachment MUST record **why** it was attached, in words the user can read: "matched repo omniHarness", "linked session", "commit names T-3", "promoted from thread". It is shown next to the item. When a source matches more than one project, it attaches to the most specific match, and ties attach to all of them. The user MUST be able to reassign an evidence item manually; the reassignment is recorded and shown as the new reason ("moved here by you").
 - **FR-043**: Calendar events MUST be shown on a project when the user links them (an event, or a recurring series), and on Today when they are today. A calendar that is not connected or not reachable reads as "can't tell", not as an empty day.
 
 ### Today and the Project view
@@ -355,14 +361,22 @@ In Settings, the user turns on "Report Claude Code prompts precisely". The page 
 - Dispatching agents into worktrees to work on tasks.
 - Remote approval of coding-agent permission prompts (Article IV: every prompt reaches the human at the machine).
 - Importing ChatGPT or Claude conversation history.
-- Two-way sync with GitHub, Linear or Notion. This is a candidate Feature 006 and is listed in the open questions.
+- Two-way sync with GitHub, Linear or Notion (Feature 006).
+- Hooks for Codex (Codex is read from its files only in 005).
 - Sharing projects with other people.
 
-## Open Questions (for /speckit-clarify)
+## Clarifications
 
-- **Q1 [NEEDS CLARIFICATION]**: Should two-way sync with GitHub, Linear or Notion be part of 005 (as its last slice) or a separate Feature 006? The original brief lists it as optional. This spec assumes 006.
-- **Q2 [NEEDS CLARIFICATION]**: When a session's folder or a commit's repository is linked to two projects, should evidence attach to both, or only to the project whose linked folder is the most specific match? This spec assumes the most specific match, ties going to both.
-- **Q3 [NEEDS CLARIFICATION]**: Where should the hooks upgrade be installed? In the user-level Claude Code settings (covers every repository, and is one place to undo), or per repository as the reference does (narrower, but one file per linked repo)? This spec assumes user-level.
-- Q4: Today replaces Inbox (decided above). Is that acceptable, or should Inbox stay and Today sit inside Projects?
-- Q5: Should Claude Code's own task store on disk (undocumented) be used to cross-check session todo lists, or should only the session records be trusted? This spec assumes session records only, since the store is undocumented.
-- Q6: Should the hooks upgrade also cover Codex if Codex adds an equivalent, or is Codex file-only for 005? This spec assumes file-only.
+### Session 2026-10-19
+
+- Q: Is two-way sync with GitHub, Linear or Notion part of 005? → A: No. It is Feature 006 and stays out of 005.
+- Q: Evidence matching two projects' linked folders or repositories? → A: Attach to the most specific match; ties attach to both. Every attachment stores and shows **why** it was attached (for example "matched repo omniHarness"), and the user can reassign it manually (FR-044).
+- Q: Where are hooks installed? → A: At user level, on five conditions (FR-035):
+  - fail-silent with a short timeout, never blocking or slowing a session;
+  - merged with the user's existing hooks, never replacing them;
+  - only allowlisted fields are sent, never prompt or message text;
+  - one uninstall command restores the previous settings exactly;
+  - installed only by a command the user runs, never automatically.
+- Q: Does Today replace Inbox? → A: Yes. "Blocked on me" is Today's top section, and the badge moves to Today.
+- Q: Should Claude Code's on-disk task store be read? → A: No. Only session records are read, and `~/.claude/tasks` MUST NOT be read (FR-030a).
+- Q: Does Codex get hooks in 005? → A: No. Codex stays file-only in 005.

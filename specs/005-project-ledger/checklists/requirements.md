@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain. Three remain (Q1 to Q3), held for the user.
+- [x] No [NEEDS CLARIFICATION] markers remain (answered 2026-10-19; see Clarifications)
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)

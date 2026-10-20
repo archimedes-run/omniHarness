@@ -12,6 +12,23 @@ description: "Task list for Feature 005, Project Ledger"
 
 **Done means**: a task is marked [X] only when it is **called in production**, tested, and sabotage-checked. The wiring gate enforces the first, and has done so since T003.
 
+## Delivery order: slices (decided 2026-10-19)
+
+The user re-ordered the work into six slices, one PR each. The task IDs below stay as written; this table is the order they are done in. The review stops after slices 1 and 2.
+
+| Slice | PR | Tasks | Notes |
+|---|---|---|---|
+| **1. Multi-agent watcher** | first, needed now | T001, T005 (Codex mount only), T006, T028–T035, T038 (drift and health part), T039, T040, plus S1-a | Independent of the ledger. Verified on the user's real sessions: one Claude and one Codex session in parallel, both on the Coding sessions page. |
+| **2. Ledger core** | | T002–T004, T007–T013, T014–T022 | Projects page, agent tools, capture from chat, promoting todos. |
+| **3. Today** | | T023–T027 | Replaces Inbox. "Blocked on me" is the top section, and the badge moves. |
+| **4. Evidence** | | T036, T041–T045, plus S4-a | Git, sessions, workflows and calendar; observed vs claimed; why attached, with reassignment (FR-044). |
+| **5. Automations from chat** | | T046–T049, then T050–T053 | US6 (ledger-aware triggers) is not in the user's slice list. It runs on the same trigger-engine path, so it follows here and is flagged in the PR. |
+| **6. Drift and hooks** | | T037, T054–T058 | Declared-vs-observed flags, and the optional hooks installer under FR-035's five conditions. |
+| Every slice | | T059–T063 as they apply | Contrast on new pages, page speed measured under 1 s, wiring gate, and a composition-root test. |
+
+- **S1-a** [US3] The Coding sessions page (`/workspace/settings/activity` → sessions section, or its own route if it has one) shows Claude and Codex sessions together. Each is labelled by agent, with task progress ("3 of 5") from the confirmed todo list. Rendering spec, contrast, measured load.
+- **S4-a** [US4] FR-044: each attachment stores its reason. A reassign action on an evidence item records the move.
+
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: can run in parallel (different files, no dependency).
 - **[Story]**: US1–US7 from spec.md.
@@ -74,7 +91,7 @@ description: "Task list for Feature 005, Project Ledger"
   - turn state;
   - the explicit inert list, and drift for everything else.
 - [ ] T031 [US3] Before trusting fixtures: run the Codex adapter read-only over this machine's `~/.codex` and record the drift counts by type, structure only, in `research.md`. Positive control (Article XII): one file must yield at least one session with a cwd and a turn.
-- [ ] T032 [US3] `session_watcher/todos.py`: confirmed-only todo state (research R3), wired for Claude (TodoWrite, TaskCreate, TaskUpdate) and Codex (`update_plan`). Descriptions are dropped at parse time.
+- [ ] T032 [US3] `session_watcher/todos.py`: confirmed-only todo state (research R3), wired for Claude (TodoWrite, TaskCreate, TaskUpdate) and Codex (`update_plan`). Descriptions are dropped at parse time. `~/.claude/tasks` is never read (FR-030a).
 - [ ] T033 [US3] Fixtures shaped like the real files (synthetic content) in `tests/session_watcher/fixtures/codex/` and `claude_tasks/`. Tests for: failed result, no result, interrupted turn, resume, subagent, and 3 of 10 failing updates (SC-004). Sabotage: apply at call time, and the tests fail.
 - [ ] T034 [US3] Files changed from successful results only (research R5). Sabotage: record from the call, and the test fails.
 - [ ] T035 [US3] Reply fields from contracts/watcher.md. The tool-surface snapshot (T006) still passes. Sabotage: add a tool, and T006 fails.
@@ -109,7 +126,7 @@ description: "Task list for Feature 005, Project Ledger"
 ## Phase 9: US7 Optional hooks (P5)
 
 - [ ] T054 [US7] Re-check the Claude Code hooks reference on the day of building. Record the fields used, and the date, in research.md (FR-035).
-- [ ] T055 [US7] `scripts/claude_hooks.py install|uninstall|status`: diff preview, atomic write, backup, tagged groups only, async/silent/exit 0. Tests run against a temporary settings file that already has user hooks (SC-007, byte-identical after round-trip).
+- [ ] T055 [US7] `scripts/claude_hooks.py install|uninstall|status`: diff preview, atomic write, backup, tagged groups only, async/silent/exit 0. The handler sends only allowlisted fields (FR-035): no prompt, message or tool text. Tests run against a temporary settings file that already has user hooks (SC-007, byte-identical after round-trip).
 - [ ] T056 [US7] `session_watcher/hooks.py`: the receiver on the existing port. It always returns 204, unknown events count as drift, and permission or idle prompts set waiting = observed.
 - [ ] T057 [US7] Settings → Coding agents: the switch, the diff, the command, and the status. Add a rendering spec.
 - [ ] T058 [US7] Hook script resilience: with nothing listening, it exits 0 within 1 s and prints nothing. Asserted.
