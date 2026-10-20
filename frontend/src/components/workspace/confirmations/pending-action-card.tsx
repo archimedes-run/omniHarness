@@ -30,6 +30,7 @@ export function PendingActionCard({
   onEdit,
   busy,
   result,
+  onContinue,
 }: {
   action: PendingAction;
   onResolve: (confirm: boolean, typedCount?: number) => void;
@@ -37,6 +38,9 @@ export function PendingActionCard({
   onEdit?: (args: Record<string, unknown>, typedCount?: number) => void;
   busy: boolean;
   result?: ResolveResult;
+  /** "Continue <agent>": the agent stopped at this call and has not carried
+   *  on. Continuing is the user's own turn, never automatic (plan.md §2.0). */
+  onContinue?: (agent: string) => void;
 }) {
   const [typed, setTyped] = useState("");
   // A ledger plan (Feature 005) reads as the changes it makes, and can be
@@ -49,7 +53,16 @@ export function PendingActionCard({
   // are gone: the result says what happened, and nothing is left to press.
   const settled =
     result != null &&
-    !["unrecognised", "threshold_not_met"].includes(result.outcome);
+    // A refusal that can still be fixed keeps the buttons: "the source was
+    // removed from the chat" is answered by adding it back and confirming.
+    !["unrecognised", "threshold_not_met", "tool_unavailable"].includes(
+      result.outcome,
+    );
+  const continueAgent =
+    result?.outcome === "executed" &&
+    typeof result.detail?.continue_agent === "string"
+      ? result.detail.continue_agent
+      : null;
   // FR-005: the clock drives expiry, not the fetch. Without this an action
   // that lapses while you are reading it still looks actionable, and pressing
   // Confirm would fail for a reason the screen never showed.
@@ -201,6 +214,17 @@ export function PendingActionCard({
         )}
 
         {result && <ResolveMessage result={result} />}
+        {continueAgent && onContinue && (
+          <div className="flex justify-end">
+            <Button
+              data-testid="continue-agent"
+              variant="outline"
+              onClick={() => onContinue(continueAgent)}
+            >
+              Continue {continueAgent}
+            </Button>
+          </div>
+        )}
 
         {settled ? null : draft ? (
           <div className="flex flex-wrap justify-end gap-2">

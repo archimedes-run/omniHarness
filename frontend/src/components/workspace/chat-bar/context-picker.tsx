@@ -87,6 +87,10 @@ export interface PickerProps {
   /** A new chat on the plain chat page: an agent is picked in place. */
   canChooseAgent?: boolean;
   onChooseAgent?: (name: string) => void;
+  /** Phase 2 (optional): the agents called into this chat, and calling one
+   *  in. Without them the existing chat's Agents tab is read-only, as before. */
+  members?: string[];
+  onCallInAgent?: (name: string) => void;
   // Integrations
   integrations: IntegrationRow[];
   integrationsLoading: boolean;
@@ -369,12 +373,14 @@ function AgentsTab({
   threadAgent,
   canChooseAgent,
   onChooseAgent,
+  members,
+  onCallInAgent,
 }: PickerProps) {
   const { query, setQuery, filtered } = useFilter(agents, agentText);
   return (
     <>
       <SearchBox label="Search agents" value={query} onChange={setQuery} />
-      {!isNewChat && (
+      {!isNewChat && !onCallInAgent && (
         <p className="text-muted-foreground px-4 pb-1 text-xs">
           {MULTI_AGENT_LATER}
         </p>
@@ -392,10 +398,18 @@ function AgentsTab({
                 </span>
               )}
             </span>
-            {a.name === threadAgent ? (
+            {a.name === threadAgent || members?.includes(a.name) ? (
               <span className="text-muted-foreground text-xs">
                 In this chat
               </span>
+            ) : !isNewChat && onCallInAgent ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onCallInAgent(a.name)}
+              >
+                Call in<span className="sr-only"> {a.name}</span>
+              </Button>
             ) : canChooseAgent && onChooseAgent ? (
               <Button
                 size="sm"

@@ -29,6 +29,7 @@ export function PendingConfirmations({
   quietWhenEmpty = false,
   only,
   exclude,
+  onContinue,
 }: {
   threadId?: string;
   quietWhenEmpty?: boolean;
@@ -36,6 +37,8 @@ export function PendingConfirmations({
   only?: string[];
   /** All but these: the cards not raised at a point the chat shows. */
   exclude?: string[];
+  /** In a chat: "Continue <agent>" once a call it stopped for has run. */
+  onContinue?: (agent: string) => void;
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
@@ -88,6 +91,7 @@ export function PendingConfirmations({
           action={action}
           busy={resolve.isPending || edit.isPending}
           result={resolved[action.id]?.result}
+          onContinue={onContinue}
           onEdit={(args, typedCount) =>
             edit.mutate(
               { id: action.id, args, typedCount },

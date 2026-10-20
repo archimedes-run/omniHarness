@@ -41,6 +41,11 @@ import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import { usePreferences } from "@/core/preferences/hooks";
 import type { AgentThreadContext } from "@/core/threads";
+import {
+  useCallInAgent,
+  useRemoveAgent,
+  useThreadParticipants,
+} from "@/core/threads/participants";
 import { cn } from "@/lib/utils";
 
 import { AgentAvatar } from "./chat-bar/agent-avatar";
@@ -61,7 +66,7 @@ import {
   type ChatAgent,
   type ChipsHandle,
 } from "./chat-bar/context-chips";
-import { ContextPicker, MULTI_AGENT_LATER } from "./chat-bar/context-picker";
+import { ContextPicker } from "./chat-bar/context-picker";
 import {
   effortForMode,
   findTrigger,
@@ -263,14 +268,34 @@ export function InputBox({
   const isNewChat = !!isWelcomeMode;
   const threadAgent = threadAgentName ?? LEAD_AGENT;
   const canChooseAgent = isNewChat && !routeAgent && !!onChooseAgent;
+  // Phase 2: the agents called into this chat are the THREAD's state, read
+  // from the server; "@" (or the picker) calls one in, its chip's × takes it
+  // out. A new chat has no members until its first message.
+  const { members: memberRows } = useThreadParticipants(threadId, !isNewChat);
+  const members = useMemo(() => memberRows.map((m) => m.name), [memberRows]);
+  const callIn = useCallInAgent(threadId);
+  const removeMember = useRemoveAgent(threadId);
+  const callInAgent = useCallback(
+    (name: string) => {
+      if (members.includes(name)) return;
+      callIn.mutate(name, {
+        onSuccess: () => toast(`${name} is in this chat. Mention it with @.`),
+        onError: (e) => toast.error(e.message),
+      });
+    },
+    [callIn, members],
+  );
   const chatAgents: ChatAgent[] = useMemo(
     () => [
       {
         name: threadAgent,
         role: !routeAgent && chosenAgent ? "chosen" : "thread",
       },
+      ...members
+        .filter((name) => name !== threadAgent)
+        .map((name) => ({ name, role: "member" as const })),
     ],
-    [chosenAgent, routeAgent, threadAgent],
+    [chosenAgent, members, routeAgent, threadAgent],
   );
   // Read-only (Open Question 7): what this chat's agent may use.
   const agentSkillList = useMemo(() => {
@@ -365,12 +390,14 @@ export function InputBox({
           key: a.name,
           label: a.name,
           hint:
-            a.name === threadAgent
+            a.name === threadAgent || members.includes(a.name)
               ? "In this chat"
               : canChooseAgent
                 ? a.description || "Start the chat with this agent"
-                : MULTI_AGENT_LATER,
-          disabled: !canChooseAgent || a.name === threadAgent,
+                : a.description || "Call into this chat",
+          // In a new chat "@" picks the agent it starts with; in an existing
+          // one it calls an agent in. The chat's own agent is already here.
+          disabled: a.name === threadAgent || (isNewChat && !canChooseAgent),
           leading: <AgentAvatar id={a.name} name={a.name} />,
         }))
       : commandMatches.map((c) => ({
@@ -405,13 +432,16 @@ export function InputBox({
       if (trigger.kind === "@") {
         // Open Question 8: in a new chat, "@" picks the agent the chat
         // starts with: a chip, the typed text kept on both sides of the
-        // mention and the caret right after it. In an existing chat it is
-        // disabled (multi-agent chat comes later).
+        // mention and the caret right after it. In an existing chat it calls
+        // the agent in (Phase 2): it joins the chat, and this message, which
+        // mentions it, is handed to it.
         const agent = agentMatches[index];
-        if (!agent || !canChooseAgent || agent.name === threadAgent) return;
+        if (!agent || agent.name === threadAgent) return;
+        if (isNewChat && !canChooseAgent) return;
         const next = insertMention(el.value, trigger, caret, agent.name);
         setText(next.text, next.caret);
-        onChooseAgent?.(agent.name);
+        if (isNewChat) onChooseAgent?.(agent.name);
+        else callInAgent(agent.name);
       } else {
         const cmd = commandMatches[index];
         if (!cmd) return;
@@ -422,8 +452,10 @@ export function InputBox({
     },
     [
       agentMatches,
+      callInAgent,
       canChooseAgent,
       commandMatches,
+      isNewChat,
       onChooseAgent,
       runCommand,
       setText,
@@ -682,6 +714,8 @@ export function InputBox({
               onChooseAgent?.(name);
               closePicker();
             }}
+            members={members}
+            onCallInAgent={isNewChat ? undefined : callInAgent}
             integrations={integrations.rows}
             integrationsLoading={integrations.loading}
             integrationsError={integrations.error}
@@ -732,7 +766,13 @@ export function InputBox({
                 })
               }
               agents={chatAgents}
-              onRemoveAgent={() => onChooseAgent?.(null)}
+              onRemoveAgent={(name) =>
+                members.includes(name)
+                  ? removeMember.mutate(name, {
+                      onError: (e) => toast.error(e.message),
+                    })
+                  : onChooseAgent?.(null)
+              }
               integrations={chipIntegrations}
               onRemoveIntegration={(id) => integrations.setSelected(id, false)}
               files={attachments.files}

@@ -42,9 +42,13 @@ import type { IntegrationRow } from "./logic";
  * One agent in the chat. Phase 1 has one: the thread's own, or the one picked
  * with "@" before the first message (that one can be removed again).
  */
+const isLead = (name: string) => name === "Lead agent" || name === "lead_agent";
+
 export interface ChatAgent {
   name: string;
-  role: "thread" | "chosen";
+  /** thread: the chat's own agent; chosen: picked before the first message;
+   *  member: called into this chat (Phase 2), removable. */
+  role: "thread" | "chosen" | "member";
 }
 
 export interface ChipsHandle {
@@ -270,13 +274,27 @@ export const ContextChips = forwardRef<
       key: `agent:${a.name}`,
       testId: "chip-agent",
       label: a.name,
-      leading: <AgentAvatar id={a.name} name={a.name} size={24} />,
+      leading: (
+        <AgentAvatar
+          // The lead has its own colour and reads "L", as in the thread's
+          // headers (Chat.dc.html).
+          id={isLead(a.name) ? "lead_agent" : a.name}
+          name={a.name}
+          size={24}
+          initials={isLead(a.name) ? "L" : undefined}
+        />
+      ),
       ...(a.role === "chosen"
         ? {
             removeLabel: `Remove ${a.name}`,
             onRemove: () => p.onRemoveAgent(a.name),
           }
-        : { locked: "A chat keeps the agent it started with" }),
+        : a.role === "member"
+          ? {
+              removeLabel: `Remove ${a.name} from this chat`,
+              onRemove: () => p.onRemoveAgent(a.name),
+            }
+          : { locked: "A chat keeps the agent it started with" }),
       padLeft: "pl-[5px]",
     })),
     ...ints.visible.map<Item>((row) => {
