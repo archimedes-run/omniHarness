@@ -225,19 +225,28 @@ def get_internal_user():
 
 #: Prefix of the message id the trigger engine gives its injected prompt.
 TURN_ID_PREFIX = "trigger-turn-"
+#: Signed turn ids already accepted once (single use, per process).
+_CONSUMED_TURN_IDS: set[str] = set()
 
 
-def sign_turn_id(nonce: str) -> str:
-    """A message id only this server can mint: the gateway keeps a caller's
-    message id (so the engine can find its own turn) ONLY when it carries this
-    signature. A client-chosen id is dropped, so it can never replace an
-    earlier message (add_messages replaces by id)."""
-    mac = hmac.new(_INTERNAL_AUTH_TOKEN.encode(), nonce.encode(), hashlib.sha256).hexdigest()[:32]
+def sign_turn_id(nonce: str, thread_id: str = "") -> str:
+    """A message id only this server can mint, bound to one thread and one
+    purpose (the engine's injected prompt). The gateway keeps it only on a
+    request that carries the trigger engine's credential, only for that thread,
+    and only once (see `accept_turn_id`). Any other caller's id is dropped, so
+    no one can replace an earlier message (add_messages replaces by id), even
+    by replaying an id read back from the thread's state."""
+    mac = hmac.new(_INTERNAL_AUTH_TOKEN.encode(), f"turn-id|{thread_id}|{nonce}".encode(), hashlib.sha256).hexdigest()[:32]
     return f"{TURN_ID_PREFIX}{nonce}.{mac}"
 
 
-def is_signed_turn_id(value: object) -> bool:
-    if not isinstance(value, str) or not value.startswith(TURN_ID_PREFIX) or "." not in value:
+def accept_turn_id(value: object, *, thread_id: str, from_trigger_engine: bool) -> bool:
+    """True once for a valid id the engine signed for `thread_id`, on the
+    engine's own request; False for anything else, and for any id seen before."""
+    if not from_trigger_engine or not isinstance(value, str) or not value.startswith(TURN_ID_PREFIX) or "." not in value:
         return False
-    nonce, _, mac = value[len(TURN_ID_PREFIX) :].rpartition(".")
-    return bool(nonce) and secrets.compare_digest(sign_turn_id(nonce), value) and len(mac) == 32
+    nonce, _, _mac = value[len(TURN_ID_PREFIX) :].rpartition(".")
+    if not nonce or not secrets.compare_digest(sign_turn_id(nonce, thread_id), value) or value in _CONSUMED_TURN_IDS:
+        return False
+    _CONSUMED_TURN_IDS.add(value)
+    return True

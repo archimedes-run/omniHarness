@@ -157,22 +157,27 @@ def test_a_purged_run_leaves_no_bytes_in_the_database(tmp_path) -> None:
     marker = "PURGE-ME-" + "q" * 2000
     store.record(kind="automation", source_id="old", body={"note": marker}, status="completed", started_at=datetime.now(UTC) - timedelta(days=90))
     store.record(kind="automation", source_id="new", body={"note": "kept"}, status="completed")
-    assert marker.encode() in store.db.read_bytes()
+    assert marker.encode() in on_disk(tmp_path)
 
     assert store.purge() == 1
-    assert marker[:40].encode() not in store.db.read_bytes(), "the purged run's content is still in the file"
+    assert marker[:40].encode() not in on_disk(tmp_path), "the purged run's content is still in the database or its WAL"
 
 
-def test_the_gateway_keeps_the_turn_id_the_injector_sends() -> None:
-    from app.gateway.internal_auth import sign_turn_id
+def test_the_gateway_keeps_the_turn_id_only_from_the_engine_for_its_thread_once() -> None:
+    from app.gateway.internal_auth import accept_turn_id, sign_turn_id
     from app.gateway.services import normalize_input
 
-    signed = sign_turn_id("abc")
-    (msg,) = normalize_input({"messages": [{"role": "human", "content": "hi", "id": signed}]})["messages"]
-    assert msg.id == signed
-    # A forged one (right prefix, wrong signature) is dropped.
-    (forged,) = normalize_input({"messages": [{"role": "human", "content": "hi", "id": signed[:-1] + "x"}]})["messages"]
-    assert forged.id != signed[:-1] + "x"
+    def ids(value, *, thread="t-1", engine=True):
+        keep = lambda v: accept_turn_id(v, thread_id=thread, from_trigger_engine=engine)  # noqa: E731
+        return normalize_input({"messages": [{"role": "human", "content": "hi", "id": value}]}, keep_id=keep)["messages"][0].id
+
+    signed = sign_turn_id("n1", "t-1")
+    assert ids(signed, engine=False) != signed, "kept from a caller that is not the engine"
+    assert ids(signed, thread="t-2") != signed, "kept for another thread"
+    assert ids(signed) == signed, "the engine's own id was dropped"
+    assert ids(signed) != signed, "a used id was accepted again"
+    forged = sign_turn_id("n2", "t-1")[:-1] + "x"
+    assert ids(forged) != forged
 
 
 def test_one_run_is_capped_and_says_where_it_was_cut(tmp_path) -> None:

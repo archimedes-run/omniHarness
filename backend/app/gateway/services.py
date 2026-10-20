@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -593,8 +593,20 @@ async def start_run(
         synthetic_rule_id = rule_id or ""
 
     # A scheduled turn's "human" message is a rule's prompt, never the person.
+    # The engine's own turn id (run history, Feature 006) is kept only on the
+    # engine's granted request, for this thread, once across every worker
+    # (the run history's database records it). No history: no id is kept.
+    from app.gateway.internal_auth import accept_turn_id
+
+    from_engine = synthetic_rule_id is not None
+    history = getattr(request.app.state, "run_history", None)
+    consume = history.consume_turn_id if history is not None else (lambda _id: False)
     try:
-        graph_input = normalize_input(body.input, user_turn=not relayed and synthetic_rule_id is None)
+        graph_input = normalize_input(
+            body.input,
+            user_turn=not relayed and synthetic_rule_id is None,
+            keep_id=lambda v: accept_turn_id(v, thread_id=thread_id, from_trigger_engine=from_engine, consume=consume),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:

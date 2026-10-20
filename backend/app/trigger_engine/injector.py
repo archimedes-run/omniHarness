@@ -119,7 +119,7 @@ class TurnInjector:
         # `_mirror_runtime_visible_keys` in app/gateway/services.py.
         from app.gateway.internal_auth import sign_turn_id
 
-        marker = sign_turn_id(uuid.uuid4().hex)
+        marker = sign_turn_id(uuid.uuid4().hex, thread_id)
         payload = {
             "assistant_id": self.assistant_id,
             # The id marks where THIS turn starts in the thread runs/wait
