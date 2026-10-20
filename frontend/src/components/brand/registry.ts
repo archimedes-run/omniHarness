@@ -4,13 +4,16 @@
  * so a brand is drawn the same way everywhere and an unknown source falls back
  * to the same neutral monogram.
  *
- * Two kinds of logo, both recorded in THIRD-PARTY-NOTICES.md (Logos):
- *   - "file": the brand's own full-colour SVG, served from public/brand/,
- *     never recoloured (Google product icons, from Google's own CDN);
+ * Three kinds of logo, all recorded in THIRD-PARTY-NOTICES.md (Logos):
+ *   - "file": the brand's own full-colour asset, served from public/brand/,
+ *     never recoloured (Google product icons; Slack's multi-colour hash mark);
+ *   - "themed": the brand's own black and white versions of one mark, the
+ *     black one on light themes and the white one on dark (OpenAI's Blossom,
+ *     both supplied in OpenAI's logo pack), never recoloured;
  *   - "mark": a monochrome mark (marks.ts, Simple Icons 16.33.0), drawn in
  *     the theme's foreground, as black or white, which those brands allow.
- * A brand with neither (OpenAI, Slack, Outlook: no SVG obtainable from an
- * official or CC0 source here) shows its monogram until one is added.
+ * A brand with none (Outlook, until it is actually connected) shows its
+ * monogram.
  */
 
 export interface BrandEntry {
@@ -22,7 +25,10 @@ export interface BrandEntry {
   monogram: string;
   /** Other spellings the app uses for the same source. */
   aliases?: string[];
-  logo?: { kind: "file"; src: string } | { kind: "mark" };
+  logo?:
+    | { kind: "file"; src: string }
+    | { kind: "themed"; light: string; dark: string }
+    | { kind: "mark" };
 }
 
 const FILE = (file: string) => ({
@@ -30,6 +36,11 @@ const FILE = (file: string) => ({
   src: `/brand/${file}`,
 });
 const MARK = { kind: "mark" as const };
+const THEMED = (light: string, dark: string) => ({
+  kind: "themed" as const,
+  light: `/brand/${light}`,
+  dark: `/brand/${dark}`,
+});
 
 export const BRANDS: readonly BrandEntry[] = [
   // Model providers / coding agents.
@@ -45,6 +56,7 @@ export const BRANDS: readonly BrandEntry[] = [
     name: "OpenAI",
     monogram: "OAI",
     aliases: ["codex", "chatgpt", "gpt"],
+    logo: THEMED("openai-blossom-black.svg", "openai-blossom-white.svg"),
   },
   // Composio toolkits (backend/app/gateway/routers/composio.py TOOLKIT_CATALOG).
   { id: "gmail", name: "Gmail", monogram: "M", logo: FILE("gmail.svg") },
@@ -69,7 +81,7 @@ export const BRANDS: readonly BrandEntry[] = [
     aliases: ["githubissueconnector"],
     logo: MARK,
   },
-  { id: "slack", name: "Slack", monogram: "S" },
+  { id: "slack", name: "Slack", monogram: "S", logo: FILE("slack.png") },
   { id: "notion", name: "Notion", monogram: "N", logo: MARK },
   { id: "linear", name: "Linear", monogram: "L", logo: MARK },
   {

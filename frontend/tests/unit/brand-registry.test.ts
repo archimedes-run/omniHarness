@@ -49,19 +49,43 @@ describe("logo registry (Feature 006)", () => {
     for (const slug of slugs) expect(resolveBrand(slug), slug).toBeDefined();
   });
 
-  it("every file logo exists, is a clean SVG, and is in THIRD-PARTY-NOTICES", () => {
+  it("every file logo exists, is a clean SVG or a real PNG, and is in THIRD-PARTY-NOTICES", () => {
     for (const b of BRANDS) {
-      if (b.logo?.kind !== "file") continue;
-      const path = join(ROOT, "public", b.logo.src);
-      expect(existsSync(path), b.logo.src).toBe(true);
-      const svg = readFileSync(path, "utf8");
-      expect(svg, `${b.id}: scripts, handlers or external refs`).not.toMatch(
-        /<script|\son\w+=|href=|url\(|<image|<foreignObject/i,
-      );
-      expect(NOTICES, `${b.id} missing from notices`).toContain(
-        b.logo.src.replace(/^\//, "frontend/public/"),
-      );
+      const files =
+        b.logo?.kind === "file"
+          ? [b.logo.src]
+          : b.logo?.kind === "themed"
+            ? [b.logo.light, b.logo.dark]
+            : [];
+      for (const src of files) {
+        const path = join(ROOT, "public", src);
+        expect(existsSync(path), src).toBe(true);
+        if (src.endsWith(".png")) {
+          const head = readFileSync(path).subarray(0, 8).toString("hex");
+          expect(head, `${src} is not a PNG`).toBe("89504e470d0a1a0a");
+        } else {
+          const svg = readFileSync(path, "utf8");
+          expect(
+            svg,
+            `${b.id}: scripts, handlers or external refs`,
+          ).not.toMatch(/<script|\son\w+=|href=|url\(|<image|<foreignObject/i);
+        }
+        expect(NOTICES, `${src} missing from notices`).toContain(
+          src.replace(/^\//, "frontend/public/"),
+        );
+      }
     }
+  });
+
+  it("OpenAI and Slack use their official assets; Outlook stays a monogram", () => {
+    const by = (id: string) => BRANDS.find((b) => b.id === id)!;
+    expect(by("openai").logo).toEqual({
+      kind: "themed",
+      light: "/brand/openai-blossom-black.svg",
+      dark: "/brand/openai-blossom-white.svg",
+    });
+    expect(by("slack").logo).toEqual({ kind: "file", src: "/brand/slack.png" });
+    expect(by("outlook").logo).toBeUndefined();
   });
 
   it("every mark has path data, and every brand with a logo is in THIRD-PARTY-NOTICES", () => {

@@ -43,6 +43,28 @@ export function BrandLogo({
   );
   const dims = { width: box, height: box };
 
+  if (brand?.logo?.kind === "themed") {
+    // The brand's own black and white versions; only one is ever shown.
+    return (
+      <span className={boxClass} style={dims} data-brand={brand.id} {...a11y}>
+        <img
+          src={brand.logo.light}
+          alt=""
+          width={inner}
+          height={inner}
+          className="object-contain dark:hidden"
+        />
+        <img
+          src={brand.logo.dark}
+          alt=""
+          width={inner}
+          height={inner}
+          className="hidden object-contain dark:block"
+        />
+      </span>
+    );
+  }
+
   if (brand?.logo?.kind === "file") {
     return (
       <span className={boxClass} style={dims} data-brand={brand.id} {...a11y}>
