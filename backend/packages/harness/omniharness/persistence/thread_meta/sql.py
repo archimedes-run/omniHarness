@@ -24,7 +24,11 @@ class ThreadMetaRepository(ThreadMetaStore):
         for key in ("created_at", "updated_at"):
             val = d.get(key)
             if isinstance(val, datetime):
-                d[key] = val.isoformat()
+                # SQLite drops the zone of a DateTime(timezone=True) column on
+                # read. Every value is written in UTC, so a naive one IS UTC;
+                # without the offset a browser parses it as local time, and a
+                # chat updated a moment ago in New York read "in about 4 hours".
+                d[key] = (val if val.tzinfo else val.replace(tzinfo=UTC)).isoformat()
         return d
 
     async def create(
