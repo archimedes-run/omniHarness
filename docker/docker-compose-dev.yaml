@@ -65,7 +65,8 @@ services:
     image: nginx:alpine
     container_name: omni-harness-nginx
     ports:
-      - "2026:2026"
+      # Loopback only: the app must not be reachable from the LAN.
+      - "127.0.0.1:2026:2026"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
     command:
@@ -115,7 +116,8 @@ services:
     # because it did not need the mount in the first place.
     command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects --codex-root /root/.codex/sessions"
     ports:
-      - "18101:18101"
+      # Loopback only; containers still reach it via host.docker.internal.
+      - "127.0.0.1:18101:18101"
     volumes:
       # The sessions it reports on. READ-ONLY: this server never writes, and
       # the mount is what makes that structural rather than a promise.
