@@ -161,3 +161,48 @@ def test_only_the_autonomy_action_changes_grants(studio) -> None:
     smuggled = {**snapshot, "config": {**snapshot["config"], "autonomy": ["tasks", "notes", "archive"]}}
     config_versions.write_agent(studio.user_id, "wrap-up", smuggled, who="agent:wrap-up", source="proposal")
     assert _granted(c, "wrap-up") == []
+
+
+def test_an_agents_self_update_never_overwrites_an_edit_made_since_it_read(studio, monkeypatch) -> None:
+    """update_agent sends the version it read as base_version: a user edit
+    landing between its read and its write is kept, and the agent is told."""
+    from omniharness.config import config_versions
+    from omniharness.runtime.user_context import reset_current_user, set_current_user
+    from omniharness.tools.builtins.update_agent_tool import update_agent
+
+    c = studio.client
+    c.post("/api/agents", json={"name": "researcher", "soul": "s", "description": "first"})
+    real = config_versions.current_agent_state
+    edited = []
+
+    def read_then_user_edits(user_id, name):
+        state = real(user_id, name)
+        if not edited:  # once: the edit's own reads go straight through
+            edited.append(True)
+            assert c.put("/api/agents/researcher", json={"description": "the user's edit", "base_version": state[1] or 1}).status_code == 200
+        return state
+
+    monkeypatch.setattr(config_versions, "current_agent_state", read_then_user_edits)
+    runtime = type("R", (), {"context": {"agent_name": "researcher"}, "tool_call_id": "t"})()
+    token = set_current_user(type("U", (), {"id": studio.user_id})())
+    try:
+        out = update_agent.func(runtime=runtime, description="the agent's edit")
+    finally:
+        reset_current_user(token)
+    assert "changed by someone else" in out.update["messages"][0].content
+    assert c.get("/api/agents/researcher").json()["description"] == "the user's edit"
+    assert [v["source"] for v in _versions(c, "researcher")["versions"]] == ["manual", "manual"]
+
+
+def test_an_agent_set_up_in_chat_is_recorded_as_the_agents_doing(studio) -> None:
+    from omniharness.runtime.user_context import reset_current_user, set_current_user
+    from omniharness.tools.builtins.setup_agent_tool import setup_agent
+
+    runtime = type("R", (), {"context": {"agent_name": "builder"}, "tool_call_id": "t"})()
+    token = set_current_user(type("U", (), {"id": studio.user_id})())
+    try:
+        setup_agent.func(soul="# Builder", description="Builds", runtime=runtime)
+    finally:
+        reset_current_user(token)
+    [created] = _versions(studio.client, "builder")["versions"]
+    assert (created["who"], created["source"]) == ("agent:builder", "chat")

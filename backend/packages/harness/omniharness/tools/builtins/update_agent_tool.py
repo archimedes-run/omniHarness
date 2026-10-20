@@ -111,8 +111,12 @@ def update_agent(
     updated_fields: list[str] = []
 
     # Start from the config on record, every key kept (display name, projects,
-    # autonomy, anything added later); only what was passed changes.
-    current = config_versions.current_agent_snapshot(user_id, agent_name) or {}
+    # autonomy, anything added later); only what was passed changes. The
+    # version is read with it and sent back as base_version, so an edit made
+    # by someone else in between (the user in Agent Studio) is never
+    # overwritten: the write is refused instead.
+    current_snapshot, read_version = config_versions.current_agent_state(user_id, agent_name)
+    current = current_snapshot or {}
     config_data: dict[str, Any] = dict(current.get("config") or {})
     # Force the on-disk ``name`` to match the directory we are writing into,
     # even if ``existing_cfg.name`` had drifted (e.g. from manual yaml edits).
@@ -135,7 +139,10 @@ def update_agent(
         try:
             # Through the versioned store: the agent changing itself is a
             # proposal it applied, recorded as such and undoable.
-            config_versions.write_agent(user_id, agent_name, {"config": config_data, "soul": new_soul}, who=f"agent:{agent_name}", source="proposal")
+            config_versions.write_agent(user_id, agent_name, {"config": config_data, "soul": new_soul}, who=f"agent:{agent_name}", source="proposal", base_version=read_version)
+        except config_versions.StaleWriteError as e:
+            logger.info("[update_agent] Refused a stale update to agent '%s' (user=%s): %s", agent_name, user_id, e)
+            return _err(f"Agent '{agent_name}' was changed by someone else while you were updating it, so nothing was saved ({e}). Read the current setup again and redo the change on top of it.")
         except Exception as e:
             logger.error("[update_agent] Failed to update agent '%s' (user=%s): %s", agent_name, user_id, e, exc_info=True)
             return _err(f"Failed to update agent '{agent_name}': {e}")

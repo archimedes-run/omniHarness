@@ -294,9 +294,17 @@ def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, sou
 
 
 def current_agent_snapshot(user_id: str, name: str) -> dict | None:
+    return current_agent_state(user_id, name)[0]
+
+
+def current_agent_state(user_id: str, name: str) -> tuple[dict | None, int]:
+    """(snapshot, version) read TOGETHER, so a writer can name the version it
+    read as its base_version and be refused if anything changed since."""
     name = _normalise_agent_name(name)
     versions = _versions(_agent_paths(user_id, name)[0])
-    return versions[-1].snapshot if versions else _agent_on_disk(user_id, name)
+    if versions:
+        return versions[-1].snapshot, versions[-1].version
+    return _agent_on_disk(user_id, name), 0
 
 
 # -- skills -------------------------------------------------------------------
