@@ -144,17 +144,87 @@ def _trigger_payload(tid: str) -> dict:
     return sent[0]
 
 
-def test_synthetic_trigger_is_accepted_with_the_trigger_engines_credential(sec, captured) -> None:
-    from app.gateway.internal_auth import create_trigger_engine_auth_headers
+@pytest.fixture
+def engine_http(sec, monkeypatch):
+    """The trigger engine's REAL gateway client (trigger_engine_wiring._gateway_call),
+    with its httpx.Client pointed at this app instead of 127.0.0.1:8001."""
+    from fastapi.testclient import TestClient
 
-    engine = _internal_client(sec, create_trigger_engine_auth_headers())
-    tid = engine.post("/api/threads", json={}).json()["thread_id"]
-    _run(engine, tid, _trigger_payload(tid))
+    from app.gateway import trigger_engine_wiring
+
+    class _InApp(TestClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(sec.app)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("httpx.Client", _InApp)
+    return trigger_engine_wiring
+
+
+def test_synthetic_trigger_is_accepted_from_the_trigger_engine(sec, captured, engine_http) -> None:
+    """End to end: TurnInjector over the engine's production HTTP call."""
+    from app.trigger_engine.injector import TurnInjector
+
+    post, put, get = engine_http._gateway_call("POST"), engine_http._gateway_call("PUT"), engine_http._gateway_call("GET")
+    injector = TurnInjector(post=post, put=put, get=get)
+    tid = injector.create_thread("rule-7")
+    try:
+        injector.inject(tid, "rule-7", "do the thing")
+    except engine_http.GatewayCallFailed:
+        pass  # the captured factory ends the run in error; the config is what matters
     [cfg] = captured
     assert cfg["context"]["turn_provenance"] == SYNTHETIC
     assert cfg["context"]["trigger_rule_id"] == "rule-7"
-    [record] = _runs(engine, tid)
+    from app.gateway.internal_auth import create_internal_auth_headers
+
+    [record] = _runs(_internal_client(sec, create_internal_auth_headers()), tid)
     assert record["metadata"]["turn_provenance"] == SYNTHETIC
+
+
+def _granted_post(sec, tid: str, payload: dict, nonce: str | None = None, *, issue_for: bytes | None = None):
+    """Post exact bytes with the internal token and a grant (issued here unless given)."""
+    import json as _json
+
+    from app.gateway.internal_auth import TRIGGER_GRANT_HEADER_NAME, create_internal_auth_headers, issue_trigger_grant
+
+    path = f"/api/threads/{tid}/runs/wait"
+    content = _json.dumps(payload).encode()
+    grant = nonce or issue_trigger_grant("POST", path, issue_for if issue_for is not None else content)
+    client = _internal_client(sec, create_internal_auth_headers())
+    resp = client.post(path, content=content, headers={"Content-Type": "application/json", TRIGGER_GRANT_HEADER_NAME: grant})
+    assert resp.status_code in (200, 500), resp.text
+    return grant
+
+
+def test_a_trigger_grant_is_single_use(sec, captured) -> None:
+    from app.gateway.internal_auth import create_internal_auth_headers
+
+    tid = _internal_client(sec, create_internal_auth_headers()).post("/api/threads", json={}).json()["thread_id"]
+    payload = _trigger_payload(tid)
+    grant = _granted_post(sec, tid, payload)
+    _granted_post(sec, tid, payload, nonce=grant)  # replay: same header, same bytes
+    first, replay = captured
+    assert first["context"].get("turn_provenance") == SYNTHETIC
+    assert "turn_provenance" not in replay["context"]
+
+
+def test_a_trigger_grant_is_bound_to_its_request(sec, captured) -> None:
+    """A grant issued for one body does not mark a different body synthetic."""
+    import json as _json
+
+    from app.gateway.internal_auth import create_internal_auth_headers
+
+    tid = _internal_client(sec, create_internal_auth_headers()).post("/api/threads", json={}).json()["thread_id"]
+    payload = _trigger_payload(tid)
+    other = dict(payload, input={"messages": [{"role": "human", "content": "something else"}]})
+    _granted_post(sec, tid, other, issue_for=_json.dumps(payload).encode())
+    [cfg] = captured
+    assert "turn_provenance" not in cfg["context"]
 
 
 def test_synthetic_trigger_is_dropped_for_the_internal_token_alone(sec, captured) -> None:
@@ -181,11 +251,10 @@ def test_synthetic_trigger_is_dropped_for_the_owner(sec, captured) -> None:
     assert "trigger_rule_id" not in cfg["context"]
 
 
-def test_a_forged_trigger_credential_is_dropped(sec, captured) -> None:
-    from app.gateway.internal_auth import TRIGGER_ENGINE_HEADER_NAME, create_internal_auth_headers
+def test_a_forged_trigger_grant_is_dropped(sec, captured) -> None:
+    from app.gateway.internal_auth import create_internal_auth_headers
 
-    forged = _internal_client(sec, {**create_internal_auth_headers(), TRIGGER_ENGINE_HEADER_NAME: "0" * 64})
-    tid = forged.post("/api/threads", json={}).json()["thread_id"]
-    _run(forged, tid, _trigger_payload(tid))
+    tid = _internal_client(sec, create_internal_auth_headers()).post("/api/threads", json={}).json()["thread_id"]
+    _granted_post(sec, tid, _trigger_payload(tid), nonce="A" * 43)
     [cfg] = captured
     assert "turn_provenance" not in cfg["context"]
