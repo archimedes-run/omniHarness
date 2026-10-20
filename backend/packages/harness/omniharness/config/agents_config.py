@@ -47,6 +47,11 @@ class AgentConfig(BaseModel):
     # - [] (explicit empty list): disable all skills
     # - ["skill1", "skill2"]: load only the specified skills
     skills: list[str] | None = None
+    # Feature 006 (Agent Studio). A name for people ("Evening wrap-up"); the
+    # slug above stays the id. None shows the title-cased slug.
+    display_name: str | None = None
+    # Ledger project ids this agent works on. None and [] both mean none.
+    projects: list[str] | None = None
 
 
 def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:

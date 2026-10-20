@@ -29,6 +29,8 @@ class AgentResponse(BaseModel):
     tool_groups: list[str] | None = Field(default=None, description="Optional tool group whitelist")
     skills: list[str] | None = Field(default=None, description="Optional skill whitelist (None=all, []=none)")
     soul: str | None = Field(default=None, description="SOUL.md content")
+    display_name: str | None = Field(default=None, description="Name shown to people; None shows the title-cased slug")
+    projects: list[str] | None = Field(default=None, description="Ledger project ids this agent works on")
 
 
 class AgentsListResponse(BaseModel):
@@ -46,6 +48,8 @@ class AgentCreateRequest(BaseModel):
     tool_groups: list[str] | None = Field(default=None, description="Optional tool group whitelist")
     skills: list[str] | None = Field(default=None, description="Optional skill whitelist (None=all enabled, []=none)")
     soul: str = Field(default="", description="SOUL.md content — agent personality and behavioral guardrails")
+    display_name: str | None = Field(default=None, max_length=80, description="Name shown to people")
+    projects: list[str] | None = Field(default=None, description="Ledger project ids this agent works on")
 
 
 class AgentUpdateRequest(BaseModel):
@@ -56,6 +60,8 @@ class AgentUpdateRequest(BaseModel):
     tool_groups: list[str] | None = Field(default=None, description="Updated tool group whitelist")
     skills: list[str] | None = Field(default=None, description="Updated skill whitelist (None=all, []=none)")
     soul: str | None = Field(default=None, description="Updated SOUL.md content")
+    display_name: str | None = Field(default=None, max_length=80, description="Updated name shown to people")
+    projects: list[str] | None = Field(default=None, description="Updated ledger project ids")
 
 
 def _validate_agent_name(name: str) -> None:
@@ -101,6 +107,8 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
         tool_groups=agent_cfg.tool_groups,
         skills=agent_cfg.skills,
         soul=soul,
+        display_name=agent_cfg.display_name,
+        projects=agent_cfg.projects,
     )
 
 
@@ -237,6 +245,10 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
             config_data["tool_groups"] = request.tool_groups
         if request.skills is not None:
             config_data["skills"] = request.skills
+        if request.display_name and request.display_name.strip():
+            config_data["display_name"] = request.display_name.strip()
+        if request.projects is not None:
+            config_data["projects"] = request.projects
 
         config_file = agent_dir / "config.yaml"
         with open(config_file, "w", encoding="utf-8") as f:
@@ -304,7 +316,7 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
         # Use model_fields_set to distinguish "field omitted" from "explicitly set to null".
         # This is critical for skills where None means "inherit all" (not "don't change").
         fields_set = request.model_fields_set
-        config_changed = bool(fields_set & {"description", "model", "tool_groups", "skills"})
+        config_changed = bool(fields_set & {"description", "model", "tool_groups", "skills", "display_name", "projects"})
 
         if config_changed:
             updated: dict = {
@@ -326,6 +338,13 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
                 new_skills = agent_cfg.skills
             if new_skills is not None:
                 updated["skills"] = new_skills
+
+            new_display = request.display_name if "display_name" in fields_set else agent_cfg.display_name
+            if new_display and new_display.strip():
+                updated["display_name"] = new_display.strip()
+            new_projects = request.projects if "projects" in fields_set else agent_cfg.projects
+            if new_projects is not None:
+                updated["projects"] = new_projects
 
             config_file = agent_dir / "config.yaml"
             with open(config_file, "w", encoding="utf-8") as f:

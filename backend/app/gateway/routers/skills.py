@@ -135,6 +135,113 @@ async def list_custom_skills(config: AppConfig = Depends(get_config)) -> SkillsL
         raise HTTPException(status_code=500, detail=f"Failed to list custom skills: {str(e)}")
 
 
+class CustomSkillCreateRequest(BaseModel):
+    name: str = Field(..., description="Hyphen-case skill name; must match the SKILL.md frontmatter")
+    content: str = Field(..., description="Full SKILL.md content, frontmatter included")
+
+
+class SkillFile(BaseModel):
+    path: str = Field(..., description="Path relative to the skill directory")
+    size: int = Field(..., description="Size in bytes")
+
+
+class SkillFilesResponse(BaseModel):
+    skill_name: str
+    files: list[SkillFile]
+
+
+class SkillFileWriteRequest(BaseModel):
+    path: str = Field(..., description="references/, templates/, scripts/ or assets/ path inside the skill")
+    content: str = Field(..., max_length=512_000, description="Text content")
+
+
+@router.post("/skills/custom", response_model=CustomSkillContentResponse, status_code=201, summary="Create Custom Skill")
+async def create_custom_skill(request: CustomSkillCreateRequest, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
+    """Skill Studio's "+ New skill": the same checks the skill_manage tool's
+    create runs (frontmatter, name match, security scan, history)."""
+    try:
+        storage = get_or_new_skill_storage(app_config=config)
+        name = storage.validate_skill_name(request.name)
+        if storage.custom_skill_exists(name) or storage.public_skill_exists(name):
+            raise HTTPException(status_code=409, detail=f"A skill named '{name}' already exists")
+        storage.validate_skill_markdown_content(name, request.content)
+        scan = await scan_skill_content(request.content, executable=False, location=f"{name}/{SKILL_MD_FILE}", app_config=config)
+        if scan.decision == "block":
+            raise HTTPException(status_code=400, detail=f"Security scan blocked the skill: {scan.reason}")
+        storage.write_custom_skill(name, SKILL_MD_FILE, request.content)
+        storage.append_history(
+            name,
+            {
+                "action": "human_create",
+                "author": "human",
+                "thread_id": None,
+                "file_path": SKILL_MD_FILE,
+                "prev_content": None,
+                "new_content": request.content,
+                "scanner": {"decision": scan.decision, "reason": scan.reason},
+            },
+        )
+        await refresh_skills_system_prompt_cache_async()
+        return await get_custom_skill(name, config)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to create custom skill %s: %s", request.name, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create custom skill: {str(e)}")
+
+
+@router.get("/skills/custom/{skill_name}/files", response_model=SkillFilesResponse, summary="List a Custom Skill's Files")
+async def list_custom_skill_files(skill_name: str, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not storage.custom_skill_exists(name):
+        raise HTTPException(status_code=404, detail=f"Custom skill '{name}' not found")
+    root = storage.get_custom_skill_dir(name)
+    files = [
+        SkillFile(path=str(path.relative_to(root)), size=path.stat().st_size) for path in sorted(root.rglob("*")) if path.is_file() and path.name != SKILL_MD_FILE and not any(part.startswith(".") for part in path.relative_to(root).parts)
+    ]
+    return SkillFilesResponse(skill_name=name, files=files)
+
+
+@router.post("/skills/custom/{skill_name}/files", response_model=SkillFilesResponse, summary="Add a File to a Custom Skill")
+async def write_custom_skill_file(skill_name: str, request: SkillFileWriteRequest, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
+    """A script, reference or template next to SKILL.md. Scripts are scanned as
+    executable; a blocked scan writes nothing."""
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+        storage.ensure_custom_skill_is_editable(name)
+        target = storage.ensure_safe_support_path(name, request.path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    executable = request.path.startswith("scripts/")
+    scan = await scan_skill_content(request.content, executable=executable, location=f"{name}/{request.path}", app_config=config)
+    if scan.decision == "block":
+        raise HTTPException(status_code=400, detail=f"Security scan blocked the file: {scan.reason}")
+    prev = target.read_text(encoding="utf-8") if target.exists() else None
+    storage.write_custom_skill(name, request.path, request.content)
+    storage.append_history(
+        name,
+        {
+            "action": "human_file",
+            "author": "human",
+            "thread_id": None,
+            "file_path": request.path,
+            "prev_content": prev,
+            "new_content": request.content,
+            "scanner": {"decision": scan.decision, "reason": scan.reason},
+        },
+    )
+    return await list_custom_skill_files(name, config)
+
+
 @router.get("/skills/custom/{skill_name}", response_model=CustomSkillContentResponse, summary="Get Custom Skill Content")
 async def get_custom_skill(skill_name: str, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
     try:

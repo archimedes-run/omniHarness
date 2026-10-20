@@ -171,6 +171,13 @@ def update_agent(
     if skills is not None and skills != existing_cfg.skills:
         updated_fields.append("skills")
 
+    # Fields only people set (Agent Studio): kept as they are, never dropped
+    # by a self-update that rewrites config.yaml.
+    if existing_cfg.display_name:
+        config_data["display_name"] = existing_cfg.display_name
+    if existing_cfg.projects is not None:
+        config_data["projects"] = existing_cfg.projects
+
     config_changed = bool({"description", "model", "tool_groups", "skills"} & set(updated_fields))
 
     # Stage every file we intend to rewrite into a temp sibling. Only after
