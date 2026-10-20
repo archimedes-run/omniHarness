@@ -423,3 +423,130 @@ def test_normalize_input_tags_the_persons_message_so_it_reads_as_theirs() -> Non
 
     (msg,) = normalize_input({"messages": [{"role": "user", "content": "hi"}]})["messages"]
     assert _is_tagged_user_turn(msg.model_dump())
+
+
+def test_a_retention_change_waits_out_a_firing_on_any_worker(make_gateway, tmp_path, monkeypatch) -> None:
+    """The purge takes the cross-process firing lock: while a firing holds it
+    (any worker), the purge is skipped, not run under it; the next one runs."""
+    import threading
+    from datetime import timedelta
+
+    import app.run_history.delete as delete
+    from app.trigger_engine.threads import RuleThreadMap
+
+    monkeypatch.setattr(delete, "LOCK_WAIT", 0.2)
+    state = tmp_path / "triggers"
+    with make_gateway(_tweak(state)) as (client, _):
+        h = client.app.state.run_history
+        h.record(kind="automation", source_id="r", body={}, status="completed", started_at=datetime.now(UTC) - timedelta(days=40))
+        engine_map = RuleThreadMap(path=state / "threads.json", create_thread=lambda r: "t")
+        held, release = threading.Event(), threading.Event()
+
+        def firing():
+            with engine_map.firing_lock():
+                held.set()
+                release.wait(10)
+
+        t = threading.Thread(target=firing)
+        t.start()
+        held.wait(5)
+        try:
+            assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
+            assert h.count() == 1, "the purge ran during a firing"
+        finally:
+            release.set()
+            t.join()
+        assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
+        assert h.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_checkpoint_committed_during_the_trims_rewrite_survives(tmp_path) -> None:
+    """A person's checkpoint lands after the re-check, during the rewrite: the
+    trim rewrites only the checkpoints it read, so the new one is kept."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from langgraph.checkpoint.base import empty_checkpoint
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from app.run_history.delete import trim_thread
+
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    cfg = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+
+    def cp_(ts, msgs, n):
+        c = empty_checkpoint()
+        c["id"] = f"1ef00000-0000-6000-8000-{n:012d}"
+        c["ts"] = ts.isoformat()
+        c["channel_values"] = {"messages": msgs}
+        c["channel_versions"] = {"messages": n}
+        return c
+
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "cp.sqlite")) as cp:
+        old = [{"type": "ai", "id": "ai-old", "content": "OLD-MAIL"}]
+        await cp.aput(cfg, cp_(now - timedelta(days=40), old, 1), {}, {})
+        mine = [*old, {"type": "human", "id": "p-1", "content": "my note"}]
+        await cp.aput(cfg, cp_(now - timedelta(days=1), mine, 2), {}, {})
+        real_aput = cp.aput
+        injected = {"done": False}
+
+        async def person_commits_on_first_write(config, checkpoint, metadata, versions):
+            if not injected["done"]:
+                injected["done"] = True
+                await real_aput(cfg, cp_(now, [*mine, {"type": "human", "id": "p-2", "content": "NEWEST"}], 3), {}, {})
+            return await real_aput(config, checkpoint, metadata, versions)
+
+        cp.aput = person_commits_on_first_write
+        app = SimpleNamespace(state=SimpleNamespace(checkpointer=cp, run_store=None, run_event_store=None))
+        assert await trim_thread(app, "t1", now - timedelta(days=30))
+        cp.aput = real_aput
+        latest = (await cp.aget_tuple(cfg)).checkpoint["channel_values"]["messages"]
+        assert any(m["content"] == "NEWEST" for m in latest), "the person's newest checkpoint was lost"
+        older = [t.checkpoint for t in [t async for t in cp.alist(cfg)] if t.checkpoint["id"].endswith("2") or t.checkpoint["id"].endswith("1")]
+        assert all("OLD-MAIL" not in str(c["channel_values"]) for c in older), "the checkpoints it read still hold the old content"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["nothing-old", "changed-meanwhile"])
+async def test_the_trim_writes_nothing_when_nothing_is_old_or_the_thread_changed(tmp_path, case) -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from langgraph.checkpoint.base import empty_checkpoint
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from app.run_history.delete import trim_thread
+
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    cfg = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+
+    def cp_(ts, msgs, n):
+        c = empty_checkpoint()
+        c["id"] = f"1ef00000-0000-6000-8000-{n:012d}"
+        c["ts"] = ts.isoformat()
+        c["channel_values"] = {"messages": msgs}
+        c["channel_versions"] = {"messages": n}
+        return c
+
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "cp.sqlite")) as cp:
+        first_age = timedelta(days=5 if case == "nothing-old" else 40)
+        await cp.aput(cfg, cp_(now - first_age, [{"type": "ai", "id": "a", "content": "x"}], 1), {}, {})
+        await cp.aput(cfg, cp_(now - timedelta(days=1), [{"type": "ai", "id": "a", "content": "x"}, {"type": "human", "id": "p", "content": "me"}], 2), {}, {})
+        real_aput, real_get = cp.aput, cp.aget_tuple
+        writes = []
+
+        async def counting_aput(*a, **k):
+            writes.append(1)
+            return await real_aput(*a, **k)
+
+        async def someone_writes_first(config):
+            await real_aput(cfg, cp_(now, [{"type": "human", "id": "p2", "content": "new"}], 3), {}, {})
+            return await real_get(config)
+
+        cp.aput = counting_aput
+        if case == "changed-meanwhile":
+            cp.aget_tuple = someone_writes_first
+        app = SimpleNamespace(state=SimpleNamespace(checkpointer=cp, run_store=None, run_event_store=None))
+        assert await trim_thread(app, "t1", now - timedelta(days=30))
+        assert writes == [], f"{case}: the trim rewrote the thread"
