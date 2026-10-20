@@ -34,9 +34,37 @@ class _Missing(dict):
         return f"<{key} unavailable>"
 
 
+#: Event text in a prompt is QUOTED: ⟦<event type> <field>: <value>⟧. Whoever
+#: wrote it (the sender of a calendar invite, a session's last message) is
+#: not the user, so the model is shown where it starts and ends, and the
+#: policy layer labels a write it steers by it (lineage.source_label: "from:
+#: calendar event “…”"), never as the schedule's own prompt (review round 3).
+EVENT_OPEN, EVENT_CLOSE = "⟦", "⟧"
+
+#: The fields an outside party writes (an invite's sender, a session's last
+#: message). Engine-made fields (scheduled_at, state, ids, times) are not
+#: quoted.
+UNTRUSTED_FIELDS = frozenset({"last_message", "idle_reason", "summary", "attendees", "description"})
+
+
+class _Quoted(_Missing):
+    def __init__(self, fields: dict, kind: str):
+        super().__init__(fields)
+        self.kind = kind
+
+    def __getitem__(self, key: str) -> str:
+        value = super().__getitem__(key) if key in self else self.__missing__(key)
+        if key not in self or key not in UNTRUSTED_FIELDS:
+            return value
+        clean = str(value).replace(EVENT_OPEN, "").replace(EVENT_CLOSE, "")
+        return f"{EVENT_OPEN}{self.kind} {key}: {clean}{EVENT_CLOSE}"
+
+
 def render_prompt(rule: Rule, event: TriggerEvent) -> str:
-    """The prompt injected as the synthetic user turn."""
-    fields = _Missing(event.fields)
+    """The prompt injected as the synthetic user turn, with every value taken
+    from the event quoted (EVENT_OPEN … EVENT_CLOSE)."""
+    kind = getattr(getattr(event, "type", None), "value", None) or "event"
+    fields = _Quoted(dict(event.fields), str(kind))
     return Formatter().vformat(rule.prompt, (), fields)
 
 

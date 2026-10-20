@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
+import { safeField } from "../display/safe";
 import { useLocalSettings } from "../settings";
 
 interface NotificationOptions {
@@ -74,7 +75,12 @@ export function useNotification(): UseNotificationReturn {
         return;
       }
 
-      const notification = new Notification(title, options);
+      // A chat's title and reply are agent-written: shown as safe text
+      // (core/display/safe), whoever calls this.
+      const notification = new Notification(safeField(title), {
+        ...options,
+        body: options?.body == null ? options?.body : safeField(options.body),
+      });
 
       // Optional: Add event listeners
       notification.onclick = () => {

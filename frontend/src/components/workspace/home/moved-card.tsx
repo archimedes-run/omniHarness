@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { safeField } from "@/core/display/safe";
 import { useMovedToday } from "@/core/home/hooks";
 import { clock } from "@/core/home/logic";
 
@@ -51,24 +52,24 @@ export function MovedCard({ now }: { now: Date }) {
                 rel="noreferrer"
                 className="hover:underline"
               >
-                {item.text}
+                {safeField(item.text)}
               </a>
             ) : item.project_id ? (
               <Link
                 href={`/workspace/projects/${item.project_id}`}
                 className="hover:underline"
               >
-                {item.text}
+                {safeField(item.text)}
               </Link>
             ) : item.thread_id ? (
               <Link
                 href={`/workspace/chats/${item.thread_id}`}
                 className="hover:underline"
               >
-                {item.text}
+                {safeField(item.text)}
               </Link>
             ) : (
-              item.text
+              safeField(item.text)
             )}
             <span className="text-muted-foreground" data-testid="known">
               {` · ${item.known}`}

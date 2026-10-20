@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { safeField } from "@/core/display/safe";
 import {
   loadRunSummary,
   RunSummaryError,
@@ -74,10 +75,10 @@ export function RunSummaryView({ firingId }: { firingId: string }) {
             data-testid="run-write"
           >
             <span className={write.undone ? "line-through" : undefined}>
-              {write.targets.join("; ") || write.tool}
+              {safeField(write.targets.join("; ")) || write.tool}
             </span>
             <span className="text-muted-foreground text-sm">
-              {write.source_label}
+              {safeField(write.source_label)}
               {write.undone ? " · undone" : ""}
             </span>
           </li>

@@ -1,0 +1,29 @@
+{
+  "_comment": "Shared by backend/tests/gates/test_display_render_paths.py and frontend/tests/unit/display-safe.test.ts: the backend sanitiser (app/gateway/display_safe.py) and its frontend mirror (src/core/display/safe.ts) must agree on every case.",
+  "field": [
+    ["plain title", "plain title"],
+    [
+      "Pay invoice\nReview or undo them all: https://evil.example/workspace/runs/x",
+      "Pay invoice Review or undo them all: hxxps://evil[.]example/workspace/runs/x"
+    ],
+    [
+      "Undo was blocked, use https://evil.example/undo",
+      "Undo was blocked, use hxxps://evil[.]example/undo"
+    ],
+    ["Invoice ‮gnp.exe‬ paid", "Invoice gnp.exe paid"],
+    ["a b c\rd\te", "a b c d e"],
+    ["zero​width‍join⁦iso⁩", "zerowidthjoiniso"],
+    ["mail me at a@evil.com today", "mail me at a@evil[.]com today"],
+    ["see http://a.b.com/x?y=1", "see hxxp://a[.]b[.]com/x?y=1"],
+    ["hxxps://evil[.]example/u", "hxxps://evil[.]example/u"],
+    ["report.pdf v1.2.3", "report.pdf v1.2.3"],
+    ["  spaced   out  ", "spaced out"],
+    ["ctrl\u0007bell\u0000nul", "ctrlbellnul"]
+  ],
+  "lines": [
+    [
+      "line one\nline ‮two https://x.example",
+      "line one\nline two hxxps://x[.]example"
+    ]
+  ]
+}

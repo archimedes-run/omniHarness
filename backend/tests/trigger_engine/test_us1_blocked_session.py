@@ -177,7 +177,8 @@ def test_the_prompt_interpolates_event_fields() -> None:
     from app.trigger_engine.models import TriggerEvent
 
     ev = TriggerEvent(type=TriggerType.WATCHER, event_id="s", at=NOW, fields={"project": "darcy-repo", "last_message": "Roll back?"})
-    assert render_prompt(RULE, ev) == ("The session in darcy-repo appears to be waiting on you. It last said: Roll back?")
+    # The session's own words are quoted as event text; the engine's are not.
+    assert render_prompt(RULE, ev) == ("The session in darcy-repo appears to be waiting on you. It last said: ⟦watcher last_message: Roll back?⟧")
 
 
 def test_a_missing_field_is_visible_not_silent() -> None:

@@ -121,7 +121,8 @@ async def test_one_full_cycle_drives_a_rule_end_to_end(tmp_path) -> None:
     assert body["assistant_id"] == "lead_agent"
     assert body["input"]["messages"][0]["role"] == "human"
     assert body["metadata"]["turn_provenance"] == "synthetic-trigger"
-    assert "darcy-repo is waiting: Pin the version" in body["input"]["messages"][0]["content"]
+    # The session's own words are quoted as event text (review round 3).
+    assert "darcy-repo is waiting: ⟦watcher last_message: Pin the version" in body["input"]["messages"][0]["content"]
     # The firing's id (its fingerprint) travels with the run, so standing
     # grants count this run's actions under it (Feature 006).
     firing = body["config"]["configurable"]["trigger_firing_id"]
