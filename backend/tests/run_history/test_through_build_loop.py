@@ -24,20 +24,30 @@ pytestmark = pytest.mark.asyncio
 
 
 class _Gateway:
-    def __init__(self, *, fail: bool = False):
+    """runs/wait returns the WHOLE thread, as the real gateway does: an earlier
+    firing of the same rule (same prompt, its own tool output) comes first."""
+
+    def __init__(self, *, fail: bool = False, no_thread_for: frozenset = frozenset(), summarised: bool = False):
         self.fail = fail
+        self.no_thread_for = no_thread_for
+        self.summarised = summarised
 
     def post(self, path, body):
         if path == "/api/threads":
-            return {"thread_id": "t-1"}
+            rule = body["metadata"]["trigger_rule_id"]
+            if rule in self.no_thread_for:
+                raise RuntimeError("thread store unavailable")
+            return {"thread_id": f"t-{rule}"}
         if self.fail:
             raise RuntimeError("model timeout")
-        prompt = body["input"]["messages"][0]["content"]
+        sent = body["input"]["messages"][0]
+        this_turn = [] if self.summarised else [{"type": "human", "content": sent["content"], "id": sent.get("id")}]
         return {
             "messages": [
-                {"type": "human", "content": "an earlier turn"},
+                {"type": "human", "content": sent["content"], "id": "an-earlier-firing"},
+                {"type": "tool", "name": "gmail_fetch", "content": "EARLIER-FIRING-TOOL-OUTPUT"},
                 {"type": "ai", "content": "an earlier reply"},
-                {"type": "human", "content": prompt},
+                *this_turn,
                 {"type": "ai", "content": "", "tool_calls": [{"name": "gmail_fetch", "args": {"q": "is:unread"}}]},
                 {"type": "tool", "name": "gmail_fetch", "content": f"reset your token {GITHUB} now"},
                 {"type": "ai", "content": "One mail asks you to reset a token."},
@@ -51,9 +61,13 @@ class _Gateway:
         return {"status": "idle"}
 
 
-def _loop(tmp_path, gateway, history):
+def _rule(rule_id: str, prompt: str = "Summarise my inbox.") -> dict:
+    return {"id": rule_id, "type": "cron", "match": {"schedule": "* * * * *"}, "prompt": prompt, "destination": "quiet"}
+
+
+def _loop(tmp_path, gateway, history, rules_list=None):
     rules = tmp_path / "rules.json"
-    rules.write_text(json.dumps({"quiet_hours": {"enabled": False}, "rules": [{"id": "inbox", "type": "cron", "match": {"schedule": "* * * * *"}, "prompt": "Summarise my inbox.", "destination": "quiet"}]}))
+    rules.write_text(json.dumps({"quiet_hours": {"enabled": False}, "rules": rules_list or [_rule("inbox")]}))
     cfg = SimpleNamespace(trigger_engine=SimpleNamespace(rules_path=str(rules), state_dir=str(tmp_path / "state"), actor="default", tick_seconds=30.0))
     return build_loop(
         cfg,
@@ -74,7 +88,7 @@ async def test_a_run_is_recorded_whole_and_redacted(tmp_path) -> None:
     await loop.cycle()
 
     runs = history.list(kind=AUTOMATION, source_id="inbox")
-    assert len(runs) == 1 and runs[0].status == "completed" and runs[0].thread_id == "t-1"
+    assert len(runs) == 1 and runs[0].status == "completed" and runs[0].thread_id == "t-inbox"
     body = history.get(runs[0].id)["body"]
     kinds = [m["type"] for m in body["messages"]]
     assert kinds == ["human", "ai", "tool", "ai"], "not exactly this turn's messages"
@@ -114,3 +128,44 @@ async def test_the_production_loop_records_into_the_history_it_is_given(tmp_path
     loop.runner.record_run({"rule_id": "inbox", "status": "completed", "body": {"reply": "hi"}})
     assert [r.source_id for r in history.list(kind=AUTOMATION)] == ["inbox"]
     reset_extensions_config()
+
+
+async def test_only_this_turns_messages_are_stored(tmp_path) -> None:
+    """runs/wait returns the whole thread; an earlier firing with the SAME
+    prompt is not this turn. Found by the id the injector sent."""
+    history = RunHistory(tmp_path / "history")
+    await _loop(tmp_path, _Gateway(), history).cycle()
+
+    (run,) = history.list(kind=AUTOMATION, source_id="inbox")
+    body = history.get(run.id)["body"]
+    assert body["turn_found"] is True
+    assert [m["type"] for m in body["messages"]] == ["human", "ai", "tool", "ai"]
+    assert "EARLIER-FIRING-TOOL-OUTPUT" not in json.dumps(body), "an earlier turn was stored as this one"
+
+
+async def test_a_turn_that_cannot_be_found_stores_no_messages_and_says_so(tmp_path) -> None:
+    history = RunHistory(tmp_path / "history")
+    await _loop(tmp_path, _Gateway(summarised=True), history).cycle()
+
+    (run,) = history.list(kind=AUTOMATION, source_id="inbox")
+    body = history.get(run.id)["body"]
+    assert body["turn_found"] is False and body["messages"] == []
+    assert "EARLIER-FIRING-TOOL-OUTPUT" not in json.dumps(body), "the whole thread was stored"
+    assert body["reply"] == "One mail asks you to reset a token."
+
+
+async def test_a_firing_that_fails_before_injecting_records_no_earlier_messages(tmp_path) -> None:
+    """Rule `a` runs and fills the injector's last turn; rule `b` fails creating
+    its thread. b's record must not carry a's messages."""
+    history = RunHistory(tmp_path / "history")
+    loop = _loop(tmp_path, _Gateway(no_thread_for=frozenset({"b"})), history, [_rule("a", "Prompt for a."), _rule("b", "Prompt for b.")])
+
+    await loop.cycle()
+
+    (a,) = history.list(kind=AUTOMATION, source_id="a")
+    (b,) = history.list(kind=AUTOMATION, source_id="b")
+    assert history.get(a.id)["body"]["messages"], "rule a recorded nothing"
+    b_body = history.get(b.id)["body"]
+    assert b.status == "failed" and "thread store unavailable" in (b.error or "")
+    assert b_body["messages"] == [], "rule b's record carries rule a's messages"
+    assert "Prompt for a." not in json.dumps(b_body)

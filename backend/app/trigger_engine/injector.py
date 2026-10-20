@@ -18,6 +18,7 @@ Phase 3:
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -76,6 +77,17 @@ class TurnInjector:
     #: 006). The engine runs one rule at a time on one thread, so "last" is
     #: unambiguous.
     last_turn: list = field(default_factory=list)
+    #: Whether `last_turn` was cut at this turn's own prompt (True), or the
+    #: turn could not be told apart from the rest of the thread and nothing was
+    #: kept (False). None before any turn.
+    last_turn_found: bool | None = None
+
+    def reset_turn(self) -> None:
+        """Forget the last turn. The runner calls this before EVERY firing, so
+        a firing that fails before injecting never carries the previous one's
+        messages into its record."""
+        self.last_turn = []
+        self.last_turn_found = None
 
     def create_thread(self, rule_id: str) -> str:
         rec = self.post("/api/threads", {"metadata": {RULE_KEY: rule_id}})
@@ -105,9 +117,12 @@ class TurnInjector:
         # drops `configurable` wholesale, taking `thread_id` with it. The
         # gateway mirrors the whitelisted keys across instead — see
         # `_mirror_runtime_visible_keys` in app/gateway/services.py.
+        marker = f"trigger-turn-{uuid.uuid4().hex}"
         payload = {
             "assistant_id": self.assistant_id,
-            "input": {"messages": [{"role": "human", "content": prompt}]},
+            # The id marks where THIS turn starts in the thread runs/wait
+            # returns, so the run history keeps only this turn's messages.
+            "input": {"messages": [{"role": "human", "content": prompt, "id": marker}]},
             "config": {
                 "configurable": {
                     "thread_id": thread_id,
@@ -118,22 +133,27 @@ class TurnInjector:
             },
             "metadata": {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: rule_id},
         }
-        self.last_turn = []
+        self.reset_turn()
         result = self.post(f"/api/threads/{thread_id}/runs/wait", payload)
-        self.last_turn = turn_messages(result, prompt)
+        turn = turn_messages(result, marker)
+        self.last_turn, self.last_turn_found = (turn or [], turn is not None)
         return _reply_text(result)
 
 
-def turn_messages(result: dict, prompt: str) -> list:
-    """This turn's messages: from the last human message carrying `prompt`
-    (runs/wait returns the whole thread) to the end. The whole thread when the
-    prompt cannot be found, rather than nothing."""
+def turn_messages(result: dict, marker: str | None) -> list | None:
+    """This turn's messages only, from its own prompt to the end (runs/wait
+    returns the whole thread), found by the message id the injector sent.
+
+    Not by the prompt's text: a rule sends the same prompt every firing, so
+    text cannot tell this turn from an earlier one. None when the id is not
+    there (a summariser may have rewritten the thread): the caller stores no
+    messages and says so, never the earlier turns."""
     msgs = [m for m in (result.get("messages") or []) if isinstance(m, dict)]
-    for i in range(len(msgs) - 1, -1, -1):
-        m = msgs[i]
-        if (m.get("type") in ("human", "user") or m.get("role") in ("human", "user")) and prompt in str(m.get("content", "")):
-            return msgs[i:]
-    return msgs
+    if marker:
+        for i in range(len(msgs) - 1, -1, -1):
+            if msgs[i].get("id") == marker:
+                return msgs[i:]
+    return None
 
 
 def _reply_text(result: dict) -> str:

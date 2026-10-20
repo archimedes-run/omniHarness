@@ -117,6 +117,11 @@ class RuleRunner:
             firing = Firing(rule_id=rule.id, event=event, prompt=render_prompt(rule, event))
             started = datetime.now(UTC)
             raw = ""
+            # Every firing starts with no turn: one that fails before injecting
+            # must not record the previous firing's messages as its own.
+            reset = getattr(self.injector, "reset_turn", None)
+            if reset is not None:
+                reset()
             try:
                 firing.thread_id = self.threads.thread_for(rule.id)
                 if self.default_tools:
@@ -165,6 +170,9 @@ class RuleRunner:
                         "event": {"type": str(firing.event.type), "id": firing.event.event_id, "fields": dict(firing.event.fields)},
                         "prompt": firing.prompt,
                         "messages": list(getattr(self.injector, "last_turn", []) or []),
+                        # False: the turn could not be found in the thread, so
+                        # no messages were kept (never the earlier turns).
+                        "turn_found": getattr(self.injector, "last_turn_found", None),
                         "reply": reply,
                     },
                 }
