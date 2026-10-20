@@ -545,6 +545,16 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     tools = _assemble_lead_tools(cfg, inputs, app_config=resolved_app_config)
 
+    # An agent the user called in with "@" (set by the gateway, from the user's
+    # own turn, only for a member of the chat): the lead hands the turn to it.
+    called_agent = cfg.get("called_agent") if isinstance(cfg.get("called_agent"), str) else None
+    called_middlewares: list[AgentMiddleware] = []
+    if called_agent and not inputs.is_bootstrap:
+        from omniharness.agents.called_agents import CalledAgentMiddleware, call_agent_tool
+
+        tools = [*tools, call_agent_tool]
+        called_middlewares.append(CalledAgentMiddleware(called_agent))
+
     if inputs.is_bootstrap:
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
         return create_agent(
@@ -563,7 +573,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config),
         tools=tools,
-        middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name, app_config=resolved_app_config),
+        middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name, custom_middlewares=called_middlewares or None, app_config=resolved_app_config),
         system_prompt=apply_prompt_template(
             subagent_enabled=subagent_enabled,
             max_concurrent_subagents=max_concurrent_subagents,
