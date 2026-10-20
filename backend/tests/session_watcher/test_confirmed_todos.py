@@ -126,3 +126,11 @@ def test_ten_updates_with_three_failing_or_unanswered_show_the_last_confirmed(tm
         if ok:
             confirmed = items
         assert activity.visible_todos() == confirmed, f"after update {i}"
+
+
+def test_a_session_whose_first_record_has_no_cwd_is_named_from_the_first_that_does(tmp_path) -> None:
+    """Seen live: a headless `claude -p` run's first record carries no cwd, and
+    the session was named after its directory slug."""
+    first = {"type": "user", "sessionId": "s1", "timestamp": _ts(0), "message": {"role": "user", "content": "go"}}
+    ref = session(tmp_path, [first, call(1, "a", "TodoWrite", {"todos": []})])
+    assert ref.project == "repo"

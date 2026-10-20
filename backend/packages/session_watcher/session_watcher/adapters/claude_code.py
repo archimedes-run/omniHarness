@@ -324,6 +324,11 @@ class ClaudeCodeAdapter(SessionAdapter):
                 continue
 
             acc = state.sessions.get(parsed.session_id)
+            if acc is not None and not acc.project and parsed.project:
+                # The first record may carry no cwd (a headless `claude -p`
+                # run starts with one); name the session from the first that
+                # does, not from the directory slug.
+                acc.project = parsed.project
             if acc is None:
                 acc = _SessionAccum(project=parsed.project)
                 state.sessions[parsed.session_id] = acc

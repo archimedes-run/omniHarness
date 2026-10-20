@@ -67,6 +67,14 @@ CODEX_INERT_TYPES = frozenset(
 )
 
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$", re.M)
+# Code mode (codex-cli 0.146, seen live 2026-10-19): tools are called from a
+# JavaScript `exec` cell, e.g. `await tools.update_plan({plan:[{step:"x",
+# status:"pending"}]})`, keys quoted or not, and the cell's output starts
+# "Script completed" (or reports a failure).
+_CODE_PLAN = re.compile(r"tools\.update_plan\s*\((.*?)\)\s*;", re.S)
+_CODE_ITEM = re.compile(r"\{([^{}]*)\}")
+_CODE_STEP = re.compile(r"""["']?step["']?\s*:\s*(["'`])(.*?)(?<!\\)\1""", re.S)
+_CODE_STATUS = re.compile(r"""["']?status["']?\s*:\s*["'`](\w+)["'`]""")
 _EXIT = re.compile(r"(?:Exit code:|Process exited with code)\s*(-?\d+)")
 
 
@@ -113,6 +121,8 @@ class _CodexFile:
     activity: ConfirmedActivity = field(default_factory=ConfirmedActivity)
     #: call_id -> tool name, so an output can be judged by its tool's rule.
     tools: dict[str, str] = field(default_factory=dict)
+    #: Code-mode plans whose items were not literals (counted as drift).
+    unparsed_plans: int = 0
 
     def records(self) -> list[ParsedRecord]:
         return ([self.first] if self.first is not None else []) + list(self.tail)
@@ -211,6 +221,8 @@ class CodexAdapter(SessionAdapter):
             if isinstance(plan, list):
                 # Steps and statuses only; `explanation` is dropped (FR-030).
                 todo = ("replace", [(i.get("step") or "", i.get("status")) for i in plan if isinstance(i, dict)])
+        elif name == "exec" and isinstance(payload.get("input"), str):
+            todo, files = CodexAdapter._code_mode(state, payload["input"])
         elif name == "apply_patch":
             text = payload.get("input")
             if not isinstance(text, str):
@@ -224,6 +236,29 @@ class CodexAdapter(SessionAdapter):
         return (ToolCall(call_id=call_id, tool=name, todo=todo, files=files),)
 
     @staticmethod
+    def _code_mode(state: _CodexFile, code: str) -> tuple[tuple | None, tuple[str, ...]]:
+        """A plan and patched files from a code-mode `exec` cell.
+
+        The last update_plan in the cell wins. A plan whose items cannot be
+        read as literals (built from variables, say) is counted as drift
+        rather than guessed at.
+        """
+        todo = None
+        calls = _CODE_PLAN.findall(code)
+        if calls:
+            items = []
+            for body in _CODE_ITEM.findall(calls[-1]):
+                step, status = _CODE_STEP.search(body), _CODE_STATUS.search(body)
+                if step and status:
+                    items.append((step.group(2), status.group(1)))
+            if items:
+                todo = ("replace", items)
+            else:
+                state.unparsed_plans += 1
+        files = tuple(_PATCH_FILE.findall(code)) if "*** Begin Patch" in code else ()
+        return todo, files
+
+    @staticmethod
     def _result(state: _CodexFile, payload: dict) -> tuple[ToolResult, ...]:
         call_id = payload.get("call_id")
         if not isinstance(call_id, str):
@@ -232,6 +267,9 @@ class CodexAdapter(SessionAdapter):
         text = _output_text(payload)
         if tool == "update_plan":
             ok: bool | None = text.strip().startswith("Plan updated")
+        elif tool == "exec":
+            head = text.strip()
+            ok = True if head.startswith("Script completed") else False if head.startswith(("Script failed", "Script error", "Error")) else None
         else:
             m = _EXIT.search(text)
             ok = (int(m.group(1)) == 0) if m else None
@@ -313,7 +351,11 @@ class CodexAdapter(SessionAdapter):
             if not isinstance(raw, dict):
                 self._source.note_skip(SkipReason.MALFORMED, path, state.lineno)
                 continue
+            unparsed = state.unparsed_plans
             parsed = self.parse(raw, path, state.lineno)
+            if state.unparsed_plans > unparsed:
+                # A code-mode plan we could not read: the shape moved.
+                self._source.note_skip(SkipReason.UNKNOWN_TYPE, path, state.lineno, raw_type="exec:update_plan-unreadable")
             if parsed is None:
                 reason = SkipReason.NO_SESSION_ID if state.session_id is None else SkipReason.NO_TIMESTAMP
                 self._source.note_skip(reason, path, state.lineno, raw_type=raw.get("type") if isinstance(raw.get("type"), str) else None)

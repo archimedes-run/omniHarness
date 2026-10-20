@@ -117,3 +117,11 @@ The adapter ran read-only over the user's `~/.codex/sessions` before the fixture
 - **0 drift**: no unknown record types and no malformed lines. 3,237 records were inert by the explicit list.
 - **Positive control**: every session has a working folder and at least 3 observed completed turns.
 - Two sessions have confirmed plans, one of 3 items (all completed) and one of 5. The other three made no plan.
+
+## R4c. Codex code mode (seen live, 2026-10-19)
+
+The installed Codex (codex-cli 0.146.0-alpha.3.1, bundled with Codex.app) does not call `update_plan` at the top level, which is how the July files on this machine did it. It runs tools from a JavaScript `exec` cell, `await tools.update_plan({plan:[{step:"…",status:"…"}]})`, with keys quoted or not. The cell's output starts "Script completed".
+- The adapter reads the last literal plan in a completed cell.
+- A plan built from variables counts as drift (`exec:update_plan-unreadable`); it is never guessed.
+
+This is the drift rule doing its job: the July fixtures would have passed while the live session showed no plan.

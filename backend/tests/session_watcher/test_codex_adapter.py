@@ -137,3 +137,35 @@ def test_a_half_written_last_line_waits_for_its_newline(tmp_path) -> None:
     _, source, refs = discover(tmp_path)
     assert source.stats.skips["malformed-json"] == 0
     assert len(refs["s1"].records) == 1
+
+
+def _exec(minutes: float, call_id: str, code: str) -> dict:
+    return item(minutes, "custom_tool_call", name="exec", input=code, call_id=call_id, status="completed")
+
+
+def _exec_out(minutes: float, call_id: str, head: str) -> dict:
+    return item(minutes, "custom_tool_call_output", call_id=call_id, output=[{"type": "input_text", "text": f"{head}\nWall time 0.1 seconds\nOutput:\n"}, {"type": "input_text", "text": "{}"}])
+
+
+def test_code_mode_plans_are_read_and_applied_only_when_the_cell_completes(tmp_path) -> None:
+    """codex-cli 0.146 calls tools from a JavaScript `exec` cell. Seen live on
+    2026-10-19; the July files on this machine used a top-level update_plan."""
+    first = 'const r = await tools.update_plan({plan:[\n  {step:"List the files",status:"in_progress"},\n  {step:"Report",status:"pending"}\n]});\ntext(r)\n'
+    second = 'const r = await tools.update_plan({explanation:"x","plan":[\n  {"step":"List the files","status":"completed"},\n  {step:\'Report\',status:"in_progress"}\n]});\ntext(r)\n'
+    failed = 'const r = await tools.update_plan({plan:[{step:"List the files",status:"completed"},{step:"Report",status:"completed"}]});'
+    write(
+        tmp_path,
+        "2026/10/19",
+        "s1",
+        [meta(0, "s1"), _exec(1, "e1", first), _exec_out(1.1, "e1", "Script completed"), _exec(2, "e2", second), _exec_out(2.1, "e2", "Script completed"), _exec(3, "e3", failed), _exec_out(3.1, "e3", "Script failed")],
+    )
+    _, source, refs = discover(tmp_path)
+    assert refs["s1"].todos == [("List the files", "completed"), ("Report", "in_progress")]
+    assert source.stats.drift_signals == 0
+
+
+def test_a_code_mode_plan_built_from_variables_is_drift_not_a_guess(tmp_path) -> None:
+    write(tmp_path, "2026/10/19", "s1", [meta(0, "s1"), _exec(1, "e1", "const steps = make();\nawait tools.update_plan({plan: steps});"), _exec_out(1.1, "e1", "Script completed")])
+    _, source, refs = discover(tmp_path)
+    assert refs["s1"].todos is None
+    assert source.stats.unknown_types["exec:update_plan-unreadable"] == 1
