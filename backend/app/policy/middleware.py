@@ -105,6 +105,7 @@ class PolicyMiddleware(AgentMiddleware):
                 return self._require_confirmation(request, decision, extra_note=grant)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = handler(request)
+            self._mark_trusted_ack(request, result)
             if grant:
                 self._record_grant_use(request, decision, grant, call.get("write_id"))
             else:
@@ -139,6 +140,7 @@ class PolicyMiddleware(AgentMiddleware):
                 return self._require_confirmation(request, decision, extra_note=grant)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
+            self._mark_trusted_ack(request, result)
             if grant:
                 self._record_grant_use(request, decision, grant, call.get("write_id"))
                 return result
@@ -640,7 +642,25 @@ class PolicyMiddleware(AgentMiddleware):
             context = getattr(getattr(request, "runtime", None), "context", None)
             if isinstance(context, dict):
                 context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
-        return self._as_tool_result(request, action.plan_text)
+        return self._mark_trusted_ack(request, self._as_tool_result(request, action.plan_text))
+
+    @staticmethod
+    def _mark_trusted_ack(request, result: Any) -> Any:
+        """Mark a tool result as the harness's own acknowledgement when, and
+        only when, the tool dispatched IS a registered built-in whose results
+        are trusted (lineage.TRUSTED_TOOL_RESULTS), by object identity: an
+        outside tool with the same name is never marked."""
+        from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
+
+        from .lineage import TRUSTED_ACK_MARKER
+
+        if getattr(request, "tool", None) is not ledger_apply_tool:
+            return result
+        messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
+        for message in messages:
+            if getattr(message, "type", None) == "tool" and isinstance(getattr(message, "additional_kwargs", None), dict):
+                message.additional_kwargs[TRUSTED_ACK_MARKER] = True
+        return result
 
     @staticmethod
     def _as_tool_result(request, text: str) -> Any:

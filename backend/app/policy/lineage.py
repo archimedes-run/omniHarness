@@ -115,10 +115,9 @@ ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter'
 
 #: Tool results the harness itself produced, which therefore cannot carry
 #: anyone else's words: write acknowledgements and receipts (user decision
-#: 2026-10-20). THE ONE PLACE that says which tool output is trusted. Anything
-#: not listed (mail, web, files, list cells, stored runs, MCP reads, a
-#: subagent's or a called agent's output, and every tool added later) is
-#: UNTRUSTED by default.
+#: 2026-10-20). Anything not listed (mail, web, files, list cells, stored
+#: runs, MCP reads, a subagent's or a called agent's output, and every tool
+#: added later) is UNTRUSTED by default.
 #:
 #: `ledger_apply` answers with what it wrote ("Added T-1 …", a suggestion's
 #: plan, an Undo id), composed by the ledger service from the call's own
@@ -126,10 +125,21 @@ ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter'
 #: may have put there.
 TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"})
 
+#: Set on a tool result by the policy middleware at dispatch, and only when
+#: the tool that ran IS the registered built-in object (middleware.
+#: _mark_trusted_ack): trust follows the tool's identity, never its name, so
+#: an MCP tool calling itself ledger_apply (refused at load anyway: tools.
+#: refuse_builtin_collisions) or a hand-made message naming it is untrusted.
+TRUSTED_ACK_MARKER = "omniharness_trusted_ack"
 
-def tool_result_is_trusted(tool_name: str | None) -> bool:
-    """True only for a harness-internal acknowledgement (TRUSTED_TOOL_RESULTS)."""
-    return bool(tool_name) and tool_name in TRUSTED_TOOL_RESULTS
+
+def tool_result_is_trusted(message: Any, name: str | None = None) -> bool:
+    """THE one trust decision for a tool result: a harness-internal
+    acknowledgement from the registered built-in (marker) of a kind listed in
+    TRUSTED_TOOL_RESULTS. Everything else is untrusted."""
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    marked = isinstance(kwargs, dict) and kwargs.get(TRUSTED_ACK_MARKER) is True
+    return bool(marked and name and name in TRUSTED_TOOL_RESULTS)
 
 
 def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) -> tuple[str, str]:
@@ -162,7 +172,7 @@ def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) ->
             continue
         if is_tool_result(message):
             name = _tool_name_of(items, message)
-            if not tool_result_is_trusted(name) and name not in untrusted:
+            if not tool_result_is_trusted(message, name) and name not in untrusted:
                 untrusted.insert(0, name)
             continue
         if is_invitation(message):
@@ -253,7 +263,7 @@ def source_label(messages: list[Any] | None) -> str:
         message = items[index]
         if is_tool_result(message):
             name = _tool_name_of(items, message)
-            if tool_result_is_trusted(name):
+            if tool_result_is_trusted(message, name):
                 continue
             family = _family(name)
             content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
@@ -270,5 +280,35 @@ def source_label(messages: list[Any] | None) -> str:
                 short = "Withheld"
             return f"from: {family} “{short}”"
         if is_user_turn(message) or (_message_type(message) in USER_ORIGINS):
+            quoted = _event_label(message)
+            if quoted:
+                return quoted
             break
     return "from: the schedule's own prompt"
+
+
+_EVENT_QUOTE = re.compile(r"⟦(\w+) (\w+): ([^⟧]*)⟧")
+_EVENT_FAMILY = {"calendar": "calendar event", "watcher": "session", "completion": "session"}
+_TITLE_FIELDS = ("summary", "title", "subject", "name", "project")
+
+
+def _event_label(message: Any) -> str | None:
+    """A scheduled turn whose prompt quotes event text (trigger_engine.compose
+    render_prompt) is not the schedule's own words: name the event."""
+    from session_watcher.redaction import Channel, RedactionError, redact
+
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    text = content if isinstance(content, str) else " ".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in (content or []))
+    quotes = _EVENT_QUOTE.findall(text)
+    if not quotes:
+        return None
+    kind = quotes[0][0]
+    by_field = {field: value for _, field, value in quotes}
+    title = next((by_field[f] for f in _TITLE_FIELDS if by_field.get(f)), quotes[0][2])
+    short = " ".join(title.split())
+    short = short[:_LABEL_LIMIT] + ("…" if len(short) > _LABEL_LIMIT else "")
+    try:
+        short = redact(short, Channel.REMOTE)
+    except RedactionError:
+        short = "Withheld"
+    return f"from: {_EVENT_FAMILY.get(kind, 'event' if kind == 'event' else kind + ' event')} “{short}”"

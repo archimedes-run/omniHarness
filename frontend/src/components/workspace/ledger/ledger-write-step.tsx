@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { Button } from "@/components/ui/button";
+import { safeField } from "@/core/display/safe";
 import { LedgerError, parseLedgerResult, undoWrite } from "@/core/ledger/api";
 
 /**
@@ -20,7 +21,9 @@ export function LedgerWriteStep({
   label: React.ReactNode;
   result: string;
 }) {
-  const { text, writeId } = parseLedgerResult(result);
+  const parsed = parseLedgerResult(result);
+  const text = safeField(parsed.text);
+  const writeId = parsed.writeId;
   const [state, setState] = useState<
     | { kind: "idle" }
     | { kind: "busy" }
