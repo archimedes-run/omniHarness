@@ -43,6 +43,7 @@ READ_SURFACES = [
 #: The routers that MAY write in these namespaces, and why. Nothing else may.
 WRITE_ROUTERS = {
     "gateway/routers/automations.py": "edits trigger rules through automations_store: validated by the engine's parser, written atomically, refused on a stale version",
+    "gateway/routers/tool_sources_retry.py": "Feature 006 Retry: empties and reloads the in-memory MCP tool cache; writes no store and no file",
     "gateway/routers/confirmations.py": "confirms or declines a pending Tier 3 action through confirm_flow, the single confirmation path",
 }
 
