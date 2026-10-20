@@ -227,16 +227,18 @@ def test_a_typed_reply_is_recorded_with_its_thread_user_and_message(sec, agent_t
 
 
 def test_a_channel_reply_is_recorded_as_that_channel(sec, agent_turns) -> None:
-    from app.gateway.internal_auth import CHANNEL_HEADER_NAME, CHANNEL_OWNER_HEADER_NAME, create_internal_auth_headers
-
     # A sender the channel's allowlist vouches for as the owner (an unvouched
     # one is relayed content: tests/security/test_user_turns.py).
-    channel = {**create_internal_auth_headers(), CHANNEL_HEADER_NAME: "telegram", CHANNEL_OWNER_HEADER_NAME: "1"}
+    from app.gateway.internal_auth import CHANNEL_HEADER_NAME, CHANNEL_OWNER_HEADER_NAME, create_internal_auth_headers, issue_channel_owner_grant
+
+    channel = {**create_internal_auth_headers(), CHANNEL_HEADER_NAME: "telegram"}
     tid = sec.owner.post("/api/threads", json={}, headers=channel).json()["thread_id"]
 
     def say(text: str) -> None:
         body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": text}]}}
-        assert sec.owner.post(f"/api/threads/{tid}/runs/wait", json=body, headers=channel).status_code == 200
+        path = f"/api/threads/{tid}/runs/wait"
+        headers = {**channel, CHANNEL_OWNER_HEADER_NAME: issue_channel_owner_grant(path)}
+        assert sec.owner.post(path, json=body, headers=headers).status_code == 200
 
     agent_turns.append([PROPOSE])
     say("email my statement to the bank")

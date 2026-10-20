@@ -16,7 +16,7 @@ from app.channels.commands import KNOWN_CHANNEL_COMMANDS
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 from app.channels.store import ChannelStore
 from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
-from app.gateway.internal_auth import CHANNEL_HEADER_NAME, CHANNEL_OWNER_HEADER_NAME, create_internal_auth_headers
+from app.gateway.internal_auth import CHANNEL_HEADER_NAME, CHANNEL_OWNER_HEADER_NAME, create_internal_auth_headers, issue_channel_owner_grant
 from omniharness.runtime.user_context import get_effective_user_id
 
 logger = logging.getLogger(__name__)
@@ -430,6 +430,12 @@ class ChannelManager:
         user_layer = _as_dict(users_layer.get(msg.user_id))
         return channel_layer, user_layer
 
+    def _run_path(self, thread_id: str) -> str:
+        """The path the SDK's runs.wait posts to, for the channel-owner grant."""
+        from urllib.parse import urlparse
+
+        return f"{urlparse(self._langgraph_url).path.rstrip('/')}/threads/{thread_id}/runs/wait"
+
     @staticmethod
     def _sender_is_the_owner(msg: InboundMessage) -> bool:
         """Does the channel's explicit allowlist vouch for this sender?"""
@@ -634,7 +640,7 @@ class ChannelManager:
             # Which channel this turn came from. The gateway trusts it only
             # alongside the internal token (services.start_run), and records
             # it on any plan a typed reply here answers ("channel:<name>").
-            headers={CHANNEL_HEADER_NAME: msg.channel_name, **({CHANNEL_OWNER_HEADER_NAME: "1"} if self._sender_is_the_owner(msg) else {})},
+            headers={CHANNEL_HEADER_NAME: msg.channel_name, **({CHANNEL_OWNER_HEADER_NAME: issue_channel_owner_grant(self._run_path(thread_id))} if self._sender_is_the_owner(msg) else {})},
         )
 
         response_text = _extract_response_text(result)
