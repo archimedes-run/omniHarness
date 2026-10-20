@@ -149,7 +149,7 @@ export function ScheduleList({ agentId }: { agentId: string }) {
                         : ""
                     }`
                   : c.noSchedule}
-            {s.timezone_named ? "" : ` · ${c.utcNote}`}
+            {s.timezone_named ? "" : ` · ${c.utcNote(s.timezone)}`}
           </div>
         </li>
       ))}

@@ -137,7 +137,8 @@ const enUS = {
     recentRuns: "Recent runs",
     noRuns: "No runs yet.",
     nextAt: (when: string) => `Next: ${when}`,
-    utcNote: "on the engine's clock (UTC): the rule names no time zone",
+    utcNote: (zone: string) =>
+      `in the engine's default zone (${zone}): the rule names no time zone`,
     scheduleOff: "Off",
     today: "Today",
     tomorrow: "Tomorrow",
@@ -371,7 +372,7 @@ const zhCN: StudioCopy = {
     recentRuns: "最近运行",
     noRuns: "还没有运行记录。",
     nextAt: (when) => `下次：${when}`,
-    utcNote: "按引擎时钟（UTC）：规则未指定时区",
+    utcNote: (zone) => `按引擎默认时区（${zone}）：规则未指定时区`,
     scheduleOff: "已关闭",
     today: "今天",
     tomorrow: "明天",

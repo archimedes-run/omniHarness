@@ -2,14 +2,14 @@
 
 Every rule today runs as the lead agent (the injector's assistant id), so the
 lead agent owns them all and a custom agent has none until a rule names it.
-Next run is the engine's own computation, in the rule's zone (or UTC when it
-names none), held to the end of quiet hours unless the rule is urgent.
+Next run is the engine's own computation, in the rule's zone (or the engine's
+default zone when it names none), held to the end of quiet hours unless the rule is urgent.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 
 RULES = {
     "quiet_hours": {"start": "22:00", "end": "07:30", "timezone": "America/New_York", "enabled": True},
@@ -44,9 +44,11 @@ def test_the_lead_agent_owns_every_rule_with_engine_next_runs(studio) -> None:
     held = datetime.fromisoformat(by_id["late-digest"]["held_until"]).astimezone(__import__("zoneinfo").ZoneInfo("America/New_York"))
     assert (held.hour, held.minute) == (7, 30)
 
-    # A rule that names no zone runs on the engine's clock, and says so.
-    assert (by_id["utc-ping"]["timezone"], by_id["utc-ping"]["timezone_named"]) == ("UTC", False)
-    assert datetime.fromisoformat(by_id["utc-ping"]["next_run"]).astimezone(UTC).hour == 12
+    # A rule that names no zone runs in the engine's default zone (New York
+    # since main's d059617), and says so.
+    assert (by_id["utc-ping"]["timezone"], by_id["utc-ping"]["timezone_named"]) == ("America/New_York", False)
+    ping = datetime.fromisoformat(by_id["utc-ping"]["next_run"]).astimezone(__import__("zoneinfo").ZoneInfo("America/New_York"))
+    assert (ping.hour, ping.minute) == (12, 0)
     assert by_id["off-rule"]["next_run"] is None
 
     assert [(r["rule_id"], r["outcome"]) for r in body["recent"]] == [("evening-wrap", "delivered")]

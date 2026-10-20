@@ -29,7 +29,7 @@ class AgentSchedule(BaseModel):
     rule_id: str
     schedule: str = Field(..., description="The cron expression, verbatim")
     timezone: str = Field(..., description="The zone the engine evaluates it in")
-    timezone_named: bool = Field(..., description="False when the rule names no zone and the engine's clock (UTC) is used")
+    timezone_named: bool = Field(..., description="False when the rule names no zone and the engine's default zone (scheduler.DEFAULT_TIMEZONE) is used")
     enabled: bool
     next_run: str | None = Field(..., description="ISO instant; None when disabled or the expression cannot be evaluated")
     held_until: str | None = Field(None, description="When the next run falls in quiet hours: when it is released")
@@ -53,7 +53,7 @@ def rule_agent(rule) -> str:
 
 def describe_agent_runs(*, agent: str, rules: list, quiet_hours, audit: list[dict], engine_enabled: bool, rules_error: str | None = None, now: datetime | None = None, limit: int = 5) -> AgentRunsView:
     from app.trigger_engine.models import TriggerType
-    from app.trigger_engine.scheduler import next_due
+    from app.trigger_engine.scheduler import DEFAULT_TIMEZONE, next_due
 
     now = now or datetime.now(UTC)
     mine = [r for r in rules if rule_agent(r) == agent]
@@ -63,7 +63,7 @@ def describe_agent_runs(*, agent: str, rules: list, quiet_hours, audit: list[dic
             continue
         expr = str((rule.match or {}).get("schedule") or "")
         zone = (rule.match or {}).get("timezone")
-        item = AgentSchedule(rule_id=rule.id, schedule=expr, timezone=zone or "UTC", timezone_named=bool(zone), enabled=rule.enabled, next_run=None)
+        item = AgentSchedule(rule_id=rule.id, schedule=expr, timezone=zone or DEFAULT_TIMEZONE, timezone_named=bool(zone), enabled=rule.enabled, next_run=None)
         if rule.enabled:
             try:
                 due = next_due(expr, now, zone)
