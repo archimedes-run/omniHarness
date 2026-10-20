@@ -210,6 +210,7 @@ const ROUTES: Record<string, unknown> = {
         tool_count: 2,
         error: null,
         selected: null,
+        unruled_tools: ["session-watcher_new_tool"],
       },
       {
         id: "local:dead-server",

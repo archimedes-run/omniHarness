@@ -69,8 +69,11 @@ async function serve(page: Page, rules = RULES, audit = AUDIT, path = SAFETY) {
         tier: 3,
         deciding_rule: known ? "calendar_delete_event → Tier 3" : null,
         from_default: !known,
+        refused: !known,
         raised_by: null,
-        in_plain_words: `I won't use ${tool} until you confirm. I'll tell you what I intend to do first.`,
+        in_plain_words: known
+          ? `I won't use ${tool} until you confirm. I'll tell you what I intend to do first.`
+          : `Refused: ${tool} was not run, because no permission policy rule covers it, and a tool without a rule is never run on a default.`,
         absent:
           tool === "send email"
             ? "I can't send email — I have no tool that sends."
@@ -90,7 +93,7 @@ async function check(page: Page, tool: string) {
   return page.getByTestId("tier-result");
 }
 
-test("a Tier 3 from the default is marked apart from a classified Tier 3 (FR-027, SC-012)", async ({
+test("a tool no rule names reads as refused, apart from a classified Tier 3 (FR-027, 007)", async ({
   page,
 }) => {
   await serve(page);
@@ -100,11 +103,17 @@ test("a Tier 3 from the default is marked apart from a classified Tier 3 (FR-027
   await expect(classified.getByTestId("deciding-rule")).toContainText(
     "calendar_delete_event",
   );
-  await expect(classified.getByTestId("default-marker")).toHaveCount(0);
+  await expect(classified).toContainText("Tier 3");
+  await expect(classified.getByTestId("refused-marker")).toHaveCount(0);
 
   const unknown = await check(page, "some_tool_nobody_classified");
   await expect(unknown).toHaveAttribute("data-from-default", "true");
-  await expect(unknown.getByTestId("default-marker")).toBeVisible();
+  await expect(unknown.getByTestId("refused-marker")).toHaveText(
+    "No policy rule — refused",
+  );
+  // Not given a tier it would never be acted on at.
+  await expect(unknown).not.toContainText("Tier 3");
+  await expect(unknown.getByTestId("deciding-rule")).toContainText("never run");
 });
 
 test("a refused edit is stated, above the rules still in force (FR-029)", async ({

@@ -306,6 +306,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         install_policy()
 
+        # 007: every registered tool resolves to an explicit rule; any that do
+        # not are refused, and listed here in the startup log. Never fatal: an
+        # unruled tool is already refused at dispatch, so a failed check costs
+        # the log line, not the gate.
+        try:
+            from app.policy.coverage import startup_check
+
+            startup_check(app.state.config)
+        except Exception:
+            logger.exception("policy: the startup tool-coverage check failed")
+
         # Start the trigger engine, in exactly one worker.
         #
         # This is the call site whose absence made Feature 002 ship inert: the

@@ -76,6 +76,19 @@ export function SafetyToolSources() {
                 <StatusWord tone={status.tone} className="w-[96px]">
                   {status.label}
                 </StatusWord>
+                {(source.unruled_tools?.length ?? 0) > 0 && (
+                  <p
+                    className="text-warning basis-full text-xs"
+                    data-testid="safety-source-unruled"
+                  >
+                    No policy rule: {source.unruled_tools!.length} tool
+                    {source.unruled_tools!.length === 1 ? " is" : "s are"}{" "}
+                    refused, not offered and not run:{" "}
+                    <span className="font-mono break-all">
+                      {source.unruled_tools!.join(", ")}
+                    </span>
+                  </p>
+                )}
                 {(reason !== null ||
                   source.last_error_withheld === true ||
                   Boolean(source.last_error)) && (

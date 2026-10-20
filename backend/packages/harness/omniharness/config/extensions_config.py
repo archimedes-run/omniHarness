@@ -83,9 +83,15 @@ class McpToolSurface(BaseModel):
     deny: list[str] = Field(default_factory=list, description="Tools removed from the surface entirely.")
 
     def permits(self, unprefixed_name: str) -> bool:
-        if self.allow is not None and unprefixed_name not in self.allow:
+        # Compared in canonical form (omniharness.tools.names), the same form
+        # the policy rules match in: a deny written `send_email` must remove a
+        # tool the server spells `send-email` or `SEND_EMAIL`.
+        from omniharness.tools.names import canonical_tool_name
+
+        name = canonical_tool_name(unprefixed_name)
+        if self.allow is not None and name not in {canonical_tool_name(a) for a in self.allow}:
             return False
-        return unprefixed_name not in self.deny
+        return name not in {canonical_tool_name(d) for d in self.deny}
 
 
 class McpServerConfig(BaseModel):

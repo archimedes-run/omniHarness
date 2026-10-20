@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .config import ConfigLoader, RuleSet
+from .coverage import refusal_text
 from .explain import explain
 from .limits import ABSENT_CAPABILITIES, describe_absent, describe_tier
 from .models import Tier
@@ -66,6 +67,9 @@ class TierCheck(BaseModel):
     #: Set when the name is a capability the assistant does not have at all
     #: (FR-012): no tool exists, so the tier above describes nothing real.
     absent: str | None = None
+    #: No rule names this tool, so it is refused: never offered, never run
+    #: (007). The tier above is then not acted on.
+    refused: bool = False
 
 
 class Tier3Execution(BaseModel):
@@ -104,8 +108,9 @@ def tier_check(tool: str, arguments: dict[str, Any] | None, ruleset: RuleSet) ->
         deciding_rule=decision.deciding_rule.describe() if decision.deciding_rule else None,
         from_default=decision.deciding_rule is None,
         raised_by=ExceptionView(tier=int(raised.tier), when=dict(raised.when), unless=dict(raised.unless)) if raised else None,
-        in_plain_words=describe_tier(Tier(decision.tier), tool),
+        in_plain_words=refusal_text(tool) if decision.refused else describe_tier(Tier(decision.tier), tool),
         absent=describe_absent(tool),
+        refused=decision.refused,
     )
 
 

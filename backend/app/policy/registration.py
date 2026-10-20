@@ -104,5 +104,11 @@ def shared_loader(policy) -> ConfigLoader:
 
 def install() -> None:
     """Called once at gateway startup."""
+    from omniharness.mcp.cache import add_tools_loaded_listener
+
+    from .coverage import on_mcp_tools_loaded
+
     register_policy_middleware_builder(build)
+    # MCP tools load lazily, after startup: check their coverage when they do.
+    add_tools_loaded_listener(on_mcp_tools_loaded)
     logger.info("permission policy layer registered at the tool-dispatch chokepoint")

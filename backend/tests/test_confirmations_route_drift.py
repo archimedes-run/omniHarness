@@ -39,8 +39,8 @@ def policy(tmp_path, monkeypatch):
 
 
 def _state_a_plan(middleware, meetings: list[str]):
-    """Through the real chokepoint: an unknown tool is Tier 3, so this records a plan."""
-    request = SimpleNamespace(tool_call={"name": "calendar_decline_everything", "args": {"meetings": meetings}, "id": "tc1"}, runtime=None, state={"messages": []})
+    """Through the real chokepoint: googlecalendar_decline* is Tier 3 in the shipped rules, so this records a plan. (An UNKNOWN tool is refused outright since 007, and records nothing.)"""
+    request = SimpleNamespace(tool_call={"name": "googlecalendar_decline_everything", "args": {"meetings": meetings}, "id": "tc1"}, runtime=None, state={"messages": []})
     middleware.wrap_tool_call(request, lambda r: pytest.fail("a Tier 3 call executed at statement"))
     [action] = middleware.pending.open_actions(middleware.now())
     return action
@@ -54,7 +54,7 @@ def test_an_unchanged_plan_confirmed_from_the_ui_executes(policy) -> None:
         body = client.post(f"/api/confirmations/{action.id}/confirm", json={}).json()
 
     assert body["outcome"] == "executed", body
-    assert policy.ran == [("calendar_decline_everything", {"meetings": ["Standup", "Review"]})]
+    assert policy.ran == [("googlecalendar_decline_everything", {"meetings": ["Standup", "Review"]})]
 
 
 def test_a_drifted_plan_confirmed_from_the_ui_is_declined_and_restated(policy) -> None:

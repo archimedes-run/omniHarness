@@ -365,20 +365,65 @@ def apply_connector_tool_surface(config, connector_tools: list[BaseTool]) -> lis
             if server is not None:
                 break
         surface = getattr(server, "tools", None)
-        # Case-insensitively: the deny list is written `send_email` and the
-        # connector names the same capability `GMAIL_SEND_EMAIL`. A guarantee
-        # that depends on matching case is not a guarantee.
+        # Case-insensitively (via `permits`): the deny list is written
+        # `send_email` and the connector names the same capability
+        # `GMAIL_SEND_EMAIL`. A guarantee that depends on matching case is not
+        # a guarantee.
         # `server_name`, not the loop variable `name`: when no MCP servers are
         # configured the loop never runs and `name` is unbound. That passed on a
         # machine with an extensions_config.json and raised UnboundLocalError in
         # CI, which has none — a test inheriting ambient state, one day after
         # Article XIV was extended to say exactly that.
-        candidates = {unprefixed, unprefixed.lower(), unprefixed.upper()}
-        if server_name and unprefixed.upper().startswith(f"{server_name.upper()}_"):
-            bare = unprefixed[len(server_name) + 1 :]
-            candidates |= {bare, bare.lower(), bare.upper()}
+        # `permits` compares in canonical form (omniharness.tools.names), so
+        # only the toolkit's own repeated prefix (`GMAIL_`) is stripped here.
+        from omniharness.tools.names import canonical_tool_name
+
+        candidates = {unprefixed}
+        if server_name and canonical_tool_name(unprefixed).startswith(f"{canonical_tool_name(server_name)}_"):
+            candidates.add(unprefixed[len(server_name) + 1 :])
         if surface is None or all(surface.permits(c) for c in candidates):
             kept.append(tool)
         else:
             logger.info("Tool surface: connector tool '%s' is denied and will not be exposed", tool.name)
     return kept
+
+
+def registrable_tool_names(app_config: AppConfig) -> list[str]:
+    """EVERY tool name this process can offer an agent, whatever the conditions.
+
+    `get_available_tools` decides per agent: a vision model gets view_image,
+    gateway mode gets preview and mcp_build, plan mode gets write_todos, a
+    custom agent gets update_agent. A policy coverage check (007: every tool
+    resolves to an explicit rule) needs the UNION, because a tool reachable
+    under any condition must already have a rule when that condition arises.
+
+    MCP tools are included only when they have ALREADY been loaded: reading
+    their names must not spawn every configured server. They are checked again
+    when they load (omniharness.mcp.cache.add_tools_loaded_listener). Connector
+    tools are per user and per turn, and are checked where they are offered.
+
+    Kept beside get_available_tools on purpose: a built-in added there and not
+    here is caught by tests/policy/test_tool_coverage.py, which asserts that
+    every tool get_available_tools returns (all conditions on) is listed here.
+    """
+    from omniharness.agents.middlewares.todo_middleware import TodoMiddleware
+    from omniharness.mcp.cache import loaded_mcp_tools
+    from omniharness.tools.builtins import setup_agent, update_agent
+    from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
+    from omniharness.tools.builtins.tool_search import tool_search
+    from omniharness.tools.skill_manage_tool import skill_manage_tool
+
+    names: list[str] = []
+    for cfg in app_config.tools:
+        try:
+            names.append(resolve_variable(cfg.use, BaseTool).name)
+        except Exception:  # noqa: BLE001 — a config tool that cannot load is never offered
+            logger.warning("tool %r (%s) could not be loaded, so it is not offered", cfg.name, cfg.use)
+    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, skill_manage_tool, setup_agent, update_agent)]
+    names += [t.name for t in TodoMiddleware().tools]
+    # Named, not built: building it needs a configured ACP agent, and the name is
+    # what the rules speak about. Always listed so a rule exists before an
+    # operator adds one.
+    names.append("invoke_acp_agent")
+    names += [t.name for t in (loaded_mcp_tools() or [])]
+    return list(dict.fromkeys(names))
