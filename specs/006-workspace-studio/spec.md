@@ -267,6 +267,20 @@ It also provides the create-from-chat hook that 005 Slice 5 uses.
 - Panels in Phase 1 host existing screens. Their redesign is Phases 3 and 4.
 - 005 Slice 3 delivers Home's full content (projects, coding sessions, upcoming, what moved). Phase 1 only lays the ground.
 
+## Run history: storage rules and accepted limits
+
+The run history (Automations history, 007 replay) keeps each automation run's full content locally. Rules:
+
+- **Encrypted at rest.** Each run's content is sealed with its own data key. The data keys are kept, wrapped by a master key, in a key store beside the master key file, outside the run database, the project, the data dir and every agent sandbox mount (`~/.omni-harness-secrets/`, 0700; files 0600). Deleting or expiring a run destroys its data key. "Delete run history", and a purge that empties the store, also rotate the master key.
+- **Backups.** No backup routine and no agent ever copies the key store or the master key file into the same backup as the run database.
+- **Retention covers the automations' conversations.** A live automation whose conversation holds content older than the retention starts a fresh conversation (it forgets earlier runs). A conversation the person wrote in within the retention is kept, trimmed to the retention.
+
+Accepted known limits:
+
+- **Cross-worker busy detection.** With several gateway workers, a person chatting in an automation's conversation on another worker is not seen as busy by "Delete run history". The only guard is the check after the delete: a conversation written during its delete is reported as not deleted and retried. Engine firings on any worker are covered by a cross-process lock.
+- **Old backups.** A backup that holds both an old copy of the run database and an old copy of the key store can still open a deleted run, until the master key is next rotated (delete-all, or a purge that empties the store). Hence the backup rule above.
+- **Disk blocks.** Overwriting a file does not erase its old blocks on a copy-on-write or wear-levelled disk. Rotation, not overwriting, is the control.
+
 ## Clarifications
 
 ### Session 2026-10-20 (the user's answers to the open questions)

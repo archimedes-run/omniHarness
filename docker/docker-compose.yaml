@@ -157,9 +157,21 @@ services:
         read_only: true
         bind:
           create_host_path: true
+      # Run history keys (Feature 006): the master key and the key store of
+      # per-run data keys, in their OWN subdirectory of the secrets dir (never
+      # beside watcher.token), mounted into the gateway ONLY, read-write
+      # (delete-all rotates the master key). `make run-store-keys` makes the
+      # 0700 host dir; the gateway creates the files on first run. Never back
+      # this directory up together with OMNI_HARNESS_HOME.
+      - type: bind
+        source: ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/run-store
+        target: /run/secrets/run-store
+        bind:
+          create_host_path: true
     working_dir: /app
     environment:
       - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
+      - OMNI_HARNESS_RUN_STORE_KEY_FILE=/run/secrets/run-store/run_store.key
       - CI=true
       - OMNI_HARNESS_PROJECT_ROOT=/app
       - OMNI_HARNESS_HOME=/app/backend/.omni-harness
