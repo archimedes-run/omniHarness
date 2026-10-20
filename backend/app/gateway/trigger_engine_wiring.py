@@ -153,7 +153,7 @@ def _quiet_hours(engine_config) -> EnforcedQuietHours:
     )
 
 
-def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state, remote, record_run=None) -> TriggerLoop:
+def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state, remote, record_run=None, note_thread=None) -> TriggerLoop:
     """Construct the engine. Raises on misconfiguration — the caller decides
     whether that is fatal (it is not; see lifespan.start)."""
     cfg = config.trigger_engine
@@ -168,6 +168,9 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
     threads = RuleThreadMap(
         path=state / "threads.json",
         create_thread=injector.create_thread,
+        # The run history's ledger of automation threads (Feature 006): what
+        # "Delete run history" and retention delete from.
+        on_created=note_thread,
     )
     sources = {
         TriggerType.WATCHER: WatcherSource(fetch_sessions=fetch_sessions),
@@ -400,6 +403,7 @@ def build_production_loop(config: AppConfig, *, run_store, run_history=None) -> 
         exchange_state=_exchange_state(config, run_store, asyncio.get_running_loop()),
         remote=_remote_destination(config, asyncio.get_running_loop()),
         record_run=_run_recorder(run_history),
+        note_thread=(lambda rule_id, thread_id: run_history.note_thread(thread_id, rule_id)) if run_history is not None else None,
     )
 
 

@@ -17,6 +17,14 @@ deletes every stored run. Kept: the automations themselves, their delivery log
 (times and outcomes, no content), and any message still waiting for delivery
 (held for quiet hours).
 
+THE LEDGER. Which threads are the automations' is read from the run
+history's own ledger (store.automation_threads), written when the engine
+creates a thread and whenever an automation run names one. A ledger row stays
+until its thread is really gone, so a failed delete is retried (next delete,
+and `sweep_threads` at startup and after every retention purge). The sweep
+also deletes threads no stored run names any more, once their rule is gone, so
+retention does not leave an automation's content behind in its thread.
+
 SAFETY. It refuses (ThreadsBusy) while any of those threads has a run in
 progress, rather than deleting under it, and while a firing holds the rule
 map's cross-process firing lock (a firing in ANY worker). The map itself is a
@@ -130,45 +138,105 @@ async def delete_thread_everywhere(app, thread_id: str) -> None:
         await store.delete(thread_id, user_id=None)
 
 
-async def delete_history_and_threads(app) -> DeleteResult:
-    """Delete every automation thread, then the whole run history. Raises
-    ThreadsBusy, having deleted nothing, when one of the threads is running."""
-    history = app.state.run_history
+async def _locked(app, work, *, refuse: bool = True):
+    """Run `work(rule_map, run)` holding the cross-process firing lock: on the
+    engine's own worker when it runs here, else on a thread. `run(coro)` runs a
+    coroutine on the gateway's loop from there. With `refuse`, a firing in
+    progress (any worker) raises ThreadsBusy; without, returns None."""
     rule_map, engine = _rule_map(app)
     main = asyncio.get_running_loop()
 
     def run(coro) -> Any:
         return asyncio.run_coroutine_threadsafe(coro, main).result(timeout=STEP_TIMEOUT)
 
-    def critical() -> DeleteResult:
-        # The engine holds this lock for each firing, in whichever worker runs
-        # it. Not had within LOCK_WAIT: a firing is in progress; refuse.
+    def critical():
         with rule_map.firing_lock(timeout=LOCK_WAIT) as held:
             if not held:
-                raise ThreadsBusy(["(a firing in another worker)"])
-            return _delete_locked()
-
-    def _delete_locked() -> DeleteResult:
-        by_rule = {rule: rule_map.thread_of(rule) for rule in rule_map.known_rules()}
-        thread_ids = {t for t in by_rule.values() if t} | history.thread_ids(kind=AUTOMATION)
-        busy = run(_busy(app, thread_ids))
-        if busy:
-            raise ThreadsBusy(busy)
-        result = DeleteResult(runs=0)
-        for tid in sorted(thread_ids):
-            try:
-                run(delete_thread_everywhere(app, tid))
-                result.threads_deleted.append(tid)
-            except Exception as exc:  # noqa: BLE001 — reported per thread, by id
-                logger.exception("run history: deleting automation thread %s failed", tid)
-                result.threads_failed[tid] = type(exc).__name__
-        for rule, tid in by_rule.items():
-            if tid in result.threads_deleted:
-                rule_map.forget(rule)
-        result.runs = history.delete_all()
-        return result
+                if refuse:
+                    raise ThreadsBusy(["(a firing in another worker)"])
+                return None
+            return work(rule_map, run)
 
     if engine is not None:
         # On the engine's worker: no firing runs while this does.
         return await engine.runner.offload(critical)
     return await asyncio.to_thread(critical)
+
+
+def _delete_ledgered(app, history, rule_map, run, thread_ids, result: DeleteResult) -> None:
+    """Delete each ledger thread; the ledger row goes only when the thread is
+    really gone, so a failure is retried by the next call or the startup sweep."""
+    mapped = {rule: rule_map.thread_of(rule) for rule in rule_map.known_rules()}
+    for tid in sorted(thread_ids):
+        try:
+            run(delete_thread_everywhere(app, tid))
+        except Exception as exc:  # noqa: BLE001 — reported per thread, by id
+            logger.exception("run history: deleting automation thread %s failed", tid)
+            history.thread_failed(tid, type(exc).__name__)
+            result.threads_failed[tid] = type(exc).__name__
+            continue
+        history.thread_gone(tid)
+        result.threads_deleted.append(tid)
+        for rule, mapped_tid in mapped.items():
+            if mapped_tid == tid:
+                rule_map.forget(rule)
+
+
+async def delete_history_and_threads(app) -> DeleteResult:
+    """Delete every automation thread, then the whole run history. Raises
+    ThreadsBusy, having deleted nothing, when one of the threads is running.
+
+    Which threads: the LEDGER (store.automation_threads), which records each
+    thread the engine created and each thread an automation run named. A
+    rule-map entry naming a thread the ledger does not know (a tampered or
+    foreign map) is NOT deleted: it is reported in threads_failed and the rule
+    forgets it, so the engine never writes into it again."""
+    history = app.state.run_history
+
+    def work(rule_map, run) -> DeleteResult:
+        for tid in history.thread_ids(kind=AUTOMATION):  # runs from before the ledger
+            history.note_thread(tid, None)
+        ledger = set(history.ledger_threads())
+        busy = run(_busy(app, ledger))
+        if busy:
+            raise ThreadsBusy(busy)
+        result = DeleteResult(runs=0)
+        for rule in rule_map.known_rules():
+            tid = rule_map.thread_of(rule)
+            if tid and tid not in ledger:
+                result.threads_failed[tid] = "not a thread the engine created; not deleted"
+                rule_map.forget(rule)
+        # Durable intent first: an interrupted delete is finished by the sweep.
+        history.mark_threads_pending(ledger)
+        _delete_ledgered(app, history, rule_map, run, ledger, result)
+        result.runs = history.delete_all()
+        return result
+
+    return await _locked(app, work)
+
+
+async def sweep_threads(app) -> DeleteResult | None:
+    """Delete the ledger threads that should no longer exist: a delete that
+    failed or was interrupted (retried here), and threads no run names any more
+    (retention purged their runs) whose rule is gone. Run at startup, after
+    every retention purge, and never while a firing runs (skipped, not
+    waited for: the next purge retries). Returns None when skipped."""
+    history = getattr(app.state, "run_history", None)
+    if history is None:
+        return None
+
+    def work(rule_map, run) -> DeleteResult:
+        mapped = {t for t in (rule_map.thread_of(r) for r in rule_map.known_rules()) if t}
+        todo = history.threads_to_sweep(mapped)
+        result = DeleteResult(runs=0)
+        busy = set(run(_busy(app, set(todo))))
+        _delete_ledgered(app, history, rule_map, run, [t for t in todo if t not in busy], result)
+        if result.threads_deleted or result.threads_failed:
+            logger.info("run history: swept %d automation thread(s), %d failed", len(result.threads_deleted), len(result.threads_failed))
+        return result
+
+    try:
+        return await _locked(app, work, refuse=False)
+    except Exception:
+        logger.exception("run history: the thread sweep failed; it is retried after the next purge")
+        return None

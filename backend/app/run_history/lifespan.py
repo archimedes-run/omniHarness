@@ -33,6 +33,13 @@ async def load_known_secrets(app) -> None:
 
     try:
         counts = await asyncio.to_thread(load_process_secrets)
+        # The internal auth token is a credential too (it lets a caller act as
+        # the system): never in a stored run.
+        from app.gateway import internal_auth
+        from omniharness.utils.known_secrets import register_secret
+
+        register_secret(internal_auth._INTERNAL_AUTH_TOKEN, "internal-auth")
+        counts["internal-auth"] = 1
         vault = getattr(app.state, "mcp_secrets_vault", None)
         if vault is not None:
             counts["mcp-vault"] = await vault.register_known_secrets()
@@ -41,11 +48,16 @@ async def load_known_secrets(app) -> None:
         logger.exception("run history: loading known secret values failed; only pattern redaction applies")
 
 
-async def purge_forever(history: RunHistory, interval: float = PURGE_INTERVAL_SECONDS) -> None:
-    """The retention job: purge, sleep, repeat, until cancelled."""
+async def purge_forever(history: RunHistory, interval: float = PURGE_INTERVAL_SECONDS, *, app=None) -> None:
+    """The retention job: purge, then sweep the threads retention orphaned (and
+    retry failed thread deletes), sleep, repeat, until cancelled."""
     while True:
         await asyncio.sleep(interval)
         try:
             await asyncio.to_thread(history.purge)
+            if app is not None:
+                from app.run_history.delete import sweep_threads
+
+                await sweep_threads(app)
         except Exception:
             logger.exception("run history: a scheduled purge failed")

@@ -93,6 +93,9 @@ async def put_settings(body: RetentionSettings, request: Request) -> HistorySett
     h = _history(request)
     h.set_retention_days(body.retention_days)
     h.purge()  # a shorter retention applies now, not at the next hourly run
+    from app.run_history.delete import sweep_threads
+
+    await sweep_threads(request.app)  # and the threads it orphaned go too
     return _settings(h)
 
 

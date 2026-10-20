@@ -75,7 +75,7 @@ def test_settings_show_the_cap_warning(gateway) -> None:
 
     settings = client.get("/api/run-history/settings").json()
     assert settings["cap_bytes"] == 1_000
-    assert "recorded without its content" in settings["warning"]
+    assert "1 run was not stored" in settings["warning"]
 
 
 def test_a_run_whose_blob_is_gone_reads_as_withheld_over_http(gateway) -> None:

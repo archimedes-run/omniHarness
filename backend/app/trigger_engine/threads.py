@@ -30,6 +30,9 @@ class RuleThreadMap:
     #: A rule thread's value is remembering the last few firings, not the last
     #: few hundred; beyond that it is context ballast (FR-011c).
     firing_retention: int = DEFAULT_FIRING_RETENTION
+    #: Told of every thread this map creates (the run history's ledger of
+    #: automation threads), BEFORE the map points at it. Optional.
+    on_created: Callable[[str, str], None] | None = None
     _store: JsonStore | None = None
 
     def __post_init__(self) -> None:
@@ -67,6 +70,8 @@ class RuleThreadMap:
         if isinstance(existing, str) and existing:
             return existing
         thread_id = self.create_thread(rule_id)
+        if self.on_created is not None:
+            self.on_created(rule_id, thread_id)
         self._store.set(rule_id, thread_id)
         logger.info("rule %s: created thread %s", rule_id, thread_id)
         return thread_id

@@ -361,7 +361,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
             await load_known_secrets(app)
             app.state.run_history = open_history(get_paths().base_dir)
-            purge_task = asyncio.create_task(purge_forever(app.state.run_history))
+            # Finish any automation-thread delete that failed or was cut short,
+            # and delete threads retention orphaned, before the engine starts.
+            from app.run_history.delete import sweep_threads
+
+            await sweep_threads(app)
+            purge_task = asyncio.create_task(purge_forever(app.state.run_history, app=app))
         except Exception:
             logger.exception("Run history could not be opened; automations run without it")
             app.state.run_history = None
