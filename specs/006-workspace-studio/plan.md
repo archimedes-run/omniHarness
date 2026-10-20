@@ -116,6 +116,25 @@ Phases 2 to 5 add backend capability where the mockups need data that does not e
 
 ## Phase 2: Multi-agent chat
 
+### 2.0 FIRST: confirming delegated and subagent actions (design spike, then build)
+
+Two defects block multi-agent chat (AUDIT-2026-10 addendum, 2026-10-20):
+- a delegation suggested by a page cannot be confirmed from the card;
+- a subagent's own Tier 3 tool cannot be confirmed from the lead's chat, because nothing suspends the subagent.
+
+**Spike, decided before building.** The decision is written HERE, replacing this paragraph.
+- **Waiting and resuming.** How does a paused subagent wait for approval across an arbitrary delay and resume?
+  - Option (a): a LangGraph `interrupt` plus a per-subagent checkpointer, resumed with `Command(resume=…)` on confirm.
+  - Option (b): end the subagent's run at the plan, and on confirm re-run that subagent from its checkpoint with the confirmed call injected.
+  - Compare them on: survival across a gateway restart and across workers; exactly-once execution; what the lead sees meanwhile; and cost.
+- **Tools at confirm time.** How does the card's confirm path get the tools the ORIGINAL run had (the thread's selection, the subagent's own tool list, and the `task` tool)? It must not rebuild the lead's tools.
+- **Reuse.** Phase 2's @-invited agents use the same mechanism, with provenance inherited through `agents/invitation.py`.
+
+**Acceptance**, each check with a sabotage that must fail it:
+1. A page-suggested delegation, confirmed by the button, runs ONCE.
+2. A subagent's own Tier 3 action, confirmed from the lead's chat, runs ONCE in that subagent with its own tools.
+3. A test through the production composition root, `create_app()` + lifespan + the real `SubagentExecutor`.
+
 - **Participants**: `thread_meta` gains `participants` (a list of agent names, with `lead`) and a router `routers/thread_participants.py`. The mention parser runs in `thread_runs.py` on user turns only (Article III).
 - **Running a called-in agent**: reuse the subagent executor (`omniharness/subagents/executor.py`, `tools/builtins/task_tool.py`), with that agent's config (`config/agents_config.py`). Its tools are the intersection of the thread's selection and the agent's `tool_groups` and `skills` (see `_merge_skill_allowlists`). `PolicyMiddleware` applies unchanged.
 - Messages carry `agent_name`, which `components/workspace/messages/*` renders with the avatar.
