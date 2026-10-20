@@ -286,6 +286,12 @@ It also provides the create-from-chat hook that 005 Slice 5 uses.
 9. **Logos**: all eight existing app logos are replaced with official assets. A monogram is used only where a brand's terms forbid the use, and those brands are listed.
 10. **Inbox removal**: items waiting go to Home → "Waiting on you"; alerts missed while away go to a dismissable Home block, "While you were away"; delivery history goes to Settings → Activity log.
 
+11. **Standing grants and content origin (Phase 3)**:
+    - Standing grants, which only ever cover reversible actions, DO apply in scheduled runs even when the run's origin is "derived from content".
+    - They are capped per run: at most 20 granted reversible actions by default. Above that the run pauses and appears on Home → "Waiting on you".
+    - Every granted action is listed in the run's history with its origin.
+    - Required tests: the cap pauses the run at action 21, a content-derived scheduled run still uses its grant, and a chat run never does. Each has a sabotage.
+
 The 33 resolutions in design-notes.md are accepted, including the solid-button and contrast fixes.
 
 ## Open Questions (answered 2026-10-20, see Clarifications)
