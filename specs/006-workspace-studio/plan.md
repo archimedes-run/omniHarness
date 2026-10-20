@@ -152,12 +152,36 @@ Two facts were measured before deciding (probe in the chat agent's scratchpad):
 5. **Subagent checkpoints are keyed per delegation** (`<thread_id>/subagent/<task_id>`), so a delegation never inherits another one's messages.
 6. **@-called agents use the same mechanism.** Calling an agent in runs it through the subagent executor with `invited_agent_context` from the user turn that mentioned it (origin `user`, chain `lead_agent → <agent>`), and with a `subagent` surface. Its Tier 3 calls are recorded, shown and confirmed exactly like a delegated subagent's.
 
+**The user accepted (b) on 2026-10-20 and added six required conditions.** Each is built and tested as follows.
+1. **The result is posted in the thread, attributed to the proposer, and the next step is "Continue <agent>" (chosen over the lead continuing on its own).**
+   - After a confirmed call runs, the thread gets one message, attributed to the proposing agent (`name` = the agent), naming the tool and its result. The excerpt is redacted for display, and "Withheld" is shown if redaction fails.
+   - For an invited agent the message says it "stopped at this step to ask you and has not continued its task". The card offers **Continue <agent>**, which sends an ordinary user turn, so continuing is the user's own act with the user's provenance and is never automatic.
+   - Chat: the confirming turn's reply IS that message. Card: the route appends it to the thread's checkpoint and reports `posted_to_thread`, so if it could not be posted, the card says so.
+   - A subagent that stops at a Tier 3 call ends its own result with "[<agent> stopped and is waiting for the user to confirm `<id>` (<tool>). It has NOT finished its task]". The lead therefore never reads a half-done task as done. The excerpt never cuts that line off.
+   - Why not let the lead continue on its own: from the card there is no run to continue, so starting one means injecting a turn the user did not write. That is the provenance confusion Article III forbids.
+2. **Durable.** Pending actions and their proposer record (requester, chain, origin, `surface`) live in the policy state directory, one file per action, and the result is written to the thread's durable checkpoint. A new `create_app()` on the same database and state confirms it exactly once.
+3. **Re-checked at confirmation, before the claim.** The proposer's surface is rebuilt with the chat's CURRENT tool selection. If the tool is no longer there, the outcome is `tool_unavailable`, with the reason on the card:
+   - "its source was removed from the chat" when it was there with the original selection;
+   - otherwise "its source is disconnected or cannot be reached".
+
+   The action is not claimed and stays open, so adding the source back and confirming again works. Expiry is the existing `expired` outcome. Subagents now also get only the chat's selected sources (they used to get every configured tool).
+4. **Server-written, exact call.**
+   - The surface is written by the policy layer from the server-built runtime context.
+   - `tool_surface`, `invited_*`, `delegation_chain` and `called_agent` are stripped from any run body (`services.strip_server_owned_context`).
+   - The confirm/decline body accepts only `typed_count` (`extra="forbid"`): a request naming a tool, arguments or a surface is a 422 and nothing runs.
+   - The edit route carries the original proposer record over unchanged.
+5. **A second delegation no longer inherits the first one's messages** (checkpoint key `<thread>/subagent/<task_id>`).
+6. **003 VP-008 / FR-031 reworded** to this design, and marked met.
+
+Found while building, and fixed: an invited agent's own policy layer read its first message (the lead's instructions) as the user's verdict on whatever was pending in the chat, and replaced the subagent's whole run with a restated plan. An invited agent has no user, so it never completes a confirmation.
+
 **Test plan** (each through `create_app()` + lifespan + the real `SubagentExecutor`, only the chat models faked; each with a sabotage that must fail it):
 - A page-suggested `task` is card-only; confirming it by button runs the subagent ONCE; a second confirm is `already_resolved` and runs nothing. Sabotage: the card path rebuilds tools without the surface (the old code), and the outcome is `failed` with `LookupError`.
 - A subagent's own Tier 3 tool, which the lead does NOT have, confirmed by typing "yes" in the lead's chat, runs ONCE, with the subagent's tool and the subagent's runtime context (`invited_agent`). Sabotage: the chat path uses the lead's `request.tools`, and the test fails on `LookupError`.
 - The same action confirmed from the card runs once. Sabotage: drop the claim check, and the double-confirm test runs it twice.
 - Two delegations in one thread: the second subagent does not see the first one's messages. Sabotage: key the checkpoint by the thread id again.
 - An @-called agent's Tier 3 call shows `delegation_chain = [lead_agent, <agent>]` and is confirmable from the card.
+- Built (`backend/tests/policy/test_delegated_confirmation.py`, 17 tests, each condition sabotage-checked): the result is posted as the proposer and the stop is said; restart then confirm runs once; chip removed / source disconnected / expired are each refused; a confirm body changing the tool, its arguments or the surface is a 422; client-sent server-owned keys are stripped; the second delegation does not see the first.
 
 **Acceptance**, each check with a sabotage that must fail it:
 1. A page-suggested delegation, confirmed by the button, runs ONCE.

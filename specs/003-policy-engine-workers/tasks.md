@@ -144,9 +144,9 @@
 
 ### Subagent confirmation
 
-- [X] T051 [US2] Implement subagent Tier 3 suspension in `backend/app/policy/middleware.py` — classify subagent calls identically, suspend, ask the user through the lead agent's conversation, resume with the outcome (FR-031; requires T006/T007).
+- [X] T051 [US2] Subagent Tier 3 calls in `backend/app/policy/middleware.py`: classified identically; the subagent stops at the call and the user is asked in the lead's conversation; confirmation runs that one call against the recorded tool surface (FR-031 as revised 2026-10-20; 006 plan.md §2.0, `app/policy/surface_run.py`). *Re-opened by AUDIT-2026-10 and met again 2026-10-20.*
 - [X] T052 [US2] Record requester and delegation chain on the Pending Action and name them in the prompt (FR-033, SC-018).
-- [X] T053 [P] [US2] Test that a subagent Tier 3 action does not execute until confirmed and that the subagent then resumes, **confirming after a delay** (FR-031, SC-017).
+- [X] T053 [P] [US2] Test that a subagent Tier 3 action does not execute until confirmed, then runs once with the subagent's tools and is reported in the thread, **confirming after a gateway restart** (FR-031, SC-017 as revised): `backend/tests/policy/test_delegated_confirmation.py`.
 
 ### Tier 2 disclosure
 
