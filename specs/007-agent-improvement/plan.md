@@ -13,13 +13,13 @@ Scheduled agents get better from their own run history, using the Harness² loop
 - **Nothing applies without approval.** Proposals are diffs with evidence in Agent Studio; every change is a version and can be restored.
 - **Cost is bounded** before, during and after each run.
 
-The **first slice** is the read-only replay harness and the simulated-write wrapper with its sabotage test. Nothing else is built until that gate has been seen failing under sabotage.
+**Slice 0** is a shared prerequisite built once, outside this feature: the durable run store that 006 Phase D also uses. The **first 007 slice** is the read-only replay harness and the simulated-write wrapper with its sabotage tests. Nothing else in 007 is built until those gates have been seen failing under sabotage.
 
 ## Technical Context
 
 - **Language/Version**: Python 3.12 (gateway, policy, new improvement module); TypeScript 5 / React 19 / Next.js 16 (Agent Studio tabs).
 - **Primary Dependencies**: existing only. FastAPI, SQLAlchemy and Alembic; the LangChain agent middleware chain; the policy engine; TanStack Query, Radix Tabs and Dialog. **No new dependency**, and nothing from `google-research/harness2` is imported or vendored (research.md R4).
-- **Storage**: new SQL tables in one migration (next free number at implementation time; `0014_ledger` is the latest on `main`, and 006 Phase 1 reserved `0015` for `user_preferences`): `agent_versions`, `improvement_runs`, `improvement_candidates`, `improvement_probes`, `simulated_writes`, `feedback_events`, `improvement_proposals`, `agent_lessons`, `improvement_budgets`. A tracked price table `backend/app/improvement/prices.yaml` (Article XIV) with per-user overrides in `improvement_budgets`.
+- **Storage**: runs, traces and probe records live in the **shared run store** (Slice 0). Agent versions live in the **shared versioned agent store** (006 Phase C). 007 adds new SQL tables in one migration (next free number at implementation time; `0014_ledger` is the latest on `main`, and 006 Phase 1 reserved `0015` for `user_preferences`): `improvement_runs`, `improvement_candidates`, `improvement_probes`, `simulated_writes`, `feedback_events`, `improvement_proposals`, `agent_lessons`, `improvement_budgets`. A tracked price table `backend/app/improvement/prices.yaml` (Article XIV) with per-user overrides in `improvement_budgets` (defaults $2 per run, $10 per month). Tracked `backend/app/policy/probe_read_only.yaml`: the proven read-only list, one entry per tool with its verification (research.md R8). Improver models per role in the `improvement:` section of `config.example.yaml` (tracked defaults; `config.yaml` overrides).
 - **Testing**: pytest, including `tests/gates/test_wiring.py`, the `gateway` composition-root fixture pattern from `backend/tests/ledger/conftest.py` (TestClient with lifespan, temp sqlite, policy on), and `backend/tests/trigger_engine/test_production_wiring.py`'s `build_production_loop` pattern. vitest and Playwright for the tabs (`contrast.spec.ts` in both themes, a rendering spec per tab).
 - **Target Platform**: the existing daemon profile and full stack. No Docker requirement (Article VI).
 - **Performance Goals**: probes run in the background, never on the trigger engine's event loop (AUDIT-2026-10 T-6), at most 2 probes in parallel by default. Improve tab usable in under 1 s; panel open under 150 ms (006 FR-007).
@@ -40,12 +40,12 @@ The **first slice** is the read-only replay harness and the simulated-write wrap
 | VI. Lite | No new process; the orchestrator runs inside the gateway lifespan as a background task only while a run exists. No Docker. |
 | VII. Politeness | Probes never deliver, alert or notify (FR-015). Weekly and shadow results wait quietly on the Improve tab (FR-072). Shadow probes start only after the real firing is delivered or held (FR-070, FR-073). |
 | VIII. Privacy | Probe evidence stays local. The evidence guard refuses secrets and tokens in improver inputs (redaction at the boundary, fail closed). Approve, reject and restore are written to the audit log (FR-047). |
-| IX. Slices | Six slices, each releasable. Slices 1 and 2 need nothing from 006 (spec "Order of work"; research.md R6). |
+| IX. Slices | Slice 0 (shared run store) is a prerequisite built once for 007 and 006 Phase D. Then six 007 slices, each releasable; slice 1 needs only slice 0, slice 2 the shared Phase C versioned store (spec "Order of work"; research.md R6). |
 | X. Honest limits | "Not available", "can't tell", "replayed on today's data", "stopped at your budget", and KEEP_CURRENT are first-class outcomes in words. |
 | XI. Production shape | Each slice has an integration test through `create_app()` with its lifespan; slice 1 also through `build_production_loop`. Probes use the real `get_available_tools` and the real middleware chain, not a test registry. |
 | XII. Probes seen finding | Every new gate is sabotaged once and the failure confirmed to be the gate (not an upstream error), with the summary line read, not grepped. The honesty checker and feedback judge each get a known-positive case before their negatives are trusted. |
 | XIII. Initiation ≠ confirmation | Two separate requirements with separate tests: FR-031 (no new identifiers can be proposed from content) and FR-032/FR-044 (only the user's UI request approves). |
-| XIV. Tracked defaults | The write-verb list, the price table, the default caps and thresholds and the probe hook registration are tracked files. Tests read only tracked files; the gate test asserts the paths are tracked (`git ls-files`). |
+| XIV. Tracked defaults | The proven read-only list, the write-verb list, the price table, the per-role model defaults, the default caps and thresholds and the probe hook registration are tracked files. Tests read only tracked files; the gate test asserts the paths are tracked (`git ls-files`). |
 
 **Result: PASS.**
 
@@ -74,7 +74,7 @@ lead agent runtime  ── middleware chain: [ProbeMiddleware (outermost) → Po
 
 **Probe wrapper.** `ProbeMiddleware` implements `wrap_tool_call` and `awrap_tool_call`:
 1. classify with `app.policy.classify.classify()` and the shared rules loader (`app/policy/registration.py:90`, `shared_loader`);
-2. run the call (pass it on to `PolicyMiddleware`) only if the decision is Tier 1 **from an explicit rule** and the tool name is not on the tracked write-verb list (`backend/app/policy/probe_write_verbs.yaml`);
+2. run the call (pass it on to `PolicyMiddleware`) only if the decision is Tier 1 **from an explicit rule**, the tool is on the proven read-only list (`backend/app/policy/probe_read_only.yaml`), and its name is not on the tracked write-verb list (`backend/app/policy/probe_write_verbs.yaml`);
 3. otherwise write a `simulated_writes` row and return a `ToolMessage` that says the write was recorded and not executed in a test run.
 
 It must wrap `PolicyMiddleware` from outside, so a simulated Tier 3 call never reaches `_require_confirmation` and never creates a PendingAction. The ordering is asserted by a test that inspects the built chain and by the sabotage test, not assumed from the list order (research.md R6: the code comment at `tool_error_handling_middleware.py:133-137` makes two incompatible claims about which position is outermost, so the order is unverified).
@@ -83,12 +83,21 @@ It must wrap `PolicyMiddleware` from outside, so a simulated Tier 3 call never r
 
 ## Slices
 
+### Slice 0 (shared prerequisite, not built by 007): durable run store
+
+Built once by the 006 Tasks/Automations work for both 007 replay and 006 Phase D history, and reviewed through the same gated review as 006 Phase B (it stores mail and calendar content). 007 depends on it and does not build it. Requirements are spec FR-100 to FR-106.
+
+**The gate 007 relies on**: a token placed in a tool result never lands on disk in any file or table of the store (sabotage: disable redaction; the gate must fail, and the failure must be the redaction assertion, Article XII). Also: no truncation (a 100 KB body round-trips byte for byte); retention deletes bodies past the limit; "Delete run history" leaves no rows or body files.
+
+**What 007 adds on top**: probe and improver records are written to the same store, marked as probes, under the same redaction and retention (FR-105). Replay reads only from it.
+
+
 Each slice: one PR, CI green, every new gate sabotaged once (Article XII), at least one test through the production composition root. "Done" means called in production, tested, and the sabotage recorded in the PR description with the failing assertion named.
 
 ### Slice 1 (FIRST): read-only replay harness and simulated-write wrapper
 
 **Builds**
-- `backend/app/policy/probe.py`: `ProbeMiddleware`; `probe_write_verbs.yaml` (tracked).
+- `backend/app/policy/probe.py`: `ProbeMiddleware`; `probe_write_verbs.yaml` and `probe_read_only.yaml` (tracked). The read-only list starts with the tools research.md R8 marks RUN; everything else is simulated.
 - Harness hook `omniharness/agents/middlewares/probe_hook.py` (`register_probe_middleware_builder`), mirroring `policy_hook.py:35-94`, wired in `app/policy/registration.py:install()`.
 - `backend/app/gateway/routers/improvement.py` with `POST /api/improvement/probes` only (internal service token): input = agent name + stored run id (replay) → a probe run under the wrapper, with the run's stored `kwargs_json` input and config (`app/gateway/services.py:324`), side effects disabled (memory middleware off, no channel delivery, no alerts, no disclosure ledger writes, thread tagged synthetic).
 - `simulated_writes` table and its repository.
@@ -102,25 +111,30 @@ Each slice: one PR, CI green, every new gate sabotaged once (Article XII), at le
 | G1.3 write-verb disagreement | A Tier 1-by-rule tool named `archive_*` is simulated and flagged | empty the write-verb list |
 | G1.4 no side effects | After a probe: ledger, agent `memory.json`, pending store, disclosure ledger, trigger engine deliveries and Home items unchanged (hash before and after) | re-enable the memory middleware for probe runs |
 | G1.5 fail closed | The probe endpoint refuses to run when the built chain lacks the wrapper; regular run endpoints reject a probe marker | make the builder return the chain without the wrapper |
-| G1.6 tracked files | The write-verb list and rules files the wrapper reads are tracked (`git ls-files`) | point the loader at an untracked copy |
+| G1.6 tracked files | The read-only list, the write-verb list and the rules files the wrapper reads are tracked (`git ls-files`) | point the loader at an untracked copy |
+| G1.7 state-changing read (spec FR-016a) | A test tool with an explicit Tier 1 rule and a read-like name (`fetch_items`) that moves a test change marker when called is simulated in probes, and the marker does not move | add it to `probe_read_only.yaml` without a verification entry |
+| G1.8 every list entry is proven | Each `probe_read_only.yaml` entry has a method (`code` with file and lines, or `observation` with a test id); `docs` alone is rejected | accept an entry whose method is `docs` |
+| G1.9 no channel in probes | A probe run starts, polls or sends through no channel (Telegram `getUpdates`, Slack socket) | let the probe runtime start the channel service |
 
 **Integration tests (production shape)**
 - Through `create_app()` + lifespan (the `gateway` fixture pattern from `tests/ledger/conftest.py`, policy ON): store a run for a test agent, call the probe endpoint, assert G1.1 to G1.4 with the real `get_available_tools` (built-ins, ledger tools, and one stub MCP tool loaded through the MCP path) and the real middleware chain. The test names the structural difference it defends against: "probe chain built by the production builder, not a test chain".
 - Through the trigger engine: `build_production_loop` (`app/gateway/trigger_engine_wiring.py:370`) with a cron rule for the test agent; run one firing, then a probe of that firing's run. Assert the firing delivered once and the probe produced zero firings, zero deliveries and zero pending entries in the engine's state dir.
-- Positive control (Article XII): the same test agent run normally (not as a probe) DOES increment the counter. Without this, a counter stuck at 0 proves nothing.
+- Positive control (Article XII): the same test agent run normally (not as a probe) DOES increment the counter, and the G1.7 tool DOES move its marker. Without this, a counter stuck at 0 proves nothing.
 
-### Slice 2: agent versions, apply, restore, locked-surface validator
+**Task 1.8: read-only verification of the connector tools (research.md R8).** For each tool marked "SIM until observed" or "SIM until code-verified": read its implementation where it is available (record the file and lines), or run the observation test against a dedicated test account (Gmail: `historyId` and the message's `UNREAD` label before and after; Calendar: `syncToken` or `etag`), with a positive control that a known write moves the marker. A tool joins `probe_read_only.yaml` only with that record. Tools still unproven stay simulated, and the Improve tab says which reads were simulated for that agent.
+
+### Slice 2: apply, restore and the locked-surface validator, over the shared versioned store
+
+**Uses** the versioned agent store built once by 006 Phase C (spec FR-045, Clarification 10). Every agent and skill config write (`routers/agents.py` POST :191 and PUT :259, `setup_agent_tool.py`, `update_agent_tool.py`, Studio saves, manual edits through the app) goes through that store. 007 checks that the snapshot covers what 007 can edit (`SOUL.md`, `memory.json`, the new `TOOLS.md` tool-guidance file, the skill and subagent allow-lists, agent-only skills and subagents, and the prompt of each automation that runs the agent) and the locked fields, and asks Phase C to extend it if not. 007 builds no second store.
 
 **Builds**
-- `agent_versions` table; a snapshot function over the agent's files (`config.yaml`, `SOUL.md`, `memory.json`, the new `TOOLS.md` tool-guidance file, its skill allow-list, the rule prompt it is bound to) and its locked fields.
-- A versioning hook at every writer: `routers/agents.py` (POST :191, PUT :259), `setup_agent_tool.py`, `update_agent_tool.py`, and later 006 Studio saves (spec FR-045, Open Question 10).
 - `validator.py`: the editable allow-list (spec FR-004), locked-surface diff (FR-005), executable-code rejection (FR-006), identifier check (FR-031).
 - Endpoints: `GET /api/agents/{name}/versions`, `POST /api/agents/{name}/versions/{n}/restore`; restore and apply are audited (FR-047).
 
 **Gates and sabotages**
 | Gate | Asserts | Sabotage |
 |---|---|---|
-| G2.1 locked surfaces | An edit to tool_groups, model, schedule, autonomy or a policy file is dropped | remove one locked field from the validator |
+| G2.1 locked surfaces | An edit to tool_groups, model, an automation's schedule, delivery channel, recipients or quiet hours, autonomy, a policy file, or a shared skill's or subagent's content is dropped | remove one locked field from the validator |
 | G2.2 initiation (Article XIII) | An edit adding an email address or URL not in the current setup or user text is dropped | disable the identifier check |
 | G2.3 restore exactness | Restore reproduces the snapshot hash | skip `memory.json` in the snapshot |
 | G2.4 single apply path | Only the approval endpoint writes a proposal to an agent (static call-site gate, like `test_single_confirmation_path.py`) | add a second call site |
@@ -135,7 +149,10 @@ Each slice: one PR, CI green, every new gate sabotaged once (Article XII), at le
 - `POST /api/improvement/complete`: tool-less model calls for proposer, composer, judges and reflector, with the evidence guard (no secrets in inputs) and per-call cost accounting; token counting forced on (FR-056).
 - User endpoints: estimate, start, stop, result, approve (all or per edit), reject; lessons CRUD; budgets.
 - Proposer prompts in `backend/app/improvement/prompts/`, adapted from the harness2 prompts with the attribution header and a THIRD-PARTY-NOTICES entry (research.md R4).
-- Defaults: k = 1, M = 3, R = 2, caps from Technical Context, 20% token tolerance, at most 2 probes in parallel.
+- Defaults: k = 1 (configurable up to 3), M = 3, R = 2, caps from Technical Context, 20% token tolerance, at most 2 probes in parallel. The estimate is computed and shown before every run, including weekly runs.
+- Improver models per role (spec FR-008): proposer, composer and reflector default to the strongest configured model; the judges use a different model family when one is configured, and the run report records when they had to share the proposer's.
+- Proposed lessons are stored with status `proposed` and shown with the proposal; only `approved` lessons are passed to later runs (spec FR-061a).
+- Outcome recording (spec FR-027a): each run's outcome and, for KEEP_CURRENT, the step that stopped each setup; the "no change" rate per agent is served to Settings.
 
 **Gates and sabotages**
 | Gate | Asserts | Sabotage |
@@ -150,6 +167,9 @@ Each slice: one PR, CI green, every new gate sabotaged once (Article XII), at le
 | G3.8 safety abort | A probe record showing a real non-Tier-1 execution aborts the run | ignore the safety step |
 | G3.9 lessons cannot apply | A lesson saying "apply X" produces no change without approval | let the orchestrator apply ADOPT results |
 | G3.10 evidence citation | Every proposal edit cites at least one probe id | allow empty citations |
+| G3.11 lessons need approval | A `proposed` or `rejected` lesson never reaches a proposer's input | pass all lessons through |
+| G3.12 judge family | With two model families configured, the judges' model family differs from the proposer's | resolve the judge to the proposer's model |
+| G3.13 k bounds | k above 3 is refused by the estimate endpoint | raise the bound |
 
 Positive controls: the honesty checker is shown flagging a planted H2 case, and the feedback judge a planted declined-action case, before their "no violation" results count.
 
@@ -157,9 +177,9 @@ Positive controls: the honesty checker is shown flagging a planted H2 case, and 
 
 ### Slice 4: feedback signals recorded server-side
 
-**Builds**: `feedback_events` filled from PendingAction outcomes (linked to agent and run through the thread's rule and run ids), the edit-and-confirm route (SUPERSEDED plus new action), run ratings, proposal rejections, server-side dismissals (merged with or replacing `006-A-home`'s work, whichever lands first), and "opened in the web app" for delivered briefs. Other channels report "not available" (FR-041).
+**Builds**: `feedback_events` filled from PendingAction outcomes (linked to agent and run through the thread's rule and run ids), the edit-and-confirm route (SUPERSEDED plus new action), run ratings, proposal rejections, server-side dismissals (merged with or replacing `006-A-home`'s work, whichever lands first), "opened in the web app" for delivered briefs, and a **"Got it"** inline button on Telegram briefs (a callback handled by the existing Telegram channel's poller; no second `getUpdates` consumer). No other read receipts (spec FR-040).
 
-**Gates**: G4.1 a decline in a scheduled run produces one event linked to its agent and run (sabotage: drop the run link); G4.2 a channel without read receipts yields "not available", never "ignored" (sabotage: default to ignored).
+**Gates**: G4.1 a decline in a scheduled run produces one event linked to its agent and run (sabotage: drop the run link); G4.2 a brief with neither signal reads "not marked read", never "ignored" (sabotage: default to ignored); G4.3 pressing "Got it" records one read event for that run (sabotage: drop the run id from the callback data).
 
 **Integration test**: through `create_app()`: a scheduled run proposes a Tier 3 action, the user declines it through `/api/confirmations/{id}/decline`, and the event appears for the agent with the run id.
 
@@ -200,7 +220,8 @@ backend/
 ├── app/
 │   ├── policy/
 │   │   ├── probe.py                  # ProbeMiddleware (slice 1)
-│   │   └── probe_write_verbs.yaml    # tracked write-verb list (slice 1)
+│   │   ├── probe_write_verbs.yaml    # tracked write-verb list (slice 1)
+│   │   └── probe_read_only.yaml      # tracked proven read-only list (slice 1, research.md R8)
 │   ├── improvement/                  # module; gateway HTTP only (slices 3, 4, 6)
 │   │   ├── orchestrator.py  compare.py  honesty.py  feedback.py
 │   │   ├── budget.py  validator.py  reflection.py  lessons.py
@@ -232,5 +253,5 @@ Unchanged: **PASS**. The one place to watch in review is the probe wrapper's pos
 | Item | Why needed | Simpler alternative rejected because |
 |---|---|---|
 | A second wrapper outside `PolicyMiddleware` | A simulated Tier 3 call must not create a PendingAction or a card | Putting probe logic inside `PolicyMiddleware` would add a mode flag to the one chokepoint every real call uses; a bug there could disable confirmation for real runs |
-| Versioning every agent writer, not just proposals | Undo must work whatever made the last change (Open Question 10) | Versioning only proposals would let a later manual edit make "restore" silently drop it |
+| Versioning every agent writer, not just proposals | Undo must work whatever made the last change (Clarification 10) | Versioning only proposals would let a later manual edit make "restore" silently drop it. Built once in the shared 006 Phase C store, not here |
 | Two baseline replicates per input | Without them there is no noise band, and a single-sample difference would count as evidence (the paper's prompts call it noise, `prompts.py:916-924`) | One baseline run is cheaper but makes the comparison rule meaningless |

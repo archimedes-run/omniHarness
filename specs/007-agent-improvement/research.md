@@ -160,7 +160,7 @@ the evidence does not argue for is a regression: it costs context and buys nothi
 | Selection pool excludes the base (`selection.py:93-111`) | **Drop** | In our setting the current setup must always be a possible winner. |
 | Execution evidence as the only signal | **Extend** with (b) the user's feedback history and (c) honesty checks | The user's brief. Neither is in the paper; they are our additions and are labelled so. |
 | Eight components (Table 5) | **Narrow** to five editable surfaces: instructions (C1), tool guidance (C4), skills (C6), memory notes (C3), subagent setup (C5) | Guardrails (C2) overlap policy and confirmation rules, which are locked. Scripts (C7) and plugins (C8) are new executable code: they go only through MCP Suite Build → approve. |
-| Library of full adopted harnesses + EXPERIENCE.md, per domain | **Adapt** to a per-agent **Lessons** store of `cue / lesson / evidence / confidence` entries, user-viewable and editable | A personal workspace has few agents and one user who should be able to correct what the system "learned". We keep the cue/lesson/evidence/confidence fields and the NO_ENTRY rule. |
+| Library of full adopted harnesses + EXPERIENCE.md, per domain | **Adapt** to a per-agent **Lessons** store of `cue / lesson / evidence / confidence` entries; each new lesson needs the user's approval, and lessons stay editable and deletable | A personal workspace has few agents and one user who should be able to correct what the system "learned". We keep the cue/lesson/evidence/confidence fields and the NO_ENTRY rule. |
 | Edit verdicts helped / hurt / no observed effect / confounded | **Adopt** verbatim for the per-edit evidence rows shown in the diff | Precise, and "confounded" is the honest default. Attribution in THIRD-PARTY-NOTICES (R4). |
 | Each task restarts from ℋ₀ (§2.3) | **Change**: an approved change becomes the agent's new current version | Ours is one recurring task per agent, not a stream of distinct tasks. Every version is kept and can be restored. |
 | Sequential mode (Eq. 3) | **Defer** (not v1) | Parallel gives a fixed, estimable cost before the run starts, which the budget rule needs. |
@@ -282,9 +282,14 @@ State checked on 2026-10-20 against `origin/main` at 5dac619. 006 Phase 1 is mer
 - **Memory** (for the Lessons tab's look and for memory notes): `omniharness/agents/memory/storage.py:62`, per-agent `agent_memory_file` (`omniharness/config/paths.py:147`), UI `frontend/src/components/workspace/settings/memory/`.
 - **Agents** are files: `{base_dir}/users/{user_id}/agents/{name}/config.yaml`, `SOUL.md`, `memory.json` (`omniharness/config/paths.py:60-80`). **No version history exists** for agents (only custom skills have one, `local_skill_storage.py:31, 176`).
 
+### Shared prerequisites decided 2026-10-20
+
+- **Slice 0, the durable run store**: one store for 007 replay and 006 Phase D automation history, built once by the 006 Tasks/Automations work: full content (large bodies stored separately), secrets redacted before storing (sabotage-tested), 30-day retention the user can change, local only, and "Delete run history" in Settings. It goes through the same gated review as 006 Phase B, because it holds mail and calendar content. It replaces the caveats above about `memory` and the 10 KB cut-off.
+- **The versioned agent store**: built once by 006 Phase C; every agent and skill config write goes through it. 007 uses it for versions, apply and restore, and does not build its own.
+
 ### Ordering consequence (Article IX)
 
-007 must not need a later phase to deliver value. Slices 1 and 2 need nothing from 006. Slice 3 delivers improvement runs and proposals over the API for a test or cron-driven agent. Slices 5 and 6 are explicitly scheduled after 006 Phases 3 and 4 and are re-cut if those phases change.
+007 must not need a later phase to deliver value. Slice 1 needs only Slice 0 for replay (a dry run of a live input works without it). Slice 2 needs the Phase C versioned store. Slice 3 delivers improvement runs and proposals over the API for a test or cron-driven agent. Slices 5 and 6 are explicitly scheduled after 006 Phases 3 and 4 and are re-cut if those phases change.
 
 ---
 
@@ -319,3 +324,60 @@ Two new boards for the "OmniHarness Workspace Studio" canvas, next to `Agent-Stu
 - A list of **lesson cards** on `--card`, each with: the **cue** as the card title ("When a source is unreachable"), the **lesson** as body text ("Say 'can't tell' for its items, in the instructions' status section."), an **Evidence** line with run-id chips and the confidence ("medium: confounded in 1 of 3"), and a footer "Written by reflection · Updated 2 hours ago" or "Written by you · Updated 4 months ago · may be out of date". Each card has Edit and a "⋯" with Delete.
 - Edit opens the card inline with three fields (cue, lesson, evidence is read-only for reflection-written lessons) and Save / Cancel.
 - Empty state: "No lessons yet. After an improvement run, a lesson is added only when the evidence supports one."
+
+---
+
+## R8. Connector and tool audit: which reads are proven read-only (Clarification 6)
+
+**Rule (spec FR-012, FR-012a).** In a probe, a call runs for real only if (1) a tracked rule in `backend/app/policy/default_rules.yaml` explicitly classifies it Tier 1, (2) it is on the proven read-only list, and (3) its name is not on the write-verb list. **Proof** means its implementation was read (**code**) or it was called against a test account and the provider's change marker did not move, with a positive control (**observation**). **Docs** (vendor documentation) and **schema** (the tool's parameters) are recorded but are **not proof**.
+
+**Status key.** **RUN**: proven, runs for real in probes. **SIM**: simulated (recorded, not run). **SIM until observed**: docs and schema point to a pure read, but there is no proof yet, so it is simulated until the observation test in plan slice 1 (task 1.8) passes for it.
+
+Audit done 2026-10-20 against `origin/main` 5dac619. The tool surface comes from four places: built-ins (`omniharness/tools/tools.py:105`), sandbox tools (`omniharness/sandbox/tools.py`), the MCP servers in `extensions_config.example.json`, and the Composio connector toolkits (`omniharness/tools/connector_tools.py:28-37`: Gmail, Google Calendar, Google Drive, Slack, Notion, GitHub, Linear, Outlook; Composio's "important" subset per toolkit, `composio_mcp_server.py:40-63`).
+
+### Built-in and sandbox tools (code in this repo)
+
+| Tool | Tier rule | Verified by | State change found | Probe status |
+|---|---|---|---|---|
+| `ls`, `glob`, `grep`, `read_file` | 1 | code: `sandbox/tools.py:1243-1450` | creates the thread's own sandbox directories (`ensure_thread_directories_exist`), nothing else; the probe has its own thread | RUN |
+| `view_image` | 1 | code: `tools/builtins/view_image_tool.py:49` (reads a sandbox image) | none found | RUN (confirm in slice 1 code review) |
+| `tool_search` | 1 | code: `tools/builtins/tool_search.py` (lists deferred tools) | none | RUN |
+| `write_todos` | 1 | rule comment, `default_rules.yaml` ("changes only this conversation's state") | the probe thread's own state only | RUN |
+| `present_files` | 1 | code: `tools/builtins/present_file_tool.py:84` (returns a state `Command`) | shows files to the user: output, not a read | SIM (outbound to the user) |
+| `ask_clarification` | 1 | code: `tools/builtins/clarification_tool.py:6` (`return_direct`, "presented to the user") | interrupts and asks the user | SIM (outbound to the user) |
+| `ledger_read` | 1 | code: `tools/builtins/ledger_tool.py:36-40` calls `controller.read`; **the controller was not read in this pass** | not established | SIM until code-verified (slice 1) |
+| `web_search`, `image_search` | 1 | code: `community/{ddg_search,exa,firecrawl,tavily,serper,image_search}/tools.py` send a query to a search API | no change to the user's accounts | RUN |
+| `web_fetch` | 1 | code: `community/{exa,firecrawl,jina_ai,tavily}/tools.py` fetch an arbitrary URL | a GET can change state on the far side (one-click unsubscribe, magic links, tracking pixels in mail), and the URL may come from content | **SIM** (not provable for arbitrary URLs) |
+| `list_coding_sessions`, `get_session_status`, `session-watcher_*` | 1 | Feature 001 "observe-only by construction" (rule comment) and the gate `tests/gates/test_read_surfaces_do_not_write.py` | none | RUN |
+
+### MCP servers (from `extensions_config.example.json`; third-party code)
+
+| Server / tools | Tier rule | Verified by | State change found | Probe status |
+|---|---|---|---|---|
+| Gmail MCP (`@gongrzhe/server-gmail-autoauth-mcp`): `read_email`, `search_emails` | 1 (`gmail_read*`, `gmail_search*`) | code: `GongRzhe/Gmail-MCP-Server` `src/index.ts`: `users.messages.get` (format full) and `users.messages.list` + `get` (format metadata); no `modify` call | none; `messages.get` does not remove UNREAD | RUN, after confirming the npm package matches that repo's source (slice 1) |
+| Gmail MCP: `list_email_labels`, `list_filters`, `get_filter` | 1 (`gmail_list*`, `gmail_get*`) | code: handlers call helpers in `label-manager.js` / `filter-manager.js`, **which were not read** | not established | SIM until code-verified |
+| Gmail MCP: `download_attachment` | none (Tier 3 default) | code: `fs.writeFileSync` to local disk | writes a file | SIM |
+| Gmail MCP: `send_email`, `draft_email`, `modify_email`, `delete_email`, `batch_*`, label and filter writes | denied (`tools.deny`) or Tier 3 default | code | writes | SIM (send is absent from the surface) |
+| Google Calendar MCP (`@cocal/google-calendar-mcp`, repo `nspady/google-calendar-mcp`): `list-calendars`, `list-events`, `get-event`, `get-freebusy`, `get-current-time`, `list-colors` | 1 (`googlecalendar_list*`, `googlecalendar_get*`) | docs: README tool list only; **implementation not read**; repo-to-package link not stated on the page | not established | SIM until observed (calendar `syncToken`/`etag` unchanged) |
+| Calendar MCP: `search-events` | **none**: the rules have `googlecalendar_find*` and `freebusy*`, not `search*` | | | SIM (Tier 3 default) |
+| Calendar MCP: `create-event`, `update-event`, `delete-event`, `respond-to-event`, `manage-accounts` | the rules use underscores (`googlecalendar_create_event`); these tools use hyphens, so **the rules do not match them** and they fall to Tier 3 | | writes | SIM. Finding: the hyphen/underscore mismatch makes these Tier 3 instead of the intended Tier 2; safe, but worth fixing in the rules. **[NOT VERIFIED]** the exact prefixed name the gateway gives MCP tools at runtime |
+| GitHub MCP (`@modelcontextprotocol/server-github`, archived): `get_*`, `list_*`, `search_*` (14 tools named in the rules) | 1 | docs: tool list in `modelcontextprotocol/servers-archived/src/github`; **HTTP methods not read** | not established; the server has **no notification tools**, so nothing can mark notifications read | SIM until code-verified |
+| Filesystem MCP: `filesystem_read*`, `filesystem_list*`, `directory_tree`, `get_file_info`, `search_files` | 1 | docs (reference server); implementation not read | not established | SIM until code-verified |
+| Postgres MCP: `postgres_query` (SELECT only) | 1 with an exception | rule comment: the `sql` argument name is itself unverified | a single SELECT can still change state (`nextval()`, side-effecting functions, `FOR UPDATE` locks) | **SIM** |
+
+### Composio connector toolkits (vendor-executed; implementation not inspectable)
+
+| Tools | Tier rule | Verified by | Probe status |
+|---|---|---|---|
+| Gmail: `GMAIL_FETCH_EMAILS`, `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID`, `GMAIL_FETCH_MESSAGE_BY_THREAD_ID`, `GMAIL_LIST_THREADS`, `GMAIL_LIST_LABELS`, `GMAIL_GET_PROFILE`, `GMAIL_GET_ATTACHMENT` | 1 | docs + schema: docs.composio.dev/toolkits/gmail describes each as a fetch/list/get with no mailbox-modifying parameter; marking as read is a separate tool (`GMAIL_ADD_LABEL_TO_EMAIL`, `GMAIL_MODIFY_THREAD_LABELS`). The docs give no read-only annotation, and Composio's server code cannot be read | **SIM until observed**: call each against a test mailbox and check `historyId` (from `GMAIL_GET_PROFILE`) and the message's `UNREAD` label do not change; positive control: a known label change does move `historyId` |
+| Calendar: `GOOGLECALENDAR_FIND_EVENT`, `LIST_CALENDARS`, `GET_CALENDAR`, `FIND_FREE_SLOTS`, `GET_CURRENT_DATE_TIME` | 1 | docs only (not fetched in detail in this pass) | SIM until observed (`syncToken`/`etag`) |
+| Every other action in the 8 toolkits, including all of Google Drive, Slack (for example `conversations.mark`-style actions), Notion, GitHub (including any notifications actions), Linear and Outlook | no rule, so Tier 3 | | SIM |
+
+### Channels (not agent tools, but able to change state)
+
+| What | Where | Risk | Rule |
+|---|---|---|---|
+| Telegram `getUpdates` polling | `backend/app/channels/telegram.py:202` (`_run_polling`) | each poll **consumes the update offset**; a second consumer (for example a probe that started a channel) would steal updates, including the "Got it" presses the read signal depends on | probes never start, poll or send through a channel (spec FR-015, FR-016a check) |
+| Slack Socket Mode | `backend/app/channels/slack.py:53-87` | acknowledges events on the socket | same |
+
+**Consequence the user should know.** Under the "not proven means write" rule, on day one most mail and calendar reads through **Composio** are simulated in probes until the observation test passes for each. A brief built from simulated reads proves little, so slice 1 includes the observation tests (plan task 1.8) before replay is useful for Gmail- and Calendar-backed agents.

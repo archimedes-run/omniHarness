@@ -16,14 +16,15 @@
 
 | Slice | What | Needs from 006 |
 |---|---|---|
+| 0 | **Shared durable run store** (built once, by the 006 Tasks/Automations work; 007 consumes it) | it is a shared prerequisite of 007 replay and 006 Phase D history (FR-100 to FR-106) |
 | 1 | Read-only replay harness and the simulated-write wrapper, with its sabotage test | nothing |
-| 2 | Agent versions: snapshot, apply, undo, and the locked-surface validator | nothing (agents are already files) |
+| 2 | Locked-surface validator, apply and undo over the **shared versioned agent store** | the versioned store built once by 006 Phase C (Clarification 10); 007 does not build a second one |
 | 3 | The improvement run: propose, probe, compose, the comparison rule, budgets, Lessons store (API only) | nothing for replay; a scheduled agent needs Phase 3's `schedule` field or Phase 4's rule `agent` field |
 | 4 | Feedback signals recorded server-side | 006-A Home dismissals (unmerged branch) for dismissals |
 | 5 | Improve and Lessons tabs in Agent Studio | Phase 3 (Agent Studio panel and tabs) and Phase 4 (run history) |
 | 6 | Shadow mode and the weekly run | Phase 4 (rule `agent` field and run history) |
 
-Slices 1 and 2 are useful on their own: a "dry run" of any agent that touches no account, and undoable agent edits with a history.
+Slice 1 is useful on its own: a "dry run" of any agent that touches no account. Slice 0 is useful on its own to 006 Phase D (automation history).
 
 ## Terms
 
@@ -70,7 +71,8 @@ The user worries that "running the Morning brief 15 times" means 15 briefs on Te
 
 **Acceptance Scenarios**:
 
-1. **Given** a probe calls a tool classified Tier 1 by an explicit rule, **When** the call is made, **Then** it runs for real and its result is part of the evidence.
+1. **Given** a probe calls a tool that is classified Tier 1 by an explicit rule AND is on the proven read-only list (FR-012a), **When** the call is made, **Then** it runs for real and its result is part of the evidence.
+1a. **Given** a Tier 1 tool that is not on the proven read-only list (for example a read whose provider may mark mail as read), **When** a probe calls it, **Then** it is simulated, and the evidence says the read was not run because the tool is not proven read-only.
 2. **Given** a probe calls a Tier 2 tool, **When** the call is made, **Then** the tool does not run, a simulated-write record is stored (tool, arguments, tier, the probe, the time), and the agent receives a result that says the write was recorded and not executed in a test run.
 3. **Given** a probe calls a Tier 3 tool, or an unknown tool, **When** the call is made, **Then** it does not run, no pending action is created, no approval card appears anywhere, and a simulated-write record is stored.
 4. **Given** a tool classified Tier 1 whose name looks like a write (FR-013), **When** a probe calls it, **Then** it is simulated, not run, and the run report flags the disagreement for the user to fix in the policy rules.
@@ -120,15 +122,16 @@ There is no "correct" evening wrap-up to grade against. The comparison uses thre
 
 ### User Story 5 - Lessons (Priority: P3)
 
-After each improvement run, a reflection step writes at most one lesson for the agent, only when the evidence supports one: "When a source is unreachable, say 'can't tell' for its items, in the instructions' status section. Evidence: runs 812, 815; confounded in 1 of 3." The user opens the Lessons tab, laid out like Settings > Memory, edits the wording of one lesson and deletes another that is wrong. The next improvement run reads the lessons when proposing. The lessons never change the agent by themselves.
+After each improvement run, a reflection step proposes at most one lesson for the agent, only when the evidence supports one, and shows it with the proposal for the user to approve or reject: "When a source is unreachable, say 'can't tell' for its items, in the instructions' status section. Evidence: runs 812, 815; confounded in 1 of 3." The user approves it. Later they open the Lessons tab, laid out like Settings > Memory, edit the wording of one lesson and delete another that is wrong. The next improvement run reads the lessons when proposing. The lessons never change the agent by themselves.
 
 **Why this priority**: this is the harnessing-level loop. It makes later runs cheaper and better, but the task-level loop works without it.
 
-**Independent Test**: through `create_app()`, run reflection over fixed run records: it writes one lesson with cue, lesson, evidence and confidence, or none when evidence is thin. Edit and delete via the API. Start the next run and check the proposer's input contains the edited lesson and not the deleted one, and that the agent's setup did not change.
+**Independent Test**: through `create_app()`, run reflection over fixed run records: it proposes one lesson with cue, lesson, evidence and confidence, or none when evidence is thin. The proposed lesson is not used by any run until approved. Approve, edit and delete via the API. Start the next run and check the proposer's input contains the edited lesson and not the deleted one, and that the agent's setup did not change.
 
 **Acceptance Scenarios**:
 
-1. **Given** an improvement run whose evidence rows are all "confounded" or "no observed effect", **When** reflection runs, **Then** no lesson is written, and the run log says "No lesson: evidence too thin".
+1. **Given** an improvement run whose evidence rows are all "confounded" or "no observed effect", **When** reflection runs, **Then** no lesson is proposed, and the run log says "No lesson: evidence too thin".
+5. **Given** a proposed lesson, **When** the user rejects it, **Then** it is never given to a proposer; **When** the user approves it (optionally after editing), **Then** the next run uses it.
 2. **Given** the Lessons tab, **When** the user edits or deletes a lesson, **Then** the change is saved and used by the next run.
 3. **Given** any lesson, **When** a proposal is made, **Then** the lesson can only shape what is proposed. It never applies an edit, never skips approval, and never unlocks a locked surface.
 4. **Given** a lesson, **When** it is shown, **Then** it says whether it was written by reflection or by the user, when, and which runs it rests on.
@@ -137,7 +140,7 @@ After each improvement run, a reflection step writes at most one lesson for the 
 
 ### User Story 6 - Cost before and after (Priority: P2)
 
-In Settings the user sets $3 per improvement run and $15 per month. An improvement run that would cost $4.10 by estimate cannot start; the sheet offers k = 1 or fewer inputs to fit. A run that reaches $3 mid-way stops, says "Stopped at your $3 run budget after 11 of 15 probes", and shows what it found. The month's total is shown on the Improve tab.
+The defaults are $2 per improvement run and $10 per month; in Settings the user raises them to $3 and $15. An improvement run that would cost $4.10 by estimate cannot start; the sheet offers k = 1 or fewer inputs to fit. A run that reaches $3 mid-way stops, says "Stopped at your $3 run budget after 11 of 15 probes", and shows what it found. The month's total is shown on the Improve tab.
 
 **Why this priority**: each probe is a full agent run. Without a hard stop, a few runs can cost more than the agent saves.
 
@@ -172,8 +175,8 @@ The user turns on "Improve weekly" for the Morning brief, with shadow mode. Each
 
 ### Edge Cases
 
-- **No stored inputs** (a new agent, or run events kept only in memory): Improve says there is nothing to replay yet and offers shadow mode. It does not invent inputs.
-- **Stored input incomplete** (run events truncated at the size limit): that input is skipped and listed as skipped with the reason.
+- **No stored inputs** (a new agent, the run store not yet built, or runs past retention): Improve says there is nothing to replay yet and offers shadow mode. It does not invent inputs.
+- **Stored input incomplete** (for example a run recorded before the shared run store existed): that input is skipped and listed as skipped with the reason.
 - **Source data changed since the stored run**: replay reads today's data. The baseline is re-run in the same improvement run, so baseline and candidates see the same data. The evidence panel says "replayed on today's data".
 - **A read tool fails during a probe**: recorded as a tool error in that probe. If it fails in the baseline and the candidate alike, it is not counted against either.
 - **A probe exceeds its turn or time cap**: it ends, counts as "did not deliver", and that setup cannot win on that input.
@@ -181,7 +184,7 @@ The user turns on "Improve weekly" for the Morning brief, with shadow mode. Each
 - **Two improvement runs for one agent**: refused; one at a time per agent.
 - **A proposal whose base version is no longer current** (user edited, or another proposal was approved): cannot be approved (US3 scenario 4).
 - **The proposer returns invalid edits twice**: that candidate falls back to the current setup and is recorded as such, as in the reference code (research.md R3, last paragraph).
-- **A Tier 1 read with a side effect** (for example a mail read that marks the message as read): see Open Question 6.
+- **A Tier 1 read with a side effect** (for example a mail read that marks the message as read): simulated unless proven read-only (FR-012a); research.md R8 lists every connector tool and its status.
 - **A lesson that names a locked surface** ("raise the archive grant"): kept as text, but it cannot cause a locked edit; the validator drops any such edit.
 
 ## Requirements *(mandatory)*
@@ -191,33 +194,36 @@ The user turns on "Improve weekly" for the Morning brief, with shadow mode. Each
 - **FR-001**: v1 MUST improve only agents that run on a schedule or a recurring trigger (for example Morning brief, Evening wrap-up). Live chat agents are out of scope; their Improve tab says so (US1 scenario 7).
 - **FR-002**: An improvement run MUST start only from the **Improve** button (by the signed-in user in the web UI) or from the agent's optional **weekly run** (FR-071). No agent tool, chat message, tool result or automation other than the weekly run may start one.
 - **FR-003**: Inputs MUST come from the agent's own run history, either **replayed** (FR-003a) or the **next live input in shadow mode** (FR-070).
-- **FR-003a**: **Replay** re-runs a stored input: the same trigger, prompt and time context, with today's data from real Tier 1 reads. An input whose stored record is incomplete is skipped with its reason.
+- **FR-003a**: **Replay** re-runs a stored input from the shared run store (FR-100): the same trigger, prompt and time context, with today's data from real reads allowed by FR-012. An input whose stored record is incomplete or past retention is skipped with its reason.
 - **FR-004**: The editable surfaces are an **allow-list**, and only these may be changed by a proposal:
-  - **instructions** (the agent's SOUL.md, and the prompt of the rule that runs it, see Open Question 3);
+  - **instructions** (the agent's SOUL.md, and the automation's own prompt for each automation that runs this agent; Clarification 3);
   - **tool guidance** (a per-agent text section on how to use the tools it already has);
-  - **skills** (which of the existing skills this agent uses, and new agent-scoped skills; see Open Question 4 on shared skills);
+  - **skills** (which shared skills this agent uses, and new skills scoped to this agent only; a shared skill's content is never edited; Clarification 4);
   - **memory notes** (facts in the agent's own memory);
-  - **subagent setup** (the instructions of subagents this agent calls, see Open Question 4).
-- **FR-005**: Everything not in FR-004 is **locked**, including: policy tiers and rules, autonomy grants, confirmation rules and thresholds, the agent's tool list and integrations, its model, schedule, delivery channel, projects and name. A validator MUST compare each candidate and the proposal against the current version and drop any edit to a locked surface before probing. A candidate whose edits are invalid gets one retry with the validator's message, then falls back to the current setup.
+  - **subagent setup** (which shared subagents this agent uses, and subagents scoped to this agent only; a shared subagent is never edited; Clarification 4).
+- **FR-005**: Everything not in FR-004 is **locked**, including: policy tiers and rules, autonomy grants, confirmation rules and thresholds, the agent's tool list and integrations, its model, projects and name, and, for each automation, its schedule, delivery channel, recipients and quiet hours (Clarification 3). The content of shared skills and shared subagents is locked. A validator MUST compare each candidate and the proposal against the current version and drop any edit to a locked surface before probing. A candidate whose edits are invalid gets one retry with the validator's message, then falls back to the current setup.
 - **FR-006**: A proposal MUST NOT contain new executable code (scripts, plugins, hooks, MCP servers). Where the evidence argues for one, the proposal lists it as a suggestion that links to **MCP Suite → Build**, the existing describe, build, test and approve flow. Nothing is built from the Improve tab.
 - **FR-007**: Improver sessions (proposer, composer, feedback judge, honesty judge, reflector) MUST be model calls with **no tools**. Their evidence is passed as data, marked as data (Article III). They cannot run code, read files outside the evidence they are given, or reach the network.
+- **FR-008**: The model for each improver role (proposer, composer, reflector, honesty judge, feedback judge) MUST be configurable per role. Defaults: proposer, composer and reflector use the strongest configured model ("Pro"). Both judges use a model from a **different model family** from the proposer's when one is configured, so a model does not judge its own family's output; when none is configured they use the same model, and the run report says so in words. The shipped defaults live in tracked config (`config.example.yaml` and code defaults); `config.yaml` may only override them (Article XIV).
 
 ### Probe safety
 
 - **FR-010**: Every probe MUST run through the agent's production runtime with the **same tool registry** the agent gets in a scheduled run (`get_available_tools` and the same middleware chain), wrapped by a **probe wrapper** that is the outermost tool-call wrapper.
 - **FR-011**: The probe wrapper MUST classify each call with the policy engine's own classifier and rules (the same function and the same tracked rules file production uses, never a copy).
-- **FR-012**: A call MUST run for real only when it is classified **Tier 1 by an explicit rule** in the tracked rules (not by a fallback) AND it passes FR-013. Every other call is **simulated**: it is recorded and not executed. That includes all Tier 2, all Tier 3, and every unknown tool. Tier 3 is never executed in a probe under any setting.
+- **FR-012**: A call MUST run for real only when it is classified **Tier 1 by an explicit rule** in the tracked rules (not by a fallback) AND the tool is on the **proven read-only list** (FR-012a) AND it passes FR-013. Every other call is **simulated**: it is recorded and not executed. That includes all Tier 2, all Tier 3, and every unknown tool. Tier 3 is never executed in a probe under any setting.
+- **FR-012a**: The **proven read-only list** is a tracked file. Each entry names one tool and how it was proven not to change state: **code** (its implementation was read and makes no state-changing call), or **observation** (it was called against a test account and the provider's change marker, such as Gmail's `historyId`, did not move, with a positive control showing the marker does move for a known write). Documentation or a tool schema alone is **not** proof; such tools stay simulated until proven. Every connector tool the workspace has is audited and classified (research.md R8). A tool not on the list is treated as a write in probes: recorded, not run.
 - **FR-013**: A Tier 1 call whose tool name matches the tracked write-verb list (create, update, delete, remove, send, post, archive, move, write, apply, set, add, insert, patch, put, upload, share, invite, and their variants) MUST be simulated and flagged in the run report as a classification disagreement.
 - **FR-014**: A simulated call MUST return to the agent a result that says, in words, that the write was recorded and not executed because this is a test run. It MUST NOT create a pending action, show an approval card, write to the disclosure ledger, or count against a standing grant.
 - **FR-015**: Probes MUST NOT change the agent's persistent state or the user's data by any other path: memory updates, ledger writes, skill edits, channel delivery, Home items, alerts and notifications are disabled for probe runs. Probe records live only in the improvement run's own store.
 - **FR-016**: **Sabotage test (required)**: a probe of a test agent calls a write tool whose real implementation increments a counter. The gate asserts the counter is 0 and a simulated-write record exists. The sabotage removes the probe wrapper (and, separately, makes the classifier return Tier 1 for that tool without an explicit rule); in each case the gate MUST fail. Both sabotages are run once and their failure recorded, following Article XII (confirm the failure is the gate firing, not an upstream error).
+- **FR-016a**: **State-changing read test (required)**: a test tool that is classified Tier 1 by an explicit rule, has a read-like name, and changes state when called (it moves a test change marker) MUST be simulated in probes because it is not on the proven read-only list. The sabotage adds it to the list without proof; the gate MUST then fail. A second check: the probe runtime never starts or polls a channel (for example Telegram `getUpdates`, which consumes the update offset).
 - **FR-017**: Each probe MUST have a turn cap and a time cap (defaults in plan.md). A probe that hits a cap ends and counts as "did not deliver".
 
 ### Comparison rule (signals with no answer key)
 
 This is the exact rule. It is deterministic given the probe records and the judges' verdicts. The judges are the only model-based parts, and each is blind to which setup produced the output it judges.
 
-- **FR-020**: **Runs per improvement run.** For M inputs (default 3, most recent first): the current version is probed **R = 2** times per input (the **baseline replicates**); each of the **2k** candidates (k per scope, default k = 1) once per input; the **proposal** once per input. Total probes = M × (R + 2k + 1). Default: 3 × 5 = 15.
+- **FR-020**: **Runs per improvement run.** For M inputs (default 3, most recent first): the current version is probed **R = 2** times per input (the **baseline replicates**); each of the **2k** candidates (k per scope, as in the paper; default k = 1, configurable up to k = 3) once per input; the **proposal** once per input. Total probes = M × (R + 2k + 1). Default: 3 × 5 = 15.
 - **FR-021**: **Step 1, validity.** A setup is discarded if it edits a locked surface (FR-005), contains executable code (FR-006), or fails the initiation check (FR-031).
 - **FR-022**: **Step 2, safety.** If any probe in the run executed a call that FR-012 says must be simulated, the whole improvement run is aborted, no proposal is shown, and the user is told this is a defect. (This should be impossible; the check proves it.)
 - **FR-023**: **Step 3, honesty: loses outright.** An honesty check runs on every probe's output against that probe's own trace. A violation is any of:
@@ -230,7 +236,8 @@ This is the exact rule. It is deterministic given the probe records and the judg
 - **FR-024**: **Step 4, delivery.** A setup loses if, on any input where at least one baseline replicate delivered an output, it delivered none (empty, cap hit, or error).
 - **FR-025**: **Step 5, execution evidence.** Per input, these measures are read from the trace: tool errors, repeated failing calls, required sections missing (sections the current instructions require), turns, and tokens. For each measure and input, the **noise band** is the range between the two baseline replicates. A setup **improves** a measure on an input when its value is outside the band in the better direction, and **regresses** when outside in the worse direction. A token increase of up to 20% over the band's top is not a regression (default; the cost is shown anyway).
 - **FR-026**: **Step 6, feedback evidence.** From this agent's feedback history (FR-040), **feedback checks** are built: each is one yes/no question about an output, and each cites the feedback event(s) it comes from (for example: "Does it propose archiving a task that had activity in the last two days? (declined on 14 Oct, run 790)"). For each input, the outputs of both baseline replicates and the setup under test are shuffled and anonymized, and a judge answers each check for each output: pass, fail or can't tell. On an input, a check **improves** when the setup passes and both baseline replicates fail, and **regresses** when the setup fails and both replicates pass. Can't tell counts as neither.
-- **FR-027**: **Decision.** A setup that survived steps 1 to 4 is **backed by evidence** when it has **no regression** (FR-025, FR-026) on any input, **and** at least **two improvements** in total, observed on **at least two different inputs**. Otherwise it is not.
+- **FR-027**: **Decision.** A setup that survived steps 1 to 4 is **backed by evidence** when it has **no regression** (FR-025, FR-026) on any input, **and** at least **two improvements** in total, observed on **at least two different inputs**. Otherwise it is not. These thresholds (M = 3, R = 2, two improvements on two inputs, 20% token tolerance) are fixed for v1 (Clarification 5). Safety (FR-022) and honesty (FR-023) are absolute and are never tuned.
+- **FR-027a**: Every improvement run MUST record its outcome (proposal, KEEP_CURRENT, stopped at budget, aborted) and, for KEEP_CURRENT, which step stopped each setup (validity, honesty, delivery, regression, too few improvements). The rate of "no change" outcomes per agent and overall is shown in Settings so the thresholds can be tuned later.
 - **FR-028**: **Composition.** The composer sees all candidates that survived steps 1 to 4, their probes, and the per-edit evidence, and returns one of: MERGE (a combination of edits), ADOPT (one candidate as is), or KEEP_CURRENT. Each edit it keeps must cite the probe(s) behind it. The proposal is then probed (FR-020) and must itself pass steps 1 to 6 (FR-021 to FR-027). If it does not, the result is the single candidate that does, with the most improvements (ties: fewer tokens, then KEEP_CURRENT); if none does, the result is KEEP_CURRENT.
 - **FR-029**: **Per-edit verdicts.** Each edit in the proposal is labelled **helped**, **hurt**, **no observed effect** or **confounded** (the reference's verdict set, research.md R1.5). "Confounded" is used whenever a setup changed several surfaces and no probe isolates this one, or when one probe is all that stands behind it. An edit labelled **hurt** cannot be in a proposal.
 - **FR-030**: With a single input (for example one shadow firing), FR-027 cannot be met. Shadow mode therefore accumulates firings until M inputs are probed (FR-070).
@@ -243,7 +250,7 @@ This is the exact rule. It is deterministic given the probe records and the judg
   - pending actions confirmed, declined, expired or edited-then-confirmed (exists: PendingAction outcomes and the edit route; this feature links them to the agent and run);
   - drafts the user edited before sending, where the edit is visible to OmniHarness (the confirmation card's edit path; edits made inside Gmail are not visible and are reported as not available);
   - alerts and Home items dismissed (needs server-side dismissals; today they live in browser storage);
-  - briefs opened vs ignored, where the channel can tell: opened in the web app is recorded; for Telegram and other channels the signal is "not available", never "ignored";
+  - briefs read: a brief counts as read when it is **opened in the web app** or when the user presses a **"Got it"** button on the Telegram message (Clarification 9). No other read receipts are collected. A brief with neither is "not marked read", never "ignored";
   - run ratings (thumbs and comment, which exist today);
   - proposals rejected, with the optional reason.
 - **FR-041**: A missing signal MUST be shown as "not available" in the evidence and MUST NOT be treated as negative feedback.
@@ -253,15 +260,15 @@ This is the exact rule. It is deterministic given the probe records and the judg
 - **FR-042**: The result of an improvement run MUST be shown in Agent Studio's Improve tab as a diff per surface, with, for each edit: old and new text, the reason (the trace moment that motivated it), the run ids behind it, the observed difference, its verdict (FR-029), and any honesty or feedback checks it changed.
 - **FR-043**: The user MUST be able to approve all, approve some, or reject. Approval creates a new version made of exactly the approved edits on top of the version the proposal was made from. If that version is no longer current, approval is refused (US3 scenario 4).
 - **FR-044**: Approval, rejection and restore MUST be accepted only from the signed-in user through the web UI (a trusted channel, Article III). They are not agent tools and are not available through chat or Telegram in v1.
-- **FR-045**: Every change to an agent's editable or locked surfaces, whether from a proposal, from Agent Studio, or from the existing agent tools, MUST create a version: number, timestamp, author (user, proposal id), the snapshot and its hash.
+- **FR-045**: Every change to an agent's editable or locked surfaces, whether from a proposal, from Agent Studio, from a manual file edit made through the app, or from the existing agent tools, MUST create a version: number, timestamp, author (user, proposal id), the snapshot and its hash (Clarification 10). Agent and skill config writes go through **one versioned store shared with 006 Phase C**; 007 uses that store and MUST NOT add a second.
 - **FR-046**: The user MUST be able to restore any earlier version. A restore is a new version, and is itself undoable.
 - **FR-047**: Every approval, rejection and restore MUST be written to the local audit log (Article VIII).
 - **FR-048**: Nothing applies automatically, ever, in v1. There is no setting, flag or environment variable that applies a proposal without the user's approval; a gate test asserts that the only code path that writes a proposal to an agent is the approval endpoint.
 
 ### Cost
 
-- **FR-050**: The user MUST be able to set a **per-run budget** and a **monthly budget** (currency amounts) for improvement runs, in Settings. Defaults are in Open Question 7.
-- **FR-051**: Before a run, the system MUST show an estimate: k, M, the number of probe runs, the number of improver calls, tokens, and cost. Tokens are estimated from the agent's recent runs (the run records' token totals); cost from a tracked price table per model, which the user can override.
+- **FR-050**: The user MUST be able to set a **per-run budget** and a **monthly budget** (currency amounts) for improvement runs, in Settings. Defaults: **$2 per run** and **$10 per month** (Clarification 7).
+- **FR-051**: Before **every** run (manual or weekly), the system MUST compute and show an estimate: k, M, the number of probe runs, the number of improver calls, tokens, and cost. Tokens are estimated from the agent's recent runs (the run records' token totals); cost from a tracked price table per model, which the user can override.
 - **FR-052**: A run whose estimate exceeds either budget MUST NOT start. The sheet says which budget and by how much, and offers smaller k or M.
 - **FR-053**: During a run, before each model call, the system MUST check that the actual cost so far plus that call's maximum cost stays within both budgets. If not, the call is not made and the run stops with "Stopped at your <budget> after <n> of <N> probes".
 - **FR-054**: After a run, the system MUST show the actual cost, tokens and runs next to the estimate. Calls served from a cache are counted and shown separately, not as zero-cost probes.
@@ -270,10 +277,11 @@ This is the exact rule. It is deterministic given the probe records and the judg
 
 ### Lessons (harnessing-level loop)
 
-- **FR-061**: Each agent has a **Lessons** store. After each improvement run (including KEEP_CURRENT), a reflection step writes per-edit evidence rows (FR-029) and **at most one** lesson with **cue**, **lesson**, **evidence** and **confidence**. It writes no lesson ("No lesson: evidence too thin") when the rows rest only on confounded or no-effect verdicts.
+- **FR-061**: Each agent has a **Lessons** store. After each improvement run (including KEEP_CURRENT), a reflection step writes per-edit evidence rows (FR-029) and proposes **at most one** lesson with **cue**, **lesson**, **evidence** and **confidence**. It proposes no lesson ("No lesson: evidence too thin") when the rows rest only on confounded or no-effect verdicts.
+- **FR-061a**: A proposed lesson is shown with the run's proposal (or with its KEEP_CURRENT result), and the user approves, edits-then-approves, or rejects it **separately** from the setup edits (Clarification 8). Only approved lessons are given to later runs. Rejected lessons are kept as feedback and never used as lessons.
 - **FR-062**: The Lessons tab MUST let the user view, add, edit and delete lessons, with the layout and interaction of Settings > Memory (cards, Edit, Add, "updated <time>", and "may be out of date" for old entries).
 - **FR-063**: Lessons MUST be given to the proposer and composer as data. A lesson cannot apply an edit, cannot skip approval, cannot unlock a locked surface, and cannot override the comparison rule.
-- **FR-064**: Each lesson MUST show its author (reflection or user), its time, and the runs it rests on.
+- **FR-064**: Each lesson MUST show its author (reflection, approved by the user; or the user), its time, and the runs it rests on.
 
 ### Shadow mode and weekly runs
 
@@ -281,6 +289,18 @@ This is the exact rule. It is deterministic given the probe records and the judg
 - **FR-071**: The user MAY turn on an optional **weekly** improvement run per agent. It runs only if its estimate fits both budgets; otherwise it is skipped and the Improve tab says why.
 - **FR-072**: Shadow and weekly runs MUST respect quiet hours and must not interrupt an exchange in progress (Article VII). A ready proposal is a quiet item on the Improve tab; it is not pushed to a channel in v1.
 - **FR-073**: Shadow probes MUST NOT delay, change or reorder the real firing, and MUST NOT run on the trigger engine's event loop (see AUDIT-2026-10 T-6).
+
+### Run storage (shared Slice 0, prerequisite)
+
+These requirements belong to the shared run store that 007 replay and 006 Phase D automation history both use. It is built once, by the 006 Tasks/Automations work, and goes through the same gated review as 006 Phase B, because it stores mail and calendar content. 007 states them so its replay can depend on them.
+
+- **FR-100**: Every scheduled run's input, trace and output MUST be stored durably with **full content**: no truncation (today's `db` backend cuts content at 10,240 bytes); large bodies are stored separately and referenced.
+- **FR-101**: Secrets (tokens, keys, passwords, OAuth codes, cookies) MUST be redacted **before** anything is written. **Sabotage test (required)**: a token placed in a tool result never lands on disk in any file or table; the sabotage disables redaction and the gate MUST fail.
+- **FR-102**: Retention is **30 days** by default, changeable by the user in Settings; runs past retention are deleted, including their large bodies.
+- **FR-103**: The store is **local only**; nothing is sent off the machine.
+- **FR-104**: Settings MUST have a **"Delete run history"** control that removes all stored runs (and their bodies) after a confirmation, and says when it is done.
+- **FR-105**: Improvement probes, shadow probes and their improver calls are stored in the same store, marked as probes, under the same redaction and retention.
+- **FR-106**: When the run store is absent or empty for an agent, Improve says there is nothing to replay and offers shadow mode; it never invents inputs.
 
 ### Agent Studio UI
 
@@ -295,7 +315,8 @@ This is the exact rule. It is deterministic given the probe records and the judg
 
 ### Key Entities
 
-- **Agent version**: agent, number, snapshot of all surfaces (editable and locked), hash, author (user or proposal), created at, restored-from (optional).
+- **Agent version**: lives in the shared versioned agent store (006 Phase C): agent, number, snapshot of all surfaces (editable and locked), hash, author (user or proposal), created at, restored-from (optional).
+- **Proven read-only entry**: tool name, verification method (code or observation), the evidence (file and lines, or the observation test id), date.
 - **Improvement run**: agent, base version, mode (replay or shadow), k, M, R, estimate (runs, tokens, cost), actual (runs, tokens, cost, cached calls), budgets at start, status (estimating, running, stopped-at-budget, done, aborted), result (proposal id or KEEP_CURRENT with reason).
 - **Candidate**: run, scope (how it works / what it knows), the edits, validator outcome, fallback flag, proposer notes.
 - **Probe**: run, setup (baseline replicate n, candidate id, or proposal), input, trace reference, output, delivered flag, measures, honesty verdicts, caps hit.
@@ -303,7 +324,7 @@ This is the exact rule. It is deterministic given the probe records and the judg
 - **Feedback event**: agent, run, kind (confirmed, declined, expired, edited, dismissed, opened, rating, proposal rejected), detail, time, source.
 - **Feedback check**: run, question, cited feedback events.
 - **Proposal**: run, base version, outcome (MERGE, ADOPT, KEEP_CURRENT), edits (surface, old, new, reason, evidence rows, verdict), MCP Build suggestions, status (open, approved in part, approved, rejected, stale).
-- **Lesson**: agent, cue, lesson, evidence (run ids and rows), confidence, author, created and updated times.
+- **Lesson**: agent, cue, lesson, evidence (run ids and rows), confidence, author, status (proposed, approved, rejected), created and updated times.
 - **Improvement budget**: user, per-run amount, monthly amount, price overrides.
 
 ## Success Criteria *(mandatory)*
@@ -319,13 +340,16 @@ This is the exact rule. It is deterministic given the probe records and the judg
 - **SC-007**: On a stand-in model with fixed token counts, the estimate is within 10% of the actual tokens.
 - **SC-008**: Shadow mode leaves the real firing's outcome, delivery count and delivery time unchanged (integration test through `build_production_loop`).
 - **SC-009**: The only code path that writes a proposal to an agent is the approval endpoint (gate test, with a sabotage that adds a second path).
+- **SC-010**: The state-changing-read sabotage (FR-016a) and the run-store redaction sabotage (FR-101) each make their gate fail, recorded once.
+- **SC-011**: Every connector tool the workspace exposes appears in research.md R8 with a status; a gate fails when a tool on the proven read-only list has no recorded verification.
+- **SC-012**: No lesson reaches a proposer without the user's approval (gate test with a sabotage that passes proposed lessons through).
 
 ## Assumptions
 
 - Scheduled agents exist as agents with a schedule (006 Phase 3) or as rules that name an agent (006 Phase 4). Until then, the backend slices are tested with a test agent driven by a cron rule.
-- Run events are persisted (`run_events.backend` is `db` or `jsonl`). With the default `memory` backend nothing is stored, so replay has nothing to read; Improve says so.
+- Replay depends on the shared run store (Slice 0, FR-100 to FR-106). Today's run events default to the `memory` backend, which stores nothing, and the `db` backend truncates at 10 KB; neither is enough on its own.
 - A single user per workspace; budgets are per user.
-- The configured models are used for probes (the agent's own model) and for the improver (Open Question 2). No Vertex or other new provider is required.
+- Probes use the agent's own model; improver roles use the per-role models of FR-008. No Vertex or other new provider is required.
 - The paper's numbers are benchmark results with judges; nothing here assumes the same gains for personal agents.
 
 ## Out of Scope (v1)
@@ -334,9 +358,22 @@ This is the exact rule. It is deterministic given the probe records and the judg
 
 ## Clarifications
 
-None yet. The questions below need the user's answers. Each has a default the plan uses until answered.
+### Session 2026-10-20 (the user's decisions on the ten open questions, relayed by the lead)
 
-## Open Questions
+1. **k**: k candidates per kind of change, as in the paper. Default k = 1 (2 candidates, 15 probes), configurable up to k = 3. The probe count and cost estimate are shown before every run. → FR-020, FR-051.
+2. **Models**: configurable per role in config. Propose, compose and reflect default to the strongest configured model ("Pro"). The judge is a different model family from the proposer when one is configured; otherwise the same model, recorded in the run report. → FR-008.
+3. **Automation prompt**: an automation's own prompt counts as the agent's instructions and is editable. Its schedule, delivery channel, recipients and quiet hours are locked. No new addresses, URLs, recipients or tools. → FR-004, FR-005, FR-031.
+4. **Shared skills and subagents**: a proposal may change which shared skills or subagents this agent uses and add agent-only ones, never edit a shared one. → FR-004, FR-005.
+5. **Thresholds**: 3 inputs, 2 baseline runs, two or more improvements on two inputs, 20% token tolerance, for v1. Safety and honesty stay absolute. The "no change" rate is recorded for later tuning. → FR-027, FR-027a.
+6. **Reads that change state**: every connector tool is audited and classified; a tool not proven read-only is treated as a write. The table is research.md R8; the sabotage is FR-016a. → FR-012, FR-012a, FR-016a.
+7. **Budgets**: $2 per run and $10 per month by default, editable in Settings. → FR-050.
+8. **Lessons**: need the user's approval, shown with the proposal and approved or rejected separately; editable and deletable later on the Lessons tab. → FR-061, FR-061a.
+9. **Read signal**: a "Got it" button on Telegram briefs, plus "opened in the web app". No other read receipts. → FR-040.
+10. **Versions**: every change to an agent is versioned, manual edits included, with undo, through one versioned store shared with 006 Phase C. 007 uses it and does not add a second. → FR-045.
+
+**Prerequisite (from the same session)**: a durable run store is a shared Slice 0 for 007 replay and 006 Phase D automation history, built once. Full content, secrets redacted before storing (with a sabotage test), 30-day retention the user can change, local only, and "Delete run history" in Settings. It goes through the same gated review as 006 Phase B. → FR-100 to FR-106.
+
+## Open Questions (answered 2026-10-20, see Clarifications)
 
 1. **"K candidates".** The paper probes k candidates **per scope** (k "how it works" plus k "what it knows", so 2k), and its capital K means the eight components (research.md R5 item 1). **Default:** the user sets k (1 to 3, default 1), and the estimate shows 2k candidates. Is that the meaning you intended, or did you mean K candidates in total?
 2. **Improver model.** Which model writes candidates, composes, judges and reflects? **Default:** the strongest model configured in OmniHarness, chosen in Settings, separate from the agent's own model, with its cost in the estimate. The paper's evidence that the same model can improve itself is Figure 8.
