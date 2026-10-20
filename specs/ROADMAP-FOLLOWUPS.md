@@ -278,7 +278,10 @@ The original report follows.
 
 Run alone, they fail with `NoReferencedTableError`. In the full suite they pass, because another test's import registers the referenced table's model first. This is the same on `main`, so it was not introduced here. It is a test-isolation defect, not a production one: the gateway imports every model at startup. **Fix:** import the models in the MCP tests' conftest. **Reopen** if CI ever shards the suite.
 
-## `e2e-tests` fails on main: two landing-page specs
+## `e2e-tests` fails on main: two landing-page specs — FIXED 2026-10-19 (pre-005 hygiene PR)
+
+**The cause was not a missing backend.** The landing page changed in 7639b43 (2026-06-11): the brand moved from a header h1 into the nav, and "Get Started" became "Start building" -> /workspace. The specs still asserted the old page. They now assert the current page and still use mock-api for the workspace step. The earlier note above ("the e2e workflow starts no backend, so two landing-page tests fail by design") was wrong about the cause.
+
 
 `tests/e2e/landing.spec.ts` fails twice: "renders the header and hero section" (element not found) and "Get Started link navigates to workspace" (click timeout). It fails the same way on main's last three runs (7daced7, 14e857e, e3e23e2, back to 2026-08-25), and on PR #39, which touches no landing or e2e file. The job runs only when `frontend/**` changes, so a backend-only PR never shows it. It is red on every frontend PR, and that is the "red build that tells you nothing" problem the backend config step was added to fix. **Fix**: update the spec to the current landing page, or delete it if the landing page is no longer the product's entry.
 
