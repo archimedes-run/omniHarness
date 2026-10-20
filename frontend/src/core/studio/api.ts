@@ -4,6 +4,7 @@ import { getBackendBaseURL } from "@/core/config";
 import type {
   AgentRuns,
   CustomSkill,
+  DraftResponse,
   SkillFiles,
   StudioOptions,
 } from "./types";
@@ -65,3 +66,18 @@ export const addSkillFile = (name: string, path: string, content: string) =>
 
 export const loadAgentRuns = (name: string) =>
   call<AgentRuns>(`/api/studio/agents/${encodeURIComponent(name)}/runs`);
+
+/** One sentence in, the large fields out, for review. Never saves. */
+export const draft = (
+  kind: "agent" | "skill",
+  body: {
+    sentence: string;
+    agent_name?: string | null;
+    name?: string | null;
+    body?: string | null;
+  },
+) =>
+  call<DraftResponse>(`/api/drafts/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });

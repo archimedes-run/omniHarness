@@ -48,3 +48,18 @@ export interface AgentRuns {
   schedules: AgentSchedule[];
   recent: FiringView[];
 }
+
+/** Mirrors app/gateway/routers/drafts.py. A draft is never saved. */
+export interface DraftResponse {
+  kind: "agent" | "skill";
+  model: string;
+  agent: {
+    display_name: string;
+    description: string;
+    instructions: string;
+    tool_groups: string[];
+    skills: string[];
+  } | null;
+  skill: { description: string; body: string } | null;
+  dropped: string[];
+}

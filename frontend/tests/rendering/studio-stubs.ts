@@ -189,6 +189,34 @@ export async function stubStudio(
       ],
     });
   });
+  await page.route("**/api/drafts/*", (route) => {
+    const kind = route.request().url().split("/").pop();
+    seen.drafts.push({ kind, ...route.request().postDataJSON() });
+    return kind === "agent"
+      ? json(route, {
+          kind,
+          model: "default",
+          agent: {
+            display_name: "Morning brief",
+            description: "Tells you what is waiting each morning",
+            instructions: "You are my morning brief.\n1. What is waiting.",
+            tool_groups: ["web"],
+            skills: ["cite-every-claim"],
+          },
+          skill: null,
+          dropped: ["teleport"],
+        })
+      : json(route, {
+          kind,
+          model: "default",
+          agent: null,
+          skill: {
+            description: "Use when someone asks where things stand.",
+            body: "# Status\n\n- Moved",
+          },
+          dropped: [],
+        });
+  });
   await page.route("**/api/studio/options", (route) =>
     json(route, {
       tool_groups: ["web", "file:read", "file:write", "bash"],
