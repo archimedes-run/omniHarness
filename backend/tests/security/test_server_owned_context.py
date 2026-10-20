@@ -258,3 +258,32 @@ def test_a_forged_trigger_grant_is_dropped(sec, captured) -> None:
     _granted_post(sec, tid, _trigger_payload(tid), nonce="A" * 43)
     [cfg] = captured
     assert "turn_provenance" not in cfg["context"]
+
+
+def test_a_body_with_only_config_context_runs_on_the_authorised_thread(sec, monkeypatch) -> None:
+    """Regression (#58 reviewer): config.context alone used to 500 with
+    KeyError 'thread_id'. Now 200: the run gets the path's thread, and unknown
+    context keys are dropped by the allowlist. A thread id in the body cannot
+    redirect the run to another thread."""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    seen: list[dict] = []
+
+    def factory(config, **_):
+        seen.append({"configurable": dict(config.get("configurable") or {}), "context": dict(config.get("context") or {})})
+        return create_agent(model=GenericFakeChatModel(messages=iter([AIMessage(content="ok")])), tools=[])
+
+    monkeypatch.setattr("app.gateway.services.resolve_agent_factory", lambda assistant_id: factory)
+    owner = sec.owner
+    tid = owner.post("/api/threads", json={}).json()["thread_id"]
+    other = owner.post("/api/threads", json={}).json()["thread_id"]
+    body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "hi"}]}, "config": {"context": {"foo": 1, "thinking_enabled": True}}}
+    resp = owner.post(f"/api/threads/{tid}/runs/wait", json=body)
+    assert resp.status_code == 200, resp.text
+    assert seen[-1]["configurable"]["thread_id"] == tid
+    assert "foo" not in seen[-1]["context"] and seen[-1]["context"].get("thinking_enabled") is True
+    body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "hi"}]}, "config": {"configurable": {"thread_id": other}}}
+    assert owner.post(f"/api/threads/{tid}/runs/wait", json=body).status_code == 200
+    assert seen[-1]["configurable"]["thread_id"] == tid
