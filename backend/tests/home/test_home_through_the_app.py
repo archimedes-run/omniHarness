@@ -98,7 +98,7 @@ def test_bad_dismissals_are_refused(gateway) -> None:
 def test_upcoming_lists_the_next_run_of_each_enabled_cron_rule(gateway, engine) -> None:
     body = gateway.client.get("/api/home/upcoming").json()
     assert body["engine_enabled"] is True and body["rules_error"] is None
-    assert body["calendar"] == "not-set-up"
+    assert body["calendar"] == {"state": "not-set-up", "detail": None, "events": []}, "no Google Calendar connection"
     ids = [r["rule_id"] for r in body["runs"]]
     assert sorted(ids) == ["morning-briefing", "weekly-review"], "a disabled rule has no next run"
     times = [datetime.fromisoformat(r["at"]) for r in body["runs"]]
@@ -111,7 +111,7 @@ def test_upcoming_lists_the_next_run_of_each_enabled_cron_rule(gateway, engine) 
 
 def test_upcoming_with_the_engine_off_says_so(gateway) -> None:
     body = gateway.client.get("/api/home/upcoming").json()
-    assert body == {"engine_enabled": False, "rules_error": None, "runs": [], "calendar": "not-set-up"}
+    assert (body["engine_enabled"], body["rules_error"], body["runs"]) == (False, None, [])
 
 
 def test_upcoming_with_an_unreadable_rule_file_is_cant_tell(gateway, engine) -> None:
@@ -136,7 +136,8 @@ def test_today_lists_ledger_changes_and_deliveries_since_the_start_of_the_day(ga
     assert "Morning briefing delivered" in texts
     assert "Yesterday delivered" not in texts, "before the start of the day"
     assert {i["by"] for i in body["items"] if i["source"] == "ledger"} == {"you"}
-    assert body["sources"] == {"ledger": "ok", "automations": "ok"}
+    assert body["sources"] == {"ledger": "ok", "automations": "ok", "sessions": "not-set-up", "github": "not-set-up"}
+    assert {i["known"] for i in body["items"]} == {"observed"}, "the ledger and the engine recorded these here"
 
     later = gateway.client.get("/api/home/today", params={"since": (NOW + timedelta(hours=1)).isoformat()}).json()
     assert later["items"] == [] and later["sources"]["ledger"] == "ok", "empty, and read"
@@ -144,7 +145,7 @@ def test_today_lists_ledger_changes_and_deliveries_since_the_start_of_the_day(ga
 
 def test_today_with_the_engine_off_says_automations_are_off(gateway) -> None:
     body = gateway.client.get("/api/home/today", params={"since": NOW.isoformat()}).json()
-    assert body["sources"] == {"ledger": "ok", "automations": "off"}
+    assert (body["sources"]["ledger"], body["sources"]["automations"]) == ("ok", "off")
 
 
 def test_today_needs_an_offset(gateway) -> None:

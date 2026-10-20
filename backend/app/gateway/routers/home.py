@@ -3,8 +3,10 @@
 - GET  /api/home/dismissals -> {"alert_keys": [...], "name_prompt_dismissed": bool}
 - POST /api/home/dismissals {"kind": "alert", "keys": ["<rule_id>:<event_id>", ...]}
                             {"kind": "name-prompt"}
-- GET  /api/home/upcoming   -> the next run of each enabled cron automation
+- GET  /api/home/upcoming   -> the next run of each enabled cron automation, and
+                               the next 7 days of Google Calendar (read-only)
 - GET  /api/home/today?since=<ISO> -> what moved since the start of the user's day
+                               (ledger, deliveries, sessions, GitHub; read-only)
 
 Dismissals are per user, on the server: a dismissed alert stays dismissed on
 every device, and /api/inbox/alerts leaves it out of the New chat badge. The
@@ -24,7 +26,8 @@ from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_home_dismissal_repo
-from app.gateway.home_view import MovedView, SourceState, UpcomingView, describe_moved, describe_upcoming
+from app.gateway.home_sources import SourceState, calendar_events, github_items, session_items
+from app.gateway.home_view import MovedView, UpcomingView, describe_moved, describe_upcoming
 from omniharness.persistence.home_dismissals import KEY_MAX
 
 router = APIRouter(prefix="/api/home", tags=["home"])
@@ -76,23 +79,28 @@ async def post_dismissals(body: DismissIn, request: Request) -> DismissalsView:
 
 
 def _rules(cfg):
-    """The rule file as the engine reads it, and why it could not be read."""
-    from app.gateway.trigger_engine_wiring import _resolve_rules_path
+    """The rule file as the engine reads it (rules and quiet hours), and why it
+    could not be read."""
+    from app.gateway.trigger_engine_wiring import _quiet_hours, _resolve_rules_path
     from app.trigger_engine.config import ConfigLoader
 
     loader = ConfigLoader(path=_resolve_rules_path(cfg))
-    rules = list(loader.load().rules)
-    return rules, loader.last_error
+    config = loader.load()
+    # The engine's own adapter, so the window is the one it enforces.
+    return list(config.rules), _quiet_hours(config), loader.last_error
 
 
 @router.get("/upcoming", response_model=UpcomingView)
 @require_permission("threads", "read")
 async def upcoming(request: Request) -> UpcomingView:
+    now = datetime.now(UTC)
+    calendar = await calendar_events(request.app.state, _user(request), now)
     cfg = request.app.state.config.trigger_engine
     if not cfg.enabled:
-        return UpcomingView(engine_enabled=False, runs=[])
-    rules, error = _rules(cfg)
-    return describe_upcoming(rules, now=datetime.now(UTC), engine_enabled=True, rules_error=error)
+        return UpcomingView(engine_enabled=False, runs=[], calendar=calendar)
+    rules, quiet, error = _rules(cfg)
+    view = describe_upcoming(rules, now=now, engine_enabled=True, rules_error=error, quiet=quiet)
+    return view.model_copy(update={"calendar": calendar})
 
 
 @router.get("/today", response_model=MovedView)
@@ -128,4 +136,5 @@ async def today(request: Request, since: datetime = Query(..., description="The 
             automations = "ok"
         except Exception:  # noqa: BLE001
             audit, automations = None, "unavailable"
-    return describe_moved(changes=changes, project_names=names, audit=audit, since=since, now=now, automations=automations)
+    sessions, github = await asyncio.gather(session_items(since), github_items(request.app.state, user_id, since))
+    return describe_moved(changes=changes, project_names=names, audit=audit, since=since, now=now, automations=automations, outside={"sessions": sessions, "github": github})

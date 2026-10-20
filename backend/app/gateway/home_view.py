@@ -3,23 +3,30 @@
 Two pure views. Each reads nothing itself; the router hands it what it read.
 
   * upcoming: the next scheduled run of each enabled cron automation, computed
-    with the trigger engine's own `next_due` (the rule's cron in the rule's
-    time zone, DST handled by the zone), soonest first.
+    with the trigger engine's own `next_due` exactly as the engine computes it
+    (the rule's zone; a rule without one runs in UTC, as the engine runs it),
+    soonest first, with when quiet hours hold its message; plus the calendar
+    (home_sources.calendar_events).
   * moved today: what actually happened since the start of the user's day:
-    changes the Project Ledger recorded (who made each one, in words) and
-    automation messages the engine recorded as delivered. Nothing is inferred
-    or invented; a source that could not be read is said to be unreadable.
+    changes the Project Ledger recorded (who made each one, in words),
+    automation messages the engine recorded as delivered, and the outside
+    sources' items (sessions, GitHub). Each says how it is known (observed /
+    reported / inferred). Nothing is invented; a source that could not be read
+    is said to be unreadable.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
+from app.gateway.home_sources import CalendarView, Known, SourceItem, SourceState
 from app.gateway.inbox_view import describe_alerts
 from app.trigger_engine.models import Rule, TriggerType
+from app.trigger_engine.politeness.quiet_hours import QuietHours, should_suppress
 from app.trigger_engine.scheduler import next_due
 
 #: How many upcoming runs Home lists.
@@ -43,6 +50,9 @@ class UpcomingRun(BaseModel):
     at: str
     schedule: str
     timezone: str | None
+    #: Set when the run falls in quiet hours and the rule is not urgent: the
+    #: engine holds its message until the window ends, at this time.
+    held_until: str | None = None
 
 
 class UpcomingView(BaseModel):
@@ -51,11 +61,19 @@ class UpcomingView(BaseModel):
     #: Set when the rule file could not be read: the list may be missing runs.
     rules_error: str | None = None
     runs: list[UpcomingRun]
-    #: Calendar events need a calendar source; none is set up in the app.
-    calendar: Literal["not-set-up"] = "not-set-up"
+    calendar: CalendarView = CalendarView(state="not-set-up")
 
 
-def describe_upcoming(rules: list[Rule], *, now: datetime, engine_enabled: bool, rules_error: str | None, limit: int = UPCOMING_LIMIT) -> UpcomingView:
+def held_until(rule: Rule, at: datetime, quiet: QuietHours | None) -> datetime | None:
+    """When quiet hours release a run at `at`, or None when it is not held.
+    The engine's own rule (should_suppress); the window in its own zone."""
+    if quiet is None or not should_suppress(rule.urgent, quiet, at)[0]:
+        return None
+    local = at.astimezone(ZoneInfo(quiet.timezone)) if quiet.timezone else at
+    return quiet.next_end(local)
+
+
+def describe_upcoming(rules: list[Rule], *, now: datetime, engine_enabled: bool, rules_error: str | None, quiet: QuietHours | None = None, limit: int = UPCOMING_LIMIT) -> UpcomingView:
     runs: list[tuple[datetime, UpcomingRun]] = []
     for rule in rules:
         if not rule.enabled or rule.type is not TriggerType.CRON:
@@ -67,23 +85,28 @@ def describe_upcoming(rules: list[Rule], *, now: datetime, engine_enabled: bool,
         except Exception:  # noqa: BLE001 — a rule the parser let through but croniter cannot run is skipped, not guessed
             continue
         prompt = " ".join(rule.prompt.split())
-        runs.append((at, UpcomingRun(rule_id=rule.id, title=rule_title(rule.id), prompt=prompt[:140] + ("…" if len(prompt) > 140 else ""), at=at.isoformat(), schedule=schedule, timezone=tz)))
+        try:
+            held = held_until(rule, at, quiet)
+        except Exception:  # noqa: BLE001 — an unknown quiet-hours zone: say nothing rather than guess
+            held = None
+        runs.append((at, UpcomingRun(rule_id=rule.id, title=rule_title(rule.id), prompt=prompt[:140] + ("…" if len(prompt) > 140 else ""), at=at.isoformat(), schedule=schedule, timezone=tz, held_until=held.isoformat() if held else None)))
     runs.sort(key=lambda pair: pair[0])
     return UpcomingView(engine_enabled=engine_enabled, rules_error=rules_error, runs=[r for _, r in runs[:limit]])
 
 
-SourceState = Literal["ok", "unavailable", "off"]
-
-
 class MovedItem(BaseModel):
     at: str
-    source: Literal["ledger", "automation"]
+    source: Literal["ledger", "automation", "session", "github"]
     text: str
     #: Who made the change, in words ("you", "the assistant, confirmed by you").
     by: str | None = None
     #: Where to look: a project or a conversation.
     project_id: str | None = None
     thread_id: str | None = None
+    #: How it is known: observed (recorded here or seen), reported (another
+    #: system says so), inferred (from silence).
+    known: Known = "observed"
+    url: str | None = None
 
 
 class MovedView(BaseModel):
@@ -92,6 +115,9 @@ class MovedView(BaseModel):
     #: off ("off"). An unreadable source means the list may be missing events.
     sources: dict[str, SourceState]
 
+
+#: An outside source's answer: its items (None when unread) and its state.
+Outside = tuple[list[SourceItem] | None, SourceState]
 
 _TASK_STATUS = {"done": "Task done", "doing": "Task started", "blocked": "Task blocked", "dropped": "Task dropped", "todo": "Task reopened"}
 _BY = {"user": "you", "assistant_confirmed": "the assistant, confirmed by you"}
@@ -146,8 +172,9 @@ def _when(at: str) -> datetime:
     return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
-def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str], audit: list[dict] | None, since: datetime, now: datetime, automations: SourceState, limit: int = MOVED_LIMIT) -> MovedView:
-    """`changes` / `audit` None means that source could not be read."""
+def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str], audit: list[dict] | None, since: datetime, now: datetime, automations: SourceState, outside: dict[str, Outside] | None = None) -> MovedView:
+    """`changes` / `audit` None means that source could not be read.
+    `outside`: per source name, its items (None when unread) and its state."""
     items: list[MovedItem] = []
     for change in changes or []:
         item = describe_change(change, project_names)
@@ -159,5 +186,11 @@ def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str],
                 continue
             if _when(alert.at) >= since:
                 items.append(MovedItem(at=alert.at, source="automation", text=f"{rule_title(alert.rule_id)} delivered", thread_id=alert.thread_id))
+    sources: dict[str, SourceState] = {"ledger": "unavailable" if changes is None else "ok", "automations": automations if audit is not None or automations == "off" else "unavailable"}
+    for name, (found, state) in (outside or {}).items():
+        sources[name] = state
+        for it in found or []:
+            if _when(it.at) >= since:
+                items.append(MovedItem(at=it.at, source=it.source, text=it.text, known=it.known, url=it.url))
     items.sort(key=lambda i: _when(i.at), reverse=True)
-    return MovedView(items=items[:limit], sources={"ledger": "unavailable" if changes is None else "ok", "automations": automations if audit is not None or automations == "off" else "unavailable"})
+    return MovedView(items=items[:MOVED_LIMIT], sources=sources)
