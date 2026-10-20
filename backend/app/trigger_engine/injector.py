@@ -71,6 +71,11 @@ class TurnInjector:
     get: Callable[[str], dict]
     assistant_id: str = DEFAULT_ASSISTANT_ID
     default_tools: tuple[str, ...] = field(default_factory=tuple)
+    #: The messages of the last injected turn: the prompt, every tool call and
+    #: result, and the reply. Read by the runner for the run history (Feature
+    #: 006). The engine runs one rule at a time on one thread, so "last" is
+    #: unambiguous.
+    last_turn: list = field(default_factory=list)
 
     def create_thread(self, rule_id: str) -> str:
         rec = self.post("/api/threads", {"metadata": {RULE_KEY: rule_id}})
@@ -113,8 +118,22 @@ class TurnInjector:
             },
             "metadata": {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: rule_id},
         }
+        self.last_turn = []
         result = self.post(f"/api/threads/{thread_id}/runs/wait", payload)
+        self.last_turn = turn_messages(result, prompt)
         return _reply_text(result)
+
+
+def turn_messages(result: dict, prompt: str) -> list:
+    """This turn's messages: from the last human message carrying `prompt`
+    (runs/wait returns the whole thread) to the end. The whole thread when the
+    prompt cannot be found, rather than nothing."""
+    msgs = [m for m in (result.get("messages") or []) if isinstance(m, dict)]
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if (m.get("type") in ("human", "user") or m.get("role") in ("human", "user")) and prompt in str(m.get("content", "")):
+            return msgs[i:]
+    return msgs
 
 
 def _reply_text(result: dict) -> str:

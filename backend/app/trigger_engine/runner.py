@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from .audit import AuditLog
 from .compose import compose_proactive, render_prompt, with_late_note
@@ -75,6 +75,10 @@ class RuleRunner:
     #: hanging the gateway — which is what it did before.
     #: Failed attempts per event fingerprint, for the retry rule in `_give_up`.
     attempts: dict[str, int] = field(default_factory=dict)
+    #: Records each run's full content (Feature 006 run history): called once
+    #: per injected turn, succeeded or failed, with a plain dict. Optional, and
+    #: never allowed to break a firing.
+    record_run: Callable[[dict], None] | None = None
     worker: Executor = field(default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="trigger-engine"))
 
     async def offload(self, fn: Callable, *args):
@@ -111,6 +115,8 @@ class RuleRunner:
                 continue  # FR-017: already fired for this event
 
             firing = Firing(rule_id=rule.id, event=event, prompt=render_prompt(rule, event))
+            started = datetime.now(UTC)
+            raw = ""
             try:
                 firing.thread_id = self.threads.thread_for(rule.id)
                 if self.default_tools:
@@ -124,9 +130,11 @@ class RuleRunner:
                 firing.body = compose_proactive(rule, event, raw, late=False)
                 firing.reply = with_late_note(event, firing.body)
             except Exception as exc:  # noqa: BLE001 — one firing, not the rule
+                self._record(rule, firing, started, raw, error=f"{type(exc).__name__}: {exc}")
                 if self._give_up(rule, firing, key, exc, now):
                     fired.append(firing)
                 continue
+            self._record(rule, firing, started, raw, error=None)
 
             # Recorded BEFORE delivery: a crash between injection and delivery
             # must not cause the same event to fire again on the next cycle.
@@ -137,6 +145,32 @@ class RuleRunner:
             self._route(rule, firing, now)
             fired.append(firing)
         return fired
+
+    def _record(self, rule: Rule, firing: Firing, started: datetime, reply: str, *, error: str | None) -> None:
+        if self.record_run is None:
+            return
+        try:
+            self.record_run(
+                {
+                    "rule_id": rule.id,
+                    "event_type": str(firing.event.type),
+                    "event_id": firing.event.event_id,
+                    "thread_id": firing.thread_id,
+                    "started_at": started,
+                    "finished_at": datetime.now(UTC),
+                    "status": "failed" if error else "completed",
+                    "error": error,
+                    "body": {
+                        "rule_id": rule.id,
+                        "event": {"type": str(firing.event.type), "id": firing.event.event_id, "fields": dict(firing.event.fields)},
+                        "prompt": firing.prompt,
+                        "messages": list(getattr(self.injector, "last_turn", []) or []),
+                        "reply": reply,
+                    },
+                }
+            )
+        except Exception:  # noqa: BLE001 — history must never break a firing
+            logger.exception("rule %s: recording the run failed", rule.id)
 
     def _give_up(self, rule: Rule, firing: Firing, key: str, exc: Exception, now: datetime) -> bool:
         """Resolve a failed firing. Returns True when the event is settled.

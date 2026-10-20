@@ -35,6 +35,7 @@ from app.gateway.routers import (
     policy,
     preferences,
     previews,
+    run_history,
     runs,
     sessions,
     skills,
@@ -219,7 +220,7 @@ async def _start_trigger_engine(app: FastAPI):
             # (tests/trigger_engine/test_production_wiring.py). Argument
             # construction lives in the wiring module so that a test cannot
             # exercise a different argument list from the one that ships.
-            lambda: wiring.build_production_loop(config, run_store=app.state.run_store),
+            lambda: wiring.build_production_loop(config, run_store=app.state.run_store, run_history=getattr(app.state, "run_history", None)),
             enabled=True,
         )
         if handle.error:
@@ -348,6 +349,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("policy: the startup tool-coverage check failed")
 
+        # The run history (Feature 006): every automation run's full content,
+        # redacted, kept locally under the data dir, purged past retention.
+        # Opened before the engine, which records into it. A failure here must
+        # not stop the gateway: automations then run without history, and the
+        # run-history routes say it is unavailable.
+        purge_task = None
+        try:
+            from app.run_history.lifespan import open_history, purge_forever
+            from omniharness.config.paths import get_paths
+
+            app.state.run_history = open_history(get_paths().base_dir)
+            purge_task = asyncio.create_task(purge_forever(app.state.run_history))
+        except Exception:
+            logger.exception("Run history could not be opened; automations run without it")
+            app.state.run_history = None
+
         # Start the trigger engine, in exactly one worker.
         #
         # This is the call site whose absence made Feature 002 ship inert: the
@@ -361,6 +378,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Stop the trigger engine before the channel service, so a firing in
         # flight still has a destination to deliver to.
         await _stop_trigger_engine(app)
+        if purge_task is not None:
+            purge_task.cancel()
 
         # Stop channel service on shutdown (bounded to prevent worker hang)
         try:
@@ -590,6 +609,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
+    app.include_router(run_history.router)
 
     # Automations: the one write path for trigger rules (Phase 2.5).
     app.include_router(automations.router)
