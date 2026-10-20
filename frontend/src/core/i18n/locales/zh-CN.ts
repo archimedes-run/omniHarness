@@ -467,6 +467,12 @@ export const zhCN: Translations = {
       disableNotification: "关闭通知",
     },
     account: {
+      displayName: "显示名称",
+      displayNameHint: "可选。设置后将代替 {fallback} 显示。",
+      displayNameSave: "保存名称",
+      displayNameSaved: "已保存。",
+      displayNameFailed: "无法保存你的名称，名称未更改。",
+      displayNameUnknown: "无法加载你的名称。",
       profileTitle: "个人信息",
       email: "邮箱",
       role: "角色",

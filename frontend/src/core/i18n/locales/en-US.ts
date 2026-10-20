@@ -488,6 +488,12 @@ export const enUS: Translations = {
       disableNotification: "Disable notification",
     },
     account: {
+      displayName: "Display name",
+      displayNameHint: "Optional. Shown instead of {fallback} when set.",
+      displayNameSave: "Save name",
+      displayNameSaved: "Saved.",
+      displayNameFailed: "Could not save your name. It is unchanged.",
+      displayNameUnknown: "Could not load your name.",
       profileTitle: "Profile",
       email: "Email",
       role: "Role",

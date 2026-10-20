@@ -403,6 +403,12 @@ export interface Translations {
       disableNotification: string;
     };
     account: {
+      displayName: string;
+      displayNameHint: string;
+      displayNameSave: string;
+      displayNameSaved: string;
+      displayNameFailed: string;
+      displayNameUnknown: string;
       profileTitle: string;
       email: string;
       role: string;

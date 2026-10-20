@@ -70,3 +70,35 @@ export function appearanceScript(appearance: Appearance): string {
   if (!isAppearance(appearance)) return "";
   return `(function(){try{var t=${JSON.stringify(appearance)};localStorage.setItem("theme",t);var d=t==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):t;var e=document.documentElement;e.classList.remove("light","dark");e.classList.add(d);e.style.colorScheme=d}catch(_){}})()`;
 }
+
+/** Everything stored for the user, from GET /api/preferences. */
+export interface Preferences {
+  appearance: Appearance;
+  appearance_chosen: boolean;
+  /** What the user set; null when unset. */
+  display_name: string | null;
+  /** The name to show everywhere: display_name, else the email before "@". */
+  display_name_effective: string;
+}
+
+async function readPreferences(response: Response): Promise<Preferences> {
+  if (!response.ok) throw new Error(`Preferences: ${response.status}`);
+  return (await response.json()) as Preferences;
+}
+
+export async function fetchPreferences(): Promise<Preferences> {
+  return readPreferences(await fetch(`${getBackendBaseURL()}/api/preferences`));
+}
+
+/** Set the display name; null or blank clears it (back to the fallback). */
+export async function saveDisplayName(
+  displayName: string | null,
+): Promise<Preferences> {
+  return readPreferences(
+    await fetch(`${getBackendBaseURL()}/api/preferences/display-name`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: displayName }),
+    }),
+  );
+}

@@ -473,6 +473,12 @@ Object.assign(ROUTES, {
   "**/api/mcp/config": { mcp_servers: {} },
   "**/api/mcp-studio/servers/weather": SERVER("weather", "deployed"),
   "**/api/preferences/appearance": { appearance: "system", chosen: false },
+  "**/api/preferences": {
+    appearance: "system",
+    appearance_chosen: false,
+    display_name: null,
+    display_name_effective: "e2e",
+  },
 });
 
 const PAGES = [
