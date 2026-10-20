@@ -222,6 +222,9 @@ def test_deleting_a_server_deletes_its_secrets(tmp_path):
     repo.get = AsyncMock(return_value=_SERVER)
     repo.delete = AsyncMock(return_value=True)
     app.state.mcp_server_repo = repo
+    # The container teardown is covered through the real app in
+    # tests/mcp_studio/; here the manager only has to succeed.
+    app.state.mcp_server_manager = SimpleNamespace(stop=AsyncMock(), _records={})
     app.state.mcp_secrets_vault = McpSecretsVault(Fernet.generate_key(), sf)
     app.include_router(mcp_studio.router)
     client = TestClient(app)

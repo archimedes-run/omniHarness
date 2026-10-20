@@ -152,6 +152,58 @@ def _patch_main_for_sse(source: str) -> str:
     return _MAIN_BLOCK_RE.sub(_DOCKER_MAIN_NEW.rstrip(), source)
 
 
+class McpTeardownError(RuntimeError):
+    """Stopping or deleting a server left something behind; the caller must not report success."""
+
+
+class McpContainerRemovalError(McpTeardownError):
+    """The server's container could not be stopped and removed."""
+
+
+class McpDeployInProgressError(RuntimeError):
+    """A deploy is running; stopping now would race the container it starts."""
+
+
+def _container_name(server_id: str) -> str:
+    return f"omni-mcp-{server_id[:12]}"
+
+
+def _config_entry_name(server_name: str) -> str:
+    """The extensions_config.json key ``connect`` writes for a server."""
+    return re.sub(r"[^a-z0-9\-]", "-", server_name.lower()).strip("-")
+
+
+# The URL ``connect`` writes: a studio container on a local port. An entry with
+# the same name but another URL was written by someone else and is left alone.
+_STUDIO_SSE_URL_RE = re.compile(r"^http://(localhost|host\.docker\.internal):\d+/sse$")
+
+
+def _remove_config_entry(server: dict) -> None:
+    """Drop the server's entry from extensions_config.json, if ``connect`` wrote one.
+
+    Edits the file as JSON so every other key is kept as written, then reloads
+    the cached config so agents stop seeing the server.
+    """
+    from omniharness.config.extensions_config import ExtensionsConfig, atomic_write_json, reload_extensions_config
+
+    name = _config_entry_name(server["name"])
+    try:
+        path = ExtensionsConfig.resolve_config_path()
+        if path is None or not path.exists():
+            return
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        servers = data.get("mcpServers") or {}
+        entry = servers.get(name)
+        if not isinstance(entry, dict) or not _STUDIO_SSE_URL_RE.match(str(entry.get("url") or "")):
+            return
+        del servers[name]
+        atomic_write_json(path, data)
+        reload_extensions_config()
+    except (OSError, ValueError) as exc:
+        raise McpTeardownError(f"could not remove {name!r} from extensions_config.json: {exc}") from exc
+    logger.info("MCP server %s: removed extensions_config entry %r", server["id"][:12], name)
+
+
 @dataclass
 class MCPBuildRecord:
     """Runtime record for a single MCP server's current build/test phase.
@@ -640,11 +692,27 @@ class MCPServerManager:
         return record
 
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Stop a running server."""
-        await self._load_and_verify(server_id, user_id)
-        await self._repo.update_status(server_id, "stopped", user_id=user_id)
+        """Stop a server: stop and remove its container, drop its agent config entry.
+
+        Before, this only changed the status, and the container kept running
+        (``--restart unless-stopped``) with the owner's secrets in its env.
+        Raises ``McpContainerRemovalError`` when the container could not be
+        removed; the status is then left as it was, so nothing claims success.
+        """
+        server = await self._load_and_verify(server_id, user_id)
         async with self._lock:
             existing = self._records.get(server_id)
+        if existing is not None and existing.phase == "deploying":
+            raise McpDeployInProgressError("A deploy is in progress. Wait for it to finish, then stop the server.")
+        await self._remove_container(server_id, server)
+        _remove_config_entry(server)
+        await self._repo.update_container_info(
+            server_id,
+            container_id=None,
+            container_port=None,
+            status="stopped",
+            user_id=user_id,
+        )
         record = MCPBuildRecord(
             server_id=server_id,
             phase="stopped",
@@ -657,6 +725,29 @@ class MCPServerManager:
         async with self._lock:
             self._records[server_id] = record
         return record
+
+    async def _remove_container(self, server_id: str, server: dict) -> None:
+        """``docker stop`` then ``docker rm`` this server's container.
+
+        A container that does not exist counts as removed. Any other failure
+        raises ``McpContainerRemovalError`` with docker's own words.
+        """
+        name = _container_name(server_id)
+        for verb in ("stop", "rm"):
+            try:
+                rc, _, err = await self._docker_run(["docker", verb, name], timeout=60.0)
+            except FileNotFoundError:
+                # No docker CLI here. If a container was recorded, it may still be
+                # running somewhere we cannot reach: say so. If none ever was,
+                # there is nothing to remove.
+                if server.get("container_id"):
+                    raise McpContainerRemovalError(f"docker is not available, so container {name} could not be removed")
+                return
+            except TimeoutError:
+                raise McpContainerRemovalError(f"docker {verb} {name} timed out")
+            if rc != 0 and "no such container" not in err.lower():
+                raise McpContainerRemovalError(f"docker {verb} {name} failed: {err.strip()[:300]}")
+        logger.info("MCP server %s: container %s stopped and removed", server_id[:12], name)
 
     # ------------------------------------------------------------------
     # Docker deploy / undeploy / connect
@@ -778,8 +869,8 @@ class MCPServerManager:
                 **kwargs,  # type: ignore[arg-type]
             )
 
-        image_tag = f"omni-mcp-{server_id[:12]}"
-        container_name = f"omni-mcp-{server_id[:12]}"
+        image_tag = _container_name(server_id)
+        container_name = _container_name(server_id)
         patched = _patch_main_for_sse(source)
 
         try:
@@ -869,33 +960,8 @@ class MCPServerManager:
             await self._fail_step(server_id, "launching", f"deploy error: {str(exc)[:400]}")
 
     async def undeploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Stop and remove the Docker container for this server."""
-        server = await self._load_and_verify(server_id, user_id)
-        container_name = server.get("container_id") or f"omni-mcp-{server_id[:12]}"
-
-        await self._docker_run(["docker", "rm", "-f", container_name], timeout=30.0)
-
-        await self._repo.update_container_info(
-            server_id,
-            container_id=None,
-            container_port=None,
-            status="stopped",
-            user_id=user_id,
-        )
-        async with self._lock:
-            existing = self._records.get(server_id)
-        record = MCPBuildRecord(
-            server_id=server_id,
-            phase="stopped",
-            owner_id=user_id,
-            required_key_names=existing.required_key_names if existing else [],
-            tools_discovered=existing.tools_discovered if existing else [],
-            test_results=existing.test_results if existing else [],
-            last_verified_at=existing.last_verified_at if existing else None,
-        )
-        async with self._lock:
-            self._records[server_id] = record
-        return record
+        """Stop and remove the Docker container for this server (same as ``stop``)."""
+        return await self.stop(server_id=server_id, user_id=user_id)
 
     async def connect(self, *, server_id: str, user_id: str) -> dict[str, str]:
         """Register the deployed container's SSE URL into extensions_config.json.
@@ -926,7 +992,7 @@ class MCPServerManager:
 
         internal_url = f"http://{internal_host}:{container_port}/sse"
         display_url = f"http://{display_host}:{container_port}/sse"
-        server_name = re.sub(r"[^a-z0-9\-]", "-", db_server["name"].lower()).strip("-")
+        server_name = _config_entry_name(db_server["name"])
 
         config_path = ExtensionsConfig.resolve_config_path()
         if config_path is None:

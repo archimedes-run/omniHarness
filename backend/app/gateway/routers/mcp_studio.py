@@ -10,7 +10,8 @@ PUT  /api/mcp-studio/servers/{id}/secrets           write secrets (write-only)
 POST /api/mcp-studio/servers/{id}/test              trigger test pipeline
 POST /api/mcp-studio/servers/{id}/approve           mark server approved
 POST /api/mcp-studio/servers/{id}/register          register approved server for agent use
-POST /api/mcp-studio/servers/{id}/stop              stop running server
+POST /api/mcp-studio/servers/{id}/stop              stop and remove the server's container
+DELETE /api/mcp-studio/servers/{id}                 remove container, config entry, secrets, record
 
 Security invariants
 -------------------
@@ -39,6 +40,7 @@ from app.gateway.deps import (
     get_run_manager,
     get_stream_bridge,
 )
+from app.gateway.mcp_server_manager import McpDeployInProgressError, McpTeardownError
 from app.gateway.services import (
     build_run_config,
     normalize_input,
@@ -537,6 +539,10 @@ async def stop_mcp_server(server_id: str, request: Request) -> McpServerResponse
         record = await manager.stop(server_id=server_id, user_id=user_id)
     except PermissionError:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    except McpDeployInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except McpTeardownError as exc:
+        raise HTTPException(status_code=502, detail=f"The server was not stopped: {exc}") from exc
 
     repo = get_mcp_server_repo(request)
     server = await repo.get(server_id)
@@ -603,6 +609,10 @@ async def undeploy_mcp_server(server_id: str, request: Request) -> McpBuildStatu
         record = await manager.undeploy(server_id=server_id, user_id=user_id)
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except McpDeployInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except McpTeardownError as exc:
+        raise HTTPException(status_code=502, detail=f"The server was not stopped: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -654,24 +664,31 @@ async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResp
 @router.delete("/servers/{server_id}", status_code=204)
 @require_permission("threads", "write")
 async def delete_mcp_server(server_id: str, request: Request) -> None:
+    """Delete a server and everything it left running or stored.
+
+    In order: stop and remove its container, drop its extensions_config entry
+    (both via ``manager.stop``), delete its secrets, then its record. If the
+    container or config entry cannot be removed, nothing is deleted and the
+    call fails, so the server stays listed and the delete can be retried.
+    """
     _check_flag(request)
     user_id = _get_user_id(request)
     repo = get_mcp_server_repo(request)
+    manager = get_mcp_server_manager(request)
 
-    # Best-effort: stop the server if it is running.
-    manager = getattr(request.app.state, "mcp_server_manager", None)
-    if manager is not None:
-        try:
-            await manager.stop(server_id=server_id, user_id=user_id)
-        except Exception:
-            pass
-        # Remove the in-memory record regardless of stop outcome.
-        manager._records.pop(server_id, None)
+    try:
+        await manager.stop(server_id=server_id, user_id=user_id)
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    except McpDeployInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except McpTeardownError as exc:
+        raise HTTPException(status_code=502, detail=f"The server was not deleted: {exc}") from exc
 
+    # Secrets before the record: if the record delete then fails, the server is
+    # still listed (retryable) rather than gone with its secrets orphaned.
+    await get_mcp_secrets_vault(request).delete_all_for_server(server_id=server_id, owner_id=user_id)
     deleted = await repo.delete(server_id, user_id=user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    # A deleted server's secrets go with it. They were left in the vault,
-    # encrypted but orphaned, and a server later created with the same id
-    # would have inherited them.
-    await get_mcp_secrets_vault(request).delete_all_for_server(server_id=server_id, owner_id=user_id)
+    manager._records.pop(server_id, None)
