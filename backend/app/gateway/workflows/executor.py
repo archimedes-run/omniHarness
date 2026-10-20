@@ -226,10 +226,13 @@ async def execute_workflow_run(workflow_run_id: str, *, app) -> None:
     else:
         graph_input = {"messages": [HumanMessage(content=instruction_prompt)]}
     run_config = build_run_config(thread_id, None, {"workflow_run_id": workflow_run_id})
-    if owner_id:
-        ctx_dict = run_config.setdefault("context", {})
-        if isinstance(ctx_dict, dict):
+    ctx_dict = run_config.setdefault("context", {})
+    if isinstance(ctx_dict, dict):
+        if owner_id:
             ctx_dict.setdefault("user_id", owner_id)
+        # Unattended: the policy layer holds routine ledger writes for the
+        # user's click, as nobody reads the reply as it happens.
+        ctx_dict["workflow_run_id"] = workflow_run_id
 
     record = None
     try:

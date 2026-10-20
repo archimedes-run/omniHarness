@@ -203,14 +203,25 @@ class PolicyMiddleware(AgentMiddleware):
         output; feature 003's lineage, FR-006) is a SUGGESTION: it is stated
         on a card and runs only if the user confirms it there. None: run it."""
         from .grants import governed_by_grants
+        from .lineage import untrusted_in_history
 
         if not governed_by_grants(decision.tool_name):
             return None
+        context = self._runtime_context(request) or {}
+        if context.get("workflow_run_id"):
+            # A workflow run is unattended like a scheduled one, but has no
+            # grants or cap of its own: a routine write waits for the user.
+            return "This workflow runs without you watching, so I did not make this change; it runs only if you confirm it here."
         origin, source, via = self._origin(request)
-        if origin == "user":
-            return None
-        logger.info("policy: %s was suggested by %s (%s); it waits on its card", decision.tool_name, origin, source or via or "-")
-        return "This is a suggestion: it came from something I read, not from your message, so I did not do it. It runs only if you confirm it here."
+        if origin != "user":
+            logger.info("policy: %s was suggested by %s (%s); it waits on its card", decision.tool_name, origin, source or via or "-")
+            return "This is a suggestion: it came from something I read, not from your message, so I did not do it. It runs only if you confirm it here."
+        state = getattr(request, "state", None) or {}
+        earlier = untrusted_in_history(state.get("messages") if isinstance(state, dict) else None)
+        if earlier:
+            logger.info("policy: %s in a conversation that read untrusted content (%s); it waits on its card", decision.tool_name, ", ".join(earlier))
+            return f"This is a suggestion: earlier in this conversation I read content from {', '.join(earlier)}, which could be steering me, so I did not do it. It runs only if you confirm it here."
+        return None
 
     @contextmanager
     def _reserved(self, grant, call: dict):
