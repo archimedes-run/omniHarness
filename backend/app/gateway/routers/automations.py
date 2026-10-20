@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.gateway.authz import require_permission
 from app.gateway.automations_store import TEMPLATES, RulesEditError, read_rules, with_rule, without_rule, write_rules
+from app.gateway.ownership import require_owner_account
 
-router = APIRouter(prefix="/api/automations", tags=["automations"])
+# Install-wide records: the owner account only (security baseline).
+router = APIRouter(prefix="/api/automations", tags=["automations"], dependencies=[Depends(require_owner_account)])
 
 
 class RuleWrite(BaseModel):

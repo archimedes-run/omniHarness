@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.gateway.authz import require_permission
+from app.gateway.ownership import require_owner_account
+
+# The local Claude/Codex sessions on this machine: the owner account only.
 from app.gateway.sessions_view import SessionsView, describe_sessions
 from app.gateway.watcher_client import WatcherClient, WatcherTimedOut, WatcherUnavailable
 
-router = APIRouter(prefix="/api", tags=["sessions"])
+router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_owner_account)])
 
 #: How long a page waits for the watcher. It was the client's 10 s default, and
 #: a watcher busy re-reading transcripts made every visit wait the full 10 s.

@@ -31,11 +31,13 @@ def test_second_registration_is_refused_with_a_plain_reason(sec) -> None:
 
 
 def test_a_second_account_cannot_sign_in(sec) -> None:
+    """Refused with EXACTLY the wrong-password answer, so the form is not an
+    oracle for which passwords are right (review round)."""
     client, resp = login(sec.app, *SECOND)
-    assert resp.status_code == 403
-    detail = resp.json()["detail"]
-    assert detail["code"] == "account_not_permitted"
-    assert "single owner account" in detail["message"]
+    _, wrong = login(sec.app, SECOND[0], "Wr0ng!Password")
+    assert resp.status_code == 401
+    assert resp.json() == wrong.json()
+    assert resp.json()["detail"]["code"] == "invalid_credentials"
     assert "access_token" not in client.cookies
 
 
@@ -70,21 +72,20 @@ def test_the_owner_keeps_every_permission(sec) -> None:
 
 def _live_shape(make_gateway):
     """The live install's shape: the person who owns the data has role "user"
-    and was created first; an admin-role account was created later."""
-    from _security_helpers import OWNER
-
+    and was created first; an admin-role account was created later. Both are
+    inserted directly (no HTTP route creates a second account any more)."""
     app, client = make_gateway(initialize=False)
 
-    async def _first_user():
+    async def _accounts():
         from app.gateway.deps import get_local_provider
 
-        return await get_local_provider().create_user(email="first@example.com", password="F1rst!Strong", system_role="user")
+        provider = get_local_provider()
+        first = await provider.create_user(email="first@example.com", password="F1rst!Strong", system_role="user")
+        admin = await provider.create_user(email=OWNER[0], password=OWNER[1], system_role="admin")
+        return str(first.id), str(admin.id)
 
-    first = client.portal.call(_first_user)
-    # /initialize still works (no admin yet) and makes a LATER admin account.
-    init = client.post("/api/v1/auth/initialize", json={"email": OWNER[0], "password": OWNER[1]})
-    assert init.status_code == 201
-    return app, str(first.id), init.json()["id"]
+    first_id, admin_id = client.portal.call(_accounts)
+    return app, first_id, admin_id
 
 
 def test_the_owner_is_the_earliest_account_not_the_admin(make_gateway) -> None:
@@ -92,19 +93,18 @@ def test_the_owner_is_the_earliest_account_not_the_admin(make_gateway) -> None:
     _, first = login(app, "first@example.com", "F1rst!Strong")
     assert first.status_code == 200, first.text
     _, admin = login(app, *OWNER)
-    assert admin.status_code == 403
-    assert admin.json()["detail"]["code"] == "account_not_permitted"
+    assert admin.status_code == 401
 
 
 def test_an_explicit_owner_setting_wins(make_gateway, monkeypatch) -> None:
     app, _, admin_id = _live_shape(make_gateway)
     _, admin = login(app, *OWNER)
-    assert admin.status_code == 403
+    assert admin.status_code == 401
     monkeypatch.setenv("OMNI_HARNESS_OWNER_USER_ID", admin_id)
     _, admin = login(app, *OWNER)
     assert admin.status_code == 200, admin.text
     _, first = login(app, "first@example.com", "F1rst!Strong")
-    assert first.status_code == 403
+    assert first.status_code == 401
 
 
 def test_an_explicit_owner_that_matches_no_account_admits_nobody(make_gateway, monkeypatch) -> None:
@@ -112,4 +112,4 @@ def test_an_explicit_owner_that_matches_no_account_admits_nobody(make_gateway, m
     monkeypatch.setenv("OMNI_HARNESS_OWNER_USER_ID", "no-such-account")
     for email, password in (("first@example.com", "F1rst!Strong"), OWNER):
         _, resp = login(app, email, password)
-        assert resp.status_code == 403, email
+        assert resp.status_code == 401, email

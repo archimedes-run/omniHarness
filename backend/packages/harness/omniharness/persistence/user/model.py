@@ -48,6 +48,12 @@ class UserRow(Base):
     needs_setup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     token_version: Mapped[int] = mapped_column(nullable=False, default=0)
 
+    # Security baseline: a disabled account is refused everywhere (login with
+    # the wrong-password answer, every route, no permissions) and is never the
+    # owner. Reversible: ``python -m app.gateway.auth.accounts enable <email>``.
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    disabled_reason: Mapped[str | None] = mapped_column(String(256), nullable=True, default=None)
+
     __table_args__ = (
         Index(
             "idx_users_oauth_identity",
@@ -57,3 +63,19 @@ class UserRow(Base):
             sqlite_where=text("oauth_provider IS NOT NULL AND oauth_id IS NOT NULL"),
         ),
     )
+
+
+class FirstAccountClaimRow(Base):
+    """At most one row, ever: the claim on creating an install's FIRST account.
+
+    Security baseline (single owner). ``/register`` and ``/initialize`` insert
+    this row (id=1) in the same transaction as the account, so concurrent first
+    registrations race on a primary key and exactly one commits, on any worker
+    and any backend. See app.gateway.ownership.create_first_account.
+    """
+
+    __tablename__ = "first_account_claim"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))

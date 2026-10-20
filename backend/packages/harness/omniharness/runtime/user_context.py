@@ -83,6 +83,23 @@ def get_current_user() -> CurrentUser | None:
 DEFAULT_USER_ID: Final[str] = "default"
 
 
+#: The account that owns data written before per-user layouts existed (the
+#: legacy shared ``agents/`` directory). Set by the gateway at startup to the
+#: install's owner account (app.gateway.ownership); unset, only the system
+#: user (``DEFAULT_USER_ID``) may read legacy shared data.
+_legacy_data_owner: str | None = None
+
+
+def set_legacy_data_owner(user_id: str | None) -> None:
+    global _legacy_data_owner
+    _legacy_data_owner = user_id
+
+
+def may_read_legacy_shared_data(user_id: str) -> bool:
+    """Legacy shared data belongs to the owner (and the system acting for it)."""
+    return user_id == DEFAULT_USER_ID or (_legacy_data_owner is not None and user_id == _legacy_data_owner)
+
+
 def get_effective_user_id() -> str:
     """Return the current user's id as a string, or DEFAULT_USER_ID if unset.
 
