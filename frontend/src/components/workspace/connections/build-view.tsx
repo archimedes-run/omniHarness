@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { SparklesIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -12,17 +12,13 @@ import {
   SectionHeading,
   TONE_TEXT,
 } from "@/components/workspace/page-kit";
-import {
-  approveAndEnable,
-  getApprovalPacket,
-  discardBuilt,
-  startBuild,
-} from "@/core/mcp-studio/api";
+import { discardBuilt, startBuild } from "@/core/mcp-studio/api";
 import { useBuiltServers } from "@/core/mcp-studio/hooks";
 import type { BuildStep, BuiltServer } from "@/core/mcp-studio/types";
 import { formatTimeAgo } from "@/core/utils/datetime";
 import { cn } from "@/lib/utils";
 
+import { ApprovalDialog } from "./approval-dialog";
 import { buildStateTone } from "./build-state";
 
 const HOW = [
@@ -248,6 +244,8 @@ function Detail({ server }: { server: BuiltServer }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const reviewButton = useRef<HTMLButtonElement>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const tone = buildStateTone(server.state);
 
@@ -387,21 +385,23 @@ function Detail({ server }: { server: BuiltServer }) {
           <Button
             className="rounded-lg font-semibold"
             disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                const packet = await getApprovalPacket(server.id);
-                return approveAndEnable(
-                  server.id,
-                  packet.code_sha256,
-                  packet.view_token,
-                );
-              })
-            }
+            ref={reviewButton}
+            onClick={() => setReviewing(true)}
           >
-            {busy ? "Turning on…" : "Approve and turn on"}
+            Review and approve
           </Button>
         )}
       </div>
+      <ApprovalDialog
+        server={server}
+        open={reviewing}
+        onOpenChange={setReviewing}
+        returnFocusTo={reviewButton}
+        onApproved={() => {
+          void queryClient.invalidateQueries({ queryKey: ["builtServers"] });
+          void queryClient.invalidateQueries({ queryKey: ["toolSources"] });
+        }}
+      />
     </section>
   );
 }

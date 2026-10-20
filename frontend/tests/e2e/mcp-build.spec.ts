@@ -187,7 +187,11 @@ test("describe -> build in the sandbox -> approval required before it is enabled
   expect(gw.calls).toEqual(["build"]);
   expect(gw.state()).toBe("awaiting_approval");
 
-  await page.getByRole("button", { name: "Approve and turn on" }).click();
+  // #59: review first. The dialog shows the code; then approve that code.
+  await page.getByRole("button", { name: "Review and approve" }).click();
+  const dialog = page.getByTestId("approval-dialog");
+  await expect(dialog.getByTestId("approval-code")).toContainText("FastMCP");
+  await dialog.getByRole("button", { name: "Approve and turn on" }).click();
   await expect(detail.getByTestId("build-state")).toHaveText("Enabled");
   expect(gw.calls).toEqual(["build", "approval", "enable"]);
   await expect(detail).toContainText("On: agents can use its tools");

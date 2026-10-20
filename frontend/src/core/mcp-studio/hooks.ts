@@ -16,7 +16,10 @@ export function useBuiltServers() {
           s.state === "turning_on",
       )
         ? 3_000
-        : false,
+        : // #59: while one waits for approval, notice a code change.
+          q.state.data?.servers.some((s) => s.state === "awaiting_approval")
+          ? 5_000
+          : false,
   });
   return {
     servers: query.data?.servers,
