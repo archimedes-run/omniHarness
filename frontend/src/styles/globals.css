@@ -143,15 +143,46 @@
   }
 }
 
+/* latin-ext halves of the shipped fonts (see the @theme note on --font-sans).
+ * The unicode-range is Google Fonts' latin-ext range for these files. */
+@font-face {
+  font-family: "Inter latin-ext";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("../../public/fonts/inter-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "JetBrains Mono latin-ext";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("../../public/fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 @theme inline {
-  /* Inter and JetBrains Mono, self-hosted by next/font (src/app/layout.tsx
-   * sets --font-inter and --font-jetbrains-mono on <html>). font-mono is for
-   * ids, paths and code. */
+  /* Inter and JetBrains Mono ship in the repo (public/fonts/, SIL OFL 1.1):
+   * nothing is fetched from Google at build time or at runtime.
+   * src/app/layout.tsx loads the latin subsets with next/font/local and sets
+   * --font-inter and --font-jetbrains-mono on <html>; the latin-ext subsets
+   * are the @font-face rules below, listed first so accented names outside
+   * latin (ą, ł, ő, …) still render in Inter instead of the fallback. Their
+   * unicode-range keeps them from being downloaded for latin-only text.
+   * font-mono is for ids, paths and code. */
   --font-sans:
-    var(--font-inter), ui-sans-serif, system-ui, sans-serif,
+    "Inter latin-ext", var(--font-inter), ui-sans-serif, system-ui, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-mono:
-    var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    "JetBrains Mono latin-ext", var(--font-jetbrains-mono), ui-monospace,
+    SFMono-Regular, Menlo, monospace;
   /* Radii 8 / 10 / 14: rounded-md (controls), rounded-lg (cards),
    * rounded-xl (panels and sheets). --radius is 10px. */
   --radius-sm: calc(var(--radius) - 4px);

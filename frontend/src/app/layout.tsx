@@ -1,23 +1,31 @@
 import "@/styles/globals.css";
 
 import { type Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
 
-// Self-hosted: next/font downloads these at build time and serves them from
-// this app, so no page ever asks a font CDN for anything.
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+// Inter and JetBrains Mono ship in the repo (public/fonts/, SIL OFL 1.1, see
+// Inter-OFL.txt and JetBrainsMono-OFL.txt there): no build, CI run or page
+// ever fetches a font from Google. These are the variable-font latin subsets Next's Google font
+// loader used to download; next/font/local preloads them and generates the
+// size-adjusted fallback, as before. The latin-ext subsets cannot be given a
+// unicode-range here, so they are declared with @font-face in
+// src/styles/globals.css and sit ahead of these families in --font-sans and
+// --font-mono.
+const inter = localFont({
+  src: "../../public/fonts/inter-latin.woff2",
+  weight: "400 600",
+  style: "normal",
   variable: "--font-inter",
   display: "swap",
 });
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500"],
+const jetbrainsMono = localFont({
+  src: "../../public/fonts/jetbrains-mono-latin.woff2",
+  weight: "400 500",
+  style: "normal",
   variable: "--font-jetbrains-mono",
   display: "swap",
 });

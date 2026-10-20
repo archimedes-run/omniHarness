@@ -57,3 +57,19 @@ Brand logos are trademarks of their owners, used only to identify the service a 
 | Outlook | none (monogram "O") | — | Stays a monogram until Outlook is actually connected (the owner's decision, 2026-10-20). |
 
 Simple Icons is released under CC0-1.0 (https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md); its DISCLAIMER notes that the brands' own trademark terms still apply.
+
+## Fonts (Inter, JetBrains Mono)
+
+Shipped in `frontend/public/fonts/` and served by the app itself (next/font/local for the app, `fonts.css` for the static demo thread artifacts); nothing is fetched from Google Fonts at build time or at runtime. The files are the variable-font woff2 subsets that `next/font/google` previously downloaded at build time, committed unmodified:
+
+| File | sha256 |
+|---|---|
+| `inter-latin.woff2` | `c940764593d0fe5d596be327ca7558855e018039fb78509aa21921fd3644c3e4` |
+| `inter-latin-ext.woff2` | `a28eb6d3ccb534ae0c94ca999371df024aab60b08c3c8a5720ee9e32fa0faaa2` |
+| `jetbrains-mono-latin.woff2` | `2c32b9b3ee358c119e210f6f5195f9bd34894d78a785ff2e95d60e718e400af4` |
+| `jetbrains-mono-latin-ext.woff2` | `9c38cb2d0d2d93c1ee6e21fa78db76f13ea7e15e15cc64214c7ca89b6aaa35c4` |
+
+- Inter: Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1.
+- JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono). SIL Open Font License 1.1.
+
+Each family's licence, copied verbatim from its upstream repository (`rsms/inter` `LICENSE.txt`, `JetBrains/JetBrainsMono` `OFL.txt`), is next to the files: `frontend/public/fonts/Inter-OFL.txt` and `frontend/public/fonts/JetBrainsMono-OFL.txt`.
