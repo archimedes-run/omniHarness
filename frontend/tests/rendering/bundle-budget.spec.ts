@@ -105,7 +105,7 @@ const PANEL_MARKERS: Record<string, RegExp> = {
   agents: /Custom agents are turned off/,
   skills: /mode=skill/,
   automations: /every weekday at 9, brief me/,
-  tasks: /What you are working toward/,
+  tasks: /Evidence is not set up yet/,
 };
 
 for (const route of [

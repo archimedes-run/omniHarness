@@ -1,10 +1,17 @@
 "use client";
 
-import ProjectsPage from "@/app/workspace/projects/page";
+import { useState } from "react";
+
+import {
+  TasksBoard,
+  type TasksSelection,
+} from "@/components/workspace/ledger/tasks-board";
 
 import type { PanelProps } from "../panels";
 
-/** Tasks panel, Phase 1: the Projects page (Feature 005). */
+/** Tasks panel (Feature 006, Tasks.dc.html): projects and their tasks from
+ * the Feature 005 ledger. Each project also has its own page. */
 export default function TasksPanel(_props: PanelProps) {
-  return <ProjectsPage />;
+  const [selection, setSelection] = useState<TasksSelection>(null);
+  return <TasksBoard selection={selection} onSelect={setSelection} />;
 }

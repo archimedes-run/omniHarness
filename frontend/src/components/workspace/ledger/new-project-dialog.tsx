@@ -20,9 +20,12 @@ import { useLedgerWrite } from "@/core/ledger/hooks";
 export function NewProjectDialog({
   open,
   onOpenChange,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Where a new project goes; by default, its page. */
+  onCreated?: (projectId: string) => void;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -58,7 +61,8 @@ export function NewProjectDialog({
               {
                 onSuccess: (project) => {
                   onOpenChange(false);
-                  router.push(`/workspace/projects/${project.id}`);
+                  if (onCreated) onCreated(project.id);
+                  else router.push(`/workspace/projects/${project.id}`);
                 },
               },
             );

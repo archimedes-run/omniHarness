@@ -238,7 +238,7 @@ test("focus stays inside the open panel", async ({ page }) => {
   await serve(page);
   await page.goto("/workspace/chats");
   await capsule(page, "tasks").click();
-  await expect(page.getByText("Beta launch")).toBeVisible();
+  await expect(page.getByText("Beta launch").first()).toBeVisible();
   for (let i = 0; i < 15; i += 1) {
     await page.keyboard.press("Tab");
     const inside = await page.evaluate(() =>
@@ -278,7 +278,7 @@ test("a link to a panel opens it", async ({ page }) => {
   await serve(page);
   await page.goto("/workspace/chats?panel=tasks");
   await expect(page.getByRole("dialog", { name: "Tasks" })).toBeVisible();
-  await expect(sheet(page).getByText("Beta launch")).toBeVisible();
+  await expect(sheet(page).getByText("Beta launch").first()).toBeVisible();
 });
 
 for (const [id, text] of [
