@@ -64,6 +64,7 @@ def _to_dict(action: PendingAction) -> dict:
         "post_content": action.post_content,
         "post_attempts": action.post_attempts,
         "continued": action.continued,
+        "run_markers": [list(pair) for pair in action.run_markers],
     }
 
 
@@ -93,6 +94,7 @@ def _from_dict(raw: dict) -> PendingAction:
         post_content=raw.get("post_content") or "",
         post_attempts=int(raw.get("post_attempts") or 0),
         continued=bool(raw.get("continued")),
+        run_markers=tuple((str(k), str(v)) for k, v in (raw.get("run_markers") or ())),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):

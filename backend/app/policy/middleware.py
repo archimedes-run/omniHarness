@@ -103,7 +103,7 @@ class PolicyMiddleware(AgentMiddleware):
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()), self._reserved(grant):
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = handler(request)
             if grant:
                 self._record_grant_use(request, decision, grant)
@@ -137,7 +137,7 @@ class PolicyMiddleware(AgentMiddleware):
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()), self._reserved(grant):
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
             if grant:
                 self._record_grant_use(request, decision, grant)
@@ -213,15 +213,21 @@ class PolicyMiddleware(AgentMiddleware):
         return "This is a suggestion: it came from something I read, not from your message, so I did not do it. It runs only if you confirm it here."
 
     @contextmanager
-    def _reserved(self, grant):
-        """Give a granted call's reservation back if the call raises: actions
-        that did not happen do not count against the run."""
+    def _reserved(self, grant, call: dict):
+        """Give a granted call's reservation back ONLY when the call
+        demonstrably did not write: its write never committed (the ledger
+        tool marks the commit, provenance.mark_committed), and it returned or
+        raised an ordinary exception. A cancellation (or anything else not an
+        Exception) may land after the commit, so it keeps the reservation:
+        the count may run high, never low."""
         try:
             yield
-        except BaseException:
-            if grant:
+        except Exception:
+            if grant and not call.get("committed"):
                 self.grant_runs.release(grant.run_key, grant.actions)
             raise
+        if grant and not call.get("committed"):
+            self.grant_runs.release(grant.run_key, grant.actions)
 
     def _record_grant_use(self, request, decision, grant: GrantedCall) -> None:
         from .lineage import initiation_origin
@@ -590,6 +596,7 @@ class PolicyMiddleware(AgentMiddleware):
             owner_id=self._owner_id(request),
             surface=self._surface(request),
             delegation_key=self._delegation_key(request),
+            run_markers=self._run_markers(request),
         )
         action.plan_text = self._plan_text_for(action)
         if extra_note:
@@ -705,15 +712,18 @@ class PolicyMiddleware(AgentMiddleware):
         return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via, run_markers=run_markers)
 
     def _inviting_for(self, request) -> Any:
-        from .provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY
-
         origin, source, via = self._origin(request)
         # An agent invited during a scheduled run is in that run: it gets the
         # run's markers, so its grant-governed Tier 2 calls need a grant and
         # count against the same cap (never treated as a chat with you).
+        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), self._run_markers(request))
+
+    def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
+        """The scheduled run's markers in this call's context, if any."""
+        from .provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY
+
         context = self._runtime_context(request) or {}
-        markers = tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY) if context.get(k))
-        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), markers)
+        return tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY) if context.get(k))
 
     def _is_invited(self, request) -> bool:
         from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
@@ -810,7 +820,9 @@ class PolicyMiddleware(AgentMiddleware):
 
         from .surface_run import confirming
 
-        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)), confirming(action):
+        # A confirmed `task` from a scheduled run invites its agent INTO that
+        # run: the markers stated with the action travel on (review round 2).
+        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain, tuple(action.run_markers))), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
         from .surface_run import observed_result, result_report
 

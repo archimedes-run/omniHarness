@@ -135,11 +135,29 @@ def granted_classes(user_id: str, agent: str) -> list[str]:
     revocation applies from the next one."""
 
     try:
-        snapshot = config_versions.current_agent_snapshot(user_id, agent)
+        versions = config_versions.agent_history(user_id, agent)
     except (ValueError, OSError):
         return []
-    granted = ((snapshot or {}).get("config") or {}).get(AUTONOMY_KEY) or []
+    if not versions:
+        # Grants come ONLY from the versioned store, where the Autonomy action
+        # alone writes them. An agent with no history has none, whatever its
+        # config.yaml on disk says (a restored backup, a migration, a hand
+        # edit): that is reported, never honoured.
+        _report_unversioned_grants(user_id, agent)
+        return []
+    granted = ((versions[-1].snapshot or {}).get("config") or {}).get(AUTONOMY_KEY) or []
     return [g for g in granted if isinstance(g, str)]
+
+
+def _report_unversioned_grants(user_id: str, agent: str) -> None:
+    import logging
+
+    try:
+        on_disk = ((config_versions.current_agent_snapshot(user_id, agent) or {}).get("config") or {}).get(AUTONOMY_KEY)
+    except (ValueError, OSError):
+        return
+    if on_disk:
+        logging.getLogger(__name__).warning("agent %s has grants %s in its config.yaml but no versioned Autonomy record; they are ignored until granted on its Autonomy tab", agent, on_disk)
 
 
 def governed_by_grants(tool_name: str) -> bool:

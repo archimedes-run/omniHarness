@@ -71,16 +71,20 @@ CONFIRMED = "confirmed"
 DISCLOSED = "disclosed"
 GRANTED = "granted"
 
-_executed_as: ContextVar[tuple[str, str | None]] = ContextVar("policy_executed_as", default=(CONFIRMED, None))
+_executed_as: ContextVar[tuple[str, str | None, dict]] = ContextVar("policy_executed_as", default=(CONFIRMED, None, {}))
 
 
 @contextmanager
-def executed_as(how: str, write_id: str | None = None) -> Iterator[None]:
+def executed_as(how: str, write_id: str | None = None) -> Iterator[dict]:
     """`write_id` names a write made without a confirmation (Tier 2, or a
-    standing grant), so its Undo can find and revert it."""
-    token = _executed_as.set((how, write_id))
+    standing grant), so its Undo can find and revert it. Yields the call's
+    state: {"committed": True} once the tool's write is durable (see
+    mark_committed), which is how the grant cap knows not to give back a
+    reservation for a write that happened."""
+    state: dict = {"committed": False}
+    token = _executed_as.set((how, write_id, state))
     try:
-        yield
+        yield state
     finally:
         _executed_as.reset(token)
 
@@ -93,6 +97,11 @@ def current_execution() -> str:
 def current_write_id() -> str | None:
     """The write id of an unconfirmed write in progress, else None."""
     return _executed_as.get()[1]
+
+
+def mark_committed() -> None:
+    """Called by a tool once its write is committed."""
+    _executed_as.get()[2]["committed"] = True
 
 
 def new_write_id() -> str:

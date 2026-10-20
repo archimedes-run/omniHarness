@@ -225,6 +225,10 @@ class PendingAction:
     #: action. Only then is Continue spent; a refused, failed or crashed one
     #: can be pressed again.
     continued: bool = False
+    #: The scheduled run's markers (turn_provenance, trigger_rule_id,
+    #: trigger_firing_id) when it was stated in one, as (key, value) pairs:
+    #: an agent a confirmed `task` invites is then still in that run.
+    run_markers: tuple[tuple[str, str], ...] = ()
 
     @property
     def confirmable_by_typing(self) -> bool:
