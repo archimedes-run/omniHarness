@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omniharness.persistence.thread_meta.base import ThreadMetaStore
 from omniharness.persistence.thread_meta.model import ThreadMetaRow
+from omniharness.persistence.timestamps import utc_iso
 from omniharness.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
 
 
@@ -28,7 +29,7 @@ class ThreadMetaRepository(ThreadMetaStore):
                 # read. Every value is written in UTC, so a naive one IS UTC;
                 # without the offset a browser parses it as local time, and a
                 # chat updated a moment ago in New York read "in about 4 hours".
-                d[key] = (val if val.tzinfo else val.replace(tzinfo=UTC)).isoformat()
+                d[key] = utc_iso(val)
         return d
 
     async def create(

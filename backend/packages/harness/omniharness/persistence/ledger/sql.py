@@ -32,6 +32,7 @@ from omniharness.persistence.ledger.model import (
     LedgerProjectRow,
     LedgerTaskRow,
 )
+from omniharness.persistence.timestamps import utc_iso
 
 _ROWS = {"project": LedgerProjectRow, "goal": LedgerGoalRow, "task": LedgerTaskRow, "note": LedgerNoteRow, "link": LedgerLinkRow}
 
@@ -60,7 +61,7 @@ def _plain(value: Any) -> Any:
         # SQLite drops the zone of a DateTime(timezone=True) column; every
         # time here is written in UTC, so say so. Without it a browser read
         # the time as local and showed "updated in about 4 hours" (EDT).
-        return (value if value.tzinfo else value.replace(tzinfo=UTC)).isoformat()
+        return utc_iso(value)
     if isinstance(value, date):
         return value.isoformat()
     return value
