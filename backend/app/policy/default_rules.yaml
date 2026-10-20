@@ -66,6 +66,14 @@ policy:
       tier: 1
     - pattern: "tool_search"
       tier: 1
+    # The agent's own to-do list: it changes only this conversation's state,
+    # reaches nothing outside it, and is rewritten freely. Unclassified, it
+    # fell to Tier 3, so every to-do update asked for a confirmation, and a
+    # confirmation from the card ran it outside the agent, where its state
+    # update was lost (found 2026-10-19, Feature 005: promoting to-dos to
+    # project tasks never had a list to promote).
+    - pattern: "write_todos"
+      tier: 1
 
     # Local reads, listings and metadata. Added 2026-08-25 after enumerating
     # what the lead agent ACTUALLY has: 3 of 39 tools were classified, so

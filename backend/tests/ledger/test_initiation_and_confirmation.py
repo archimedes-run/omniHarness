@@ -67,3 +67,14 @@ def test_t014_a_triggers_injected_turn_cannot_cause_a_ledger_proposal(gateway) -
     agent = _agent([AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_project", "name": "From a trigger"}]}, "id": "c1"}]), AIMessage(content="ok")])
     agent.invoke({"messages": [HumanMessage(content="Morning brief")]}, context={"thread_id": "t", "user_id": gateway.user_id, PROVENANCE_KEY: SYNTHETIC})
     assert pending(gateway) == []
+
+
+def test_the_agents_own_todo_list_is_tier_1() -> None:
+    """write_todos writes only the conversation's state. Unclassified, it was
+    Tier 3, and a list confirmed from the card was lost (Feature 005 found)."""
+    from app.policy.classify import classify
+    from app.policy.config import ConfigLoader
+    from app.policy.models import Tier
+    from app.policy.registration import DEFAULT_RULES
+
+    assert classify("write_todos", {"todos": []}, ConfigLoader(path=DEFAULT_RULES).load()).tier is Tier.TIER_1
