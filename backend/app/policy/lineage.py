@@ -91,6 +91,14 @@ def is_user_turn(message: Any) -> bool:
     return bool(isinstance(kwargs, dict) and kwargs.get(USER_TURN_MARKER) is True)
 
 
+def is_invitation(message: Any) -> bool:
+    """An invited agent's instruction message (omniharness.agents.turns)."""
+    from omniharness.agents.turns import INVITATION_MARKER
+
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    return bool(isinstance(kwargs, dict) and kwargs.get(INVITATION_MARKER) is True)
+
+
 def eligible_to_confirm(message: Any) -> bool:
     """FR-005. Only a genuine user turn may satisfy a confirmation."""
     return is_user_turn(message)
@@ -101,6 +109,7 @@ ORIGIN_USER = "user"  # the user's own latest message
 ORIGIN_CONTENT = "content"  # something the agent READ: a page, an email, any tool output
 ORIGIN_AUTOMATION = "automation"  # a trigger's synthetic turn
 ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
+ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter's origin applies
 
 
 def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) -> tuple[str, str]:
@@ -128,6 +137,8 @@ def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) ->
             continue
         if is_tool_result(message):
             return ORIGIN_CONTENT, _content_source(items, index)
+        if is_invitation(message):
+            return ORIGIN_INVITATION, ""
         if is_user_turn(message):
             return ORIGIN_USER, ""
         return ORIGIN_UNKNOWN, ""

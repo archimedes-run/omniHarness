@@ -158,3 +158,37 @@ def test_only_an_explicit_allowlist_vouches_for_a_channel_sender() -> None:
     assert not open_bot.sender_is_the_owner("123"), "an empty allowlist lets anyone talk, never as the user"
     locked = TelegramChannel(bus=MessageBus(), config={"bot_token": "x", "allowed_users": [123]})
     assert locked.sender_is_the_owner("123") and not locked.sender_is_the_owner("456")
+
+
+def test_a_bad_channel_name_with_the_internal_token_is_still_relayed(sec, run_agent) -> None:
+    """An invalid channel name is not a "direct internal call": the message is
+    relayed content, never the user's turn, even with the owner header."""
+    from app.gateway.internal_auth import CHANNEL_HEADER_NAME, CHANNEL_OWNER_HEADER_NAME, create_internal_auth_headers
+
+    run_agent([DELETE])
+    headers = {**create_internal_auth_headers(), CHANNEL_HEADER_NAME: "Tele gram", CHANNEL_OWNER_HEADER_NAME: "1"}
+    tid = sec.owner.post("/api/threads", json={}, headers=headers).json()["thread_id"]
+    body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "delete it"}]}}
+    assert sec.owner.post(f"/api/threads/{tid}/runs/wait", json=body, headers=headers).status_code == 200
+    assert _plan(tid).origin != "user"
+
+
+def test_a_subagents_instruction_is_never_a_user_turn() -> None:
+    """The executor marks it as an invitation; lineage maps it to the inviter."""
+    import importlib.util
+    import os
+
+    import omniharness.subagents as pkg
+    from app.policy.lineage import initiation_origin, is_user_turn
+    from omniharness.subagents.config import SubagentConfig
+
+    spec = importlib.util.spec_from_file_location("_real_executor_for_test", os.path.join(os.path.dirname(pkg.__file__), "executor.py"))
+    real = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real)  # tests/conftest.py replaces the module with a mock
+    executor = real.SubagentExecutor(config=SubagentConfig(name="general-purpose", description="d", system_prompt="s", skills=[]), tools=[], thread_id="t", user_id="u")
+    import asyncio
+
+    state, _ = asyncio.run(executor._build_initial_state("yes"))
+    instruction = state["messages"][-1]
+    assert not is_user_turn(instruction)
+    assert initiation_origin([instruction, DELETE])[0] == "invitation"
