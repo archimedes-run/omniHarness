@@ -123,3 +123,19 @@ def test_the_reads_need_a_signed_in_user(make_gateway) -> None:
     gw = make_gateway()
     gw.client.cookies.clear()
     assert gw.client.get("/api/triggers/rules/morning-brief/runs").status_code == 401
+
+
+def test_a_next_run_inside_quiet_hours_says_when_it_will_be_delivered(make_gateway) -> None:
+    gw = make_gateway(engine_enabled=True)
+    view = _view(gw)
+    rule = next(r for r in view["rules"] if r["id"] == "morning-brief")
+    edited = {k: rule[k] for k in ("id", "name", "type", "enabled", "match", "prompt", "destination", "urgent")}
+    edited["match"] = {"schedule": "30 5 * * *", "timezone": "America/New_York"}
+    assert gw.client.put("/api/automations/rules/morning-brief", json={"rule": edited, "version": view["version"]}).status_code == 200
+
+    brief = next(r for r in _view(gw)["rules"] if r["id"] == "morning-brief")
+
+    assert brief["held_for_quiet_hours"] is True
+    due, deliver = datetime.fromisoformat(brief["next_run_at"]), datetime.fromisoformat(brief["deliver_at"])
+    assert (due.hour, due.minute) == (5, 30) and (deliver.hour, deliver.minute) == (7, 0)
+    assert brief["timezone"] == "America/New_York"

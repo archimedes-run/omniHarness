@@ -99,7 +99,7 @@ NOW = datetime(2026, 10, 20, 14, 0, tzinfo=UTC)  # Tuesday 10:00 in New York
 
 def test_next_run_is_the_schedulers_instant_in_the_rules_zone() -> None:
     out = next_run(cron(), now=NOW, engine_enabled=True)
-    assert out == {"next_run": "scheduled", "next_run_at": "2026-10-21T08:45:00-04:00"}
+    assert out == {"next_run": "scheduled", "next_run_at": "2026-10-21T08:45:00-04:00", "deliver_at": "2026-10-21T08:45:00-04:00"}
 
 
 def test_next_run_after_friday_skips_the_weekend() -> None:
@@ -136,3 +136,29 @@ def test_the_rules_view_carries_name_quiet_hours_and_next_run() -> None:
 def test_a_name_that_is_not_short_text_is_refused() -> None:
     with pytest.raises(ConfigError, match="name"):
         parse({"rules": [{"id": "x", "name": "n" * 81, "type": "watcher", "match": {"event": "idle"}, "prompt": "p"}]})
+
+
+def _quiet(start="22:00", end="07:00", enabled=True):
+    from app.trigger_engine.config import QuietHours
+
+    return QuietHours(start=start, end=end, timezone="America/New_York", enabled=enabled)
+
+
+def test_a_run_due_inside_quiet_hours_is_delivered_when_they_end() -> None:
+    early = cron(schedule="30 5 * * 1-5")  # 5:30 New York, inside 22:00-07:00
+    out = next_run(early, now=NOW, engine_enabled=True, quiet_hours=_quiet())
+    assert out["next_run_at"] == "2026-10-21T05:30:00-04:00"
+    assert out["held_for_quiet_hours"] is True and out["deliver_at"] == "2026-10-21T07:00:00-04:00"
+
+
+def test_an_urgent_run_or_one_outside_quiet_hours_is_delivered_when_due() -> None:
+    urgent = Rule(id="u", type=TriggerType.CRON, match={"schedule": "30 5 * * 1-5", "timezone": "America/New_York"}, prompt="p", urgent=True)
+    for rule, quiet in ((urgent, _quiet()), (cron(), _quiet()), (cron(schedule="30 5 * * 1-5"), _quiet(enabled=False))):
+        out = next_run(rule, now=NOW, engine_enabled=True, quiet_hours=quiet)
+        assert out["deliver_at"] == out["next_run_at"] and "held_for_quiet_hours" not in out
+
+
+def test_a_rule_without_a_zone_fires_in_utc_and_is_shown_in_the_users_zone() -> None:
+    cfg = parse({"rules": [{"id": "z", "type": "cron", "match": {"schedule": "0 9 * * *"}, "prompt": "p"}]})
+    view = describe_rules(rules=list(cfg.rules), evaluated={}, audit=[], engine_enabled=True, quiet_hours=cfg.quiet_hours, now=NOW)
+    assert view.rules[0].next_run_at == "2026-10-21T09:00:00+00:00" and view.rules[0].timezone == "America/New_York"

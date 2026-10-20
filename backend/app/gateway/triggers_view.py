@@ -40,6 +40,11 @@ HeldBecause = Literal["mid-conversation", "quiet-hours", "other"]
 #: only waited for the window was delivered on time.
 COALESCING_REASON = "awaiting the coalescing window"
 
+#: The user's zone, for a rule that names none. The engine still fires such a
+#: rule's cron in UTC (scheduler.next_due with no zone); only how its times are
+#: shown changes.
+USER_TIMEZONE = "America/New_York"
+
 
 class RuleView(BaseModel):
     id: str
@@ -59,8 +64,14 @@ class RuleView(BaseModel):
     last_fired_at: str | None = None
     last_outcome: str | None = None
     next_run: NextRun = "cant-tell"
-    #: ISO instant, in the rule's own zone, when next_run is "scheduled".
+    #: ISO instant the engine next fires it, when next_run is "scheduled".
     next_run_at: str | None = None
+    #: When that run will actually be delivered: the end of quiet hours when
+    #: it fires inside them and is not urgent; otherwise next_run_at.
+    deliver_at: str | None = None
+    held_for_quiet_hours: bool = False
+    #: The zone to show its times in: the rule's own, else the user's.
+    timezone: str = "America/New_York"
 
 
 class QuietHoursView(BaseModel):
@@ -191,7 +202,8 @@ def describe_rules(
                 last_evaluated=recorded,
                 last_fired_at=last.get("at") if last else None,
                 last_outcome=last.get("outcome") if last else None,
-                **next_run(rule, now=now, engine_enabled=engine_enabled),
+                timezone=(rule.match.get("timezone") if isinstance(rule.match, dict) else None) or USER_TIMEZONE,
+                **next_run(rule, now=now, engine_enabled=engine_enabled, quiet_hours=quiet_hours),
             )
         )
     qh = None
@@ -200,10 +212,15 @@ def describe_rules(
     return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error, version=version, writable=writable, not_writable_reason=not_writable_reason, quiet_hours=qh)
 
 
-def next_run(rule, *, now: datetime, engine_enabled: bool) -> dict:
+def next_run(rule, *, now: datetime, engine_enabled: bool, quiet_hours=None) -> dict:
     """When `rule` next runs, computed with the scheduler's own function (the
     one the engine fires by), in the rule's zone. Never a guess: a schedule that
-    cannot be computed is "cant-tell"."""
+    cannot be computed is "cant-tell".
+
+    Quiet hours are the engine's own check (politeness.quiet_hours): a run that
+    fires inside them, and is not urgent, is held and delivered when they end,
+    so deliver_at says that time."""
+    from app.trigger_engine.politeness.quiet_hours import QuietHours, should_suppress
     from app.trigger_engine.scheduler import next_due
 
     if not engine_enabled:
@@ -216,7 +233,16 @@ def next_run(rule, *, now: datetime, engine_enabled: bool) -> dict:
         due = next_due(str(rule.match["schedule"]), now, rule.match.get("timezone") or None)
     except Exception:  # noqa: BLE001 — any failure means "cannot say", not a time
         return {"next_run": "cant-tell"}
-    return {"next_run": "scheduled", "next_run_at": due.isoformat()}
+    out = {"next_run": "scheduled", "next_run_at": due.isoformat(), "deliver_at": due.isoformat()}
+    if quiet_hours is not None:
+        window = QuietHours(start=quiet_hours.start, end=quiet_hours.end, enabled=quiet_hours.enabled, timezone=quiet_hours.timezone)
+        held, _ = should_suppress(rule.urgent, window, due)
+        if held:
+            out["held_for_quiet_hours"] = True
+            from zoneinfo import ZoneInfo
+
+            out["deliver_at"] = window.next_end(due.astimezone(ZoneInfo(window.timezone))).isoformat()
+    return out
 
 
 def describe_firings(audit: list[dict], *, limit: int = 200) -> FiringsView:
