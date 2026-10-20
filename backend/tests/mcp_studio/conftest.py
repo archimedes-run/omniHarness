@@ -107,7 +107,13 @@ def studio(tmp_path, monkeypatch):
     config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy")}
     config["trigger_engine"] = {"enabled": False}
     config.setdefault("memory", {})["enabled"] = False
-    config["mcp_builder"] = {"enabled": True, "vault_key": Fernet.generate_key().decode()}
+    # #59: the vault key is a 0600 file outside the project; no startup
+    # reconcile here (it would look at this machine's real Docker).
+    keyfile = tmp_path / "secrets" / "mcp_vault.key"
+    keyfile.parent.mkdir()
+    keyfile.write_bytes(Fernet.generate_key())
+    keyfile.chmod(0o600)
+    config["mcp_builder"] = {"enabled": True, "vault_key_file": str(keyfile), "reconcile_on_start": False}
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
     extensions = tmp_path / "extensions.json"

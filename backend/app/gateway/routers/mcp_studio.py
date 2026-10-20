@@ -59,6 +59,7 @@ from omniharness.runtime import run_agent
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mcp-studio", tags=["mcp-studio"])
+logger = logging.getLogger(__name__)
 
 _THREAD_ID_META_KEY = "mcp_server_id"
 
@@ -369,6 +370,20 @@ async def start_build(body: StartBuildRequest, request: Request) -> StartBuildRe
     del extracted  # the values are in the vault now, and nowhere else
     thread_id = await _start_build_run(request, server_id=server_id, name=name, message=message, user_id=user_id)
     return StartBuildResponse(server_id=server_id, thread_id=thread_id, name=name, secret_placeholders=secret_names)
+
+
+@router.get("/events")
+@require_permission("threads", "read")
+async def list_build_events(request: Request) -> dict:
+    """What the startup reconcile and the one-time retirement did (#59):
+    retired servers, deleted orphaned secrets (names only), servers turned
+    off because their running code was not the approved version."""
+    _check_flag(request)
+    _get_user_id(request)
+    from app.gateway.mcp_reconcile import recent_events
+
+    repo = get_mcp_server_repo(request)
+    return {"events": await recent_events(repo._sf)}
 
 
 # ---------------------------------------------------------------------------

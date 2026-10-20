@@ -19,6 +19,7 @@ from omniharness.persistence.feedback.model import FeedbackRow
 from omniharness.persistence.home_dismissals.model import HomeDismissalRow
 from omniharness.persistence.ledger.model import LedgerChangeRow, LedgerGoalRow, LedgerLinkRow, LedgerNoteRow, LedgerProjectRow, LedgerTaskRow
 from omniharness.persistence.mcp_secrets.model import McpSecretRow
+from omniharness.persistence.mcp_server.audit_model import McpBuildAuditRow
 from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
@@ -45,6 +46,7 @@ __all__ = [
     "LedgerNoteRow",
     "LedgerProjectRow",
     "LedgerTaskRow",
+    "McpBuildAuditRow",
     "McpSecretRow",
     "McpServerRow",
     "RunEventRow",

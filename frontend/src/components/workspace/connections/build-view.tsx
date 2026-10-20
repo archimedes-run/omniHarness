@@ -13,8 +13,12 @@ import {
   TONE_TEXT,
 } from "@/components/workspace/page-kit";
 import { discardBuilt, startBuild } from "@/core/mcp-studio/api";
-import { useBuiltServers } from "@/core/mcp-studio/hooks";
-import type { BuildStep, BuiltServer } from "@/core/mcp-studio/types";
+import { useBuildEvents, useBuiltServers } from "@/core/mcp-studio/hooks";
+import type {
+  BuildEvent,
+  BuildStep,
+  BuiltServer,
+} from "@/core/mcp-studio/types";
 import { formatTimeAgo } from "@/core/utils/datetime";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +49,8 @@ export function BuildView({ selected }: { selected: string | null }) {
   return (
     <div className="flex flex-col gap-[22px]">
       <Describe onStarted={select} />
+
+      <GatewayNotices />
 
       <SectionHeading className="mt-1">Your MCP servers</SectionHeading>
       {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
@@ -403,5 +409,36 @@ function Detail({ server }: { server: BuiltServer }) {
         }}
       />
     </section>
+  );
+}
+
+/** #59: what the gateway retired or turned off on its own, said in words. */
+function eventText(e: BuildEvent): string {
+  const d = e.details;
+  if (e.event === "retired") {
+    const kept = d.code_sha256
+      ? "Its code is kept; test and approve it to use it again."
+      : "Its code could not be recovered.";
+    return `Retired ${e.name ?? "a built server"}: started before approvals were bound to code. ${kept}`;
+  }
+  if (e.event === "orphaned-secrets") {
+    const keys = Array.isArray(d.key_names) ? (d.key_names as string[]) : [];
+    return `Deleted ${keys.length} stored secret${keys.length === 1 ? "" : "s"} (${keys.join(", ")}) left by a removed server.`;
+  }
+  return `Turned off ${e.name ?? "a built server"}: ${typeof d.why === "string" ? d.why : "its running code was not the approved version"}.`;
+}
+
+function GatewayNotices() {
+  const { events } = useBuildEvents();
+  if (!events || events.length === 0) return null;
+  return (
+    <PageCard data-testid="gateway-notices">
+      <div className="font-medium">Changes the gateway made</div>
+      <ul className="text-foreground-2 flex flex-col gap-1 text-[13px]">
+        {events.map((e, i) => (
+          <li key={`${e.event}-${e.server_id ?? ""}-${i}`}>{eventText(e)}</li>
+        ))}
+      </ul>
+    </PageCard>
   );
 }

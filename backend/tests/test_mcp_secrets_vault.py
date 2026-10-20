@@ -18,6 +18,7 @@ from omniharness.persistence.base import Base
 
 
 async def _make_vault():
+    import omniharness.persistence.models  # noqa: F401  (every table, so foreign keys resolve when run alone)
     from app.gateway.mcp_secrets import McpSecretsVault
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
@@ -156,30 +157,13 @@ def test_scan_for_required_keys_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_make_vault_key_raises_without_key_in_prod_mode() -> None:
-    from app.gateway.mcp_secrets import make_vault_key
+def test_make_vault_key_no_longer_has_an_ephemeral_or_config_key(tmp_path) -> None:
+    """#59: no dev-mode ephemeral key and no key in config.yaml; the key file
+    rules are tested in tests/apps/test_mcp_vault_key.py."""
+    from app.gateway.mcp_secrets import VaultKeyError, make_vault_key
     from omniharness.config.mcp_builder_config import McpBuilderConfig
 
-    config = McpBuilderConfig(enabled=True, vault_key=None, dev_mode=False)
-    with pytest.raises(RuntimeError, match="vault_key is required"):
-        make_vault_key(config)
-
-
-def test_make_vault_key_returns_ephemeral_in_dev_mode() -> None:
-    from app.gateway.mcp_secrets import make_vault_key
-    from omniharness.config.mcp_builder_config import McpBuilderConfig
-
-    config = McpBuilderConfig(enabled=True, vault_key=None, dev_mode=True)
-    key = make_vault_key(config)
-    assert isinstance(key, bytes)
-    Fernet(key)  # validates key format
-
-
-def test_make_vault_key_uses_configured_key() -> None:
-    from app.gateway.mcp_secrets import make_vault_key
-    from omniharness.config.mcp_builder_config import McpBuilderConfig
-
-    raw_key = Fernet.generate_key()
-    config = McpBuilderConfig(enabled=True, vault_key=raw_key.decode(), dev_mode=False)
-    key = make_vault_key(config)
-    assert key == raw_key
+    with pytest.raises(VaultKeyError):
+        make_vault_key(McpBuilderConfig(enabled=True, dev_mode=True, vault_key_file=str(tmp_path / "missing")))
+    with pytest.raises(VaultKeyError):
+        make_vault_key(McpBuilderConfig(enabled=True, vault_key=Fernet.generate_key().decode()))

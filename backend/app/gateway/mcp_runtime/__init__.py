@@ -11,3 +11,4 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 LAUNCHER = HERE / "launch.py"
 ASSEMBLER = HERE / "assemble_packages.py"
+EGRESS_DIR = HERE / "egress"

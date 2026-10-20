@@ -289,9 +289,17 @@ services:
     extra_hosts:
       # For Linux: map host.docker.internal to host gateway
       - "host.docker.internal:host-gateway"
+    # The MCP builder's vault key (#59), for the gateway only, read-only at
+    # /run/secrets/mcp_vault_key. Created by `make vault-key`.
+    secrets:
+      - mcp_vault_key
     networks:
       - omni-harness-dev
     restart: unless-stopped
+
+secrets:
+  mcp_vault_key:
+    file: ${OMNI_HARNESS_MCP_VAULT_KEY_FILE:-${HOME:?HOME must be set}/.omni-harness-secrets/mcp_vault.key}
 
 volumes:
   # Persist .venv across container restarts so dependencies installed during

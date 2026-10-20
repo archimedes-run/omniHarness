@@ -9,15 +9,15 @@ Default-deny: the sandbox allows NO outbound connections unless the server
 record explicitly declares an egress_hosts entry.
 
 Declared allows: each hostname in *egress_hosts* gets an explicit ALLOW rule
-for port 443 (HTTPS) and port 80 (HTTP).
+for port 443 (HTTPS) only (#59; the user's answer: no plain HTTP).
 
-The resulting dict is opaque to this module — the sandbox runner (Phase 4)
-converts it to iptables / nftables rules or Docker network policies.
+The deploy turns the result into the Squid sidecar's allowlist
+(``mcp_egress_config``), which is what enforces it.
 """
 
 from __future__ import annotations
 
-_ALLOWED_PORTS = (80, 443)
+_ALLOWED_PORTS = (443,)
 
 
 def build_egress_rules(egress_hosts: list[str]) -> dict:
@@ -29,7 +29,6 @@ def build_egress_rules(egress_hosts: list[str]) -> dict:
             "default_policy": "deny",
             "allow": [
                 {"host": "api.example.com", "port": 443},
-                {"host": "api.example.com", "port": 80},
                 ...
             ],
         }

@@ -72,3 +72,12 @@ export interface ApprovalPacket {
   /** An approved version is still running while this new code waits. */
   approved_version_on: boolean;
 }
+
+/** GET /api/mcp-studio/events: what the gateway did on its own (#59). */
+export interface BuildEvent {
+  at: string | null;
+  event: "retired" | "orphaned-secrets" | "turned-off";
+  server_id: string | null;
+  name: string | null;
+  details: Record<string, unknown>;
+}

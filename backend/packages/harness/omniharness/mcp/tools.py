@@ -93,6 +93,11 @@ async def get_mcp_tools() -> list[BaseTool]:
                 existing_headers["Authorization"] = auth_header
                 servers_config[server_name]["headers"] = existing_headers
 
+        # Feature 006 #59: built servers' endpoint tokens, from the vault, in memory only.
+        from omniharness.mcp.built_auth import inject_built_tokens
+
+        await inject_built_tokens(extensions_config, servers_config)
+
         tool_interceptors = []
         oauth_interceptor = build_oauth_tool_interceptor(extensions_config)
         if oauth_interceptor is not None:

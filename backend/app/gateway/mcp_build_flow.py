@@ -265,6 +265,10 @@ def describe_build(
         steps.append(_step("done", "You approved its first run"))
         steps.append(_step("done", "On: agents can use its tools"))
         return done("enabled", "Enabled")
+    if status == "retired" and phase in (None, "idle"):
+        # #59: kept from before approvals were bound to code; its keys were deleted.
+        steps.append(_step("waiting", "Test it again, then review and approve it, to use it"))
+        return done("off", "Retired", "Built before approvals were bound to code. Its code is kept; its stored keys were deleted (add them again).")
     if status == "stopped" or phase == "stopped":
         return done("off", "Off")
     if testing_now:

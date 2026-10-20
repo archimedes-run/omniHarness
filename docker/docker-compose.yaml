@@ -212,6 +212,9 @@ services:
       - VOLCENGINE_API_KEY
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # The MCP builder's vault key (#59), for the gateway only (see docker-compose-dev.yaml).
+    secrets:
+      - mcp_vault_key
     networks:
       - omni-harness
     restart: unless-stopped
@@ -253,3 +256,7 @@ networks:
       config:
         # Fixed so nginx can have a fixed address (the only trusted proxy).
         - subnet: ${OMNI_HARNESS_SUBNET:-172.30.226.0/24}
+
+secrets:
+  mcp_vault_key:
+    file: ${OMNI_HARNESS_MCP_VAULT_KEY_FILE:-${HOME:?HOME must be set}/.omni-harness-secrets/mcp_vault.key}

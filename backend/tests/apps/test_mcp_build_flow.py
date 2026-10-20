@@ -131,9 +131,12 @@ def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(
     assert sid not in builder_gateway.extensions.read_text()
 
     # The user approves the code they saw (by hash): deployed (docker faked) and connected for agents.
-    from mcp_fakes import FakeDockerRunner
+    from mcp_fakes import FakeDockerRunner, FakeImages
 
+    # The deployed topology is test_mcp_deployed_egress's; here docker is faked.
     manager._runner = FakeDockerRunner()
+    manager._images = FakeImages()
+    manager._wait_endpoint = AsyncMock(return_value=None)
     if True:
         packet = client.get(f"/api/mcp-studio/servers/{sid}/approval").json()
         resp = client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": server["code_sha256"], "view_token": packet["view_token"]})

@@ -31,14 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import io
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
 import socket
-import tarfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +47,7 @@ from app.gateway.mcp_build_flow import placeholder, scrub
 from app.gateway.mcp_container_files import deliver, render_secrets, secret_name_problem
 from app.gateway.mcp_docker import CliDockerRunner, DockerRunner
 from app.gateway.mcp_egress import build_egress_rules
+from app.gateway.mcp_egress_config import UPSTREAM_DNS, allowlist_hosts, proxy_password_line, render_dnsmasq, render_squid
 from app.gateway.mcp_names import name_collision, slugify, tool_name_collision, wire_key
 from app.gateway.mcp_runtime_image import RuntimeImages
 from app.gateway.mcp_secrets import McpSecretsVault
@@ -113,42 +113,14 @@ def _classify_output(text: str) -> str:
     return "pass"
 
 
-# Matches the entire __main__ block from "if __name__" to end-of-file.
-# Generated server.py files always end with this block, so replacing to EOF is safe.
-_MAIN_BLOCK_RE = re.compile(
-    r'^if\s+__name__\s*==\s*[\'"]__main__[\'"].*',
-    re.MULTILINE | re.DOTALL,
-)
-# Canonical dual-transport __main__ block written into every Docker image.
-# FastMCP.run() does NOT accept host=/port= kwargs — those must be set on
-# mcp.settings before run(). transport_security is cleared so Docker port-
-# mapping from the host is not blocked by localhost rebinding protection.
-_DOCKER_MAIN_NEW = (
-    'if __name__ == "__main__":\n'
-    '    _transport = os.environ.get("MCP_TRANSPORT", "stdio")\n'
-    '    if _transport == "sse":\n'
-    '        mcp.settings.host = "0.0.0.0"\n'
-    '        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))\n'
-    "        mcp.settings.transport_security = None\n"
-    '        mcp.run(transport="sse")\n'
-    "    else:\n"
-    "        mcp.run()\n"
-)
-# MCP_TRANSPORT selects stdio (sandbox) vs sse (Docker). MCP_PORT sets the
-# container's listen port, which is mapped to a dynamic host port by docker run.
-_DOCKERFILE_TEMPLATE = """\
-FROM python:3.12-slim
-WORKDIR /app
-COPY server.py .
-RUN pip install --no-cache-dir mcp httpx
-ENV MCP_TRANSPORT=sse
-ENV MCP_PORT=8080
-EXPOSE 8080
-CMD ["python", "server.py"]
-"""
 _DEPLOY_PORT_BASE = 18100
 #: The non-root user every built server runs as (no passwd entry needed).
 _SANDBOX_UID = 10001
+#: The squid user of the egress image (alpine's squid package).
+_SQUID_UID = 31
+#: The vault name of a server's endpoint token. The "__" prefix is reserved:
+#: never a user's key, never handed to the server.
+INBOUND_TOKEN_KEY = "__INBOUND_TOKEN"
 
 # Ordered deploy steps emitted as live timeline data to the frontend.
 _DEPLOY_STEP_DEFS: list[tuple[str, str]] = [
@@ -178,28 +150,6 @@ def _read_config(path: Path | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _tar_context(files: dict[str, str]) -> bytes:
-    """A docker build context as an in-memory tar (no files on disk)."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        for name, text in files.items():
-            data = text.encode("utf-8")
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            info.mode = 0o644
-            tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
-
-
-def _patch_main_for_sse(source: str) -> str:
-    """Replace the __main__ block with the canonical dual-transport form.
-
-    Always rewrites — handles bare mcp.run(), old bad host=/port= kwargs,
-    and already-patched-but-incorrect blocks in one pass.
-    """
-    return _MAIN_BLOCK_RE.sub(_DOCKER_MAIN_NEW.rstrip(), source)
-
-
 class McpTeardownError(RuntimeError):
     """Stopping or deleting a server left something behind; the caller must not report success."""
 
@@ -210,46 +160,6 @@ class McpContainerRemovalError(McpTeardownError):
 
 class McpDeployInProgressError(RuntimeError):
     """A deploy is running; stopping now would race the container it starts."""
-
-
-def _container_name(server_id: str) -> str:
-    return f"omni-mcp-{server_id[:12]}"
-
-
-def _config_entry_name(server_name: str) -> str:
-    """The extensions_config.json key ``connect`` writes for a server (#59: built/<slug>)."""
-    return wire_key(slugify(server_name))
-
-
-# The URL ``connect`` writes: a studio container on a local port. An entry with
-# the same name but another URL was written by someone else and is left alone.
-_STUDIO_SSE_URL_RE = re.compile(r"^http://(localhost|host\.docker\.internal):\d+/sse$")
-
-
-def _remove_config_entry(server: dict) -> None:
-    """Drop the server's entry from extensions_config.json, if ``connect`` wrote one.
-
-    Edits the file as JSON so every other key is kept as written, then reloads
-    the cached config so agents stop seeing the server.
-    """
-    from omniharness.config.extensions_config import ExtensionsConfig, atomic_write_json, reload_extensions_config
-
-    name = _config_entry_name(server["name"])
-    try:
-        path = ExtensionsConfig.resolve_config_path()
-        if path is None or not path.exists():
-            return
-        data = json.loads(path.read_text(encoding="utf-8") or "{}")
-        servers = data.get("mcpServers") or {}
-        entry = servers.get(name)
-        if not isinstance(entry, dict) or not _STUDIO_SSE_URL_RE.match(str(entry.get("url") or "")):
-            return
-        del servers[name]
-        atomic_write_json(path, data)
-        reload_extensions_config()
-    except (OSError, ValueError) as exc:
-        raise McpTeardownError(f"could not remove {name!r} from extensions_config.json: {exc}") from exc
-    logger.info("MCP server %s: removed extensions_config entry %r", server["id"][:12], name)
 
 
 @dataclass
@@ -288,7 +198,10 @@ class MCPServerManager:
         vault: McpSecretsVault,
         runner: DockerRunner | None = None,
         images: RuntimeImages | None = None,
+        reconcile_on_start: bool = True,
     ) -> None:
+        self._reconcile_on_start = reconcile_on_start
+        self.reconcile_messages: list[str] = []
         self._repo = repo
         self._vault = vault
         self._runner: DockerRunner = runner or CliDockerRunner()
@@ -310,6 +223,10 @@ class MCPServerManager:
         # Ensures only one test_server call runs at a time per server; concurrent
         # callers wait for the in-flight test to finish and return its result.
         self._test_locks: dict[str, asyncio.Lock] = {}
+        # The sidecar's DNS: Docker's embedded resolver, rebinding protection on.
+        # Tests point the upstream at a fake resolver; nothing else sets these.
+        self._egress_upstream_dns = UPSTREAM_DNS
+        self._egress_stop_dns_rebind = True
         # Feature 006 Build: server_id -> the build agent's run, so "drafting"
         # is observed (a run in progress), not assumed. In memory only.
         self._build_runs: dict[str, object] = {}
@@ -346,6 +263,27 @@ class MCPServerManager:
 
     async def start(self) -> None:
         logger.info("MCPServerManager started")
+        if self._reconcile_on_start:
+            # #59 plan §9: in the background (Docker calls are slow), reported
+            # through the audit table and on the Build board, never silent.
+            self._reconcile_task = asyncio.create_task(self.reconcile(), name="mcp-reconcile")
+
+    async def reconcile(self) -> list[str]:
+        """The one-time retirement, then turn off built servers whose running
+        code is not the approved version (app.gateway.mcp_reconcile)."""
+        from app.gateway.mcp_reconcile import Reconciler
+        from omniharness.config.extensions_config import ExtensionsConfig
+
+        rec = Reconciler(session_factory=self._repo._sf, runner=self._runner, prefix=self._images.prefix, config_path=ExtensionsConfig.resolve_config_path(), manager=self)
+        try:
+            messages = await rec.retire() + await rec.reconcile()
+        except Exception:
+            logger.exception("the startup reconcile of built MCP servers failed")
+            return []
+        for m in messages:
+            logger.warning("MCP builder: %s", m)
+        self.reconcile_messages = messages
+        return messages
 
     async def close(self) -> None:
         logger.info("MCPServerManager stopped")
@@ -684,9 +622,6 @@ class MCPServerManager:
                         self._records[server_id] = record
                     return record
 
-            # Stage 4: validate egress rules structure
-            build_egress_rules(egress_hosts)
-
             # Stage 5: two-phase sandbox test (discovery: no secrets; test-calls: real secrets).
             # "verified" = scan gates passed AND server started cleanly AND tools discovered.
             # Test-call auth/args errors never block 'verified' — they're classified by badge.
@@ -814,11 +749,12 @@ class MCPServerManager:
         return tool_name_collision(key, tools, others.keys(), other_tools)
 
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Stop a server: stop and remove its container, drop its agent config entry.
+        """Stop a server: remove its containers (server and egress sidecar) and
+        networks, and drop its agent config entry.
 
         Before, this only changed the status, and the container kept running
         (``--restart unless-stopped``) with the owner's secrets in its env.
-        Raises ``McpContainerRemovalError`` when the container could not be
+        Raises ``McpContainerRemovalError`` when something could not be
         removed; the status is then left as it was, so nothing claims success.
         """
         server = await self._load_and_verify(server_id, user_id)
@@ -826,8 +762,8 @@ class MCPServerManager:
             existing = self._records.get(server_id)
         if existing is not None and existing.phase == "deploying":
             raise McpDeployInProgressError("A deploy is in progress. Wait for it to finish, then stop the server.")
-        await self._remove_container(server_id, server)
-        _remove_config_entry(server)
+        await self._remove_topology(server_id, strict=True, recorded=bool(server.get("container_id")))
+        self._drop_config_entries(server_id)
         await self._repo.update_container_info(
             server_id,
             container_id=None,
@@ -847,29 +783,6 @@ class MCPServerManager:
         async with self._lock:
             self._records[server_id] = record
         return record
-
-    async def _remove_container(self, server_id: str, server: dict) -> None:
-        """``docker stop`` then ``docker rm`` this server's container.
-
-        A container that does not exist counts as removed. Any other failure
-        raises ``McpContainerRemovalError`` with docker's own words.
-        """
-        name = _container_name(server_id)
-        for verb in ("stop", "rm"):
-            try:
-                rc, _, err = await self._runner.run(["docker", verb, name], timeout=60.0)
-            except FileNotFoundError:
-                # No docker CLI here. If a container was recorded, it may still be
-                # running somewhere we cannot reach: say so. If none ever was,
-                # there is nothing to remove.
-                if server.get("container_id"):
-                    raise McpContainerRemovalError(f"docker is not available, so container {name} could not be removed")
-                return
-            except TimeoutError:
-                raise McpContainerRemovalError(f"docker {verb} {name} timed out")
-            if rc != 0 and "no such container" not in err.lower():
-                raise McpContainerRemovalError(f"docker {verb} {name} failed: {err.strip()[:300]}")
-        logger.info("MCP server %s: container %s stopped and removed", server_id[:12], name)
 
     # ------------------------------------------------------------------
     # Docker deploy / undeploy / connect
@@ -912,7 +825,7 @@ class MCPServerManager:
         for port in range(start, start + 100):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 try:
-                    s.bind(("", port))
+                    s.bind(("127.0.0.1", port))
                     return port
                 except OSError:
                     continue
@@ -991,66 +904,21 @@ class MCPServerManager:
         """
         expected_sha256 = expected_sha256 or code_sha256(source)
 
-        def _make_record(phase: str, **kwargs: object) -> MCPBuildRecord:
-            return MCPBuildRecord(
-                server_id=server_id,
-                phase=phase,  # type: ignore[arg-type]
-                owner_id=user_id,
-                required_key_names=existing.required_key_names if existing else [],
-                tools_discovered=existing.tools_discovered if existing else [],
-                test_results=existing.test_results if existing else [],
-                last_verified_at=existing.last_verified_at if existing else None,
-                **kwargs,  # type: ignore[arg-type]
-            )
-
-        image_tag = _container_name(server_id)
-        container_name = _container_name(server_id)
-        patched = _patch_main_for_sse(source)
-
         try:
             # ── Step 1: Preparing ──────────────────────────────────────────
-            # (already set to "running" by deploy(); just do the work)
             if code_sha256(source) != expected_sha256:
                 await self._refuse_changed(server_id, user_id, "preparing")
                 return
-            context = _tar_context({"server.py": patched, "Dockerfile": _DOCKERFILE_TEMPLATE})
-            await self._advance_step(server_id, "preparing", "building", detail="Source patched for SSE transport")
+            await self._advance_step(server_id, "preparing", "building", detail="Code matches the approved hash")
 
-            # ── Step 2: Building ──────────────────────────────────────
-            rc, _, err = await self._runner.run(["docker", "build", "-t", image_tag, "-"], stdin=context, timeout=300.0)
-            if rc != 0:
-                await self._fail_deploy(server_id, user_id, "building", f"docker build failed: {err[:400]}")
-                return
+            # ── Step 2: Building ───────────────────────────────────────────
+            # The image for exactly this code (its label is the hash), and the
+            # Squid sidecar image. Containers run image IDs, never tags.
+            image_id = await self._images.code_image_id(source, expected_sha256)
+            egress_id = await self._images.egress_image_id()
+            await self._advance_step(server_id, "building", "launching", detail="Image built for the approved code")
 
-            await self._advance_step(server_id, "building", "launching", detail="Image built successfully")
-
-            # ── Step 3: Launching ─────────────────────────────────────────
-            host_port = self._find_free_port()
-
-            # Decrypt real secrets — injected as env vars, NOT logged
-            real_env: dict[str, str] = {}
-            try:
-                real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
-            except Exception:
-                pass
-
-            run_args: list[str] = [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                container_name,
-                "-p",
-                # Loopback only (security baseline): reached at localhost or, from
-                # a containerised gateway on Docker Desktop, host.docker.internal.
-                f"127.0.0.1:{host_port}:8080",
-                "--restart",
-                "unless-stopped",
-            ]
-            for k, v in real_env.items():
-                run_args += ["-e", f"{k}={v}"]
-            run_args.append(image_tag)
-
+            # ── Step 3: Launching ──────────────────────────────────────────
             async with self._source_lock(server_id):
                 # The final check: the code stored now is the code this
                 # approval is for. A change made while the image built is
@@ -1059,52 +927,234 @@ class MCPServerManager:
                 if row is None or code_sha256(row.get("source_code")) != expected_sha256:
                     await self._refuse_changed(server_id, user_id, "launching")
                     return
-                # Remove any previous container (non-fatal), then start this one.
-                await self._runner.run(["docker", "rm", "-f", container_name], timeout=15.0)
-                rc, out, err = await self._runner.run(run_args, timeout=30.0)
-            if rc != 0:
-                await self._fail_deploy(server_id, user_id, "launching", f"docker run failed: {err[:400]}")
-                return
-
-            container_id = out.strip()[:128]
-            await self._advance_step(server_id, "launching", "registering", detail=f"Container started on port {host_port}")
+                real = await self._secrets_for_deploy(row, user_id, expected_sha256)
+                host_port = await self._start_topology(server_id, row, image_id, egress_id, real)
+            del real
+            await self._advance_step(server_id, "launching", "registering", detail="Running behind its egress allowlist")
 
             # A pending approval becomes the approval only now that it runs.
             row = await self._repo.get(server_id, user_id=user_id)
             if row is not None and (row.get("pending_approval") or {}).get("code_sha256") == expected_sha256:
                 if not await self._repo.commit_approval(server_id, expected_sha256=expected_sha256, user_id=user_id):
-                    await self._runner.run(["docker", "rm", "-f", container_name], timeout=15.0)
+                    await self._remove_topology(server_id)
                     await self._fail_deploy(server_id, user_id, "registering", "the code changed while turning on; review it again")
                     return
 
-            # ── Step 4: Registering ───────────────────────────────────────
-            await self._repo.update_container_info(
-                server_id,
-                container_id=container_id,
-                container_port=host_port,
-                status="deployed",
-                user_id=user_id,
-            )
-            # Finalize: mark registering done and flip phase to deployed
+            # ── Step 4: Registering ────────────────────────────────────────
+            container_id = self._names(server_id)["server"]
+            await self._repo.update_container_info(server_id, container_id=container_id, container_port=host_port, status="deployed", user_id=user_id)
             async with self._lock:
                 rec = self._records.get(server_id)
                 if rec is not None:
                     final_steps = [{**s, "status": "done"} if s["key"] == "registering" else s for s in rec.deploy_steps]
-                    self._records[server_id] = dataclasses.replace(
-                        rec,
-                        phase="deployed",
-                        container_id=container_id,
-                        container_port=host_port,
-                        deploy_steps=final_steps,
-                    )
-            logger.info("MCP server %s deployed: container=%s port=%s", server_id[:12], container_id[:12], host_port)
+                    self._records[server_id] = dataclasses.replace(rec, phase="deployed", container_id=container_id, container_port=host_port, deploy_steps=final_steps)
+            logger.info("MCP server %s deployed behind its egress allowlist", server_id[:12])
             if connect_after:
                 # "Approve and turn on": the agents get its tools now.
                 await self.connect(server_id=server_id, user_id=user_id)
 
         except Exception as exc:
             logger.error("Docker deploy failed for %s: %s", server_id[:12], exc)
+            try:
+                await self._remove_topology(server_id)
+            except Exception:
+                logger.exception("cleanup after a failed deploy of %s", server_id[:12])
             await self._fail_deploy(server_id, user_id, "launching", f"deploy error: {str(exc)[:400]}")
+
+    # ------------------------------------------------------------------
+    # The deployed topology (#59): an --internal network per server, the
+    # server on it alone at .3, and a Squid sidecar at .2 that is its only way
+    # out (allowlist, private-destination refusal, SNI check, proxy login) and
+    # the only way in (the endpoint token). Secrets reach both as 0400 files.
+    # ------------------------------------------------------------------
+
+    def _names(self, server_id: str) -> dict[str, str]:
+        p, i = self._images.prefix, server_id[:12]
+        return {"server": f"{p}{i}", "egress": f"{p}egress-{i}", "net": f"{p}net-{i}", "pub": f"{p}pub-{i}"}
+
+    async def _secrets_for_deploy(self, row: dict, user_id: str, sha: str) -> dict[str, str]:
+        """The real secrets, only for the approved code (#59, Q3): the hash
+        must be the approved version's, or the pending approval's for the
+        code stored now. New, unapproved code never gets them."""
+        approved = row.get("approved_code_sha256") == sha and (row.get("approval") or {}).get("code_sha256") == sha
+        pending = (row.get("pending_approval") or {}).get("code_sha256") == sha and code_sha256(row.get("source_code")) == sha
+        if not (approved or pending):
+            raise PermissionError("real secrets are only for approved code")
+        values = await self._vault._decrypt_for_sandbox(server_id=row["id"], owner_id=user_id)
+        return {k: v for k, v in values.items() if not k.startswith("__")}
+
+    async def _gateway_network(self) -> str | None:
+        """The network the gateway's own container is on (Docker mode), or
+        None for a gateway on the bare host."""
+        override = os.environ.get("OMNI_HARNESS_MCP_GATEWAY_NETWORK")
+        if override:
+            return override
+        if not Path("/.dockerenv").exists():
+            return None
+        rc, out, _ = await self._runner.run(["docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", socket.gethostname()], timeout=15.0)
+        nets = out.split() if rc == 0 else []
+        return nets[0] if nets else None
+
+    async def _free_subnet(self) -> ipaddress.IPv4Network:
+        rc, out, _ = await self._runner.run(["docker", "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", *await self._network_ids()], timeout=30.0)
+        used = []
+        for cidr in out.split() if rc == 0 else []:
+            try:
+                used.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                continue
+        for candidate in ipaddress.ip_network("172.30.0.0/16").subnets(new_prefix=28):
+            if not any(candidate.overlaps(u) for u in used):
+                return candidate
+        raise RuntimeError("no free /28 left in 172.30.0.0/16 for a built server's network")
+
+    async def _network_ids(self) -> list[str]:
+        rc, out, _ = await self._runner.run(["docker", "network", "ls", "-q"], timeout=15.0)
+        return out.split() if rc == 0 else []
+
+    async def _subnet_of(self, network: str) -> str:
+        rc, out, err = await self._runner.run(["docker", "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", network], timeout=15.0)
+        for cidr in out.split() if rc == 0 else []:
+            if ":" not in cidr:
+                return cidr
+        raise RuntimeError(f"can't read the subnet of {network}: {err.strip()[:200]}")
+
+    async def _docker(self, args: list[str], what: str, timeout: float = 60.0) -> str:
+        rc, out, err = await self._runner.run(["docker", *args], timeout=timeout)
+        if rc != 0:
+            raise RuntimeError(f"{what} failed: {err.strip()[:300]}")
+        return out
+
+    def _labels(self, server_id: str, role: str) -> list[str]:
+        out = ["--label", f"omni.mcp.server={server_id}", "--label", f"omni.mcp.role={role}"]
+        for k, v in self._images.labels:
+            out += ["--label", f"{k}={v}"]
+        return out
+
+    async def _start_topology(self, server_id: str, row: dict, image_id: str, egress_id: str, real: dict[str, str]) -> int:
+        """Start the server and its sidecar; returns the published 127.0.0.1
+        port (bare-host gateway) or 0 (gateway on the same Docker network)."""
+        n = self._names(server_id)
+        await self._remove_topology(server_id)
+        subnet = await self._free_subnet()
+        hosts = list(subnet.hosts())
+        sidecar_ip, server_ip = str(hosts[1]), str(hosts[2])  # .2 and .3
+        rules = build_egress_rules(list(row.get("egress_hosts") or []))
+        allow = allowlist_hosts(sorted({a["host"] for a in rules["allow"]}))
+        token = secrets.token_hex(24)
+        password = secrets.token_hex(16)
+        await self._vault.store(server_id=server_id, owner_id=row["owner_id"], key_name=INBOUND_TOKEN_KEY, plaintext_value=token)
+
+        await self._docker(["network", "create", "--internal", "--subnet", str(subnet), *self._labels(server_id, "net"), n["net"]], "creating the internal network")
+        outer = await self._gateway_network()
+        port = 0
+        if outer is None:
+            await self._docker(["network", "create", *self._labels(server_id, "pub"), n["pub"]], "creating the endpoint network")
+            outer = n["pub"]
+            port = self._find_free_port()
+
+        # 1. The server: internal network only, no port, no mounts, no secrets in its config.
+        await self._docker(
+            [
+                "run", "-d", "--name", n["server"], *self._labels(server_id, "server"),
+                "--label", f"omni.code_sha256={code_sha256(row.get('source_code'))}",
+                "--network", n["net"], "--ip", server_ip, "--dns", "127.0.0.1",
+                "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m",
+                "--tmpfs", f"/run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid={_SANDBOX_UID},gid={_SANDBOX_UID}",
+                "--user", f"{_SANDBOX_UID}:{_SANDBOX_UID}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--memory", "256m", "--memory-swap", "256m", "--pids-limit", "64", "--cpus", "0.5", "--ulimit", "nofile=512:512",
+                "--restart", "unless-stopped",
+                "-e", "HOME=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "MCP_TRANSPORT=sse", "-e", "MCP_PORT=8080",
+                image_id, "python", "-I", "-B", "/opt/omni/launch.py",
+            ],
+            "starting the server",
+        )  # fmt: skip
+
+        # 2. The sidecar: created on the outer network, connected to the internal one at .2, then started.
+        create = [
+            "create", "--name", n["egress"], *self._labels(server_id, "egress"),
+            "--network", outer,
+            "--read-only", "--tmpfs", f"/tmp:rw,nosuid,nodev,size=16m,uid={_SQUID_UID},gid={_SQUID_UID}",
+            "--tmpfs", f"/run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid={_SQUID_UID},gid={_SQUID_UID}",
+            "--user", f"{_SQUID_UID}:{_SQUID_UID}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--sysctl", "net.ipv4.ip_unprivileged_port_start=53",
+            "--memory", "128m", "--memory-swap", "128m", "--pids-limit", "64", "--cpus", "0.5", "--ulimit", "nofile=4096:4096",
+            "--restart", "unless-stopped",
+            "-e", f"OUTER_SUBNET={await self._subnet_of(outer)}",
+        ]  # fmt: skip
+        if port:
+            create += ["-p", f"127.0.0.1:{port}:8080"]
+        await self._docker([*create, egress_id], "creating the egress sidecar")
+        await self._docker(["network", "connect", "--ip", sidecar_ip, n["net"], n["egress"]], "connecting the sidecar")
+        await self._docker(["start", n["egress"]], "starting the sidecar")
+
+        # 3. Files, values on stdin only: the sidecar's configs, then the server's keys.
+        squid = render_squid(hosts=allow, internal_ip=sidecar_ip, upstream_ip=server_ip, token=token)
+        dnsmasq = render_dnsmasq(upstream=self._egress_upstream_dns, stop_dns_rebind=self._egress_stop_dns_rebind)
+        await deliver(self._runner, n["egress"], str(_SQUID_UID), {"squid.conf": squid.encode(), "dnsmasq.conf": dnsmasq.encode(), "passwd": proxy_password_line("mcp", password)})
+        proxy = f"http://mcp:{password}@{sidecar_ip}:3128"
+        await deliver(self._runner, n["server"], str(_SANDBOX_UID), {"secrets": render_secrets(real, gateway={"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy})})
+        await self._wait_endpoint(server_id, port, token)
+        return port
+
+    def endpoint_url(self, server_id: str, port: int) -> str:
+        """Where the gateway reaches a deployed server: the sidecar's endpoint."""
+        if port:
+            return f"http://127.0.0.1:{port}/sse"
+        return f"http://{self._names(server_id)['egress']}:8080/sse"
+
+    async def _wait_endpoint(self, server_id: str, port: int, token: str, timeout: float = 45.0) -> None:
+        import httpx
+
+        url = self.endpoint_url(server_id, port)
+        deadline = asyncio.get_running_loop().time() + timeout
+        last = "no answer"
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
+                    async with client.stream("GET", url, headers={"Authorization": f"Bearer {token}"}) as resp:
+                        if resp.status_code == 200:
+                            return
+                        last = f"HTTP {resp.status_code}"
+            except Exception as exc:
+                last = type(exc).__name__
+            await asyncio.sleep(0.5)
+        raise RuntimeError(f"the server did not answer through its sidecar ({last})")
+
+    async def _remove_topology(self, server_id: str, *, strict: bool = False, recorded: bool = False) -> None:
+        """Remove the server, its sidecar and both networks. Something already
+        gone counts as removed. With *strict*, any other failure raises
+        ``McpContainerRemovalError`` in docker's own words."""
+        n = self._names(server_id)
+        steps = [(["docker", "rm", "-f", c], c) for c in (n["server"], n["egress"])]
+        steps += [(["docker", "network", "rm", net], net) for net in (n["net"], n["pub"])]
+        for args, what in steps:
+            try:
+                rc, _, err = await self._runner.run(args, timeout=60.0)
+            except FileNotFoundError:
+                # No docker CLI here. If a container was recorded, it may still be
+                # running somewhere we cannot reach: say so.
+                if strict and recorded:
+                    raise McpContainerRemovalError(f"docker is not available, so {what} could not be removed")
+                return
+            except TimeoutError:
+                if strict:
+                    raise McpContainerRemovalError(f"removing {what} timed out")
+                continue
+            gone = "no such" in err.lower() or "not found" in err.lower()
+            if strict and rc != 0 and not gone:
+                raise McpContainerRemovalError(f"removing {what} failed: {err.strip()[:300]}")
+
+    async def inbound_token(self, server_id: str) -> str | None:
+        """The endpoint token for a built server, for the MCP loader only."""
+        row = await self._repo.get(server_id, user_id=None)
+        if row is None:
+            return None
+        try:
+            values = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=row["owner_id"])
+        except Exception:
+            return None
+        return values.get(INBOUND_TOKEN_KEY)
 
     async def _fail_deploy(self, server_id: str, user_id: str, step: str, error: str) -> None:
         """A deploy failed: the step says why, and an approval that was
@@ -1121,6 +1171,34 @@ class MCPServerManager:
     async def undeploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Stop and remove the Docker container for this server (same as ``stop``)."""
         return await self.stop(server_id=server_id, user_id=user_id)
+
+    async def disconnect(self, *, server_id: str, user_id: str) -> bool:
+        """Remove this server's entry from extensions_config.json (only one it owns)."""
+        await self._load_and_verify(server_id, user_id)
+        return self._drop_config_entries(server_id)
+
+    def _drop_config_entries(self, server_id: str) -> bool:
+        """Drop the entries carrying this server's id; every other key is kept
+        as written. Raises ``McpTeardownError`` if the file can't be edited."""
+        from omniharness.config.extensions_config import ExtensionsConfig, atomic_write_json, reload_extensions_config
+
+        try:
+            path = ExtensionsConfig.resolve_config_path()
+            if path is None or not Path(path).exists():
+                return False
+            raw = _read_config(path)
+            servers = raw.get("mcpServers") or {}
+            mine = [k for k, v in servers.items() if isinstance(v, dict) and v.get("server_id") == server_id]
+            if not mine:
+                return False
+            for k in mine:
+                servers.pop(k)
+            atomic_write_json(path, raw)
+            reload_extensions_config()
+        except (OSError, ValueError) as exc:
+            raise McpTeardownError(f"could not remove the extensions_config.json entry: {exc}") from exc
+        logger.info("MCP server %s: removed its extensions_config entry", server_id[:12])
+        return True
 
     async def connect(self, *, server_id: str, user_id: str) -> dict[str, str]:
         """Register the deployed container's SSE URL into extensions_config.json.
@@ -1139,20 +1217,16 @@ class MCPServerManager:
         async with self._lock:
             record = self._records.get(server_id)
 
-        container_port = (record.container_port if record else None) or db_server.get("container_port")
-        if not container_port:
+        container_port = record.container_port if record and record.container_port is not None else db_server.get("container_port")
+        if container_port is None or not db_server.get("container_id"):
             raise ValueError("Server is not deployed — run deploy first")
 
-        # When the gateway runs inside Docker, `localhost` resolves to the
-        # container itself — not the host machine where MCP containers run.
-        # `host.docker.internal` is Docker Desktop's magic hostname for the host.
-        # On a bare host (make dev), `localhost` is correct.
-        _in_docker = Path("/.dockerenv").exists()
-        internal_host = "host.docker.internal" if _in_docker else "localhost"
-        display_host = "localhost"  # always localhost for the user's browser
-
-        internal_url = f"http://{internal_host}:{container_port}/sse"
-        display_url = f"http://{display_host}:{container_port}/sse"
+        # #59: the server is reached only through its sidecar's endpoint, which
+        # needs the per-server token (added by the MCP loader, never written
+        # here): 127.0.0.1:<port> for a bare-host gateway, or the sidecar's
+        # name on the gateway's own Docker network (no published port).
+        internal_url = self.endpoint_url(server_id, int(container_port))
+        display_url = internal_url
         slug = slugify(db_server["name"])
         server_name = wire_key(slug)
         approval = db_server.get("approval") or {}
@@ -1175,6 +1249,8 @@ class MCPServerManager:
             "url": internal_url,  # gateway-accessible URL
             "description": db_server.get("description") or f"MCP server: {db_server['name']}",
             "server_id": server_id,
+            # The endpoint token is added at load time from the vault, never stored here.
+            "auth": "built-server-token",
             "built": {
                 "display_name": f"built/{slug}",
                 "code_sha256": approval.get("code_sha256"),

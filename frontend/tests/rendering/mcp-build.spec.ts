@@ -28,7 +28,19 @@ const built = (id: string, state: string, label: string, extra = {}) => ({
   ...extra,
 });
 
-async function serve(page: Page, servers: unknown[] | null, status = 200) {
+async function serve(
+  page: Page,
+  servers: unknown[] | null,
+  status = 200,
+  events: unknown[] = [],
+) {
+  await page.route("**/api/mcp-studio/events", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ events }),
+    }),
+  );
   await page.route("**/api/tool-sources*", (route) =>
     route.fulfill({
       status: 200,
@@ -235,4 +247,32 @@ test("the builder switched off is said, not shown as nothing built", async ({
     "The MCP builder is off on this gateway",
   );
   await expect(page.getByTestId("built-empty")).toHaveCount(0);
+});
+
+test("#59: what the gateway retired is said on the board, names only", async ({
+  page,
+}) => {
+  await serve(page, [], 200, [
+    {
+      at: now,
+      event: "retired",
+      server_id: null,
+      name: "github-issue-connector",
+      details: { code_sha256: "a".repeat(64), env_names: ["GITHUB_TOKEN"] },
+    },
+    {
+      at: now,
+      event: "orphaned-secrets",
+      server_id: "gone1",
+      name: null,
+      details: { key_names: ["GITHUB_TOKEN", "SLACK_TOKEN"] },
+    },
+  ]);
+  const notices = page.getByTestId("gateway-notices");
+  await expect(notices).toContainText(
+    "Retired github-issue-connector: started before approvals were bound to code. Its code is kept",
+  );
+  await expect(notices).toContainText(
+    "Deleted 2 stored secrets (GITHUB_TOKEN, SLACK_TOKEN) left by a removed server.",
+  );
 });

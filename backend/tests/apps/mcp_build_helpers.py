@@ -9,7 +9,7 @@ import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_fakes import FakeDockerRunner
+from mcp_fakes import FakeDockerRunner, FakeImages
 
 DESCRIPTION = "list my open github issues"
 
@@ -40,10 +40,13 @@ def built(builder_gateway, monkeypatch):
     manager = app.state.mcp_server_manager
     runner = FakeDockerRunner()
     manager._runner = runner
+    manager._images = FakeImages()
     allow = AsyncMock(return_value=type("R", (), {"decision": "allow", "reason": "ok"})())
     patches = [
         patch("app.gateway.mcp_server_manager.scan_python_code", allow),
         patch.object(manager, "_run_server_sandbox_test", AsyncMock(return_value=TOOLS)),
+        # The fake runner starts nothing, so there is no endpoint to wait for.
+        patch.object(manager, "_wait_endpoint", AsyncMock(return_value=None)),
     ]
     for p in patches:
         p.start()

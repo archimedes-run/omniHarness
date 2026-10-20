@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.gateway.mcp_docker import DockerRunner
-from app.gateway.mcp_runtime import ASSEMBLER, LAUNCHER
+from app.gateway.mcp_runtime import ASSEMBLER, EGRESS_DIR, LAUNCHER
 
 RUNTIME_VERSION = "1"
 #: python:3.12-slim, linux/arm64, already in the local image store
@@ -39,6 +39,11 @@ DEFAULT_BASE_IMAGE = "sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e
 #: environment (a bare-host gateway on macOS, the tests): the gateway image.
 DEFAULT_PACKAGES_IMAGE = "omni-harness-dev-gateway:latest"
 DEFAULT_PACKAGES_PYTHON = "/app/backend/.venv/bin/python"
+
+EGRESS_VERSION = "1"
+#: The approved download (2026-10-20): Alpine 3.22 by digest (in the
+#: Dockerfile) and these exact packages from its main repository.
+EGRESS_PACKAGES = {"SQUID_VERSION": "6.12-r0", "DNSMASQ_VERSION": "2.91-r1", "OPENSSL_VERSION": "3.5.9-r0"}
 
 
 class RuntimeImageError(RuntimeError):
@@ -171,6 +176,44 @@ class RuntimeImages:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._record_path.write_text(json.dumps({"version": RUNTIME_VERSION, "image_id": found["Id"], "base": self.base_image, "packages": versions}, indent=2))
         return found["Id"]
+
+    @property
+    def egress_tag(self) -> str:
+        return f"{self.prefix}egress:{EGRESS_VERSION}"
+
+    async def egress_image_id(self) -> str:
+        """The verified Squid sidecar image ID, building it the first time.
+
+        The one build that uses the network: ``apk add`` of the pinned
+        packages onto the digest-pinned Alpine base (the approved download)."""
+        record_path = self.state_dir / f"{self.prefix}egress.json"
+        async with self._lock:
+            record = None
+            if record_path.exists():
+                try:
+                    record = json.loads(record_path.read_text())
+                except ValueError:
+                    record = None
+            if record and record.get("version") == EGRESS_VERSION:
+                found = await self._inspect(self.egress_tag)
+                labels = ((found or {}).get("Config") or {}).get("Labels") or {}
+                if found is None or found.get("Id") != record.get("image_id") or labels.get("omni.egress_version") != EGRESS_VERSION:
+                    raise RuntimeImageError(f"{self.egress_tag} no longer names the image recorded when it was built (removed or retagged?)")
+                return record["image_id"]
+            files = {name: (EGRESS_DIR / name).read_bytes() for name in ("Dockerfile", "entrypoint.sh")}
+            args = ["docker", "build", "--pull=false", "-t", self.egress_tag, *self._label_args({})]
+            for k, v in EGRESS_PACKAGES.items():
+                args += ["--build-arg", f"{k}={v}"]
+            args.append("-")
+            rc, _, err = await self.runner.run(args, stdin=_tar(files), timeout=600.0)
+            if rc != 0:
+                raise RuntimeImageError(f"building the egress image failed: {err.strip()[-400:]}")
+            found = await self._inspect(self.egress_tag)
+            if not found:
+                raise RuntimeImageError("the egress image was built but can't be inspected")
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            record_path.write_text(json.dumps({"version": EGRESS_VERSION, "image_id": found["Id"], "packages": EGRESS_PACKAGES}, indent=2))
+            return found["Id"]
 
     async def code_image_id(self, source: str, sha: str) -> str:
         """Build (or reuse) the image for exactly this code; returns its image

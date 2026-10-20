@@ -3,6 +3,7 @@ import { getBackendBaseURL } from "@/core/config";
 
 import type {
   ApprovalPacket,
+  BuildEvent,
   BuiltServer,
   BuiltServerList,
   StartBuildResponse,
@@ -76,4 +77,9 @@ export async function discardBuilt(id: string): Promise<void> {
   if (!response.ok && response.status !== 204) {
     throw new Error(`${response.status}: could not discard`);
   }
+}
+
+/** What the gateway retired or turned off on its own, newest first. */
+export async function listBuildEvents(): Promise<{ events: BuildEvent[] }> {
+  return json(await fetch(`${base()}/events`));
 }

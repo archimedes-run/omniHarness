@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
+.PHONY: help config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway vault-key vault-key-migrate
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -159,7 +159,7 @@ docker-init:
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh init
 
 # Start Docker development environment
-docker-start:
+docker-start: vault-key
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh start
 
 runtime-check:
@@ -184,7 +184,7 @@ docker-logs-gateway:
 # ==========================================
 
 # Build and start production services
-up:
+up: vault-key
 	@$(RUN_WITH_GIT_BASH) ./scripts/deploy.sh
 
 # Day-to-day use: the dev stack's gateway, watcher, nginx and data, with a
@@ -193,7 +193,17 @@ up:
 # provisioner sandbox mode uses (scripts/docker.sh makes the same choice).
 DAILY_COMPOSE = cd docker && OMNI_HARNESS_ROOT=$(CURDIR) docker compose --env-file ../.env -p omni-harness-dev -f docker-compose-dev.yaml
 
-daily:
+# The MCP builder's vault key (#59): a 0600 file outside the project, mounted
+# into the gateway only, as a compose secret. Created once; never overwritten.
+vault-key:
+	@cd backend && uv run python -m app.gateway.mcp_vault_migrate create
+
+# Move an old key (config.yaml mcp_builder.vault_key, or dev_vault.key) into
+# that file, with a NEW key: every stored secret is re-encrypted.
+vault-key-migrate:
+	@cd backend && uv run python -m app.gateway.mcp_vault_migrate migrate
+
+daily: vault-key
 	$(DAILY_COMPOSE) up -d gateway session-watcher nginx
 	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend
 

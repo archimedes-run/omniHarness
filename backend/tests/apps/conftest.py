@@ -18,8 +18,8 @@ from mcp_build_helpers import built  # noqa: F401  (the fixture, re-exported)
 EXAMPLE = Path(__file__).resolve().parents[3] / "config.example.yaml"
 
 
-@pytest.fixture
-def builder_gateway(tmp_path, monkeypatch):
+def _builder_config(tmp_path, monkeypatch, *, sandbox: dict | None = None, mcp_builder_extra: dict | None = None):
+    """Write the builder gateway's config (and environment) for create_app()."""
     from cryptography.fernet import Fernet
 
     from app.gateway.auth.config import AuthConfig, set_auth_config
@@ -32,7 +32,15 @@ def builder_gateway(tmp_path, monkeypatch):
     config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy")}
     config["trigger_engine"] = {"enabled": False}
     config.setdefault("memory", {})["enabled"] = False
-    config["mcp_builder"] = {"enabled": True, "vault_key": Fernet.generate_key().decode()}
+    # #59: the vault key is a 0600 file outside the project; the startup
+    # reconcile is off here (it would look at this machine's real Docker).
+    keyfile = tmp_path / "secrets" / "mcp_vault.key"
+    keyfile.parent.mkdir()
+    keyfile.write_bytes(Fernet.generate_key())
+    keyfile.chmod(0o600)
+    config["mcp_builder"] = {"enabled": True, "vault_key_file": str(keyfile), "reconcile_on_start": False, **(mcp_builder_extra or {})}
+    if sandbox:
+        config.setdefault("sandbox", {}).update(sandbox)
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
     extensions = tmp_path / "extensions.json"
@@ -45,11 +53,44 @@ def builder_gateway(tmp_path, monkeypatch):
     set_auth_config(AuthConfig(jwt_secret=os.environ["AUTH_JWT_SECRET"]))
 
     import app.gateway.deps as deps
-    from app.gateway.app import create_app
 
     monkeypatch.setattr(deps, "_cached_local_provider", None)
     monkeypatch.setattr(deps, "_cached_repo", None)
+    return extensions
 
+
+@pytest.fixture
+def builder_gateway_factory(tmp_path, monkeypatch):
+    """Start (and stop) a builder gateway with config overrides; startup
+    errors propagate, so a refusal to start can be asserted."""
+    from fastapi.testclient import TestClient as _Client
+
+    from app.gateway.app import create_app
+    from omniharness.config.app_config import reset_app_config
+    from omniharness.config.extensions_config import reset_extensions_config
+
+    def start(**overrides):
+        _builder_config(tmp_path, monkeypatch, **overrides)
+        try:
+            with _Client(create_app()):
+                pass
+        finally:
+            from omniharness.runtime.mcp.controller import set_mcp_build_controller
+
+            set_mcp_build_controller(None)
+            reset_app_config()
+            reset_extensions_config()
+
+    return start
+
+
+@pytest.fixture
+def builder_gateway(tmp_path, monkeypatch):
+    from app.gateway.app import create_app
+    from omniharness.config.app_config import reset_app_config
+    from omniharness.config.extensions_config import reset_extensions_config
+
+    extensions = _builder_config(tmp_path, monkeypatch)
     app = create_app()
     with TestClient(app) as client:
         resp = client.post("/api/v1/auth/initialize", json={"email": "owner@example.com", "password": "Str0ng!Pass99"})

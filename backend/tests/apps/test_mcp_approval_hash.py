@@ -101,20 +101,21 @@ def test_t5_a_pending_approval_with_no_container_is_not_approval(built) -> None:
 
 
 def test_t15_code_changed_while_turning_on_never_runs(built) -> None:
-    gw, sid, runner, _ = built
-    runner.hold_build = asyncio.Event()
-    runner.build_started = asyncio.Event()
+    gw, sid, runner, manager = built
+    images = manager._images
+    images.hold_build = asyncio.Event()
+    images.build_started = asyncio.Event()
     sha = server(gw, sid)["code_sha256"]
     resp = enable(gw, sid, sha=sha)
     assert resp.status_code == 200, resp.text
     deadline = time.monotonic() + 5
-    while not runner.build_started.is_set() and time.monotonic() < deadline:
+    while not images.build_started.is_set() and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert runner.build_started.is_set(), "the deploy never reached docker build"
+    assert images.build_started.is_set(), "the deploy never reached docker build"
 
     # While the image builds, the agent submits new code.
     submit(gw, sid, CODE_V2)
-    gw.client.portal.call(runner.hold_build.set)
+    gw.client.portal.call(images.hold_build.set)
 
     s = wait_for(gw, sid, {"turn_on_failed", "enabled"})
     assert s["state"] == "turn_on_failed", s

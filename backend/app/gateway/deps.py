@@ -98,9 +98,17 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
                 from app.gateway.mcp_secrets import McpSecretsVault, make_vault_key
                 from app.gateway.mcp_server_manager import MCPServerManager
 
+                # #59: host bash would give the agent (and anything that
+                # injects into it) the reach generated code is denied.
+                if getattr(getattr(config, "sandbox", None), "allow_host_bash", False):
+                    raise RuntimeError("mcp_builder is enabled while sandbox.allow_host_bash is true: turn one of them off.")
                 vault = McpSecretsVault(make_vault_key(mcp_builder_config), sf)
                 app.state.mcp_secrets_vault = vault
-                app.state.mcp_server_manager = MCPServerManager(app.state.mcp_server_repo, vault)
+                app.state.mcp_server_manager = MCPServerManager(app.state.mcp_server_repo, vault, reconcile_on_start=mcp_builder_config.reconcile_on_start)
+                # #59: the MCP loader asks the manager for a built server's endpoint token.
+                from omniharness.mcp.built_auth import set_built_token_provider
+
+                set_built_token_provider(app.state.mcp_server_manager.inbound_token)
             else:
                 app.state.mcp_secrets_vault = None
                 app.state.mcp_server_manager = None

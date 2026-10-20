@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { listBuiltServers } from "./api";
+import { listBuildEvents, listBuiltServers } from "./api";
 
 /** Built servers. Polls while one is drafting, building or turning on. */
 export function useBuiltServers() {
@@ -26,4 +26,14 @@ export function useBuiltServers() {
     isLoading: query.isLoading,
     error: query.error,
   };
+}
+
+/** What the gateway did on its own (retired, turned off). */
+export function useBuildEvents() {
+  const query = useQuery({
+    queryKey: ["buildEvents"],
+    queryFn: listBuildEvents,
+    retry: false,
+  });
+  return { events: query.data?.events, error: query.error };
 }
