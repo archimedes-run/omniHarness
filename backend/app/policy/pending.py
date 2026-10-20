@@ -186,6 +186,14 @@ class PendingStore:
         self.save(action)
         return action
 
+    def release_claim(self, action: PendingAction) -> PendingAction:
+        """Give back a claim taken for an all-or-nothing batch that did not
+        run ("Apply all" with a card that failed): the action is open again,
+        unresolved, exactly as before the claim."""
+        self._claim_path(action.id).unlink(missing_ok=True)
+        action.claimed_by = None
+        return self.save(action)
+
     def declined_in_thread(self, thread_id: str | None, owner_id: str | None) -> list[PendingAction]:
         """Actions this owner DECLINED in this thread (005 FR-009 Amendment 1:
         a declined suggestion stays declined in that chat)."""

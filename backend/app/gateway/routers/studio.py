@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from app.gateway.agent_runs_view import AgentRunsView, describe_agent_runs
 from app.gateway.authz import permission_dependency, require_permission
 from app.gateway.deps import get_config
+from app.gateway.display_safe import safe_field
 from omniharness.config.app_config import AppConfig
 
 router = APIRouter(prefix="/api/studio", tags=["studio"])
@@ -191,7 +192,13 @@ async def grant_uses(name: str, config: AppConfig = Depends(get_config)) -> list
     entries = PolicyAuditLog(path=Path(config.policy.state_dir) / "audit.jsonl", actor="default").entries()
     mine = [e for e in entries if e.get("kind") == "grant-use" and e.get("agent") == agent and e.get("user_id") == user_id]
     mine.sort(key=lambda e: e.get("at", ""), reverse=True)
-    return [GrantUse(**{k: e.get(k) for k in GrantUse.model_fields}) for e in mine[:50]]
+    out = []
+    for e in mine[:50]:
+        fields = {k: e.get(k) for k in GrantUse.model_fields}
+        fields["targets"] = [safe_field(t) for t in e.get("targets") or []]
+        fields["source_label"] = safe_field(e.get("source_label") or "")
+        out.append(GrantUse(**fields))
+    return out
 
 
 # -- a scheduled run's summary: what it did on its own, and Undo all --------
@@ -236,7 +243,17 @@ def _run_summary(request: Request, config: AppConfig, firing_id: str) -> RunSumm
     for e in sorted(mine, key=lambda e: e.get("at", "")):
         write_id = e.get("write_id")
         undone = bool(service is not None and write_id and service.write_undone(user_id=user_id, write_id=write_id))
-        writes.append(RunWrite(at=e.get("at", ""), tool=e.get("tool", ""), classes=e.get("classes") or [], targets=e.get("targets") or [], source_label=e.get("source_label") or "", write_id=write_id, undone=undone))
+        writes.append(
+            RunWrite(
+                at=e.get("at", ""),
+                tool=e.get("tool", ""),
+                classes=e.get("classes") or [],
+                targets=[safe_field(t) for t in e.get("targets") or []],
+                source_label=safe_field(e.get("source_label") or ""),
+                write_id=write_id,
+                undone=undone,
+            )
+        )
     return RunSummary(firing_id=firing_id, rule_id=mine[0].get("rule_id"), agent=mine[0].get("agent") or "", writes=writes, all_undone=all(w.undone for w in writes))
 
 

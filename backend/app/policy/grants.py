@@ -160,22 +160,114 @@ def _report_unversioned_grants(user_id: str, agent: str) -> None:
         logging.getLogger(__name__).warning("agent %s has grants %s in its config.yaml but no versioned Autonomy record; they are ignored until granted on its Autonomy tab", agent, on_disk)
 
 
-def _norm(value: Any) -> str:
-    return " ".join(str(value or "").split()).casefold()
+#: A small confusables skeleton (after NFKC and casefold) for the scripts a
+#: Latin title is most easily faked in: Cyrillic and Greek letters that look
+#: like Latin ones, and a few Latin/digit lookalikes, in the spirit of Unicode
+#: TR39's skeleton. No full confusables table is installed, and none is
+#: downloaded; this covers the common homoglyphs, and BEST EFFORT is what the
+#: rule promises (005 FR-009 Amendment 1).
+_CONFUSABLES = str.maketrans(
+    {
+        # Cyrillic
+        "а": "a",
+        "в": "b",
+        "е": "e",
+        "ё": "e",
+        "з": "3",
+        "и": "u",
+        "і": "i",
+        "ї": "i",
+        "ј": "j",
+        "к": "k",
+        "м": "m",
+        "н": "h",
+        "о": "o",
+        "п": "n",
+        "р": "p",
+        "с": "c",
+        "т": "t",
+        "у": "y",
+        "х": "x",
+        "ѕ": "s",
+        "ԁ": "d",
+        "һ": "h",
+        "ӏ": "l",
+        "ԛ": "q",
+        "ԝ": "w",
+        "ь": "b",
+        "ѵ": "v",
+        "ү": "y",
+        "ɡ": "g",
+        # Greek
+        "α": "a",
+        "β": "b",
+        "γ": "y",
+        "δ": "d",
+        "ε": "e",
+        "η": "n",
+        "ι": "i",
+        "κ": "k",
+        "μ": "u",
+        "ν": "v",
+        "ο": "o",
+        "ρ": "p",
+        "σ": "o",
+        "ς": "c",
+        "τ": "t",
+        "υ": "u",
+        "χ": "x",
+        "ω": "w",
+        "ϲ": "c",
+        "ϳ": "j",
+        # Latin and digit lookalikes
+        "ı": "i",
+        "ȷ": "j",
+        "ℓ": "l",
+        "0": "o",
+        "1": "l",
+        "|": "l",
+        "ß": "ss",
+    }
+)
+
+#: Defaults an op fills in when a change leaves them out: spelling the default
+#: out is the same write.
+_OP_DEFAULTS = {"create_task": {"status": "todo"}}
 
 
-def change_signatures(arguments: dict[str, Any]) -> set[tuple[str, ...]]:
-    """What a ledger_apply would do, normalised (case and whitespace): one
-    (op, project, task, title-or-note, status) per change. Two calls that
-    share any signature are "the same write" for the declined-stays-declined
-    rule, however the model rephrased the rest."""
+def canonical_text(value: Any) -> str:
+    """Text as the declined-stays-declined rule compares it: NFKC, casefold,
+    invisible and format characters (zero-width, joiners, bidi marks) removed,
+    common confusables mapped to Latin, punctuation and symbols folded to
+    spaces, whitespace collapsed."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    text = text.translate(_CONFUSABLES)
+    text = "".join(" " if unicodedata.category(ch)[0] in "PSZC" else ch for ch in text)
+    return " ".join(text.split())
+
+
+def change_signatures(arguments: dict[str, Any], resolve_project=None) -> set[tuple[str, ...]]:
+    """What a ledger_apply would do, canonicalised: one (op, project, task,
+    title-or-note, status) per change, with the op's defaults filled in and
+    the project resolved to its id when `resolve_project` can (a name and an
+    id of one project are then the same). Two calls that share any signature
+    are "the same write" for the declined-stays-declined rule. Best effort: a
+    paraphrase is a different write."""
     changes = arguments.get("changes")
     if not isinstance(changes, list):
         return set()
     out = set()
     for c in changes:
-        if isinstance(c, dict):
-            out.add((_norm(c.get("op")), _norm(c.get("project")), _norm(c.get("task")), _norm(c.get("title") or c.get("decided")), _norm(c.get("status"))))
+        if not isinstance(c, dict):
+            continue
+        op = canonical_text(c.get("op")).replace(" ", "_")
+        filled = {**_OP_DEFAULTS.get(op, {}), **{k: v for k, v in c.items() if v not in (None, "")}}
+        project = filled.get("project")
+        resolved = resolve_project(project) if (resolve_project is not None and project) else None
+        out.add((op, resolved or canonical_text(project), canonical_text(filled.get("task")), canonical_text(filled.get("title") or filled.get("decided")), canonical_text(filled.get("status"))))
     return out
 
 

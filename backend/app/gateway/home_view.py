@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
+from app.gateway.display_safe import safe_field
 from app.gateway.home_sources import CalendarView, Known, SourceItem, SourceState
 from app.gateway.inbox_view import describe_alerts
 from app.trigger_engine.models import Rule, TriggerType
@@ -161,7 +162,7 @@ def describe_change(change: dict, project_names: dict[str, str]) -> MovedItem | 
         text = f"{kind} linked to {project}" if before is None else f"{kind} unlinked from {project}"
     else:
         return None
-    return MovedItem(at=str(change.get("at", "")), source="ledger", text=text, by=_BY.get(change.get("actor", ""), None), project_id=project_id)
+    return MovedItem(at=str(change.get("at", "")), source="ledger", text=safe_field(text), by=_BY.get(change.get("actor", ""), None), project_id=project_id)
 
 
 def _when(at: str) -> datetime:
@@ -191,6 +192,6 @@ def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str],
         sources[name] = state
         for it in found or []:
             if _when(it.at) >= since:
-                items.append(MovedItem(at=it.at, source=it.source, text=it.text, known=it.known, url=it.url))
+                items.append(MovedItem(at=it.at, source=it.source, text=safe_field(it.text), known=it.known, url=it.url))
     items.sort(key=lambda i: _when(i.at), reverse=True)
     return MovedView(items=items[:MOVED_LIMIT], sources=sources)
