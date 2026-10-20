@@ -140,6 +140,7 @@ function MyMcpsTab() {
   const [servers, setServers] = useState<MyMcp[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -182,9 +183,20 @@ function MyMcpsTab() {
       });
       if (res.ok || res.status === 204) {
         setServers((prev) => prev.filter((s) => s.id !== id));
+        setDeleteError(null);
+      } else {
+        // e.g. 502: the container could not be removed, so nothing was deleted.
+        let detail = res.statusText;
+        try {
+          const body = (await res.json()) as { detail?: unknown };
+          if (typeof body.detail === "string") detail = body.detail;
+        } catch {
+          // the status line is all there is
+        }
+        setDeleteError(`Not deleted: ${detail}`);
       }
     } catch {
-      // silently ignore — server might be unreachable
+      setDeleteError("Not deleted: the server could not be reached.");
     } finally {
       setDeletingId(null);
     }
@@ -200,6 +212,11 @@ function MyMcpsTab() {
         <h2 className="text-foreground text-sm font-semibold">
           Agent-Built Servers
         </h2>
+        {deleteError && (
+          <p role="alert" className="text-destructive text-sm">
+            {deleteError}
+          </p>
+        )}
         {/* Filters */}
         <div className="flex items-center gap-3">
           <div className="relative flex-1">

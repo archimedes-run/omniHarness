@@ -151,3 +151,46 @@ for (const scheme of ["light", "dark"] as const) {
     });
   });
 }
+
+test("a delete the gateway refuses is said in words, and the server stays", async ({
+  page,
+}) => {
+  await page.route("**/api/**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+  );
+  await page.route("**/api/mcp-studio/servers?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ servers: [SERVER], total: 1 }),
+    }),
+  );
+  await page.route("**/api/mcp-studio/servers/weather", (route) =>
+    route.request().method() === "DELETE"
+      ? route.fulfill({
+          status: 502,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail:
+              "The server was not deleted: docker rm omni-mcp-weather failed: permission denied",
+          }),
+        })
+      : route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(SERVER),
+        }),
+  );
+  await page.goto("/workspace/connections?tab=build", {
+    waitUntil: "networkidle",
+  });
+  await page.getByTitle("Delete").first().click();
+  await page.getByTitle("Confirm delete").click();
+  // (Next's route announcer is also role=alert.)
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Not deleted" }),
+  ).toContainText(
+    "Not deleted: The server was not deleted: docker rm omni-mcp-weather failed: permission denied",
+  );
+  await expect(page.getByText("weather-server")).toBeVisible();
+});
