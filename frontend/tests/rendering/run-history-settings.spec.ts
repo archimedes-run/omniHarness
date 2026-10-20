@@ -145,4 +145,7 @@ test("retention says it covers the automations' conversations", async ({
   await expect(page.getByTestId("run-history-settings")).toContainText(
     "the automation starts a fresh conversation (forgetting earlier runs)",
   );
+  await expect(page.getByTestId("run-history-settings")).toContainText(
+    "it is kept, with only the content older than the retention removed",
+  );
 });

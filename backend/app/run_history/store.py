@@ -266,8 +266,26 @@ TRIGGER = "trigger"  # the prompt an automation injected, exactly its rule's tex
 #: The injected prompt with EVENT text rendered into it (a mail subject, a
 #: session's message): written by whoever sent that event, so untrusted.
 TRIGGER_WITH_EVENT = "trigger_with_untrusted_event"
-#: A person's message that arrived in the thread during an automation's turn.
+#: A person's message that arrived in the thread during an automation's turn
+#: (only when the server tagged it as a user turn).
 CONCURRENT_USER = "user_concurrent"
+#: A human-typed message during an automation's turn that is NOT tagged as a
+#: person's: harness-injected (summary, image, reminder) or unverifiable.
+UNVERIFIED_HUMAN = "untrusted_injected_or_unverified"
+
+
+def _is_tagged_user_turn(message: dict) -> bool:
+    """The server's user-turn tag (security baseline: is_user_turn). A message
+    with a harness `name` is never a person's."""
+    if message.get("name"):
+        return False
+    try:
+        from app.gateway.user_turn import is_user_turn  # the baseline's helper, once rebased
+    except ImportError:
+        return False
+    return bool(is_user_turn(message))
+
+
 USER = "user"  # a person's message
 ASSISTANT = "assistant"  # the model's own output, tool calls included
 SYSTEM = "system"
@@ -303,7 +321,12 @@ def with_provenance(body: Any, *, first_human: str = USER) -> Any:
             if not seen_human:
                 label, seen_human = first_human, True
             elif first_human in (TRIGGER, TRIGGER_WITH_EVENT):
-                label = CONCURRENT_USER
+                # Later human messages in an automation turn: a person writing
+                # mid-run, OR harness middleware (summaries, viewed images,
+                # todo reminders, preview errors) which also arrive as human
+                # messages. Only a server-set user-turn tag can tell them
+                # apart; without it, never claim a person wrote it.
+                label = CONCURRENT_USER if _is_tagged_user_turn(m) else UNVERIFIED_HUMAN
         out.append({**m, "provenance": label})
     return {**body, "messages": out}
 
@@ -352,6 +375,10 @@ class RunHistory:
         self._now = now or (lambda: datetime.now(UTC))
         self._lock = threading.Lock()
         with self._connect() as c:
+            # WAL, so readers never block the recorder; every purge and delete
+            # ends with a TRUNCATE checkpoint so the WAL file holds no copy of
+            # what was removed (see _flush_wal).
+            c.execute("PRAGMA journal_mode = WAL")
             c.executescript(_SCHEMA)
             # A store created before owners were stored: add the column. Its
             # rows keep a NULL owner, which the ownership rule gives to the
@@ -437,12 +464,14 @@ class RunHistory:
         # purge hold over rows AND blobs: a delete can never land between the
         # two and leave a row naming a blob that is gone (or a stray blob).
         with self._lock, self._connect() as c:
-            if blob_name:
-                self._write_blob(blob_name, encoded)
+            # Row FIRST, blob second, one transaction: a failed insert never
+            # leaves a blob; a failed blob write rolls the row back.
             c.execute(
                 "INSERT INTO runs (id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size, body, blob, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, kind, source_id, event_id, thread_id, started, _utc(finished_at).isoformat() if finished_at else None, status, clean_error, len(encoded) + extra, None if blob_name else data, blob_name, owner_id),
             )
+            if blob_name:
+                self._write_blob(blob_name, encoded)
         return run_id
 
     def _write_blob(self, name: str, data: bytes) -> None:
@@ -476,7 +505,22 @@ class RunHistory:
             for row in rows:
                 if row["blob"]:
                     _shred(self.blobs / row["blob"])
+            # A blob no row names (a crash between the two, or an older
+            # version's write order) is shredded too, never kept forever.
+            named = {r[0] for r in c.execute("SELECT blob FROM runs WHERE blob IS NOT NULL")}
+            for f in self.blobs.glob("*.json"):
+                if f.name not in named:
+                    _shred(f)
+        self._flush_wal()
         return len(rows)
+
+    def _flush_wal(self) -> None:
+        """Copy the WAL into the (secure_delete) database and truncate it to
+        zero bytes. What can still remain, said plainly: blocks the filesystem
+        or SSD kept from before (copy-on-write, wear levelling) and any backup
+        or snapshot of this directory; this is deletion, not forensic erasure."""
+        with self._lock, self._connect() as c:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def delete_all(self) -> int:
         """Delete every run and every blob file. Returns how many runs."""
@@ -489,6 +533,7 @@ class RunHistory:
                     _shred(f)
         with self._lock, self._connect() as c:
             c.execute("VACUUM")
+        self._flush_wal()
         return int(n)
 
     # -- reads ------------------------------------------------------------
@@ -565,6 +610,9 @@ class RunHistory:
             pending = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE pending_delete = 1")}
             orphans = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE thread_id NOT IN (SELECT thread_id FROM runs WHERE thread_id IS NOT NULL)")}
         return sorted(pending | (orphans - mapped))
+
+    def retention_cutoff(self) -> datetime:
+        return _utc(self._now()) - timedelta(days=self.retention_days())
 
     def threads_past_retention(self) -> set[str]:
         """Ledger threads holding content older than the retention: the

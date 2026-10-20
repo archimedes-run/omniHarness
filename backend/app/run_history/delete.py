@@ -40,6 +40,7 @@ deleted is reported by id, never reported as deleted.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,8 @@ class DeleteResult:
     runs: int
     threads_deleted: list[str] = field(default_factory=list)
     threads_failed: dict[str, str] = field(default_factory=dict)
+    #: Kept, with only content inside the retention: a person wrote in them.
+    threads_trimmed: list[str] = field(default_factory=list)
 
 
 def _rule_map(app):
@@ -139,6 +142,12 @@ async def delete_thread_everywhere(app, thread_id: str) -> None:
     if store is not None:
         await store.delete(thread_id, user_id=None)
 
+    # Re-check: a run (a person's, on any worker) that wrote to the thread
+    # during the delete leaves a checkpoint behind. Then it is NOT gone: raise,
+    # so it is reported and retried, never reported as deleted.
+    if checkpointer is not None and await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}) is not None:
+        raise ThreadsBusy([thread_id])
+
 
 async def _locked(app, work, *, refuse: bool = True):
     """Run `work(rule_map, run)` holding the cross-process firing lock: on the
@@ -165,12 +174,89 @@ async def _locked(app, work, *, refuse: bool = True):
     return await asyncio.to_thread(critical)
 
 
-def _delete_ledgered(app, history, rule_map, run, thread_ids, result: DeleteResult) -> None:
+def _is_person(message: Any) -> bool:
+    """Could this message be a person's own? A human message that is not the
+    engine's injected prompt (signed turn id) and carries no harness `name`
+    (summary, todo_reminder...). Conservative: when unsure, keep it."""
+    from app.gateway.internal_auth import TURN_ID_PREFIX
+
+    get = message.get if isinstance(message, dict) else (lambda k, d=None: getattr(message, k, d))
+    kind = get("type") or get("role")
+    mid = get("id") or ""
+    return kind in ("human", "user") and not get("name") and not str(mid).startswith(TURN_ID_PREFIX)
+
+
+def _message_key(message: Any) -> str:
+    get = message.get if isinstance(message, dict) else (lambda k, d=None: getattr(message, k, d))
+    return str(get("id") or "") or json.dumps([get("type"), get("content")], default=str, sort_keys=True)
+
+
+async def trim_thread(app, thread_id: str, cutoff) -> bool:
+    """Retention for a thread a PERSON also wrote in: remove only content older
+    than `cutoff`, keep the conversation. Each message's age is the time of the
+    first checkpoint that holds it. When a person's message remains, every
+    checkpoint is deleted and ONE new checkpoint holding only the messages
+    inside the window (and the title) is written; run traces and run records
+    older than the cutoff go too. Returns True when the thread was kept
+    (trimmed); False when no person's message is inside the window, so the
+    caller deletes the whole thread."""
+    from datetime import UTC, datetime
+
+    cp = getattr(app.state, "checkpointer", None)
+    if cp is None:
+        return False
+    cfg = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    tuples = [t async for t in cp.alist(cfg)]
+    if not tuples:
+        return False
+    first: dict[str, datetime] = {}
+    for t in tuples:
+        ts = datetime.fromisoformat(str(t.checkpoint.get("ts")))
+        ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts
+        for m in (t.checkpoint.get("channel_values") or {}).get("messages") or []:
+            k = _message_key(m)
+            first[k] = min(first.get(k, ts), ts)
+    latest = tuples[0]
+    messages = (latest.checkpoint.get("channel_values") or {}).get("messages") or []
+    recent = [m for m in messages if first.get(_message_key(m), cutoff) >= cutoff]
+    if not any(_is_person(m) for m in recent):
+        return False
+    checkpoint = dict(latest.checkpoint)
+    values = {"messages": recent}
+    if "title" in (latest.checkpoint.get("channel_values") or {}):
+        values["title"] = latest.checkpoint["channel_values"]["title"]
+    checkpoint["channel_values"] = values
+    await cp.adelete_thread(thread_id)
+    await cp.aput(cfg, checkpoint, dict(latest.metadata or {}), {})
+    runs = getattr(app.state, "run_store", None)
+    events = getattr(app.state, "run_event_store", None)
+    if runs is not None:
+        for r in await runs.list_by_thread(thread_id, user_id=None, limit=10_000):
+            created = str(r.get("created_at") or "")
+            if created and datetime.fromisoformat(created).replace(tzinfo=datetime.fromisoformat(created).tzinfo or UTC) < cutoff:
+                if events is not None:
+                    await events.delete_by_run(thread_id, r["run_id"])
+                await runs.delete(r["run_id"])
+    return True
+
+
+def _delete_ledgered(app, history, rule_map, run, thread_ids, result: DeleteResult, *, trim_before=None) -> None:
     """Delete each ledger thread; the ledger row goes only when the thread is
-    really gone, so a failure is retried by the next call or the startup sweep."""
+    really gone, so a failure is retried by the next call or the startup sweep.
+    With `trim_before` (retention, not "Delete run history"), a thread a person
+    wrote in within the window is trimmed instead (see trim_thread)."""
     mapped = {rule: rule_map.thread_of(rule) for rule in rule_map.known_rules()}
     for tid in sorted(thread_ids):
         try:
+            if trim_before is not None and run(trim_thread(app, tid, trim_before)):
+                # Kept in the ledger: still the engine's thread, so "Delete run
+                # history" deletes it (the dialog says: including what you
+                # wrote in it). Trimming again finds nothing older to remove.
+                result.threads_trimmed.append(tid)
+                for rule, mapped_tid in mapped.items():
+                    if mapped_tid == tid:
+                        rule_map.forget(rule)
+                continue
             run(delete_thread_everywhere(app, tid))
         except Exception as exc:  # noqa: BLE001 — reported per thread, by id
             logger.exception("run history: deleting automation thread %s failed", tid)
@@ -241,7 +327,12 @@ async def sweep_threads(app) -> DeleteResult | None:
         todo = sorted(set(history.threads_to_sweep(mapped)) | (stale - mapped))
         result = DeleteResult(runs=0)
         busy = set(run(_busy(app, set(todo))))
-        _delete_ledgered(app, history, rule_map, run, [t for t in todo if t not in busy], result)
+        # A delete that failed is finished whole; retention trims or deletes.
+        pending = {t for t, row in history.ledger_threads().items() if row["pending_delete"]}
+        ready = [t for t in todo if t not in busy]
+        cutoff = history.retention_cutoff()
+        _delete_ledgered(app, history, rule_map, run, [t for t in ready if t in pending], result)
+        _delete_ledgered(app, history, rule_map, run, [t for t in ready if t not in pending], result, trim_before=cutoff)
         if result.threads_deleted or result.threads_failed:
             logger.info("run history: swept %d automation thread(s), %d failed", len(result.threads_deleted), len(result.threads_failed))
         return result

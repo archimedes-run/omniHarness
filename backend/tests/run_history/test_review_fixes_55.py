@@ -14,6 +14,7 @@ import pytest
 
 from app.run_history.store import RunHistory, default_redactor
 from omniharness.utils.known_secrets import KNOWN_SECRETS, register_secret
+from omniharness.utils.known_secrets import environ_secrets as _REAL_ENVIRON_SECRETS
 
 CONTENT = "AUTOMATION-THREAD-CONTENT-FIX-55"
 
@@ -31,9 +32,11 @@ def _tweak(state):
     return tweak
 
 
-def _thread(client, text=CONTENT) -> str:
+def _thread(client, text=CONTENT, kind="ai") -> str:
+    """A thread holding `text`: as the automation's own output (an AI message)
+    by default, or as a person's message (kind="human")."""
     tid = client.post("/api/threads", json={"metadata": {}}).json()["thread_id"]
-    assert client.post(f"/api/threads/{tid}/state", json={"values": {"messages": [{"type": "human", "content": text}]}}).status_code == 200
+    assert client.post(f"/api/threads/{tid}/state", json={"values": {"messages": [{"type": kind, "content": text}]}}).status_code == 200
     return tid
 
 
@@ -42,7 +45,7 @@ def test_a_map_entry_the_engine_did_not_create_is_never_deleted(make_gateway, tm
     rule forgets it, and the response names it."""
     state = tmp_path / "triggers"
     with make_gateway(_tweak(state)) as (client, _):
-        chat = _thread(client, f"{CONTENT} my own chat")
+        chat = _thread(client, f"{CONTENT} my own chat", kind="human")
         state.mkdir(parents=True, exist_ok=True)
         (state / "threads.json").write_text(json.dumps({"inbox": chat}))
         resp = client.delete("/api/run-history/runs", params={"confirm": "delete-all"}).json()
@@ -93,14 +96,14 @@ def test_the_engine_notes_each_thread_it_creates(tmp_path) -> None:
     reset_extensions_config()
 
 
-def test_a_person_writing_during_a_firing_is_labelled_concurrent(tmp_path) -> None:
+def test_a_human_message_during_a_firing_is_not_claimed_as_a_person(tmp_path) -> None:
     from app.run_history.recorder import automation_recorder
 
     h = RunHistory(tmp_path / "h", redact=lambda t: (t, True))
     automation_recorder(h)({"rule_id": "r", "body": {"prompt": "p", "prompt_template": "p", "messages": [{"type": "human", "content": "p"}, {"type": "human", "content": "me, mid-run"}, {"type": "ai", "content": "ok"}]}})
     (run,) = h.list()
     labels = [m["provenance"] for m in h.get(run.id)["body"]["messages"]]
-    assert labels == ["trigger", "user_concurrent", "assistant"]
+    assert labels == ["trigger", "untrusted_injected_or_unverified", "assistant"]
 
 
 def test_the_internal_auth_token_is_a_known_secret(gateway) -> None:
@@ -266,3 +269,126 @@ def test_a_purged_run_ages_its_live_thread_so_it_rotates(make_gateway, tmp_path)
         assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
         assert not _content(client, tid)
         assert json.loads((state / "threads.json").read_text()) == {}
+
+
+def test_retention_trims_a_thread_a_person_wrote_in(make_gateway, tmp_path) -> None:
+    """A deleted rule's thread: automation content from 40 days ago, and a
+    person's message from today. Retention keeps the thread and the person's
+    message, and removes the old content from every checkpoint."""
+    from datetime import timedelta
+
+    from langgraph.checkpoint.base import empty_checkpoint
+
+    state = tmp_path / "triggers"
+    with make_gateway(_tweak(state)) as (client, _):
+        tid = client.post("/api/threads", json={"metadata": {}}).json()["thread_id"]
+        cp = client.app.state.checkpointer
+        cfg = {"configurable": {"thread_id": tid, "checkpoint_ns": ""}}
+        old_msg = {"type": "ai", "content": "OLD-AUTOMATION-CONTENT", "id": "m-old"}
+        mine = {"type": "human", "content": "MY-RECENT-NOTE", "id": "m-mine"}
+
+        async def seed():
+            c1 = empty_checkpoint()
+            c1["ts"] = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+            c1["channel_values"] = {"messages": [old_msg]}
+            await cp.aput(cfg, c1, {}, {})
+            c2 = empty_checkpoint()
+            c2["channel_values"] = {"messages": [old_msg, mine]}
+            await cp.aput(cfg, c2, {}, {})
+
+        client.portal.call(seed)
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "threads.json").write_text("{}")
+        client.app.state.run_history.record(kind="automation", source_id="gone", thread_id=tid, body={}, status="completed", started_at=datetime.now(UTC) - timedelta(days=40))
+
+        assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
+
+        async def everything():
+            return json.dumps([t.checkpoint for t in [t async for t in cp.alist(cfg)]], default=str)
+
+        all_checkpoints = client.portal.call(everything)
+        assert "MY-RECENT-NOTE" in all_checkpoints, "the person's recent message was removed"
+        assert "OLD-AUTOMATION-CONTENT" not in all_checkpoints, "content past the retention stayed in the thread"
+
+
+def test_a_hook_key_registers_its_url_even_with_a_plain_path() -> None:
+    from omniharness.utils.known_secrets import secret_values_in
+
+    url = "https://alerts.example.com/hooks/team-alerts"
+    assert url in secret_values_in({"TEAM_HOOK_URL": url}, all_values=True)
+
+
+def test_a_url_with_a_token_path_under_an_ordinary_key_registers_the_segment() -> None:
+    from omniharness.utils.known_secrets import secret_values_in
+
+    seg = "Q8vR2kLm9Tx4WpB7nYc3HdF6s"
+    found = secret_values_in({"endpoint": f"https://api.example.com/v1/{seg}/events"})
+    assert seg in found
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "&#90;q8vR2/kLm9+Tx4WpB7nYc3HdF6sJ0aEfake",  # HTML numeric entity
+        "Zq8vR2/kLm9=2BTx4WpB7nYc3HdF6sJ0aEfake",  # quoted-printable '+'
+        "Zq8vR2/kLm9+Tx4Wp=\r\nB7nYc3HdF6sJ0aEfake",  # quoted-printable soft break
+    ],
+)
+def test_html_entity_and_quoted_printable_forms(tmp_path, form) -> None:
+    secret = "Zq8vR2/kLm9+Tx4WpB7nYc3HdF6sJ0aEfake"
+    register_secret(secret, "test")
+    h = RunHistory(tmp_path / "h", redact=default_redactor())
+    rid = h.record(kind="a", source_id="r", status="completed", body={"t": f"mail: {form} end"})
+    assert "fake" not in h.get(rid)["body"]["t"]
+
+
+def test_a_webhook_url_in_the_environment_is_registered() -> None:
+    # The real function (conftest replaces the module attribute per test).
+    url = "https://alerts.example.com/hooks/team-alerts"
+    assert url in _REAL_ENVIRON_SECRETS({"TEAM_WEBHOOK_URL": url, "HOME": "/Users/x"})
+
+
+def test_purge_shreds_a_blob_no_row_names(tmp_path) -> None:
+    h = RunHistory(tmp_path / "h", redact=lambda t: (t, True))
+    (h.blobs / "0123abcd.json").write_text("ORPHAN-BLOB-CONTENT")
+    h.purge()
+    assert not (h.blobs / "0123abcd.json").exists()
+
+
+def test_a_thread_written_during_its_delete_is_reported_not_deleted(make_gateway, tmp_path) -> None:
+    """Another run writes to the thread while it is being deleted: the
+    re-check finds the new checkpoint; the thread is reported failed (and
+    retried), never reported as deleted."""
+    from langgraph.checkpoint.base import empty_checkpoint
+
+    state = tmp_path / "triggers"
+    with make_gateway(_tweak(state)) as (client, _):
+        tid = _thread(client)
+        h = client.app.state.run_history
+        h.record(kind="automation", source_id="r", thread_id=tid, body={}, status="completed")
+        cp = client.app.state.checkpointer
+        store = client.app.state.thread_store
+        real_delete = store.delete
+
+        async def delete_then_someone_writes(thread_id, **kw):
+            await real_delete(thread_id, **kw)
+            c = empty_checkpoint()
+            c["channel_values"] = {"messages": [{"type": "human", "content": "written mid-delete"}]}
+            await cp.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, c, {}, {})
+
+        store.delete = delete_then_someone_writes
+        resp = client.delete("/api/run-history/runs", params={"confirm": "delete-all"}).json()
+        store.delete = real_delete
+        assert resp["threads_failed"] == [tid] and resp["threads_deleted"] == 0
+        assert tid in h.ledger_threads(), "a thread written during its delete was dropped from the ledger"
+
+
+def test_a_failed_insert_writes_no_blob_at_all(tmp_path) -> None:
+    import sqlite3
+
+    h = RunHistory(tmp_path / "h", redact=lambda t: (t, True))
+    with sqlite3.connect(h.db) as c:
+        c.execute("CREATE TRIGGER boom BEFORE INSERT ON runs BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+    with pytest.raises(sqlite3.DatabaseError):
+        h.record(kind="a", source_id="r", status="completed", body={"t": "B" * 70_000})
+    assert not list(h.blobs.glob("*.json")), "the blob was written before its row"

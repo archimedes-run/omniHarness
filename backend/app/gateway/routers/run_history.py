@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from app.gateway.authz import require_permission
 
@@ -19,7 +19,8 @@ router = APIRouter(prefix="/api/run-history", tags=["run-history"])
 
 
 class RetentionSettings(BaseModel):
-    retention_days: int = Field(ge=1, le=3650)
+    #: Strict: `true` is not 1 day, and "30" is not 30.
+    retention_days: StrictInt = Field(ge=1, le=3650)
 
 
 class HistorySettings(RetentionSettings):

@@ -49,7 +49,9 @@ export function RunHistorySettings() {
         Secrets are redacted before anything is stored. The retention also
         applies to each automation&apos;s conversation: once its oldest content
         is past it, the automation starts a fresh conversation (forgetting
-        earlier runs) and the old one is deleted.
+        earlier runs) and the old one is deleted. If you wrote in that
+        conversation within the retention, it is kept, with only the content
+        older than the retention removed.
       </p>
       {error != null && (
         <Alert variant="destructive">
