@@ -472,6 +472,95 @@ async def undo_custom_skill(skill_name: str, request: SkillUndoRequest, config: 
     return await custom_skill_versions(name, config)
 
 
+class SkillTestRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2_000, description="A message a user might send")
+    tries: int = Field(3, ge=1, le=3, description="How many times to ask the model (each is a model call)")
+    agent_name: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9-]+$", description="Test as this agent (its skills, model and instructions); default the lead agent")
+
+
+class SkillTestTry(BaseModel):
+    loaded: bool
+    #: Other skills the model opened on this try, by name.
+    other_skills: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class SkillTestResponse(BaseModel):
+    skill: str
+    model: str = Field(..., description="The configured model that was asked, the one a run would use")
+    listed: bool = Field(..., description="Whether the skill is in the list a run's prompt shows (off, or outside the agent's skills, means never)")
+    tries: list[SkillTestTry]
+    loaded: int
+    total: int
+
+
+@router.post("/skills/{skill_name}/test", response_model=SkillTestResponse, summary="Test whether a message makes the model load this skill")
+async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConfig = Depends(get_config)) -> SkillTestResponse:
+    """Runs ONLY when asked (a button press), and never writes.
+
+    There is no selection function to call: at runtime the model reads each
+    skill's description in the lead prompt's <skill_system> and opens a
+    skill's SKILL.md with read_file. So this sends the message through that
+    same path: the prompt from apply_prompt_template (the function the lead
+    agent is built with), the model _resolve_model_name picks, built by
+    create_chat_model, offered the run's own tools, a few times. It reports
+    what it OBSERVED per try: a read_file call on this skill's SKILL.md."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from omniharness.agents.lead_agent.agent import _resolve_model_name
+    from omniharness.agents.lead_agent.prompt import apply_prompt_template, get_enabled_skills_for_config
+    from omniharness.config.agents_config import load_agent_config
+    from omniharness.models import create_chat_model
+    from omniharness.tools.tools import get_available_tools
+
+    skill_name = skill_name.replace("\r\n", "").replace("\n", "")
+    skills = get_or_new_skill_storage(app_config=config).load_skills(enabled_only=False)
+    skill = next((s for s in skills if s.name == skill_name), None)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    agent_cfg = None
+    if request.agent_name:
+        try:
+            agent_cfg = load_agent_config(request.agent_name.lower())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Agent '{request.agent_name}' not found")
+    available = set(agent_cfg.skills) if agent_cfg and agent_cfg.skills is not None else None
+    enabled = {s.name for s in get_enabled_skills_for_config(config)}
+    listed = skill.name in enabled and (available is None or skill.name in available)
+    model_name = _resolve_model_name(agent_cfg.model if agent_cfg else None, app_config=config)
+    if not listed:
+        # A run's prompt never shows it, so no model call could load it.
+        return SkillTestResponse(skill=skill.name, model=model_name, listed=False, tries=[], loaded=0, total=0)
+
+    container = config.skills.container_path
+    paths = {s.get_container_file_path(container): s.name for s in skills}
+    system = apply_prompt_template(agent_name=agent_cfg.name if agent_cfg else None, available_skills=available, app_config=config)
+    tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config)
+    try:
+        model = create_chat_model(name=model_name, thinking_enabled=False, app_config=config).bind_tools(tools)
+    except Exception as exc:  # noqa: BLE001 — said, not hidden
+        raise HTTPException(status_code=502, detail=f"The model could not be set up: {type(exc).__name__}: {exc}")
+
+    tries: list[SkillTestTry] = []
+    for _ in range(request.tries):
+        try:
+            reply = await model.ainvoke([SystemMessage(content=system), HumanMessage(content=request.message)], config={"run_name": "skill_test"})
+        except Exception as exc:  # noqa: BLE001 — one failed try is reported, not fatal
+            tries.append(SkillTestTry(loaded=False, error=f"{type(exc).__name__}: {exc}"))
+            continue
+        opened = []
+        for call in getattr(reply, "tool_calls", None) or []:
+            if call.get("name") != "read_file":
+                continue
+            path = str((call.get("args") or {}).get("path") or "")
+            name = paths.get(path) or next((n for p, n in paths.items() if path.endswith(p.split(container, 1)[-1])), None)
+            if name and name not in opened:
+                opened.append(name)
+        tries.append(SkillTestTry(loaded=skill.name in opened, other_skills=[n for n in opened if n != skill.name]))
+    return SkillTestResponse(skill=skill.name, model=model_name, listed=True, tries=tries, loaded=sum(t.loaded for t in tries), total=len(tries))
+
+
 @router.get(
     "/skills/{skill_name}",
     response_model=SkillResponse,
