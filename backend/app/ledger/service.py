@@ -167,7 +167,9 @@ class LedgerService:
                         due_date=_date(c.get("due_date"), "due_date"),
                         owner=_owner(c.get("owner")),
                         goal_id=self._goal(s, project, c["goal"], goal_refs) if c.get("goal") else None,
-                        declared_files=list(c.get("declared_files") or []),
+                        # Not the model's to set: it is not in the tool's
+                        # contract and names paths evidence is matched on.
+                        declared_files=[],
                     )
                     if thread_id and c.get("todo_ref"):
                         self.repo.link(s, owner_id=user_id, actor=actor, from_kind="task", from_id=row["id"], to_kind="thread", to_ref=thread_id, todo_ref=str(c["todo_ref"])[:300])
@@ -220,19 +222,32 @@ class LedgerService:
             if self.repo.changes_caused_by(s, user_id, f"undo:{write_id}"):
                 raise LedgerError("this was already undone")
             stamp = {"owner_id": user_id, "actor": "user", "pending_action_id": f"undo:{write_id}"}
+            # Per entity the write touched: what it was BEFORE the write (its
+            # first change's `before`; None if the write created it) and what
+            # the write LEFT (its last change's `after`). Only the latter is
+            # checked against the row now, so an entity touched twice in one
+            # write (or created and then updated) undoes cleanly, and a later
+            # edit by anyone still refuses the whole undo.
+            entities: dict[tuple[str, str], dict] = {}
+            for change in changes:
+                key = (change["entity"], change["entity_id"])
+                slot = entities.setdefault(key, {"before": change["before"], "after": change["after"]})
+                slot["after"] = change["after"]
             try:
-                for change in reversed(changes):
-                    entity, before, after = change["entity"], change["before"], change["after"]
+                for (entity, entity_id), slot in reversed(list(entities.items())):
+                    before, after = slot["before"], slot["after"]
                     version = (after or {}).get("version")
+                    if after is None:
+                        raise LedgerError(f"the {entity} it touched is gone")
                     if before is None:  # it was created: remove it
-                        if not self.repo.remove(s, entity, change["entity_id"], version=version, **stamp):
+                        if not self.repo.remove(s, entity, entity_id, version=version, **stamp):
                             raise LedgerError(f"the {entity} it created is already gone")
                         done.append(f"Removed the {entity} “{after.get('title') or after.get('decided') or after.get('name') or entity}”.")
-                    elif after is not None:  # it was changed: put the fields back
+                    else:  # it was changed: put the fields back
                         fields = {k: before[k] for k in after if k in before and before[k] != after[k] and k not in ("version", "updated_at", "created_at", "done_at")}
                         if "due_date" in fields and isinstance(fields["due_date"], str):
                             fields["due_date"] = date.fromisoformat(fields["due_date"])
-                        if self.repo.update(s, entity, change["entity_id"], version=version, **stamp, **fields) is None:
+                        if self.repo.update(s, entity, entity_id, version=version, **stamp, **fields) is None:
                             raise LedgerError(f"the {entity} it changed is gone")
                         done.append(f"Put back {after.get('short_id') or entity} as it was.")
             except StaleWrite as exc:

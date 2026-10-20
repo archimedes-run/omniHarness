@@ -172,6 +172,24 @@ def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) ->
     return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
 
 
+def untrusted_in_history(messages: list[Any] | None) -> list[str]:
+    """The untrusted tool results ANYWHERE in this thread's history, by tool
+    name (tool_result_is_trusted decides). Used for routine ledger writes in
+    chat (005 FR-009 Amendment 1, review round 2): content read in an earlier
+    turn still sits in the model's context and can steer a later turn, so a
+    thread that has read untrusted content makes such writes suggestions
+    from then on. Deliberately structural: whether the user's new message
+    "asks for" a write is not something a check can know."""
+    items = list(messages or [])
+    names: list[str] = []
+    for message in items:
+        if is_tool_result(message):
+            name = _tool_name_of(items, message)
+            if not tool_result_is_trusted(name) and name not in names:
+                names.append(name)
+    return names
+
+
 def _tool_name_of(items: list[Any], result: Any) -> str:
     name = result.get("name") if isinstance(result, dict) else getattr(result, "name", None)
     if name:

@@ -58,12 +58,14 @@ def ledger_read_tool(runtime: ToolRuntime[ContextT, ThreadState], project: str |
         'If it was proposed, stop: the user confirms with the card or by replying themselves. Never write the confirmation ("yes …") yourself.'
     ),
 )
-def ledger_apply_tool(changes: list[dict], runtime: ToolRuntime[ContextT, ThreadState], thread_id: str | None = None) -> str:
+def ledger_apply_tool(changes: list[dict], runtime: ToolRuntime[ContextT, ThreadState]) -> str:
     controller = get_ledger_controller()
     if controller is None:
         return _UNAVAILABLE
     return controller.apply(
         user_id=_context(runtime, "user_id") or get_effective_user_id(),
         changes=changes,
-        thread_id=thread_id or _context(runtime, "thread_id"),
+        # This conversation, from the run's own context: never a thread the
+        # model names (review round 2).
+        thread_id=_context(runtime, "thread_id"),
     )
