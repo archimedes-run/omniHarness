@@ -321,6 +321,11 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
             detail=(f"Agent '{name}' only exists in the legacy shared layout and is not scoped to a user. Run scripts/migrate_user_isolation.py to move legacy agents into the per-user layout before updating."),
         )
 
+    if request.base_version is None:
+        # Every edit names the version it was made from, so a second tab (or
+        # an old client) can never silently overwrite a newer one.
+        raise HTTPException(status_code=428, detail="base_version is required: send the agent's version you edited (GET /api/agents/{name} returns it).")
+
     fields_set = request.model_fields_set
     current = config_versions.current_agent_snapshot(user_id, name) or {"config": {"name": name}, "soul": ""}
     # Start from what is on record, so a key this endpoint does not know (the

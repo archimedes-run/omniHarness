@@ -407,10 +407,20 @@ def write_skill(
                     files[path] = text
             after = {"files": files}
         if after is not None:
-            from omniharness.skills.validation import check_skill_limits
+            from omniharness.skills.validation import check_skill_limits, skill_dir_sizes
 
             # Refused before anything is written (SkillLimitError is a ValueError).
-            check_skill_limits(name, {path: len(text.encode("utf-8")) for path, text in after["files"].items()})
+            # Measured over the WHOLE tree the write leaves on disk: every file
+            # already there (dot-files and non-text files included, which the
+            # versioned snapshot does not hold) plus this write's files.
+            root = storage.get_custom_skill_dir(name)
+            sizes = skill_dir_sizes(root) if root.exists() else {}
+            if replace_all or changes is None:
+                sizes = {p: n for p, n in sizes.items() if p not in (before or {"files": {}})["files"]}
+            for path, text in (changes or {}).items():
+                sizes.pop(path, None)
+            sizes.update({path: len(text.encode("utf-8")) for path, text in after["files"].items()})
+            check_skill_limits(name, sizes)
         changed = _changed((before or {}).get("files") if before else None, after["files"] if after else None)
         _materialise_skill(name, after, storage)
         record = {**(extra or {}), "version": current + 1, "at": now, "ts": now, "who": who, "source": source, "changed": changed, "snapshot": after}
