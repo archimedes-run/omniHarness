@@ -262,9 +262,8 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
     literals: ["#000000", "#4a4a4a", "#aaaaaa"],
   },
   "components/workspace/input-box.tsx": {
-    reason:
-      "an issue number (#2746) in a comment; the send button's violet-indigo gradient is a brand accent; the red glow (rgb) on the ultra mode's rocket (this file is being rebuilt by the chat-bar work, so it is listed, not edited)",
-    literals: ["#2746", "from-violet-400", "rgb(", "to-indigo-500"],
+    reason: "not a colour: an issue number (#2746) in a comment",
+    literals: ["#2746"],
   },
   "components/workspace/mcp/mcp-server-detail.tsx": {
     reason: "always-dark code editor and build log (#13141a)",
