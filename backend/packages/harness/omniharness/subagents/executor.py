@@ -315,7 +315,37 @@ class SubagentExecutor:
 
         logger.info(f"[trace={self.trace_id}] SubagentExecutor initialized: {config.name} with {len(self.tools)} tools")
 
-    def _create_agent(self, tools: list[BaseTool] | None = None):
+    def _run_checkpointer(self) -> Any:
+        """An async context manager yielding the checkpointer for ONE run.
+
+        DURABLE WHEN THE APP IS. A delegation's checkpoint is what "Continue
+        <agent>" re-enters, so it must survive a process restart: it goes to
+        the store configured under `database:` (or a legacy `checkpointer:`),
+        opened for this run on THIS run's event loop (subagents run on their
+        own loop, and an async saver is bound to the loop that opened it).
+        It used to be the process singleton, an InMemorySaver unless a legacy
+        `checkpointer:` section existed, so after a restart Continue re-entered
+        an empty delegation (review of PR #58). Only an in-memory app keeps the
+        process singleton, so in-process suspend/resume still works there.
+        """
+        import contextlib
+
+        if self.checkpointer is not None:
+            return contextlib.nullcontext(self.checkpointer)
+        try:
+            app_config = self.app_config or get_app_config()
+        except FileNotFoundError:
+            app_config = None
+        durable = app_config is not None and (getattr(app_config, "checkpointer", None) is not None or getattr(getattr(app_config, "database", None), "backend", "memory") != "memory")
+        if durable:
+            from omniharness.runtime.checkpointer.async_provider import make_checkpointer
+
+            return make_checkpointer(app_config)
+        from omniharness.runtime.checkpointer import get_checkpointer
+
+        return contextlib.nullcontext(get_checkpointer())
+
+    def _create_agent(self, tools: list[BaseTool] | None = None, *, checkpointer: Any | None = None):
         """Create the agent instance."""
         app_config = self.app_config or get_app_config()
         if self.model_name is None:
@@ -339,7 +369,7 @@ class SubagentExecutor:
         # backend/tests/policy/test_subagent_suspend.py, whose positive control
         # (test_suspend_resume_control.py) establishes that the probe can detect
         # suspension where it is known to work.
-        checkpointer = self.checkpointer
+        checkpointer = checkpointer or self.checkpointer
         if checkpointer is None:
             from omniharness.runtime.checkpointer import get_checkpointer
 
@@ -491,9 +521,13 @@ class SubagentExecutor:
             ai_messages = []
             result.ai_messages = ai_messages
 
+        import contextlib
+
+        resources = contextlib.AsyncExitStack()
         try:
             state, filtered_tools = await self._build_initial_state(task)
-            agent = self._create_agent(filtered_tools)
+            checkpointer = await resources.enter_async_context(self._run_checkpointer())
+            agent = self._create_agent(filtered_tools, checkpointer=checkpointer)
 
             # Build config with thread_id for sandbox access and recursion limit
             run_config: RunnableConfig = {
@@ -665,6 +699,11 @@ class SubagentExecutor:
             result.status = SubagentStatus.FAILED
             result.error = str(e)
             result.completed_at = datetime.now()
+        finally:
+            try:
+                await resources.aclose()
+            except Exception:
+                logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} checkpointer did not close cleanly", exc_info=True)
 
         return result
 
