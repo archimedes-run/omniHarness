@@ -154,6 +154,14 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             app.state.thread_tool_selection_repo = None
 
+        # Per-user preferences (Feature 006): the appearance a user chose.
+        if sf is not None:
+            from omniharness.persistence.user_preferences import UserPreferenceRepository
+
+            app.state.user_preference_repo = UserPreferenceRepository(sf)
+        else:
+            app.state.user_preference_repo = None
+
         # ComposioClient (only when COMPOSIO_API_KEY is set)
         import os
 
@@ -213,6 +221,7 @@ get_mcp_secrets_vault = _require("mcp_secrets_vault", "MCP secrets vault")
 get_composio_connection_repo = _require("composio_connection_repo", "Composio connection repository")
 get_composio_client = _require("composio_client", "Composio client")
 get_thread_tool_selection_repo = _require("thread_tool_selection_repo", "Thread tool-selection repository")
+get_user_preference_repo = _require("user_preference_repo", "User preferences")
 
 
 def get_store(request: Request):
