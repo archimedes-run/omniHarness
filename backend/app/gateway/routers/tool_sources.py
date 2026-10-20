@@ -29,11 +29,13 @@ async def tool_sources(request: Request, thread_id: str | None = Query(default=N
     if not cache._cache_initialized:
         await cache.initialize_mcp_tools()
 
+    auth = get_auth_context(request)
+    user_id = str(auth.user.id) if auth is not None and auth.user is not None else None
+
     authorised: set[str] | None = None
     if getattr(request.app.state, "composio_client", None) is not None:
         authorised = set()
         repo = getattr(request.app.state, "composio_connection_repo", None)
-        auth = get_auth_context(request)
         if repo is not None and auth is not None and auth.user is not None:
             for row in await repo.list_by_user(user_id=str(auth.user.id)):
                 if row.get("status") == "active":
@@ -44,6 +46,16 @@ async def tool_sources(request: Request, thread_id: str | None = Query(default=N
         selection = getattr(request.app.state, "thread_tool_selection_repo", None)
         selected = set(await selection.get_sources(thread_id=thread_id)) if selection is not None else set()
 
+    # Feature 006: what the tool-call chokepoint observed. Unreadable is not
+    # "never worked": it is left out, and each source reads as not yet seen.
+    health = None
+    health_repo = getattr(request.app.state, "tool_source_health_repo", None)
+    if health_repo is not None:
+        try:
+            health = await health_repo.for_user(user_id=user_id)
+        except Exception:
+            logger.warning("tool-source health could not be read", exc_info=True)
+
     return describe_tool_sources(
         servers=get_extensions_config().mcp_servers,
         last_loads=load_report.last_loads(),
@@ -51,4 +63,5 @@ async def tool_sources(request: Request, thread_id: str | None = Query(default=N
         authorised=authorised,
         selected=selected,
         thread_id=thread_id,
+        health=health,
     )

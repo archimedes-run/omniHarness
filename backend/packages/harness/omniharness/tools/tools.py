@@ -237,6 +237,16 @@ def get_available_tools(
                             filtered.append(t)
                     mcp_tools = filtered
 
+                # Feature 006: each tool carries its source, so the tool-call
+                # chokepoint can record when that source last worked.
+                from omniharness.tools.source_tags import tag_source
+
+                all_server_names = list(enabled_servers.keys())
+                for t in mcp_tools:
+                    server = _tool_source(t.name, all_server_names)
+                    if server and not server.lower().startswith(("connector-", "composio-")):
+                        tag_source(t, f"local:{server}")
+
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 

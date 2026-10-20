@@ -154,6 +154,15 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             app.state.thread_tool_selection_repo = None
 
+        # Feature 006: when each tool source last worked, as observed at the
+        # tool-call chokepoint (ToolSourceHealthMiddleware writes it).
+        if sf is not None:
+            from omniharness.persistence.tool_source_health import ToolSourceHealthRepository
+
+            app.state.tool_source_health_repo = ToolSourceHealthRepository(sf)
+        else:
+            app.state.tool_source_health_repo = None
+
         # Per-user preferences (Feature 006): the appearance a user chose.
         if sf is not None:
             from omniharness.persistence.user_preferences import UserPreferenceRepository
