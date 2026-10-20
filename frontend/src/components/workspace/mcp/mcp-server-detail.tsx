@@ -1662,7 +1662,7 @@ function ToolsView({
       {/* status banners */}
       {dp === "verified" && (
         <div className="border-success/30 bg-success flex items-center gap-2.5 border-b px-5 py-2.5">
-          <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
+          <div className="flex size-6 items-center justify-center rounded-full bg-current/20">
             <CheckCircle2Icon className="text-success-foreground size-3.5" />
           </div>
           <span className="text-success-foreground text-sm font-medium">
@@ -1672,7 +1672,7 @@ function ToolsView({
       )}
       {dp === "needs_secrets" && (
         <div className="border-warning/30 bg-warning flex items-center gap-2.5 border-b px-5 py-2.5">
-          <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
+          <div className="flex size-6 items-center justify-center rounded-full bg-current/20">
             <KeyIcon className="text-warning-foreground size-3.5" />
           </div>
           <span className="text-warning-foreground text-sm font-medium">
@@ -1682,7 +1682,7 @@ function ToolsView({
       )}
       {dp === "failed" && (
         <div className="border-destructive/20 bg-destructive flex items-center gap-3 border-b px-5 py-3">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/15">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-current/15">
             <ShieldXIcon className="text-destructive-foreground size-4" />
           </div>
           <div className="min-w-0 flex-1">
@@ -1694,7 +1694,7 @@ function ToolsView({
               prevented execution
             </p>
           </div>
-          <span className="text-destructive-foreground flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold ring-1 ring-white/20">
+          <span className="text-destructive-foreground flex items-center gap-1.5 rounded-full bg-current/10 px-3 py-1 text-[11px] font-semibold ring-1 ring-current/20">
             <XCircleIcon className="size-3" />
             {errors.length} {errors.length === 1 ? "error" : "errors"}
           </span>
@@ -1702,7 +1702,7 @@ function ToolsView({
       )}
       {dp === "testing" && (
         <div className="border-warning/30 bg-warning flex items-center gap-2.5 border-b px-5 py-2.5">
-          <div className="flex size-6 items-center justify-center rounded-full bg-white/20">
+          <div className="flex size-6 items-center justify-center rounded-full bg-current/20">
             <ShieldAlertIcon className="text-warning-foreground size-3.5" />
           </div>
           <span className="text-warning-foreground text-sm font-medium">
@@ -1796,7 +1796,7 @@ function ToolsView({
             <div className="flex flex-col items-center gap-3 pt-6 pb-2 text-center">
               <div className="border-destructive/40 bg-destructive/10 relative flex size-16 items-center justify-center rounded-2xl border">
                 <ShieldXIcon className="text-destructive size-8" />
-                <span className="bg-destructive ring-muted-foreground absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold text-white ring-2">
+                <span className="bg-destructive ring-muted-foreground text-destructive-foreground absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold ring-2">
                   {errors.length}
                 </span>
               </div>

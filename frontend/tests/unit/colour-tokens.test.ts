@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -27,13 +27,48 @@ const PALETTE =
   "(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\\d{2,3}";
 const UTILITY =
   "(?:text|bg|border|ring|fill|stroke|from|via|to|outline|divide|placeholder|decoration|accent|caret|shadow)";
+// No leading \b on the function literals: inside an arbitrary Tailwind value
+// (`shadow-[0_0_0_1px_hsl(...)]`) the `_` before them is a word character, so
+// \b never matched there and that literal went unseen.
 const HARDCODED = [
   new RegExp(`\\b${UTILITY}-(?:black|white|${PALETTE})(?:/\\d+)?\\b`, "g"),
   /#[0-9a-fA-F]{3,8}\b/g,
-  /\b(?:rgb|rgba|hsl|hsla)\(/g,
+  /(?<![a-zA-Z-])(?:rgb|rgba|hsl|hsla|oklch|oklab|lab|lch)\(/g,
 ];
 
+/**
+ * Directories that are not scanned, each with the reason. Everything else
+ * under src/ is, including directories added later (the walk is recursive and
+ * the coverage test below fails if a component directory is ever skipped).
+ */
+const EXEMPT_DIRS: Record<string, string> = {
+  "components/brand":
+    "official brand logos keep their trademark colours in both themes (TOKEN-CONTRACT: logos are the one exception, via the logo registry only)",
+};
+const exempt = (rel: string) =>
+  Object.keys(EXEMPT_DIRS).some((d) => rel === d || rel.startsWith(`${d}/`));
+
 const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
+  "components/landing/sections/what-is-omniharness-section.tsx": {
+    reason:
+      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
+    literals: ["rgba("],
+  },
+  "components/landing/sections/features-section.tsx": {
+    reason:
+      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
+    literals: ["rgba("],
+  },
+  "components/landing/sections/example-harnesses-section.tsx": {
+    reason:
+      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
+    literals: ["rgba("],
+  },
+  "components/landing/header.tsx": {
+    reason:
+      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
+    literals: ["rgba("],
+  },
   "app/workspace/chats/[thread_id]/page.tsx": {
     reason: "not a colour: an issue number (#2746) in a comment",
     literals: ["#2746"],
@@ -65,8 +100,9 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
   },
   "components/landing/sections/agent-skills-section.tsx": {
     reason:
-      "always-dark agent-log panel and diagram (stone-950) in both themes",
+      "always-dark agent-log panel and diagram (stone-950) in both themes; a soft drop shadow (rgba)",
     literals: [
+      "rgba(",
       "#111827",
       "#1c1917",
       "#6b7280",
@@ -102,8 +138,9 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
   },
   "components/landing/sections/final-cta-section.tsx": {
     reason:
-      "always-dark call-to-action card (stone-950, white text) in both themes",
+      "always-dark call-to-action card (stone-950, white text) in both themes; a soft drop shadow (rgba)",
     literals: [
+      "rgba(",
       "bg-stone-100",
       "bg-stone-950",
       "bg-white",
@@ -117,8 +154,8 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
     ],
   },
   "components/landing/sections/harness-definition-section.tsx": {
-    reason: "decorative gradient bar",
-    literals: ["from-stone-900", "to-stone-200", "via-stone-500"],
+    reason: "decorative gradient bar; a soft drop shadow (rgba)",
+    literals: ["rgba(", "from-stone-900", "to-stone-200", "via-stone-500"],
   },
   "components/landing/sections/live-preview-demo-section.tsx": {
     reason:
@@ -205,10 +242,7 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
     reason: "macOS window dots (red, yellow, green)",
     literals: ["bg-green-500", "bg-red-500", "bg-yellow-500"],
   },
-  "components/ui/tooltip.tsx": {
-    reason: "fixed near-black tooltip surface in dark mode, with its border",
-    literals: ["#050504", "border-white/18"],
-  },
+
   "components/ui/word-rotate.tsx": {
     reason: "decorative gold gradient on rotating words",
     literals: ["#e3a812", "#e9c665", "#efefbb"],
@@ -235,12 +269,11 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
   },
   "components/workspace/input-box.tsx": {
     reason:
-      "an issue number (#2746) in a comment; the send button's violet-indigo gradient is a brand accent",
-    literals: ["#2746", "from-violet-400", "to-indigo-500"],
+      "an issue number (#2746) in a comment; the send button's violet-indigo gradient is a brand accent; the red glow (rgb) on the ultra mode's rocket (this file is being rebuilt by the chat-bar work, so it is listed, not edited)",
+    literals: ["#2746", "from-violet-400", "rgb(", "to-indigo-500"],
   },
   "components/workspace/mcp/mcp-server-detail.tsx": {
-    reason:
-      "always-dark code editor and build log (#13141a); white glazes and text over solid status banners",
+    reason: "always-dark code editor and build log (#13141a)",
     literals: [
       "#13141a",
       "#131519",
@@ -248,31 +281,14 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
       "#7C79F0",
       "#9CA3AF",
       "#E9EBF0",
-      "bg-white/10",
-      "bg-white/15",
-      "bg-white/20",
       "rgba(",
-      "ring-white/20",
-      "text-white",
     ],
   },
   "components/workspace/messages/subtask-card.tsx": {
     reason: "decorative shimmer gradient on a running subtask",
     literals: ["#A07CFE", "#FE8FB5", "#FFBE7B"],
   },
-  "components/workspace/settings/appearance-settings-page.tsx": {
-    reason: "theme preview swatches: must show fixed light and dark samples",
-    literals: [
-      "bg-emerald-400",
-      "bg-emerald-500",
-      "bg-neutral-900",
-      "bg-white",
-      "border-neutral-800",
-      "border-slate-200",
-      "text-neutral-200",
-      "text-slate-900",
-    ],
-  },
+
   "components/workspace/welcome.tsx": {
     reason: "decorative gold gradient on the greeting",
     literals: ["#e3a812", "#e9c665", "#efefbb"],
@@ -285,6 +301,7 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
+    if (exempt(relative(SRC, path))) return [];
     return statSync(path).isDirectory()
       ? files(path)
       : /\.tsx?$/.test(name)
@@ -312,6 +329,10 @@ describe("colours come from theme tokens, site-wide", () => {
     expect(
       literals('className="text-red-500 bg-white" style={{ color: "#333" }}'),
     ).toEqual(["text-red-500", "bg-white", "#333"]);
+    expect(literals('className="shadow-[0_0_0_1px_hsl(var(--x))]"')).toEqual([
+      "hsl(",
+    ]);
+    expect(literals('style={{ color: "oklch(0.5 0 0)" }}')).toEqual(["oklch("]);
     expect(
       literals('className="text-muted-foreground bg-muted border-border"'),
     ).toEqual([]);
@@ -336,6 +357,30 @@ describe("colours come from theme tokens, site-wide", () => {
         .map((l) => `${file}: ${l}`),
     );
     expect(stale, "remove these from ALLOWED").toEqual([]);
+  });
+
+  it("scans every component directory, new ones included", () => {
+    const dirs = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const path = join(dir, name);
+        return statSync(path).isDirectory() ? [path, ...dirs(path)] : [];
+      });
+    const scanned = new Set(files(SRC).map((f) => dirname(f)));
+    const missed = dirs(join(SRC, "components"))
+      .filter((d) => !exempt(relative(SRC, d)))
+      .filter((d) => readdirSync(d).some((n) => /\.tsx?$/.test(n)))
+      .filter((d) => !scanned.has(d))
+      .map((d) => relative(SRC, d));
+    expect(missed, "these component directories are not scanned").toEqual([]);
+    expect(scanned.size).toBeGreaterThan(10);
+  });
+
+  it("exempts directories only with a reason", () => {
+    expect(
+      Object.entries(EXEMPT_DIRS)
+        .filter(([, r]) => !r.trim())
+        .map(([d]) => d),
+    ).toEqual([]);
   });
 
   it("gives every listed file a reason", () => {
