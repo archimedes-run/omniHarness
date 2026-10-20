@@ -14,6 +14,7 @@ export interface StudioSeen {
   drafts: unknown[];
   autonomyPuts: unknown[];
   tests: unknown[];
+  undos: { url: string; body: unknown }[];
 }
 
 export const WRAP_UP = {
@@ -25,6 +26,7 @@ export const WRAP_UP = {
   tool_groups: ["web", "file:read"],
   skills: ["cite-every-claim", "project-status-format"],
   projects: ["p1"],
+  version: 3,
   soul: "You are my evening wrap-up. For each project I'm working on:\n1. What moved today.\n2. What is stuck.\n3. The one thing to start with tomorrow, and why.",
 };
 
@@ -85,11 +87,13 @@ Mark each item "observed" or "reported".
 
 export interface StudioStubOptions {
   agentsDisabled?: boolean;
+  /** Every agent PUT is refused as stale (409). */
+  staleAgents?: boolean;
 }
 
 export async function stubStudio(
   page: Page,
-  { agentsDisabled = false }: StudioStubOptions = {},
+  { agentsDisabled = false, staleAgents = false }: StudioStubOptions = {},
 ): Promise<StudioSeen> {
   await chatBarStub(page);
   const seen: StudioSeen = {
@@ -98,6 +102,7 @@ export async function stubStudio(
     drafts: [],
     autonomyPuts: [],
     tests: [],
+    undos: [],
   };
   const agents = AGENTS.map((a) => ({ ...a }));
 
@@ -121,6 +126,50 @@ export async function stubStudio(
     }
     return json(route, { agents });
   });
+  const VERSIONS = {
+    current: 3,
+    versions: [
+      {
+        version: 3,
+        at: new Date().toISOString(),
+        who: "user:u1",
+        source: "draft",
+        changed: ["soul"],
+        deleted: false,
+      },
+      {
+        version: 2,
+        at: new Date(Date.now() - 86_400_000).toISOString(),
+        who: "agent:evening-wrap-up",
+        source: "proposal",
+        changed: ["config.description"],
+        deleted: false,
+      },
+      {
+        version: 1,
+        at: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        who: "user:u1",
+        source: "manual",
+        changed: ["created"],
+        deleted: false,
+      },
+    ],
+  };
+  await page.route("**/api/agents/*/versions", (route) =>
+    json(route, { name: "evening-wrap-up", ...VERSIONS }),
+  );
+  await page.route("**/api/skills/custom/*/versions", (route) =>
+    json(route, { name: "project-status-format", ...VERSIONS }),
+  );
+  for (const glob of ["**/api/agents/*/undo", "**/api/skills/custom/*/undo"]) {
+    await page.route(glob, (route) => {
+      seen.undos.push({
+        url: route.request().url(),
+        body: route.request().postDataJSON(),
+      });
+      return json(route, { name: "x", ...VERSIONS });
+    });
+  }
   await page.route("**/api/agents/*", async (route) => {
     const method = route.request().method();
     const name = decodeURIComponent(route.request().url().split("/").pop()!);
@@ -128,6 +177,16 @@ export async function stubStudio(
     if (method === "PUT") {
       const body = route.request().postDataJSON() as Record<string, unknown>;
       seen.agentWrites.push({ method, url: route.request().url(), body });
+      if (staleAgents) {
+        return json(
+          route,
+          {
+            detail:
+              "agent 'evening-wrap-up' changed since you opened it (you had version 3, it is now version 4). Reload to see the change, then try again.",
+          },
+          409,
+        );
+      }
       Object.assign(agent ?? {}, body);
       return json(route, agent);
     }
@@ -276,7 +335,11 @@ export async function stubStudio(
       name === "project-status-format"
         ? STATUS_MD
         : `---\nname: ${name}\ndescription: Use when stating facts.\n---\n\nCite every claim.\n`;
-    return json(route, { ...SKILLS.find((s) => s.name === name), content });
+    return json(route, {
+      ...SKILLS.find((s) => s.name === name),
+      content,
+      version: 3,
+    });
   });
   await page.route("**/api/skills/custom/*/files", (route) =>
     json(route, {

@@ -23,6 +23,7 @@ import {
   readItemParam,
   writeItemParam,
 } from "@/components/workspace/agents/studio/url-item";
+import { VersionHistory } from "@/components/workspace/agents/studio/version-history";
 import { useAgents } from "@/core/agents";
 import { useSkills } from "@/core/skills/hooks";
 import type { Skill } from "@/core/skills/type";
@@ -186,6 +187,7 @@ function SkillEditor({
     | { kind: "error"; message: string }
   >({ kind: "idle" });
   useEffect(() => setDoc(initial), [initial]);
+  const [fromDraft, setFromDraft] = useState(false);
   const usedBy = useUsedBy(skill);
 
   const patch = (next: Partial<SkillDoc>) => {
@@ -212,6 +214,7 @@ function SkillEditor({
         body: doc.body || null,
       });
       apply(result.skill!);
+      setFromDraft(true);
       setDraftNote({ text: c.draftReady(result.model), bad: false });
     } catch (e) {
       setDraftNote({
@@ -252,9 +255,15 @@ function SkillEditor({
     try {
       const md = composeSkillMd({ ...doc, name: slug });
       if (isNew) {
-        await createCustomSkill(slug, md);
+        await createCustomSkill(slug, md, fromDraft ? "draft" : "manual");
       } else {
-        await saveCustomSkill(slug, md);
+        await saveCustomSkill(
+          slug,
+          md,
+          content?.version ?? 0,
+          fromDraft ? "draft" : "manual",
+        );
+        setFromDraft(false);
       }
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
       setStatus({ kind: "saved" });
@@ -286,6 +295,15 @@ function SkillEditor({
 
   const footer = (
     <>
+      {isCustom ? (
+        <VersionHistory
+          kind="skill"
+          name={skill.name}
+          onRestored={() =>
+            void queryClient.invalidateQueries({ queryKey: ["skills"] })
+          }
+        />
+      ) : null}
       {status.kind === "error" ? (
         <p
           className="text-destructive mr-auto text-sm"

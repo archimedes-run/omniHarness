@@ -74,6 +74,9 @@ test("editing an agent's projects and skills saves only on Save", async ({
   expect(seen.agentWrites[0]!.body).toMatchObject({
     projects: ["p1", "p2"],
     skills: ["project-status-format"],
+    // Made from version 3, by hand: the store refuses it if 3 is stale.
+    base_version: 3,
+    source: "manual",
   });
 });
 
@@ -156,6 +159,7 @@ test("Draft fills the fields from one sentence for review, and only Save writes"
     soul: "You are my morning brief.\n1. What is waiting.",
     tool_groups: ["web"],
     skills: ["cite-every-claim"],
+    source: "draft",
   });
 });
 
@@ -175,5 +179,41 @@ test("a skill's when-sentence is drafted for review, not saved", async ({
   await expect.poll(() => seen.skillWrites.length).toBe(1);
   expect((seen.skillWrites[0]!.body as { content: string }).content).toContain(
     "description: Use when someone asks where things stand.",
+  );
+});
+
+test("History restores an earlier version as a new one", async ({ page }) => {
+  const seen = await stubStudio(page);
+  await page.goto("/workspace/chats?panel=agents&item=evening-wrap-up", {
+    waitUntil: "networkidle",
+  });
+  await page.getByTestId("studio-history").click();
+  const rows = page.getByTestId("studio-version");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText("v3 · You saved from a draft");
+  await expect(rows.nth(0)).toBeDisabled();
+  await expect(rows.nth(1)).toContainText(
+    "v2 · The agent (evening-wrap-up) changed itself",
+  );
+  await rows.nth(2).click();
+  await expect.poll(() => seen.undos.length).toBe(1);
+  expect(seen.undos[0]!.url).toContain("/api/agents/evening-wrap-up/undo");
+  expect(seen.undos[0]!.body).toEqual({ to_version: 1, base_version: 3 });
+  await expect(page.getByTestId("studio-history-note")).toHaveText(
+    "Restored version 1 as a new version.",
+  );
+});
+
+test("a save made from an old version is refused and says so", async ({
+  page,
+}) => {
+  await stubStudio(page, { staleAgents: true });
+  await page.goto("/workspace/chats?panel=agents&item=evening-wrap-up", {
+    waitUntil: "networkidle",
+  });
+  await page.getByLabel("What it does, in one line").fill("Changed here");
+  await page.getByTestId("studio-save").click();
+  await expect(page.getByTestId("studio-save-error")).toContainText(
+    "changed since you opened it",
   );
 });

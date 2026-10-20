@@ -15,6 +15,8 @@ export interface CustomSkill {
   enabled: boolean;
   /** The whole SKILL.md, frontmatter included. */
   content: string;
+  /** Current version in the versioned store; send back as base_version. */
+  version: number;
 }
 
 export interface SkillFile {
@@ -62,4 +64,21 @@ export interface DraftResponse {
   } | null;
   skill: { description: string; body: string } | null;
   dropped: string[];
+}
+
+/** Mirrors the /versions routes of the agents and skills APIs. */
+export interface VersionSummary {
+  version: number;
+  at: string;
+  /** "user:<id>", "agent:<name>", "agent", or "unknown". */
+  who: string;
+  source: "manual" | "draft" | "proposal" | "chat" | "undo" | "existing";
+  changed: string[];
+  deleted: boolean;
+}
+
+export interface Versions {
+  name: string;
+  current: number;
+  versions: VersionSummary[];
 }
