@@ -70,6 +70,7 @@ export function ConnectionRow({
     action = (
       <Button
         size="sm"
+        variant="outline"
         disabled={busy}
         onClick={() => run(() => connectComposioToolkit(name))}
       >

@@ -13,10 +13,12 @@ const buttonVariants = cva(
           "cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90",
         destructive:
           "cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
+        // A real outline (Phase 2.6): it was a solid black fill, so every
+        // row with an action looked like a primary button.
         outline:
-          "cursor-pointer border border-primary bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground",
+          "cursor-pointer border border-input bg-background text-foreground shadow-xs hover:bg-accent hover:text-accent-foreground",
         secondary:
-          "cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90",
+          "cursor-pointer bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "cursor-pointer hover:bg-muted hover:text-foreground",
         link: "cursor-pointer text-foreground underline-offset-4 hover:underline",
       },
