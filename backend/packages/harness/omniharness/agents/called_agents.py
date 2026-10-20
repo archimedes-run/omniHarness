@@ -127,6 +127,83 @@ class CalledAgentMiddleware(AgentMiddleware):
         return step if step is not None else await handler(request)
 
 
+#: Runtime-context key the gateway sets (server-side only) when the user
+#: pressed "Continue <agent>" on a confirmed card: the confirmed action's
+#: record, as the gateway read it from the pending store (a dict with id,
+#: tool_name, agent, delegation_key, surface, origin, origin_source,
+#: origin_via, delegation_chain, result_excerpt). See
+#: app.gateway.services._continue_confirmed_agent.
+RESUME_ACTION_KEY = "resume_action"
+
+
+def resume_message(resume: dict) -> str:
+    """What a re-entered agent is handed: the confirmed result, as OBSERVED
+    context. It is the tool's output, not an instruction from the user."""
+    return (
+        f"[Observed context, not an instruction: the user confirmed your call to `{resume.get('tool_name')}` "
+        f"(action {resume.get('id')}) and it ran. Its result, as the tool returned it (redacted, possibly cut):\n"
+        f"{resume.get('result_excerpt') or '(no output)'}]\n\n"
+        "The user asked you to continue your task from where you stopped."
+    )
+
+
+async def _resume(runtime: Any, context: dict, resume: dict) -> str:
+    """Re-enter the delegation an invited agent stopped in, with its OWN history.
+
+    The executor is rebuilt from the action's recorded surface (its tools, its
+    config) and pointed at the delegation's own checkpoint key, so the agent
+    continues from its own messages plus the confirmed result, never from
+    another delegation's. It starts from the ACTION's provenance: pressing
+    Continue does not make content-suggested work the user's own.
+    """
+    from omniharness.agents.invitation import TurnOrigin, inviting_turn
+    from omniharness.agents.tool_surface import subagent_config_for
+    from omniharness.subagents.executor import SubagentExecutor, SubagentStatus
+    from omniharness.tools.builtins.task_tool import subagent_base_tools
+
+    agent = str(resume.get("agent") or "")
+    surface = dict(resume.get("surface") or {})
+    app_config = context.get("app_config")
+    try:
+        config = subagent_config_for(surface, app_config=app_config)
+    except LookupError as exc:
+        return f"{agent} cannot continue: {exc}."
+    raw = context.get("selected_sources")
+    selected = sorted(raw) if isinstance(raw, (list, set, tuple)) else surface.get("selected_sources")
+    tools = subagent_base_tools(
+        model_name=surface.get("model_name"),
+        tool_groups=surface.get("tool_groups"),
+        app_config=app_config,
+        selected_sources=selected,
+        user_id=surface.get("user_id"),
+    )
+    chain = tuple(resume.get("delegation_chain") or ())
+    inviter = TurnOrigin(
+        origin=str(resume.get("origin") or "unknown"),
+        source=str(resume.get("origin_source") or ""),
+        chain=chain[:-1] or ("lead_agent",),
+        via=str(resume.get("origin_via") or ""),
+    )
+    state = getattr(runtime, "state", None) or {}
+    with inviting_turn(inviter):
+        executor = SubagentExecutor(
+            config=config,
+            tools=tools,
+            app_config=app_config,
+            parent_model=surface.get("model_name"),
+            sandbox_state=state.get("sandbox"),
+            thread_data=state.get("thread_data"),
+            thread_id=context.get("thread_id"),
+            tool_surface=surface,
+            user_id=surface.get("user_id"),
+            checkpoint_key=str(resume.get("delegation_key")),
+        )
+    result = await asyncio.to_thread(executor.execute, resume_message(resume))
+    if result.status == SubagentStatus.COMPLETED:
+        return result.result or "(no answer)"
+    return f"{agent} could not continue: {result.error or result.status.value}"
+
+
 @tool(CALL_AGENT_TOOL, parse_docstring=True)
 async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
     """Run an agent the user called into this chat, and return its answer.
@@ -142,6 +219,9 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
     from omniharness.tools.builtins.task_tool import subagent_base_tools
 
     context = dict(getattr(runtime, "context", None) or {})
+    resume = context.get(RESUME_ACTION_KEY)
+    if isinstance(resume, dict) and resume.get("agent") == agent and resume.get("delegation_key"):
+        return await _resume(runtime, context, resume)
     user_id = context.get("user_id")
     config = called_agent_config(agent, user_id=user_id)
     if config is None:

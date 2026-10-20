@@ -198,6 +198,14 @@ class PendingAction:
     #: (`task`) can be run. Empty for actions recorded before it existed,
     #: which keep the old behaviour.
     surface: dict[str, Any] = field(default_factory=dict)
+    #: For an invited agent's call: the checkpoint key of the delegation it was
+    #: proposed in (omniharness.agents.invitation.DELEGATION_KEY). "Continue
+    #: <agent>" re-enters THAT delegation, with its own history.
+    delegation_key: str = ""
+    #: What the confirmed call returned, as the thread shows it (cut and
+    #: redacted; "Withheld" when it failed redaction). Set only for an invited
+    #: agent's call, as the observed context "Continue <agent>" hands it.
+    result_excerpt: str = ""
 
     @property
     def confirmable_by_typing(self) -> bool:

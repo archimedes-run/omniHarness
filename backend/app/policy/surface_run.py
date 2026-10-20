@@ -223,6 +223,16 @@ def agent_label(action: PendingAction) -> str:
     return action.requester if action.requester and action.requester != "lead_agent" else "Lead agent"
 
 
+def observed_result(result: Any) -> str:
+    """A confirmed call's result as the thread shows it: cut to RESULT_EXCERPT
+    and redacted, "Withheld" when it fails redaction. Never the raw result."""
+    from app.gateway.display_redaction import for_display
+
+    text = "" if result is None else str(result)
+    excerpt, withheld = for_display(text[:RESULT_EXCERPT] + ("…" if len(text) > RESULT_EXCERPT else ""))
+    return "Withheld: the result failed redaction." if withheld else (excerpt or "(no output)")
+
+
 def result_report(action: PendingAction, result: Any) -> str:
     """What the thread says after a confirmed call ran: who ran what, the
     result, and, for an invited agent, that it STOPPED (plan.md §2.0 item 7).
@@ -230,11 +240,8 @@ def result_report(action: PendingAction, result: Any) -> str:
     A subagent stops at the step it asked about. Its task is not silently half
     done: the thread says it has not continued and how to continue it.
     """
-    from app.gateway.display_redaction import for_display
-
     text = "" if result is None else str(result)
-    excerpt, withheld = for_display(text[:RESULT_EXCERPT] + ("…" if len(text) > RESULT_EXCERPT else ""))
-    shown = "Withheld: the result failed redaction." if withheld else (excerpt or "(no output)")
+    shown = observed_result(result)
     # A delegate's "stopped and is waiting" line is never cut off by the excerpt.
     for notice in _STOPPED.findall(text):
         if notice not in shown:

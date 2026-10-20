@@ -365,6 +365,9 @@ SERVER_OWNED_CONTEXT_KEYS: frozenset[str] = frozenset(
         "invited_agent",
         "delegation_chain",
         "called_agent",
+        "delegation_key",
+        "resume_action",
+        "stopped_at",
     }
 )
 
@@ -402,6 +405,69 @@ async def _call_in_mentioned_member(request: Request, thread_id: str, graph_inpu
         ctx_dict = config.setdefault("context", {})
         if isinstance(ctx_dict, dict):
             ctx_dict[CALLED_AGENT_KEY] = called
+
+
+#: The run body's context key the card's "Continue <agent>" sends: the id of
+#: the confirmed action whose agent should carry on. Only an id; everything
+#: the run gets from it is read from the server's own record.
+CONTINUE_ACTION_KEY = "continue_action"
+
+
+def _continue_refused(reason: str) -> HTTPException:
+    return HTTPException(status_code=409, detail=f"That agent cannot be continued: {reason}")
+
+
+async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any, config: dict[str, Any]) -> None:
+    """ "Continue <agent>" on a confirmed card: re-enter the agent that stopped.
+
+    The body names an action id and nothing else. The server reads the action
+    and checks it: confirmed and run, in THIS thread, proposed by an invited
+    agent inside a delegation it recorded. Then the turn is handed to that
+    agent (the call_agent path), which re-enters its own delegation with the
+    confirmed result as observed context (called_agents._resume).
+    """
+    from omniharness.agents.called_agents import CALLED_AGENT_KEY, RESUME_ACTION_KEY
+
+    raw = getattr(body, "context", None)
+    action_id = raw.get(CONTINUE_ACTION_KEY) if isinstance(raw, Mapping) else None
+    for container in (config.get("configurable"), config.get("context")):
+        if isinstance(container, dict):
+            container.pop(CONTINUE_ACTION_KEY, None)
+    if not action_id:
+        return
+    if not isinstance(action_id, str):
+        raise _continue_refused("the action id is not text")
+
+    from app.policy.models import Outcome
+    from app.policy.registration import build
+    from omniharness.config import get_app_config
+
+    middleware = build(get_app_config())
+    action = middleware.pending.get(action_id) if middleware is not None else None
+    if action is None:
+        raise _continue_refused("no such confirmed action")
+    if action.thread_id != thread_id:
+        raise _continue_refused("that action belongs to another chat")
+    if action.outcome != Outcome.EXECUTED:
+        raise _continue_refused("that action has not run")
+    if not action.delegation_key or action.requester == "lead_agent":
+        raise _continue_refused("it was not proposed by an agent that stopped in a delegation")
+    ctx_dict = config.setdefault("context", {})
+    if not isinstance(ctx_dict, dict):
+        return
+    ctx_dict[CALLED_AGENT_KEY] = action.requester
+    ctx_dict[RESUME_ACTION_KEY] = {
+        "id": action.id,
+        "tool_name": action.tool_name,
+        "agent": action.requester,
+        "delegation_key": action.delegation_key,
+        "surface": dict(action.surface),
+        "origin": action.origin,
+        "origin_source": action.origin_source,
+        "origin_via": action.origin_via,
+        "delegation_chain": list(action.delegation_chain),
+        "result_excerpt": action.result_excerpt,
+    }
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -716,6 +782,10 @@ async def start_run(
     # in. Read from this request's input only (Article III): a mention inside a
     # tool result or an agent's reply is never in it.
     await _call_in_mentioned_member(request, thread_id, graph_input, config)
+
+    # "Continue <agent>" on a confirmed card: the agent that stopped re-enters
+    # its own delegation (after the mention: an explicit Continue wins).
+    await _continue_confirmed_agent(request, thread_id, body, config)
 
     # Feature 006: skills removed from this conversation (the chat bar's ×).
     # Always the server's stored value (the client's was dropped above).

@@ -430,6 +430,7 @@ class PolicyMiddleware(AgentMiddleware):
             origin_via=origin_via,
             owner_id=self._owner_id(request),
             surface=self._surface(request),
+            delegation_key=self._delegation_key(request),
         )
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
@@ -552,6 +553,16 @@ class PolicyMiddleware(AgentMiddleware):
         context = self._runtime_context(request) or {}
         return INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
 
+    def _delegation_key(self, request) -> str:
+        """The proposing delegation's own checkpoint key; empty for the lead."""
+        from omniharness.agents.invitation import DELEGATION_KEY
+
+        if not self._is_invited(request):
+            return ""
+        context = self._runtime_context(request) or {}
+        key = context.get(DELEGATION_KEY)
+        return key if isinstance(key, str) else ""
+
     @staticmethod
     def _surface(request) -> dict:
         """How the proposing run's tool list was built (plan.md §2.0)."""
@@ -633,6 +644,11 @@ class PolicyMiddleware(AgentMiddleware):
 
         with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
+        if action.delegation_key:
+            # What "Continue <agent>" hands the agent as observed context.
+            from .surface_run import observed_result
+
+            action.result_excerpt = observed_result(result)
         self.pending.resolve(action, Outcome.EXECUTED)
         if self.audit is not None:
             self.audit.record_tier3(action=action, actor=self.actor, now=self.now())

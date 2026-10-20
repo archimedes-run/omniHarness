@@ -52,6 +52,10 @@ DELEGATION_CHAIN_KEY = "delegation_chain"
 #: stopped at, as {"id", "tool"}. Its inviter reads it after the run, so the
 #: invited agent never ends with its task silently half done.
 STOPPED_AT_KEY = "stopped_at"
+#: The invited agent's own checkpoint key (one per delegation), set by the
+#: subagent executor. The policy layer records it on a Tier 3 call the agent
+#: proposes, so "Continue <agent>" re-enters that delegation's history.
+DELEGATION_KEY = "delegation_key"
 
 #: No inviting turn was marked: can't-tell, which fails toward card-only.
 UNKNOWN = "unknown"
