@@ -36,6 +36,9 @@ export interface TierCheck {
   in_plain_words?: string;
   /** Set when the name is a capability the assistant does not have at all. */
   absent?: string | null;
+  /** 007: no rule names this tool, so it is refused (never offered, never
+   * run). `tier` is then not acted on. Absent from an older gateway. */
+  refused?: boolean;
 }
 
 export interface Tier3Execution {

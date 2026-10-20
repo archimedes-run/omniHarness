@@ -70,11 +70,18 @@ export function TierCheckForm() {
         >
           <div className="flex items-center gap-2">
             <span className="text-foreground font-medium">{result.tool}</span>
-            <Badge variant={result.tier === 3 ? "destructive" : "secondary"}>
-              Tier {result.tier}
-            </Badge>
+            {/* 007: a tool no rule names has no tier; it is refused. */}
+            {result.refused ? (
+              <Badge variant="destructive" data-testid="refused-marker">
+                No policy rule — refused
+              </Badge>
+            ) : (
+              <Badge variant={result.tier === 3 ? "destructive" : "secondary"}>
+                Tier {result.tier}
+              </Badge>
+            )}
             {/* FR-027: the default is not a classification, and says so. */}
-            {result.from_default && (
+            {result.from_default && !result.refused && (
               <Badge variant="outline" data-testid="default-marker">
                 Default — no rule matched
               </Badge>
@@ -86,7 +93,9 @@ export function TierCheckForm() {
           >
             {result.deciding_rule
               ? `Decided by: ${result.deciding_rule}`
-              : "No rule matched this tool; unknown tools are Tier 3."}
+              : result.refused
+                ? "No rule names this tool, so it is refused: never offered to the assistant, never run."
+                : "No rule matched this tool, and the rules could not be read, so every tool is Tier 3."}
           </p>
           {result.in_plain_words && (
             <p className="text-foreground text-sm" data-testid="plain-words">
