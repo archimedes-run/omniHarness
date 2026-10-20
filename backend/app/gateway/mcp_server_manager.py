@@ -915,7 +915,9 @@ class MCPServerManager:
                 "--name",
                 container_name,
                 "-p",
-                f"{host_port}:8080",
+                # Loopback only (security baseline): reached at localhost or, from
+                # a containerised gateway on Docker Desktop, host.docker.internal.
+                f"127.0.0.1:{host_port}:8080",
                 "--restart",
                 "unless-stopped",
             ]

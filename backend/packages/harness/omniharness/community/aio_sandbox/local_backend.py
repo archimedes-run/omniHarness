@@ -165,8 +165,13 @@ def _resolve_docker_bind_host(sandbox_host: str | None = None, bind_host: str | 
         logger.debug("Docker sandbox bind: 127.0.0.1 (loopback default)")
         return "127.0.0.1"
 
-    logger.debug("Docker sandbox bind: 0.0.0.0 (non-loopback sandbox host compatibility)")
-    return "0.0.0.0"
+    # Security baseline: loopback even when the sandbox is reached via
+    # host.docker.internal. Docker Desktop (macOS/Windows) routes that name to
+    # loopback-published ports; on Linux, set OMNI_HARNESS_SANDBOX_BIND_HOST to
+    # the docker bridge address. Never every interface by default: the sandbox
+    # API runs arbitrary commands.
+    logger.debug("Docker sandbox bind: 127.0.0.1 (loopback; set OMNI_HARNESS_SANDBOX_BIND_HOST to override)")
+    return "127.0.0.1"
 
 
 class LocalContainerBackend(SandboxBackend):

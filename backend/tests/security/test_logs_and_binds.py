@@ -5,6 +5,7 @@ User items B and C of the security baseline.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -233,3 +234,229 @@ def test_the_logged_bind_is_the_real_one(argv, expected) -> None:
 
     assert actual_bind(argv) == expected
     assert get_gateway_config().host != "0.0.0.0" or __import__("os").environ.get("GATEWAY_HOST") == "0.0.0.0"
+
+
+def test_a_child_loggers_preview_token_is_redacted_in_the_file(tmp_path, monkeypatch) -> None:
+    """Logger filters do not see records a child logger propagates; the file
+    handler's own filter does. Other root handlers are set aside first: a
+    filter on one of them mutates the record and would hide the difference."""
+    from app.gateway.log_files import install_log_file
+
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    handler = install_log_file(str(tmp_path / "gateway.log"))
+    try:
+        logging.getLogger("some.child.module").warning("GET /api/threads/t/artifacts/preview-token/SECRETTOKEN123/x")
+    finally:
+        for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):
+            logging.getLogger(name).removeHandler(handler)
+        handler.close()
+    text = (tmp_path / "gateway.log").read_text()
+    assert "SECRETTOKEN123" not in text and "[redacted]" in text
+
+
+def test_four_workers_starting_at_once_keep_the_old_log(tmp_path) -> None:
+    import threading
+
+    (tmp_path / "gateway.log").write_text("line from before rotation\n")
+    today = [date(2026, 10, 20)]
+    handlers = [_handler(tmp_path, today) for _ in range(4)]
+    barrier = threading.Barrier(4)
+
+    def start(h, i):
+        barrier.wait()
+        h.emit(_record(f"worker {i}"))
+
+    threads = [threading.Thread(target=start, args=(h, i)) for i, h in enumerate(handlers)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    [h.close() for h in handlers]
+    kept = "".join(p.read_text() for p in tmp_path.glob("gateway-pre-rotation-*.log"))
+    assert "line from before rotation" in kept
+    assert (tmp_path / "gateway.log").is_symlink()
+    today_lines = (tmp_path / "gateway-2026-10-20.log").read_text().splitlines()
+    assert sorted(today_lines) == [f"worker {i}" for i in range(4)]
+
+
+def test_host_bash_never_sees_the_internal_token_or_api_keys(monkeypatch) -> None:
+    from omniharness.sandbox.local.local_sandbox import scrubbed_environment
+
+    secrets = {k: "x" for k in ("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "AUTH_JWT_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "GITHUB_TOKEN", "MY_SERVICE_PASSWORD", "FERNET_KEY")}
+    env = scrubbed_environment({"PATH": "/usr/bin", "HOME": "/h", **secrets})
+    assert env == {"PATH": "/usr/bin", "HOME": "/h"}
+
+
+# ── nginx log rotation (docker/nginx/rotate-logs.sh) ──────────────────────
+
+_FAKE_NGINX = r"""
+import os, signal, sys, time
+d = sys.argv[1]
+f = open(os.path.join(d, "access.log"), "a", buffering=1)
+def reopen(*_):
+    global f
+    f.close()
+    f = open(os.path.join(d, "access.log"), "a", buffering=1)
+signal.signal(signal.SIGUSR1, reopen)
+open(os.path.join(d, "ready"), "w").close()
+i = 0
+while not os.path.exists(os.path.join(d, "stop")):
+    f.write(f"line {i}\n"); i += 1
+    time.sleep(0.005)
+f.write(f"line {i}\n")
+f.close()
+open(os.path.join(d, "count"), "w").write(str(i + 1))
+"""
+
+
+def test_nginx_rotation_loses_no_lines_compresses_and_keeps_30_days(tmp_path) -> None:
+    import gzip
+    import os
+    import sys
+    import time
+
+    if shutil.which("gzip") is None:
+        pytest.skip("gzip not installed: nginx rotation NOT checked")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "error.log").write_text("an error\n")
+    old = logs / "access-2026-08-01.log.gz"
+    old.write_bytes(gzip.compress(b"old\n"))
+    recent = logs / "access-2026-10-01.log.gz"
+    recent.write_bytes(gzip.compress(b"recent\n"))
+    now = time.time()
+    os.utime(old, (now - 40 * 86400, now - 40 * 86400))
+    os.utime(recent, (now - 19 * 86400, now - 19 * 86400))
+
+    writer = subprocess.Popen([sys.executable, "-c", _FAKE_NGINX, str(logs)])
+    try:
+        for _ in range(200):
+            if (logs / "ready").exists():
+                break
+            time.sleep(0.01)
+        time.sleep(0.2)
+        pidfile = tmp_path / "nginx.pid"
+        pidfile.write_text(str(writer.pid))
+        result = subprocess.run(["sh", str(REPO / "docker/nginx/rotate-logs.sh"), "once", str(logs), "2026-10-20", str(pidfile)], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        time.sleep(0.2)
+        (logs / "stop").write_text("")
+        writer.wait(timeout=10)
+    finally:
+        writer.kill() if writer.poll() is None else None
+    rotated = gzip.decompress((logs / "access-2026-10-20.log.gz").read_bytes()).decode().splitlines()
+    current = (logs / "access.log").read_text().splitlines()
+    total = int((logs / "count").read_text())
+    assert rotated and current, "both the rotated day and the reopened file have lines"
+    assert sorted(rotated + current, key=lambda line: int(line.split()[1])) == [f"line {i}" for i in range(total)], "a line was lost or duplicated"
+    assert gzip.decompress((logs / "error-2026-10-20.log.gz").read_bytes()) == b"an error\n"
+    assert not old.exists(), "older than 30 days must go"
+    assert recent.exists(), "within 30 days must stay"
+    assert not (logs / "access-2026-10-20.log").exists(), "the rotated day is compressed"
+
+
+def test_both_compose_files_run_the_nginx_rotation() -> None:
+    for compose in ("docker/docker-compose.yaml", "docker/docker-compose-dev.yaml"):
+        text = (REPO / compose).read_text()
+        assert "rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &" in text, compose
+        assert "./nginx/rotate-logs.sh:/etc/nginx/rotate-logs.sh:ro" in text, compose
+    assert "pid /tmp/nginx.pid;" in (REPO / "docker/nginx/nginx.conf").read_text()
+
+
+def test_nginx_sets_forwarded_headers_itself_in_every_proxied_location() -> None:
+    for conf in ("docker/nginx/nginx.conf", "docker/nginx/nginx.local.conf"):
+        text = (REPO / conf).read_text()
+        for block in re.split(r"\n\s*location ", text)[1:]:
+            if "proxy_pass" not in block:
+                continue
+            head = block.split("\n", 1)[0]
+            assert 'proxy_set_header Forwarded "";' in block, (conf, head)
+            assert "proxy_set_header X-Forwarded-Host $http_host;" in block, (conf, head)
+            assert 'proxy_set_header X-Forwarded-Port "";' in block, (conf, head)
+
+
+# ── every dev/test/run config in the repo binds loopback ─────────────────
+
+#: 0.0.0.0 that stays, each with its reason: it is INSIDE a container, whose
+#: port is reached over the compose network and published on the host only
+#: through the loopback mappings checked above.
+CONTAINER_INTERNAL = {
+    "backend/Dockerfile": "gateway inside its container; nginx reaches gateway:8001, no host publish",
+    "docker/docker-compose.yaml": "gateway command inside its container (same)",
+    "docker/docker-compose-dev.yaml": "gateway command inside its container (same)",
+    "docker/provisioner/Dockerfile": "provisioner inside its container; nginx reaches provisioner:8002",
+    "frontend/Dockerfile": "NEXT_HOST=0.0.0.0 inside the frontend container; nginx reaches frontend:3000",
+}
+
+
+def _repo_files(*patterns: str) -> list[Path]:
+    out = subprocess.run(["git", "ls-files", *patterns], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+    return [REPO / p for p in out]
+
+
+def test_playwright_web_servers_bind_loopback() -> None:
+    configs = _repo_files("*playwright*.config.ts")
+    assert configs, "the sweep found no Playwright config"
+    for path in configs:
+        text = path.read_text()
+        assert "0.0.0.0" not in text, path
+        for command in re.findall(r"command:\s*[\"'`]([^\"'`]+)", text):
+            assert re.search(r"(-H|--hostname)\s+127\.0\.0\.1", command), (path.name, command)
+        for url in re.findall(r"(?:baseURL|url):\s*[\"'`](https?://[^\"'`]+)", text):
+            assert re.match(r"https?://(127\.0\.0\.1|localhost)(:|/|$)", url), (path.name, url)
+
+
+def test_next_scripts_bind_loopback_by_default() -> None:
+    for path in _repo_files("*package.json"):
+        if "node_modules" in path.parts:
+            continue
+        scripts = json.loads(path.read_text()).get("scripts", {})
+        for name, script in scripts.items():
+            for command in re.findall(r"next (?:dev|start)[^&;|]*", script):
+                assert re.search(r"(-H|--hostname)\s+(127\.0\.0\.1|\$\{NEXT_HOST:-127\.0\.0\.1\})", command), (path, name, command)
+
+
+def test_uvicorn_on_the_host_binds_loopback() -> None:
+    files = _repo_files("Makefile", "*/Makefile", "scripts/*", "*Dockerfile", "docker/*.y*ml")
+    for path in files:
+        rel = path.relative_to(REPO).as_posix()
+        for host in re.findall(r"uvicorn[^\n\"]*?--host[ =](\S+)", path.read_text()):
+            if host == "0.0.0.0":
+                assert rel in CONTAINER_INTERNAL, f"{rel}: uvicorn --host 0.0.0.0 on the host"
+            else:
+                assert host == "127.0.0.1", (rel, host)
+
+
+def test_docker_run_port_publishes_are_loopback() -> None:
+    """Every `-p` the code builds for `docker run` names 127.0.0.1 (or the
+    loopback-defaulting resolver). The Apple `container` runtime line is the
+    one listed exception."""
+    exceptions = {("packages/harness/omniharness/community/aio_sandbox/local_backend.py", 'f"{port}:8080"'): "Apple container runtime: its -p takes no host address here; NOT verified loopback (reported)"}
+    found = 0
+    for path in _repo_files("*.py", "*.sh"):
+        rel = path.relative_to(REPO).as_posix()
+        if "/tests/" in f"/{rel}" or rel.startswith("skills/"):
+            continue
+        text = path.read_text(errors="ignore")
+        for mapping in re.findall(r'"-p",\s*(?:#[^\n]*\n\s*)*(f?"[^"]+")', text) + re.findall(r'port_mapping = (f"[^"]+")', text):
+            found += 1
+            if (rel.removeprefix("backend/"), mapping) in exceptions:
+                continue
+            assert mapping.startswith(('f"127.0.0.1:', '"127.0.0.1:', 'f"{_resolve_docker_bind_host()}:')), (rel, mapping)
+        for mapping in re.findall(r"docker run[^\n]*\s-p\s+(\S+)", text):
+            found += 1
+            assert mapping.startswith("127.0.0.1:"), (rel, mapping)
+    assert found >= 2, "the sweep found no docker -p at all"
+    from omniharness.community.aio_sandbox.local_backend import _resolve_docker_bind_host
+
+    assert _resolve_docker_bind_host(sandbox_host="host.docker.internal", bind_host=None) == "127.0.0.1"
+
+
+def test_host_bash_command_runs_with_the_scrubbed_environment(monkeypatch) -> None:
+    """Through LocalSandbox.execute_command, the path host bash takes."""
+    from omniharness.sandbox.local.local_sandbox import LocalSandbox
+
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "internal-token-value-xyz")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-value-xyz")
+    out = LocalSandbox("t").execute_command("env")
+    assert "internal-token-value-xyz" not in out and "sk-test-value-xyz" not in out
+    assert "PATH=" in out

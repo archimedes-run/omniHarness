@@ -58,9 +58,19 @@ class DailyAppendFileHandler(logging.Handler):
     def _point_symlink(self, target: Path) -> None:
         tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
         try:
-            if self.path.exists() and not self.path.is_symlink():
-                # A plain file from the old shell redirect: keep it, by date.
-                self.path.rename(self.path.with_name(f"{self.path.stem}-pre-rotation-{datetime.now():%Y%m%d%H%M%S}{self.path.suffix or '.log'}"))
+            # A plain file from the old shell redirect: keep its lines by
+            # HARD-LINKING it under a dated name, then atomically replace the
+            # path with the symlink. Nothing is renamed, so several workers
+            # starting at once cannot move each other's symlink or lose lines;
+            # a late worker that links today's file instead only adds a
+            # harmless second name for it.
+            st = os.lstat(self.path) if os.path.lexists(self.path) else None
+            if st is not None and not os.path.islink(self.path):
+                keep = self.path.with_name(f"{self.path.stem}-pre-rotation-{st.st_ino}{self.path.suffix or '.log'}")
+                try:
+                    os.link(self.path, keep, follow_symlinks=False)
+                except FileExistsError:
+                    pass
             tmp.unlink(missing_ok=True)
             tmp.symlink_to(target.name)
             os.replace(tmp, self.path)
@@ -116,8 +126,12 @@ def install_log_file(path: str | None = None) -> DailyAppendFileHandler | None:
     path = path or os.environ.get(LOG_FILE_ENV, "").strip() or None
     if not path:
         return None
+    from app.gateway.logging_filters import add_preview_token_filter
+
     handler = DailyAppendFileHandler(path)
     handler.setFormatter(logging.Formatter(_FORMAT, datefmt=_DATEFMT))
+    # Every record this file receives, from any logger, is redacted.
+    add_preview_token_filter(handler)
     for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):
         target = logging.getLogger(name)
         for existing in list(target.handlers):

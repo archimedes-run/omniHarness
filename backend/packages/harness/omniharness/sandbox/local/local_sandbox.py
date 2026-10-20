@@ -1,6 +1,7 @@
 import errno
 import ntpath
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -10,6 +11,17 @@ from typing import NamedTuple
 from omniharness.sandbox.local.list_dir import list_dir
 from omniharness.sandbox.sandbox import Sandbox
 from omniharness.sandbox.search import GrepMatch, find_glob_matches, find_grep_matches
+
+#: Environment variables a host command never sees. By name pattern, so a key
+#: added later is covered too.
+_SECRET_ENV_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY|CREDENTIAL|_KEY$|^AUTH_|COOKIE|SESSION)", re.IGNORECASE)
+_SECRET_ENV_NAMES = frozenset({"OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "AUTH_JWT_SECRET", "BETTER_AUTH_SECRET", "DATABASE_URL"})
+
+
+def scrubbed_environment(source: dict[str, str] | None = None) -> dict[str, str]:
+    """The process environment minus every secret-looking variable."""
+    source = dict(os.environ if source is None else source)
+    return {k: v for k, v in source.items() if k not in _SECRET_ENV_NAMES and not _SECRET_ENV_RE.search(k)}
 
 
 @dataclass(frozen=True)
@@ -298,6 +310,10 @@ class LocalSandbox(Sandbox):
         raise RuntimeError("No suitable shell executable found. Tried /bin/zsh, /bin/bash, /bin/sh, and `sh` on PATH.")
 
     def execute_command(self, command: str) -> str:
+        # Host bash (sandbox.allow_host_bash) runs agent-written commands with
+        # the gateway's own environment unless scrubbed: the internal auth
+        # token, JWT secret and API keys must never reach it (security baseline).
+        env = scrubbed_environment()
         # Resolve container paths in command before execution
         resolved_command = self._resolve_paths_in_command(command)
         shell = self._get_shell()
@@ -316,6 +332,7 @@ class LocalSandbox(Sandbox):
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=env,
             )
         else:
             args = [shell, "-c", resolved_command]
@@ -325,6 +342,7 @@ class LocalSandbox(Sandbox):
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=env,
             )
         output = result.stdout
         if result.stderr:

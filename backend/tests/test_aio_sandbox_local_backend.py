@@ -144,11 +144,14 @@ def test_resolve_docker_bind_host_defaults_loopback_for_localhost(monkeypatch):
     assert _resolve_docker_bind_host() == "127.0.0.1"
 
 
-def test_resolve_docker_bind_host_keeps_dood_compatibility(monkeypatch):
+def test_resolve_docker_bind_host_is_loopback_even_for_dood(monkeypatch):
+    """Security baseline: never every interface by default. Docker Desktop
+    reaches loopback publishes via host.docker.internal; Linux operators set
+    OMNI_HARNESS_SANDBOX_BIND_HOST."""
     monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
     monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "host.docker.internal")
 
-    assert _resolve_docker_bind_host() == "0.0.0.0"
+    assert _resolve_docker_bind_host() == "127.0.0.1"
 
 
 def test_resolve_docker_bind_host_uses_ipv6_loopback_for_ipv6_sandbox_host(monkeypatch):
@@ -189,7 +192,7 @@ def test_start_container_binds_local_docker_port_to_loopback_by_default(monkeypa
     assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"
 
 
-def test_start_container_keeps_broad_bind_for_dood_sandbox_host(monkeypatch):
+def test_start_container_binds_loopback_for_dood_sandbox_host(monkeypatch):
     backend = LocalContainerBackend(
         image="sandbox:latest",
         base_port=8080,
@@ -202,7 +205,7 @@ def test_start_container_keeps_broad_bind_for_dood_sandbox_host(monkeypatch):
 
     captured_cmd = _capture_start_container_command(monkeypatch, backend)
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "0.0.0.0:18080:8080"
+    assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"
 
 
 def test_start_container_binds_ipv6_sandbox_host_to_ipv6_loopback(monkeypatch):
