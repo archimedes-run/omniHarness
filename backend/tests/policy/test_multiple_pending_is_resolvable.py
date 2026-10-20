@@ -13,9 +13,8 @@ which is the same outcome as a broken gate.
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage
-
 from app.policy import confirm_flow as cf
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 
 
 def test_the_plan_text_tells_the_user_how_to_name_this_action(build_flow, make_pending):
@@ -38,7 +37,7 @@ def test_a_bare_yes_with_several_pending_still_refuses(build_flow, make_pending)
     make_pending(system, targets=["A"])
     make_pending(system, targets=["B"])
 
-    result = system.flow.from_message(HumanMessage(content="yes"), run_tool=system.run_tool)
+    result = system.flow.from_message(user_turn(content="yes"), run_tool=system.run_tool)
 
     assert result.outcome == cf.UNRECOGNISED
     assert "2 actions are pending" in result.message
@@ -50,7 +49,7 @@ def test_naming_the_action_confirms_exactly_that_one(build_flow, make_pending):
     first = make_pending(system, targets=["A"])
     second = make_pending(system, targets=["B"])
 
-    result = system.flow.from_message(HumanMessage(content=f"yes {second.id}"), run_tool=system.run_tool)
+    result = system.flow.from_message(user_turn(content=f"yes {second.id}"), run_tool=system.run_tool)
 
     assert result.outcome == cf.EXECUTED
     assert system.ran == [("calendar_decline", {"meetings": ["B"]})]
@@ -62,7 +61,7 @@ def test_naming_the_action_declines_exactly_that_one(build_flow, make_pending):
     first = make_pending(system, targets=["A"])
     second = make_pending(system, targets=["B"])
 
-    result = system.flow.from_message(HumanMessage(content=f"no {first.id}"), run_tool=system.run_tool)
+    result = system.flow.from_message(user_turn(content=f"no {first.id}"), run_tool=system.run_tool)
 
     assert result.outcome == cf.DECLINED
     assert system.ran == []

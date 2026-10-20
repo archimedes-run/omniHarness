@@ -50,6 +50,10 @@ class SlackChannel(Channel):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._allowed_users = _normalize_allowed_users(config.get("allowed_users", []))
 
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        """Only an EXPLICIT allowlist vouches for a sender as the user."""
+        return bool(self._allowed_users) and user_id in self._allowed_users
+
     async def start(self) -> None:
         if self._running:
             return

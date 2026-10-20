@@ -36,6 +36,16 @@ class Channel(ABC):
         self._running = False
 
     @property
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        """Is this sender the person who owns the install? (security baseline)
+
+        Only then is their message the user's own turn (lineage.is_user_turn):
+        able to originate a Tier 3 plan as "user" or confirm one by typing.
+        A channel with no explicit allowlist cannot tell, so: False. Channels
+        with an allowlist (Telegram, Slack) override this.
+        """
+        return False
+
     def is_running(self) -> bool:
         return self._running
 

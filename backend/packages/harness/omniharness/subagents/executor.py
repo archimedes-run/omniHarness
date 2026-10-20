@@ -408,7 +408,12 @@ class SubagentExecutor:
         # Skill content injected as developer/system messages before the task
         messages.extend(skill_messages)
         # Then the actual task
-        messages.append(HumanMessage(content=task))
+        # The invited agent's "user" is its inviter: tagged as a turn so the
+        # policy layer finds it, then substitutes the INVITER's origin for it
+        # (PolicyMiddleware._origin). It never counts as the person directly.
+        from omniharness.agents.turns import mark_user_turn
+
+        messages.append(mark_user_turn(HumanMessage(content=task)))
 
         state: dict[str, Any] = {
             "messages": messages,
