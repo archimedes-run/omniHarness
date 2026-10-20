@@ -231,7 +231,9 @@ class ConfirmationFlow:
             # only by expiry, and silent until then. Found by running a real
             # gateway: a tool raised on a missing injected argument and the
             # action sat claimed with outcome None.
-            logger.exception("policy: confirmed action %s (%s) did not complete", claimed.id, claimed.tool_name)
+            # The exception's TYPE only: its text (and a traceback's) can carry
+            # the call's arguments, and a log is not a redacted surface.
+            logger.error("policy: confirmed action %s (%s) did not complete: %s", claimed.id, claimed.tool_name, type(exc).__name__)
             self.store.resolve(claimed, Outcome.FAILED, f"authorised, but the tool did not complete: {exc}")
             return FlowResult(
                 FAILED,

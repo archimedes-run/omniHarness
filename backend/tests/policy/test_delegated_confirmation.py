@@ -63,6 +63,8 @@ def web_fetch(url: str) -> str:
 #: Hold points for concurrency tests: "lead" pauses the lead's model call,
 #: "wipe" pauses wipe_backup. Each is (entered, release) threading.Events.
 HOLD: dict[str, tuple[threading.Event, threading.Event]] = {}
+#: wipe_backup's behaviour: "extra" is appended to its output, "raise" makes it raise.
+WIPE_OUT: dict[str, str] = {}
 
 
 def _hold(name: str) -> None:
@@ -84,8 +86,10 @@ class HeldLeadFake(ToolCapableFake):
 def wipe_backup(name: str) -> str:
     """Delete a backup. No rule names it, so Tier 3 (FR-009 default). Only a subagent has it."""
     _hold("wipe")
+    if WIPE_OUT.get("raise"):
+        raise RuntimeError(WIPE_OUT["raise"])
     RAN.append(("wipe_backup", {"name": name}))
-    return f"wiped {name}"
+    return f"wiped {name}{WIPE_OUT.get('extra', '')}"
 
 
 #: Off only for the ungated fixture: `task` then runs with the provider's own
@@ -128,6 +132,7 @@ def gateway(tmp_path, monkeypatch):
     SUB_SCRIPT.clear()
     SOURCE_STATE["disconnected"] = False
     HOLD.clear()
+    WIPE_OUT.clear()
     _wire(monkeypatch)
 
     holder = SimpleNamespace(client=None, stack=None)
@@ -744,3 +749,77 @@ def test_continue_is_refused_for_an_action_that_cannot_be_continued(gateway) -> 
     assert elsewhere.status_code == 409 and "another chat" in elsewhere.text, elsewhere.text
     assert _continue(gateway, thread_id, "nonexistent").status_code == 409
     assert len([r for r in SUBAGENT_RUNS if any("Observed context" in m for m in r)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Review nits (PR #58): one tool snapshot per confirmation; the card's result
+# redacted; no exception text in logs; a confirmation off the default pool
+# ---------------------------------------------------------------------------
+
+
+def test_a_confirmation_builds_the_proposers_tools_once(gateway, monkeypatch) -> None:
+    import omniharness.agents.tool_surface as tool_surface
+
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    builds: list[dict] = []
+    real = tool_surface.tools_for_surface
+
+    def counting(surface, **kwargs):
+        builds.append(surface)
+        return real(surface, **kwargs)
+
+    monkeypatch.setattr(tool_surface, "tools_for_surface", counting)
+    body = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+
+    assert body["outcome"] == "executed", body
+    assert len(builds) == 1, f"the surface was rebuilt {len(builds)} times: what was checked is not what ran"
+
+
+def test_the_cards_result_is_redacted(gateway) -> None:
+    token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    WIPE_OUT["extra"] = f"; the API printed {token}"
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+
+    resp = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={})
+
+    assert resp.status_code == 200
+    assert token not in resp.text, "the tool's raw output reached the card"
+    assert resp.json()["detail"]["result"].startswith("wiped nightly")
+    assert RAN == [("wipe_backup", {"name": "nightly"})]
+
+
+def test_a_failed_confirmed_call_logs_no_exception_text(gateway, caplog) -> None:
+    import logging
+
+    WIPE_OUT["raise"] = "could not wipe nightly-ARGUMENT-SECRET"
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        body = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+
+    assert body["outcome"] == "failed", body
+    logged = "\n".join(f"{r.getMessage()} {r.exc_text or ''} {r.exc_info or ''}" for r in caplog.records)
+    assert "did not complete: RuntimeError" in logged, "the failure was not logged at all"
+    assert "ARGUMENT-SECRET" not in logged, "the tool's exception text (with its arguments) was logged"
+
+
+def test_a_confirmed_delegation_runs_off_the_default_thread_pool(gateway, monkeypatch) -> None:
+    import app.policy.surface_run as surface_run
+
+    names: list[str] = []
+    real = surface_run.invoke
+
+    def spy(tool, arguments, *, runtime, state, call_id):
+        names.append(threading.current_thread().name)
+        return real(tool, arguments, runtime=runtime, state=state, call_id=call_id)
+
+    monkeypatch.setattr(surface_run, "invoke", spy)
+    thread_id = _thread(gateway)
+    _say(gateway, thread_id, "ask a helper to wipe the nightly backup", [AIMessage(content="", tool_calls=[DELEGATE]), AIMessage(content="Delegation waiting.")])
+    [delegation] = _pending(gateway, "task")
+    SUB_SCRIPT[:] = [AIMessage(content="done")]
+
+    assert gateway.client.post(f"/api/confirmations/{delegation['id']}/confirm", json={}).json()["outcome"] == "executed"
+
+    [name] = names
+    assert name.startswith("confirmed-action"), f"the confirmed task ran on {name!r}, the shared pool"

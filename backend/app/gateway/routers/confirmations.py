@@ -22,8 +22,11 @@ what chat could not.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -117,6 +120,34 @@ class ResolveResponse(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+#: Where a confirmed call runs: its own pool, never the event loop's default
+#: one. A confirmed `task` runs its subagent to the end before the route
+#: returns, minutes perhaps, and the default pool also serves every
+#: `asyncio.to_thread` in the gateway; a few confirmations must not starve it.
+_CONFIRM_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="confirmed-action")
+
+
+async def _off_the_request_pool(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+    """Run a confirmation in _CONFIRM_POOL, with this request's context."""
+    context = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(_CONFIRM_POOL, functools.partial(context.run, fn, *args, **kwargs))
+
+
+def _response_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    """What the card is sent: the tool's result and any error, REDACTED.
+
+    The result is the tool's output (an email, a page, a token it printed),
+    so it passes the same redactor as every other read surface; one that fails
+    redaction reads Withheld, never raw.
+    """
+    shown = dict(detail)
+    for key in ("result", "error"):
+        if key in shown and shown[key] is not None:
+            text, withheld = for_display(shown[key] if isinstance(shown[key], str) else json.dumps(shown[key], default=str, ensure_ascii=False))
+            shown[key] = "Withheld: this could not be safely redacted for display." if withheld else text
+    return shown
+
+
 #: Refused before the claim: the chat this action's result is posted into is
 #: running a reply now. Nothing ran; the card stays.
 THREAD_BUSY = "thread_busy"
@@ -167,8 +198,12 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
         current = list(await selection.get_sources(thread_id=thread_id))
         sources = set(current)
 
+    from app.policy.surface_run import SurfaceSnapshot
+
     tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=get_app_config())
     registry = {getattr(t, "name", ""): t for t in tools}
+    # The proposer's tools, built once: checked and run from the same list.
+    snapshot = SurfaceSnapshot(current)
 
     def run(tool_name: str, arguments: dict) -> Any:
         from app.policy.surface_run import confirming_action, run_on_surface
@@ -179,7 +214,7 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
             # selection alone has no `task` and none of a subagent's own tools,
             # so a confirmed delegation or subagent action failed here with
             # LookupError (AUDIT-2026-10 addendum).
-            return run_on_surface(action, tool_name, arguments, selection=current)
+            return run_on_surface(action, tool_name, arguments, selection=current, snapshot=snapshot)
         tool = registry.get(tool_name)
         if tool is None:
             # Loud. A confirmation that cannot execute must say why; the defect
@@ -199,7 +234,7 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
     def unavailable(action: Any) -> str | None:
         from app.policy.surface_run import unavailable_reason
 
-        return unavailable_reason(action, current)
+        return unavailable_reason(action, current, snapshot=snapshot)
 
     run.unavailable = unavailable  # type: ignore[attr-defined]
     return run
@@ -364,13 +399,14 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # OFF THE EVENT LOOP: a confirmed delegation runs its subagent to the end
     # before the flow returns, and that must not stall every other request.
     answered = {"via": "button", "thread_id": None, "user_id": user_id, "message_id": None}
-    result = await asyncio.to_thread(flow.explicit, action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
-    detail = dict(result.detail)
-    message = result.message
+    result = await _off_the_request_pool(flow.explicit, action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
+    detail = _response_detail(result.detail)
+    message = for_display(result.message)[0]
     if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
         from app.policy.surface_run import report_message
 
-        report = report_message(action, detail.get("result"))
+        # The report redacts the raw result itself (surface_run.observed_result).
+        report = report_message(action, result.detail.get("result"))
         message = str(report.content)
         detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
         # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
@@ -445,8 +481,8 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
     user_id = _user_id(ctx)
     run_tool = await _runner(request, edited.thread_id, user_id)
     answered = {"via": "edit", "thread_id": None, "user_id": user_id, "message_id": None}
-    result = await asyncio.to_thread(flow.explicit, edited.id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
-    return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail={**result.detail, "replaced": action_id})
+    result = await _off_the_request_pool(flow.explicit, edited.id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
+    return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=for_display(result.message)[0], detail={**_response_detail(result.detail), "replaced": action_id})
 
 
 @router.post("/{action_id}/confirm", response_model=ResolveResponse)
