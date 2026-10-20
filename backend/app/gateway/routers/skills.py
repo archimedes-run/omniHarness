@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import permission_dependency
@@ -22,6 +22,18 @@ from omniharness.skills.types import SKILL_MD_FILE, SkillCategory
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["skills"])
+
+
+async def _own_custom_skill(skill_name: str, request: Request) -> None:
+    """A custom skill's routes reach only the account it belongs to (the
+    security baseline's ownership rule; a refusal is a 404)."""
+    from app.gateway.ownership import require_access
+
+    try:
+        owner = config_versions.skill_owner(skill_name)
+    except ValueError:
+        return  # an invalid name: the route itself answers 400
+    await require_access(request, owner, what="Custom skill", ident=f"'{skill_name}'")
 
 
 class SkillResponse(BaseModel):
@@ -117,9 +129,14 @@ def _skill_to_response(skill: Skill) -> SkillResponse:
     summary="List All Skills",
     description="Retrieve a list of all available skills from both public and custom directories.",
 )
-async def list_skills(config: AppConfig = Depends(get_config)) -> SkillsListResponse:
+async def list_skills(http: Request, config: AppConfig = Depends(get_config)) -> SkillsListResponse:
+    from app.gateway.ownership import filter_accessible
+
     try:
         skills = get_or_new_skill_storage(app_config=config).load_skills(enabled_only=False)
+        # Public skills are everyone's; a custom one only its owner's.
+        custom = await filter_accessible(http, [k for k in skills if k.category == SkillCategory.CUSTOM], lambda skill: config_versions.skill_owner(skill.name))
+        skills = [k for k in skills if k.category != SkillCategory.CUSTOM or k in custom]
         return SkillsListResponse(skills=[_skill_to_response(skill) for skill in skills])
     except Exception as e:
         logger.error(f"Failed to load skills: {e}", exc_info=True)
@@ -140,7 +157,7 @@ async def install_skill(request: SkillInstallRequest, config: AppConfig = Depend
         # The archive is unpacked by the installer (its own path checks); the
         # result is then recorded as a version, so it shows in history and
         # can be undone like any other change.
-        config_versions.record_installed(result["skill_name"], who="user:" + get_effective_user_id(), storage=storage)
+        config_versions.record_installed(result["skill_name"], who="user:" + get_effective_user_id(), storage=storage, owner_id=get_effective_user_id())
         await refresh_skills_system_prompt_cache_async()
         return SkillInstallResponse(**result)
     except FileNotFoundError as e:
@@ -156,10 +173,14 @@ async def install_skill(request: SkillInstallRequest, config: AppConfig = Depend
         raise HTTPException(status_code=500, detail=f"Failed to install skill: {str(e)}")
 
 
-@router.get("/skills/custom", response_model=SkillsListResponse, summary="List Custom Skills")
-async def list_custom_skills(config: AppConfig = Depends(get_config)) -> SkillsListResponse:
+@router.get("/skills/custom", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=SkillsListResponse, summary="List Custom Skills")
+async def list_custom_skills(http: Request, config: AppConfig = Depends(get_config)) -> SkillsListResponse:
+    from app.gateway.ownership import filter_accessible
+
     try:
         skills = [skill for skill in get_or_new_skill_storage(app_config=config).load_skills(enabled_only=False) if skill.category == SkillCategory.CUSTOM]
+        # Only the caller's custom skills (the ownership rule).
+        skills = await filter_accessible(http, skills, lambda skill: config_versions.skill_owner(skill.name))
         return SkillsListResponse(skills=[_skill_to_response(skill) for skill in skills])
     except Exception as e:
         logger.error("Failed to list custom skills: %s", e, exc_info=True)
@@ -188,7 +209,7 @@ class SkillFileWriteRequest(BaseModel):
     base_version: int | None = Field(None, description="The version this was added from; refused when it is no longer current")
 
 
-@router.post("/skills/custom", response_model=CustomSkillContentResponse, status_code=201, summary="Create Custom Skill")
+@router.post("/skills/custom", dependencies=[Depends(permission_dependency("threads", "write"))], response_model=CustomSkillContentResponse, status_code=201, summary="Create Custom Skill")
 async def create_custom_skill(request: CustomSkillCreateRequest, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
     """Skill Studio's "+ New skill": the same checks the skill_manage tool's
     create runs (frontmatter, name match, security scan, history)."""
@@ -205,6 +226,7 @@ async def create_custom_skill(request: CustomSkillCreateRequest, config: AppConf
             name,
             {SKILL_MD_FILE: request.content},
             who="user:" + get_effective_user_id(),
+            owner_id=get_effective_user_id(),
             source=request.source,
             base_version=None,
             extra={
@@ -229,7 +251,7 @@ async def create_custom_skill(request: CustomSkillCreateRequest, config: AppConf
         raise HTTPException(status_code=500, detail=f"Failed to create custom skill: {str(e)}")
 
 
-@router.get("/skills/custom/{skill_name}/files", response_model=SkillFilesResponse, summary="List a Custom Skill's Files")
+@router.get("/skills/custom/{skill_name}/files", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], response_model=SkillFilesResponse, summary="List a Custom Skill's Files")
 async def list_custom_skill_files(skill_name: str, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
     storage = get_or_new_skill_storage(app_config=config)
     try:
@@ -245,7 +267,7 @@ async def list_custom_skill_files(skill_name: str, config: AppConfig = Depends(g
     return SkillFilesResponse(skill_name=name, files=files)
 
 
-@router.post("/skills/custom/{skill_name}/files", response_model=SkillFilesResponse, summary="Add a File to a Custom Skill")
+@router.post("/skills/custom/{skill_name}/files", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], response_model=SkillFilesResponse, summary="Add a File to a Custom Skill")
 async def write_custom_skill_file(skill_name: str, request: SkillFileWriteRequest, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
     """A script, reference or template next to SKILL.md. Scripts are scanned as
     executable; a blocked scan writes nothing."""
@@ -277,6 +299,7 @@ def _write_file_version(name: str, request: SkillFileWriteRequest, prev: str | N
         name,
         {request.path: request.content},
         who="user:" + get_effective_user_id(),
+        owner_id=get_effective_user_id(),
         source="manual",
         base_version=request.base_version,
         extra={
@@ -292,7 +315,7 @@ def _write_file_version(name: str, request: SkillFileWriteRequest, prev: str | N
     )
 
 
-@router.get("/skills/custom/{skill_name}", response_model=CustomSkillContentResponse, summary="Get Custom Skill Content")
+@router.get("/skills/custom/{skill_name}", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], response_model=CustomSkillContentResponse, summary="Get Custom Skill Content")
 async def get_custom_skill(skill_name: str, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
@@ -309,7 +332,7 @@ async def get_custom_skill(skill_name: str, config: AppConfig = Depends(get_conf
         raise HTTPException(status_code=500, detail=f"Failed to get custom skill: {str(e)}")
 
 
-@router.put("/skills/custom/{skill_name}", response_model=CustomSkillContentResponse, summary="Edit Custom Skill")
+@router.put("/skills/custom/{skill_name}", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], response_model=CustomSkillContentResponse, summary="Edit Custom Skill")
 async def update_custom_skill(skill_name: str, request: CustomSkillUpdateRequest, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
@@ -324,6 +347,7 @@ async def update_custom_skill(skill_name: str, request: CustomSkillUpdateRequest
             skill_name,
             {SKILL_MD_FILE: request.content},
             who="user:" + get_effective_user_id(),
+            owner_id=get_effective_user_id(),
             source=request.source,
             base_version=request.base_version,
             extra={
@@ -352,7 +376,7 @@ async def update_custom_skill(skill_name: str, request: CustomSkillUpdateRequest
         raise HTTPException(status_code=500, detail=f"Failed to update custom skill: {str(e)}")
 
 
-@router.delete("/skills/custom/{skill_name}", summary="Delete Custom Skill", dependencies=[Depends(permission_dependency("threads", "delete"))])
+@router.delete("/skills/custom/{skill_name}", dependencies=[Depends(permission_dependency("threads", "delete")), Depends(_own_custom_skill)], summary="Delete Custom Skill")
 async def delete_custom_skill(skill_name: str, config: AppConfig = Depends(get_config)) -> dict[str, bool]:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
@@ -363,6 +387,7 @@ async def delete_custom_skill(skill_name: str, config: AppConfig = Depends(get_c
             skill_name,
             None,
             who="user:" + get_effective_user_id(),
+            owner_id=get_effective_user_id(),
             source="manual",
             extra={
                 "action": "human_delete",
@@ -386,7 +411,7 @@ async def delete_custom_skill(skill_name: str, config: AppConfig = Depends(get_c
         raise HTTPException(status_code=500, detail=f"Failed to delete custom skill: {str(e)}")
 
 
-@router.get("/skills/custom/{skill_name}/history", response_model=CustomSkillHistoryResponse, summary="Get Custom Skill History")
+@router.get("/skills/custom/{skill_name}/history", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], response_model=CustomSkillHistoryResponse, summary="Get Custom Skill History")
 async def get_custom_skill_history(skill_name: str, config: AppConfig = Depends(get_config)) -> CustomSkillHistoryResponse:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
@@ -401,7 +426,7 @@ async def get_custom_skill_history(skill_name: str, config: AppConfig = Depends(
         raise HTTPException(status_code=500, detail=f"Failed to read history: {str(e)}")
 
 
-@router.post("/skills/custom/{skill_name}/rollback", response_model=CustomSkillContentResponse, summary="Rollback Custom Skill")
+@router.post("/skills/custom/{skill_name}/rollback", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], response_model=CustomSkillContentResponse, summary="Rollback Custom Skill")
 async def rollback_custom_skill(skill_name: str, request: SkillRollbackRequest, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
     try:
         storage = get_or_new_skill_storage(app_config=config)
@@ -431,7 +456,7 @@ async def rollback_custom_skill(skill_name: str, request: SkillRollbackRequest, 
         if scan.decision == "block":
             storage.append_history(skill_name, history_entry)
             raise HTTPException(status_code=400, detail=f"Rollback blocked by security scanner: {scan.reason}")
-        config_versions.write_skill(skill_name, {SKILL_MD_FILE: target_content}, who="user:" + get_effective_user_id(), source="undo", extra=history_entry, storage=storage)
+        config_versions.write_skill(skill_name, {SKILL_MD_FILE: target_content}, who="user:" + get_effective_user_id(), owner_id=get_effective_user_id(), source="undo", extra=history_entry, storage=storage)
         await refresh_skills_system_prompt_cache_async()
         return await get_custom_skill(skill_name, config)
     except HTTPException:
@@ -447,7 +472,7 @@ async def rollback_custom_skill(skill_name: str, request: SkillRollbackRequest, 
         raise HTTPException(status_code=500, detail=f"Failed to roll back custom skill: {str(e)}")
 
 
-@router.get("/skills/custom/{skill_name}/versions", response_model=SkillVersionsResponse, summary="A custom skill's version history")
+@router.get("/skills/custom/{skill_name}/versions", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], response_model=SkillVersionsResponse, summary="A custom skill's version history")
 async def custom_skill_versions(skill_name: str, config: AppConfig = Depends(get_config)) -> SkillVersionsResponse:
     storage = get_or_new_skill_storage(app_config=config)
     try:
@@ -458,7 +483,9 @@ async def custom_skill_versions(skill_name: str, config: AppConfig = Depends(get
     return SkillVersionsResponse(name=name, current=versions[-1].version if versions else 0, versions=[SkillVersionSummary(**v.summary()) for v in reversed(versions)])
 
 
-@router.post("/skills/custom/{skill_name}/undo", response_model=SkillVersionsResponse, summary="Restore an earlier version of a custom skill as a new one")
+@router.post(
+    "/skills/custom/{skill_name}/undo", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], response_model=SkillVersionsResponse, summary="Restore an earlier version of a custom skill as a new one"
+)
 async def undo_custom_skill(skill_name: str, request: SkillUndoRequest, config: AppConfig = Depends(get_config)) -> SkillVersionsResponse:
     storage = get_or_new_skill_storage(app_config=config)
     try:
@@ -496,7 +523,7 @@ class SkillTestResponse(BaseModel):
     total: int
 
 
-@router.post("/skills/{skill_name}/test", response_model=SkillTestResponse, summary="Test whether a message makes the model load this skill")
+@router.post("/skills/{skill_name}/test", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], response_model=SkillTestResponse, summary="Test whether a message makes the model load this skill")
 async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConfig = Depends(get_config)) -> SkillTestResponse:
     """Runs ONLY when asked (a button press), and never writes.
 

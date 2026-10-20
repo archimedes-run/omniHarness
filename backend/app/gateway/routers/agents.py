@@ -364,6 +364,10 @@ async def agent_versions(name: str) -> AgentVersionsResponse:
         _validate_agent_name(name)
         name = _normalize_agent_name(name)
     versions = config_versions.agent_history(user_id, name)
+    if not versions and name != config_versions.LEAD_AGENT and config_versions.current_agent_snapshot(user_id, name) is None:
+        # The caller has no such agent (another account's is not reachable:
+        # the store resolves agents in the caller's own directory).
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     return AgentVersionsResponse(
         name=name,
         current=versions[-1].version if versions else 0,

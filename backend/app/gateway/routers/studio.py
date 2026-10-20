@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.agent_runs_view import AgentRunsView, describe_agent_runs
-from app.gateway.authz import require_permission
+from app.gateway.authz import permission_dependency, require_permission
 from app.gateway.deps import get_config
 from omniharness.config.app_config import AppConfig
 
@@ -24,7 +24,7 @@ class StudioOptions(BaseModel):
     default_model: str | None = Field(..., description="The model a run uses when the agent names none")
 
 
-@router.get("/options", response_model=StudioOptions, summary="Agent Studio options")
+@router.get("/options", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=StudioOptions, summary="Agent Studio options")
 async def studio_options(config: AppConfig = Depends(get_config)) -> StudioOptions:
     return StudioOptions(
         tool_groups=[group.name for group in config.tool_groups],
@@ -118,7 +118,7 @@ def _require_agents_api_enabled() -> None:
     require()
 
 
-@router.get("/agents/{name}/autonomy", response_model=AutonomyView, summary="What an agent may do on its own in a scheduled run")
+@router.get("/agents/{name}/autonomy", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=AutonomyView, summary="What an agent may do on its own in a scheduled run")
 async def get_autonomy(name: str, config: AppConfig = Depends(get_config)) -> AutonomyView:
     from omniharness.runtime.user_context import get_effective_user_id
 
@@ -127,7 +127,7 @@ async def get_autonomy(name: str, config: AppConfig = Depends(get_config)) -> Au
     return _autonomy_view(_agent_or_404(name, user_id), user_id, config)
 
 
-@router.put("/agents/{name}/autonomy", response_model=AutonomyView, summary="Grant or revoke standing permissions (a new agent version)")
+@router.put("/agents/{name}/autonomy", dependencies=[Depends(permission_dependency("threads", "write"))], response_model=AutonomyView, summary="Grant or revoke standing permissions (a new agent version)")
 async def put_autonomy(name: str, request: AutonomyUpdate, config: AppConfig = Depends(get_config)) -> AutonomyView:
     """Refuses, server-side, any class that is not reversible in the rules in
     force: the checkbox being absent in the UI is not the guarantee."""
@@ -171,7 +171,7 @@ class GrantUse(BaseModel):
     count_in_run: int
 
 
-@router.get("/agents/{name}/grant-uses", response_model=list[GrantUse], summary="What an agent did on its own under its grants, newest first")
+@router.get("/agents/{name}/grant-uses", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=list[GrantUse], summary="What an agent did on its own under its grants, newest first")
 async def grant_uses(name: str, config: AppConfig = Depends(get_config)) -> list[GrantUse]:
     from pathlib import Path
 
