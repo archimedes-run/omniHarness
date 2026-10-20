@@ -185,7 +185,10 @@ class ConfigLoader:
                     raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has neither `when` nor `unless`, so it can never apply.')
                 exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier, unless=unless))
 
-            rules.append(ClassificationRule(pattern=pattern, tier=tier, exceptions=tuple(exceptions), source_file=str(self.path), source_line=index))
+            reversible = raw.get("reversible")
+            if reversible is not None and not isinstance(reversible, bool):
+                raise PolicyConfigError(f'{self.path}: rules[{index}] (pattern "{pattern}") has reversible {reversible!r}; expected true or false')
+            rules.append(ClassificationRule(pattern=pattern, tier=tier, exceptions=tuple(exceptions), source_file=str(self.path), source_line=index, reversible=reversible))
 
         confirmation = policy.get("confirmation") or {}
         return RuleSet(

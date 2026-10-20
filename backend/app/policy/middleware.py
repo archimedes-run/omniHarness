@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -69,6 +69,10 @@ class PolicyMiddleware(AgentMiddleware):
     audit: Any = None
     actor: str = "default"
     now: Any = _now
+    #: Granted actions taken so far, per run (Feature 006 standing grants).
+    #: One middleware is built per run; keyed by thread as well, so a shared
+    #: instance still counts each run on its own.
+    _granted_in_run: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         super().__init__()
@@ -96,7 +100,13 @@ class PolicyMiddleware(AgentMiddleware):
             )
             return result
 
-        return self._require_confirmation(request, decision)
+        grant = self._standing_grant(request, decision)
+        if isinstance(grant, list):
+            with inviting_turn(self._inviting_for(request)):
+                result = handler(request)
+            self._record_grant_use(request, decision, grant)
+            return result
+        return self._require_confirmation(request, decision, extra_note=grant or "")
 
     async def awrap_tool_call(self, request, handler):
         # Any agent this call invites (the `task` tool) starts from this
@@ -126,7 +136,84 @@ class PolicyMiddleware(AgentMiddleware):
             self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
             return result
 
-        return self._require_confirmation(request, decision)
+        grant = self._standing_grant(request, decision)
+        if isinstance(grant, list):
+            with inviting_turn(self._inviting_for(request)):
+                result = await handler(request)
+            self._record_grant_use(request, decision, grant)
+            return result
+        return self._require_confirmation(request, decision, extra_note=grant or "")
+
+    # -- standing grants (Feature 006, app/policy/grants.py) ----------------
+    #
+    # Checked HERE, on the Tier 3 path, so no caller can skip it: a grant lets
+    # a reversible Tier 3 call run without a confirmation, in a scheduled run
+    # only, up to the per-run cap. Anything else falls through to the normal
+    # Tier 3 proposal.
+
+    def _standing_grant(self, request, decision) -> list[str] | str | None:
+        """The granted classes covering this call; a note (str) when a grant
+        covers it but the run's cap is spent; None when no grant applies."""
+        from .grants import GRANT_CAP_PER_RUN, covering_classes, granted_classes
+        from .provenance import is_synthetic_turn
+
+        context = self._runtime_context(request) or {}
+        if not is_synthetic_turn(context):
+            return None  # chat: the user is there to ask
+        agent = self._requester(request)
+        granted = granted_classes(self._user_id(context), agent)
+        if not granted:
+            return None
+        used = covering_classes(decision, self._arguments(request), granted, self.loader.load())
+        if used is None:
+            return None
+        key = self._run_key(context)
+        if self._granted_in_run.get(key, 0) >= GRANT_CAP_PER_RUN:
+            logger.warning("policy: %s's standing grant covers %s, but this run already took %d granted actions; it waits", agent, decision.tool_name, GRANT_CAP_PER_RUN)
+            return f"This run already did {GRANT_CAP_PER_RUN} things on its own under {agent}'s standing grants, the most one run may do, so this one waits for you."
+        return used
+
+    def _record_grant_use(self, request, decision, classes: list[str]) -> None:
+        from .lineage import initiation_origin
+
+        context = self._runtime_context(request) or {}
+        key = self._run_key(context)
+        self._granted_in_run[key] = self._granted_in_run.get(key, 0) + 1
+        arguments = self._arguments(request)
+        targets = list(self.resolve_targets(decision.tool_name, arguments)) if self.resolve_targets else [f"{decision.tool_name}({arguments})"]
+        # What caused it, for the run's history: the schedule's own turn, or
+        # content the agent read on the way (which still uses the grant).
+        state = getattr(request, "state", None) or {}
+        cause, source = initiation_origin(state.get("messages") if isinstance(state, dict) else None, synthetic=False)
+        origin = "automation" if cause == "user" else cause
+        if self.audit is not None:
+            self.audit.record_grant_use(
+                agent=self._requester(request),
+                user_id=self._user_id(context),
+                tool=decision.tool_name,
+                classes=classes,
+                targets=targets,
+                thread_id=context.get("thread_id"),
+                rule_id=context.get("trigger_rule_id"),
+                origin=origin,
+                origin_source=source,
+                count_in_run=self._granted_in_run[key],
+                now=self.now(),
+            )
+        # Disclosed in the run's reply like a Tier 2 write: the person reading
+        # it later sees what was done without them.
+        self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets))
+        logger.info("policy: %s ran %s on its own under a standing grant (%s; origin %s)", self._requester(request), decision.tool_name, ", ".join(classes), origin)
+
+    @staticmethod
+    def _user_id(context: dict) -> str:
+        from omniharness.runtime.user_context import get_effective_user_id
+
+        return str(context.get("user_id") or get_effective_user_id())
+
+    @staticmethod
+    def _run_key(context: dict) -> tuple:
+        return (context.get("thread_id"), context.get("trigger_rule_id"))
 
     # -- internals ---------------------------------------------------------
 
@@ -345,7 +432,7 @@ class PolicyMiddleware(AgentMiddleware):
         call = getattr(request, "tool_call", None) or {}
         return call.get("args") or {}
 
-    def _require_confirmation(self, request, decision):
+    def _require_confirmation(self, request, decision, extra_note: str = ""):
         """Tier 3: state the plan, record it durably, and do not execute.
 
         FR-006, GLOBALLY: content the agent READ may SUGGEST an action but can
@@ -380,6 +467,8 @@ class PolicyMiddleware(AgentMiddleware):
             owner_id=self._owner_id(request),
         )
         action.plan_text = self._plan_text_for(action)
+        if extra_note:
+            action.plan_text = f"{action.plan_text}\n\n{extra_note}"
         self.pending.save(action)
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
         return self._as_tool_result(request, action.plan_text)

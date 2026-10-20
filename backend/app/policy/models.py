@@ -113,6 +113,10 @@ class ClassificationRule:
     exceptions: tuple[RuleException, ...] = ()
     source_file: str = ""
     source_line: int | None = None
+    #: Can the user undo what this call does? Separate from the tier (Feature
+    #: 006): only a reversible tool may be covered by a standing grant. None
+    #: (unlabelled) counts as irreversible.
+    reversible: bool | None = None
 
     def describe(self) -> str:
         where = f" ({self.source_file}:{self.source_line})" if self.source_line else ""
