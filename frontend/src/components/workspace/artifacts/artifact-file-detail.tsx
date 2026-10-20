@@ -28,7 +28,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import { Streamdown } from "streamdown";
+import type { Components } from "streamdown";
 
 import {
   Artifact,
@@ -38,6 +38,7 @@ import {
   ArtifactHeader,
   ArtifactTitle,
 } from "@/components/ai-elements/artifact";
+import { Markdown as Streamdown } from "@/components/ai-elements/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectItem } from "@/components/ui/select";
@@ -1049,7 +1050,7 @@ export function ArtifactFilePreview({
         <Streamdown
           className="size-full"
           {...streamdownPlugins}
-          components={{ a: ArtifactLink }}
+          components={{ a: ArtifactLink } as unknown as Components}
         >
           {content ?? ""}
         </Streamdown>

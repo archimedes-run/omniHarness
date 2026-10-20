@@ -14,8 +14,11 @@ import { expect, test, type Page } from "@playwright/test";
  */
 const HEAVY: Record<string, RegExp> = {
   codemirror: /@codemirror|cm-editor/,
-  katex: /katex/i,
-  shiki: /shiki|createHighlighter|getSingletonHighlighter/,
+  // Strings the libraries cannot minify away: katex's error text, shiki's
+  // error class name. ("katex"/"shiki" alone also match loader paths and
+  // CSS variable names, so they say nothing about the library being loaded.)
+  katex: /KaTeX parse error/,
+  shiki: /ShikiError/,
   "mermaid (library)": /mermaidAPI|mermaid-js\/mermaid/,
   "@langchain/core": /lc_serializable/,
   xterm: /xterm/,
@@ -29,10 +32,11 @@ const NON_CHAT = [
   "/workspace/automations",
   "/workspace/agents",
   "/workspace/sessions",
-  "/workspace/settings/connections",
+  "/workspace/connections",
   "/workspace/settings/safety",
   "/workspace/settings/activity",
   "/workspace/settings/appearance",
+  "/workspace/settings/memory",
   "/workspace/settings/account",
   "/workspace/settings/tools",
 ];
@@ -45,6 +49,9 @@ async function scriptsOf(page: Page, route: string): Promise<string[]> {
     }
   });
   await page.goto(route, { waitUntil: "networkidle" });
+  // Components that mount after the first paint load their chunks a moment
+  // later; without this settle, a static import there went unseen.
+  await page.waitForTimeout(1500);
   return Promise.all(bodies);
 }
 
@@ -65,11 +72,23 @@ for (const route of NON_CHAT) {
   });
 }
 
-test("a chat page does not ship codemirror until an artifact editor opens", async ({
+test("an empty chat page ships no code editor, highlighter or math renderer", async ({
   page,
 }) => {
+  // Phase 2.6: shiki and katex load when a message needs them
+  // (markdown-lazy.spec.ts proves they do load then), codemirror when an
+  // artifact's editor opens.
   const scripts = await scriptsOf(page, "/workspace/chats/new");
-  // Positive control: the chat page does carry the markdown renderer.
-  expect(heavyIn(scripts)).toContain("shiki");
-  expect(heavyIn(scripts)).not.toContain("codemirror");
+  expect(
+    scripts.length,
+    "no scripts captured: the check saw nothing",
+  ).toBeGreaterThan(5);
+  // Each named: expect.not.arrayContaining passes unless ALL are present,
+  // which let a statically imported katex through.
+  const heavy = heavyIn(scripts);
+  for (const library of ["codemirror", "shiki", "katex"]) {
+    expect(heavy, `${library} shipped with an empty chat page`).not.toContain(
+      library,
+    );
+  }
 });

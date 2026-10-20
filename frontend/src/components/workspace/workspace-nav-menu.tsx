@@ -10,7 +10,6 @@ import {
   EllipsisIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
@@ -23,44 +22,53 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useI18n } from "@/core/i18n/hooks";
-import { useToolSources } from "@/core/tool-sources/hooks";
+import { usePolicyRules } from "@/core/policy/hooks";
 
 import { GithubIcon } from "./github-icon";
 
 function NavMenuButtonContent({
   isSidebarOpen,
   t,
+  attention = false,
 }: {
   isSidebarOpen: boolean;
   t: ReturnType<typeof useI18n>["t"];
+  attention?: boolean;
 }) {
+  const dot = attention && (
+    <span
+      className="bg-destructive absolute top-1.5 left-5 size-1.5 rounded-full"
+      data-testid="more-attention"
+      aria-label="Something in More needs attention"
+    />
+  );
   return isSidebarOpen ? (
-    <div className="flex w-full items-center gap-2 text-left text-sm text-inherit">
+    <div className="relative flex w-full items-center gap-2 text-left text-sm text-inherit">
       <EllipsisIcon className="size-4" />
+      {dot}
       <span>{t.workspace.settingsAndMore}</span>
       <ChevronsUpDown className="ml-auto size-4 text-current" />
     </div>
   ) : (
-    <div className="flex size-full items-center justify-center">
+    <div className="relative flex size-full items-center justify-center">
       <EllipsisIcon className="size-4 text-current" />
+      {dot}
     </div>
   );
 }
 
 export function WorkspaceNavMenu() {
   const [mounted, setMounted] = useState(false);
-  const pathname = usePathname();
-  // FR-041 (Feature 004): a tool source that failed to load reaches the user
-  // in the sidebar, without opening its page. Connections live in Settings
-  // now, so the count rides on the Settings entry.
-  const { view: sources } = useToolSources();
-  const failing = sources?.failing ?? 0;
+  // Something inside More needs attention: the policy rules in force were not
+  // the ones last written (a refused edit) or could not be read at all. The
+  // dot says "look in here" without opening the menu (Phase 2.6).
+  const { rules } = usePolicyRules();
+  const attention = rules?.kept_previous === true || rules?.unreadable === true;
   const { open: isSidebarOpen } = useSidebar();
   const { t } = useI18n();
 
@@ -71,35 +79,6 @@ export function WorkspaceNavMenu() {
   return (
     <>
       <SidebarMenu className="w-full">
-        {/* Settings is a page now (Phase 2.5): Connections, Safety and the
-            Activity log live there alongside the old dialog's sections. */}
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/settings")}
-            asChild
-          >
-            <Link
-              className="text-inherit"
-              href={
-                failing > 0
-                  ? "/workspace/settings/connections"
-                  : "/workspace/settings"
-              }
-            >
-              <Settings2Icon />
-              <span>{t.sidebar.settings}</span>
-            </Link>
-          </SidebarMenuButton>
-          {failing > 0 && (
-            <SidebarMenuBadge
-              className="text-destructive"
-              data-testid="failing-sources"
-              title={`${failing} tool source(s) failing — see Connections`}
-            >
-              {failing}
-            </SidebarMenuBadge>
-          )}
-        </SidebarMenuItem>
         <SidebarMenuItem>
           {mounted ? (
             <DropdownMenu>
@@ -108,7 +87,11 @@ export function WorkspaceNavMenu() {
                   size="lg"
                   className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 >
-                  <NavMenuButtonContent isSidebarOpen={isSidebarOpen} t={t} />
+                  <NavMenuButtonContent
+                    isSidebarOpen={isSidebarOpen}
+                    t={t}
+                    attention={attention}
+                  />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -118,9 +101,18 @@ export function WorkspaceNavMenu() {
               >
                 <DropdownMenuGroup>
                   <DropdownMenuItem asChild>
-                    <Link href="/workspace/settings/appearance">
+                    <Link
+                      href="/workspace/settings"
+                      data-testid="more-settings"
+                    >
                       <Settings2Icon />
                       {t.common.settings}
+                      {attention && (
+                        <span
+                          className="bg-destructive ml-auto size-1.5 rounded-full"
+                          aria-label="needs attention"
+                        />
+                      )}
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -173,7 +165,11 @@ export function WorkspaceNavMenu() {
             </DropdownMenu>
           ) : (
             <SidebarMenuButton size="lg" className="pointer-events-none">
-              <NavMenuButtonContent isSidebarOpen={isSidebarOpen} t={t} />
+              <NavMenuButtonContent
+                isSidebarOpen={isSidebarOpen}
+                t={t}
+                attention={attention}
+              />
             </SidebarMenuButton>
           )}
         </SidebarMenuItem>

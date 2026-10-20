@@ -6,7 +6,6 @@ import {
   BrainIcon,
   InfoIcon,
   PaletteIcon,
-  PlugIcon,
   ShieldIcon,
   SparklesIcon,
   UserIcon,
@@ -20,7 +19,6 @@ import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
 
 export const SETTINGS_SECTIONS = [
-  "connections",
   "safety",
   "activity",
   "account",
@@ -34,7 +32,6 @@ export const SETTINGS_SECTIONS = [
 export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number];
 
 const ICONS: Record<SettingsSectionId, LucideIcon> = {
-  connections: PlugIcon,
   safety: ShieldIcon,
   activity: ActivityIcon,
   account: UserIcon,
@@ -56,7 +53,6 @@ export function SettingsNav() {
   const { t } = useI18n();
   const pathname = usePathname();
   const label: Record<SettingsSectionId, string> = {
-    connections: "Connections",
     safety: "Safety",
     activity: "Activity log",
     account: t.settings.sections.account,

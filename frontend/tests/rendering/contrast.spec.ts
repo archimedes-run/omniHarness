@@ -288,7 +288,53 @@ const TOOLKIT = (slug: string, status: string) => ({
   status,
   account_display: status === "active" ? "me@example.com" : null,
 });
+const DAY = 24 * 60 * 60 * 1000;
+const daysAgo = (d: number) => new Date(Date.now() - d * DAY).toISOString();
 Object.assign(ROUTES, {
+  "**/api/memory": {
+    version: "1.0",
+    lastUpdated: daysAgo(1),
+    user: {
+      workContext: {
+        summary: "Founder building OmniHarness.",
+        updatedAt: daysAgo(3),
+      },
+      personalContext: {
+        summary: "Prefers concise answers with a table first.",
+        updatedAt: daysAgo(100),
+      },
+      topOfMind: {
+        summary: "Building a retention dashboard. ".repeat(12),
+        updatedAt: daysAgo(2),
+      },
+    },
+    history: {
+      recentMonths: {
+        summary: "Shipped the trigger engine.",
+        updatedAt: daysAgo(40),
+      },
+      earlierContext: { summary: "", updatedAt: "" },
+      longTermBackground: { summary: "", updatedAt: "" },
+    },
+    facts: [
+      {
+        id: "f1",
+        content: "Prefers tables over prose",
+        category: "preference",
+        confidence: 0.95,
+        createdAt: daysAgo(10),
+        source: "t1",
+      },
+      {
+        id: "f2",
+        content: "Lives in New York",
+        category: "context",
+        confidence: 0.9,
+        createdAt: daysAgo(40),
+        source: "t2",
+      },
+    ],
+  },
   "**/api/mcp-studio/servers": {
     servers: [
       SERVER("weather", "deployed"),
@@ -316,7 +362,10 @@ const PAGES = [
   "/workspace/automations/morning-briefing",
   "/workspace/agents",
   "/workspace/sessions",
-  "/workspace/settings/connections",
+  "/workspace/connections",
+  "/workspace/connections?tab=suite",
+  "/workspace/settings/memory",
+  "/workspace/settings/memory?tab=facts",
   "/workspace/mcp/new",
   "/workspace/settings/safety",
   "/workspace/settings/activity",

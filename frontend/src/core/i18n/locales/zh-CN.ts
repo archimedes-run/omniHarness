@@ -169,6 +169,7 @@ export const zhCN: Translations = {
     agents: "智能体",
     inbox: "收件箱",
     automations: "自动化",
+    connections: "连接",
     settings: "设置",
   },
 

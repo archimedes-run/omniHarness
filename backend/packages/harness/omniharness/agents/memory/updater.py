@@ -11,6 +11,7 @@ import re
 import uuid
 from typing import Any
 
+from omniharness.agents.memory.durability import scrub_transient
 from omniharness.agents.memory.prompt import (
     MEMORY_UPDATE_PROMPT,
     format_conversation_for_update,
@@ -364,6 +365,8 @@ class MemoryUpdater:
         # cannot corrupt the still-cached original object reference.
         updated_memory = self._apply_updates(copy.deepcopy(current_memory), update_data, thread_id)
         updated_memory = _strip_upload_mentions_from_memory(updated_memory)
+        # The prompt asks for durable memory; this makes it so (durability.py).
+        updated_memory = scrub_transient(updated_memory)
         return get_memory_storage().save(updated_memory, agent_name, user_id=user_id)
 
     async def aupdate_memory(
@@ -584,6 +587,93 @@ class MemoryUpdater:
             )[: config.max_facts]
 
         return current_memory
+
+
+SECTIONS: dict[str, tuple[str, ...]] = {
+    "user": ("workContext", "personalContext", "topOfMind"),
+    "history": ("recentMonths", "earlierContext", "longTermBackground"),
+}
+
+
+def update_memory_section(group: str, key: str, summary: str, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    """Set one summary section's text, as the user corrected it (Phase 2.6).
+
+    Stamped as updated now: the user has just confirmed it. The durability scrub
+    is NOT applied to a user's own edit; it guards what the model writes.
+    """
+    if key not in SECTIONS.get(group, ()):
+        raise KeyError(f"{group}.{key}")
+    memory_data = copy.deepcopy(get_memory_data(agent_name, user_id=user_id))
+    memory_data.setdefault(group, {})[key] = {"summary": summary.strip(), "updatedAt": utc_now_iso_z()}
+    if not get_memory_storage().save(memory_data, agent_name, user_id=user_id):
+        raise OSError("Failed to save memory data")
+    return get_memory_data(agent_name, user_id=user_id)
+
+
+class MemoryChanged(Exception):
+    """Memory changed between a cleanup preview and its apply."""
+
+
+def propose_memory_cleanup(agent_name: str | None = None, *, user_id: str | None = None, model: Any = None) -> dict[str, Any]:
+    """Rewrite the current summaries under the durability rules. Saves NOTHING.
+
+    Returns the memory's version (lastUpdated), each section's before and after,
+    and the facts the rules would drop, for the user to accept or not.
+    """
+    from omniharness.agents.memory.durability import durable_text, transient_markers
+    from omniharness.agents.memory.prompt import MEMORY_CLEANUP_PROMPT
+
+    memory_data = get_memory_data(agent_name, user_id=user_id)
+    current = {f"{g}.{k}": ((memory_data.get(g) or {}).get(k) or {}).get("summary", "") for g, keys in SECTIONS.items() for k in keys}
+    nonempty = {name: text for name, text in current.items() if text.strip()}
+    rewritten: dict[str, str] = {}
+    if nonempty:
+        model = model or MemoryUpdater()._get_model()
+        prompt = MEMORY_CLEANUP_PROMPT.format(sections=json.dumps(nonempty, indent=2, ensure_ascii=False))
+        response = model.invoke(prompt, config={"run_name": "memory_cleanup"})
+        text = _extract_text(response.content).strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+        proposed = json.loads(text)
+        if not isinstance(proposed, dict):
+            raise ValueError("cleanup model did not return a JSON object")
+        rewritten = {name: str(proposed.get(name, before)) for name, before in nonempty.items()}
+    sections = []
+    for name, before in current.items():
+        # The model's rewrite, then the guarantee; a section the model did not
+        # touch is still scrubbed.
+        after = durable_text(rewritten.get(name, before)) if before.strip() else before
+        group, key = name.split(".")
+        sections.append({"group": group, "key": key, "before": before, "after": after, "changed": after != before})
+    facts = [{"id": f.get("id"), "content": f.get("content", ""), "markers": transient_markers(str(f.get("content", "")))} for f in memory_data.get("facts", [])]
+    return {
+        "version": memory_data.get("lastUpdated", ""),
+        "sections": sections,
+        "factsToRemove": [f for f in facts if f["markers"]],
+    }
+
+
+def apply_memory_cleanup(version: str, sections: dict[str, str], facts_to_remove: list[str], agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    """Save an accepted cleanup, if memory has not changed since the preview.
+
+    A cleaned section keeps its updatedAt: rewording does not make stale
+    information fresh, and the page's "may be out of date" must stay honest.
+    """
+    memory_data = copy.deepcopy(get_memory_data(agent_name, user_id=user_id))
+    if memory_data.get("lastUpdated", "") != version:
+        raise MemoryChanged("memory changed since the cleanup was previewed")
+    for name, summary in sections.items():
+        group, _, key = name.partition(".")
+        if key not in SECTIONS.get(group, ()):
+            raise KeyError(name)
+        section = memory_data.setdefault(group, {}).setdefault(key, {"summary": "", "updatedAt": ""})
+        section["summary"] = summary.strip()
+    drop = set(facts_to_remove)
+    memory_data["facts"] = [f for f in memory_data.get("facts", []) if f.get("id") not in drop]
+    if not get_memory_storage().save(memory_data, agent_name, user_id=user_id):
+        raise OSError("Failed to save memory data")
+    return get_memory_data(agent_name, user_id=user_id)
 
 
 def update_memory_from_conversation(

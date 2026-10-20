@@ -263,7 +263,7 @@ const SURFACES: {
     },
   },
   {
-    path: "/workspace/settings/connections",
+    path: "/workspace/connections",
     row: '[data-testid="tool-source"]',
     routes: {
       "**/api/tool-sources*": {

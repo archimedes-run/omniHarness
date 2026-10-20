@@ -13,7 +13,6 @@ import {
   type AnchorHTMLAttributes,
   type ImgHTMLAttributes,
 } from "react";
-import rehypeKatex from "rehype-katex";
 
 import { Loader } from "@/components/ai-elements/loader";
 import {
@@ -352,7 +351,9 @@ function MessageContent_({
       <MarkdownContent
         content={contentToDisplay}
         isLoading={isLoading}
-        rehypePlugins={[...rehypePlugins, [rehypeKatex, { output: "html" }]]}
+        // Math (katex) comes from the lazily loaded math plugin when the
+        // message has any (core/streamdown/lazy-plugins.ts).
+        rehypePlugins={rehypePlugins}
         className="my-3"
         components={components}
       />

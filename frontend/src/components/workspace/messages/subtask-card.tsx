@@ -6,13 +6,14 @@ import {
   XCircleIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Streamdown } from "streamdown";
+import type { Components } from "streamdown";
 
 import {
   ChainOfThought,
   ChainOfThoughtContent,
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
+import { Markdown as Streamdown } from "@/components/ai-elements/markdown";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { ShineBorder } from "@/components/ui/shine-border";
@@ -130,7 +131,7 @@ export function SubtaskCard({
               label={
                 <Streamdown
                   {...streamdownPluginsWithWordAnimation}
-                  components={{ a: CitationLink }}
+                  components={{ a: CitationLink } as unknown as Components}
                 >
                   {task.prompt}
                 </Streamdown>

@@ -4,13 +4,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from omniharness.agents.memory.updater import (
+    MemoryChanged,
+    apply_memory_cleanup,
     clear_memory_data,
     create_memory_fact,
     delete_memory_fact,
     get_memory_data,
     import_memory_data,
+    propose_memory_cleanup,
     reload_memory_data,
     update_memory_fact,
+    update_memory_section,
 )
 from omniharness.config.memory_config import get_memory_config
 from omniharness.runtime.user_context import get_effective_user_id
@@ -354,3 +358,91 @@ async def get_memory_status() -> MemoryStatusResponse:
         ),
         data=MemoryResponse(**memory_data),
     )
+
+
+# --- Phase 2.6: correct a summary, and the one-time durability cleanup ---------
+
+
+class SectionWrite(BaseModel):
+    summary: str = Field(..., description="The section's new text, as the user wrote it")
+
+
+@router.put(
+    "/memory/sections/{group}/{key}",
+    response_model=MemoryResponse,
+    response_model_exclude_none=True,
+    summary="Edit a Memory Summary Section",
+    description="Replace one summary section (user.workContext, user.topOfMind, ...) with the user's correction.",
+)
+async def edit_memory_section(group: str, key: str, request: SectionWrite) -> MemoryResponse:
+    try:
+        memory_data = update_memory_section(group, key, request.summary, user_id=get_effective_user_id())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"No memory section '{group}.{key}'.") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Failed to save memory.") from exc
+    return MemoryResponse(**memory_data)
+
+
+class CleanupSection(BaseModel):
+    group: str
+    key: str
+    before: str
+    after: str
+    changed: bool
+
+
+class CleanupFact(BaseModel):
+    id: str | None
+    content: str
+    markers: list[str]
+
+
+class CleanupPreview(BaseModel):
+    #: lastUpdated when previewed; applying is refused if memory changed since.
+    version: str
+    sections: list[CleanupSection]
+    factsToRemove: list[CleanupFact]
+
+
+class CleanupApply(BaseModel):
+    version: str
+    #: "user.topOfMind" -> accepted text
+    sections: dict[str, str] = Field(default_factory=dict)
+    factsToRemove: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/memory/cleanup/preview",
+    response_model=CleanupPreview,
+    summary="Preview a Memory Cleanup",
+    description="Rewrite the current summaries under the durability rules (no paths, commands or task steps) and return before/after. Saves nothing.",
+)
+async def preview_memory_cleanup() -> CleanupPreview:
+    import asyncio
+
+    try:
+        # The model call is synchronous; keep it off the event loop.
+        preview = await asyncio.to_thread(propose_memory_cleanup, user_id=get_effective_user_id())
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail=f"The memory model returned something unusable: {exc}") from exc
+    return CleanupPreview(**preview)
+
+
+@router.post(
+    "/memory/cleanup/apply",
+    response_model=MemoryResponse,
+    response_model_exclude_none=True,
+    summary="Apply an Accepted Memory Cleanup",
+    description="Save the sections and fact removals the user accepted, if memory has not changed since the preview.",
+)
+async def apply_cleanup(request: CleanupApply) -> MemoryResponse:
+    try:
+        memory_data = apply_memory_cleanup(request.version, request.sections, request.factsToRemove, user_id=get_effective_user_id())
+    except MemoryChanged as exc:
+        raise HTTPException(status_code=409, detail="Memory changed since this cleanup was previewed. Preview it again.") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"No memory section {exc}.") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Failed to save memory.") from exc
+    return MemoryResponse(**memory_data)

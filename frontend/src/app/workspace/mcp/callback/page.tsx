@@ -37,7 +37,7 @@ export default function ComposioCallbackPage() {
                 );
                 window.close();
               } else {
-                router.push("/workspace/settings/connections");
+                router.push("/workspace/connections");
               }
             }, 1500);
             return;
