@@ -568,23 +568,22 @@ def check_sandbox(config_path: Path) -> list[CheckResult]:
         if "LocalSandboxProvider" in sandbox_use:
             results.append(CheckResult("sandbox configured", "ok", "Local sandbox"))
             has_bash_tool = "bash" in tool_names
-            allow_host_bash = bool(sandbox.get("allow_host_bash", False))
-            if has_bash_tool and not allow_host_bash:
+            if "allow_host_bash" in sandbox:
                 results.append(
                     CheckResult(
-                        "bash compatibility",
-                        "warn",
-                        "bash tool configured but host bash is disabled",
-                        fix="Enable host bash only in a fully trusted environment, or switch to container sandbox",
+                        "host execution key",
+                        "fail",
+                        "sandbox.allow_host_bash is no longer supported (host execution was removed); the gateway refuses to start with it",
+                        fix="Delete the line 'allow_host_bash: ...' under sandbox: in config.yaml",
                     )
                 )
-            elif allow_host_bash:
+            if has_bash_tool:
                 results.append(
                     CheckResult(
                         "bash compatibility",
                         "warn",
-                        "host bash enabled on LocalSandboxProvider",
-                        fix="Use container sandbox for stronger isolation when bash is required",
+                        "bash tool configured, but commands never run on the host",
+                        fix="Switch sandbox.use to the container sandbox (AioSandboxProvider) to run bash",
                     )
                 )
         elif "AioSandboxProvider" in sandbox_use:

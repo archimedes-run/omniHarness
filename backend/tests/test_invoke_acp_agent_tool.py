@@ -493,7 +493,9 @@ async def test_invoke_acp_agent_passes_env_to_spawn(monkeypatch, tmp_path):
         sys.modules.pop("acp", None)
         sys.modules.pop("acp.schema", None)
 
-    assert captured["env"] == {"OPENAI_API_KEY": "sk-from-env", "FOO": "bar"}
+    # The configured keys, on top of a SCRUBBED base (never the full environment).
+    assert captured["env"]["OPENAI_API_KEY"] == "sk-from-env" and captured["env"]["FOO"] == "bar"
+    assert "OMNI_HARNESS_INTERNAL_AUTH_TOKEN" not in captured["env"] and "AUTH_JWT_SECRET" not in captured["env"]
 
 
 @pytest.mark.anyio
@@ -665,7 +667,11 @@ async def test_invoke_acp_agent_passes_none_env_when_not_configured(monkeypatch,
         sys.modules.pop("acp", None)
         sys.modules.pop("acp.schema", None)
 
-    assert captured["env"] is None
+    # Not the inherited full environment: a scrubbed one, with no secrets.
+    from omniharness.utils.safe_env import SECRET_ENV_RE
+
+    assert isinstance(captured["env"], dict)
+    assert not [k for k in captured["env"] if SECRET_ENV_RE.search(k)]
 
 
 def test_get_available_tools_includes_invoke_acp_agent_when_agents_configured(monkeypatch):

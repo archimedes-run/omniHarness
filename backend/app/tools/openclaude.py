@@ -24,6 +24,23 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
 
+#: The only secrets openclaude is given: the model credentials it runs on
+#: (CLAUDE_CODE_USE_OPENAI). Everything else secret, the internal token and
+#: JWT secret included, is scrubbed, and HOME is an empty temporary directory.
+OPENCLAUDE_PASSTHROUGH = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
+
+
+def openclaude_environment(source: dict[str, str] | None = None) -> dict[str, str]:
+    import os
+
+    from omniharness.utils.safe_env import scrubbed_environment
+
+    source = dict(os.environ if source is None else source)
+    env = scrubbed_environment(source)
+    env.update({k: source[k] for k in OPENCLAUDE_PASSTHROUGH if k in source})
+    return env
+
+
 class _Input(BaseModel):
     prompt: str
 
@@ -56,6 +73,7 @@ class OpenClaudeCodingTool(BaseTool):
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=openclaude_environment(),
             )
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(),

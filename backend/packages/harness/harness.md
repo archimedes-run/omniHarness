@@ -336,7 +336,6 @@ All extra fields are forwarded to the LLM constructor via `model_dump(extra="all
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `use` | `str` | required | Provider class path |
-| `allow_host_bash` | `bool` | `False` | Allow bash on host (local provider only) |
 | `image` | `str \| None` | `None` | Docker image (AioSandboxProvider) |
 | `port` | `int \| None` | `None` | Base port for containers |
 | `replicas` | `int \| None` | `None` | Max concurrent containers (default 3) |
@@ -2505,7 +2504,6 @@ tool_groups:
 
 sandbox:
   use: omniharness.sandbox.local.local_sandbox_provider:LocalSandboxProvider
-  allow_host_bash: false
   # For AioSandboxProvider:
   # use: omniharness.community.aio_sandbox:AioSandboxProvider
   image: ghcr.io/archimedes-run/omni-harness-sandbox:latest

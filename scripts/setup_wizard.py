@@ -94,7 +94,6 @@ def main() -> int:
             web_fetch_tool_name=fetch_provider.tool_name if fetch_provider else "web_fetch",
             web_fetch_extra_config=fetch_provider.extra_config if fetch_provider else None,
             sandbox_use=execution.sandbox_use,
-            allow_host_bash=execution.allow_host_bash,
             include_bash_tool=execution.include_bash_tool,
             include_write_tools=execution.include_write_tools,
         )
@@ -138,9 +137,7 @@ def main() -> int:
         sandbox_label = "Local sandbox" if execution.sandbox_use.endswith("LocalSandboxProvider") else "Container sandbox"
         print(f"  {green('✓')} Execution:  {sandbox_label}")
         if execution.include_bash_tool:
-            bash_label = "enabled"
-            if execution.allow_host_bash:
-                bash_label += " (host bash)"
+            bash_label = "enabled (in the container sandbox)"
             print(f"  {green('✓')} Bash:       {bash_label}")
         else:
             print(f"  {'—':>3} Bash:       disabled")

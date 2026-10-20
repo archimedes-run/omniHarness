@@ -387,37 +387,6 @@ class TestMultipleMounts:
         sandbox.write_file("/mnt/repo/writable/file.txt", "content")
         assert (rw_dir / "file.txt").read_text() == "content"
 
-    def test_execute_command_path_replacement(self, tmp_path, monkeypatch):
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        test_file = data_dir / "test.txt"
-        test_file.write_text("hello")
-
-        sandbox = LocalSandbox(
-            "test",
-            [
-                PathMapping(container_path="/mnt/data", local_path=str(data_dir)),
-            ],
-        )
-
-        # Mock subprocess to capture the resolved command
-        captured = {}
-        original_run = __import__("subprocess").run
-
-        def mock_run(*args, **kwargs):
-            if len(args) > 0:
-                captured["command"] = args[0]
-            return original_run(*args, **kwargs)
-
-        monkeypatch.setattr("omniharness.sandbox.local.local_sandbox.subprocess.run", mock_run)
-        monkeypatch.setattr("omniharness.sandbox.local.local_sandbox.LocalSandbox._get_shell", lambda self: "/bin/sh")
-
-        sandbox.execute_command("cat /mnt/data/test.txt")
-        # Verify the command received the resolved local path
-        command = captured.get("command", [])
-        assert isinstance(command, list) and len(command) >= 3
-        assert str(data_dir) in command[2]
-
     def test_reverse_resolve_path_does_not_match_partial_prefix(self, tmp_path):
         foo_dir = tmp_path / "foo"
         foo_dir.mkdir()
