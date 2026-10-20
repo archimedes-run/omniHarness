@@ -86,6 +86,8 @@ class AwaitingPost(BaseModel):
     thread_id: str | None = None
     tool_name: str
     requester: str
+    #: Whose action it is; the list is filtered by it, as `actions` is.
+    owner_id: str | None = None
 
 
 class PendingListResponse(BaseModel):
@@ -330,11 +332,17 @@ async def drain_waiting_posts(app: Any) -> int:
     middleware = build(get_app_config())
     checkpointer = getattr(app.state, "checkpointer", None)
     run_manager = getattr(app.state, "run_manager", None)
+    thread_store = getattr(app.state, "thread_store", None)
     if middleware is None or checkpointer is None or run_manager is None:
         return 0
     posted = 0
     for action in middleware.pending.awaiting_post():
         if not action.thread_id:
+            continue
+        # OWNERSHIP: a result is only ever written into a thread its action's
+        # owner owns (the record could have been edited on disk).
+        if thread_store is not None and action.owner_id and not await thread_store.check_access(action.thread_id, str(action.owner_id), require_existing=True):
+            logger.warning("a waiting result %s names a thread its owner does not own; not posted", action.id)
             continue
         message = report_message(action, None, content=action.post_content)
         outcome = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=action, message=message)
@@ -403,7 +411,7 @@ def read_pending(middleware, now: datetime) -> PendingListResponse:
 
     return PendingListResponse(
         actions=[_view(a, rules.threshold_targets) for a in actions],
-        awaiting_post=[AwaitingPost(id=a.id, thread_id=a.thread_id, tool_name=a.tool_name, requester=a.requester) for a in waiting],
+        awaiting_post=[AwaitingPost(id=a.id, thread_id=a.thread_id, tool_name=a.tool_name, requester=a.requester, owner_id=a.owner_id) for a in waiting],
         readable=True,
     )
 
@@ -422,6 +430,7 @@ async def list_pending(request: Request) -> PendingListResponse:
     result = read_pending(middleware, datetime.now(UTC))
     # Ownership: only the caller's own plans (and, for the owner, the system's).
     result.actions = await filter_accessible(request, result.actions, lambda view: view.owner_id)
+    result.awaiting_post = await filter_accessible(request, result.awaiting_post, lambda view: view.owner_id)
     return result
 
 
