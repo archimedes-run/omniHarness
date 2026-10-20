@@ -120,6 +120,7 @@ TEMPLATES: list[dict] = [
         "description": "A short briefing on what is waiting, each weekday morning.",
         "rule": {
             "id": "morning-brief",
+            "name": "Morning brief",
             "type": "cron",
             "enabled": True,
             "match": {"schedule": "45 8 * * 1-5", "timezone": "America/New_York"},
@@ -131,7 +132,15 @@ TEMPLATES: list[dict] = [
         "template": "blocked-session",
         "title": "Blocked coding session",
         "description": "Tell me when a Claude Code session is waiting on me.",
-        "rule": {"id": "blocked-session", "type": "watcher", "enabled": True, "match": {"event": "waiting-on-user"}, "prompt": "The session in {project} is waiting on you: {last_message}", "destination": "auto"},
+        "rule": {
+            "id": "blocked-session",
+            "name": "Blocked session alert",
+            "type": "watcher",
+            "enabled": True,
+            "match": {"event": "waiting-on-user"},
+            "prompt": "The session in {project} is waiting on you: {last_message}",
+            "destination": "auto",
+        },
     },
     {
         "template": "weekly-review",
@@ -139,6 +148,7 @@ TEMPLATES: list[dict] = [
         "description": "Every Friday afternoon: what got done this week and what is still open.",
         "rule": {
             "id": "weekly-review",
+            "name": "Weekly review",
             "type": "cron",
             "enabled": True,
             "match": {"schedule": "0 16 * * 5", "timezone": "America/New_York"},

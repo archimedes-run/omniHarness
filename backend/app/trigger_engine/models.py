@@ -56,6 +56,9 @@ class Rule:
     destination: Destination = Destination.AUTO
     urgent: bool = False
     enabled: bool = True
+    #: What the person called it ("Morning brief"). Display only: the id stays
+    #: the key (thread map, audit log), so a rename never moves its history.
+    name: str = ""
 
 
 @dataclass(frozen=True)

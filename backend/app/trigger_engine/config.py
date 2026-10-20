@@ -44,6 +44,10 @@ DEFAULTS = {
 }
 
 
+#: A rule's display name, as long as a list row can show.
+NAME_MAX = 80
+
+
 class ConfigError(ValueError):
     """The configuration is invalid. The previous one stays in effect."""
 
@@ -125,6 +129,10 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
     if rtype is TriggerType.WATCHER and not match.get("event"):
         raise ConfigError(f"rule {rid!r}: a watcher rule needs match.event")
 
+    name = raw.get("name", "")
+    if not isinstance(name, str) or len(name) > NAME_MAX:
+        raise ConfigError(f"rule {rid!r}: name must be text of at most {NAME_MAX} characters")
+
     try:
         dest = Destination(raw.get("destination", "auto"))
     except ValueError as exc:
@@ -138,6 +146,7 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         destination=dest,
         urgent=bool(raw.get("urgent", False)),
         enabled=bool(raw.get("enabled", True)),
+        name=name.strip(),
     )
 
 
