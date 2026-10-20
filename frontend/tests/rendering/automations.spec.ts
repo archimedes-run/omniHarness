@@ -3,7 +3,9 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * T060, moved with its content (Phase 2.5): the rules are on Automations, the
  * firing log on Settings → Activity log. Asserted against what renders
- * (SC-008, SC-010), plus the Automations edit path.
+ * (SC-008, SC-010), plus the Automations board (Feature 006,
+ * Automations.dc.html): list, History and Edit tabs, run wording, next run,
+ * quiet hours, editing and new automations from scratch.
  *
  * NO BACKEND: the routes are intercepted. The data the real engine writes, the
  * routes' reading of it, and the write path's validation are pytest's
@@ -83,11 +85,91 @@ const RULES_RAW = {
 
 const RULES = {
   ...RULES_RAW,
+  quiet_hours: {
+    enabled: true,
+    start: "22:00",
+    end: "07:00",
+    timezone: "America/New_York",
+  },
   rules: RULES_RAW.rules.map((r) => ({
     ...RULE_DEFAULTS,
     ...r,
-    match: { schedule: "45 8 * * 1-5", timezone: "America/New_York" },
+    name: r.id === "hushed" ? "Morning brief" : "",
+    match:
+      r.type === "watcher"
+        ? { event: "waiting-on-user" }
+        : { schedule: "45 8 * * 1-5", timezone: "America/New_York" },
+    next_run: r.type === "watcher" ? "on-event" : "scheduled",
+    // A fixed instant, worded relative to the real clock: the card must say
+    // the server's time, whatever day the test runs.
+    next_run_at: r.type === "watcher" ? null : "2030-01-07T08:45:00-05:00",
   })),
+};
+
+const RUNS = {
+  rule_id: "hushed",
+  runs: [
+    {
+      event_id: "2026-10-20T08:45:00-04:00",
+      at: "2026-10-20T08:45:00-04:00",
+      kind: "delivered",
+      settled_at: "2026-10-20T12:46:00+00:00",
+      reason: "",
+      held_because: null,
+      held_reason: "",
+      delivered_with: [],
+      batch_not_recorded: false,
+      thread_id: "th-1",
+    },
+    {
+      event_id: "2026-10-16T08:45:00-04:00",
+      at: "2026-10-16T08:45:00-04:00",
+      kind: "held-then-delivered",
+      settled_at: "2026-10-16T13:02:00+00:00",
+      reason: "",
+      held_because: "mid-conversation",
+      held_reason: "",
+      delivered_with: [],
+      batch_not_recorded: false,
+      thread_id: "th-1",
+    },
+    {
+      event_id: "2026-10-15T08:45:00-04:00",
+      at: "2026-10-15T08:45:00-04:00",
+      kind: "delivered-with-others",
+      settled_at: "2026-10-15T12:46:00+00:00",
+      reason: "",
+      held_because: null,
+      held_reason: "",
+      delivered_with: [{ rule_id: "watching", event_id: "s1" }],
+      batch_not_recorded: false,
+      thread_id: "th-1",
+    },
+    {
+      event_id: "2026-10-14T08:45:00-04:00",
+      at: "2026-10-14T08:45:00-04:00",
+      kind: "failed",
+      settled_at: "2026-10-14T12:50:00+00:00",
+      reason: "gave up after 3 attempts: model timeout",
+      held_because: null,
+      held_reason: "",
+      delivered_with: [],
+      batch_not_recorded: false,
+      thread_id: null,
+    },
+    {
+      event_id: "2026-10-13T08:45:00-04:00",
+      at: "2026-10-13T08:45:00-04:00",
+      kind: "pending",
+      settled_at: "2026-10-13T12:50:00+00:00",
+      reason: "user is mid-exchange on the target thread",
+      held_because: "mid-conversation",
+      held_reason: "",
+      delivered_with: [],
+      batch_not_recorded: false,
+      thread_id: null,
+    },
+  ],
 };
 
 const FIRINGS = {
@@ -131,7 +213,7 @@ const FIRINGS = {
 const AUTOMATIONS = "/workspace/automations";
 const ACTIVITY = "/workspace/settings/activity";
 
-async function serve(page: Page, path: string) {
+async function serve(page: Page, path: string, rules: unknown = RULES) {
   const writes: { method: string; url: string; body: unknown }[] = [];
   const json = (body: unknown) => ({
     status: 200,
@@ -139,10 +221,19 @@ async function serve(page: Page, path: string) {
     body: JSON.stringify(body),
   });
   await page.route("**/api/triggers/rules", (route) =>
-    route.fulfill(json(RULES)),
+    route.fulfill(json(rules)),
   );
   await page.route("**/api/triggers/firings", (route) =>
     route.fulfill(json(FIRINGS)),
+  );
+  await page.route("**/api/triggers/rules/*/runs", (route) =>
+    route.fulfill(
+      json(
+        route.request().url().includes("/hushed/")
+          ? RUNS
+          : { rule_id: "x", runs: [] },
+      ),
+    ),
   );
   await page.route("**/api/policy/audit", (route) => route.fulfill(json([])));
   await page.route("**/api/automations/templates", (route) =>
@@ -189,7 +280,7 @@ const TEMPLATES = [
   },
 ];
 
-test("a quiet-hours suppression differs from a delivery and from a rule that never evaluated (SC-008)", async ({
+test("a quiet-hours suppression differs from a delivery (SC-008)", async ({
   page,
 }) => {
   await serve(page, ACTIVITY);
@@ -211,16 +302,6 @@ test("a quiet-hours suppression differs from a delivery and from a rule that nev
   await expect(suppressed.getByTestId("reason")).toHaveText(
     "quiet hours 22:00-07:30",
   );
-
-  await serve(page, AUTOMATIONS);
-  const never = page.locator('[data-testid="rule"][data-rule="dormant"]');
-  const evaluating = page.locator('[data-testid="rule"][data-rule="watching"]');
-  await expect(never).toContainText("Never evaluated");
-  await expect(evaluating).toContainText("Evaluating, never fired");
-  await expect(never.getByTestId("activity-icon")).toHaveAttribute(
-    "aria-label",
-    "never-evaluated",
-  );
 });
 
 test("firings coalesced into one message each name the others (SC-010)", async ({
@@ -240,31 +321,145 @@ test("firings coalesced into one message each name the others (SC-010)", async (
   ).toContainText("brief-a");
 });
 
+// --- The Automations board (Feature 006) -------------------------------------
+
+const rule = (page: Page, id: string) =>
+  page.locator(`[data-testid="rule"][data-rule="${id}"]`);
+const card = (page: Page, label: string) =>
+  page.getByTestId("history").getByText(label, { exact: true }).locator("..");
+
+test("the list shows each automation's name, schedule and on/off state", async ({
+  page,
+}) => {
+  const off = {
+    ...RULES,
+    rules: RULES.rules.map((r) =>
+      r.id === "dormant" ? { ...r, enabled: false, next_run: "off" } : r,
+    ),
+  };
+  await serve(page, AUTOMATIONS, off);
+
+  await expect(rule(page, "hushed")).toContainText("Morning brief");
+  await expect(rule(page, "hushed")).toContainText("Weekdays 8:45 AM");
+  await expect(rule(page, "watching")).toContainText(
+    "When a session waits on you",
+  );
+  await expect(rule(page, "hushed").getByRole("img")).toHaveAttribute(
+    "aria-label",
+    "On",
+  );
+  await expect(rule(page, "dormant").getByRole("img")).toHaveAttribute(
+    "aria-label",
+    "Off",
+  );
+  // The first automation is open, as the board opens on one.
+  await expect(rule(page, "hushed")).toHaveAttribute("aria-current", "true");
+  await expect(
+    page.getByRole("heading", { name: "Morning brief" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("rule-detail")).toContainText(
+    "Weekdays at 8:45 AM · America/New_York · automatically",
+  );
+});
+
+test("history shows the next run, last checked and quiet hours from the server", async ({
+  page,
+}) => {
+  await serve(page, `${AUTOMATIONS}/hushed`);
+
+  await expect(card(page, "Next run")).toContainText("Jan 7, 8:45 AM");
+  await expect(card(page, "Quiet hours")).toContainText("10 PM to 7 AM");
+  await expect(card(page, "Last checked")).not.toContainText("Never");
+
+  await serve(page, `${AUTOMATIONS}/watching`);
+  await expect(card(page, "Next run")).toContainText("When it happens");
+});
+
+test("a next run inside quiet hours says when it will be delivered", async ({
+  page,
+}) => {
+  const held = {
+    ...RULES,
+    rules: RULES.rules.map((r) =>
+      r.id === "hushed"
+        ? {
+            ...r,
+            next_run_at: "2030-01-07T05:30:00-05:00",
+            deliver_at: "2030-01-07T07:00:00-05:00",
+            held_for_quiet_hours: true,
+          }
+        : r,
+    ),
+  };
+  await serve(page, `${AUTOMATIONS}/hushed`, held);
+  await expect(card(page, "Next run")).toContainText(
+    "Jan 7, 7:00 AM (due 5:30 AM, held for quiet hours)",
+  );
+});
+
 test("a time that was not recorded is not shown as never (FR-022)", async ({
   page,
 }) => {
-  await serve(page, AUTOMATIONS);
+  await serve(page, `${AUTOMATIONS}/legacy`);
+  await expect(card(page, "Last checked")).toContainText("Not recorded");
 
-  await expect(
-    page
-      .locator('[data-testid="rule"][data-rule="legacy"]')
-      .getByTestId("last-evaluated"),
-  ).toHaveText("not recorded");
-  await expect(
-    page
-      .locator('[data-testid="rule"][data-rule="dormant"]')
-      .getByTestId("last-evaluated"),
-  ).toHaveText("never");
+  await serve(page, `${AUTOMATIONS}/dormant`);
+  await expect(card(page, "Last checked")).toContainText("Never");
+  await expect(page.getByTestId("no-history")).toHaveText(
+    "It has not run yet.",
+  );
 });
 
-// --- Automations: editable (Phase 2.5) ---------------------------------------
-
-test("the toggle turns a rule off through the write path, naming the version it saw", async ({
+test("each run is worded as on the board, and an unsettled one is never called delivered", async ({
   page,
 }) => {
-  const writes = await serve(page, AUTOMATIONS);
+  await serve(page, `${AUTOMATIONS}/hushed`);
 
-  await page.getByRole("switch", { name: "Turn off hushed" }).click();
+  const runs = page.getByTestId("run");
+  await expect(runs).toHaveCount(5);
+  await expect(runs.nth(0)).toContainText("Delivered");
+  await expect(runs.nth(1)).toContainText(
+    "Held, then delivered at 9:02 AM. You were mid-conversation.",
+  );
+  await expect(runs.nth(2)).toContainText(
+    "Delivered with 1 other (watching), one message",
+  );
+  await expect(runs.nth(3)).toContainText(
+    "Failed: gave up after 3 attempts: model timeout",
+  );
+  await expect(runs.nth(4)).toContainText("Can't tell yet");
+  await expect(runs.nth(4)).not.toContainText("Delivered");
+  await expect(
+    runs.nth(0).getByRole("link", { name: "Open thread" }),
+  ).toHaveAttribute("href", "/workspace/chats/th-1");
+});
+
+test("History and Edit are a real tablist, moved with the arrow keys", async ({
+  page,
+}) => {
+  await serve(page, `${AUTOMATIONS}/hushed`);
+
+  const history = page.getByRole("tab", { name: "History" });
+  await expect(
+    page.getByRole("tablist", { name: "Automation views" }),
+  ).toBeVisible();
+  await expect(history).toHaveAttribute("aria-selected", "true");
+  await history.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Edit" })).toBeFocused();
+  await expect(page.getByRole("tab", { name: "Edit" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByTestId("rule-form")).toBeVisible();
+});
+
+test("the switch turns a rule off through the write path, naming the version it saw", async ({
+  page,
+}) => {
+  const writes = await serve(page, `${AUTOMATIONS}/hushed`);
+
+  await page.getByRole("switch", { name: "Morning brief is on" }).click();
 
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]!.method).toBe("PATCH");
@@ -276,13 +471,9 @@ test("an invalid edit shows the engine's reason inline, and says the rules in fo
   page,
 }) => {
   await serve(page, `${AUTOMATIONS}/hushed`);
+  await page.getByRole("tab", { name: "Edit" }).click();
 
-  await expect(
-    page.getByRole("textbox", { name: /What to ask/ }),
-  ).toBeVisible();
-  await page
-    .getByRole("textbox", { name: /What to ask/ })
-    .fill("Hi {nonsense}");
+  await page.getByTestId("rule-prompt").fill("Hi {nonsense}");
   await page.getByRole("button", { name: "Save changes" }).click();
 
   const error = page.getByTestId("rule-error");
@@ -295,35 +486,87 @@ test("the schedule is edited as time, days and zone, and saved as cron", async (
   page,
 }) => {
   const writes = await serve(page, `${AUTOMATIONS}/hushed`);
+  await page.getByRole("tab", { name: "Edit" }).click();
 
   await page.getByLabel("Time", { exact: true }).fill("07:30");
   await page.getByRole("button", { name: "Sat" }).click();
   await page.getByRole("button", { name: "Save changes" }).click();
 
   await expect(page.getByTestId("rule-saved")).toBeVisible();
-  const body = writes[0]!.body as { rule: { match: { schedule: string } } };
+  const body = writes[0]!.body as {
+    rule: { id: string; name: string; match: { schedule: string } };
+    version: string;
+  };
   expect(writes[0]!.method).toBe("PUT");
+  expect(writes[0]!.url).toContain("/api/automations/rules/hushed");
+  expect(body.version).toBe("v1");
+  expect(body.rule.id).toBe("hushed");
+  expect(body.rule.name).toBe("Morning brief");
   expect(body.rule.match.schedule).toBe("30 7 * * 1,2,3,4,5,6");
 });
 
-test("a rule's page shows that rule's history and no other", async ({
-  page,
-}) => {
-  await serve(page, `${AUTOMATIONS}/brief-a`);
-
-  const history = page.getByTestId("history").getByTestId("firing");
-  await expect(history.first()).toBeVisible();
-  for (const row of await history.all()) {
-    await expect(row).toHaveAttribute("data-rule", "brief-a");
-  }
-});
-
-test("a template becomes a new rule through the create route", async ({
+test("a new automation from scratch is created through the create route", async ({
   page,
 }) => {
   const writes = await serve(page, AUTOMATIONS);
 
+  await page.getByTestId("new-automation").click();
+  const editor = page.getByTestId("new-automation-editor");
+  await editor.getByTestId("rule-name").fill("Standup nudge");
+  await editor.getByLabel("Time", { exact: true }).fill("09:55");
+  await editor.getByLabel("Time zone").fill("Europe/London");
+  await editor.getByTestId("rule-prompt").fill("Standup in five minutes.");
+  await editor.getByLabel("Destination").selectOption("remote");
+  await editor.getByRole("button", { name: "Create automation" }).click();
+
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]!.method).toBe("POST");
+  expect(writes[0]!.body).toEqual({
+    version: "v1",
+    rule: {
+      id: "standup-nudge",
+      name: "Standup nudge",
+      type: "cron",
+      enabled: true,
+      match: { schedule: "55 9 * * 1-5", timezone: "Europe/London" },
+      prompt: "Standup in five minutes.",
+      destination: "remote",
+      urgent: false,
+    },
+  });
+});
+
+test("a new watcher automation picks its event, and a refusal is shown inline", async ({
+  page,
+}) => {
+  const writes = await serve(page, AUTOMATIONS);
+
+  await page.getByTestId("new-automation").click();
+  const editor = page.getByTestId("new-automation-editor");
+  await editor.getByTestId("rule-name").fill("Failed sessions");
+  await editor.getByLabel("When a coding session changes").check();
+  await editor.getByLabel("Watcher event").selectOption("session-failed");
+  await editor.getByTestId("rule-prompt").fill("Look at {nonsense}");
+  await editor.getByRole("button", { name: "Create automation" }).click();
+
+  await expect(editor.getByTestId("rule-error")).toContainText("cannot supply");
+  const body = writes[0]!.body as { rule: Record<string, unknown> };
+  expect(body.rule.type).toBe("watcher");
+  expect(body.rule.match).toEqual({ event: "session-failed" });
+});
+
+test("a template becomes a new rule through the same create route", async ({
+  page,
+}) => {
+  const writes = await serve(page, AUTOMATIONS);
+
+  await page.getByTestId("new-automation").click();
   await page.getByTestId("template").first().click();
+  await expect(page).toHaveURL(/\/automations\/new\?template=weekly-review$/);
+  await expect(page.getByTestId("new-automation-editor")).toContainText(
+    "Starting from “Weekly review”",
+  );
+  await expect(page.getByTestId("rule-name")).toHaveValue("Weekly review");
   await page.getByRole("button", { name: "Create automation" }).click();
 
   await expect.poll(() => writes.length).toBe(1);

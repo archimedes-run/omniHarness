@@ -131,6 +131,34 @@ const ROUTES: Record<string, unknown> = {
     ],
   },
   "**/api/triggers/rules": RULES,
+  // Feature 006: every run wording the Automations board can show.
+  "**/api/triggers/rules/*/runs": {
+    rule_id: "morning-briefing",
+    runs: (
+      [
+        "delivered",
+        "held-then-delivered",
+        "delivered-with-others",
+        "failed",
+        "pending",
+        "cant-tell",
+      ] as const
+    ).map((kind, i) => ({
+      event_id: `e${i}`,
+      at: now(),
+      kind,
+      settled_at: now(),
+      reason: kind === "failed" ? "gave up after 3 attempts: timeout" : "",
+      held_because: kind === "held-then-delivered" ? "mid-conversation" : null,
+      held_reason: "",
+      delivered_with:
+        kind === "delivered-with-others"
+          ? [{ rule_id: "blocked-session", event_id: "s1" }]
+          : [],
+      batch_not_recorded: false,
+      thread_id: "t1",
+    })),
+  },
   "**/api/triggers/firings": {
     firings: [
       FIRING("delivered", ""),
