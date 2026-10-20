@@ -1,6 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { PageColumn, PageHeader } from "@/components/workspace/page-kit";
 import { SessionRow } from "@/components/workspace/sessions/session-row";
 import { useSessions } from "@/core/sessions/hooks";
 import { watcherHealth } from "@/core/sessions/logic";
@@ -10,14 +11,11 @@ export default function SessionsPage() {
   const health = view ? watcherHealth(view) : null;
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4 p-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Coding sessions</h1>
-        <p className="text-muted-foreground text-sm">
-          What your Claude Code and Codex sessions are doing, as the session
-          watcher sees them, with each agent&apos;s own task list.
-        </p>
-      </header>
+    <PageColumn width="narrow">
+      <PageHeader
+        title="Coding sessions"
+        description="What your Claude Code and Codex sessions are doing, as the session watcher sees them, with each agent's own task list."
+      />
 
       {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
 
@@ -109,7 +107,7 @@ export default function SessionsPage() {
               No sessions seen.
             </p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-2.5">
               {view.sessions.map((session) => (
                 <SessionRow key={session.session_id} session={session} />
               ))}
@@ -117,6 +115,6 @@ export default function SessionsPage() {
           )}
         </>
       )}
-    </div>
+    </PageColumn>
   );
 }
