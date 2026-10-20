@@ -106,6 +106,54 @@ def value_pattern(value: str) -> str:
     return "|".join([flex, *(re.escape(f) for f in literal)])
 
 
+#: How many layers of encoding are undone to look for a known value.
+VIEW_DEPTH = 2
+
+
+def _direct_pass(text: str, pattern: re.Pattern[str]) -> tuple[str, int]:
+    out, n = pattern.subn(MARKER, text)
+
+    def _wrapped(m: re.Match[str]) -> str:
+        nonlocal n
+        joined = re.sub(r"\s+", "", m.group(0))
+        if pattern.search(joined):
+            n += 1
+            return MARKER
+        return m.group(0)
+
+    return _WRAPPED_B64.sub(_wrapped, out), n
+
+
+_JSON_ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|[nrtbf/\\\"])")
+_JSON_SIMPLE = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "/": "/", "\\": "\\", '"': '"'}
+
+
+def _json_unescape(text: str) -> str:
+    return _JSON_ESCAPE.sub(lambda m: chr(int(m.group(1)[1:], 16)) if m.group(1)[0] == "u" else _JSON_SIMPLE[m.group(1)], text)
+
+
+def _percent_decode(text: str) -> str:
+    from urllib.parse import unquote
+
+    return unquote(text) if "%" in text else text
+
+
+_QP = re.compile(r"=(?:\r?\n|([0-9A-Fa-f]{2}))")
+
+
+def _qp_decode(text: str) -> str:
+    return _QP.sub(lambda m: chr(int(m.group(1), 16)) if m.group(1) else "", text) if "=" in text else text
+
+
+def _html_unescape(text: str) -> str:
+    import html
+
+    return html.unescape(text) if "&" in text else text
+
+
+_VIEWS = (_json_unescape, _percent_decode, _qp_decode, _html_unescape)
+
+
 class KnownSecrets:
     """The process's set of secret values. Thread-safe."""
 
@@ -154,22 +202,34 @@ class KnownSecrets:
             return self._pattern
 
     def redact(self, text: str) -> tuple[str, int]:
-        """`text` with every known value, in every supported form, replaced."""
+        """`text` with every known value, in every supported form, replaced.
+
+        Then DECODED VIEWS, to a depth of two layers: JSON string escapes,
+        percent-encoding, quoted-printable and HTML entities. When a view still
+        holds a known value (a PIN after `\\n` or `%3D`, base64 that was then
+        URL-encoded, MIME base64 whose line breaks are the JSON text `\\r\\n`),
+        the redacted VIEW is returned in place of the text: its escaping
+        changes, its words do not, and the secret does not survive."""
         self.maybe_reload()
         pattern = self._compiled()
         if pattern is None:
             return text, 0
-        out, n = pattern.subn(MARKER, text)
+        return self._redact_views(text, pattern, VIEW_DEPTH)
 
-        def _wrapped(m: re.Match[str]) -> str:
-            nonlocal n
-            joined = re.sub(r"\s+", "", m.group(0))
-            if pattern.search(joined):
-                n += 1
-                return MARKER
-            return m.group(0)
-
-        out = _WRAPPED_B64.sub(_wrapped, out)
+    def _redact_views(self, text: str, pattern: re.Pattern[str], depth: int) -> tuple[str, int]:
+        out, n = _direct_pass(text, pattern)
+        if depth <= 0:
+            return out, n
+        for decode in _VIEWS:
+            try:
+                view = decode(out)
+            except Exception:  # noqa: BLE001 — an undecodable view has nothing to find
+                continue
+            if view == out:
+                continue
+            red, m = self._redact_views(view, pattern, depth - 1)
+            if m:
+                out, n = red, n + m
         return out, n
 
     # -- files that change under us (an OAuth CLI refreshes its token file) --
@@ -266,8 +326,33 @@ def _key_words(key: str) -> list[str]:
 _FLAG_WORD = re.compile(r"^(?:true|false|yes|no|on|off|none|null)$", re.IGNORECASE)
 
 
+#: A key naming a webhook: the URL IS the credential (Slack, Discord and most
+#: alerting hooks carry their secret in the path), so `url` does not exclude it.
+_HOOK_KEY = re.compile(r"(web)?hook", re.IGNORECASE)
+
+
 def is_secret_key(key: str) -> bool:
+    if _HOOK_KEY.search(key):
+        return True
     return bool(SECRET_KEY_NAME.search(key)) and not NOT_SECRET_KEY_WORDS.intersection(_key_words(key))
+
+
+def url_secret_parts(value: str) -> list[str]:
+    """A URL's path segments that look like credentials (16+ characters,
+    token-like): a webhook's secret path, a capability URL's key."""
+    if "://" not in value:
+        return []
+    try:
+        path = urlsplit(value).path
+    except ValueError:
+        return []
+    return [seg for seg in path.split("/") if len(seg) >= 16 and _token_like(seg)]
+
+
+def _token_like(v: str) -> bool:
+    if any(c.isspace() for c in v):
+        return False
+    return sum(bool(re.search(p, v)) for p in (r"[a-z]", r"[A-Z]", r"\d")) >= 2
 
 
 def secret_values_in(tree: Any, *, env: dict[str, str] | None = None, all_values: bool = False, key: str = "") -> list[str]:
@@ -301,7 +386,13 @@ def secret_values_in(tree: Any, *, env: dict[str, str] | None = None, all_values
         password = _url_password(value)
         if password:
             out.append(password)
-        if is_secret_key(key):
+        # A URL with a credential in its path: the segment AND the whole URL.
+        secret_segments = url_secret_parts(value)
+        if secret_segments:
+            out += [*secret_segments, value]
+        if _HOOK_KEY.search(key) and "://" in value:
+            out.append(value)
+        elif is_secret_key(key):
             if len(value) >= SECRET_MIN and not _FLAG_WORD.match(value) and not value.startswith(("/", "~", "./", "../")) and not (("://" in value) and looks_non_secret(value)):
                 out.append(value)
         elif (all_values and not looks_non_secret(value)) or (not looks_non_secret(value) and _high_entropy(value)):
