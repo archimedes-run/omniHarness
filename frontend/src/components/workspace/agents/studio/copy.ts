@@ -16,6 +16,10 @@ const enUS = {
     current: "Current",
     restore: "Restore",
     restored: (v: number) => `Restored version ${v} as a new version.`,
+    restoredAgent: (v: number) =>
+      `Restored version ${v} as a new version. Its autonomy grants were not changed: change those on the Autonomy tab.`,
+    grantsKept:
+      "Restoring brings back instructions and settings, never autonomy grants.",
     failed: (why: string) => `Not restored: ${why}`,
     none: "No versions yet.",
     unreadable: (why: string) => `Can't tell: ${why}`,
@@ -256,6 +260,9 @@ const zhCN: StudioCopy = {
     current: "当前",
     restore: "恢复",
     restored: (v) => `已将版本 ${v} 恢复为新版本。`,
+    restoredAgent: (v) =>
+      `已将版本 ${v} 恢复为新版本。自主权限没有改变：请在“自主权限”标签中修改。`,
+    grantsKept: "恢复会带回指令和设置，但从不带回自主权限。",
     failed: (why) => `未恢复：${why}`,
     none: "还没有版本。",
     unreadable: (why) => `无法判断：${why}`,

@@ -2,7 +2,7 @@
 
 EVERY change to an agent or a skill goes through here: creating, editing,
 saving a draft, an agent updating itself, granting or revoking autonomy,
-deleting. Each write is a new VERSION: who made it, when, what changed, and its
+deleting. Grants change only through a write that says so (AUTONOMY_KEY). Each write is a new VERSION: who made it, when, what changed, and its
 source (manual, draft, proposal, chat, undo). Undo restores an earlier version
 AS A NEW VERSION, so nothing is ever rewritten in place. A write that names the
 version it was based on is refused when that is no longer the current one: two
@@ -53,6 +53,11 @@ Kind = Literal["agent", "skill"]
 SOURCES = frozenset({"manual", "draft", "proposal", "chat", "undo", "existing"})
 LEAD_AGENT = "lead_agent"
 CONFIG_FILENAME = "config.yaml"
+#: The agent's standing grants (app/policy/grants.py). Changed ONLY by a write
+#: that says so (`sets_autonomy=True`: the Autonomy tab's own Save). Every
+#: other write, undo included, keeps the grants as they are now: undo restores
+#: content, and never silently brings back (or drops) a grant.
+AUTONOMY_KEY = "autonomy"
 
 
 class StaleWriteError(Exception):
@@ -246,11 +251,25 @@ def agent_history(user_id: str, name: str) -> list[Version]:
     return _versions(_agent_paths(user_id, _normalise_agent_name(name))[0])
 
 
-def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, source: str, base_version: int | None = None) -> Version:
+def _keep_autonomy(snapshot: dict | None, before: dict | None) -> dict | None:
+    """`snapshot` with the grants it had in `before` (none, if it had none)."""
+    if snapshot is None:
+        return None
+    config = dict(snapshot.get("config") or {})
+    current = ((before or {}).get("config") or {}).get(AUTONOMY_KEY)
+    if current is None:
+        config.pop(AUTONOMY_KEY, None)
+    else:
+        config[AUTONOMY_KEY] = current
+    return {**snapshot, "config": config}
+
+
+def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, source: str, base_version: int | None = None, sets_autonomy: bool = False) -> Version:
     """Make `snapshot` ({"config": {...}, "soul": "..."}, or None to delete) the
     agent's new version. `base_version`: the version the change was made from;
     a write based on an older one is refused (None: the caller holds no view,
-    as an agent updating itself between turns)."""
+    as an agent updating itself between turns). Unless `sets_autonomy`, the
+    agent's grants stay exactly as they are now, whatever `snapshot` says."""
     if source not in SOURCES:
         raise ValueError(f"unknown version source {source!r}")
     name = _normalise_agent_name(name)
@@ -261,6 +280,8 @@ def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, sou
         if base_version is not None and base_version != current:
             raise StaleWriteError("agent", name, base_version, current)
         before = versions[-1].snapshot if versions else _agent_on_disk(user_id, name)
+        if not sets_autonomy:
+            snapshot = _keep_autonomy(snapshot, before)
         now = datetime.now(UTC).isoformat()
         if not versions and before is not None:
             # The state before versioning began, so the first edit can be undone.
@@ -391,7 +412,10 @@ def record_installed(name: str, *, who: str, storage=None) -> Version | None:
 
 
 def undo(kind: Kind, name: str, to_version: int, *, who: str, base_version: int | None, user_id: str | None = None, storage=None) -> Version:
-    """Restore `to_version` as a NEW version (the history only ever grows)."""
+    """Restore `to_version` as a NEW version (the history only ever grows).
+
+    For an agent this restores its CONTENT: its grants stay as they are now
+    (write_agent keeps them); changing those is the Autonomy action's alone."""
     versions = agent_history(user_id or "", name) if kind == "agent" else skill_history(name, storage)
     target = next((v for v in versions if v.version == to_version), None)
     if target is None:

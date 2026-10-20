@@ -50,7 +50,10 @@ export function VersionHistory({
     if (!data) return;
     try {
       await undoTo(kind, name, version, data.current);
-      setNote({ text: h.restored(version), bad: false });
+      setNote({
+        text: kind === "agent" ? h.restoredAgent(version) : h.restored(version),
+        bad: false,
+      });
       void queryClient.invalidateQueries({ queryKey: key });
       onRestored();
     } catch (e) {
@@ -82,6 +85,14 @@ export function VersionHistory({
           data-testid="studio-history-menu"
         >
           <DropdownMenuLabel>{h.title}</DropdownMenuLabel>
+          {kind === "agent" ? (
+            <p
+              className="text-muted-foreground px-2 pb-1.5 text-xs"
+              data-testid="studio-history-grants-note"
+            >
+              {h.grantsKept}
+            </p>
+          ) : null}
           <DropdownMenuSeparator />
           {error ? (
             <DropdownMenuItem disabled>

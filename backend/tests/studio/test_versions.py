@@ -111,3 +111,53 @@ def test_a_deleted_skill_comes_back_with_undo(studio, allow_scans) -> None:
     assert c.get("/api/skills/custom/status-format").status_code == 404
     assert c.post("/api/skills/custom/status-format/undo", json={"to_version": 1, "base_version": 2}).status_code == 200
     assert c.get("/api/skills/custom/status-format").json()["content"] == SKILL_MD
+
+
+def _granted(c, name) -> list[str]:
+    return [k["id"] for k in c.get(f"/api/studio/agents/{name}/autonomy").json()["classes"] if k["granted"]]
+
+
+def _grant(c, name, granted: list[str]) -> None:
+    version = c.get(f"/api/studio/agents/{name}/autonomy").json()["version"]
+    assert c.put(f"/api/studio/agents/{name}/autonomy", json={"granted": granted, "base_version": version}).status_code == 200
+
+
+def test_undo_restores_content_and_never_brings_back_a_revoked_grant(studio) -> None:
+    """Undo restores content only. A version taken while a grant was on does
+    not switch it back on: the grant changes only through Autonomy's Save."""
+    c = studio.client
+    c.post("/api/agents", json={"name": "wrap-up", "soul": "s", "description": "one"})  # v1
+    _grant(c, "wrap-up", ["tasks"])  # v2
+    assert c.put("/api/agents/wrap-up", json={"description": "two", "base_version": 2}).status_code == 200  # v3
+    _grant(c, "wrap-up", [])  # v4: revoked
+    resp = c.post("/api/agents/wrap-up/undo", json={"to_version": 3, "base_version": 4})
+    assert resp.status_code == 200, resp.text
+    assert c.get("/api/agents/wrap-up").json()["description"] == "two"
+    assert _granted(c, "wrap-up") == [], "undo silently restored a revoked grant"
+    # What the runtime reads agrees (config.yaml, via the store).
+    from omniharness.config import config_versions
+
+    assert config_versions.current_agent_snapshot(studio.user_id, "wrap-up")["config"].get("autonomy") == []
+
+
+def test_undo_never_silently_drops_a_grant_either(studio) -> None:
+    c = studio.client
+    c.post("/api/agents", json={"name": "wrap-up", "soul": "s", "description": "one"})  # v1
+    assert c.put("/api/agents/wrap-up", json={"description": "two", "base_version": 1}).status_code == 200  # v2
+    _grant(c, "wrap-up", ["tasks", "notes"])  # v3
+    assert c.post("/api/agents/wrap-up/undo", json={"to_version": 1, "base_version": 3}).status_code == 200
+    assert c.get("/api/agents/wrap-up").json()["description"] == "one"
+    assert _granted(c, "wrap-up") == ["tasks", "notes"]
+
+
+def test_only_the_autonomy_action_changes_grants(studio) -> None:
+    """Any other writer of an agent's config (the store's other callers, the
+    agent updating itself, setup in chat) keeps the grants as they are."""
+    from omniharness.config import config_versions
+
+    c = studio.client
+    c.post("/api/agents", json={"name": "wrap-up", "soul": "s"})
+    snapshot = config_versions.current_agent_snapshot(studio.user_id, "wrap-up")
+    smuggled = {**snapshot, "config": {**snapshot["config"], "autonomy": ["tasks", "notes", "archive"]}}
+    config_versions.write_agent(studio.user_id, "wrap-up", smuggled, who="agent:wrap-up", source="proposal")
+    assert _granted(c, "wrap-up") == []

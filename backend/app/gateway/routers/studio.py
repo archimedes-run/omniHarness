@@ -143,7 +143,8 @@ async def put_autonomy(name: str, request: AutonomyUpdate, config: AppConfig = D
 
         soul = load_agent_soul(None) or ""
     try:
-        config_versions.write_agent(user_id, agent, {"config": agent_config, "soul": soul or ""}, who=f"user:{user_id}", source="manual", base_version=request.base_version)
+        # The one write that may change grants: this explicit Autonomy action.
+        config_versions.write_agent(user_id, agent, {"config": agent_config, "soul": soul or ""}, who=f"user:{user_id}", source="manual", base_version=request.base_version, sets_autonomy=True)
     except config_versions.StaleWriteError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return _autonomy_view(agent, user_id, config)
