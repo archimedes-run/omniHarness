@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Skills, tabbed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0C0D0F}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 1000px; background: #0C0D0F; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.5; box-sizing: border-box; padding: 24px">
+  <div role="dialog" aria-labelledby="skills-title" style="max-width: 1180px; margin: 0 auto; background: #17181C; border: 1px solid #2E3138; border-radius: 18px; display: flex; flex-direction: column; overflow: hidden">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #2E3138">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C9CCD2" stroke-width="2" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"></path></svg>
+      <h1 id="skills-title" style="margin: 0; font-size: 15px; font-weight: 600; flex: 1">Skills</h1>
+      <button type="button" aria-label="Close" style="background: none; border: none; color: #9EA3AD; font-size: 18px; cursor: pointer; padding: 4px 8px">×</button>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; min-height: 860px">
+      <div style="flex: 1 1 230px; max-width: 250px; box-sizing: border-box; border-right: 1px solid #2E3138; padding: 14px 10px; display: flex; flex-direction: column; gap: 4px">
+        <button type="button" style="background: none; border: 1px dashed #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 12px; cursor: pointer; margin-bottom: 8px; text-align: left">+ New skill</button>
+        <a href="#" style="display: block; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none">Cite every claim</a>
+        <a href="#" aria-current="page" style="display: block; padding: 9px 12px; border-radius: 10px; background: #24272D; color: #ECEDEF; text-decoration: none; font-weight: 500">Project status format</a>
+        <a href="#" style="display: block; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none">Deep research</a>
+        <a href="#" style="display: block; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none">Web app builder</a>
+      </div>
+
+      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+        <div style="padding: 20px 28px 0">
+          <div style="font-size: 18px; font-weight: 600">Project status format</div>
+          <div style="color: #9EA3AD; font-size: 13px">Used by Evening wrap-up and Release manager</div>
+        </div>
+        <div role="tablist" aria-label="Skill settings" style="display: flex; flex-wrap: wrap; gap: 4px; padding: 16px 28px 0; border-bottom: 1px solid #2E3138">
+          <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+            <button type="button" role="tab" aria-selected="{{t.selected}}" onClick="{{t.pick}}" style="{{t.style}}">{{t.label}}</button>
+          </sc-for>
+        </div>
+
+        <div style="padding: 24px 28px; max-width: 760px; box-sizing: border-box; width: 100%">
+          <sc-if value="{{isDetails}}" hint-placeholder-val="{{true}}">
+            <div role="tabpanel" aria-label="Details" style="display: flex; flex-direction: column; gap: 18px">
+              <label style="display: flex; flex-direction: column; gap: 6px; max-width: 480px">
+                <span style="font-size: 13px">Name</span>
+                <input type="text" value="Project status format" style="background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 10px 12px; color: #ECEDEF; font: inherit">
+              </label>
+              <div style="display: flex; flex-direction: column; gap: 6px">
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px">
+                  <label for="when" style="font-size: 13px">When should it be used?</label>
+                  <button type="button" style="display: flex; align-items: center; gap: 6px; background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 9px; padding: 5px 10px; font-size: 13px; cursor: pointer">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>Draft</button>
+                </div>
+                <textarea id="when" rows="3" style="background: #1C1E23; border: 1px solid #3A3E46; border-radius: 12px; padding: 10px 12px; color: #ECEDEF; font: inherit; resize: vertical">Use when reporting the status of a project, a task, or a coding session: briefings, wrap-ups, and "where are we on X" questions.</textarea>
+                <span style="color: #9EA3AD; font-size: 12px">This sentence decides when the skill loads. Name the situations, not the steps.</span>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isBody}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Instructions" style="display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 12px; padding: 8px 12px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>
+                <label style="flex: 1 1 320px; display: block">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Describe the skill in one sentence</span>
+                  <input type="text" placeholder="Describe it in one sentence and let it draft the instructions" style="width: 100%; box-sizing: border-box; background: transparent; border: none; outline: none; color: #ECEDEF; font: inherit">
+                </label>
+                <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 9px; padding: 6px 12px; cursor: pointer">Draft</button>
+              </div>
+              <div style="border: 1px solid #3A3E46; border-radius: 12px; overflow: hidden">
+                <div role="toolbar" aria-label="Formatting" style="display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px; background: #1C1E23; border-bottom: 1px solid #2E3138">
+                  <button type="button" aria-label="Bold" style="background: none; border: none; color: #C9CCD2; padding: 5px 8px; font-weight: 700; cursor: pointer">B</button>
+                  <button type="button" aria-label="Italic" style="background: none; border: none; color: #C9CCD2; padding: 5px 8px; font-style: italic; cursor: pointer">I</button>
+                  <button type="button" aria-label="Heading" style="background: none; border: none; color: #C9CCD2; padding: 5px 8px; cursor: pointer">H</button>
+                  <button type="button" aria-label="List" style="background: none; border: none; color: #C9CCD2; padding: 5px 8px; cursor: pointer">List</button>
+                  <button type="button" aria-label="Code" style="background: none; border: none; color: #C9CCD2; padding: 5px 8px; font-family: 'JetBrains Mono', monospace; cursor: pointer">&lt;/&gt;</button>
+                </div>
+                <div style="background: #121316; padding: 14px 16px; min-height: 220px; display: flex; flex-direction: column; gap: 8px">
+                  <div style="font-weight: 600; font-size: 16px">Status report format</div>
+                  <div>Open with one line: on track, at risk, or blocked, and why.</div>
+                  <div style="padding-left: 16px">• Moved: what finished, with its evidence.</div>
+                  <div style="padding-left: 16px">• Stuck: what is waiting and on whom.</div>
+                  <div style="padding-left: 16px">• Next: the one most useful step.</div>
+                  <div>Mark each item "observed" or "reported".</div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isFiles}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Files" style="display: flex; flex-direction: column; gap: 12px">
+              <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #1C1E23; border: 1px solid #2E3138; border-radius: 10px"><span style="flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 13px">example-report.md</span><span style="color: #9EA3AD; font-size: 12px">2 KB</span></div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #1C1E23; border: 1px solid #2E3138; border-radius: 10px"><span style="flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 13px">score_risk.py</span><span style="color: #9EA3AD; font-size: 12px">4 KB</span></div>
+              <div style="border: 1px dashed #4A4E57; border-radius: 12px; padding: 28px; text-align: center; color: #9EA3AD">Drop scripts, references or templates here, or <a href="#">choose files</a></div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isTest}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Test" style="display: flex; flex-direction: column; gap: 10px">
+              <p style="margin: 0; color: #9EA3AD">Try messages and see whether this skill gets picked.</p>
+              <div style="display: flex; justify-content: space-between; gap: 12px; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 10px 14px"><span>“Where are we on HackMIT judging?”</span><span style="color: #6FD3A0; font-size: 13px">Loads</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 12px; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 10px 14px"><span>“Wrap up my day”</span><span style="color: #6FD3A0; font-size: 13px">Loads</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 12px; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 10px 14px"><span>“Write a tweet about our launch”</span><span style="color: #9EA3AD; font-size: 13px">Doesn't load</span></div>
+              <label style="display: block">
+                <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Test message</span>
+                <input type="text" placeholder="Type a test message" style="width: 100%; box-sizing: border-box; background: #121316; border: 1px solid #3A3E46; border-radius: 10px; padding: 10px 12px; color: #ECEDEF; font: inherit">
+              </label>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="flex: 1"></div>
+        <div style="display: flex; justify-content: flex-end; gap: 10px; padding: 14px 28px; border-top: 1px solid #2E3138">
+          <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 16px; cursor: pointer">Cancel</button>
+          <button type="button" style="background: #8FA8FF; border: none; color: #121316; font-weight: 600; border-radius: 10px; padding: 9px 16px; cursor: pointer">Save skill</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'details' };
+  }
+  renderVals() {
+    const names = [['details', 'Details'], ['body', 'Instructions'], ['files', 'Files'], ['test', 'Test']];
+    const tab = this.state.tab;
+    const on = 'background: none; border: none; border-bottom: 2px solid #8FA8FF; color: #ECEDEF; padding: 8px 12px; font-weight: 500; cursor: pointer';
+    const off = 'background: none; border: none; border-bottom: 2px solid transparent; color: #9EA3AD; padding: 8px 12px; cursor: pointer';
+    return {
+      tabs: names.map(([id, label]) => ({ label, selected: tab === id ? 'true' : 'false', style: tab === id ? on : off, pick: () => this.setState({ tab: id }) })),
+      isDetails: tab === 'details',
+      isBody: tab === 'body',
+      isFiles: tab === 'files',
+      isTest: tab === 'test'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,14 +1,3 @@
-import {
-  CompassIcon,
-  GraduationCapIcon,
-  ImageIcon,
-  MicroscopeIcon,
-  PenLineIcon,
-  ShapesIcon,
-  SparklesIcon,
-  VideoIcon,
-} from "lucide-react";
-
 import type { Translations } from "./types";
 
 export const enUS: Translations = {
@@ -107,63 +96,12 @@ export const enUS: Translations = {
     reasoningEffortHighDescription:
       "Full-dimensional Logic Deduction + Multi-path Verification + Backward Check",
     searchModels: "Search models...",
-    surpriseMe: "Surprise",
-    surpriseMePrompt: "Surprise me",
     followupLoading: "Generating follow-up questions...",
     followupConfirmTitle: "Send suggestion?",
     followupConfirmDescription:
       "You already have text in the input. Choose how to send it.",
     followupConfirmAppend: "Append & send",
     followupConfirmReplace: "Replace & send",
-    suggestions: [
-      {
-        suggestion: "Write",
-        prompt: "Write a blog post about the latest trends on [topic]",
-        icon: PenLineIcon,
-      },
-      {
-        suggestion: "Research",
-        prompt:
-          "Conduct a deep dive research on [topic], and summarize the findings.",
-        icon: MicroscopeIcon,
-      },
-      {
-        suggestion: "Collect",
-        prompt: "Collect data from [source] and create a report.",
-        icon: ShapesIcon,
-      },
-      {
-        suggestion: "Learn",
-        prompt: "Learn about [topic] and create a tutorial.",
-        icon: GraduationCapIcon,
-      },
-    ],
-    suggestionsCreate: [
-      {
-        suggestion: "Webpage",
-        prompt: "Create a webpage about [topic]",
-        icon: CompassIcon,
-      },
-      {
-        suggestion: "Image",
-        prompt: "Create an image about [topic]",
-        icon: ImageIcon,
-      },
-      {
-        suggestion: "Video",
-        prompt: "Create a video about [topic]",
-        icon: VideoIcon,
-      },
-      {
-        type: "separator",
-      },
-      {
-        suggestion: "Skill",
-        prompt:
-          "We're going to build a new skill step by step with `skill-creator`. To start, what do you want this skill to do?",
-        icon: SparklesIcon,
-      },
-    ],
   },
 
   // Sidebar
@@ -178,6 +116,59 @@ export const enUS: Translations = {
     connections: "Connections",
     projects: "Projects",
     settings: "Settings",
+    mcpSuite: "MCP Suite",
+    home: "Home",
+    more: "More",
+    moreLabel: "More: settings, memory, safety",
+    memory: "Memory",
+    safety: "Safety",
+    activityLog: "Activity log",
+    appearance: "Appearance",
+    about: "About",
+    waiting: (count: number) =>
+      `${count} ${count === 1 ? "thing is" : "things are"} waiting on you`,
+    cannotTellWaiting: "Cannot tell what is waiting",
+    failingSources: (count: number) =>
+      `${count} tool ${count === 1 ? "source" : "sources"} failing`,
+  },
+
+  // App shell
+  shell: {
+    tools: "Tools",
+    agents: "Agents",
+    skills: "Skills",
+    automations: "Automations",
+    tasks: "Tasks",
+    searchEverything: "Search everything",
+    close: "Close",
+    loadingPanel: "Loading…",
+    panelFailed: "This panel could not load.",
+    paletteTitle: "Search and commands",
+    paletteDescription:
+      "Search chats, projects, tasks, agents, skills and automations, or run a command.",
+    palettePlaceholder: "Search or type a command…",
+    noResults: "No results.",
+    groupActions: "Actions",
+    groupPanels: "Open",
+    groupChats: "Chats",
+    groupProjects: "Projects",
+    groupTasks: "Tasks",
+    groupAgents: "Agents",
+    groupSkills: "Skills",
+    groupAutomations: "Automations",
+    searching: "Searching…",
+    cannotSearch: (source: string, reason: string) =>
+      `Cannot search ${source}: ${reason}`,
+    newChat: "New chat",
+    newAgent: "New agent",
+    connectSlack: "Connect Slack",
+    darkTheme: "Turn on dark theme",
+    lightTheme: "Turn on light theme",
+    systemTheme: "Use system theme",
+    openSettings: "Open Settings",
+    openPanel: (name: string) => `Open ${name}`,
+    keyboardShortcuts: "Keyboard shortcuts",
+    openSidebar: "Open sidebar",
   },
 
   // Agents
@@ -455,6 +446,10 @@ export const enUS: Translations = {
       darkDescription: "Dim palette that reduces glare for focus.",
       languageTitle: "Language",
       languageDescription: "Switch between languages.",
+      savedToAccount: "Saved to your account. It follows you to every browser.",
+      saveFailed:
+        "Could not save to your account, so only this browser will remember it.",
+      saving: "Saving…",
     },
     tools: {
       title: "Tools",
@@ -484,6 +479,12 @@ export const enUS: Translations = {
       disableNotification: "Disable notification",
     },
     account: {
+      displayName: "Display name",
+      displayNameHint: "Optional. Shown instead of {fallback} when set.",
+      displayNameSave: "Save name",
+      displayNameSaved: "Saved.",
+      displayNameFailed: "Could not save your name. It is unchanged.",
+      displayNameUnknown: "Could not load your name.",
       profileTitle: "Profile",
       email: "Email",
       role: "Role",

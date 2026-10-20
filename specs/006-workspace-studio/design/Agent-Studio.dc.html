@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agents, tabbed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0C0D0F}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 1000px; background: #0C0D0F; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.5; box-sizing: border-box; padding: 24px">
+  <div role="dialog" aria-labelledby="studio-title" style="max-width: 1180px; margin: 0 auto; background: #17181C; border: 1px solid #2E3138; border-radius: 18px; display: flex; flex-direction: column; overflow: hidden">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #2E3138">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C9CCD2" stroke-width="2" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 4v4M9 14h.01M15 14h.01"></path></svg>
+      <h1 id="studio-title" style="margin: 0; font-size: 15px; font-weight: 600; flex: 1">Agents</h1>
+      <button type="button" aria-label="Close" style="background: none; border: none; color: #9EA3AD; font-size: 18px; cursor: pointer; padding: 4px 8px">×</button>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; min-height: 860px">
+      <div style="flex: 1 1 230px; max-width: 250px; box-sizing: border-box; border-right: 1px solid #2E3138; padding: 14px 10px; display: flex; flex-direction: column; gap: 4px">
+        <button type="button" style="background: none; border: 1px dashed #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 12px; cursor: pointer; margin-bottom: 8px; text-align: left">+ New agent</button>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 13px; background: #24272D; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600">L</span>Lead agent</a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 13px; background: #2F3A5C; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600">Rs</span>Researcher</a>
+        <a href="#" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #24272D; color: #ECEDEF; text-decoration: none; font-weight: 500"><span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 13px; background: #23423A; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600">EW</span>Evening wrap-up</a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 13px; background: #3D2F4F; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600">RM</span>Release manager</a>
+      </div>
+
+      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+        <div style="padding: 20px 28px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+          <span aria-hidden="true" style="width: 40px; height: 40px; border-radius: 20px; background: #23423A; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600">EW</span>
+          <div style="flex: 1 1 260px">
+            <div style="font-size: 18px; font-weight: 600">Evening wrap-up</div>
+            <div style="color: #9EA3AD; font-size: 13px">Tells you what moved and what's stuck, every weekday at 6:00 PM</div>
+          </div>
+          <span style="color: #6FD3A0; font-size: 12px; border: 1px solid #2F5A49; border-radius: 8px; padding: 3px 8px">Active</span>
+        </div>
+        <div role="tablist" aria-label="Agent settings" style="display: flex; flex-wrap: wrap; gap: 4px; padding: 16px 28px 0; border-bottom: 1px solid #2E3138">
+          <sc-for list="{{tabs}}" as="t" hint-placeholder-count="5">
+            <button type="button" role="tab" aria-selected="{{t.selected}}" onClick="{{t.pick}}" style="{{t.style}}">{{t.label}}</button>
+          </sc-for>
+        </div>
+
+        <div style="padding: 24px 28px; max-width: 760px; box-sizing: border-box; width: 100%">
+          <sc-if value="{{isOverview}}" hint-placeholder-val="{{true}}">
+            <div role="tabpanel" aria-label="Overview" style="display: flex; flex-direction: column; gap: 18px">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px">
+                <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 14px 16px"><div style="color: #9EA3AD; font-size: 12px">Works on</div><div style="margin-top: 4px">OmniHarness, HackMIT 2026</div></div>
+                <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 14px 16px"><div style="color: #9EA3AD; font-size: 12px">Uses</div><div style="margin-top: 6px; display: flex; gap: 6px">
+                  <span role="img" aria-label="GitHub logo" style="width: 22px; height: 22px; border-radius: 6px; background: #ECEDEF; color: #121316; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800">GH</span>
+                  <span role="img" aria-label="Google Calendar logo" style="width: 22px; height: 22px; border-radius: 6px; background: #3B6FD8; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700">31</span>
+                  <span style="color: #9EA3AD; font-size: 13px">+ 2 skills</span></div></div>
+                <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 14px 16px"><div style="color: #9EA3AD; font-size: 12px">Next run</div><div style="margin-top: 4px">Tomorrow, 6:00 PM</div></div>
+                <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 14px 16px"><div style="color: #9EA3AD; font-size: 12px">On its own it may</div><div style="margin-top: 4px">Update tasks, add notes</div></div>
+              </div>
+              <div>
+                <div style="color: #9EA3AD; font-size: 12px; margin-bottom: 6px">Recent runs</div>
+                <div style="display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid #2E3138"><span style="width: 120px; color: #9EA3AD">Today 6:00 PM</span><span style="flex: 1">Delivered on Telegram · 9 lines</span><a href="#">Open</a></div>
+                <div style="display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid #2E3138"><span style="width: 120px; color: #9EA3AD">Fri 6:00 PM</span><span style="flex: 1">Held for approval: archive 3 stale tasks</span><a href="#">Review</a></div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isInstructions}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Instructions" style="display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1C1E23; border: 1px solid #8FA8FF; border-radius: 12px; padding: 10px 12px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>
+                <label style="flex: 1 1 360px; display: block">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Describe the agent in one sentence</span>
+                  <input type="text" value="Every weekday evening, tell me what moved in my projects and what's stuck" style="width: 100%; box-sizing: border-box; background: transparent; border: none; outline: none; color: #ECEDEF; font: inherit">
+                </label>
+                <button type="button" style="background: #8FA8FF; border: none; color: #121316; font-weight: 600; border-radius: 9px; padding: 7px 12px; cursor: pointer">Draft</button>
+              </div>
+              <label style="display: block">
+                <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Instructions</span>
+                <textarea rows="9" style="width: 100%; box-sizing: border-box; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 12px; padding: 12px 14px; color: #ECEDEF; font: inherit; line-height: 1.6; resize: vertical">You are my evening wrap-up. For each project I'm working on:
+1. What moved today: merged PRs, finished tasks, sessions that ended.
+2. What is stuck: sessions waiting on me, tasks idle for 2 days, failing checks.
+3. The one thing to start with tomorrow, and why.
+Say "observed" or "reported by the agent" for every status. Under 12 lines.</textarea>
+              </label>
+              <div style="color: #9EA3AD; font-size: 12px">Drafted from your sentence · edit freely</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isTools}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Tools and skills" style="display: flex; flex-direction: column; gap: 16px">
+              <div style="color: #9EA3AD; font-size: 12px">Integrations</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                <span style="display: flex; align-items: center; gap: 8px; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 6px 10px"><span role="img" aria-label="GitHub logo" style="width: 20px; height: 20px; border-radius: 5px; background: #ECEDEF; color: #121316; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800">GH</span>GitHub <span style="color: #6FD3A0; font-size: 12px">Live</span></span>
+                <span style="display: flex; align-items: center; gap: 8px; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 6px 10px"><span role="img" aria-label="Google Calendar logo" style="width: 20px; height: 20px; border-radius: 5px; background: #3B6FD8; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700">31</span>Calendar <span style="color: #6FD3A0; font-size: 12px">Live</span></span>
+                <button type="button" style="background: none; border: 1px dashed #4A4E57; color: #C9CCD2; border-radius: 10px; padding: 6px 12px; cursor: pointer">+ Add</button>
+              </div>
+              <div style="color: #9EA3AD; font-size: 12px">Skills loaded every run</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                <span style="background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 6px 10px">Cite every claim</span>
+                <span style="background: #1C1E23; border: 1px solid #3A3E46; border-radius: 10px; padding: 6px 10px">Project status format</span>
+                <button type="button" style="background: none; border: 1px dashed #4A4E57; color: #C9CCD2; border-radius: 10px; padding: 6px 12px; cursor: pointer">+ Add</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isAutonomy}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Autonomy" style="display: flex; flex-direction: column; gap: 14px">
+              <p style="margin: 0; color: #C9CCD2">In chat it always asks you first. On a schedule nobody is there to ask, so choose what it may do on its own.</p>
+              <fieldset style="border: 1px solid #3A3E46; border-radius: 12px; padding: 12px 16px; margin: 0; display: flex; flex-direction: column; gap: 10px">
+                <legend style="padding: 0 6px; font-size: 13px">May do on its own (reversible)</legend>
+                <label style="display: flex; gap: 10px; align-items: center"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #8FA8FF">Create and update tasks</label>
+                <label style="display: flex; gap: 10px; align-items: center"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #8FA8FF">Add notes and decisions</label>
+                <label style="display: flex; gap: 10px; align-items: center"><input type="checkbox" style="width: 18px; height: 18px; accent-color: #8FA8FF">Archive stale tasks</label>
+              </fieldset>
+              <div style="background: #1C1E23; border: 1px solid #3A3E46; border-radius: 12px; padding: 12px 16px; color: #C9CCD2">Always waits for you: sending messages, permanent deletes, calendar changes that notify others.</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{isSchedule}}" hint-placeholder-val="{{false}}">
+            <div role="tabpanel" aria-label="Schedule and alerts" style="display: flex; flex-direction: column; gap: 14px">
+              <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 12px; padding: 12px 16px">
+                <span style="flex: 1 1 260px">Weekdays at 6:00 PM · America/New_York</span>
+                <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 9px; padding: 6px 12px; cursor: pointer">Edit</button>
+              </div>
+              <label style="display: flex; gap: 10px; align-items: center"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #8FA8FF">Send the result to Telegram</label>
+              <label style="display: flex; gap: 10px; align-items: center"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #8FA8FF">Show it on Home</label>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="flex: 1"></div>
+        <div style="display: flex; justify-content: flex-end; gap: 10px; padding: 14px 28px; border-top: 1px solid #2E3138">
+          <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 16px; cursor: pointer">Test run</button>
+          <button type="button" style="background: #8FA8FF; border: none; color: #121316; font-weight: 600; border-radius: 10px; padding: 9px 16px; cursor: pointer">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'overview' };
+  }
+  renderVals() {
+    const names = [['overview', 'Overview'], ['instructions', 'Instructions'], ['tools', 'Tools and skills'], ['autonomy', 'Autonomy'], ['schedule', 'Schedule']];
+    const tab = this.state.tab;
+    const on = 'background: none; border: none; border-bottom: 2px solid #8FA8FF; color: #ECEDEF; padding: 8px 12px; font-weight: 500; cursor: pointer';
+    const off = 'background: none; border: none; border-bottom: 2px solid transparent; color: #9EA3AD; padding: 8px 12px; cursor: pointer';
+    return {
+      tabs: names.map(([id, label]) => ({ label, selected: tab === id ? 'true' : 'false', style: tab === id ? on : off, pick: () => this.setState({ tab: id }) })),
+      isOverview: tab === 'overview',
+      isInstructions: tab === 'instructions',
+      isTools: tab === 'tools',
+      isAutonomy: tab === 'autonomy',
+      isSchedule: tab === 'schedule'
+    };
+  }
+}
+</script>
+</body>
+</html>

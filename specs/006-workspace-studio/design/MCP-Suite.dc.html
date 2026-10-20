@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MCP Suite, build</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#121316}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1160px; background: #121316; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 248px; max-width: 248px; min-width: 220px; box-sizing: border-box; background: #17181C; border-right: 1px solid #2E3138; padding: 20px 12px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><circle cx="19" cy="6" r="2.5" fill="#8FA8FF"></circle></svg>
+      <span style="font-weight: 600; font-size: 15px">OmniHarness</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none"><span style="flex: 1">New chat</span><span style="background: #F2B65A; color: #121316; font-size: 12px; font-weight: 600; border-radius: 10px; padding: 0 7px">2</span></a>
+    <a href="#" style="padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Chats</a>
+    <a href="Connections.dc.html" aria-current="page" style="display: flex; padding: 9px 10px; border-radius: 8px; background: #24272D; color: #ECEDEF; text-decoration: none; font-weight: 500"><span style="flex: 1">MCP Suite</span><span style="color: #F2B65A; font-size: 12px">1</span></a>
+    <div style="height: 1px; background: #2E3138; margin: 14px 4px"></div>
+    <div style="font-size: 12px; color: #9EA3AD; padding: 0 10px 6px">Recent</div>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none">Feature 005 slice review</a>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none">Calendar cleanup</a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 32px 32px 40px">
+    <div style="max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px">
+      <div>
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600">MCP Suite</h1>
+        <p style="margin: 4px 0 0; color: #9EA3AD">Where your agents' tools come from, and whether each one works right now.</p>
+      </div>
+      <div role="tablist" aria-label="MCP Suite views" style="display: flex; gap: 4px; border-bottom: 1px solid #2E3138">
+        <a href="Connections.dc.html" role="tab" aria-selected="false" style="padding: 8px 12px; border-bottom: 2px solid transparent; color: #9EA3AD; text-decoration: none">Connected</a>
+        <a href="MCP-Suite.dc.html" role="tab" aria-selected="true" style="padding: 8px 12px; border-bottom: 2px solid #8FA8FF; color: #ECEDEF; text-decoration: none; font-weight: 500">Build</a>
+      </div>
+
+      <section aria-labelledby="build-new" style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 16px; padding: 22px 24px; display: flex; flex-direction: column; gap: 16px">
+        <h2 id="build-new" style="margin: 0; font-size: 17px; font-weight: 600">Need a tool that doesn't exist yet?</h2>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #121316; border: 1px solid #8FA8FF; border-radius: 12px; padding: 10px 12px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>
+          <label style="flex: 1 1 360px; display: block">
+            <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Describe the tool</span>
+            <input type="text" placeholder="Describe it, e.g. “check my Devpost submissions and their judging status”" style="width: 100%; box-sizing: border-box; background: transparent; border: none; outline: none; color: #ECEDEF; font: inherit">
+          </label>
+          <button type="button" style="background: #8FA8FF; border: none; color: #121316; font-weight: 600; border-radius: 9px; padding: 8px 14px; cursor: pointer">Build it</button>
+        </div>
+        <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+          <li style="display: flex; gap: 10px"><span style="flex: none; width: 24px; height: 24px; border-radius: 12px; background: #24272D; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">1</span><span><span style="display: block; font-weight: 500">You describe it</span><span style="display: block; color: #9EA3AD; font-size: 13px">One sentence is enough</span></span></li>
+          <li style="display: flex; gap: 10px"><span style="flex: none; width: 24px; height: 24px; border-radius: 12px; background: #24272D; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">2</span><span><span style="display: block; font-weight: 500">An agent builds and tests it</span><span style="display: block; color: #9EA3AD; font-size: 13px">In a sandbox, away from your data</span></span></li>
+          <li style="display: flex; gap: 10px"><span style="flex: none; width: 24px; height: 24px; border-radius: 12px; background: #24272D; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600">3</span><span><span style="display: block; font-weight: 500">You approve its first run</span><span style="display: block; color: #9EA3AD; font-size: 13px">Keys stay hidden from the model</span></span></li>
+        </ol>
+      </section>
+
+      <h2 style="margin: 4px 0 0; font-size: 15px; font-weight: 600">Your MCP servers</h2>
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <div style="flex: 1 1 320px; min-width: 0; background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; overflow: hidden">
+          <a href="#" aria-current="true" style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: #24272D; color: #ECEDEF; text-decoration: none; border-bottom: 1px solid #2E3138">
+            <span style="flex: 1"><span style="display: block; font-family: 'JetBrains Mono', monospace; font-size: 13px">hackmit-devpost</span><span style="display: block; color: #9EA3AD; font-size: 12px">Built today · 3 tools</span></span>
+            <span style="color: #F2B65A; font-size: 12px">Needs approval</span></a>
+          <a href="#" style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; color: #ECEDEF; text-decoration: none; border-bottom: 1px solid #2E3138">
+            <span style="flex: 1"><span style="display: block; font-family: 'JetBrains Mono', monospace; font-size: 13px">gym-log</span><span style="display: block; color: #9EA3AD; font-size: 12px">Built Oct 12 · 2 tools</span></span>
+            <span style="color: #6FD3A0; font-size: 12px">Live</span></a>
+          <a href="#" style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; color: #ECEDEF; text-decoration: none">
+            <span style="flex: 1"><span style="display: block; font-family: 'JetBrains Mono', monospace; font-size: 13px">status-page-watch</span><span style="display: block; color: #9EA3AD; font-size: 12px">Build failed · Oct 9</span></span>
+            <span style="color: #FF8A80; font-size: 12px">Failed</span></a>
+        </div>
+
+        <section aria-labelledby="detail" style="flex: 2 1 420px; min-width: 0; background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+            <h3 id="detail" style="margin: 0; flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 400">hackmit-devpost</h3>
+            <span style="color: #F2B65A; font-size: 12px; border: 1px solid #5A4628; border-radius: 8px; padding: 2px 8px">Waiting for your approval</span>
+          </div>
+          <div style="color: #C9CCD2">Check Devpost submissions and their judging status.</div>
+          <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+            <li style="display: flex; gap: 10px"><span style="color: #6FD3A0" aria-hidden="true">✓</span>Scaffolded server, 3 tools: list_submissions, get_submission, judging_status</li>
+            <li style="display: flex; gap: 10px"><span style="color: #6FD3A0" aria-hidden="true">✓</span>Tests passed in sandbox: 5 of 5</li>
+            <li style="display: flex; gap: 10px"><span style="color: #6FD3A0" aria-hidden="true">✓</span>Uses secret DEVPOST_TOKEN: stored, never shown to the model</li>
+            <li style="display: flex; gap: 10px"><span style="color: #F2B65A" aria-hidden="true">●</span>First real run needs your approval</li>
+          </ol>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end">
+            <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 8px 14px; cursor: pointer">View code</button>
+            <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 8px 14px; cursor: pointer">Discard</button>
+            <button type="button" style="background: #8FA8FF; border: none; color: #121316; font-weight: 600; border-radius: 10px; padding: 8px 14px; cursor: pointer">Approve and turn on</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1160}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

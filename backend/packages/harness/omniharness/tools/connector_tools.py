@@ -117,6 +117,7 @@ async def _load_connector_tools_async(user_id: str, toolkits: set[str]) -> list[
         return []
 
     from omniharness.mcp.tools import _make_sync_tool_wrapper
+    from omniharness.tools.source_tags import tag_source
 
     tools: list[BaseTool] = []
     for toolkit, account_id in accounts.items():
@@ -127,6 +128,7 @@ async def _load_connector_tools_async(user_id: str, toolkits: set[str]) -> list[
             for tool in server_tools:
                 if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
                     tool.func = _make_sync_tool_wrapper(tool.coroutine, tool.name)
+                tag_source(tool, f"connector:{toolkit}", user_id)
             tools.extend(server_tools)
             logger.info("Loaded %d connector tool(s) for user=%s toolkit=%s", len(server_tools), user_id, toolkit)
         except Exception as exc:

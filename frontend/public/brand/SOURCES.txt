@@ -1,0 +1,17 @@
+Brand assets supplied by the repository owner, 2026-10-20.
+
+OpenAI "Blossom" symbol (the mark, not the wordmark)
+  Source: OpenAI brand page, logo pack download (https://openai.com/brand)
+  Files used (now frontend/public/brand/openai-blossom-*.svg): OpenAI-logos/SVGs/OAI_OpenAI-Blossom_Black.svg
+              (sha256 75c1e9fffa5e8c437bec1d67197a73992bca45d166c6ff23215185dea8fae92a)
+              OpenAI-logos/SVGs/OAI_OpenAI-Blossom_White.svg
+              (sha256 01d158767c4eec0e47bd617e67759c33da0accd1438be1a8d29dfdb99ce87285)
+  Use: identifies sessions run by OpenAI's Codex. Black on light backgrounds, white on dark,
+       as supplied, unmodified. Wordmarks not used.
+
+Slack multi-colour "hash" mark
+  Source: Slack media kit (https://slack.com/media-kit)
+  File used (now frontend/public/brand/slack.png): SLA-Slack-icon-CMYK.png, 600x600 RGBA
+             (sha256 cc0e1fcfa7e6157b4a9a9175e2f2920b8d73bf5b0d45dd88556eb6767105657c)
+  Use: identifies the Slack integration. Full colour, unmodified, not recoloured;
+       clear space kept around the mark at small sizes.

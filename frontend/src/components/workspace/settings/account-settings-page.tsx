@@ -1,7 +1,7 @@
 "use client";
 
 import { LogOutIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { fetch, getCsrfHeaders } from "@/core/api/fetcher";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { parseAuthError } from "@/core/auth/types";
 import { useI18n } from "@/core/i18n/hooks";
+import { usePreferences, useSaveDisplayName } from "@/core/preferences";
 
 import { SettingsSection } from "./settings-section";
 
@@ -85,6 +86,7 @@ export function AccountSettingsPage() {
             </span>
           </div>
         </div>
+        <DisplayNameField email={user?.email} />
       </SettingsSection>
 
       <SettingsSection
@@ -137,5 +139,74 @@ export function AccountSettingsPage() {
         </Button>
       </SettingsSection>
     </div>
+  );
+}
+
+/** Optional display name, stored per user on the server. */
+function DisplayNameField({ email }: { email?: string }) {
+  const { t } = useI18n();
+  const { preferences, error } = usePreferences();
+  const save = useSaveDisplayName();
+  const [value, setValue] = useState("");
+  useEffect(() => {
+    if (preferences) setValue(preferences.display_name ?? "");
+  }, [preferences]);
+  const fallback = email?.split("@")[0] ?? "";
+
+  return (
+    <form
+      className="mt-6 max-w-sm space-y-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate(value.trim() || null);
+      }}
+    >
+      <label
+        htmlFor="display-name"
+        className="text-muted-foreground block text-sm"
+      >
+        {t.settings.account.displayName}
+      </label>
+      <div className="flex gap-2">
+        <Input
+          id="display-name"
+          data-testid="display-name"
+          value={value}
+          maxLength={64}
+          placeholder={fallback}
+          disabled={!preferences}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <Button
+          type="submit"
+          variant="outline"
+          size="sm"
+          disabled={!preferences || save.isPending}
+          className="min-h-9"
+        >
+          {t.settings.account.displayNameSave}
+        </Button>
+      </div>
+      <p
+        role="status"
+        data-testid="display-name-status"
+        className={
+          save.isError || error
+            ? "text-destructive text-xs"
+            : "text-muted-foreground text-xs"
+        }
+      >
+        {error && !preferences
+          ? t.settings.account.displayNameUnknown
+          : save.isError
+            ? t.settings.account.displayNameFailed
+            : save.isSuccess
+              ? t.settings.account.displayNameSaved
+              : t.settings.account.displayNameHint.replace(
+                  "{fallback}",
+                  fallback,
+                )}
+      </p>
+    </form>
   );
 }

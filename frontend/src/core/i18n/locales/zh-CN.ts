@@ -1,15 +1,4 @@
-﻿import {
-  CompassIcon,
-  GraduationCapIcon,
-  ImageIcon,
-  MicroscopeIcon,
-  PenLineIcon,
-  ShapesIcon,
-  SparklesIcon,
-  VideoIcon,
-} from "lucide-react";
-
-import type { Translations } from "./types";
+﻿import type { Translations } from "./types";
 
 export const zhCN: Translations = {
   // Locale meta
@@ -103,61 +92,11 @@ export const zhCN: Translations = {
     reasoningEffortHigh: "高",
     reasoningEffortHighDescription: "全维度逻辑推演 + 多路径验证 + 反推校验",
     searchModels: "搜索模型...",
-    surpriseMe: "小惊喜",
-    surpriseMePrompt: "给我一个小惊喜吧",
     followupLoading: "正在生成可能的后续问题...",
     followupConfirmTitle: "发送建议问题？",
     followupConfirmDescription: "当前输入框已有内容，选择发送方式。",
     followupConfirmAppend: "追加并发送",
     followupConfirmReplace: "替换并发送",
-    suggestions: [
-      {
-        suggestion: "写作",
-        prompt: "撰写一篇关于[主题]的博客文章",
-        icon: PenLineIcon,
-      },
-      {
-        suggestion: "研究",
-        prompt: "深入浅出的研究一下[主题]，并总结发现。",
-        icon: MicroscopeIcon,
-      },
-      {
-        suggestion: "收集",
-        prompt: "从[来源]收集数据并创建报告。",
-        icon: ShapesIcon,
-      },
-      {
-        suggestion: "学习",
-        prompt: "学习关于[主题]并创建教程。",
-        icon: GraduationCapIcon,
-      },
-    ],
-    suggestionsCreate: [
-      {
-        suggestion: "网页",
-        prompt: "生成一个关于[主题]的网页",
-        icon: CompassIcon,
-      },
-      {
-        suggestion: "图片",
-        prompt: "生成一个关于[主题]的图片",
-        icon: ImageIcon,
-      },
-      {
-        suggestion: "视频",
-        prompt: "生成一个关于[主题]的视频",
-        icon: VideoIcon,
-      },
-      {
-        type: "separator",
-      },
-      {
-        suggestion: "技能",
-        prompt:
-          "我们一起用 skill-creator 技能来创建一个技能吧。先问问我希望这个技能能做什么。",
-        icon: SparklesIcon,
-      },
-    ],
   },
 
   // Sidebar
@@ -172,6 +111,57 @@ export const zhCN: Translations = {
     connections: "连接",
     projects: "项目",
     settings: "设置",
+    mcpSuite: "MCP 套件",
+    home: "主页",
+    more: "更多",
+    moreLabel: "更多：设置、记忆、安全",
+    memory: "记忆",
+    safety: "安全",
+    activityLog: "活动记录",
+    appearance: "外观",
+    about: "关于",
+    waiting: (count: number) => `${count} 项等待你处理`,
+    cannotTellWaiting: "无法确定有什么在等待",
+    failingSources: (count: number) => `${count} 个工具来源失败`,
+  },
+
+  // App shell
+  shell: {
+    tools: "工具",
+    agents: "智能体",
+    skills: "技能",
+    automations: "自动化",
+    tasks: "任务",
+    searchEverything: "搜索全部",
+    close: "关闭",
+    loadingPanel: "加载中…",
+    panelFailed: "此面板无法加载。",
+    paletteTitle: "搜索和命令",
+    paletteDescription:
+      "搜索对话、项目、任务、智能体、技能和自动化，或运行命令。",
+    palettePlaceholder: "搜索或输入命令…",
+    noResults: "没有结果。",
+    groupActions: "操作",
+    groupPanels: "打开",
+    groupChats: "对话",
+    groupProjects: "项目",
+    groupTasks: "任务",
+    groupAgents: "智能体",
+    groupSkills: "技能",
+    groupAutomations: "自动化",
+    searching: "搜索中…",
+    cannotSearch: (source: string, reason: string) =>
+      `无法搜索${source}：${reason}`,
+    newChat: "新对话",
+    newAgent: "新智能体",
+    connectSlack: "连接 Slack",
+    darkTheme: "开启深色主题",
+    lightTheme: "开启浅色主题",
+    systemTheme: "跟随系统主题",
+    openSettings: "打开设置",
+    openPanel: (name: string) => `打开${name}`,
+    keyboardShortcuts: "键盘快捷键",
+    openSidebar: "打开侧边栏",
   },
 
   // Agents
@@ -436,6 +426,9 @@ export const zhCN: Translations = {
       darkDescription: "更暗的配色，减少眩光方便专注。",
       languageTitle: "语言",
       languageDescription: "在不同语言之间切换。",
+      savedToAccount: "已保存到你的账户，会在所有浏览器中生效。",
+      saveFailed: "无法保存到你的账户，只有当前浏览器会记住。",
+      saving: "正在保存…",
     },
     tools: {
       title: "工具",
@@ -464,6 +457,12 @@ export const zhCN: Translations = {
       disableNotification: "关闭通知",
     },
     account: {
+      displayName: "显示名称",
+      displayNameHint: "可选。设置后将代替 {fallback} 显示。",
+      displayNameSave: "保存名称",
+      displayNameSaved: "已保存。",
+      displayNameFailed: "无法保存你的名称，名称未更改。",
+      displayNameUnknown: "无法加载你的名称。",
       profileTitle: "个人信息",
       email: "邮箱",
       role: "角色",

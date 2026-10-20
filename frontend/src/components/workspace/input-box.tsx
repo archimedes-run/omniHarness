@@ -1,48 +1,33 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import {
-  CheckIcon,
-  GraduationCapIcon,
-  LightbulbIcon,
-  PaperclipIcon,
-  PlusIcon,
-  SlidersHorizontalIcon,
-  SparklesIcon,
-  RocketIcon,
-  XIcon,
-  ZapIcon,
-} from "lucide-react";
-import { useSearchParams } from "next/navigation";
+import { PaperclipIcon, XIcon } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ComponentProps,
+  type KeyboardEvent,
 } from "react";
+import { toast } from "sonner";
 
 import {
   PromptInput,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuItem,
-  PromptInputActionMenuTrigger,
-  PromptInputAttachment,
-  PromptInputAttachments,
-  PromptInputBody,
-  PromptInputButton,
   PromptInputFooter,
-  PromptInputSubmit,
+  PromptInputHeader,
   PromptInputTextarea,
   PromptInputTools,
   usePromptInputAttachments,
   usePromptInputController,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
+import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import { Button } from "@/components/ui/button";
-import { ConfettiButton } from "@/components/ui/confetti-button";
 import {
   Dialog,
   DialogContent,
@@ -51,56 +36,74 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import { ToolsPicker } from "@/components/workspace/tools/tools-picker";
-import { fetch } from "@/core/api/fetcher";
-import { getBackendBaseURL } from "@/core/config";
+import { useAgent } from "@/core/agents/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
+import { usePreferences } from "@/core/preferences/hooks";
 import type { AgentThreadContext } from "@/core/threads";
-import { textOfMessage } from "@/core/threads/utils";
 import { cn } from "@/lib/utils";
 
+import { AgentAvatar } from "./chat-bar/agent-avatar";
 import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorName,
-  ModelSelectorTrigger,
-} from "../ai-elements/model-selector";
-import { Suggestion, Suggestions } from "../ai-elements/suggestion";
+  EffortMenu,
+  ModeMenu,
+  ModelMenu,
+  SendButton,
+} from "./chat-bar/bar-controls";
+import { backspaceToChips, chatSkills, insertMention } from "./chat-bar/chips";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
-
+  matchCommands,
+  type PickerTab,
+  type SlashCommand,
+} from "./chat-bar/commands";
+import {
+  ContextChips,
+  type ChatAgent,
+  type ChipsHandle,
+} from "./chat-bar/context-chips";
+import { ContextPicker, MULTI_AGENT_LATER } from "./chat-bar/context-picker";
+import {
+  effortForMode,
+  findTrigger,
+  getResolvedMode,
+  mentionToken,
+  agentSkills,
+  selectedIntegrations,
+  showsReasoningEffort,
+  type InputMode,
+  type ReasoningEffort,
+  type Trigger,
+} from "./chat-bar/logic";
+import { SuggestMenu, type SuggestItem } from "./chat-bar/suggest-menu";
+import {
+  useAgentChoices,
+  useChatProjects,
+  useChatUploads,
+  useSkillChoices,
+  useThreadIntegrations,
+  useThreadSkills,
+} from "./chat-bar/use-chat-bar-data";
+import { useFollowups } from "./chat-bar/use-followups";
+import { WelcomeSuggestions } from "./chat-bar/welcome-suggestions";
 import { useThread } from "./messages/context";
-import { ModeHoverGuide } from "./mode-hover-guide";
 import { Tooltip } from "./tooltip";
 
-type InputMode = "flash" | "thinking" | "pro" | "ultra";
+type BarContext = Omit<
+  AgentThreadContext,
+  "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
+> & {
+  mode: InputMode | undefined;
+  reasoning_effort?: ReasoningEffort;
+};
 
-function getResolvedMode(
-  mode: InputMode | undefined,
-  supportsThinking: boolean,
-): InputMode {
-  if (!supportsThinking && mode !== "flash") {
-    return "flash";
-  }
-  if (mode) {
-    return mode;
-  }
-  return supportsThinking ? "pro" : "flash";
-}
+/** The thread's own agent when the chat is not an agent chat. */
+const LEAD_AGENT = "Lead agent";
 
+/**
+ * The chat bar (Feature 006, Chat.dc.html), used by every chat: context chips
+ * and the "+" picker above the message, attach · mode · effort · model · send
+ * below it, "@" to call in an agent and "/" for commands.
+ */
 export function InputBox({
   className,
   disabled,
@@ -111,6 +114,8 @@ export function InputBox({
   isWelcomeMode,
   threadId,
   initialValue,
+  chosenAgent,
+  onChooseAgent,
   onContextChange,
   onFollowupsVisibilityChange,
   onSubmit,
@@ -120,13 +125,7 @@ export function InputBox({
   assistantId?: string | null;
   status?: ChatStatus;
   disabled?: boolean;
-  context: Omit<
-    AgentThreadContext,
-    "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
-  > & {
-    mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
-    reasoning_effort?: "minimal" | "low" | "medium" | "high";
-  };
+  context: BarContext;
   extraHeader?: React.ReactNode;
   /**
    * Whether to render the input in welcome layout (vertically centered,
@@ -136,39 +135,42 @@ export function InputBox({
   isWelcomeMode?: boolean;
   threadId: string;
   initialValue?: string;
-  onContextChange?: (
-    context: Omit<
-      AgentThreadContext,
-      "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
-    > & {
-      mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
-      reasoning_effort?: "minimal" | "low" | "medium" | "high";
-    },
-  ) => void;
+  /**
+   * The agent picked with "@" (or the picker) before the first message; the
+   * page starts the chat with it. Only the plain new-chat page offers this.
+   */
+  chosenAgent?: string | null;
+  onChooseAgent?: (name: string | null) => void;
+  onContextChange?: (context: BarContext) => void;
   onFollowupsVisibilityChange?: (visible: boolean) => void;
   onSubmit?: (message: PromptInputMessage) => void;
   onStop?: () => void;
 }) {
   const { t } = useI18n();
+  const router = useRouter();
   const searchParams = useSearchParams();
-  const [modelDialogOpen, setModelDialogOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
+  const params = useParams<{ agent_name?: string }>();
   const { models } = useModels();
-  const { thread, isMock } = useThread();
-  const { textInput } = usePromptInputController();
+  const { thread } = useThread();
+  const { textInput, attachments } = usePromptInputController();
   const promptRootRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const chipsRef = useRef<ChipsHandle | null>(null);
+  const menuId = useId();
 
-  const [followups, setFollowups] = useState<string[]>([]);
-  const [followupsHidden, setFollowupsHidden] = useState(false);
-  const [followupsLoading, setFollowupsLoading] = useState(false);
-  const lastGeneratedForAiIdRef = useRef<string | null>(null);
-  const wasStreamingRef = useRef(false);
-  const messagesRef = useRef(thread.messages);
-
+  const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerTab, setPickerTab] = useState<PickerTab>("integrations");
+  const [trigger, setTrigger] = useState<Trigger | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(
     null,
   );
+
+  const text = textInput.value ?? "";
+
+  // ---- model, mode, effort (behaviour unchanged) ---------------------------
 
   useEffect(() => {
     if (models.length === 0) {
@@ -179,11 +181,9 @@ export function InputBox({
     const supportsThinking = fallbackModel.supports_thinking ?? false;
     const nextModelName = fallbackModel.name;
     const nextMode = getResolvedMode(context.mode, supportsThinking);
-
     if (context.model_name === nextModelName && context.mode === nextMode) {
       return;
     }
-
     onContextChange?.({
       ...context,
       model_name: nextModelName,
@@ -197,18 +197,11 @@ export function InputBox({
     }
     return models.find((m) => m.name === context.model_name) ?? models[0];
   }, [context.model_name, models]);
-
   const resolvedModelName = selectedModel?.name;
-
-  const supportThinking = useMemo(
-    () => selectedModel?.supports_thinking ?? false,
-    [selectedModel],
-  );
-
-  const supportReasoningEffort = useMemo(
-    () => selectedModel?.supports_reasoning_effort ?? false,
-    [selectedModel],
-  );
+  const supportThinking = selectedModel?.supports_thinking ?? false;
+  const supportReasoningEffort =
+    selectedModel?.supports_reasoning_effort ?? false;
+  const mode: InputMode = context.mode ?? "flash";
 
   const handleModelSelect = useCallback(
     (model_name: string) => {
@@ -228,32 +221,286 @@ export function InputBox({
   );
 
   const handleModeSelect = useCallback(
-    (mode: InputMode) => {
+    (next: InputMode) => {
       onContextChange?.({
         ...context,
-        mode: getResolvedMode(mode, supportThinking),
-        reasoning_effort:
-          mode === "ultra"
-            ? "high"
-            : mode === "pro"
-              ? "medium"
-              : mode === "thinking"
-                ? "low"
-                : "minimal",
+        mode: getResolvedMode(next, supportThinking),
+        reasoning_effort: effortForMode(next),
       });
     },
     [onContextChange, context, supportThinking],
   );
 
   const handleReasoningEffortSelect = useCallback(
-    (effort: "minimal" | "low" | "medium" | "high") => {
-      onContextChange?.({
-        ...context,
-        reasoning_effort: effort,
-      });
+    (effort: ReasoningEffort) => {
+      onContextChange?.({ ...context, reasoning_effort: effort });
     },
     [onContextChange, context],
   );
+
+  // ---- context: projects, agents, integrations, skills, files --------------
+
+  const integrations = useThreadIntegrations(threadId);
+  const chatProjects = useChatProjects(
+    threadId,
+    thread.values.title ?? undefined,
+  );
+  const wantAgents =
+    trigger?.kind === "@" || (pickerOpen && pickerTab === "agents");
+  const { agents, error: agentsError } = useAgentChoices(wantAgents);
+  const { skills: enabledSkills, error: skillsError } = useSkillChoices(true);
+  const routeAgent = params?.agent_name;
+  // The chat's agent: its route's, else one picked before the first message.
+  const threadAgentName = routeAgent ?? chosenAgent ?? undefined;
+  const { agent: threadAgentConfig } = useAgent(threadAgentName);
+  const threadSkills = useThreadSkills(threadId);
+  const uploaded = useChatUploads(
+    threadId,
+    !isWelcomeMode && pickerOpen && pickerTab === "files",
+  );
+
+  /** Nothing sent yet: "@" may still choose the agent the chat starts with. */
+  const isNewChat = !!isWelcomeMode;
+  const threadAgent = threadAgentName ?? LEAD_AGENT;
+  const canChooseAgent = isNewChat && !routeAgent && !!onChooseAgent;
+  const chatAgents: ChatAgent[] = useMemo(
+    () => [
+      {
+        name: threadAgent,
+        role: !routeAgent && chosenAgent ? "chosen" : "thread",
+      },
+    ],
+    [chosenAgent, routeAgent, threadAgent],
+  );
+  // Read-only (Open Question 7): what this chat's agent may use.
+  const agentSkillList = useMemo(() => {
+    const names = agentSkills(
+      enabledSkills.map((s) => s.name),
+      threadAgentName ? threadAgentConfig?.skills : null,
+    );
+    return enabledSkills.filter((s) => names.includes(s.name));
+  }, [enabledSkills, threadAgentConfig, threadAgentName]);
+  // What this chat uses: the agent's skills less the ones removed here.
+  const chatSkillNames = useMemo(
+    () =>
+      chatSkills(
+        agentSkillList.map((s) => s.name),
+        threadSkills.excluded,
+      ),
+    [agentSkillList, threadSkills.excluded],
+  );
+
+  // The caret goes where setText says as soon as the new text is committed,
+  // before the next key is handled: a frame later, a fast typist's next
+  // letter would already have landed at the end.
+  const pendingCaret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    const at = pendingCaret.current;
+    if (!el || at === null || el.value !== text) return;
+    pendingCaret.current = null;
+    el.focus();
+    el.setSelectionRange(at, at);
+  }, [text]);
+  const setText = useCallback(
+    (next: string, caret?: number) => {
+      pendingCaret.current = caret ?? next.length;
+      textInput.setInput(next);
+      if (next === textareaRef.current?.value) {
+        // Unchanged text commits nothing: place the caret now.
+        const at = pendingCaret.current;
+        pendingCaret.current = null;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(at, at);
+      }
+    },
+    [textInput],
+  );
+
+  const openPicker = useCallback((tab?: PickerTab) => {
+    if (tab) setPickerTab(tab);
+    setPickerOpen(true);
+  }, []);
+  const closePicker = useCallback(() => {
+    setPickerOpen(false);
+    chipsRef.current?.focusAdd();
+  }, []);
+
+  const attachProject = useCallback(
+    (projectId: string) => {
+      const project = chatProjects.projects.find((p) => p.id === projectId);
+      chatProjects.attach.mutate(projectId, {
+        onSuccess: () => toast(`Attached to ${project?.name ?? "the project"}`),
+        onError: (e) => toast.error(e.message),
+      });
+    },
+    [chatProjects],
+  );
+
+  // ---- "@" and "/" ----------------------------------------------------------
+
+  const refreshTrigger = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const next = findTrigger(el.value, el.selectionStart ?? el.value.length);
+    setTrigger((prev) => {
+      if (prev?.kind !== next?.kind || prev?.query !== next?.query) {
+        setActiveIndex(0);
+      }
+      return next;
+    });
+  }, []);
+
+  const agentMatches = useMemo(() => {
+    if (trigger?.kind !== "@") return [];
+    const q = trigger.query.toLowerCase();
+    return agents
+      .filter(
+        (a) =>
+          mentionToken(a.name).slice(1).toLowerCase().startsWith(q) ||
+          a.name.toLowerCase().includes(q),
+      )
+      .slice(0, 8);
+  }, [agents, trigger]);
+
+  const commandMatches: SlashCommand[] = useMemo(
+    () => (trigger?.kind === "/" ? matchCommands(trigger.query) : []),
+    [trigger],
+  );
+
+  const menuItems: SuggestItem[] =
+    trigger?.kind === "@"
+      ? agentMatches.map((a) => ({
+          key: a.name,
+          label: a.name,
+          hint:
+            a.name === threadAgent
+              ? "In this chat"
+              : canChooseAgent
+                ? a.description || "Start the chat with this agent"
+                : MULTI_AGENT_LATER,
+          disabled: !canChooseAgent || a.name === threadAgent,
+          leading: <AgentAvatar id={a.name} name={a.name} />,
+        }))
+      : commandMatches.map((c) => ({
+          key: c.name,
+          label: `/${c.name}`,
+          hint: c.description,
+        }));
+
+  const runCommand = useCallback(
+    (cmd: SlashCommand, clearedText: string) => {
+      setText(clearedText, 0);
+      switch (cmd.action.kind) {
+        case "new-chat":
+          router.push("/workspace/chats/new");
+          return;
+        case "open-picker":
+          openPicker(cmd.action.tab);
+          return;
+        case "attach":
+          attachments.openFileDialog();
+          return;
+      }
+    },
+    [attachments, openPicker, router, setText],
+  );
+
+  const pick = useCallback(
+    (index: number) => {
+      const el = textareaRef.current;
+      if (!trigger || !el) return;
+      const caret = el.selectionStart ?? el.value.length;
+      if (trigger.kind === "@") {
+        // Open Question 8: in a new chat, "@" picks the agent the chat
+        // starts with: a chip, the typed text kept on both sides of the
+        // mention and the caret right after it. In an existing chat it is
+        // disabled (multi-agent chat comes later).
+        const agent = agentMatches[index];
+        if (!agent || !canChooseAgent || agent.name === threadAgent) return;
+        const next = insertMention(el.value, trigger, caret, agent.name);
+        setText(next.text, next.caret);
+        onChooseAgent?.(agent.name);
+      } else {
+        const cmd = commandMatches[index];
+        if (!cmd) return;
+        const rest = el.value.slice(caret).replace(/^ /, "");
+        runCommand(cmd, rest);
+      }
+      setTrigger(null);
+    },
+    [
+      agentMatches,
+      canChooseAgent,
+      commandMatches,
+      onChooseAgent,
+      runCommand,
+      setText,
+      threadAgent,
+      trigger,
+    ],
+  );
+
+  /**
+   * Runs before the message box's own keys (Enter sends): while a dropdown is
+   * open, the arrows, Enter, Tab and Esc belong to it.
+   */
+  const onKeyDownCapture = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Backspace in an empty message goes to the chips (a second one, on
+      // the chip, removes it). It also keeps the old "remove the last
+      // attachment" shortcut from firing underneath.
+      if (
+        e.key === "Backspace" &&
+        !trigger &&
+        backspaceToChips(e.currentTarget.value, 1) &&
+        chipsRef.current?.focusLast()
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (!trigger) return;
+      const count = menuItems.length;
+      const own = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+      if (e.key === "Escape") {
+        own();
+        setTrigger(null);
+      } else if (e.key === "ArrowDown" && count > 0) {
+        own();
+        setActiveIndex((i) => (i + 1) % count);
+      } else if (e.key === "ArrowUp" && count > 0) {
+        own();
+        setActiveIndex((i) => (i - 1 + count) % count);
+      } else if (
+        (e.key === "Enter" || e.key === "Tab") &&
+        count > 0 &&
+        !e.shiftKey
+      ) {
+        own();
+        pick(Math.min(activeIndex, count - 1));
+      }
+    },
+    [activeIndex, menuItems.length, pick, trigger],
+  );
+
+  // ---- send / stop ----------------------------------------------------------
+
+  const {
+    followups,
+    hidden: followupsHidden,
+    setHidden: setFollowupsHidden,
+    loading: followupsLoading,
+    reset: resetFollowups,
+  } = useFollowups({
+    status,
+    disabled,
+    threadId,
+    modelName: context.model_name as string | undefined,
+  });
 
   const handleSubmit = useCallback(
     async (message: PromptInputMessage) => {
@@ -264,9 +511,10 @@ export function InputBox({
       if (!message.text) {
         return;
       }
-      setFollowups([]);
-      setFollowupsHidden(false);
-      setFollowupsLoading(false);
+      resetFollowups();
+      setTrigger(null);
+      setPickerOpen(false);
+      const outgoing = message;
 
       // Guard against submitting before the initial model auto-selection
       // effect has flushed thread settings to storage/state.
@@ -279,17 +527,17 @@ export function InputBox({
             selectedModel?.supports_thinking ?? false,
           ),
         });
-        setTimeout(() => onSubmit?.(message), 0);
+        setTimeout(() => onSubmit?.(outgoing), 0);
         return;
       }
-
-      onSubmit?.(message);
+      onSubmit?.(outgoing);
     },
     [
       context,
       onContextChange,
       onSubmit,
       onStop,
+      resetFollowups,
       resolvedModelName,
       selectedModel?.supports_thinking,
       status,
@@ -306,8 +554,7 @@ export function InputBox({
       if (status === "streaming") {
         return;
       }
-      const current = (textInput.value ?? "").trim();
-      if (current) {
+      if (text.trim()) {
         setPendingSuggestion(suggestion);
         setConfirmOpen(true);
         return;
@@ -316,36 +563,28 @@ export function InputBox({
       setFollowupsHidden(true);
       setTimeout(() => requestFormSubmit(), 0);
     },
-    [requestFormSubmit, status, textInput],
+    [requestFormSubmit, setFollowupsHidden, status, text, textInput],
   );
 
-  const confirmReplaceAndSend = useCallback(() => {
-    if (!pendingSuggestion) {
+  const confirmSend = useCallback(
+    (how: "replace" | "append") => {
+      if (!pendingSuggestion) {
+        setConfirmOpen(false);
+        return;
+      }
+      const current = text.trim();
+      textInput.setInput(
+        how === "append" && current
+          ? `${current}\n${pendingSuggestion}`
+          : pendingSuggestion,
+      );
+      setFollowupsHidden(true);
       setConfirmOpen(false);
-      return;
-    }
-    textInput.setInput(pendingSuggestion);
-    setFollowupsHidden(true);
-    setConfirmOpen(false);
-    setPendingSuggestion(null);
-    setTimeout(() => requestFormSubmit(), 0);
-  }, [pendingSuggestion, requestFormSubmit, textInput]);
-
-  const confirmAppendAndSend = useCallback(() => {
-    if (!pendingSuggestion) {
-      setConfirmOpen(false);
-      return;
-    }
-    const current = (textInput.value ?? "").trim();
-    const next = current
-      ? `${current}\n${pendingSuggestion}`
-      : pendingSuggestion;
-    textInput.setInput(next);
-    setFollowupsHidden(true);
-    setConfirmOpen(false);
-    setPendingSuggestion(null);
-    setTimeout(() => requestFormSubmit(), 0);
-  }, [pendingSuggestion, requestFormSubmit, textInput]);
+      setPendingSuggestion(null);
+      setTimeout(() => requestFormSubmit(), 0);
+    },
+    [pendingSuggestion, requestFormSubmit, setFollowupsHidden, text, textInput],
+  );
 
   const showFollowups =
     !disabled &&
@@ -354,98 +593,31 @@ export function InputBox({
     (followupsLoading || followups.length > 0);
 
   const followupsVisibilityChangeRef = useRef(onFollowupsVisibilityChange);
-
   useEffect(() => {
     followupsVisibilityChangeRef.current = onFollowupsVisibilityChange;
   }, [onFollowupsVisibilityChange]);
-
   useEffect(() => {
     followupsVisibilityChangeRef.current?.(showFollowups);
   }, [showFollowups]);
-
-  useEffect(() => {
-    messagesRef.current = thread.messages;
-  }, [thread.messages]);
-
   useEffect(() => {
     return () => followupsVisibilityChangeRef.current?.(false);
   }, []);
 
-  useEffect(() => {
-    const streaming = status === "streaming";
-    const wasStreaming = wasStreamingRef.current;
-    wasStreamingRef.current = streaming;
-    if (!wasStreaming || streaming) {
-      return;
-    }
-
-    if (disabled || isMock) {
-      return;
-    }
-
-    const lastAi = [...messagesRef.current]
-      .reverse()
-      .find((m) => m.type === "ai");
-    const lastAiId = lastAi?.id ?? null;
-    if (!lastAiId || lastAiId === lastGeneratedForAiIdRef.current) {
-      return;
-    }
-    lastGeneratedForAiIdRef.current = lastAiId;
-
-    const recent = messagesRef.current
-      .filter((m) => m.type === "human" || m.type === "ai")
-      .map((m) => {
-        const role = m.type === "human" ? "user" : "assistant";
-        const content = textOfMessage(m) ?? "";
-        return { role, content };
-      })
-      .filter((m) => m.content.trim().length > 0)
-      .slice(-6);
-
-    if (recent.length === 0) {
-      return;
-    }
-
-    const controller = new AbortController();
-    setFollowupsHidden(false);
-    setFollowupsLoading(true);
-    setFollowups([]);
-
-    fetch(`${getBackendBaseURL()}/api/threads/${threadId}/suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: recent,
-        n: 3,
-        model_name: context.model_name ?? undefined,
-      }),
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          return { suggestions: [] as string[] };
-        }
-        return (await res.json()) as { suggestions?: string[] };
-      })
-      .then((data) => {
-        const suggestions = (data.suggestions ?? [])
-          .map((s) => (typeof s === "string" ? s.trim() : ""))
-          .filter((s) => s.length > 0)
-          .slice(0, 5);
-        setFollowups(suggestions);
-      })
-      .catch(() => {
-        setFollowups([]);
-      })
-      .finally(() => {
-        setFollowupsLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [context.model_name, disabled, isMock, status, threadId]);
+  const menuOpen = !!trigger;
+  const chipIntegrations = selectedIntegrations(integrations.rows);
+  const { displayName } = usePreferences();
+  // No name until it can be told: never a guessed one.
+  const heading = displayName
+    ? `What are we working on, ${displayName}?`
+    : "What are we working on?";
 
   return (
-    <div ref={promptRootRef} className="relative flex flex-col gap-4">
+    <div ref={promptRootRef} className="relative flex flex-col gap-5">
+      {isWelcomeMode && !extraHeader && (
+        <h1 className="text-center text-[30px] leading-tight font-semibold tracking-[-0.01em]">
+          {heading}
+        </h1>
+      )}
       {showFollowups && (
         <div className="flex items-center justify-center pb-2">
           <div className="flex items-center gap-2">
@@ -477,420 +649,167 @@ export function InputBox({
           </div>
         </div>
       )}
-      <PromptInput
-        className={cn(
-          "bg-background/85 rounded-2xl backdrop-blur-sm transition-all duration-300 ease-out *:data-[slot='input-group']:rounded-2xl",
-          className,
+      <div className="relative" data-testid="chat-bar">
+        {menuOpen && (
+          <SuggestMenu
+            id={menuId}
+            title={trigger.kind === "@" ? "Call in an agent" : "Commands"}
+            items={menuItems}
+            active={Math.min(activeIndex, Math.max(0, menuItems.length - 1))}
+            empty={
+              trigger.kind === "@"
+                ? agentsError
+                  ? "Agents could not be loaded."
+                  : "No agent matches."
+                : "No command matches."
+            }
+            onPick={pick}
+            onHover={setActiveIndex}
+          />
         )}
-        disabled={disabled}
-        globalDrop
-        multiple
-        onSubmit={handleSubmit}
-        {...props}
-      >
-        {extraHeader && (
-          <div className="absolute top-0 right-0 left-0 z-10">
-            <div className="absolute right-0 bottom-0 left-0 flex items-center justify-center">
-              {extraHeader}
+        {pickerOpen && (
+          <ContextPicker
+            placement={isWelcomeMode ? "bottom" : "top"}
+            isNewChat={isNewChat}
+            tab={pickerTab}
+            onTabChange={setPickerTab}
+            onClose={closePicker}
+            projects={chatProjects.projects}
+            attachedProjects={chatProjects.attached}
+            onAttachProject={attachProject}
+            agents={agents}
+            agentsError={agentsError}
+            threadAgent={threadAgent}
+            canChooseAgent={canChooseAgent}
+            onChooseAgent={(name) => {
+              onChooseAgent?.(name);
+              closePicker();
+            }}
+            integrations={integrations.rows}
+            integrationsLoading={integrations.loading}
+            integrationsError={integrations.error}
+            statusError={integrations.statusError}
+            overCap={integrations.overCap}
+            count={integrations.count}
+            onToggleIntegration={integrations.setSelected}
+            connectorsAvailable={integrations.connectorsAvailable}
+            skills={agentSkillList}
+            skillsError={skillsError}
+            excludedSkills={threadSkills.excluded}
+            chatSkillsError={threadSkills.error}
+            onToggleSkill={threadSkills.setUsed}
+            files={attachments.files}
+            uploaded={uploaded}
+            onAttachFiles={() => attachments.openFileDialog()}
+            onRemoveFile={attachments.remove}
+          />
+        )}
+        <PromptInput
+          className={cn(
+            "*:data-[slot='input-group']:bg-card *:data-[slot='input-group']:border-border-strong rounded-[20px] transition-all duration-300 ease-out *:data-[slot='input-group']:gap-3 *:data-[slot='input-group']:rounded-[20px] *:data-[slot='input-group']:px-4 *:data-[slot='input-group']:pt-3.5 *:data-[slot='input-group']:pb-3 *:data-[slot='input-group']:shadow-lg",
+            className,
+          )}
+          disabled={disabled}
+          globalDrop
+          multiple
+          onSubmit={handleSubmit}
+          {...props}
+        >
+          {extraHeader && (
+            <div className="absolute top-0 right-0 left-0 z-10">
+              <div className="absolute right-0 bottom-0 left-0 flex items-center justify-center">
+                {extraHeader}
+              </div>
             </div>
-          </div>
-        )}
-        <PromptInputAttachments>
-          {(attachment) => <PromptInputAttachment data={attachment} />}
-        </PromptInputAttachments>
-        <PromptInputBody className="absolute top-0 right-0 left-0 z-3">
+          )}
+          <PromptInputHeader className="p-0">
+            <ContextChips
+              ref={chipsRef}
+              projects={chatProjects.attached.map((a) => ({
+                link_id: a.link_id,
+                name: a.project.name,
+              }))}
+              onDetachProject={(linkId) =>
+                chatProjects.detach.mutate(linkId, {
+                  onError: (e) => toast.error(e.message),
+                })
+              }
+              agents={chatAgents}
+              onRemoveAgent={() => onChooseAgent?.(null)}
+              integrations={chipIntegrations}
+              onRemoveIntegration={(id) => integrations.setSelected(id, false)}
+              skills={chatSkillNames}
+              onRemoveSkill={
+                threadSkills.error
+                  ? undefined
+                  : (name) => threadSkills.setUsed(name, false)
+              }
+              files={attachments.files}
+              onRemoveFile={attachments.remove}
+              pickerOpen={pickerOpen}
+              onOpenPicker={() => (pickerOpen ? closePicker() : openPicker())}
+              onExit={() => textareaRef.current?.focus()}
+              disabled={disabled}
+            />
+          </PromptInputHeader>
           <PromptInputTextarea
-            className={cn("size-full")}
+            ref={textareaRef}
+            // 16 px, two rows to start, growing to ten (24 px a row).
+            className="max-h-[248px] min-h-14 overflow-y-auto px-0.5 py-1 text-base leading-6 md:text-base"
             disabled={disabled}
-            placeholder={t.inputBox.placeholder}
+            placeholder="Ask anything · @ to bring in an agent · / for commands"
+            aria-label="Message"
             autoFocus={autoFocus}
             defaultValue={initialValue}
+            role={menuOpen ? "combobox" : undefined}
+            aria-expanded={menuOpen ? true : undefined}
+            aria-controls={menuOpen ? menuId : undefined}
+            aria-autocomplete={menuOpen ? "list" : undefined}
+            aria-activedescendant={
+              menuOpen && menuItems.length > 0
+                ? `${menuId}-opt-${Math.min(activeIndex, menuItems.length - 1)}`
+                : undefined
+            }
+            onKeyDownCapture={onKeyDownCapture}
+            onChange={() => requestAnimationFrame(refreshTrigger)}
+            onSelect={refreshTrigger}
+            onBlur={() => setTrigger(null)}
           />
-        </PromptInputBody>
-        <PromptInputFooter className="flex">
-          <PromptInputTools>
-            {/* TODO: Add more connectors here
-          <PromptInputActionMenu>
-            <PromptInputActionMenuTrigger className="px-2!" />
-            <PromptInputActionMenuContent>
-              <PromptInputActionAddAttachments
-                label={t.inputBox.addAttachments}
+          <PromptInputFooter className="flex flex-wrap gap-2 p-0">
+            <PromptInputTools>
+              <AttachButton disabled={disabled} />
+            </PromptInputTools>
+            <PromptInputTools className="flex-wrap justify-end gap-2">
+              <ModeMenu
+                mode={mode}
+                supportsThinking={supportThinking}
+                onSelect={handleModeSelect}
               />
-            </PromptInputActionMenuContent>
-          </PromptInputActionMenu> */}
-            <AddAttachmentsButton className="px-2!" />
-            <PromptInputButton
-              className="gap-1.5! px-2!"
-              onClick={() => setToolsOpen(true)}
-              aria-label="Tools for this chat"
-            >
-              <SlidersHorizontalIcon className="size-3.5" />
-            </PromptInputButton>
-            <PromptInputActionMenu>
-              <ModeHoverGuide
-                mode={
-                  context.mode === "flash" ||
-                  context.mode === "thinking" ||
-                  context.mode === "pro" ||
-                  context.mode === "ultra"
-                    ? context.mode
-                    : "flash"
-                }
-              >
-                <PromptInputActionMenuTrigger className="gap-1! px-2!">
-                  <div>
-                    {context.mode === "flash" && (
-                      <ZapIcon className="text-success size-3" />
-                    )}
-                    {context.mode === "thinking" && (
-                      <LightbulbIcon className="text-warning size-3" />
-                    )}
-                    {context.mode === "pro" && (
-                      <GraduationCapIcon className="text-warning size-3" />
-                    )}
-                    {context.mode === "ultra" && (
-                      <RocketIcon className="text-destructive size-3 [filter:drop-shadow(0_0_5px_rgb(239_68_68/0.85))]" />
-                    )}
-                  </div>
-                  <div
-                    className={cn(
-                      "text-xs font-normal",
-                      context.mode === "flash" && "text-success",
-                      context.mode === "thinking" && "text-warning",
-                      context.mode === "pro" && "text-warning",
-                      context.mode === "ultra" &&
-                        "text-destructive [text-shadow:0_0_8px_rgb(239_68_68/0.55)]",
-                    )}
-                  >
-                    {(context.mode === "flash" && t.inputBox.flashMode) ||
-                      (context.mode === "thinking" &&
-                        t.inputBox.reasoningMode) ||
-                      (context.mode === "pro" && t.inputBox.proMode) ||
-                      (context.mode === "ultra" && t.inputBox.ultraMode)}
-                  </div>
-                </PromptInputActionMenuTrigger>
-              </ModeHoverGuide>
-              <PromptInputActionMenuContent className="w-80">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel className="text-muted-foreground text-xs">
-                    {t.inputBox.mode}
-                  </DropdownMenuLabel>
-                  <PromptInputActionMenu>
-                    <PromptInputActionMenuItem
-                      className={cn(
-                        context.mode === "flash"
-                          ? "text-success"
-                          : "text-muted-foreground/65",
-                      )}
-                      onSelect={() => handleModeSelect("flash")}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-1 font-bold">
-                          <ZapIcon
-                            className={cn(
-                              "mr-2 size-4",
-                              context.mode === "flash"
-                                ? "text-success"
-                                : "text-muted-foreground/60",
-                            )}
-                          />
-                          {t.inputBox.flashMode}
-                        </div>
-                        <div className="pl-7 text-xs">
-                          {t.inputBox.flashModeDescription}
-                        </div>
-                      </div>
-                      {context.mode === "flash" ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </PromptInputActionMenuItem>
-                    {supportThinking && (
-                      <PromptInputActionMenuItem
-                        className={cn(
-                          context.mode === "thinking"
-                            ? "text-warning"
-                            : "text-muted-foreground/65",
-                        )}
-                        onSelect={() => handleModeSelect("thinking")}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-1 font-bold">
-                            <LightbulbIcon
-                              className={cn(
-                                "mr-2 size-4",
-                                context.mode === "thinking"
-                                  ? "text-warning"
-                                  : "text-muted-foreground",
-                              )}
-                            />
-                            {t.inputBox.reasoningMode}
-                          </div>
-                          <div className="pl-7 text-xs">
-                            {t.inputBox.reasoningModeDescription}
-                          </div>
-                        </div>
-                        {context.mode === "thinking" ? (
-                          <CheckIcon className="ml-auto size-4" />
-                        ) : (
-                          <div className="ml-auto size-4" />
-                        )}
-                      </PromptInputActionMenuItem>
-                    )}
-                    <PromptInputActionMenuItem
-                      className={cn(
-                        context.mode === "pro"
-                          ? "text-warning"
-                          : "text-muted-foreground/65",
-                      )}
-                      onSelect={() => handleModeSelect("pro")}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-1 font-bold">
-                          <GraduationCapIcon
-                            className={cn(
-                              "mr-2 size-4",
-                              context.mode === "pro"
-                                ? "text-warning"
-                                : "text-muted-foreground/60",
-                            )}
-                          />
-                          {t.inputBox.proMode}
-                        </div>
-                        <div className="pl-7 text-xs">
-                          {t.inputBox.proModeDescription}
-                        </div>
-                      </div>
-                      {context.mode === "pro" ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </PromptInputActionMenuItem>
-                    <PromptInputActionMenuItem
-                      className={cn(
-                        context.mode === "ultra"
-                          ? "text-destructive"
-                          : "text-muted-foreground/65",
-                      )}
-                      onSelect={() => handleModeSelect("ultra")}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-1 font-bold">
-                          <RocketIcon
-                            className={cn(
-                              "mr-2 size-4",
-                              context.mode === "ultra"
-                                ? "text-destructive [filter:drop-shadow(0_0_7px_rgb(239_68_68/0.9))]"
-                                : "text-muted-foreground/60",
-                            )}
-                          />
-                          <div
-                            className={cn(
-                              context.mode === "ultra" &&
-                                "text-destructive [text-shadow:0_0_10px_rgb(239_68_68/0.6)]",
-                            )}
-                          >
-                            {t.inputBox.ultraMode}
-                          </div>
-                        </div>
-                        <div className="pl-7 text-xs">
-                          {t.inputBox.ultraModeDescription}
-                        </div>
-                      </div>
-                      {context.mode === "ultra" ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </PromptInputActionMenuItem>
-                  </PromptInputActionMenu>
-                </DropdownMenuGroup>
-              </PromptInputActionMenuContent>
-            </PromptInputActionMenu>
-            {supportReasoningEffort && context.mode !== "flash" && (
-              <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger className="gap-1! px-2!">
-                  <div className="text-xs font-normal">
-                    {t.inputBox.reasoningEffort}:
-                    {context.reasoning_effort === "minimal" &&
-                      " " + t.inputBox.reasoningEffortMinimal}
-                    {context.reasoning_effort === "low" &&
-                      " " + t.inputBox.reasoningEffortLow}
-                    {context.reasoning_effort === "medium" &&
-                      " " + t.inputBox.reasoningEffortMedium}
-                    {context.reasoning_effort === "high" &&
-                      " " + t.inputBox.reasoningEffortHigh}
-                  </div>
-                </PromptInputActionMenuTrigger>
-                <PromptInputActionMenuContent className="w-70">
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel className="text-muted-foreground text-xs">
-                      {t.inputBox.reasoningEffort}
-                    </DropdownMenuLabel>
-                    <PromptInputActionMenu>
-                      <PromptInputActionMenuItem
-                        className={cn(
-                          context.reasoning_effort === "minimal"
-                            ? "text-accent-foreground"
-                            : "text-muted-foreground/65",
-                        )}
-                        onSelect={() => handleReasoningEffortSelect("minimal")}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-1 font-bold">
-                            {t.inputBox.reasoningEffortMinimal}
-                          </div>
-                          <div className="pl-2 text-xs">
-                            {t.inputBox.reasoningEffortMinimalDescription}
-                          </div>
-                        </div>
-                        {context.reasoning_effort === "minimal" ? (
-                          <CheckIcon className="ml-auto size-4" />
-                        ) : (
-                          <div className="ml-auto size-4" />
-                        )}
-                      </PromptInputActionMenuItem>
-                      <PromptInputActionMenuItem
-                        className={cn(
-                          context.reasoning_effort === "low"
-                            ? "text-accent-foreground"
-                            : "text-muted-foreground/65",
-                        )}
-                        onSelect={() => handleReasoningEffortSelect("low")}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-1 font-bold">
-                            {t.inputBox.reasoningEffortLow}
-                          </div>
-                          <div className="pl-2 text-xs">
-                            {t.inputBox.reasoningEffortLowDescription}
-                          </div>
-                        </div>
-                        {context.reasoning_effort === "low" ? (
-                          <CheckIcon className="ml-auto size-4" />
-                        ) : (
-                          <div className="ml-auto size-4" />
-                        )}
-                      </PromptInputActionMenuItem>
-                      <PromptInputActionMenuItem
-                        className={cn(
-                          context.reasoning_effort === "medium" ||
-                            !context.reasoning_effort
-                            ? "text-accent-foreground"
-                            : "text-muted-foreground/65",
-                        )}
-                        onSelect={() => handleReasoningEffortSelect("medium")}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-1 font-bold">
-                            {t.inputBox.reasoningEffortMedium}
-                          </div>
-                          <div className="pl-2 text-xs">
-                            {t.inputBox.reasoningEffortMediumDescription}
-                          </div>
-                        </div>
-                        {context.reasoning_effort === "medium" ||
-                        !context.reasoning_effort ? (
-                          <CheckIcon className="ml-auto size-4" />
-                        ) : (
-                          <div className="ml-auto size-4" />
-                        )}
-                      </PromptInputActionMenuItem>
-                      <PromptInputActionMenuItem
-                        className={cn(
-                          context.reasoning_effort === "high"
-                            ? "text-accent-foreground"
-                            : "text-muted-foreground/65",
-                        )}
-                        onSelect={() => handleReasoningEffortSelect("high")}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-1 font-bold">
-                            {t.inputBox.reasoningEffortHigh}
-                          </div>
-                          <div className="pl-2 text-xs">
-                            {t.inputBox.reasoningEffortHighDescription}
-                          </div>
-                        </div>
-                        {context.reasoning_effort === "high" ? (
-                          <CheckIcon className="ml-auto size-4" />
-                        ) : (
-                          <div className="ml-auto size-4" />
-                        )}
-                      </PromptInputActionMenuItem>
-                    </PromptInputActionMenu>
-                  </DropdownMenuGroup>
-                </PromptInputActionMenuContent>
-              </PromptInputActionMenu>
-            )}
-          </PromptInputTools>
-          <PromptInputTools>
-            <ModelSelector
-              open={modelDialogOpen}
-              onOpenChange={setModelDialogOpen}
-            >
-              <ModelSelectorTrigger asChild>
-                <PromptInputButton className="gap-1.5!">
-                  <div className="size-1.5 shrink-0 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 opacity-75" />
-                  <div className="flex min-w-0 flex-col items-start text-left">
-                    <ModelSelectorName className="text-xs font-normal">
-                      {selectedModel?.display_name}
-                    </ModelSelectorName>
-                  </div>
-                </PromptInputButton>
-              </ModelSelectorTrigger>
-              <ModelSelectorContent>
-                <ModelSelectorInput placeholder={t.inputBox.searchModels} />
-                <ModelSelectorList>
-                  {models.map((m) => (
-                    <ModelSelectorItem
-                      key={m.name}
-                      value={m.name}
-                      onSelect={() => handleModelSelect(m.name)}
-                    >
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <ModelSelectorName>{m.display_name}</ModelSelectorName>
-                        <span className="text-muted-foreground truncate text-[10px]">
-                          {m.model}
-                        </span>
-                      </div>
-                      {m.name === context.model_name ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </ModelSelectorItem>
-                  ))}
-                </ModelSelectorList>
-              </ModelSelectorContent>
-            </ModelSelector>
-            <PromptInputSubmit
-              className="rounded-full"
-              disabled={disabled}
-              variant="outline"
-              status={status}
-            />
-          </PromptInputTools>
-        </PromptInputFooter>
-        {!isWelcomeMode && (
-          <div className="bg-background absolute right-0 -bottom-[17px] left-0 z-0 h-4"></div>
-        )}
-      </PromptInput>
-
-      {threadId && (
-        <ToolsPicker
-          threadId={threadId}
-          open={toolsOpen}
-          onOpenChange={setToolsOpen}
-          placement={isWelcomeMode ? "bottom" : "top"}
-        />
-      )}
+              {showsReasoningEffort(supportReasoningEffort, context.mode) && (
+                <EffortMenu
+                  effort={context.reasoning_effort}
+                  onSelect={handleReasoningEffortSelect}
+                />
+              )}
+              <ModelMenu
+                models={models}
+                selected={selectedModel}
+                open={modelDialogOpen}
+                onOpenChange={setModelDialogOpen}
+                onSelect={handleModelSelect}
+              />
+              <SendButton status={status} disabled={disabled} />
+            </PromptInputTools>
+          </PromptInputFooter>
+          {!isWelcomeMode && (
+            <div className="bg-background absolute right-0 -bottom-[17px] left-0 z-0 h-4"></div>
+          )}
+        </PromptInput>
+      </div>
 
       {isWelcomeMode && searchParams.get("mode") !== "skill" && (
         <div className="flex items-center justify-center pt-2">
-          <SuggestionList />
+          <WelcomeSuggestions />
         </div>
       )}
 
@@ -906,10 +825,10 @@ export function InputBox({
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
               {t.common.cancel}
             </Button>
-            <Button variant="secondary" onClick={confirmAppendAndSend}>
+            <Button variant="secondary" onClick={() => confirmSend("append")}>
               {t.inputBox.followupConfirmAppend}
             </Button>
-            <Button onClick={confirmReplaceAndSend}>
+            <Button onClick={() => confirmSend("replace")}>
               {t.inputBox.followupConfirmReplace}
             </Button>
           </DialogFooter>
@@ -919,86 +838,20 @@ export function InputBox({
   );
 }
 
-function SuggestionList() {
-  const { t } = useI18n();
-  const { textInput } = usePromptInputController();
-  const handleSuggestionClick = useCallback(
-    (prompt: string | undefined) => {
-      if (!prompt) return;
-      textInput.setInput(prompt);
-      setTimeout(() => {
-        const textarea = document.querySelector<HTMLTextAreaElement>(
-          "textarea[name='message']",
-        );
-        if (textarea) {
-          const selStart = prompt.indexOf("[");
-          const selEnd = prompt.indexOf("]");
-          if (selStart !== -1 && selEnd !== -1) {
-            textarea.setSelectionRange(selStart, selEnd + 1);
-            textarea.focus();
-          }
-        }
-      }, 500);
-    },
-    [textInput],
-  );
-  return (
-    <Suggestions className="min-h-16 w-fit items-start">
-      <ConfettiButton
-        className="border-foreground/15 text-foreground/60 hover:border-foreground/30 hover:bg-foreground/[0.05] hover:text-foreground cursor-pointer rounded-full bg-transparent px-4 text-xs font-normal shadow-none"
-        variant="outline"
-        size="sm"
-        onClick={() => handleSuggestionClick(t.inputBox.surpriseMePrompt)}
-      >
-        <SparklesIcon className="size-4" /> {t.inputBox.surpriseMe}
-      </ConfettiButton>
-      {t.inputBox.suggestions.map((suggestion) => (
-        <Suggestion
-          key={suggestion.suggestion}
-          icon={suggestion.icon}
-          suggestion={suggestion.suggestion}
-          onClick={() => handleSuggestionClick(suggestion.prompt)}
-        />
-      ))}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Suggestion icon={PlusIcon} suggestion={t.common.create} />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuGroup>
-            {t.inputBox.suggestionsCreate.map((suggestion, index) =>
-              "type" in suggestion && suggestion.type === "separator" ? (
-                <DropdownMenuSeparator key={index} />
-              ) : (
-                !("type" in suggestion) && (
-                  <DropdownMenuItem
-                    key={suggestion.suggestion}
-                    onClick={() => handleSuggestionClick(suggestion.prompt)}
-                  >
-                    {suggestion.icon && <suggestion.icon className="size-4" />}
-                    {suggestion.suggestion}
-                  </DropdownMenuItem>
-                )
-              ),
-            )}
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </Suggestions>
-  );
-}
-
-function AddAttachmentsButton({ className }: { className?: string }) {
+function AttachButton({ disabled }: { disabled?: boolean }) {
   const { t } = useI18n();
   const attachments = usePromptInputAttachments();
   return (
     <Tooltip content={t.inputBox.addAttachments}>
-      <PromptInputButton
-        className={cn("px-2!", className)}
+      <button
+        type="button"
+        aria-label="Attach file"
+        disabled={disabled}
         onClick={() => attachments.openFileDialog()}
+        className="text-foreground-2 hover:text-foreground hover:bg-surface-raised focus-visible:ring-ring inline-flex size-[38px] items-center justify-center rounded-[10px] focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 max-sm:size-11"
       >
-        <PaperclipIcon className="size-3" />
-      </PromptInputButton>
+        <PaperclipIcon className="size-5" aria-hidden />
+      </button>
     </Tooltip>
   );
 }

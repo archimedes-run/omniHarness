@@ -154,6 +154,31 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             app.state.thread_tool_selection_repo = None
 
+        # Feature 006: skills removed from one conversation (the chat bar's ×).
+        if sf is not None:
+            from omniharness.persistence.thread_skill_exclusion import ThreadSkillExclusionRepository
+
+            app.state.thread_skill_exclusion_repo = ThreadSkillExclusionRepository(sf)
+        else:
+            app.state.thread_skill_exclusion_repo = None
+
+        # Feature 006: when each tool source last worked, as observed at the
+        # tool-call chokepoint (ToolSourceHealthMiddleware writes it).
+        if sf is not None:
+            from omniharness.persistence.tool_source_health import ToolSourceHealthRepository
+
+            app.state.tool_source_health_repo = ToolSourceHealthRepository(sf)
+        else:
+            app.state.tool_source_health_repo = None
+
+        # Per-user preferences (Feature 006): the appearance a user chose.
+        if sf is not None:
+            from omniharness.persistence.user_preferences import UserPreferenceRepository
+
+            app.state.user_preference_repo = UserPreferenceRepository(sf)
+        else:
+            app.state.user_preference_repo = None
+
         # ComposioClient (only when COMPOSIO_API_KEY is set)
         import os
 
@@ -213,6 +238,8 @@ get_mcp_secrets_vault = _require("mcp_secrets_vault", "MCP secrets vault")
 get_composio_connection_repo = _require("composio_connection_repo", "Composio connection repository")
 get_composio_client = _require("composio_client", "Composio client")
 get_thread_tool_selection_repo = _require("thread_tool_selection_repo", "Thread tool-selection repository")
+get_thread_skill_exclusion_repo = _require("thread_skill_exclusion_repo", "Thread skill-exclusion repository")
+get_user_preference_repo = _require("user_preference_repo", "User preferences")
 
 
 def get_store(request: Request):

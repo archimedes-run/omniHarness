@@ -2,8 +2,10 @@ import { expect, test } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
 
+// Feature 006: the sidebar holds New chat · Chats · MCP Suite; Agents, Skills,
+// Automations and Tasks moved to the capsule, where each opens as a panel.
 test.describe("Sidebar navigation", () => {
-  test("sidebar contains Chats and Agents nav links", async ({ page }) => {
+  test("sidebar contains Chats and MCP Suite nav links", async ({ page }) => {
     mockLangGraphAPI(page);
 
     await page.goto("/workspace/chats/new");
@@ -13,20 +15,23 @@ test.describe("Sidebar navigation", () => {
     await expect(sidebar.locator("a[href='/workspace/chats']")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(sidebar.locator("a[href='/workspace/agents']")).toBeVisible();
+    await expect(
+      sidebar.locator("a[href='/workspace/connections']"),
+    ).toBeVisible();
   });
 
-  test("Agents link navigates to agents page", async ({ page }) => {
+  test("Agents in the capsule opens the Agents panel", async ({ page }) => {
     mockLangGraphAPI(page);
 
     await page.goto("/workspace/chats/new");
 
-    const sidebar = page.locator("[data-sidebar='sidebar']");
-    const agentsLink = sidebar.locator("a[href='/workspace/agents']");
-    await expect(agentsLink).toBeVisible({ timeout: 15_000 });
-    await agentsLink.click();
+    const agents = page.locator(
+      "[data-testid='capsule'] [data-capsule='agents']",
+    );
+    await expect(agents).toBeVisible({ timeout: 15_000 });
+    await agents.click();
 
-    await page.waitForURL("**/workspace/agents");
-    await expect(page).toHaveURL(/\/workspace\/agents/);
+    await expect(page).toHaveURL(/[?&]panel=agents/);
+    await expect(page.getByRole("dialog")).toBeVisible();
   });
 });

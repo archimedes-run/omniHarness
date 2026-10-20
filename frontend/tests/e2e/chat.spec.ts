@@ -10,14 +10,14 @@ test.describe("Chat workspace", () => {
   test("new chat page loads with input box", async ({ page }) => {
     await page.goto("/workspace/chats/new");
 
-    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    const textarea = page.getByLabel("Message", { exact: true });
     await expect(textarea).toBeVisible({ timeout: 15_000 });
   });
 
   test("can type a message in the input box", async ({ page }) => {
     await page.goto("/workspace/chats/new");
 
-    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    const textarea = page.getByLabel("Message", { exact: true });
     await expect(textarea).toBeVisible({ timeout: 15_000 });
 
     await textarea.fill("Hello, OmniHarness!");
@@ -35,7 +35,7 @@ test.describe("Chat workspace", () => {
 
     await page.goto("/workspace/chats/new");
 
-    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    const textarea = page.getByLabel("Message", { exact: true });
     await expect(textarea).toBeVisible({ timeout: 15_000 });
 
     await textarea.fill("Hello");

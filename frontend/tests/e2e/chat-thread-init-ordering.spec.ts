@@ -66,7 +66,7 @@ test.describe("Chat: thread API request ordering on first send", () => {
 
     await page.goto("/workspace/chats/new");
 
-    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    const textarea = page.getByLabel("Message", { exact: true });
     await expect(textarea).toBeVisible({ timeout: 15_000 });
     await textarea.fill("Hello");
     await textarea.press("Enter");

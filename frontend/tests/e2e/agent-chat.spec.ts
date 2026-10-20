@@ -28,7 +28,7 @@ test.describe("Agent chat", () => {
     await page.goto("/workspace/agents/test-agent/chats/new");
 
     // The prompt input textarea should be visible
-    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    const textarea = page.getByLabel("Message", { exact: true });
     await expect(textarea).toBeVisible({ timeout: 15_000 });
   });
 

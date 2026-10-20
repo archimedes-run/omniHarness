@@ -19,6 +19,13 @@ export interface ToolSource {
   tool_count: number | null;
   error: string | null;
   selected: boolean | null;
+  /** Feature 006: when a call to this source last came back without error
+   * (observed working), and when one last failed. Absent from an older
+   * gateway; null when never seen. */
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  last_error?: string | null;
+  last_error_withheld?: boolean;
 }
 
 export interface ToolSourcesView {

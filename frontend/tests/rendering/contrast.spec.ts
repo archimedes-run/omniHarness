@@ -1,3 +1,7 @@
+import { readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import { lowContrastText, type LowContrast } from "./contrast-probe";
@@ -467,12 +471,20 @@ Object.assign(ROUTES, {
   },
   "**/api/composio/connections": { connections: [] },
   "**/api/mcp/config": { mcp_servers: {} },
+  "**/api/mcp-studio/servers/weather": SERVER("weather", "deployed"),
+  "**/api/preferences/appearance": { appearance: "system", chosen: false },
+  "**/api/preferences": {
+    appearance: "system",
+    appearance_chosen: false,
+    display_name: null,
+    display_name_effective: "e2e",
+  },
 });
 
 const PAGES = [
   "/",
   "/workspace/chats/new",
-  "/workspace/inbox",
+  "/workspace/home",
   "/workspace/automations",
   "/workspace/automations/morning-briefing",
   "/workspace/agents",
@@ -488,7 +500,64 @@ const PAGES = [
   "/workspace/settings/activity",
   "/workspace/settings/appearance",
   "/workspace/settings/account",
+  // Feature 006: every other workspace page (see the coverage test below).
+  "/workspace/chats",
+  "/workspace/agents/new",
+  "/workspace/agents/coder/chats/new",
+  "/workspace/automations/new",
+  "/workspace/mcp/weather",
+  "/workspace/mcp/callback",
+  "/workspace/workflows/w1",
+  "/workspace/workflows/w1/runs/r1",
+  "/workspace/settings/notification",
+  "/workspace/settings/tools",
+  "/workspace/settings/skills",
+  "/workspace/settings/about",
+  "/login",
+  "/setup",
 ];
+
+/** Workspace pages not audited, each with the reason. */
+const NOT_AUDITED: Record<string, string> = {
+  "/workspace": "redirects to /workspace/chats/new",
+  "/workspace/confirmations": "redirects to /workspace/home",
+  "/workspace/inbox": "redirects to /workspace/home",
+  "/workspace/mcp": "redirects to /workspace/connections",
+  "/workspace/policy": "redirects to /workspace/settings/safety",
+  "/workspace/settings": "redirects to a settings section",
+  "/workspace/settings/connections": "redirects to /workspace/connections",
+  "/workspace/tool-sources": "redirects to /workspace/connections",
+  "/workspace/triggers": "redirects to /workspace/automations",
+  "/workspace/workflows": "redirects to /workspace/automations",
+};
+
+/** src/app/workspace/** /page.tsx as route patterns, dynamic segments as [x]. */
+function workspaceRoutes(): string[] {
+  const root = fileURLToPath(new URL("../../src/app", import.meta.url));
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) return walk(path);
+      return name === "page.tsx" ? [path] : [];
+    });
+  return walk(join(root, "workspace")).map(
+    (f) => "/" + relative(root, f).replace(/\/?page\.tsx$/, ""),
+  );
+}
+
+test("every workspace page is audited, or listed with the reason it is not", () => {
+  const audited = PAGES.map((p) => p.split("?")[0]!);
+  const routes = workspaceRoutes();
+  expect(routes.length, "found no pages: the walk is blind").toBeGreaterThan(
+    20,
+  );
+  const missing = routes.filter((route) => {
+    if (route in NOT_AUDITED) return false;
+    const re = new RegExp("^" + route.replace(/\[[^\]]+\]/g, "[^/]+") + "$");
+    return !audited.some((p) => re.test(p));
+  });
+  expect(missing, "add these to PAGES (with stubs) or NOT_AUDITED").toEqual([]);
+});
 
 async function stub(page: Page) {
   for (const [pattern, body] of Object.entries(ROUTES)) {
@@ -505,11 +574,19 @@ async function stub(page: Page) {
 /** Every screenful of the page, each probed once it has rendered. */
 async function auditPage(page: Page): Promise<LowContrast[]> {
   const found = new Map<string, LowContrast>();
+  // Workspace pages scroll inside the shell (Feature 006), under the
+  // capsule; other pages scroll the window.
   const height = await page.evaluate(
-    () => document.documentElement.scrollHeight,
+    () =>
+      document.querySelector('[data-testid="workspace-scroll"]')
+        ?.scrollHeight ?? document.documentElement.scrollHeight,
   );
   for (let y = 0; y < height; y += 800) {
-    await page.evaluate((top) => window.scrollTo(0, top), y);
+    await page.evaluate((top) => {
+      const shell = document.querySelector('[data-testid="workspace-scroll"]');
+      if (shell) shell.scrollTop = top;
+      else window.scrollTo(0, top);
+    }, y);
     await page.waitForTimeout(400);
     for (const item of await page.evaluate(lowContrastText)) {
       found.set(`${item.text}|${item.cls}`, item);

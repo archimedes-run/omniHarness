@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -329,6 +330,23 @@ def _available_skill_names(agent_config, is_bootstrap: bool) -> set[str] | None:
     return None
 
 
+def _effective_skill_names(available_skills: set[str] | None, excluded_skills: object, *, enabled_skill_names: Callable[[], set[str]]) -> set[str] | None:
+    """The skills this run may use: the agent's set minus the chat's removals.
+
+    ``available_skills`` is the agent's whitelist, or None for "every enabled
+    skill". ``excluded_skills`` is what this conversation removed (Feature 006,
+    loaded server-side at run launch). With nothing removed the result is
+    exactly ``available_skills``, None included, so behaviour is unchanged.
+    """
+    if not isinstance(excluded_skills, (list, set, tuple)):
+        return available_skills
+    excluded = {name for name in excluded_skills if isinstance(name, str)}
+    if not excluded:
+        return available_skills
+    base = available_skills if available_skills is not None else enabled_skill_names()
+    return base - excluded
+
+
 def _load_enabled_skills_for_tool_policy(available_skills: set[str] | None, *, app_config: AppConfig) -> list[Skill]:
     try:
         from omniharness.agents.lead_agent.prompt import get_enabled_skills_for_config
@@ -370,6 +388,14 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     available_skills = _available_skill_names(agent_config, is_bootstrap)
+    if not is_bootstrap:
+
+        def _enabled_skill_names() -> set[str]:
+            from omniharness.agents.lead_agent.prompt import get_enabled_skills_for_config
+
+            return {skill.name for skill in get_enabled_skills_for_config(resolved_app_config)}
+
+        available_skills = _effective_skill_names(available_skills, cfg.get("excluded_skills"), enabled_skill_names=_enabled_skill_names)
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
     agent_model_name = agent_config.model if agent_config and agent_config.model else None
 
@@ -485,7 +511,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             subagent_enabled=subagent_enabled,
             max_concurrent_subagents=max_concurrent_subagents,
             agent_name=agent_name,
-            available_skills=set(agent_config.skills) if agent_config and agent_config.skills is not None else None,
+            available_skills=available_skills,
             app_config=resolved_app_config,
         ),
         state_schema=ThreadState,

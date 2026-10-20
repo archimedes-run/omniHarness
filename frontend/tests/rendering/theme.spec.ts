@@ -162,26 +162,24 @@ test.describe("the theme toggle changes what the user sees", () => {
   });
 
   /**
-   * The dark background is a CHOSEN value, pinned exactly.
-   *
-   * This assertion used to say "charcoal, not neutral black" and checked that
-   * blue led red — encoding #36454f, a blue-grey. The chosen colour is now
-   * #28282B, a near-neutral dark grey, so that check expressed an intent the
-   * design no longer has: it would have passed on #28282B by two points of
-   * blue while asserting nothing anyone cares about.
-   *
-   * A brand colour is worth pinning exactly rather than characterising. The
-   * failure message carries the intended value, so a future change is a
-   * deliberate edit here rather than a puzzle.
+   * The dark background is a CHOSEN value, pinned exactly: Graphite's
+   * #121316 (Feature 006; it was #28282B before). A brand colour is pinned
+   * rather than characterised, so a change is a deliberate edit here.
    */
-  test("the dark background is the chosen #28282B", async ({ page }) => {
+  test("the dark background is Graphite's #121316", async ({ page }) => {
     await load(page, "dark");
     const [r, g, b] = await token(page, "--background");
 
     expect(
       { r, g, b },
-      `--background renders rgb(${r}, ${g}, ${b}); #28282B is rgb(40, 40, 43)`,
-    ).toEqual({ r: 40, g: 40, b: 43 });
+      `--background renders rgb(${r}, ${g}, ${b}); #121316 is rgb(18, 19, 22)`,
+    ).toEqual({ r: 18, g: 19, b: 22 });
+  });
+
+  test("the light background is #F7F7F8", async ({ page }) => {
+    await load(page, "light");
+    const [r, g, b] = await token(page, "--background");
+    expect({ r, g, b }).toEqual({ r: 247, g: 247, b: 248 });
   });
 
   /**
@@ -202,20 +200,63 @@ test.describe("the theme toggle changes what the user sees", () => {
     ["--secondary-foreground", "--secondary"],
     ["--accent-foreground", "--accent"],
     ["--primary-foreground", "--primary"],
+    ["--foreground-2", "--card"],
+    ["--muted-foreground", "--card"],
+    ["--muted-foreground", "--surface-raised"],
+    ["--primary", "--card"],
+    ["--success", "--card"],
+    ["--warning", "--card"],
+    ["--destructive", "--card"],
+    ["--success-foreground", "--success"],
+    ["--warning-foreground", "--warning"],
+    ["--destructive-foreground", "--destructive"],
+    ["--sidebar-foreground", "--sidebar-accent"],
+    ["--foreground", "--primary-subtle"],
+    ["--primary", "--primary-subtle"],
+    ["--avatar-lead-foreground", "--avatar-lead"],
+    ["--avatar-lead-foreground", "--background"],
+    ["--avatar-lead-foreground", "--card"],
+    ["--avatar-0-foreground", "--avatar-0"],
+    ["--avatar-0-foreground", "--background"],
+    ["--avatar-0-foreground", "--card"],
+    ["--avatar-1-foreground", "--avatar-1"],
+    ["--avatar-1-foreground", "--background"],
+    ["--avatar-1-foreground", "--card"],
+    ["--avatar-2-foreground", "--avatar-2"],
+    ["--avatar-2-foreground", "--background"],
+    ["--avatar-2-foreground", "--card"],
+    ["--avatar-3-foreground", "--avatar-3"],
+    ["--avatar-3-foreground", "--background"],
+    ["--avatar-3-foreground", "--card"],
+    ["--avatar-4-foreground", "--avatar-4"],
+    ["--avatar-4-foreground", "--background"],
+    ["--avatar-4-foreground", "--card"],
+    ["--avatar-5-foreground", "--avatar-5"],
+    ["--avatar-5-foreground", "--background"],
+    ["--avatar-5-foreground", "--card"],
+    ["--avatar-6-foreground", "--avatar-6"],
+    ["--avatar-6-foreground", "--background"],
+    ["--avatar-6-foreground", "--card"],
+    ["--avatar-7-foreground", "--avatar-7"],
+    ["--avatar-7-foreground", "--background"],
+    ["--avatar-7-foreground", "--card"],
   ];
 
-  for (const [fg, bg] of PAIRS) {
-    test(`${fg} on ${bg} meets WCAG AA in dark mode`, async ({ page }) => {
-      await load(page, "dark");
-      const ratio = contrast(await token(page, fg), await token(page, bg));
-      expect(
-        ratio,
-        `${fg} on ${bg} is ${ratio.toFixed(2)}:1, below the 4.5:1 AA floor for ` +
-          `normal text — this is what "invisible until you hover over it" looks ` +
-          `like as a number.`,
-      ).toBeGreaterThanOrEqual(4.5);
-    });
-  }
+  for (const scheme of ["light", "dark"] as const)
+    for (const [fg, bg] of PAIRS) {
+      test(`${fg} on ${bg} meets WCAG AA in ${scheme} mode`, async ({
+        page,
+      }) => {
+        await load(page, scheme);
+        const ratio = contrast(await token(page, fg), await token(page, bg));
+        expect(
+          ratio,
+          `${fg} on ${bg} is ${ratio.toFixed(2)}:1, below the 4.5:1 AA floor for ` +
+            `normal text — this is what "invisible until you hover over it" looks ` +
+            `like as a number.`,
+        ).toBeGreaterThanOrEqual(4.5);
+      });
+    }
 });
 
 /**
@@ -237,7 +278,7 @@ const SURFACES: {
   routes: Record<string, unknown>;
 }[] = [
   {
-    path: "/workspace/inbox",
+    path: "/workspace/home",
     row: '[data-testid="pending-action"]',
     routes: {
       "**/api/inbox/alerts": { alerts: [], waiting_count: 0 },
@@ -399,3 +440,134 @@ for (const surface of SURFACES) {
     ).not.toBe(light.row);
   });
 }
+
+/**
+ * Feature 006: Settings > Appearance is remembered per user on the server.
+ * The gateway is stubbed with page.route; the backend half is tested through
+ * create_app() in backend/tests/preferences.
+ */
+test.describe("Settings > Appearance", () => {
+  const PREF = "**/api/preferences/appearance";
+  /** Hydrated: before it, a click lands on server-rendered markup. */
+  const ready = (page: Page) =>
+    page.locator('[role="radiogroup"][data-ready]').waitFor();
+
+  test("choosing Dark applies it and saves it to the account", async ({
+    page,
+  }) => {
+    const puts: unknown[] = [];
+    await page.route(PREF, async (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON() as {
+          appearance: string;
+        };
+        puts.push(body);
+        return route.fulfill(ok({ appearance: body.appearance, chosen: true }));
+      }
+      return route.fulfill(ok({ appearance: "system", chosen: false }));
+    });
+    await page.addInitScript(() => localStorage.setItem("theme", "light"));
+    await page.goto("/workspace/settings/appearance");
+    await ready(page);
+    const dark = page.getByTestId("theme-option-dark");
+    await expect(dark).toHaveAttribute("role", "radio");
+    await dark.click();
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    await expect(dark).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("appearance-save-state")).toContainText(
+      "Saved to your account",
+    );
+    expect(puts).toEqual([{ appearance: "dark" }]);
+  });
+
+  test("arrow keys move the choice, as a radiogroup should", async ({
+    page,
+  }) => {
+    await page.route(PREF, (route) =>
+      route.fulfill(ok({ appearance: "light", chosen: true })),
+    );
+    await page.addInitScript(() => localStorage.setItem("theme", "light"));
+    await page.goto("/workspace/settings/appearance");
+    await ready(page);
+    const light = page.getByTestId("theme-option-light");
+    await expect(light).toHaveAttribute("aria-checked", "true");
+    await light.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("theme-option-dark")).toBeFocused();
+    await expect(page.getByTestId("theme-option-dark")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  test("a failed save is said, not swallowed", async ({ page }) => {
+    await page.route(PREF, (route) =>
+      route.request().method() === "PUT"
+        ? route.fulfill({ status: 503, body: "{}" })
+        : route.fulfill(ok({ appearance: "system", chosen: false })),
+    );
+    await page.goto("/workspace/settings/appearance");
+    await ready(page);
+    await page.getByTestId("theme-option-dark").click();
+    await expect(page.getByTestId("appearance-save-state")).toContainText(
+      "Could not save to your account",
+    );
+    // It still applies in this browser.
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  });
+
+  test("the stored choice wins over this browser's cache on load", async ({
+    page,
+  }) => {
+    await page.route(PREF, (route) =>
+      route.fulfill(ok({ appearance: "dark", chosen: true })),
+    );
+    await page.addInitScript(() => localStorage.setItem("theme", "light"));
+    await page.goto("/workspace/settings/appearance");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe(
+      "dark",
+    );
+  });
+
+  test("a user who never chose follows the system", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.route(PREF, (route) =>
+      route.fulfill(ok({ appearance: "system", chosen: false })),
+    );
+    await page.goto("/workspace/settings/appearance");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    await expect(page.getByTestId("theme-option-system")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+});
+
+test("Inter for text and JetBrains Mono for code, self-hosted", async ({
+  page,
+}) => {
+  const fontRequests: string[] = [];
+  page.on("request", (r) => {
+    if (/\.(woff2?|ttf)(\?|$)/.test(r.url()) || r.url().includes("fonts.g"))
+      fontRequests.push(r.url());
+  });
+  await page.goto("/", { waitUntil: "networkidle" });
+  const families = await page.evaluate(() => {
+    const mono = document.createElement("code");
+    mono.className = "font-mono";
+    document.body.appendChild(mono);
+    const out = {
+      body: getComputedStyle(document.body).fontFamily,
+      mono: getComputedStyle(mono).fontFamily,
+    };
+    mono.remove();
+    return out;
+  });
+  expect(families.body).toMatch(/Inter/);
+  expect(families.mono).toMatch(/JetBrains Mono/);
+  const external = fontRequests.filter(
+    (u) => !u.startsWith("http://localhost"),
+  );
+  expect(external, "a font was fetched from outside the app").toEqual([]);
+});

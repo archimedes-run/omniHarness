@@ -61,3 +61,33 @@ export async function installSkill(
 
   return response.json();
 }
+
+/** The skills removed from one chat (GET/PUT /api/threads/{id}/skills). */
+export interface ThreadSkills {
+  thread_id: string;
+  excluded: string[];
+}
+
+export async function getThreadSkills(threadId: string): Promise<ThreadSkills> {
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/skills`,
+  );
+  if (!res.ok) throw new Error(`get chat skills failed: ${res.status}`);
+  return res.json();
+}
+
+export async function putThreadSkills(
+  threadId: string,
+  excluded: string[],
+): Promise<ThreadSkills> {
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/skills`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ excluded }),
+    },
+  );
+  if (!res.ok) throw new Error(`put chat skills failed: ${res.status}`);
+  return res.json();
+}

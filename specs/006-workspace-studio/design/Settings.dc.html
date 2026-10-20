@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings, Memory</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#121316}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1040px; background: #121316; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.5">
+
+  <nav aria-label="Main" style="flex: 1 1 248px; max-width: 248px; min-width: 220px; box-sizing: border-box; background: #17181C; border-right: 1px solid #2E3138; padding: 20px 12px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><circle cx="19" cy="6" r="2.5" fill="#8FA8FF"></circle></svg>
+      <span style="font-weight: 600; font-size: 15px">OmniHarness</span>
+    </div>
+    <a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none"><span style="flex: 1">New chat</span><span style="background: #F2B65A; color: #121316; font-size: 12px; font-weight: 600; border-radius: 10px; padding: 0 7px">2</span></a>
+    <a href="#" style="padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Chats</a>
+    <a href="Connections.dc.html" style="display: flex; padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none"><span style="flex: 1">MCP Suite</span><span style="color: #F2B65A; font-size: 12px">1</span></a>
+    <div style="flex: 1"></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 10px; border-top: 1px solid #2E3138">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #2F3A5C; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px">R</span>
+      <span style="flex: 1">Rishabh</span>
+      <button type="button" aria-expanded="true" style="background: #24272D; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 8px; padding: 6px 10px; cursor: pointer">More</button>
+    </div>
+  </nav>
+
+  <div style="flex: 1 1 220px; max-width: 240px; box-sizing: border-box; border-right: 1px solid #2E3138; padding: 24px 12px; display: flex; flex-direction: column; gap: 2px">
+    <div style="font-size: 18px; font-weight: 600; padding: 0 10px 14px">Settings</div>
+    <a href="#" style="padding: 8px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Account</a>
+    <a href="#" aria-current="page" style="padding: 8px 10px; border-radius: 8px; background: #24272D; color: #ECEDEF; text-decoration: none; font-weight: 500">Memory</a>
+    <a href="#" style="padding: 8px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Safety</a>
+    <a href="#" style="padding: 8px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Notifications</a>
+    <a href="#" style="padding: 8px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Activity log</a>
+    <a href="#" style="padding: 8px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">Appearance</a>
+    <a href="#" style="padding: 8px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">About</a>
+  </div>
+
+  <main style="flex: 999 1 480px; min-width: 0; box-sizing: border-box; padding: 32px 32px 40px">
+    <div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 320px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 600">Memory</h1>
+          <p style="margin: 4px 0 0; color: #9EA3AD">What OmniHarness has learned about you. Edit anything that's wrong.</p>
+        </div>
+        <button type="button" style="background: #8FA8FF; border: none; color: #121316; font-weight: 600; border-radius: 10px; padding: 9px 14px; cursor: pointer">Add fact</button>
+        <button type="button" aria-label="More memory actions: import, export, clean up, clear" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 8px 12px; cursor: pointer">⋯</button>
+      </div>
+
+      <div role="tablist" aria-label="Memory views" style="display: flex; gap: 4px; border-bottom: 1px solid #2E3138">
+        <button type="button" role="tab" aria-selected="true" style="background: none; border: none; border-bottom: 2px solid #8FA8FF; color: #ECEDEF; padding: 8px 12px; font-weight: 500; cursor: pointer">Summary</button>
+        <button type="button" role="tab" aria-selected="false" style="background: none; border: none; border-bottom: 2px solid transparent; color: #9EA3AD; padding: 8px 12px; cursor: pointer">Facts <span style="color: #9EA3AD">· 38</span></button>
+      </div>
+
+      <article style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h2 style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Work</h2>
+          <button type="button" style="background: none; border: none; color: #8FA8FF; cursor: pointer">Edit</button>
+        </div>
+        <p style="margin: 0; color: #C9CCD2">Builds OmniHarness, a personal AI workspace framed as a project manager. Works with Mike Flores and Dalton Ponder on DarcyIQ and Spinusync. Uses Google Calendar for scheduling.</p>
+        <div style="color: #9EA3AD; font-size: 12px">Updated 2 hours ago</div>
+      </article>
+
+      <article style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h2 style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Personal</h2>
+          <button type="button" style="background: none; border: none; color: #8FA8FF; cursor: pointer">Edit</button>
+        </div>
+        <p style="margin: 0; color: #C9CCD2">In America/New_York. Likes scheduling stated as explicit time ranges.</p>
+        <div style="color: #9EA3AD; font-size: 12px">Updated 4 months ago · <span style="color: #F2B65A">may be out of date</span></div>
+      </article>
+
+      <article style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h2 style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Top of mind</h2>
+          <button type="button" style="background: none; border: none; color: #8FA8FF; cursor: pointer">Edit</button>
+        </div>
+        <p style="margin: 0; color: #C9CCD2">Shipping Feature 005, the project ledger. Preparing HackMIT 2026 judging criteria by Friday. Syncing with Mike Flores on the DarcyIQ walkthrough.</p>
+        <button type="button" style="align-self: flex-start; background: none; border: none; color: #9EA3AD; padding: 0; cursor: pointer">Show more</button>
+        <div style="color: #9EA3AD; font-size: 12px">Updated today</div>
+      </article>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

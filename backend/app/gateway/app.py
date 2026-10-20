@@ -31,12 +31,14 @@ from app.gateway.routers import (
     models,
     openclaw_webhook,
     policy,
+    preferences,
     previews,
     runs,
     sessions,
     skills,
     suggestions,
     thread_runs,
+    thread_skills,
     thread_tools,
     threads,
     tool_sources,
@@ -501,6 +503,10 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Per-conversation tools (catalog + per-thread selection + count/cap)
     app.include_router(thread_tools.router)
+    app.include_router(thread_skills.router)
+
+    # Per-user preferences (appearance) are mounted at /api/preferences
+    app.include_router(preferences.router)
 
     # Memory API is mounted at /api/memory
     app.include_router(memory.router)

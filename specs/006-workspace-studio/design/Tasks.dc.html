@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tasks and projects</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0C0D0F}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 1040px; background: #0C0D0F; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.5; box-sizing: border-box; padding: 24px">
+  <div role="dialog" aria-labelledby="tasks-title" style="max-width: 1240px; margin: 0 auto; background: #17181C; border: 1px solid #2E3138; border-radius: 18px; display: flex; flex-direction: column; overflow: hidden">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #2E3138">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C9CCD2" stroke-width="2" aria-hidden="true"><path d="M3 6l2 2 3-3M3 14l2 2 3-3M12 7h9M12 15h9"></path></svg>
+      <h1 id="tasks-title" style="margin: 0; font-size: 15px; font-weight: 600; flex: 1">Tasks</h1>
+      <button type="button" aria-label="Close" style="background: none; border: none; color: #9EA3AD; font-size: 18px; cursor: pointer; padding: 4px 8px">×</button>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; min-height: 940px">
+      <div style="flex: 1 1 240px; max-width: 260px; box-sizing: border-box; border-right: 1px solid #2E3138; padding: 14px 10px; display: flex; flex-direction: column; gap: 4px">
+        <button type="button" style="background: none; border: 1px dashed #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 12px; cursor: pointer; margin-bottom: 8px; text-align: left">+ New project</button>
+        <a href="#" style="display: flex; justify-content: space-between; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span>All open tasks</span><span style="color: #9EA3AD">14</span></a>
+        <div style="height: 1px; background: #2E3138; margin: 6px 4px"></div>
+        <a href="#" aria-current="page" style="display: flex; justify-content: space-between; padding: 9px 12px; border-radius: 10px; background: #24272D; color: #ECEDEF; text-decoration: none; font-weight: 500"><span>OmniHarness</span><span style="color: #9EA3AD; font-weight: 400">4</span></a>
+        <a href="#" style="display: flex; justify-content: space-between; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span>HackMIT 2026 judging</span><span style="color: #9EA3AD">3</span></a>
+        <a href="#" style="display: flex; justify-content: space-between; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span>DarcyIQ walkthrough</span><span style="color: #9EA3AD">2</span></a>
+        <a href="#" style="display: flex; justify-content: space-between; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none"><span>Personal</span><span style="color: #9EA3AD">5</span></a>
+      </div>
+
+      <div style="flex: 999 1 560px; min-width: 0; padding: 22px 28px; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box">
+        <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px">
+          <div style="flex: 1 1 300px">
+            <h2 style="margin: 0; font-size: 20px; font-weight: 600">OmniHarness</h2>
+            <div style="color: #9EA3AD">Goal: Feature 005 Project Ledger shipped · 3 of 7 tasks done</div>
+          </div>
+          <nav aria-label="Project views" style="display: flex; gap: 4px">
+            <a href="#" style="padding: 6px 10px; border-radius: 8px; background: #24272D; color: #ECEDEF; text-decoration: none; font-size: 13px">Tasks</a>
+            <a href="#" style="padding: 6px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none; font-size: 13px">Evidence</a>
+            <a href="#" style="padding: 6px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none; font-size: 13px">Decisions</a>
+            <a href="#" style="padding: 6px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none; font-size: 13px">Chats</a>
+          </nav>
+        </div>
+        <div style="height: 6px; background: #2E3138; border-radius: 3px"><div style="width: 43%; height: 6px; background: #8FA8FF; border-radius: 3px"></div></div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1C1E23; border: 1px solid #3A3E46; border-radius: 12px; padding: 8px 10px">
+          <label style="flex: 1 1 360px; display: block">
+            <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Add a task</span>
+            <input type="text" placeholder="Add a task, or describe a goal and let the agent break it down" style="width: 100%; box-sizing: border-box; background: transparent; border: none; outline: none; color: #ECEDEF; font: inherit; padding: 4px">
+          </label>
+          <button type="button" style="display: flex; align-items: center; gap: 6px; background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 9px; padding: 6px 10px; font-size: 13px; cursor: pointer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>Break down</button>
+        </div>
+
+        <section aria-labelledby="g-progress" style="display: flex; flex-direction: column">
+          <h3 id="g-progress" style="margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9EA3AD">In progress</h3>
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 4px; border-top: 1px solid #2E3138">
+            <input type="checkbox" aria-label="Mark Codex adapter for the session watcher as done" style="width: 18px; height: 18px; margin-top: 2px; accent-color: #8FA8FF">
+            <div style="flex: 1 1 320px; min-width: 0">
+              <div>Codex adapter for the session watcher</div>
+              <div style="color: #9EA3AD; font-size: 12px">Observed: 4 commits today on 005-project-ledger · Reported by Codex: 5 of 7 steps</div>
+            </div>
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid #4A4E57; border-radius: 7px; padding: 2px 8px 2px 3px; color: #C9CCD2"><span role="img" aria-label="OpenAI logo" style="width: 18px; height: 18px; border-radius: 5px; background: #ECEDEF; color: #121316; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800">OAI</span>Codex</span>
+            <span style="font-size: 12px; color: #F2B65A">Waiting on you</span>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 4px; border-top: 1px solid #2E3138">
+            <input type="checkbox" aria-label="Mark native todo lists as done" style="width: 18px; height: 18px; margin-top: 2px; accent-color: #8FA8FF">
+            <div style="flex: 1 1 320px; min-width: 0">
+              <div>Native todo lists, applied only after a confirmed result</div>
+              <div style="color: #9EA3AD; font-size: 12px">Observed: Claude Code session working · last activity 1m ago</div>
+            </div>
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid #4A4E57; border-radius: 7px; padding: 2px 8px 2px 3px; color: #C9CCD2"><span role="img" aria-label="Anthropic logo" style="width: 18px; height: 18px; border-radius: 5px; background: #D9C3A5; color: #121316; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800">A</span>Claude Code</span>
+            <span style="font-size: 12px; color: #6FD3A0">Working</span>
+          </div>
+        </section>
+
+        <section aria-labelledby="g-todo" style="display: flex; flex-direction: column">
+          <h3 id="g-todo" style="margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9EA3AD">To do</h3>
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 4px; border-top: 1px solid #2E3138">
+            <input type="checkbox" aria-label="Mark review slices 1 and 2 as done" style="width: 18px; height: 18px; margin-top: 2px; accent-color: #8FA8FF">
+            <div style="flex: 1 1 320px; min-width: 0"><div>Review slices 1 and 2</div><div style="color: #9EA3AD; font-size: 12px">No activity yet</div></div>
+            <span style="font-size: 12px; border: 1px solid #4A4E57; border-radius: 7px; padding: 2px 8px; color: #C9CCD2">You</span>
+            <span style="font-size: 12px; color: #C9CCD2">Wed, Oct 21</span>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 4px; border-top: 1px solid #2E3138">
+            <input type="checkbox" aria-label="Mark live Tier 3 check as done" style="width: 18px; height: 18px; margin-top: 2px; accent-color: #8FA8FF">
+            <div style="flex: 1 1 320px; min-width: 0"><div>Live Tier 3 check on a throwaway calendar event</div><div style="color: #9EA3AD; font-size: 12px">Added from chat “Calendar cleanup”</div></div>
+            <span style="font-size: 12px; border: 1px solid #4A4E57; border-radius: 7px; padding: 2px 8px; color: #C9CCD2">You</span>
+            <span style="font-size: 12px; color: #C9CCD2">No date</span>
+          </div>
+        </section>
+
+        <section aria-labelledby="g-done" style="display: flex; flex-direction: column">
+          <h3 id="g-done" style="margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9EA3AD">Done this week</h3>
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 4px; border-top: 1px solid #2E3138; color: #9EA3AD">
+            <input type="checkbox" checked aria-label="Phase 2.6 polish, done" style="width: 18px; height: 18px; margin-top: 2px; accent-color: #8FA8FF">
+            <div style="flex: 1 1 320px; min-width: 0"><div style="text-decoration: line-through">Phase 2.6 polish</div><div style="font-size: 12px">Observed: PR #41 merged</div></div>
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid #3A3E46; border-radius: 7px; padding: 2px 8px 2px 3px"><span role="img" aria-label="Anthropic logo" style="width: 18px; height: 18px; border-radius: 5px; background: #D9C3A5; color: #121316; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800">A</span>Claude Code</span>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

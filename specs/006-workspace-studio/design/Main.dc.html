@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home, Direction A</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#121316}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1120px; background: #121316; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+
+  <nav aria-label="Main" style="flex: 1 1 248px; max-width: 248px; min-width: 220px; box-sizing: border-box; background: #17181C; border-right: 1px solid #2E3138; padding: 20px 12px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><circle cx="19" cy="6" r="2.5" fill="#8FA8FF"></circle></svg>
+      <span style="font-weight: 600; font-size: 15px">OmniHarness</span>
+    </div>
+    <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; background: #24272D; color: #ECEDEF; text-decoration: none; font-weight: 500">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>
+      <span style="flex: 1">New chat</span>
+      <span style="background: #F2B65A; color: #121316; font-size: 12px; font-weight: 600; border-radius: 10px; padding: 0 7px">2</span>
+    </a>
+    <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+      <span>Chats</span>
+    </a>
+    <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: #C9CCD2; text-decoration: none">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"></path></svg>
+      <span style="flex: 1">MCP Suite</span>
+      <span style="color: #F2B65A; font-size: 12px">1 unreachable</span>
+    </a>
+    <div style="height: 1px; background: #2E3138; margin: 14px 4px"></div>
+    <div style="font-size: 12px; color: #9EA3AD; padding: 0 10px 6px">Recent</div>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">HackMIT 2026 judging criteria</a>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Calendar cleanup</a>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Feature 005 slice review</a>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">DarcyIQ walkthrough prep</a>
+    <a href="#" style="padding: 7px 10px; color: #C9CCD2; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Spinusync architecture notes</a>
+    <div style="flex: 1"></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 10px; border-top: 1px solid #2E3138">
+      <span style="width: 28px; height: 28px; border-radius: 14px; background: #2F3A5C; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px">R</span>
+      <span style="flex: 1">Rishabh</span>
+      <button type="button" aria-label="More: settings, memory, safety" style="background: none; border: 1px solid #2E3138; color: #C9CCD2; border-radius: 8px; padding: 6px 10px; cursor: pointer">More</button>
+    </div>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <div style="display: flex; justify-content: center; padding: 16px 24px 0">
+      <div role="toolbar" aria-label="Tools" style="display: flex; flex-wrap: wrap; align-items: center; gap: 2px; background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 4px">
+        <button type="button" style="display: flex; align-items: center; gap: 7px; background: none; border: none; color: #C9CCD2; padding: 8px 12px; border-radius: 10px; font-size: 13px; cursor: pointer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 4v4M9 14h.01M15 14h.01"></path></svg>Agents</button>
+        <button type="button" style="display: flex; align-items: center; gap: 7px; background: none; border: none; color: #C9CCD2; padding: 8px 12px; border-radius: 10px; font-size: 13px; cursor: pointer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"></path></svg>Skills</button>
+        <button type="button" style="display: flex; align-items: center; gap: 7px; background: none; border: none; color: #C9CCD2; padding: 8px 12px; border-radius: 10px; font-size: 13px; cursor: pointer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9z"></path></svg>Automations</button>
+        <button type="button" style="display: flex; align-items: center; gap: 7px; background: none; border: none; color: #C9CCD2; padding: 8px 12px; border-radius: 10px; font-size: 13px; cursor: pointer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6l2 2 3-3M3 14l2 2 3-3M12 7h9M12 15h9"></path></svg>Tasks</button>
+        <span style="width: 1px; height: 20px; background: #2E3138; margin: 0 4px"></span>
+        <button type="button" aria-label="Search everything" style="display: flex; align-items: center; gap: 8px; background: #24272D; border: none; color: #9EA3AD; padding: 7px 10px; border-radius: 10px; font-size: 12px; cursor: pointer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>⌘K</button>
+      </div>
+    </div>
+
+    <div style="width: 100%; max-width: 1040px; margin: 0 auto; box-sizing: border-box; padding: 36px 32px 24px; display: flex; flex-direction: column; gap: 24px">
+      <div>
+        <h1 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.01em">Good evening, Rishabh</h1>
+        <p style="margin: 6px 0 0; color: #9EA3AD">Monday, October 19 · 2 things need you</p>
+      </div>
+
+      <section aria-labelledby="waiting" style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 6px 0">
+        <h2 id="waiting" style="margin: 0; font-size: 13px; font-weight: 600; color: #F2B65A; padding: 12px 20px 8px">Waiting on you</h2>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 14px 20px; border-top: 1px solid #2E3138">
+          <span role="img" aria-label="OpenAI logo (Codex session)" style="flex: none; width: 28px; height: 28px; border-radius: 8px; background: #ECEDEF; color: #121316; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700">OAI</span>
+          <div style="flex: 1 1 360px; min-width: 0">
+            <div style="color: #9EA3AD; font-size: 12px">Codex · omniHarness@005-project-ledger</div>
+            <div style="margin-top: 2px">Asked: “Should I pin the fixture version or rewrite the fixture?”</div>
+            <div style="color: #9EA3AD; font-size: 12px; margin-top: 2px">Observed · 6 min ago</div>
+          </div>
+          <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 14px; cursor: pointer">Open session</button>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 14px 20px; border-top: 1px solid #2E3138">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C9CCD2" stroke-width="2" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>
+          <div style="flex: 1 1 360px; min-width: 0">
+            <div style="color: #9EA3AD; font-size: 12px">Approval · Google Calendar</div>
+            <div style="margin-top: 2px">Delete event “E2E test, delete me” (Tue 3:00 PM)</div>
+            <div style="color: #9EA3AD; font-size: 12px; margin-top: 2px">Asked in “Calendar cleanup” · expires in 3h 41m</div>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <button type="button" style="background: none; border: 1px solid #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 14px; cursor: pointer">Decline</button>
+            <button type="button" style="background: #8FA8FF; border: 1px solid #8FA8FF; color: #121316; font-weight: 600; border-radius: 10px; padding: 9px 14px; cursor: pointer">Confirm</button>
+          </div>
+        </div>
+      </section>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px">
+        <section aria-labelledby="projects" style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+          <h2 id="projects" style="margin: 0; font-size: 13px; font-weight: 600; color: #9EA3AD">Projects</h2>
+          <div>
+            <div style="display: flex; justify-content: space-between; gap: 12px"><span style="font-weight: 500">OmniHarness</span><span style="color: #9EA3AD; font-size: 12px">3 of 7 tasks</span></div>
+            <div style="color: #9EA3AD; font-size: 12px; margin: 2px 0 8px">Feature 005 · Slice 1 in progress</div>
+            <div style="height: 6px; background: #2E3138; border-radius: 3px"><div style="width: 43%; height: 6px; background: #8FA8FF; border-radius: 3px"></div></div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; gap: 12px"><span style="font-weight: 500">HackMIT 2026 judging</span><span style="color: #9EA3AD; font-size: 12px">1 of 4 tasks</span></div>
+            <div style="color: #9EA3AD; font-size: 12px; margin: 2px 0 8px">Due Fri, Oct 23</div>
+            <div style="height: 6px; background: #2E3138; border-radius: 3px"><div style="width: 25%; height: 6px; background: #8FA8FF; border-radius: 3px"></div></div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; gap: 12px"><span style="font-weight: 500">DarcyIQ walkthrough</span><span style="color: #9EA3AD; font-size: 12px">No task list yet</span></div>
+            <div style="color: #9EA3AD; font-size: 12px; margin-top: 2px">Next: sync with Mike Flores, Tue 11:00 AM</div>
+          </div>
+        </section>
+
+        <section aria-labelledby="sessions" style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+          <h2 id="sessions" style="margin: 0; font-size: 13px; font-weight: 600; color: #9EA3AD">Coding sessions</h2>
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span role="img" aria-label="Anthropic logo (Claude Code session)" style="flex: none; width: 22px; height: 22px; border-radius: 6px; background: #D9C3A5; color: #121316; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700">A</span>
+            <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">omniHarness@main</span>
+            <span style="color: #6FD3A0; font-size: 12px">Working</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span role="img" aria-label="OpenAI logo (Codex session)" style="flex: none; width: 22px; height: 22px; border-radius: 6px; background: #ECEDEF; color: #121316; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700">OAI</span>
+            <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">omniHarness@005-project-ledger</span>
+            <span style="color: #F2B65A; font-size: 12px">Waiting on you</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span role="img" aria-label="Anthropic logo (Claude Code session)" style="flex: none; width: 22px; height: 22px; border-radius: 6px; background: #D9C3A5; color: #121316; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700">A</span>
+            <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Rallion@main</span>
+            <span style="color: #9EA3AD; font-size: 12px">Finished 22m ago</span>
+          </div>
+          <div style="color: #9EA3AD; font-size: 12px; border-top: 1px solid #2E3138; padding-top: 10px">Watcher live · updated 12s ago</div>
+        </section>
+
+        <section aria-labelledby="upcoming" style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+          <h2 id="upcoming" style="margin: 0; font-size: 13px; font-weight: 600; color: #9EA3AD">Upcoming</h2>
+          <div style="display: flex; gap: 14px"><span style="color: #9EA3AD; width: 92px; flex: none">Tue 11:00</span><span>DarcyIQ sync with Mike Flores</span></div>
+          <div style="display: flex; gap: 14px"><span style="color: #9EA3AD; width: 92px; flex: none">Wed 2:00</span><span>Spinusync docs review</span></div>
+          <div style="display: flex; gap: 14px"><span style="color: #9EA3AD; width: 92px; flex: none">Fri</span><span>HackMIT judging criteria due</span></div>
+        </section>
+
+        <section aria-labelledby="moved" style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+          <h2 id="moved" style="margin: 0; font-size: 13px; font-weight: 600; color: #9EA3AD">What moved today</h2>
+          <div>PR #41 merged: sidebar, Connections, Memory page</div>
+          <div>Feature 005 spec approved · Slice 1 started</div>
+          <div>Morning brief delivered 8:45 AM on Telegram</div>
+        </section>
+      </div>
+    </div>
+
+    <div style="flex: 1"></div>
+    <div style="width: 100%; max-width: 840px; margin: 0 auto; box-sizing: border-box; padding: 0 24px 28px">
+      <div style="background: #1C1E23; border: 1px solid #3A3E46; border-radius: 16px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+          <span style="display: flex; align-items: center; gap: 6px; background: #24272D; border-radius: 8px; padding: 5px 8px; font-size: 13px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>OmniHarness
+            <button type="button" aria-label="Remove project" style="background: none; border: none; color: #9EA3AD; padding: 0 0 0 2px; cursor: pointer">×</button></span>
+          <span style="display: flex; align-items: center; gap: 6px; background: #24272D; border-radius: 8px; padding: 5px 8px; font-size: 13px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 4v4"></path></svg>Lead agent</span>
+          <span style="display: flex; align-items: center; gap: 6px; background: #24272D; border-radius: 8px; padding: 5px 8px; font-size: 13px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"></path></svg>3 integrations</span>
+          <button type="button" aria-label="Add context: project, agent, integration, skill or file" style="display: flex; align-items: center; background: none; border: 1px dashed #4A4E57; color: #C9CCD2; border-radius: 8px; padding: 5px 9px; cursor: pointer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+        </div>
+        <label style="display: block">
+          <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</span>
+          <textarea rows="2" placeholder="Ask anything · @ to bring in an agent · / for commands" style="width: 100%; box-sizing: border-box; background: transparent; border: none; resize: none; color: #ECEDEF; font: inherit; font-size: 15px; outline: none"></textarea>
+        </label>
+        <div style="display: flex; align-items: center; gap: 8px">
+          <button type="button" aria-label="Attach file" style="background: none; border: none; color: #9EA3AD; padding: 6px; cursor: pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12l-8.5 8.5a5 5 0 0 1-7-7L14 5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 8"></path></svg></button>
+          <span style="flex: 1"></span>
+          <button type="button" aria-label="Mode: Pro" style="background: #24272D; border: none; color: #C9CCD2; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer">Pro ▾</button>
+          <button type="button" aria-label="Reasoning effort: Medium" style="background: #24272D; border: none; color: #C9CCD2; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer">Effort: Medium ▾</button>
+          <button type="button" aria-label="Model: Claude Sonnet" style="background: #24272D; border: none; color: #C9CCD2; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer">Claude Sonnet ▾</button>
+          <button type="button" aria-label="Send" style="background: #8FA8FF; border: none; color: #121316; border-radius: 10px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1120}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

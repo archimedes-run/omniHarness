@@ -32,7 +32,12 @@ const CSS = readFileSync(
 
 function tokens(selector: string): Map<string, string> {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(CSS);
+  // The light block is `:root,\n.light {`: the selector may be followed by
+  // more selectors before its brace.
+  const match = new RegExp(
+    `^${escaped}(?:,\\s*[.\\w-]+)*\\s*\\{([\\s\\S]*?)\\n\\}`,
+    "m",
+  ).exec(CSS);
   if (!match) throw new Error(`no ${selector} block in globals.css`);
   const out = new Map<string, string>();
   for (const [, name, value] of (match[1] ?? "").matchAll(
@@ -43,8 +48,16 @@ function tokens(selector: string): Map<string, string> {
   return out;
 }
 
-/** Lightness channel of an oklch() value. */
+/** Relative luminance (0..1) of a #rrggbb value, or lightness of oklch(). */
 function lightness(value: string | undefined): number {
+  const hex = /^#([0-9a-f]{6})$/i.exec(value ?? "")?.[1];
+  if (hex) {
+    const [r, g, b] = [0, 2, 4].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  }
   return Number(/oklch\(\s*([\d.]+)/.exec(value ?? "")?.[1] ?? NaN);
 }
 
@@ -58,11 +71,7 @@ const NOT_A_THEME_TOKEN: Record<string, string> = {
 };
 
 /** Shared values that are deliberate, each with the reason. */
-const INTENTIONALLY_SHARED: Record<string, string> = {
-  "--ring": "transparent in both — the design has no focus ring colour",
-  "--sidebar-accent-foreground":
-    "light text reads on the sidebar accent in both themes",
-};
+const INTENTIONALLY_SHARED: Record<string, string> = {};
 
 describe("the dark theme", () => {
   const light = tokens(":root");
@@ -118,6 +127,13 @@ describe("the dark theme", () => {
       lightness(dark.get("--muted-foreground")),
       "--muted-foreground is too dark to read against --muted in dark mode",
     ).toBeGreaterThan(lightness(dark.get("--muted")) + 0.2);
+  });
+
+  it("defines the Feature 006 roles the shadcn set lacks", () => {
+    for (const t of ["--surface-raised", "--border-strong", "--foreground-2"]) {
+      expect(light.has(t), `${t} missing from :root`).toBe(true);
+      expect(dark.has(t), `${t} missing from .dark`).toBe(true);
+    }
   });
 });
 
