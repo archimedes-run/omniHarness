@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.run_history.store import RunHistory
+from app.run_history.store import TRIGGER, RunHistory
 
 #: The run kind for a trigger rule's run; source_id is the rule id.
 AUTOMATION = "automation"
@@ -21,7 +21,14 @@ def automation_recorder(history: RunHistory) -> Callable[[dict], None]:
             finished_at=run.get("finished_at"),
             status=run.get("status", "completed"),
             error=run.get("error"),
-            body=run.get("body") or {},
+            body=_with_body_provenance(run.get("body") or {}),
+            # The turn starts with the prompt the engine injected, not a person.
+            first_human=TRIGGER,
         )
 
     return _record
+
+
+def _with_body_provenance(body: dict) -> dict:
+    """Where the run's top-level parts came from, alongside the messages'."""
+    return {**body, "provenance": {"prompt": TRIGGER, "event": "untrusted_source_data", "reply": "assistant"}}

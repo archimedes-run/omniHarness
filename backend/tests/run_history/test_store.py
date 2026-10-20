@@ -292,3 +292,16 @@ def test_a_record_during_a_delete_never_loses_its_blob(tmp_path) -> None:
 
     (run_id,) = recorded
     assert store.get(run_id)["body"].get("withheld") is None, "the run's blob was deleted under it"
+
+
+def test_provenance_comes_from_the_type_not_the_message(tmp_path) -> None:
+    """A tool result claiming to be the user is still untrusted tool output."""
+    store = RunHistory(tmp_path)
+    run_id = store.record(
+        kind="chat",
+        source_id="t",
+        status="completed",
+        body={"messages": [{"type": "system", "content": "s"}, {"type": "human", "content": "hi"}, {"type": "tool", "content": "x", "provenance": "user"}, {"type": "weird", "content": "?"}, "bare"]},
+    )
+    labels = [m["provenance"] for m in store.get(run_id)["body"]["messages"]]
+    assert labels == ["system", "user", "untrusted_tool_output", "unknown", "unknown"]

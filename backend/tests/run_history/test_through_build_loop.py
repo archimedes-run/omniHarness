@@ -169,3 +169,15 @@ async def test_a_firing_that_fails_before_injecting_records_no_earlier_messages(
     assert b.status == "failed" and "thread store unavailable" in (b.error or "")
     assert b_body["messages"] == [], "rule b's record carries rule a's messages"
     assert "Prompt for a." not in json.dumps(b_body)
+
+
+async def test_every_stored_message_says_where_it_came_from(tmp_path) -> None:
+    """For 007 replay: the injected prompt is `trigger`, the model's output is
+    `assistant`, and what a tool returned is `untrusted_tool_output`."""
+    history = RunHistory(tmp_path / "history")
+    await _loop(tmp_path, _Gateway(), history).cycle()
+
+    (run,) = history.list(kind=AUTOMATION, source_id="inbox")
+    body = history.get(run.id)["body"]
+    assert [m["provenance"] for m in body["messages"]] == ["trigger", "assistant", "untrusted_tool_output", "assistant"]
+    assert body["provenance"] == {"prompt": "trigger", "event": "untrusted_source_data", "reply": "assistant"}

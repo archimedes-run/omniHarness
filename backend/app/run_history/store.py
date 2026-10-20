@@ -26,6 +26,9 @@ each tested (tests/run_history):
   * LOCAL ONLY. A SQLite file and a directory under the gateway's data dir,
     the directory 0700 and the database 0600. Nothing here syncs anywhere.
   * DELETABLE. `delete_all()` removes every run and every blob file.
+  * PROVENANCE. Every stored message carries `provenance` (trigger, user,
+    assistant, system, untrusted_tool_output, unknown), set from its type by
+    `with_provenance`, so 007's replay can keep tool output as data.
 
 Thread-safe: one connection per call, and SQLite's own locking. One lock
 covers a record's blob AND row, and a delete's rows AND blobs, so neither can
@@ -180,6 +183,49 @@ def cap_body(body: Any, limit: int) -> tuple[Any, dict | None]:
     return body, cut
 
 
+# -- provenance (for 007 replay) ------------------------------------------------
+#
+# Every stored message says where its content came from, set HERE from the
+# message's own type, never taken from the message: replay must be able to treat
+# a tool's output as untrusted data even if that output claims otherwise.
+TRIGGER = "trigger"  # the prompt an automation injected
+USER = "user"  # a person's message
+ASSISTANT = "assistant"  # the model's own output, tool calls included
+SYSTEM = "system"
+UNTRUSTED_TOOL_OUTPUT = "untrusted_tool_output"  # what a tool returned: mail, pages, files
+UNKNOWN = "unknown"  # a message of a type not recognised: said, not guessed
+
+_ROLE_PROVENANCE = {
+    "human": USER,
+    "user": USER,
+    "ai": ASSISTANT,
+    "assistant": ASSISTANT,
+    "AIMessageChunk": ASSISTANT,
+    "system": SYSTEM,
+    "tool": UNTRUSTED_TOOL_OUTPUT,
+    "function": UNTRUSTED_TOOL_OUTPUT,
+}
+
+
+def with_provenance(body: Any, *, first_human: str = USER) -> Any:
+    """`body` with a `provenance` on each of its `messages`, by type. The first
+    human message is labelled `first_human` (TRIGGER for an automation run,
+    whose turn starts with the injected prompt)."""
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    out, seen_human = [], False
+    for m in body["messages"]:
+        if not isinstance(m, dict):
+            out.append({"provenance": UNKNOWN, "content": m})
+            continue
+        kind = m.get("type") or m.get("role")
+        label = _ROLE_PROVENANCE.get(str(kind), UNKNOWN)
+        if label == USER and not seen_human:
+            label, seen_human = first_human, True
+        out.append({**m, "provenance": label})
+    return {**body, "messages": out}
+
+
 @dataclass(frozen=True)
 class RunSummary:
     id: str
@@ -259,10 +305,12 @@ class RunHistory:
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
         error: str | None = None,
+        first_human: str = USER,
     ) -> str:
-        """Store one run. Everything is redacted first; returns the run id."""
+        """Store one run. Every message gets its provenance and everything is
+        redacted first; returns the run id."""
         run_id = uuid.uuid4().hex
-        clean = redact_tree(body, self._redact)
+        clean = redact_tree(with_provenance(body, first_human=first_human), self._redact)
         clean_error = self._redact(error)[0] if error else None
         clean, _cut = cap_body(clean, self.run_max_bytes)
         encoded = _dumps(clean)
