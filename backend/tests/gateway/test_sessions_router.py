@@ -283,3 +283,26 @@ def test_claude_and_codex_sessions_reach_the_page_together(tmp_path, point_at) -
     assert by_agent["codex"]["todos"] == [{"title": "Parse", "status": "completed"}, {"title": "Ship", "status": "pending"}]
     assert by_agent["claude"]["todos"] is None
     assert {a["agent"]: a["readable"] for a in body["agents"]} == {"claude": True, "codex": True}
+
+
+def test_a_continued_session_reaches_the_page_as_one_row_marked_continued(tmp_path, point_at) -> None:
+    """A Claude Code session continued in another (its last record says so)
+    is one row on the Coding sessions page, carrying the earlier id."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "session_watcher"))
+    from session_watcher.server import build_service
+    from test_continued_sessions import EARLIER, LATER, write_earlier, write_later
+
+    t0 = datetime.now(UTC) - timedelta(hours=1)  # inside the real 24-hour window
+    write_earlier(tmp_path / "claude", t0=t0)
+    write_later(tmp_path / "claude", t0=t0)
+    port = _free_port()
+    server = _serve_watcher(build_service(tmp_path / "claude", None), port)
+    point_at(port)
+    try:
+        body = _get()
+    finally:
+        server.should_exit = True
+
+    [row] = body["sessions"]
+    assert row["session_id"] == LATER
+    assert row["continued_from"] == EARLIER and row["continued_in"] is None
