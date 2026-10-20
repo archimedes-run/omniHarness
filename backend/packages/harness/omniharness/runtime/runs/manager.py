@@ -53,6 +53,8 @@ class RunManager:
         self._store = store
         #: Thread writes waiting for that thread's run to end (write_when_idle).
         self._deferred: dict[str, list[Callable[[], Awaitable[bool]]]] = {}
+        #: Drains scheduled from finished run tasks (held until they finish).
+        self._drains: set[asyncio.Task] = set()
 
     def _busy(self, thread_id: str, *, exclude: str | None = None) -> bool:
         """A run on this thread is in flight: pending, running, or its task not
@@ -94,6 +96,28 @@ class RunManager:
     async def drain_deferred(self, thread_id: str, *, finished_run_id: str) -> None:
         """Called by the run worker when a run ends: write what was queued for
         its thread, unless another run is already in flight (its end drains)."""
+        await self._drain(thread_id, finished_run_id=finished_run_id)
+
+    def attach_task(self, record: RunRecord, task: asyncio.Task) -> None:
+        """Bind a run's task, and drain its thread's queue AFTER the task is done.
+
+        The worker drains in its `finally`, while its own task is still running;
+        a write queued after that drain (the task not yet done, so the thread
+        still busy) was left in memory until the next run or a restart. The
+        task's done-callback drains once nothing of the run is left.
+        """
+        record.task = task
+
+        def drained(_task: asyncio.Task) -> None:
+            loop = _task.get_loop()
+            if not loop.is_closed():
+                follow_up = loop.create_task(self._drain(record.thread_id, finished_run_id=record.run_id))
+                self._drains.add(follow_up)
+                follow_up.add_done_callback(self._drains.discard)
+
+        task.add_done_callback(drained)
+
+    async def _drain(self, thread_id: str, *, finished_run_id: str) -> None:
         async with self._lock:
             if thread_id not in self._deferred or self._busy(thread_id, exclude=finished_run_id):
                 return
