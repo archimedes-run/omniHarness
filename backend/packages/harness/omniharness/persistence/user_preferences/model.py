@@ -16,4 +16,6 @@ class UserPreferenceRow(Base):
     user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     # "light" | "dark" | "system". NULL means the user has never chosen.
     appearance: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Optional name to show instead of the email's local part. NULL = unset.
+    display_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
