@@ -20,14 +20,20 @@ router = APIRouter(prefix="/api", tags=["tool-sources"])
 @router.get("/tool-sources", response_model=ToolSourcesView)
 @require_permission("threads", "read")
 async def tool_sources(request: Request, thread_id: str | None = Query(default=None)) -> ToolSourcesView:
-    from omniharness.config.extensions_config import get_extensions_config
-    from omniharness.mcp import cache, load_report
-    from omniharness.tools.connector_tools import CONNECTOR_TOOLKITS
+    from omniharness.mcp import cache
 
     # Load once if nothing has yet, so "never loaded" does not stand in for a
     # state. The same initialisation an agent's first turn performs.
     if not cache._cache_initialized:
         await cache.initialize_mcp_tools()
+    return await describe_for_request(request, thread_id)
+
+
+async def describe_for_request(request: Request, thread_id: str | None) -> ToolSourcesView:
+    """The view for this request's user, from the MCP load already made."""
+    from omniharness.config.extensions_config import get_extensions_config
+    from omniharness.mcp import load_report
+    from omniharness.tools.connector_tools import CONNECTOR_TOOLKITS
 
     auth = get_auth_context(request)
     user_id = str(auth.user.id) if auth is not None and auth.user is not None else None

@@ -34,17 +34,20 @@ async function serve(
     pending = 0,
     alertsWaiting = 0,
     confirmationsReadable = true,
+    sourcesUnreadable = false,
   } = {},
 ) {
   await page.route("**/api/tool-sources*", (route) =>
-    route.fulfill(
-      json({
-        thread_id: null,
-        failing,
-        connectors_available: false,
-        sources: [],
-      }),
-    ),
+    sourcesUnreadable
+      ? route.fulfill({ status: 500, body: "down" })
+      : route.fulfill(
+          json({
+            thread_id: null,
+            failing,
+            connectors_available: false,
+            sources: [],
+          }),
+        ),
   );
   await page.route("**/api/policy/rules", (route) =>
     route.fulfill(json(POLICY(keptPrevious))),
@@ -244,6 +247,39 @@ test("a failing tool source shows on MCP Suite without opening anything (FR-041)
   await expect(suite.getByTestId("failing-sources")).toHaveText("2");
   await expect(
     suite.getByRole("img", { name: "2 tool sources failing" }),
+  ).toBeVisible();
+  // Amber, as on the board ("unreachable" is a warning): the warning token's
+  // colour, not the destructive one.
+  const colours = await page.evaluate(() => {
+    const probe = (cls: string) => {
+      const el = document.createElement("span");
+      el.className = cls;
+      document.body.appendChild(el);
+      const c = getComputedStyle(el).color;
+      el.remove();
+      return c;
+    };
+    return { warning: probe("text-warning"), bad: probe("text-destructive") };
+  });
+  const badge = await suite
+    .getByTestId("failing-sources")
+    .evaluate((el) => getComputedStyle(el).color);
+  expect(badge).toBe(colours.warning);
+  expect(badge).not.toBe(colours.bad);
+});
+
+test("tool sources that cannot be read show ?, never a quiet nothing", async ({
+  page,
+}) => {
+  await serve(page, { sourcesUnreadable: true });
+  const suite = page.locator(
+    '[data-sidebar="menu-item"]:has(a[href="/workspace/connections"])',
+  );
+  await expect(suite.getByTestId("failing-sources")).toHaveText("?");
+  await expect(
+    suite.getByRole("img", {
+      name: "Cannot tell whether tool sources are working",
+    }),
   ).toBeVisible();
 });
 

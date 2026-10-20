@@ -14,8 +14,11 @@ export function TierCheckForm() {
   const result = check.data;
 
   return (
-    <section className="space-y-2" aria-labelledby="check-heading">
-      <h2 id="check-heading" className="text-sm font-semibold">
+    <section
+      className="bg-card border-border space-y-2 rounded-xl border px-[18px] py-4"
+      aria-labelledby="check-heading"
+    >
+      <h2 id="check-heading" className="text-[15px] font-semibold">
         Check a tool&apos;s tier
       </h2>
       <p className="text-muted-foreground text-xs">

@@ -128,6 +128,7 @@ export const enUS: Translations = {
     waiting: (count: number) =>
       `${count} ${count === 1 ? "thing is" : "things are"} waiting on you`,
     cannotTellWaiting: "Cannot tell what is waiting",
+    cannotTellSources: "Cannot tell whether tool sources are working",
     failingSources: (count: number) =>
       `${count} tool ${count === 1 ? "source" : "sources"} failing`,
   },

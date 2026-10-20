@@ -1,0 +1,53 @@
+/** Mirrors app/gateway/routers/mcp_studio.py and app/gateway/mcp_build_flow.py. */
+
+/** Where a built server is, in words (Feature 006, MCP Suite > Build). */
+export type BuildState =
+  | "drafting"
+  | "building"
+  | "tests_failed"
+  | "awaiting_approval"
+  | "turning_on"
+  | "enabled"
+  | "off"
+  | "stalled";
+
+export interface BuildStep {
+  /** done: it happened; failed: it did not; waiting: on you or on time. */
+  status: "done" | "failed" | "waiting";
+  text: string;
+}
+
+export interface BuiltServer {
+  id: string;
+  name: string;
+  language: string | null;
+  description: string | null;
+  status: string;
+  phase: string;
+  approved: boolean;
+  detected_secrets: string[];
+  created_at: string;
+  updated_at: string;
+  /** Absent from a gateway older than Feature 006. */
+  state?: BuildState;
+  state_label?: string;
+  state_reason?: string | null;
+  steps?: BuildStep[];
+  tool_count?: number | null;
+  tests_passed?: number | null;
+  tests_total?: number | null;
+  thread_id?: string | null;
+}
+
+export interface BuiltServerList {
+  servers: BuiltServer[];
+  total: number;
+}
+
+export interface StartBuildResponse {
+  server_id: string;
+  thread_id: string;
+  name: string;
+  /** The names a secret in the description was stored under. Never values. */
+  secret_placeholders: string[];
+}

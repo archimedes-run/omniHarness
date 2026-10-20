@@ -43,6 +43,7 @@ from app.gateway.routers import (
     thread_tools,
     threads,
     tool_sources,
+    tool_sources_retry,
     triggers,
     uploads,
     workflows,
@@ -546,6 +547,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Tool source status: configured, disabled, unreachable or live (FR-040).
     app.include_router(tool_sources.router)
+    app.include_router(tool_sources_retry.router)
 
     # Coding sessions, and whether they can be seen (Feature 004, US3).
     app.include_router(sessions.router)

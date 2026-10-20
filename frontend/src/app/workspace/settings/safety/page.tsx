@@ -1,91 +1,104 @@
 "use client";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import {
+  PageCard,
+  PageColumn,
+  PageHeader,
+  RowList,
+  SectionHeading,
+} from "@/components/workspace/page-kit";
 import { TierCheckForm } from "@/components/workspace/policy/tier-check";
+import { SafetyToolSources } from "@/components/workspace/settings/safety-tool-sources";
 import { usePolicyRules } from "@/core/policy/hooks";
 
+/**
+ * Settings > Safety (Feature 006): the tool sources (from /workspace/tool-
+ * sources) and the policy (from /workspace/policy), both of which redirect
+ * here. What has been done with your confirmation is in the Activity log.
+ */
 export default function SafetyPage() {
   const { rules, error } = usePolicyRules();
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 p-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Safety</h1>
-        <p className="text-muted-foreground text-sm">
-          What each tool is allowed to do without asking. What has been done
-          with your confirmation is in the Activity log.
-        </p>
-      </header>
+    <PageColumn width="narrow">
+      <PageHeader
+        title="Safety"
+        description="Where your agents' tools come from, and what each is allowed to do without asking. What was done with your confirmation is in the Activity log."
+      />
 
       {error != null && (
-        <Alert variant="destructive" data-testid="unreadable">
-          <AlertTitle>I cannot read the policy</AlertTitle>
-          <AlertDescription>{String(error)}</AlertDescription>
-        </Alert>
+        <Problem testId="unreadable" title="I cannot read the policy">
+          {String(error)}
+        </Problem>
       )}
       {/* FR-029: the rules shown are the ones enforced, and a refused edit says so. */}
       {rules?.kept_previous && (
-        <Alert variant="destructive" data-testid="kept-previous">
-          <AlertTitle>Your last edit to the rules was refused</AlertTitle>
-          <AlertDescription>
-            The rules below are the previous ones, still in force. {rules.error}
-          </AlertDescription>
-        </Alert>
+        <Problem
+          testId="kept-previous"
+          title="Your last edit to the rules was refused"
+        >
+          The rules below are the previous ones, still in force. {rules.error}
+        </Problem>
       )}
       {rules?.unreadable && !rules.kept_previous && (
-        <Alert variant="destructive" data-testid="all-tier-3">
-          <AlertTitle>No readable rules: every tool is Tier 3</AlertTitle>
-          <AlertDescription>{rules.error}</AlertDescription>
-        </Alert>
+        <Problem
+          testId="all-tier-3"
+          title="No readable rules: every tool is Tier 3"
+        >
+          {rules.error}
+        </Problem>
       )}
+
+      <SafetyToolSources />
 
       <TierCheckForm />
 
       {/* FR-023: absent, not forbidden. No rule could allow these. */}
       {rules?.cannot_do && rules.cannot_do.length > 0 && (
-        <section className="space-y-2" aria-labelledby="cannot-heading">
-          <h2 id="cannot-heading" className="text-sm font-semibold">
+        <section
+          className="flex flex-col gap-3"
+          aria-labelledby="cannot-heading"
+        >
+          <SectionHeading id="cannot-heading">
             What I can&apos;t do
-          </h2>
-          <p className="text-muted-foreground text-xs">
+          </SectionHeading>
+          <p className="text-muted-foreground text-sm">
             No tool exists for these, so no rule can allow them.
           </p>
-          <ul className="space-y-1" data-testid="cannot-do">
+          <RowList data-testid="cannot-do">
             {rules.cannot_do.map((item) => (
-              <li
-                key={item.capability}
-                className="border-border rounded-md border px-3 py-2 text-sm"
-              >
+              <li key={item.capability} className="px-[18px] py-3 text-sm">
                 <span className="text-foreground font-medium capitalize">
                   {item.capability}
                 </span>
                 <p className="text-muted-foreground mt-0.5">{item.wording}</p>
               </li>
             ))}
-          </ul>
+          </RowList>
         </section>
       )}
 
-      <section className="space-y-2" aria-labelledby="rules-heading">
-        <h2 id="rules-heading" className="text-sm font-semibold">
-          Rules in force
-        </h2>
+      <section className="flex flex-col gap-3" aria-labelledby="rules-heading">
+        <SectionHeading id="rules-heading">Rules in force</SectionHeading>
         {rules && (
-          <p className="text-muted-foreground text-xs">
-            {rules.source_file} · a bare confirmation covers up to{" "}
-            {rules.threshold_targets} items · plans expire after{" "}
-            {Math.round(rules.expires_after_seconds / 3600)} h
+          <p className="text-muted-foreground text-sm">
+            <span className="font-mono text-xs">{rules.source_file}</span> · a
+            bare confirmation covers up to {rules.threshold_targets} items ·
+            plans expire after {Math.round(rules.expires_after_seconds / 3600)}{" "}
+            h
           </p>
         )}
-        <ul className="space-y-1" data-testid="rules">
+        <RowList data-testid="rules">
           {rules?.rules.map((rule) => (
             <li
               key={`${rule.pattern}-${rule.source_line}`}
-              className="border-border flex items-center justify-between rounded-md border px-3 py-2"
+              className="flex items-center justify-between gap-3 px-[18px] py-3"
               data-testid="rule"
             >
-              <code className="text-foreground text-sm">{rule.pattern}</code>
+              <code className="text-foreground font-mono text-[13px]">
+                {rule.pattern}
+              </code>
               <span className="flex items-center gap-2">
                 {rule.exceptions.length > 0 && (
                   <span className="text-muted-foreground text-xs">
@@ -98,8 +111,25 @@ export default function SafetyPage() {
               </span>
             </li>
           ))}
-        </ul>
+        </RowList>
       </section>
-    </div>
+    </PageColumn>
+  );
+}
+
+function Problem({
+  testId,
+  title,
+  children,
+}: {
+  testId: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <PageCard className="border-destructive" data-testid={testId} role="alert">
+      <div className="font-medium">{title}</div>
+      <p className="text-muted-foreground text-[13px]">{children}</p>
+    </PageCard>
   );
 }

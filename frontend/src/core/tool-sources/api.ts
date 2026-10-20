@@ -12,3 +12,15 @@ export async function loadToolSources(
   );
   return response.json() as Promise<ToolSourcesView>;
 }
+
+/** Load every MCP server again now; the states that load produced. */
+export async function retryToolSources(): Promise<ToolSourcesView> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/tool-sources/retry`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(`Retry failed (${response.status})`);
+  }
+  return response.json() as Promise<ToolSourcesView>;
+}

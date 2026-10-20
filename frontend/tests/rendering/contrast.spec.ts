@@ -554,7 +554,7 @@ const NOT_AUDITED: Record<string, string> = {
   "/workspace/policy": "redirects to /workspace/settings/safety",
   "/workspace/settings": "redirects to a settings section",
   "/workspace/settings/connections": "redirects to /workspace/connections",
-  "/workspace/tool-sources": "redirects to /workspace/connections",
+  "/workspace/tool-sources": "redirects to /workspace/settings/safety",
   "/workspace/triggers": "redirects to /workspace/automations",
   "/workspace/workflows": "redirects to /workspace/automations",
 };

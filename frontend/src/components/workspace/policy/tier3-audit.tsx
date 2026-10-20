@@ -9,7 +9,7 @@ export function Tier3AuditList() {
   const { executions } = useTier3Audit();
   return (
     <section className="space-y-2" aria-labelledby="audit-heading">
-      <h2 id="audit-heading" className="text-sm font-semibold">
+      <h2 id="audit-heading" className="text-[15px] font-semibold">
         Recent Tier 3 actions
       </h2>
       {executions?.length === 0 && (
@@ -24,7 +24,7 @@ export function Tier3AuditList() {
         {executions?.map((run) => (
           <li
             key={`${run.at}-${run.tool}`}
-            className="border-border space-y-1 rounded-md border p-3"
+            className="bg-card border-border space-y-1 rounded-xl border px-[18px] py-3"
             data-testid="execution"
           >
             {run.withheld ? (

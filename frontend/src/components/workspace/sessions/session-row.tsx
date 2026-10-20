@@ -24,7 +24,7 @@ export function SessionRow({ session }: { session: Row }) {
   return (
     <li
       className={cn(
-        "border-border flex flex-col gap-1 rounded-md border p-3",
+        "bg-card border-border flex flex-col gap-1 rounded-xl border px-[18px] py-3",
         inferred ? "border-dashed" : "border-solid",
       )}
       data-testid="session"

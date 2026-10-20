@@ -1,6 +1,5 @@
 "use client";
 
-import { PencilIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -47,25 +46,26 @@ export function SummaryCard({
 
   return (
     <section
-      className="border-border bg-card group space-y-2 rounded-xl border p-4"
+      className="border-border bg-card flex flex-col gap-2 rounded-xl border px-[18px] py-4"
       data-testid="summary-card"
       data-section={`${group}.${sectionKey}`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="text-foreground text-sm font-semibold">{title}</h3>
+      <div className="flex items-center gap-2.5">
+        <h3 className="text-foreground flex-1 text-[15px] font-semibold">
+          {title}
+        </h3>
         {!editing && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="text-muted-foreground -mt-1 -mr-1 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+          <button
+            type="button"
+            className="text-primary text-sm hover:underline max-md:min-h-11"
             aria-label={`Edit ${title}`}
             onClick={() => {
               setDraft(summary);
               setEditing(true);
             }}
           >
-            <PencilIcon />
-          </Button>
+            Edit
+          </button>
         )}
       </div>
 
@@ -110,7 +110,7 @@ export function SummaryCard({
         <>
           <div
             className={cn(
-              "text-foreground space-y-2 text-sm leading-relaxed",
+              "text-foreground-2 space-y-2 text-sm leading-relaxed",
               long && !expanded && "line-clamp-4",
             )}
             data-testid="summary-text"
@@ -122,7 +122,7 @@ export function SummaryCard({
           {long && (
             <button
               type="button"
-              className="text-muted-foreground hover:text-foreground text-xs font-medium"
+              className="text-muted-foreground hover:text-foreground self-start text-sm"
               onClick={() => setExpanded(!expanded)}
             >
               {expanded ? "Show less" : "Show more"}
@@ -137,7 +137,12 @@ export function SummaryCard({
         <p className="text-muted-foreground text-xs" data-testid="updated">
           Updated {formatTimeAgo(updatedAt)}
           {isStale(updatedAt) && (
-            <span data-testid="stale"> · may be out of date</span>
+            <span>
+              {" · "}
+              <span className="text-warning" data-testid="stale">
+                may be out of date
+              </span>
+            </span>
           )}
         </p>
       )}

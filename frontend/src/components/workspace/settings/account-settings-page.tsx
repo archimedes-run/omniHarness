@@ -70,7 +70,7 @@ export function AccountSettingsPage() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <SettingsSection title={t.settings.account.profileTitle}>
         <div className="space-y-2">
           <div className="grid grid-cols-[max-content_max-content] items-center gap-4">

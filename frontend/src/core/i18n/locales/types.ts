@@ -114,6 +114,7 @@ export interface Translations {
     about: string;
     waiting: (count: number) => string;
     cannotTellWaiting: string;
+    cannotTellSources: string;
     failingSources: (count: number) => string;
   };
 
