@@ -332,7 +332,8 @@ def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dic
     """THE gate for typed confirmations: which plans may this turn answer?
 
     - only a person's own turn: never a scheduled (synthetic) turn, never a
-      turn carrying a server-set continue_action / called_agent;
+      turn carrying a server-set continue_action / called_agent, never an
+      invited agent's (subagent's) turn;
     - only plans stated in THIS thread;
     - only plans owned by THIS speaker (an owner-less legacy plan is
       answerable on the owner-checked card only).
@@ -341,10 +342,16 @@ def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dic
     Several plans left after this gate and no id named: nothing is approved and
     each is restated (recognise / FR-035).
     """
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+
     from .provenance import is_synthetic_turn
 
     ctx = runtime_context or {}
     if is_synthetic_turn(ctx) or any(ctx.get(k) for k in _NOT_A_PERSONS_TURN_KEYS):
+        return []
+    # An invited agent (subagent) has no person of its own: its "user" message
+    # is its inviter's instruction. Nothing typed there confirms anything.
+    if INVITED_ORIGIN_KEY in ctx or ctx.get(DELEGATION_CHAIN_KEY):
         return []
     speaker, thread = ctx.get("user_id"), ctx.get("thread_id")
     return [a for a in actions if _same_owner(a.owner_id, speaker) and _same_key(a.thread_id, thread)]

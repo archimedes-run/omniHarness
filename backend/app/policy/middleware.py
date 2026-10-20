@@ -472,7 +472,10 @@ class PolicyMiddleware(AgentMiddleware):
         messages = state.get("messages") if isinstance(state, dict) else None
         own, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
         invited = INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
-        if not invited or own != "user":
+        if own == "invitation" and not invited:
+            # An invitation message outside an invited context: can't tell.
+            return "unknown", "", ""
+        if not invited or own not in ("user", "invitation"):
             return own, source, ""
         inherited = context.get(INVITED_ORIGIN_KEY) or "unknown"
         if inherited == "user":

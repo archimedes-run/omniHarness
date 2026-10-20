@@ -276,3 +276,33 @@ def test_an_edit_is_recorded_as_an_edit(sec, monkeypatch) -> None:
     assert resp.status_code == 200, resp.text
     edited = _store().get(resp.json()["action_id"])
     assert edited.confirmation["via"] == "edit" and edited.confirmation["user_id"] == sec.owner_id
+
+
+# ── the two machine-turn refusals, each proven on its own ────────────────
+
+
+def test_the_typed_reply_gate_alone_refuses_a_scheduled_or_invited_turn() -> None:
+    """confirm_flow.answerable_by_typed_reply, without recognise."""
+    from app.policy.confirm_flow import answerable_by_typed_reply
+    from app.policy.models import PendingAction, Tier
+    from app.policy.provenance import PROVENANCE_KEY, SYNTHETIC
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY
+
+    plan = PendingAction(plan_text="x", tool_name="gmail_delete_email", arguments={}, targets=["x"], tier_at_statement=Tier.TIER_3, expires_at=datetime.now(UTC) + timedelta(minutes=5), thread_id="t", owner_id="u")
+    person = {"thread_id": "t", "user_id": "u"}
+    assert answerable_by_typed_reply([plan], person) == [plan]  # positive control
+    assert answerable_by_typed_reply([plan], {**person, PROVENANCE_KEY: SYNTHETIC}) == []
+    assert answerable_by_typed_reply([plan], {**person, DELEGATION_CHAIN_KEY: ["lead_agent", "general-purpose"]}) == []
+    assert answerable_by_typed_reply([plan], {**person, "continue_action": "a1"}) == []
+
+
+def test_recognise_alone_refuses_a_scheduled_turn() -> None:
+    """confirm.recognise, without the gate: the same refusal, independently."""
+    from app.policy.confirm import Verdict, recognise
+    from app.policy.lineage import user_turn
+    from app.policy.models import PendingAction, Tier
+    from app.policy.provenance import PROVENANCE_KEY, SYNTHETIC
+
+    plan = PendingAction(plan_text="x", tool_name="gmail_delete_email", arguments={}, targets=["x"], tier_at_statement=Tier.TIER_3, expires_at=datetime.now(UTC) + timedelta(minutes=5), thread_id="t", owner_id="u")
+    assert recognise(user_turn("yes"), [plan], {}).verdict is Verdict.CONFIRM  # positive control
+    assert recognise(user_turn("yes"), [plan], {PROVENANCE_KEY: SYNTHETIC}).verdict is Verdict.UNRECOGNISED
