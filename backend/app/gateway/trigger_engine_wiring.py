@@ -265,7 +265,7 @@ def _gateway_call(method: str):
         import httpx
 
         from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
-        from app.gateway.internal_auth import create_internal_auth_headers
+        from app.gateway.internal_auth import create_trigger_engine_auth_headers
 
         url = f"{_gateway_base_url()}{path}"
         # The gateway's CSRF middleware checks every POST/PUT, internal calls
@@ -273,7 +273,7 @@ def _gateway_call(method: str):
         # rule could ever create its thread. Found in the live end-to-end check.
         # Same double-submit pair the channel manager sends (channels/manager.py).
         csrf = generate_csrf_token()
-        headers = {**create_internal_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
+        headers = {**create_trigger_engine_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
         with httpx.Client(timeout=GATEWAY_CALL_TIMEOUT_SECONDS) as client:
             resp = client.request(method, url, json=body, headers=headers)
             if resp.is_error:
