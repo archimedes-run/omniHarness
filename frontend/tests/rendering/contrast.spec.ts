@@ -159,6 +159,11 @@ const ROUTES: Record<string, unknown> = {
       thread_id: "t1",
     })),
   },
+  "**/api/run-history/settings": {
+    retention_days: 30,
+    runs: 3,
+    location: "/app/backend/.omni-harness/run-history",
+  },
   "**/api/triggers/firings": {
     firings: [
       FIRING("delivered", ""),
