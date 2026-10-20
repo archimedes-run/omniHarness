@@ -59,6 +59,11 @@ CARD_ONLY = "card_only"
 #: resolved: the action stays open, so restoring the source and confirming
 #: again works.
 TOOL_UNAVAILABLE = "tool_unavailable"
+#: A decline that arrived while the confirmed call was already running: it
+#: lost the claim, so it cannot stop the call, and it says so (review of PR #58:
+#: it used to answer "I have not done it" and record DECLINED, then the run
+#: recorded EXECUTED over it).
+ALREADY_RUNNING = "already_running"
 
 #: Internal, and deliberately NOT one of the seven. It means "this turn said
 #: nothing about any pending action", which is what almost every turn is. It
@@ -187,8 +192,16 @@ class ConfirmationFlow:
     def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...], answered: dict | None = None) -> FlowResult:
         answered = {"via": None, "thread_id": None, "user_id": None, "message_id": None, **(answered or {})}
         if verdict is Verdict.DECLINE:
-            action.confirmation = answered
-            self.store.resolve(action, Outcome.DECLINED, "declined by the user")
+            # A DECLINE TAKES THE CLAIM, exactly as a confirmation does: the
+            # one that loses never resolves the record.
+            claimed = take_claim(self.store, action.id, f"decline:{self._claimant()}")
+            if claimed is None:
+                current = self.store.get(action.id)
+                if current is not None and current.outcome is None:
+                    return FlowResult(ALREADY_RUNNING, action.id, "That was already confirmed and is running now, so it cannot be stopped. Its result will be shown when it finishes.", expired_meanwhile=expired)
+                return FlowResult(ALREADY_RESOLVED, action.id, f"already resolved ({current.outcome if current else 'unknown'})", expired_meanwhile=expired)
+            claimed.confirmation = answered
+            self.store.resolve(claimed, Outcome.DECLINED, "declined by the user")
             return FlowResult(DECLINED, action.id, "Understood — I have not done it.", expired_meanwhile=expired)
 
         threshold = self._threshold()
