@@ -1,3 +1,5 @@
+import { mkdirSync } from "fs";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import { lowContrastText } from "./contrast-probe";
@@ -16,8 +18,9 @@ import { lowContrastText } from "./contrast-probe";
 const THREAD = "33333333-4444-5555-6666-777777777777";
 const ACTION = "abcdef123456";
 const HOUR = 60 * 60 * 1000;
-const SHOTS =
-  "/private/tmp/claude-224110745/-Users-rishabh-sharma-Documents-OmniHarness/2fca2676-46f9-4323-a9df-ccedea8c5376/scratchpad/review/chat";
+// Review screenshots are saved only when a folder is named (never a path that
+// exists on one machine only: CI has no such folder).
+const SHOTS = process.env.CHAT_SHOTS_DIR;
 
 const MULTI = [
   {
@@ -189,10 +192,13 @@ for (const scheme of ["dark", "light"] as const) {
       await expect(buttons.nth(0)).toHaveText("Decline");
       await expect(buttons.nth(1)).toHaveText("Confirm");
 
-      await page.screenshot({
-        path: `${SHOTS}/chat-multi-agent-live-${scheme}.png`,
-        fullPage: false,
-      });
+      if (SHOTS) {
+        mkdirSync(SHOTS, { recursive: true });
+        await page.screenshot({
+          path: `${SHOTS}/chat-multi-agent-live-${scheme}.png`,
+          fullPage: false,
+        });
+      }
       await page
         .getByText("@researcher how do other tools link subagent sessions?")
         .scrollIntoViewIfNeeded();
@@ -205,9 +211,11 @@ for (const scheme of ["dark", "light"] as const) {
         el?.scrollTo({ top: 0 });
       });
       await page.waitForTimeout(300);
-      await page.screenshot({
-        path: `${SHOTS}/chat-multi-agent-top-live-${scheme}.png`,
-      });
+      if (SHOTS) {
+        await page.screenshot({
+          path: `${SHOTS}/chat-multi-agent-top-live-${scheme}.png`,
+        });
+      }
     });
 
     test("all text in a multi-agent chat meets WCAG AA", async ({ page }) => {
