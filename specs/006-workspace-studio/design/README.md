@@ -9,6 +9,7 @@ colour tokens; build the real UI with the app's own components and theme tokens.
 |---|---|
 | Main.dc.html | Home (greeting, Waiting on you, projects, sessions, upcoming, chat bar) |
 | Chat.dc.html | Chat with several agents, @ dropdown, approval card, chat bar with mode/effort/model/send |
+| Chat-Bar-v2.dc.html | New chat v2: top bar grid with the capsule on the true centre and Search on the right; wide chat bar with one removable chip per piece of context; starters |
 | Chat-Picker.dc.html | Chat bar "+" picker, Integrations tab with logos, status and per-chat toggles |
 | Agent-Studio.dc.html | Agents capsule panel, tabbed (Overview, Instructions, Tools, Autonomy, Schedule) |
 | Skill-Studio.dc.html | Skills capsule panel, tabbed (Details, Instructions, Files, Test) |
