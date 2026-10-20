@@ -141,13 +141,52 @@ class PolicyMiddleware(AgentMiddleware):
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._disclose(handler(request.override(messages=note) if note else request))
+        return self._guard_self_verdict(self._disclose(handler(request.override(messages=note) if note else request)))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._disclose(await handler(request.override(messages=note) if note else request))
+        return self._guard_self_verdict(self._disclose(await handler(request.override(messages=note) if note else request)))
+
+    # ---- the assistant never answers for the user -------------------------
+    #
+    # A model shown a pending action repeats "yes 7bf9d7ecb3b1" as its own
+    # message (seen live). It confirms nothing (only a user turn can), but to
+    # the person reading it looks as if the assistant approved on their behalf.
+    # So a line of the reply a user reads that IS a verdict on a known action
+    # is replaced, deterministically, with what is actually true.
+
+    def _guard_self_verdict(self, response: Any) -> Any:
+        message = self._final_message(response)
+        if message is None:
+            return response
+        content = message.content
+        if isinstance(content, str):
+            message.content = self._without_self_verdicts(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    block["text"] = self._without_self_verdicts(block["text"])
+        return response
+
+    def _without_self_verdicts(self, text: str) -> str:
+        from .confirm import self_verdict_id
+
+        lines = text.split("\n")
+        changed = False
+        for index, line in enumerate(lines):
+            action_id = self_verdict_id(line)
+            action = self.pending.get(action_id) if action_id else None
+            if action is None:
+                continue
+            changed = True
+            if action.confirmable_by_typing:
+                lines[index] = f"Waiting for you: confirm action `{action.id}` on the card, or reply yes."
+            else:
+                lines[index] = f"Waiting for you: confirm action `{action.id}` with the button on its card."
+            logger.warning("policy: the model wrote a verdict on %s as its own reply; replaced", action.id)
+        return "\n".join(lines) if changed else text
 
     # ---- Tier 2 disclosure ------------------------------------------------
     #
@@ -356,7 +395,8 @@ class PolicyMiddleware(AgentMiddleware):
             # addressed to the USER and never spelled as "yes <id>": this text
             # is the tool result the MODEL reads, and a model shown that phrase
             # repeats it as its own message, which reads as the assistant
-            # confirming (seen live, 2026-10-19).
+            # confirming (seen live, 2026-10-19). `_guard_self_verdict` is the
+            # deterministic backstop.
             lines.append("")
             lines.append(f"Action `{action_id}`.")
             if origin_note:

@@ -170,6 +170,35 @@ def test_the_plan_the_model_reads_never_spells_the_verdict(build_flow):
     assert f"yes {action.id}" not in tool_result.content and f"no {action.id}" not in tool_result.content
 
 
+@pytest.mark.parametrize("parrot", ["yes {id}", "`yes {id}`", "Yes, {id}.", "**no {id}**"])
+def test_a_reply_line_that_is_a_verdict_is_replaced_before_the_user_reads_it(build_flow, monkeypatch, parrot):
+    import app.policy.models as models
+
+    # The fake model's final reply has to name the id, which only exists once
+    # the plan is stated, so the id is fixed in advance.
+    fixed = "7bf9d7ecb3b1"
+    monkeypatch.setattr(models.uuid, "uuid4", lambda: type("U", (), {"hex": fixed + "0" * 20})())
+    system = build_flow()
+    agent = _agent(system, [AIMessage(content="", tool_calls=[DECLINE]), AIMessage(content=f"I have stated the plan.\n{parrot.format(id=fixed)}")])
+    out = agent.invoke({"messages": [HumanMessage(content="decline my standup")]})
+    monkeypatch.undo()
+
+    reply = out["messages"][-1].content
+    assert parrot.format(id=fixed) not in reply, reply
+    assert reply == f"I have stated the plan.\nWaiting for you: confirm action `{fixed}` on the card, or reply yes.", reply
+    assert RAN == [] and system.store.get(fixed).outcome is None, "the parroted verdict resolved the action"
+
+
+def test_a_sentence_that_only_mentions_an_id_is_left_alone(build_flow):
+    from app.policy.confirm import self_verdict_id
+
+    assert self_verdict_id("Reply yes to approve 7bf9d7ecb3b1 on the card.") is None
+    assert self_verdict_id("yes 7bf9d7ecb3b1") == "7bf9d7ecb3b1"
+    system = build_flow()
+    # An id no pending action has is not touched (it may be anything hex).
+    assert system.middleware._without_self_verdicts("yes 0123456789ab") == "yes 0123456789ab"
+
+
 def test_a_second_call_after_a_page_caused_plan_is_still_the_pages(build_flow):
     """The plan is returned as the call's ToolMessage. Returned as a bare
     string it entered state as a HumanMessage, and the NEXT call walked back
