@@ -127,6 +127,20 @@ async def list_runs(request: Request, kind: str | None = None, source_id: str | 
     return [RunSummaryView(**r.__dict__) for r in await filter_accessible(request, runs, lambda r: r.owner_id)]
 
 
+@router.delete("/runs/{run_id}", status_code=204)
+@require_permission("threads", "delete")
+async def delete_run(run_id: str, request: Request) -> None:
+    """Delete one run: its row, its blob and its data key (so even an old copy
+    of the database cannot open it). Someone else's run reads as missing."""
+    from app.gateway.ownership import can_access
+
+    h = _history(request)
+    run = h.get(run_id)
+    if run is None or not await can_access(request, run.get("owner_id")):
+        raise HTTPException(status_code=404, detail="No such run (it may have been purged).")
+    h.delete_run(run_id)
+
+
 @router.get("/runs/{run_id}", response_model=RunDetail)
 @require_permission("threads", "read")
 async def get_run(run_id: str, request: Request) -> RunDetail:

@@ -3,6 +3,7 @@ checked against what is actually on disk."""
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -157,18 +158,21 @@ def test_a_purged_run_leaves_no_bytes_in_the_database(tmp_path) -> None:
     marker = "PURGE-ME-" + "q" * 2000
     store.record(kind="automation", source_id="old", body={"note": marker}, status="completed", started_at=datetime.now(UTC) - timedelta(days=90))
     store.record(kind="automation", source_id="new", body={"note": "kept"}, status="completed")
-    assert marker.encode() in on_disk(tmp_path)
+    (old_run,) = [r for r in store.list() if r.source_id == "old"]
+    assert store.get(old_run.id)["body"]["note"] == marker, "the run was not stored"
 
     assert store.purge() == 1
     assert marker[:40].encode() not in on_disk(tmp_path), "the purged run's content is still in the database or its WAL"
 
 
-def test_the_gateway_keeps_the_turn_id_only_from_the_engine_for_its_thread_once() -> None:
+def test_the_gateway_keeps_the_turn_id_only_from_the_engine_for_its_thread_once(tmp_path) -> None:
     from app.gateway.internal_auth import accept_turn_id, sign_turn_id
     from app.gateway.services import normalize_input
 
+    history = RunHistory(tmp_path)
+
     def ids(value, *, thread="t-1", engine=True):
-        keep = lambda v: accept_turn_id(v, thread_id=thread, from_trigger_engine=engine)  # noqa: E731
+        keep = lambda v: accept_turn_id(v, thread_id=thread, from_trigger_engine=engine, consume=history.consume_turn_id)  # noqa: E731
         return normalize_input({"messages": [{"role": "human", "content": "hi", "id": value}]}, keep_id=keep)["messages"][0].id
 
     signed = sign_turn_id("n1", "t-1")
@@ -178,6 +182,20 @@ def test_the_gateway_keeps_the_turn_id_only_from_the_engine_for_its_thread_once(
     assert ids(signed) != signed, "a used id was accepted again"
     forged = sign_turn_id("n2", "t-1")[:-1] + "x"
     assert ids(forged) != forged
+
+
+def test_a_turn_id_used_on_one_worker_is_refused_on_another(tmp_path) -> None:
+    """Two PROCESSES over one database: the second consumer of the same id is
+    refused (a primary key, not a per-process set)."""
+    import subprocess
+    import sys
+
+    RunHistory(tmp_path)  # create the schema
+    code = "import sys; from app.run_history.store import RunHistory; print(RunHistory(sys.argv[1]).consume_turn_id(sys.argv[2]))"
+    env = {**os.environ}
+    first = subprocess.run([sys.executable, "-c", code, str(tmp_path), "trigger-turn-x.y"], capture_output=True, text=True, env=env, cwd=os.getcwd(), check=True)
+    second = subprocess.run([sys.executable, "-c", code, str(tmp_path), "trigger-turn-x.y"], capture_output=True, text=True, env=env, cwd=os.getcwd(), check=True)
+    assert first.stdout.strip() == "True" and second.stdout.strip() == "False", (first.stdout, first.stderr[-500:], second.stdout)
 
 
 def test_one_run_is_capped_and_says_where_it_was_cut(tmp_path) -> None:

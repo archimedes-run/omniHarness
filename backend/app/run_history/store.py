@@ -25,6 +25,11 @@ each tested (tests/run_history):
     secure_delete on, so a purged row's bytes are zeroed in the file rather
     than left in a free page; the gateway runs it at
     startup and every hour (lifespan.py).
+  * ENCRYPTED AT REST. Body, blob and error are sealed (AES-256-GCM) with the
+    run's own data key, after redaction; the data keys are kept, wrapped by a
+    master key, in a key store OUTSIDE this database. Deleting or expiring a
+    run destroys its key; delete-all and a purge that empties the store also
+    rotate the master key (crypto.py states exactly what that covers).
   * LOCAL ONLY. A SQLite file and a directory under the gateway's data dir,
     the directory 0700 and the database 0600. Nothing here syncs anywhere.
   * DELETABLE. `delete_all()` removes every run and every blob file.
@@ -54,6 +59,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from app.run_history.crypto import CannotDecrypt, StoreKey
+
 logger = logging.getLogger(__name__)
 
 #: Bodies larger than this (bytes of JSON) go to a blob file, not the row.
@@ -61,6 +68,8 @@ INLINE_MAX = 64 * 1024
 DEFAULT_RETENTION_DAYS = 30
 #: What a string is stored as when it could not be redacted.
 WITHHELD = "[Withheld: could not be redacted]"
+#: A run's content sealed under a key that has since been rotated (or altered).
+UNREADABLE = "[Withheld: this run's content cannot be decrypted with the store's current key]"
 #: A run's body when its blob file is missing or unreadable.
 BLOB_MISSING = "[Withheld: this run's stored content is missing or unreadable]"
 #: One run's stored body is cut to this (bytes of JSON): the longest strings
@@ -95,6 +104,9 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_source ON runs (kind, source_id, started_at);
 CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- The trigger engine's signed turn ids already accepted once. Shared by every
+-- worker (one database), so a replay to another worker fails the insert.
+CREATE TABLE IF NOT EXISTS consumed_turn_ids (turn_id TEXT PRIMARY KEY, at TEXT NOT NULL);
 -- The authoritative ledger of the threads the trigger engine created (noted
 -- at creation, and from every automation run that names one). Deleting the
 -- automations' threads works from THIS, never from a request or only from the
@@ -275,14 +287,13 @@ UNVERIFIED_HUMAN = "untrusted_injected_or_unverified"
 
 
 def _is_tagged_user_turn(message: dict) -> bool:
-    """The server's user-turn tag (security baseline: is_user_turn). A message
-    with a harness `name` is never a person's."""
+    """The server's user-turn tag: the security baseline's one test,
+    lineage.is_user_turn (a human message services.normalize_input tagged on
+    receipt). A message with a harness `name` is never a person's."""
     if message.get("name"):
         return False
-    try:
-        from app.gateway.user_turn import is_user_turn  # the baseline's helper, once rebased
-    except ImportError:
-        return False
+    from app.policy.lineage import is_user_turn
+
     return bool(is_user_turn(message))
 
 
@@ -358,7 +369,12 @@ class RunHistory:
         now: Callable[[], datetime] | None = None,
         run_max_bytes: int = RUN_MAX_BYTES,
         total_max_bytes: int = TOTAL_MAX_BYTES,
+        key: StoreKey | None = None,
     ) -> None:
+        # Encryption at rest (crypto.py). Raises KeyRefused on an unsafe key
+        # file: the store does not open rather than store content in the clear.
+        self.key = key or StoreKey()
+        self.key.key()
         self.run_max_bytes = run_max_bytes
         self.total_max_bytes = total_max_bytes
         self.root = Path(root)
@@ -456,22 +472,29 @@ class RunHistory:
             logger.warning("run history: full (%d byte cap); a run of %s was not stored", self.total_max_bytes, source_id)
             self._bump("not_stored_runs")
             return ""
-        data = encoded.decode()
         blob_name = f"{run_id}.json" if len(encoded) > INLINE_MAX else None
         # Stored in UTC, so stored times compare as times.
         started = _utc(started_at or self._now()).isoformat()
-        # One lock over the blob AND its row, the same lock delete_all and
-        # purge hold over rows AND blobs: a delete can never land between the
-        # two and leave a row naming a blob that is gone (or a stray blob).
+        # One lock over the data key, the blob AND the row, the same lock
+        # delete_all and purge hold over rows, blobs and keys: a delete (or a
+        # key rotation) can never land between them.
         with self._lock, self._connect() as c:
+            # Sealed AFTER redaction: content never reaches the disk in the
+            # clear. This run's own data key is wrapped into the key store
+            # (outside this database) BEFORE the row exists: deleting the run
+            # destroys it.
+            dek = self.key.new_data_key(run_id)
+            data = None if blob_name else self.key.seal_with(dek, encoded, f"{run_id}|body")
+            sealed_blob = self.key.seal_with(dek, encoded, f"{run_id}|blob").encode() if blob_name else None
+            clean_error = self.key.seal_with(dek, clean_error.encode(), f"{run_id}|error") if clean_error else None
             # Row FIRST, blob second, one transaction: a failed insert never
             # leaves a blob; a failed blob write rolls the row back.
             c.execute(
                 "INSERT INTO runs (id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size, body, blob, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, kind, source_id, event_id, thread_id, started, _utc(finished_at).isoformat() if finished_at else None, status, clean_error, len(encoded) + extra, None if blob_name else data, blob_name, owner_id),
+                (run_id, kind, source_id, event_id, thread_id, started, _utc(finished_at).isoformat() if finished_at else None, status, clean_error, len(encoded) + extra, data, blob_name, owner_id),
             )
             if blob_name:
-                self._write_blob(blob_name, encoded)
+                self._write_blob(blob_name, sealed_blob)
         return run_id
 
     def _write_blob(self, name: str, data: bytes) -> None:
@@ -511,8 +534,28 @@ class RunHistory:
             for f in self.blobs.glob("*.json"):
                 if f.name not in named:
                     _shred(f)
+            # Crypto-shred the expired runs: their data keys are destroyed, and
+            # so is any key no row names (a record that failed after its key).
+            live = {r[0] for r in c.execute("SELECT id FROM runs")}
+            self.key.destroy([r["id"] for r in rows])
+            self.key.destroy(self.key.key_ids() - live)
+            if rows and not live:
+                # Nothing left that needs the master key: rotate it too.
+                self.key.rotate()
         self._flush_wal()
         return len(rows)
+
+    def delete_run(self, run_id: str) -> bool:
+        """Delete one run: its row, its blob, and (crypto-shredding) its data
+        key. Returns whether it existed."""
+        with self._lock, self._connect() as c:
+            row = c.execute("SELECT blob FROM runs WHERE id = ?", (run_id,)).fetchone()
+            c.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+            if row is not None and row["blob"]:
+                _shred(self.blobs / row["blob"])
+            self.key.destroy([run_id])
+        self._flush_wal()
+        return row is not None
 
     def _flush_wal(self) -> None:
         """Copy the WAL into the (secure_delete) database and truncate it to
@@ -531,6 +574,11 @@ class RunHistory:
             for f in self.blobs.iterdir():
                 if f.is_file():
                     _shred(f)
+            # Crypto-shredding, under the same lock (no record can take a key
+            # in between): every data key is destroyed and the master key
+            # replaced, so what may survive the delete (SSD blocks, WAL or
+            # journal pages, an old copy of the database) cannot be opened.
+            self.key.rotate()
         with self._lock, self._connect() as c:
             c.execute("VACUUM")
         self._flush_wal()
@@ -552,7 +600,27 @@ class RunHistory:
         sql += " ORDER BY started_at DESC LIMIT ?"
         with self._connect() as c:
             rows = c.execute(sql, (*args, int(limit))).fetchall()
-        return [RunSummary(**dict(r)) for r in rows]
+        return [RunSummary(**{**dict(r), "error": self._open_error(r["id"], r["error"])}) for r in rows]
+
+    def _open_error(self, run_id: str, sealed: str | None) -> str | None:
+        if not sealed:
+            return None
+        try:
+            return self.key.open_for(run_id, sealed, f"{run_id}|error").decode()
+        except CannotDecrypt:
+            return UNREADABLE
+
+    # -- once-only turn ids ---------------------------------------------------
+
+    def consume_turn_id(self, turn_id: str) -> bool:
+        """True the first time `turn_id` is seen by ANY worker (one shared
+        database, a primary key); False on every later attempt."""
+        try:
+            with self._connect() as c:
+                c.execute("INSERT INTO consumed_turn_ids (turn_id, at) VALUES (?, ?)", (turn_id, datetime.now(UTC).isoformat()))
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
     def get(self, run_id: str) -> dict | None:
         """One run, with its full body."""
@@ -562,9 +630,15 @@ class RunHistory:
             return None
         out = dict(row)
         out.pop("blob")
+        out["error"] = self._open_error(run_id, row["error"])
         try:
-            raw = (self.blobs / row["blob"]).read_text() if row["blob"] else row["body"]
-            out["body"] = json.loads(raw) if raw else None
+            if row["blob"]:
+                plain = self.key.open_for(run_id, (self.blobs / row["blob"]).read_text(), f"{run_id}|blob")
+            else:
+                plain = self.key.open_for(run_id, row["body"], f"{run_id}|body") if row["body"] else b""
+            out["body"] = json.loads(plain) if plain else None
+        except CannotDecrypt:
+            out["body"] = {"withheld": UNREADABLE}
         except (OSError, ValueError):
             # Gone (deleted under us, or by another process) or unreadable:
             # said in words, never a 500 and never a guess.

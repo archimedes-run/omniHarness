@@ -174,3 +174,11 @@ def _enable_workflows_feature_flag(request, monkeypatch):
         return config
 
     monkeypatch.setattr(_workflows_router, "get_app_config", _enabled_config)
+
+
+@pytest.fixture(autouse=True)
+def _run_store_key_outside_home(tmp_path_factory, monkeypatch):
+    """The run history's key file (app/run_history/crypto.py) lives in a fresh
+    temp dir per test: no test reads or writes ~/.omni-harness-secrets."""
+    keydir = tmp_path_factory.mktemp("run-store-key")
+    monkeypatch.setenv("OMNI_HARNESS_RUN_STORE_KEY_FILE", str(keydir / "run_store.key"))
