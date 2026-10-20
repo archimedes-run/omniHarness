@@ -51,6 +51,19 @@ def _progress(s: dict) -> str:
     return f" Plan {done}/{len(todos)} done."
 
 
+def _continued(s: dict) -> str:
+    """The recorded link between a session and its continuation, said as such.
+
+    Observed, not inferred: the earlier session's own record names the later
+    one. Ids are shortened to eight characters, as the ambiguity prompt does.
+    """
+    if s.get("continued_from"):
+        return f" Continued from an earlier session ({str(s['continued_from'])[:8]}); shown as one."
+    if s.get("continued_in"):
+        return f" Continued in another session ({str(s['continued_in'])[:8]}), which I can't see."
+    return ""
+
+
 def _line(s: dict, *, label: bool = False) -> str:
     """One session, worded by how well we actually know its state.
 
@@ -94,7 +107,7 @@ def _line(s: dict, *, label: bool = False) -> str:
         return f"{project} — I can't tell what state it's in; its records didn't parse."
 
     line = f"{head}. {summary}" if summary else f"{head}."
-    return line + _progress(s)
+    return line + _progress(s) + _continued(s)
 
 
 def _unreadable(payload: dict) -> str:
@@ -157,9 +170,9 @@ def compose_status(payload: dict) -> str:
     elapsed = humanize(int(s.get("elapsed_seconds", -1)))
     # Elapsed goes in the head, not after the summary: summaries routinely end
     # mid-clause or on a colon, and a trailing sentence reads like a non-sequitur.
-    line = _line({**s, "summary": ""}).rstrip(".")
+    line = _line({**s, "summary": "", "continued_from": None, "continued_in": None}).rstrip(".")
     summary = (s.get("summary") or "").strip()
-    head = f"{prefix}{line}, running {elapsed} in total."
+    head = f"{prefix}{line}, running {elapsed} in total.{_continued(s)}"
     return f"{head} {summary}" if summary else head
 
 

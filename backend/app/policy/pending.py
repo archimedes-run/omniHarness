@@ -51,6 +51,9 @@ def _to_dict(action: PendingAction) -> dict:
         "claimed_by": action.claimed_by,
         "outcome": str(action.outcome) if action.outcome else None,
         "outcome_reason": action.outcome_reason,
+        "origin": action.origin,
+        "origin_source": action.origin_source,
+        "origin_via": action.origin_via,
     }
 
 
@@ -66,6 +69,11 @@ def _from_dict(raw: dict) -> PendingAction:
         requester=raw.get("requester") or "lead_agent",
         delegation_chain=tuple(raw.get("delegation_chain") or ()),
         id=raw["id"],
+        # A record without an origin predates it: it fails toward card-only
+        # rather than being assumed to be the user's own request.
+        origin=raw.get("origin") or "unknown",
+        origin_source=raw.get("origin_source") or "",
+        origin_via=raw.get("origin_via") or "",
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):

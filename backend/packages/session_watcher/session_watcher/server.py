@@ -105,10 +105,12 @@ class WatcherService:
                     "label": AGENT_LABELS.get(agent, agent),
                     "readable": readable,
                     "reason": None if readable else f"{source.root} is not mounted or not readable",
-                    # Unknown record types plus malformed lines: the signal
+                    # Malformed lines, untyped records, unknown record types
+                    # (skipped or parsed) and named shape changes: the signal
                     # that the agent's format moved (FR-024).
                     "drift": source.stats.drift_signals,
                     "unknown_types": dict(source.stats.unknown_types),
+                    "diagnostics": dict(source.stats.diagnostics),
                 }
             )
         return out
@@ -135,6 +137,9 @@ class WatcherService:
             "agent_label": AGENT_LABELS.get(s.agent, s.agent),
             "todos": todos,
             "files_changed": [self._safe(f) for f in s.files_changed[-MAX_FILES:]],
+            # Observed: the agent recorded the link (a `continued-in` record).
+            "continued_from": s.continued_from,
+            "continued_in": s.continued_in,
         }
 
     def _summarize(self, text: str) -> tuple[str, str, bool]:
@@ -174,6 +179,9 @@ class WatcherService:
         matches = self.registry.match_project(key)
         if key in self.registry.sessions:
             matches = [self.registry.sessions[key]]
+        elif (continued := self.registry.continuation_of(key)) is not None:
+            # Asked by the earlier id of a continued session: it is this one.
+            matches = [continued]
         if len(matches) > 1:
             out.update(
                 found=False,

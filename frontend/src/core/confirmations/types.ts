@@ -1,4 +1,4 @@
-/** The eight outcomes the backend can return. Never collapsed into ok/error:
+/** The outcomes the backend can return. Never collapsed into ok/error:
  *  "someone else already confirmed it", "it expired" and "the items changed"
  *  each need a different response from the person reading them, and a generic
  *  failure tells them to retry something that will never work. */
@@ -10,7 +10,10 @@ export type ResolveOutcome =
   | "targets_drifted"
   | "unrecognised"
   | "threshold_not_met"
-  | "failed";
+  | "failed"
+  /** A typed "yes" in chat for an action the user did not cause: only the
+   *  card's button can confirm it. Never returned by the card's own route. */
+  | "card_only";
 
 export interface PendingAction {
   id: string;
@@ -28,6 +31,17 @@ export interface PendingAction {
   /** The call's arguments, only for tools whose plan can be edited before
    *  confirming (ledger_apply). Absent otherwise. */
   arguments?: Record<string, unknown> | null;
+  /** What caused the proposal. Anything but "user" (content the assistant
+   *  read, an automation, or a cause nobody could tell) can only be confirmed
+   *  with this card's button. Optional: an older backend omits them. */
+  origin?: "user" | "content" | "automation" | "unknown";
+  /** For "content": the tool(s) whose output suggested it. */
+  origin_source?: string;
+  /** The sentence to show, e.g. "Suggested by content from web_fetch". */
+  origin_label?: string;
+  /** For a subagent's request: the agent the content reached it through. */
+  origin_via?: string;
+  confirmable_by_typing?: boolean;
 }
 
 export interface PendingList {

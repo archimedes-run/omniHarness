@@ -12,6 +12,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omniharness.persistence.feedback.model import FeedbackRow
+from omniharness.persistence.timestamps import utc_iso
 from omniharness.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
 
 
@@ -24,7 +25,7 @@ class FeedbackRepository:
         d = row.to_dict()
         val = d.get("created_at")
         if isinstance(val, datetime):
-            d["created_at"] = val.isoformat()
+            d["created_at"] = utc_iso(val)
         return d
 
     async def create(

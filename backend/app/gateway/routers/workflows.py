@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from app.gateway.workflows.generator import WorkflowGenerationError, WorkflowSpec, generate_workflow_spec
 from app.gateway.workflows.policy import requires_approval as _requires_approval
 from omniharness.config import get_app_config
+from omniharness.persistence.timestamps import utc_iso
 from omniharness.persistence.workflow_runs.sql import IllegalStatusTransition
 from omniharness.platform.events import EventSource
 from omniharness.platform.writer import emit_platform_event
@@ -137,7 +138,7 @@ class WorkflowResponse(BaseModel):
 
 
 def _dt(v) -> str:
-    return v.isoformat() if isinstance(v, datetime) else str(v)
+    return utc_iso(v) if isinstance(v, datetime) else str(v)
 
 
 def _serialize(row: dict, spec_json: dict | None = None) -> WorkflowResponse:
@@ -223,7 +224,7 @@ WorkflowResponse.model_rebuild()
 def _dt_opt(v) -> str | None:
     if v is None:
         return None
-    return v.isoformat() if isinstance(v, datetime) else str(v)
+    return utc_iso(v) if isinstance(v, datetime) else str(v)
 
 
 def _serialize_run(row: dict) -> WorkflowRunResponse:

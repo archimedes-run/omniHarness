@@ -176,3 +176,23 @@ class TestThreadMetaRepository:
         repo = await _make_repo(tmp_path)
         await repo.update_metadata("nonexistent", {"k": "v"})  # should not raise
         await _cleanup()
+
+
+@pytest.mark.anyio
+async def test_timestamps_read_back_from_sqlite_carry_their_utc_offset(tmp_path):
+    """SQLite returns naive datetimes. A zone-less ISO string is parsed as
+    LOCAL time by a browser, so the chat list said a chat updated now was
+    updated "in about 4 hours" in New York."""
+    from datetime import UTC, datetime
+
+    repo = await _make_repo(tmp_path)
+    await repo.create("t1")
+    await repo.update_display_name("t1", "renamed")
+    rows = await repo.search()
+    fetched = await repo.get("t1")
+    await _cleanup()
+    for record in (*rows, fetched):
+        for key in ("created_at", "updated_at"):
+            parsed = datetime.fromisoformat(record[key])
+            assert parsed.tzinfo is not None, f"{key}={record[key]!r} has no zone"
+            assert abs((datetime.now(UTC) - parsed).total_seconds()) < 60

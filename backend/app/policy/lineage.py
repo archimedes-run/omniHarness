@@ -75,12 +75,63 @@ def eligible_to_confirm(message: Any) -> bool:
     return is_user_turn(message)
 
 
-def eligible_to_initiate(message: Any) -> bool:
-    """FR-006. Tool-result content may not initiate a Tier 3 action either.
+#: What caused a Tier 3 proposal (FR-006, applied globally 2026-10-19).
+ORIGIN_USER = "user"  # the user's own latest message
+ORIGIN_CONTENT = "content"  # something the agent READ: a page, an email, any tool output
+ORIGIN_AUTOMATION = "automation"  # a trigger's synthetic turn
+ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
 
-    Separate from `eligible_to_confirm` because they are separate requirements:
-    one is about answering a question already asked, the other about causing the
-    question to exist. A single function would let one be implemented and the
-    other assumed.
+
+def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) -> tuple[str, str]:
+    """FR-006. Which turn caused the call being dispatched, and its source.
+
+    Content the agent READ may SUGGEST an action but can never confirm it or
+    originate it silently. So the question is not "is the last message a tool
+    result" — at dispatch the last message is ALWAYS the AI message making the
+    call, which is why that check never fired (reported 2026-10-19). Walk back
+    past the AI message(s) of this step; the first other message is the cause:
+
+      a genuine user turn  -> ("user", "")
+      tool result(s)       -> ("content", "<the tool(s) that produced them>")
+      anything else        -> ("unknown", "")   fails toward card-only
+
+    A trigger-injected turn is a HumanMessage by shape, so `synthetic` (from
+    runtime context, provenance.is_synthetic_turn) is consulted first.
     """
-    return not is_tool_result(message)
+    if synthetic:
+        return ORIGIN_AUTOMATION, ""
+    items = list(messages or [])
+    for index in range(len(items) - 1, -1, -1):
+        message = items[index]
+        if _message_type(message) == "ai" and not is_tool_result(message):
+            continue
+        if is_tool_result(message):
+            return ORIGIN_CONTENT, _content_source(items, index)
+        if is_user_turn(message):
+            return ORIGIN_USER, ""
+        return ORIGIN_UNKNOWN, ""
+    return ORIGIN_UNKNOWN, ""
+
+
+def _content_source(items: list[Any], index: int) -> str:
+    """The tool(s) whose results sit at the end of the read, in call order."""
+    names: list[str] = []
+    while index >= 0 and is_tool_result(items[index]):
+        name = _tool_name_of(items, items[index])
+        if name not in names:
+            names.insert(0, name)
+        index -= 1
+    return ", ".join(names)
+
+
+def _tool_name_of(items: list[Any], result: Any) -> str:
+    name = result.get("name") if isinstance(result, dict) else getattr(result, "name", None)
+    if name:
+        return str(name)
+    call_id = result.get("tool_call_id") if isinstance(result, dict) else getattr(result, "tool_call_id", None)
+    for message in items:
+        calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+        for call in calls or []:
+            if call.get("id") == call_id and call.get("name"):
+                return str(call["name"])
+    return "a tool result"

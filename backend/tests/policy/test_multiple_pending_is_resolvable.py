@@ -24,7 +24,11 @@ def test_the_plan_text_tells_the_user_how_to_name_this_action(build_flow, make_p
     text = system.middleware._plan_text_for(action)
 
     assert action.id in text, "the id the user must type is not in the message they read"
-    assert f"yes {action.id}" in text
+    # Addressed to the user, and never spelled as the verdict itself: this is
+    # the tool result the MODEL reads, and a model shown "yes <id>" repeats it
+    # as its own message (seen live, 2026-10-19).
+    assert "Waiting for you: confirm on the card, or reply yes." in text
+    assert f"yes {action.id}" not in text and f"no {action.id}" not in text
 
 
 def test_a_bare_yes_with_several_pending_still_refuses(build_flow, make_pending):

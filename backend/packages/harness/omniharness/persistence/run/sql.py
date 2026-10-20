@@ -15,6 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omniharness.persistence.run.model import RunRow
+from omniharness.persistence.timestamps import utc_iso
 from omniharness.runtime.runs.store.base import RunStore
 from omniharness.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
 
@@ -60,7 +61,7 @@ class RunRepository(RunStore):
         for key in ("created_at", "updated_at"):
             val = d.get(key)
             if isinstance(val, datetime):
-                d[key] = val.isoformat()
+                d[key] = utc_iso(val)
         return d
 
     async def put(

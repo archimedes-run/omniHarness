@@ -239,3 +239,35 @@ test("an agent whose files cannot be read says so, and is never just absent (FR-
     "Can't read Codex sessions",
   );
 });
+
+test("a continued Claude Code session is one row that says it was continued", async ({
+  page,
+}) => {
+  await serve(page, {
+    ...LIVE,
+    sessions: [
+      {
+        ...session("completed", "observed", "omniHarness"),
+        session_id: "22222222-bbbb-4bbb-8bbb-000000000002",
+        agent: "claude",
+        agent_label: "Claude Code",
+        continued_from: "11111111-aaaa-4aaa-8aaa-000000000001",
+        continued_in: null,
+      },
+      {
+        ...session("completed", "observed", "beta-site"),
+        session_id: "33333333-cccc-4ccc-8ccc-000000000003",
+        continued_from: null,
+        continued_in: "44444444-dddd-4ddd-8ddd-000000000004",
+      },
+    ],
+  });
+  const rows = page.getByTestId("session");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByTestId("continued")).toHaveText(
+    "Continued from an earlier session · 11111111 · shown as one",
+  );
+  await expect(rows.nth(1).getByTestId("continued")).toHaveText(
+    "Continued in another session · 44444444 · not in view",
+  );
+});

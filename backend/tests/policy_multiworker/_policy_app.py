@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
+from langchain_core.messages import HumanMessage
 
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
 from app.policy.audit import PolicyAuditLog
@@ -52,7 +53,9 @@ def _request(name: str, args: dict):
     return SimpleNamespace(
         tool_call={"name": name, "args": args, "id": "tc1", "type": "tool_call"},
         tool=SimpleNamespace(name=name),
-        state={"messages": []},
+        # The user's own turn: a plan with no traceable cause is card-only
+        # (FR-006), and these workers confirm by typing.
+        state={"messages": [HumanMessage(content="do it")]},
         runtime=SimpleNamespace(context={"thread_id": "t1"}),
     )
 
@@ -65,7 +68,7 @@ async def state_a_plan(request: Request):
         _request(body["tool"], body.get("args", {})),
         lambda r: (_ for _ in ()).throw(AssertionError("a Tier 3 tool executed without confirmation")),
     )
-    return {"pid": os.getpid(), "plan": plan, "pending": [a.id for a in _store.open_actions(datetime.now(UTC))]}
+    return {"pid": os.getpid(), "plan": getattr(plan, "content", plan), "pending": [a.id for a in _store.open_actions(datetime.now(UTC))]}
 
 
 @app.post("/confirm")

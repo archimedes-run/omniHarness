@@ -166,6 +166,22 @@ def recognise(message, pending: list[PendingAction], runtime_context: dict | Non
     return Recognition(Verdict.UNRECOGNISED, action_id=named, reason=f"{words!r} is neither a recognised confirmation nor a recognised decline")
 
 
+def self_verdict_id(line: str) -> str | None:
+    """The action id when this line, standing alone, IS a verdict on it.
+
+    "yes 7bf9d7ecb3b1", "`no 7bf9d7ecb3b1`.", "Confirm, 7bf9d7ecb3b1". Used on
+    the MODEL's reply, never the user's: an assistant line that is a verdict
+    reads to the user as the assistant confirming for them. A sentence that
+    merely mentions an id ("reply yes to approve 7bf9d7ecb3b1") is not one.
+    """
+    text = _normalise(line)
+    ids = _ID.findall(text)
+    if len(ids) != 1:
+        return None
+    words = " ".join(text.replace(ids[0], " ").split())
+    return ids[0] if words in _CONFIRM_FORMS or words in _DECLINE_FORMS else None
+
+
 def restate(action: PendingAction) -> str:
     """FR-035. The plan IN FULL, not a nudge.
 
@@ -180,9 +196,12 @@ def restate(action: PendingAction) -> str:
         f"It affects exactly these {len(action.targets)} item(s):",
     ]
     lines += [f"  - {target}" for target in action.targets]
+    how = f'Reply "yes {action.id}" to go ahead, or "no {action.id}" to cancel.'
+    if not action.confirmable_by_typing:
+        how = f'It was {action.origin_reason()}, so only the Confirm button on its card can approve it. Reply "no {action.id}" to cancel.'
     lines += [
         "",
-        f'Reply "yes {action.id}" to go ahead, or "no {action.id}" to cancel.',
+        how,
         f"If neither arrives, it expires at {action.expires_at.isoformat(timespec='minutes')} and does not run.",
     ]
     return "\n".join(lines)

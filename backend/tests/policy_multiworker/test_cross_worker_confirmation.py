@@ -39,7 +39,21 @@ import pytest
 BACKEND = Path(__file__).resolve().parents[2]
 REPO = BACKEND.parent
 COMPOSE = REPO / "docker" / "docker-compose.yaml"
-PORT = 8877
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+#: A free port per test process, not a fixed 8877: a gateway from an earlier
+#: run whose workers had not yet exited (or were orphaned by a kill of the
+#: master alone) kept answering on the fixed port, against ITS state dir, and
+#: three tests failed together under load.
+PORT = _free_port()
 
 RULES = """
 policy:
@@ -100,13 +114,31 @@ def gateway(tmp_path_factory):
         # confirmation 401s whenever it lands elsewhere.
         "OMNI_HARNESS_INTERNAL_AUTH_TOKEN": "cross-worker-test-token",
     }
+    # Logs to a file: a PIPE nobody reads blocks the workers once it fills.
+    log = (state / "gateway.log").open("wb")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "_policy_app:app", "--app-dir", str(state), "--host", "127.0.0.1", "--port", str(PORT), "--workers", str(workers)],
         cwd=str(BACKEND),
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=log,
         stderr=subprocess.STDOUT,
+        # Its own process group, so teardown stops the workers too, not only
+        # the master (killing the master alone orphans them on the port).
+        start_new_session=True,
     )
+
+    def stop() -> None:
+        for sig, wait in ((signal.SIGTERM, 20), (signal.SIGKILL, 10)):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                break
+            try:
+                proc.wait(timeout=wait)
+                break
+            except subprocess.TimeoutExpired:  # pragma: no cover
+                continue
+        log.close()
 
     deadline = time.monotonic() + 90
     served = set()
@@ -119,8 +151,8 @@ def gateway(tmp_path_factory):
         except Exception:
             time.sleep(1)
     else:  # pragma: no cover
-        proc.send_signal(signal.SIGTERM)
-        pytest.fail(f"gateway did not come up with several workers; saw pids {served}")
+        stop()
+        pytest.fail(f"gateway did not come up with several workers; saw pids {served}; log: {(state / 'gateway.log').read_text()[-2000:]}")
 
     def worker_pids() -> set[int]:
         """The worker set from the process tree, read FRESH on every call.
@@ -156,6 +188,14 @@ def gateway(tmp_path_factory):
                 found.add(int(entry))
         return found
 
+    # Whoever answered must be THIS gateway's workers. If the master died (the
+    # port was taken) and something else answered, every test below would be
+    # asserting against another process's state; say so instead.
+    strangers = served - worker_pids()
+    if proc.poll() is not None or strangers:  # pragma: no cover
+        stop()
+        pytest.fail(f"port {PORT} answered by processes that are not this gateway's workers: {strangers}; master exit {proc.poll()}; log: {(state / 'gateway.log').read_text()[-2000:]}")
+
     yield {
         "state": state,
         "workers": workers,
@@ -164,11 +204,7 @@ def gateway(tmp_path_factory):
         "token": env["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"],
     }
 
-    proc.send_signal(signal.SIGTERM)
-    try:
-        proc.wait(timeout=20)
-    except subprocess.TimeoutExpired:  # pragma: no cover
-        proc.kill()
+    stop()
 
 
 def _headers(gateway):
@@ -416,13 +452,57 @@ def test_confirming_through_both_routes_at_once_executes_once(gateway):
         ).json()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        both = [f.result() for f in (pool.submit(via_chat), pool.submit(via_ui))]
+        chat, ui = [f.result() for f in (pool.submit(via_chat), pool.submit(via_ui))]
 
-    executed = [r for r in both if r.get("executed")]
-    assert len(executed) == 1, f"expected exactly one execution, got {both}"
+    executed = [r for r in (chat, ui) if r.get("executed")]
+    assert len(executed) == 1, f"expected exactly one execution, got {[chat, ui]}"
+    _assert_told_what_happened(chat, ui)
+    assert len(_executions(gateway)) - before == 1, "the action ran more than once"
 
-    loser = next(r for r in both if not r.get("executed"))
-    assert loser["verdict"] in {"already_resolved", "executed"}, loser
+
+def _assert_told_what_happened(chat: dict, ui: dict) -> None:
+    """What the losing route may say depends on WHEN it looked, not on luck.
+
+    The two requests are concurrent, not simultaneous: under load (a frontend
+    build alongside the suite) the UI request routinely finished before the
+    chat request's worker read the pending actions. The chat route then saw
+    nothing open and answered NO_VERDICT, "this turn named no pending action",
+    which is true. The test used to demand ALREADY_RESOLVED, an assumption that
+    the two always overlap, and failed 3 runs in 5 under load.
+
+    * The UI route names its action, so losing it is always ALREADY_RESOLVED.
+    * The chat route names none: ALREADY_RESOLVED if it saw the action open and
+      lost the claim, NO_VERDICT if the action was resolved before it looked.
+    * Neither is ever told it failed.
+    """
+    loser, route = (chat, "chat") if ui.get("executed") else (ui, "ui")
+    allowed = {"already_resolved", "no_verdict"} if route == "chat" else {"already_resolved"}
+    assert loser["verdict"] in allowed, (route, loser)
     assert "fail" not in (loser.get("reason") or "").lower(), "the loser was told it failed rather than what happened"
 
+
+@pytest.mark.parametrize("first", ["ui", "chat"])
+def test_confirming_through_both_routes_in_either_order_executes_once(gateway, first):
+    """SC-002 without the race: each ordering, forced, so each outcome above is
+    exercised every run instead of whenever the scheduler allows."""
+    before = len(_executions(gateway))
+    stated = httpx.post(f"http://127.0.0.1:{PORT}/state", json={"tool": "calendar_decline", "args": {"targets": ["A", "B"]}}, timeout=10).json()
+    action_id = stated["pending"][0]
+    headers = _headers(gateway)
+
+    def chat_call():
+        return httpx.post(f"http://127.0.0.1:{PORT}/confirm", json={"reply": "yes"}, headers=headers, timeout=15).json()
+
+    def ui_call():
+        return httpx.post(f"http://127.0.0.1:{PORT}/resolve", json={"action_id": action_id, "confirm": True}, headers=headers, timeout=15).json()
+
+    if first == "ui":
+        ui = ui_call()
+        chat = chat_call()
+        assert ui["executed"] is True and chat["verdict"] == "no_verdict", (ui, chat)
+    else:
+        chat = chat_call()
+        ui = ui_call()
+        assert chat["executed"] is True and ui["verdict"] == "already_resolved", (chat, ui)
+    _assert_told_what_happened(chat, ui)
     assert len(_executions(gateway)) - before == 1, "the action ran more than once"

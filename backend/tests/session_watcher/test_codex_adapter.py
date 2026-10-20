@@ -106,7 +106,8 @@ def test_subagents_attach_to_their_parent_in_both_link_shapes(tmp_path) -> None:
 def test_a_subagent_naming_no_parent_is_drift(tmp_path) -> None:
     write(tmp_path, "2026/10/19", "orphan", [meta(0, "orphan", thread_source="subagent", source={"subagent": {"other": "x"}})])
     _, source, _ = discover(tmp_path)
-    assert source.stats.unknown_types["session_meta:subagent-without-parent"] == 1
+    assert source.stats.diagnostics["session_meta:subagent-without-parent"] == 1
+    assert source.stats.drift_signals == 1 and not source.stats.unknown_types
 
 
 def test_known_inert_types_are_not_drift_and_a_new_type_is(tmp_path) -> None:
@@ -168,4 +169,5 @@ def test_a_code_mode_plan_built_from_variables_is_drift_not_a_guess(tmp_path) ->
     write(tmp_path, "2026/10/19", "s1", [meta(0, "s1"), _exec(1, "e1", "const steps = make();\nawait tools.update_plan({plan: steps});"), _exec_out(1.1, "e1", "Script completed")])
     _, source, refs = discover(tmp_path)
     assert refs["s1"].todos is None
-    assert source.stats.unknown_types["exec:update_plan-unreadable"] == 1
+    assert source.stats.diagnostics["exec:update_plan-unreadable"] == 1
+    assert source.stats.drift_signals == 1 and not source.stats.unknown_types
