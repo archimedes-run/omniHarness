@@ -155,13 +155,39 @@ def surface_now(surface: dict, selection: list[str] | None) -> dict:
     return updated
 
 
+class SurfaceSnapshot:
+    """One confirmation's view of the proposing surface's tools: built ONCE.
+
+    The availability check and the execution used to rebuild the surface
+    separately (and the check twice), so what was checked was not what ran: a
+    source could drop between them, and every rebuild re-read MCP and skills.
+    One snapshot per confirmation, keyed by action, serves both.
+    """
+
+    def __init__(self, selection: list[str] | None, *, app_config: Any = None) -> None:
+        self.selection = selection
+        self.app_config = app_config
+        self._tools: dict[str, dict[str, Any]] = {}
+
+    def tools(self, action: PendingAction) -> dict[str, Any]:
+        """name -> tool, for the action's surface with the chat's current selection."""
+        if action.id not in self._tools:
+            from omniharness.agents.tool_surface import tools_for_surface
+            from omniharness.config import get_app_config
+
+            config = self.app_config or get_app_config()
+            built = tools_for_surface(surface_now(action.surface, self.selection), app_config=config)
+            self._tools[action.id] = {getattr(t, "name", ""): t for t in built}
+        return self._tools[action.id]
+
+
 def _names(surface: dict, app_config: Any) -> set[str]:
     from omniharness.agents.tool_surface import tools_for_surface
 
     return {getattr(t, "name", "") for t in tools_for_surface(surface, app_config=app_config)}
 
 
-def unavailable_reason(action: PendingAction, selection: list[str] | None, *, app_config: Any = None) -> str | None:
+def unavailable_reason(action: PendingAction, selection: list[str] | None, *, app_config: Any = None, snapshot: SurfaceSnapshot | None = None) -> str | None:
     """Why this action's tool cannot run NOW, in words for its card; None if it can.
 
     Checked at confirmation, before the claim, so a refused action stays open:
@@ -173,7 +199,8 @@ def unavailable_reason(action: PendingAction, selection: list[str] | None, *, ap
         return None
     config = app_config or get_app_config()
     try:
-        if action.tool_name in _names(surface_now(action.surface, selection), config):
+        now = set(snapshot.tools(action)) if snapshot is not None else _names(surface_now(action.surface, selection), config)
+        if action.tool_name in now:
             return None
     except LookupError as exc:
         # The proposing agent was deleted (or its surface cannot be rebuilt):
@@ -193,6 +220,7 @@ def run_on_surface(
     app_config: Any = None,
     live_tool: Any = None,
     selection: list[str] | None = None,
+    snapshot: SurfaceSnapshot | None = None,
 ) -> Any:
     """Run the confirmed call with the proposing run's own tools, as they are now.
 
@@ -207,6 +235,9 @@ def run_on_surface(
     config = app_config or get_app_config()
     if live_tool is not None:
         tool = live_tool
+    elif snapshot is not None:
+        # The SAME tools the availability check saw.
+        tool = snapshot.tools(action).get(tool_name)
     else:
         registry = {getattr(t, "name", ""): t for t in tools_for_surface(surface_now(action.surface, selection), app_config=config)}
         tool = registry.get(tool_name)

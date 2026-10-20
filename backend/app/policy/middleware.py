@@ -349,7 +349,7 @@ class PolicyMiddleware(AgentMiddleware):
                 # call runs with the PROPOSER's runtime (the live one has no run
                 # config, which `task` reads).
                 live = registry.get(tool_name) if action.surface.get("kind") == LEAD else None
-                return run_on_surface(action, tool_name, arguments, state=state, live_tool=live, selection=selection)
+                return run_on_surface(action, tool_name, arguments, state=state, live_tool=live, selection=selection, snapshot=snapshot)
             tool = registry.get(tool_name)
             if tool is None:
                 # Loud, not silent. A confirmation that cannot execute must say
@@ -361,6 +361,10 @@ class PolicyMiddleware(AgentMiddleware):
         context = getattr(runtime, "context", None) or {}
         raw = context.get("selected_sources") if isinstance(context, dict) else None
         selection = list(raw) if isinstance(raw, (list, tuple, set)) else None
+        from .surface_run import SurfaceSnapshot
+
+        # The proposer's tools, built once: checked and run from the same list.
+        snapshot = SurfaceSnapshot(selection)
 
         def unavailable(action: Any) -> str | None:
             from omniharness.agents.tool_surface import LEAD
@@ -369,7 +373,7 @@ class PolicyMiddleware(AgentMiddleware):
 
             if (not action.surface or action.surface.get("kind") == LEAD) and action.tool_name in registry:
                 return None  # on the lead's live list, assembled from the chat's selection now
-            return unavailable_reason(action, selection)
+            return unavailable_reason(action, selection, snapshot=snapshot)
 
         run.unavailable = unavailable  # type: ignore[attr-defined]
         return run
