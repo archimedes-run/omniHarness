@@ -80,6 +80,7 @@ stop_all() {
     nginx -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
     sleep 1
     pkill -9 nginx 2>/dev/null || true
+    pkill -f "rotate-logs.sh loop logs " 2>/dev/null || true
     # Force-kill any survivors still holding the service ports
     _kill_port 8001
     _kill_port 3000
@@ -235,6 +236,11 @@ run_service "Frontend" \
 run_service "Nginx" \
     "nginx -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' >> logs/nginx.log 2>&1" \
     2026 10
+
+# 4. Log rotation for the host nginx (daily, 30 days, gzip, no line lost) and a
+#    size cap on the console captures (docker/nginx/rotate-logs.sh).
+LOG_NAMES="nginx-access nginx-error" CAP_FILES="logs/gateway.console.log logs/frontend.log logs/nginx.log" \
+    nohup sh docker/nginx/rotate-logs.sh loop logs logs/nginx.pid > /dev/null 2>>logs/rotate-logs.log &
 
 # ── Ready ────────────────────────────────────────────────────────────────────
 
