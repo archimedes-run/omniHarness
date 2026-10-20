@@ -104,8 +104,14 @@ export function PendingActionCard({
           </pre>
         )}
 
-        {draft ? (
+        {draft && !settled ? (
           <LedgerPlanEditor changes={draft} onChange={setDraft} />
+        ) : settled && typeof result?.detail?.result === "string" ? (
+          // Once applied, say exactly what was saved (it may be an edit of
+          // the list above), in the ledger's own words.
+          <p className="text-foreground text-sm" data-testid="applied">
+            {result.detail.result}
+          </p>
         ) : (
           <div>
             <p className="text-muted-foreground mb-1 text-xs uppercase">

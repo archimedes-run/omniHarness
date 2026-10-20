@@ -307,7 +307,10 @@ async function chat(
           outcome: "executed",
           action_id: "new",
           message: "Done.",
-          detail: {},
+          detail: {
+            result:
+              "Created project “Beta launch”. Added T-1 “Landing page” to Beta launch.",
+          },
         }),
       );
     }
@@ -364,6 +367,10 @@ test("the ledger card lists the changes, and Edit sends the edited plan to be co
     "Create project “Beta launch”",
   );
   await card.getByTestId("edit").click();
+  // The editor names the project, not the plan's internal ref ("p").
+  await expect(card.getByTestId("plan-editor")).toContainText(
+    "New task · Beta launch",
+  );
   await card.getByLabel("Project name").fill("Public beta");
   await card.getByTestId("save-and-confirm").click();
   await expect.poll(() => writes.length).toBe(1);
@@ -429,6 +436,9 @@ test("once confirmed, the card shows the result and nothing left to press", asyn
   const card = page.getByTestId("pending-action");
   await card.getByTestId("confirm").click();
   await expect(card.getByTestId("resolve-message")).toContainText("Done.");
+  await expect(card.getByTestId("applied")).toContainText(
+    "Added T-1 “Landing page”",
+  );
   await expect(card.getByTestId("confirm")).toHaveCount(0);
   await expect(card.getByTestId("edit")).toHaveCount(0);
 });

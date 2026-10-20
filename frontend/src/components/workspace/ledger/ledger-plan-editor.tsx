@@ -65,6 +65,12 @@ export function LedgerPlanEditor({
     );
   const remove = (index: number) =>
     onChange(changes.filter((_, i) => i !== index));
+  // A project created earlier in this plan is named, not shown by its ref.
+  const names = new Map(
+    changes
+      .filter((c) => c.op === "create_project" && typeof c.ref === "string")
+      .map((c) => [c.ref as string, String(c.name ?? c.ref)]),
+  );
 
   return (
     <ul className="space-y-2" data-testid="plan-editor">
@@ -75,7 +81,7 @@ export function LedgerPlanEditor({
               {VERB[change.op] ?? change.op}
               {typeof change.project === "string" &&
               change.op !== "create_project"
-                ? ` · ${change.project}`
+                ? ` · ${names.get(change.project) ?? change.project}`
                 : ""}
             </p>
             <Button

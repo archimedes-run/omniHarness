@@ -133,7 +133,7 @@ class LedgerService:
                         refs[str(c["ref"])] = row["id"]
                     if thread_id:
                         # US1: the project links to the chat it was captured in.
-                        self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="Where it was captured")
+                        self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="The chat it was captured in")
                     done.append(f"Created project “{row['name']}”.")
                     continue
                 project = self._project(s, user_id, c.get("project"), refs)

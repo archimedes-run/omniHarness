@@ -278,7 +278,11 @@ function Goals({ projectId, goals }: { projectId: string; goals: Goal[] }) {
                   style={{ width: `${pct}%` }}
                 />
               </div>
-              <p className="text-muted-foreground text-xs">{`Done when ${goal.definition_of_done}`}</p>
+              <p className="text-muted-foreground text-xs">
+                {/^done when/i.test(goal.definition_of_done)
+                  ? goal.definition_of_done
+                  : `Done when ${goal.definition_of_done}`}
+              </p>
             </li>
           );
         })}

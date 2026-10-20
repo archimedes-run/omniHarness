@@ -43,10 +43,16 @@ export function ThreadProjects({
       {(attached ?? []).map(({ link_id, project }) => (
         <span
           key={link_id}
-          className="text-muted-foreground group hover:text-foreground flex items-center gap-0.5 text-xs"
+          className="text-muted-foreground group hover:text-foreground flex max-w-40 items-center gap-0.5 text-xs whitespace-nowrap"
           data-testid="thread-project"
         >
-          <Link href={`/workspace/projects/${project.id}`}>{project.name}</Link>
+          <Link
+            href={`/workspace/projects/${project.id}`}
+            className="truncate"
+            title={project.name}
+          >
+            {project.name}
+          </Link>
           <button
             type="button"
             aria-label={`Detach from ${project.name}`}
