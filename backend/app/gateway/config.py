@@ -67,3 +67,43 @@ def published_address_warning(environ: dict | None = None) -> str | None:
     if not bind or bind in ("127.0.0.1", "::1", "[::1]", "localhost"):
         return None
     return f"The app is published on {bind} (BIND_ADDR), not loopback: anyone who can reach that address can reach the login page."
+
+
+#: Host names the gateway answers to (port ignored). Loopback for the browser
+#: and local callers, `gateway` for containers on the compose network,
+#: host.docker.internal for a containerised caller of a host gateway. Anything
+#: else is DNS rebinding (a page whose own name now points at 127.0.0.1) and
+#: gets 421. Add a LAN name with GATEWAY_ALLOWED_HOSTS if you publish beyond
+#: loopback (BIND_ADDR).
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "gateway", "host.docker.internal")
+
+
+def allowed_hosts(environ: dict | None = None) -> frozenset[str]:
+    env = os.environ if environ is None else environ
+    extra = [h.strip().lower() for h in (env.get("GATEWAY_ALLOWED_HOSTS") or "").split(",") if h.strip()]
+    return frozenset(DEFAULT_ALLOWED_HOSTS) | frozenset(extra)
+
+
+class HostGuardMiddleware:
+    """421 for a Host header the gateway does not serve (pure ASGI)."""
+
+    def __init__(self, app, hosts: frozenset[str]) -> None:
+        self.app = app
+        self.hosts = hosts
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        host = ""
+        for key, value in scope.get("headers", []):
+            if key == b"host":
+                host = value.decode("latin1").strip().lower()
+                break
+        name = host.split("]", 1)[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
+        if name not in self.hosts:
+            if scope["type"] == "websocket":
+                return await send({"type": "websocket.close", "code": 1008})
+            await send({"type": "http.response.start", "status": 421, "headers": [(b"content-type", b"text/plain")]})
+            await send({"type": "http.response.body", "body": b"Invalid Host header"})
+            return
+        return await self.app(scope, receive, send)

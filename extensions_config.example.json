@@ -74,7 +74,9 @@
       "args": [],
       "env": {},
       "url": "http://host.docker.internal:18101/sse",
-      "headers": {},
+      "headers": {
+        "X-OmniHarness-Watcher-Token": "$OMNI_HARNESS_WATCHER_TOKEN"
+      },
       "oauth": null,
       "description": "Feature 001's read-only coding-session watcher (FR-018). This entry IS the integration point \u2014 the gateway has no external tool-registration API, so without it the watcher's tools never reach the agent and 'what are my sessions doing?' answers 'I don't have that tool'. The process is the `session-watcher` service in docker/docker-compose-dev.yaml (and docker-compose.yaml); it used to be something you had to remember to start, which is how it came to be running nowhere. The url stays host.docker.internal because the service publishes its port, so the same value works from inside the stack and from a gateway run on the host."
     }

@@ -21,6 +21,9 @@ import pytest
 # clone needs a placeholder for config loading to succeed.
 os.environ.setdefault("OMNI_HARNESS_CONFIG_PATH", str(Path(__file__).resolve().parents[2] / "config.example.yaml"))
 os.environ.setdefault("OPENAI_API_KEY", "placeholder-not-a-real-key")
+# TestClient sends Host: testserver; the gateway answers only allowlisted
+# hosts (app.gateway.config.HostGuardMiddleware), so tests allow that name.
+os.environ.setdefault("GATEWAY_ALLOWED_HOSTS", "testserver")
 
 # Make 'app' and 'omniharness' importable from any working directory
 sys.path.insert(0, str(Path(__file__).parent.parent))

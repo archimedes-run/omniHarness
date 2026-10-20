@@ -537,6 +537,11 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     # nginx container's fixed address, or 127.0.0.1 for the host nginx). From
     # any other peer they are ignored. Outermost, so the access log, the rate
     # limiter and every route see the same client address.
+    # Host allowlist (DNS rebinding): outermost of all, 421 for a foreign Host.
+    from app.gateway.config import HostGuardMiddleware, allowed_hosts
+
+    app.add_middleware(HostGuardMiddleware, hosts=allowed_hosts())
+
     trusted_proxies = [p.strip() for p in os.environ.get("GATEWAY_TRUSTED_PROXIES", "").split(",") if p.strip()]
     if trusted_proxies:
         from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware

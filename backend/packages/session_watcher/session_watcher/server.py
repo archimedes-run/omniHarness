@@ -278,9 +278,74 @@ def build_server(service: WatcherService) -> Server:
     return server
 
 
-def build_app(service: WatcherService) -> Starlette:
+#: Hosts the watcher answers to: loopback, Docker Desktop's host name, and the
+#: compose service name, on any port. Anything else is a DNS-rebinding attempt
+#: (a web page that points its own name at 127.0.0.1) and gets 421.
+WATCHER_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", "host.docker.internal", "session-watcher")
+#: Shared secret with the gateway (sent as X-OmniHarness-Watcher-Token or a
+#: Bearer token). When set, every request without it is refused (401).
+WATCHER_TOKEN_ENV = "OMNI_HARNESS_WATCHER_TOKEN"
+WATCHER_TOKEN_HEADER = "x-omniharness-watcher-token"
+
+
+def _host_name(host_header: str) -> str:
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        return host.split("]", 1)[0] + "]"
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+class _GuardMiddleware:
+    """Host, Origin and token, checked before ANY route (security baseline).
+
+    - Host must be one of WATCHER_ALLOWED_HOSTS (421 otherwise): blocks DNS
+      rebinding, where a page on evil.example resolves to 127.0.0.1 and is
+      then same-origin with the watcher.
+    - Any Origin header is refused (403): the gateway's MCP client sends none,
+      and no browser page has a reason to talk to the watcher.
+    - With a token configured, the request must carry it (401).
+    """
+
+    def __init__(self, app, token: str | None) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        import secrets
+
+        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
+        status, body = None, b""
+        if _host_name(headers.get("host", "")) not in WATCHER_ALLOWED_HOSTS:
+            status, body = 421, b"Invalid Host header"
+        elif headers.get("origin"):
+            status, body = 403, b"Invalid Origin header"
+        elif self.token:
+            presented = headers.get(WATCHER_TOKEN_HEADER) or headers.get("authorization", "").removeprefix("Bearer ").strip()
+            if not presented or not secrets.compare_digest(presented, self.token):
+                status, body = 401, b"Unauthorized"
+        if status is not None:
+            await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"text/plain")]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        return await self.app(scope, receive, send)
+
+
+def build_app(service: WatcherService, *, token: str | None = None) -> Starlette:
+    from mcp.server.transport_security import TransportSecuritySettings
+
     server = build_server(service)
-    sse = SseServerTransport("/messages/")
+    # The SDK's own DNS-rebinding protection too (it was OFF: no settings).
+    sse = SseServerTransport(
+        "/messages/",
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[f"{h}:*" for h in WATCHER_ALLOWED_HOSTS] + list(WATCHER_ALLOWED_HOSTS),
+            allowed_origins=[],
+        ),
+    )
+    token = token if token is not None else (os.environ.get(WATCHER_TOKEN_ENV, "").strip() or None)
 
     async def handle_sse(request):
         async with sse.connect_sse(request.scope, request.receive, request._send) as (r, w):
@@ -302,12 +367,15 @@ def build_app(service: WatcherService) -> Starlette:
             }
         )
 
+    from starlette.middleware import Middleware
+
     return Starlette(
         routes=[
             Route("/health", endpoint=health),
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse.handle_post_message),
-        ]
+        ],
+        middleware=[Middleware(_GuardMiddleware, token=token)],
     )
 
 
@@ -369,6 +437,8 @@ def main() -> None:
     service.refresh()
     start_background_refresh(service)
     # 0.0.0.0 so a containerized backend can reach us via host.docker.internal.
+    if not os.environ.get(WATCHER_TOKEN_ENV, "").strip():
+        logging.getLogger(__name__).warning("%s is not set: the watcher checks Host and Origin but accepts any local caller without a token.", WATCHER_TOKEN_ENV)
     uvicorn.run(build_app(service), host="0.0.0.0", port=args.port, log_level=args.log_level)
 
 
