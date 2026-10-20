@@ -71,6 +71,9 @@ class SubagentResult:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     ai_messages: list[dict[str, Any]] | None = None
+    #: The run ended on a failed model call (the error middleware's message),
+    #: not on an answer: COMPLETED in form, a failure in fact.
+    model_failed: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def __post_init__(self):
@@ -311,6 +314,9 @@ class SubagentExecutor:
         #: Re-entering an existing delegation: its checkpoint holds its history,
         #: and the run's input is only what is new.
         self.resuming = checkpoint_key is not None
+        #: For a resumed delegation: the messages appended to its history
+        #: (execute_resume). None for an ordinary run, which starts from a task.
+        self.resume_input: list[Any] | None = None
         self.checkpointer = checkpointer
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
@@ -367,7 +373,9 @@ class SubagentExecutor:
         if durable:
             database = getattr(app_config, "database", None)
             if getattr(app_config, "checkpointer", None) is None and getattr(database, "backend", None) == "sqlite":
-                return _sqlite_run_checkpointer(database.checkpointer_sqlite_path)
+                from omniharness.runtime.checkpointer.delegations import delegation_sqlite_path
+
+                return _sqlite_run_checkpointer(delegation_sqlite_path(database.checkpointer_sqlite_path))
             from omniharness.runtime.checkpointer.async_provider import make_checkpointer
 
             return make_checkpointer(app_config)
@@ -399,7 +407,8 @@ class SubagentExecutor:
         # backend/tests/policy/test_subagent_suspend.py, whose positive control
         # (test_suspend_resume_control.py) establishes that the probe can detect
         # suspension where it is known to work.
-        checkpointer = checkpointer or self.checkpointer
+        if checkpointer is None:
+            checkpointer = self.checkpointer
         if checkpointer is None:
             from omniharness.runtime.checkpointer import get_checkpointer
 
@@ -504,13 +513,18 @@ class SubagentExecutor:
         messages: list[Any] = []
         # Skill content injected as developer/system messages before the task
         messages.extend(skill_messages)
-        # Then the actual task
-        # Written by the inviting agent's MODEL, never by the person: marked as
-        # an invitation (not a user turn), so lineage substitutes the inviter's
-        # recorded origin and a typed "yes" in it can never confirm anything.
-        from omniharness.agents.turns import mark_invitation
+        if self.resume_input is not None:
+            # RE-ENTERING a delegation: what is new is given as given (the
+            # confirmed call and its OBSERVED output), never as a user turn.
+            messages.extend(self.resume_input)
+        else:
+            # Then the actual task
+            # Written by the inviting agent's MODEL, never by the person: marked as
+            # an invitation (not a user turn), so lineage substitutes the inviter's
+            # recorded origin and a typed "yes" in it can never confirm anything.
+            from omniharness.agents.turns import mark_invitation
 
-        messages.append(mark_invitation(HumanMessage(content=task)))
+            messages.append(mark_invitation(HumanMessage(content=task)))
 
         state: dict[str, Any] = {
             "messages": messages,
@@ -604,7 +618,13 @@ class SubagentExecutor:
                         result.completed_at = datetime.now()
                 return result
 
-            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+            # DURABILITY "sync": each step's checkpoint is written before the
+            # next step runs. A delegation's checkpoint is what Continue
+            # re-enters; with the default (async) writes, a run could propose
+            # its Tier 3 call and finish while its checkpoint write was still
+            # pending, and the history was intermittently missing (review of
+            # PR #58, found by a test that read the store back).
+            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values", durability="sync"):  # type: ignore[arg-type]
                 # Cooperative cancellation: check if parent requested stop.
                 # Note: cancellation is only detected at astream iteration boundaries,
                 # so long-running tool calls within a single iteration will not be
@@ -659,6 +679,9 @@ class SubagentExecutor:
                         break
 
                 if last_ai_message is not None:
+                    from omniharness.agents.middlewares.llm_error_handling_middleware import LLM_ERROR_KEY
+
+                    result.model_failed = bool((last_ai_message.additional_kwargs or {}).get(LLM_ERROR_KEY))
                     content = last_ai_message.content
                     # Handle both str and list content types for the final result
                     if isinstance(content, str):
@@ -818,6 +841,12 @@ class SubagentExecutor:
             result.error = str(e)
             result.completed_at = datetime.now()
             return result
+
+    def execute_resume(self, messages: list[Any]) -> SubagentResult:
+        """Re-enter this delegation (checkpoint_key) with `messages` appended:
+        no task, no user turn."""
+        self.resume_input = list(messages)
+        return self.execute("")
 
     def execute_async(self, task: str, task_id: str | None = None) -> str:
         """Start a task execution in the background.
