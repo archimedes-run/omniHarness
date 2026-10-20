@@ -40,9 +40,11 @@ DEFAULT_BASE_IMAGE = "sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e
 DEFAULT_PACKAGES_IMAGE = "omni-harness-dev-gateway:latest"
 DEFAULT_PACKAGES_PYTHON = "/app/backend/.venv/bin/python"
 
-EGRESS_VERSION = "1"
+EGRESS_VERSION = "2"
 #: The approved download (2026-10-20): Alpine 3.22 by digest (in the
 #: Dockerfile) and these exact packages from its main repository.
+#: The approved Alpine base, by digest (must match the Dockerfile's FROM).
+EGRESS_BASE = "alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
 EGRESS_PACKAGES = {"SQUID_VERSION": "6.12-r0", "DNSMASQ_VERSION": "2.91-r1", "OPENSSL_VERSION": "3.5.9-r0"}
 
 
@@ -63,7 +65,7 @@ def _tar(files: dict[str, bytes], extra: bytes | None = None) -> bytes:
         for name, data in files.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
-            info.mode = 0o644
+            info.mode = 0o755 if name.endswith(".sh") else 0o644
             tar.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 
@@ -121,7 +123,7 @@ class RuntimeImages:
             except ModuleNotFoundError:
                 pass
         name = f"{self.prefix}pkgs-{secrets.token_hex(4)}"
-        args = ["docker", "run", "--rm", "-i", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
+        args = ["docker", "run", "--pull=never", "--rm", "-i", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
         args += self._label_args({"omni.mcp.role": "packages"})
         args += [self.packages_image, self.packages_python, "-I", "-"]
         rc, out, err = await self.runner.run_bytes(args, stdin=ASSEMBLER.read_bytes(), timeout=180.0)
@@ -148,7 +150,14 @@ class RuntimeImages:
                 return record["image_id"]
             return await self._build_runtime()
 
+    async def _require_local(self, ref: str) -> None:
+        """A base image must already be in the local store: the gateway never
+        pulls (#59); the approved base is pulled by a person, once."""
+        if await self._inspect(ref) is None:
+            raise RuntimeImageError(f"{ref} is not in the local image store; the gateway does not download images. Pull the approved image first: docker pull {ref}")
+
     async def _build_runtime(self) -> str:
+        await self._require_local(self.base_image)
         packages = await self._packages_tar()
         try:
             with tarfile.open(fileobj=io.BytesIO(packages), mode="r") as t:
@@ -200,7 +209,10 @@ class RuntimeImages:
                 if found is None or found.get("Id") != record.get("image_id") or labels.get("omni.egress_version") != EGRESS_VERSION:
                     raise RuntimeImageError(f"{self.egress_tag} no longer names the image recorded when it was built (removed or retagged?)")
                 return record["image_id"]
-            files = {name: (EGRESS_DIR / name).read_bytes() for name in ("Dockerfile", "entrypoint.sh")}
+            await self._require_local(EGRESS_BASE)
+            files = {name: (EGRESS_DIR / name).read_bytes() for name in ("Dockerfile", "entrypoint.sh", "sni_check.sh")}
+            if f"FROM {EGRESS_BASE}" not in files["Dockerfile"].decode():
+                raise RuntimeImageError("the egress Dockerfile's FROM is not the approved, digest-pinned base")
             args = ["docker", "build", "--pull=false", "-t", self.egress_tag, *self._label_args({})]
             for k, v in EGRESS_PACKAGES.items():
                 args += ["--build-arg", f"{k}={v}"]

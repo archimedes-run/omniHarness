@@ -327,6 +327,7 @@ Squid wins on the two properties that matter most here: the SNI check and refusa
 - Squid's own outbound traffic leaves through the outer network's route.
 
 **Residual risk, stated, and the CDN-fronting part ACCEPTED by the user (2026-10-20):** the allowlist bounds **where** traffic goes, not **what** it carries.
+- **Updated (2026-10-20, the user's addition): CDN fronting is now possible only through a deliberate SNI/Host-header mismatch on the same CDN.** The SNI must equal the CONNECT host, and a connection without SNI is refused. The inner HTTP `Host` header is not inspected, because TLS is never decrypted.
 - Code allowed to reach `api.github.com` can still exfiltrate through that API (gist, issue body), using whatever token it holds.
 - The SNI check requires the SNI to be **on the allowlist**, not equal to the CONNECT host. With two allowlisted hosts on the same CDN, one can be fronted through the other.
 - A mismatched HTTP `Host` header inside TLS can't be seen at all.
@@ -691,9 +692,11 @@ Built on `006-E-mcp-build` and pushed; PR #59 stays a gated draft.
 
 ### Where the build differs from this plan, and what was learned
 
-1. **The SNI check is "the name the client sends must be allowlisted"; when NO name is sent, Squid 6.12 judges the CONNECT host instead.**
-   - Observed with `ssl::server_name --client-requested`: a tunnel to an allowlisted host with no SNI was spliced. A different, non-allowlisted SNI was terminated.
-   - This is the Host-header fronting residual the user accepted (§4). It reaches no host that is off the allowlist.
+1. **The SNI must EQUAL the CONNECT host, and a connection without SNI is refused** (the user's addition, 2026-10-20).
+   - Squid's `ssl::server_name --client-requested` falls back to the CONNECT host when no SNI is sent (seen on 6.12), so it can't express this.
+   - A tiny external ACL helper (`mcp_runtime/egress/sni_check.sh`, about 10 lines of `sh`) compares `%ssl::>sni` with `%DST` after the same normalisation (lower-case, one trailing dot dropped). It answers OK only when they are equal.
+   - The rule is `ssl_bump splice sni_ok sni_matches_connect`, then `terminate all`.
+   - Tests against the real sidecar: no SNI is refused; an SNI naming another allowlisted host is refused; a matching SNI reaches upstream (the positive control, skipped visibly when offline).
 2. **A refused CONNECT on the ssl-bump port is answered by Squid inside TLS.** The answer is its error page, with `X-Squid-Error`, over the throwaway certificate. So "never presented" is wrong for Squid's own error pages. It still holds for upstream traffic: TLS to any upstream is never decrypted. The tests read `X-Squid-Error`.
 3. **`PRIVATE_DESTINATIONS` leaves out `::ffff:0:0/96` and `::/128`.** `squid -k parse` (6.12) read them as `0.0.0.0/0`. Squid stores IPv4-mapped addresses as IPv4, so the IPv4 ranges cover them.
 4. **Squid needs `max_filedescriptors 1024` and `--ulimit nofile=4096`.** With Docker's default fd limit (1M) it sized its tables to about 670 MB and aborted.
@@ -705,7 +708,20 @@ Built on `006-E-mcp-build` and pushed; PR #59 stays a gated draft.
 10. **Tool tiers live in the server's `extensions_config.json` entry** (`built.tool_tiers`), and the classifier reads the file by mtime. Without this, every gateway worker would not see an approval.
 11. **The look-alike check is stricter than the canonical tool name.** Case and all separators are ignored, so `git_hub`, `GitHub` and `git-hub` all collide with `github`.
 12. **The secrets file is "read-only" in this sense:** mode 0400, its directory 0500, both owned by the container's non-root user. A truly read-only tmpfs needs `CAP_SYS_ADMIN` or a host mount.
-13. **Restarts:** a container brought back by `--restart` waits for its files. The startup reconcile does **not** yet hand them over again (§4 promised it). This is still to do.
+13. **Restarts (closed):** a container brought back by `--restart` (empty tmpfs) waits for its files, and the gateway hands them over again.
+    - It does this on its startup reconcile, and on every container start it sees in `docker events` (filtered on the `omni.mcp.role` label).
+    - It only hands them over when the server container's `omni.code_sha256` label is the approved hash, and never through env vars.
+    - The proxy login is kept in the vault (`__PROXY_PASSWORD`), so either container can be restarted alone.
+    - Tested on real Docker: deploy, `docker restart` the server and then the sidecar; each serves again with its key, and `docker inspect` shows no secret.
+15. **No registry contact.** Every `docker` command goes through `check_no_registry`:
+    - `pull`, `push`, `login` and `search` are refused;
+    - `run` and `create` need `--pull=never`;
+    - `build` needs `--pull=false`, and the classic builder is forced.
+    - A base image missing from the local store is an error that names the approved pull; the gateway never pulls.
+    - The sandbox's stdio `docker run`, which bypasses the runner, is checked too.
+16. **Rebased** onto `006-security-baseline` (which contains main, with 007's normaliser and `classify`). The built-tool branch sits before 007's refusal of unmatched tools.
+    - Main's stop/delete hotfix is kept, now removing both containers and both networks; its tests were adapted to the topology and to hash-bound approval.
+    - The broken intermediate commit (empty files) was folded into its fix.
 14. **The `docker` and `internet` pytest markers** are registered in `backend/pyproject.toml`.
 
 ### Sabotage results

@@ -5,7 +5,8 @@ Pure functions. The sidecar's two listeners:
 * ``fwd`` on the internal network's fixed address, port 3128: the built
   server's only way out. CONNECT only, port 443 only, to allowlisted hosts
   only, never to a private address (checked on the RESOLVED addresses), the
-  TLS server name the client sends must be allowlisted too, and a proxy login.
+  client must send a TLS server name and it must EQUAL the CONNECT host (no
+  SNI: terminated), and a proxy login.
 * ``inbound`` on the outer network's address (found by the entrypoint), port
   8080: the endpoint's login. It forwards to the server only with the
   per-server bearer token.
@@ -45,7 +46,8 @@ REQUIRED_SQUID_LINES = (
     "http_access allow inbound inbound_token",
     "http_access deny all",
     "ssl_bump peek step1",
-    "ssl_bump splice sni_ok",
+    "ssl_bump splice sni_ok sni_matches_connect",
+    "acl sni_matches_connect external sni_equals_connect",
     "ssl_bump terminate all",
     "on_unsupported_protocol respond all",
     "cache deny all",
@@ -158,8 +160,14 @@ def render_squid(*, hosts: list[str], internal_ip: str, upstream_ip: str, token:
         "http_access deny all",
         "acl step1 at_step SslBump1",
         f"acl sni_ok ssl::server_name --client-requested {allowed}",
+        # The SNI the client SENT must equal the CONNECT host. Squid's own
+        # server_name ACL falls back to the CONNECT host when there is no SNI
+        # (seen on 6.12), so it can't say this; a tiny external helper compares
+        # the two (mcp_runtime/egress/sni_check.sh).
+        "external_acl_type sni_equals_connect ttl=0 negative_ttl=0 children-max=4 children-startup=1 %ssl::>sni %DST /opt/omni/sni_check.sh",
+        "acl sni_matches_connect external sni_equals_connect",
         "ssl_bump peek step1",
-        "ssl_bump splice sni_ok",
+        "ssl_bump splice sni_ok sni_matches_connect",
         "ssl_bump terminate all",
         "on_unsupported_protocol respond all",
         f"cache_peer {upstream_ip} parent {upstream_port} 0 no-query originserver name=mcp",

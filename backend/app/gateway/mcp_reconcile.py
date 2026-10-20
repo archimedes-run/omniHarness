@@ -100,7 +100,7 @@ class Reconciler:
         """server.py from the image, through a container that is created and
         copied from, never started."""
         tmp = f"{self._prefix}recover-{uuid.uuid4().hex[:8]}"
-        rc, _, _ = await self._runner.run(["docker", "create", "--name", tmp, "--network", "none", image, "true"], timeout=60.0)
+        rc, _, _ = await self._runner.run(["docker", "create", "--pull=never", "--name", tmp, "--network", "none", image, "true"], timeout=60.0)
         if rc != 0:
             return None
         try:
@@ -250,6 +250,13 @@ class Reconciler:
             async with self._sf() as session:
                 row = await session.get(McpServerRow, server_id) if server_id else None
             if row is not None and row.approved_code_sha256 and row.approved_code_sha256 == sha:
+                # Approved and kept: if Docker restarted it (empty tmpfs), it
+                # waits for its files; hand them over again (#59).
+                if self._manager is not None and server_id:
+                    for container in (name, self._manager._names(server_id)["egress"]):
+                        outcome = await self._manager.redeliver_with_retries(container, attempts=3)
+                        if outcome == "delivered":
+                            messages.append(f"Handed {row.name} its files again after a restart.")
                 continue
             why = "its server was deleted" if row is None else "it runs code that is not the approved version"
             await self._audit("turned-off", server_id=server_id, name=row.name if row else name, details={"container": name, "code_sha256": sha, "why": why})

@@ -27,6 +27,33 @@ class DockerRunner(Protocol):
         ...
 
 
+#: Verbs that talk to a registry: never issued by the gateway (#59). The one
+#: approved download (the digest-pinned Alpine base) is pulled by a person.
+REGISTRY_VERBS = frozenset({"pull", "push", "login", "logout", "search"})
+
+
+class RegistryContactError(ValueError):
+    """A docker command that could contact a registry was refused."""
+
+
+def check_no_registry(args: list[str]) -> None:
+    """Refuse any docker command that could reach a registry (#59).
+
+    * ``pull``/``push``/``login``/``search`` are never run;
+    * ``run`` and ``create`` must say ``--pull=never`` (a missing image is an
+      error, never a download);
+    * ``build`` must say ``--pull=false`` (and the runner forces the classic
+      builder: BuildKit was seen resolving a local image ID on docker.io).
+    """
+    verb = args[1] if len(args) > 1 else ""
+    if verb in REGISTRY_VERBS:
+        raise RegistryContactError(f"docker {verb} is never run by the gateway")
+    if verb in ("run", "create") and "--pull=never" not in args:
+        raise RegistryContactError(f"docker {verb} without --pull=never could download an image")
+    if verb == "build" and "--pull=false" not in args:
+        raise RegistryContactError("docker build without --pull=false could download a base image")
+
+
 class CliDockerRunner:
     """``DockerRunner`` over the ``docker`` CLI."""
 
@@ -37,6 +64,7 @@ class CliDockerRunner:
     async def run_bytes(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, bytes, str]:
         if not args or args[0] != "docker":
             raise ValueError("DockerRunner only runs the docker CLI")
+        check_no_registry(args)
         env = None
         if len(args) > 1 and args[1] == "build":
             # The classic builder resolves FROM against the local image store

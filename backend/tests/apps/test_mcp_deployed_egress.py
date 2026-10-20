@@ -134,6 +134,13 @@ def head(url: str) -> str:
 
 
 @mcp.tool()
+def env_has(name: str) -> str:
+    """Whether a key reached this process (its length only, never its value)."""
+    v = os.environ.get(name)
+    return "unset" if v is None else "set:%d" % len(v)
+
+
+@mcp.tool()
 def secrets_file() -> str:
     st = os.stat("/run/omni/secrets")
     d = os.stat("/run/omni")
@@ -157,7 +164,7 @@ class Targets:
             ledger.resources.append(Resource(kind, name))
         _docker("network", "create", "--label", LABEL_ARG, self.net)
         code = "import socket\ns=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',443));s.listen()\nwhile True:\n c,a=s.accept();print('CONNECTION',a,flush=True);c.close()"
-        common = ["run", "-d", "--rm", "--label", LABEL_ARG, "--network", self.net, "--read-only", "--cap-drop", "ALL", "--user", "65534:65534", "--sysctl", "net.ipv4.ip_unprivileged_port_start=0"]
+        common = ["run", "--pull=never", "-d", "--rm", "--label", LABEL_ARG, "--network", self.net, "--read-only", "--cap-drop", "ALL", "--user", "65534:65534", "--sysctl", "net.ipv4.ip_unprivileged_port_start=0"]
         _docker(*common, "--name", self.listener, "python:3.12-slim", "python", "-c", code)
         self.listener_ip = _docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", self.listener)
         resolved = {k: (v.replace("LISTENER", self.listener_ip) if isinstance(v, str) else [x.replace("LISTENER", self.listener_ip) for x in v]) for k, v in names.items()}
@@ -242,7 +249,9 @@ def test_deployed_egress_is_the_allowlist_and_nothing_else(probe_env, docker_led
     targets = Targets(docker_ledger, {"allowed.test": ["LISTENER"], "rebind.test": "flip:198.51.100.7,LISTENER"})
     host = HostListener()
     docker_ledger.resources.append(Resource("container", f"{PREFIX}thostip-{os.getpid()}"))
-    host_ip = _docker("run", "--rm", "--name", f"{PREFIX}thostip-{os.getpid()}", "--label", LABEL_ARG, "--network", targets.net, "python:3.12-slim", "python", "-c", "import socket;print(socket.gethostbyname('host.docker.internal'))")
+    host_ip = _docker(
+        "run", "--pull=never", "--rm", "--name", f"{PREFIX}thostip-{os.getpid()}", "--label", LABEL_ARG, "--network", targets.net, "python:3.12-slim", "python", "-c", "import socket;print(socket.gethostbyname('host.docker.internal'))"
+    )
     try:
         sid, info = _deploy(gw, manager, docker_ledger, runtime_images, monkeypatch, hosts=["allowed.test", "rebind.test", "api.github.com"], upstream=targets.dns_ip)
         names = manager._names(sid)
@@ -269,7 +278,7 @@ def test_deployed_egress_is_the_allowlist_and_nothing_else(probe_env, docker_led
         pub_ip = names_ip(names["egress"], names["pub"])
         probe_outer = f"import socket\ntry:\n socket.create_connection(('{pub_ip}',3128),timeout=3).close();print('OPEN')\nexcept Exception as e:\n print('x:'+type(e).__name__)"
         docker_ledger.resources.append(Resource("container", f"{PREFIX}touter-{os.getpid()}"))
-        outer = _docker("run", "--rm", "--name", f"{PREFIX}touter-{os.getpid()}", "--label", LABEL_ARG, "--network", names["pub"], "python:3.12-slim", "python", "-c", probe_outer)
+        outer = _docker("run", "--pull=never", "--rm", "--name", f"{PREFIX}touter-{os.getpid()}", "--label", LABEL_ARG, "--network", names["pub"], "python:3.12-slim", "python", "-c", probe_outer)
         sidecar_log = subprocess.run(["docker", "logs", names["egress"]], capture_output=True, text=True)
         sidecar_log = sidecar_log.stdout + sidecar_log.stderr
     finally:
@@ -338,10 +347,11 @@ def test_t7d_squids_own_private_destination_acl(probe_env, docker_ledger, runtim
 @pytest.mark.internet
 def test_t7_positive_control_and_t17_sni(probe_env, docker_ledger, runtime_images, monkeypatch) -> None:
     """Through the production DNS path (Docker's resolver), an allowlisted
-    public host is reachable, and the TLS name the client sends must be
-    allowlisted too. Needs internet; skipped (and reported) without it."""
+    public host is reachable only when the TLS name the client sends equals
+    the CONNECT host: no SNI, or SNI naming another (even allowlisted) host, is
+    refused. Needs internet; skipped (and reported) without it."""
     gw, manager = probe_env
-    sid, info = _deploy(gw, manager, docker_ledger, runtime_images, monkeypatch, hosts=["api.github.com"])
+    sid, info = _deploy(gw, manager, docker_ledger, runtime_images, monkeypatch, hosts=["api.github.com", "github.com"])
     url = manager.endpoint_url(sid, info["port"])
     out = _call(
         url,
@@ -360,6 +370,7 @@ def test_t7_positive_control_and_t17_sni(probe_env, docker_ledger, runtime_image
             ("connect", {"target": "user@api.github.com:443"}),
             ("connect", {"target": "xn--pi-6kc.github.com:443"}),
             ("plain", {}),
+            ("connect", {"target": "api.github.com:443", "sni": "github.com"}),  # 13: another ALLOWLISTED name
         ],
     )
     if out[1].startswith("x:"):
@@ -368,12 +379,48 @@ def test_t7_positive_control_and_t17_sni(probe_env, docker_ledger, runtime_image
     assert out[1] in ("200", "301", "302", "403"), out[1]
     assert out[2].startswith("upstream:HTTP/1.1"), out[2]
     assert out[3].startswith("upstream:HTTP/1.1"), out[3]  # CONNECT host normalised (case, one trailing dot)
-    # The TLS name the client sends must be allowlisted too: another name never
-    # reaches upstream. With NO name sent, Squid 6.12 judges the CONNECT host
-    # (allowlisted here), so it goes through: that is the Host-header fronting
-    # residual the user accepted, not a way to a host off the allowlist.
+    # The TLS name the client sends must EQUAL the CONNECT host: another name
+    # (even an allowlisted one), or no name at all, never reaches upstream.
     assert not out[4].startswith("upstream:"), out[4]
-    assert out[5].startswith("upstream:HTTP/1.1"), out[5]
+    assert not out[5].startswith("upstream:"), out[5]
+    assert not out[13].startswith("upstream:"), out[13]
     for o in out[6:12]:
         assert o in ("403", "400") or o.startswith("squid:"), out[6:12]
     assert not out[12].startswith("got:HTTP"), out[12]
+
+
+def _serves(url: str, token: str, timeout: float = 120.0) -> list[str] | None:
+    """Call env_has through the sidecar until it answers (or give up)."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            return _call(url, token, [("env_has", {"name": "GITHUB_TOKEN"}), ("secrets_file", {})])
+        except Exception:
+            time.sleep(2)
+    return None
+
+
+def test_a_restarted_server_or_sidecar_gets_its_files_again(probe_env, docker_ledger, runtime_images, monkeypatch) -> None:
+    """Docker restarts a container (its tmpfs is empty, it waits for its
+    files): the gateway, watching docker events, hands them over again; never
+    through env vars, and docker inspect still shows no secret."""
+    gw, manager = probe_env
+    sid, info = _deploy(gw, manager, docker_ledger, runtime_images, monkeypatch, hosts=["api.github.com"])
+    url = manager.endpoint_url(sid, info["port"])
+    names = manager._names(sid)
+    gw.client.portal.call(manager.start_event_watcher)
+    try:
+        assert _call(url, info["token"], [("env_has", {"name": "GITHUB_TOKEN"})]) == [f"set:{len(STORED_SECRET)}"]
+        for container in (names["server"], names["egress"]):
+            _docker("restart", container)
+            out = _serves(url, info["token"])
+            assert out == [f"set:{len(STORED_SECRET)}", "400 10001 500"], (container, out)
+            for c in (names["server"], names["egress"]):
+                dump = subprocess.run(["docker", "inspect", c], capture_output=True, text=True).stdout
+                for secret in (STORED_SECRET, info["token"]):
+                    assert secret not in dump and base64.b64encode(secret.encode()).decode() not in dump, c
+                assert "GITHUB_TOKEN" not in json.dumps(json.loads(dump)[0]["Config"].get("Env") or [])
+    finally:
+        gw.client.portal.call(manager.stop_event_watcher)

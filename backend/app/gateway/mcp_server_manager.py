@@ -44,8 +44,8 @@ from pathlib import Path
 from typing import Literal
 
 from app.gateway.mcp_build_flow import placeholder, scrub
-from app.gateway.mcp_container_files import deliver, render_secrets, secret_name_problem
-from app.gateway.mcp_docker import CliDockerRunner, DockerRunner
+from app.gateway.mcp_container_files import RUN_DIR, deliver, render_secrets, secret_name_problem
+from app.gateway.mcp_docker import CliDockerRunner, DockerRunner, check_no_registry
 from app.gateway.mcp_egress import build_egress_rules
 from app.gateway.mcp_egress_config import UPSTREAM_DNS, allowlist_hosts, proxy_password_line, render_dnsmasq, render_squid
 from app.gateway.mcp_names import name_collision, slugify, tool_name_collision, wire_key
@@ -121,6 +121,8 @@ _SQUID_UID = 31
 #: The vault name of a server's endpoint token. The "__" prefix is reserved:
 #: never a user's key, never handed to the server.
 INBOUND_TOKEN_KEY = "__INBOUND_TOKEN"
+#: The vault name of the server's login to its egress proxy (same rules).
+PROXY_PASSWORD_KEY = "__PROXY_PASSWORD"
 
 # Ordered deploy steps emitted as live timeline data to the frontend.
 _DEPLOY_STEP_DEFS: list[tuple[str, str]] = [
@@ -267,6 +269,7 @@ class MCPServerManager:
             # #59 plan §9: in the background (Docker calls are slow), reported
             # through the audit table and on the Build board, never silent.
             self._reconcile_task = asyncio.create_task(self.reconcile(), name="mcp-reconcile")
+            self.start_event_watcher()
 
     async def reconcile(self) -> list[str]:
         """The one-time retirement, then turn off built servers whose running
@@ -286,6 +289,7 @@ class MCPServerManager:
         return messages
 
     async def close(self) -> None:
+        await self.stop_event_watcher()
         logger.info("MCPServerManager stopped")
 
     # ------------------------------------------------------------------
@@ -466,7 +470,7 @@ class MCPServerManager:
     def _sandbox_args(self, name: str, server_id: str, image_id: str) -> list[str]:
         """``docker run`` for the sandbox test (#59): the exact flags."""
         return [
-            "run", "--rm", "-i",
+            "run", "--pull=never", "--rm", "-i",
             "--name", name,
             "--label", f"omni.mcp.server={server_id}",
             "--label", "omni.mcp.role=test",
@@ -499,7 +503,9 @@ class MCPServerManager:
         from mcp.client.stdio import get_default_environment
 
         cli_env = {**get_default_environment(), **{k: v for k, v in os.environ.items() if k.startswith("DOCKER_")}}
-        params = params_cls(command="docker", args=self._sandbox_args(name, server_id, image_id), env=cli_env)
+        args = self._sandbox_args(name, server_id, image_id)
+        check_no_registry(["docker", *args])  # spawned by the MCP stdio client, not the runner
+        params = params_cls(command="docker", args=args, env=cli_env)
 
         class _Session:
             async def __aenter__(self):
@@ -1044,6 +1050,8 @@ class MCPServerManager:
         token = secrets.token_hex(24)
         password = secrets.token_hex(16)
         await self._vault.store(server_id=server_id, owner_id=row["owner_id"], key_name=INBOUND_TOKEN_KEY, plaintext_value=token)
+        # Kept so a restarted container can be handed the same login (#59).
+        await self._vault.store(server_id=server_id, owner_id=row["owner_id"], key_name=PROXY_PASSWORD_KEY, plaintext_value=password)
 
         await self._docker(["network", "create", "--internal", "--subnet", str(subnet), *self._labels(server_id, "net"), n["net"]], "creating the internal network")
         outer = await self._gateway_network()
@@ -1056,7 +1064,7 @@ class MCPServerManager:
         # 1. The server: internal network only, no port, no mounts, no secrets in its config.
         await self._docker(
             [
-                "run", "-d", "--name", n["server"], *self._labels(server_id, "server"),
+                "run", "--pull=never", "-d", "--name", n["server"], *self._labels(server_id, "server"),
                 "--label", f"omni.code_sha256={code_sha256(row.get('source_code'))}",
                 "--network", n["net"], "--ip", server_ip, "--dns", "127.0.0.1",
                 "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m",
@@ -1072,7 +1080,7 @@ class MCPServerManager:
 
         # 2. The sidecar: created on the outer network, connected to the internal one at .2, then started.
         create = [
-            "create", "--name", n["egress"], *self._labels(server_id, "egress"),
+            "create", "--pull=never", "--name", n["egress"], *self._labels(server_id, "egress"),
             "--network", outer,
             "--read-only", "--tmpfs", f"/tmp:rw,nosuid,nodev,size=16m,uid={_SQUID_UID},gid={_SQUID_UID}",
             "--tmpfs", f"/run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid={_SQUID_UID},gid={_SQUID_UID}",
@@ -1089,13 +1097,133 @@ class MCPServerManager:
         await self._docker(["start", n["egress"]], "starting the sidecar")
 
         # 3. Files, values on stdin only: the sidecar's configs, then the server's keys.
-        squid = render_squid(hosts=allow, internal_ip=sidecar_ip, upstream_ip=server_ip, token=token)
-        dnsmasq = render_dnsmasq(upstream=self._egress_upstream_dns, stop_dns_rebind=self._egress_stop_dns_rebind)
-        await deliver(self._runner, n["egress"], str(_SQUID_UID), {"squid.conf": squid.encode(), "dnsmasq.conf": dnsmasq.encode(), "passwd": proxy_password_line("mcp", password)})
-        proxy = f"http://mcp:{password}@{sidecar_ip}:3128"
-        await deliver(self._runner, n["server"], str(_SANDBOX_UID), {"secrets": render_secrets(real, gateway={"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy})})
+        await deliver(self._runner, n["egress"], str(_SQUID_UID), self._egress_files(allow, sidecar_ip, server_ip, token, password))
+        await deliver(self._runner, n["server"], str(_SANDBOX_UID), self._server_files(real, sidecar_ip, password))
         await self._wait_endpoint(server_id, port, token)
         return port
+
+    def _egress_files(self, allow: list[str], sidecar_ip: str, server_ip: str, token: str, password: str) -> dict[str, bytes]:
+        squid = render_squid(hosts=allow, internal_ip=sidecar_ip, upstream_ip=server_ip, token=token)
+        dnsmasq = render_dnsmasq(upstream=self._egress_upstream_dns, stop_dns_rebind=self._egress_stop_dns_rebind)
+        return {"squid.conf": squid.encode(), "dnsmasq.conf": dnsmasq.encode(), "passwd": proxy_password_line("mcp", password)}
+
+    @staticmethod
+    def _server_files(real: dict[str, str], sidecar_ip: str, password: str) -> dict[str, bytes]:
+        proxy = f"http://mcp:{password}@{sidecar_ip}:3128"
+        return {"secrets": render_secrets(real, gateway={"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy})}
+
+    # ------------------------------------------------------------------
+    # Re-delivery (#59): a container that Docker restarted has an empty
+    # tmpfs and waits for its files. The gateway hands them over again, on
+    # its startup reconcile and on every container start it sees (docker
+    # events), but only for the APPROVED code, and never through env vars.
+    # ------------------------------------------------------------------
+
+    async def _inspect_container(self, name: str) -> dict | None:
+        rc, out, _ = await self._runner.run(["docker", "container", "inspect", name, "--format", "{{json .}}"], timeout=30.0)
+        if rc != 0:
+            return None
+        try:
+            return json.loads(out)
+        except ValueError:
+            return None
+
+    async def redeliver(self, container: str) -> str:
+        """Hand a restarted server or sidecar its files again. Returns what
+        happened, in words: "delivered", "already has its files", or why not."""
+        info = await self._inspect_container(container)
+        if info is None:
+            return "no such container"
+        labels = (info.get("Config") or {}).get("Labels") or {}
+        role, server_id = labels.get("omni.mcp.role"), labels.get("omni.mcp.server")
+        if role not in ("server", "egress") or not server_id or not container.startswith(self._images.prefix):
+            return "not a built server's container"
+        row = await self._repo.get(server_id, user_id=None)
+        if row is None:
+            return "its server no longer exists"
+        n = self._names(server_id)
+        server_info = info if role == "server" else await self._inspect_container(n["server"])
+        running_sha = (((server_info or {}).get("Config") or {}).get("Labels") or {}).get("omni.code_sha256")
+        approved = row.get("approved_code_sha256")
+        if not approved or running_sha != approved or (row.get("approval") or {}).get("code_sha256") != approved:
+            logger.warning("MCP server %s: not handing files to %s: it does not run the approved code", server_id[:12], container)
+            return "refused: the container does not run the approved code"
+        uid = str(_SANDBOX_UID if role == "server" else _SQUID_UID)
+        rc, _, _ = await self._runner.run(["docker", "exec", "-u", uid, container, "test", "-e", f"{RUN_DIR}/ready"], timeout=15.0)
+        if rc == 0:
+            return "already has its files"
+        values = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=row["owner_id"])
+        password, token = values.get(PROXY_PASSWORD_KEY), values.get(INBOUND_TOKEN_KEY)
+        if not password or not token:
+            return "refused: its login or endpoint token is not stored"
+        nets = lambda i: ((i or {}).get("NetworkSettings") or {}).get("Networks") or {}  # noqa: E731
+        sidecar_ip = (nets(info if role == "egress" else await self._inspect_container(n["egress"])).get(n["net"]) or {}).get("IPAddress")
+        server_ip = (nets(server_info).get(n["net"]) or {}).get("IPAddress")
+        if not sidecar_ip or not server_ip:
+            return "refused: can't find its addresses on its network"
+        if role == "server":
+            real = await self._secrets_for_deploy(row, row["owner_id"], running_sha)
+            files = self._server_files(real, sidecar_ip, password)
+            del real
+        else:
+            rules = build_egress_rules(list((row.get("approval") or {}).get("egress_hosts") or []))
+            files = self._egress_files(allowlist_hosts(sorted({a["host"] for a in rules["allow"]})), sidecar_ip, server_ip, token, password)
+        await deliver(self._runner, container, uid, files)
+        logger.info("MCP server %s: handed %s its files again", server_id[:12], container)
+        return "delivered"
+
+    async def redeliver_with_retries(self, container: str, attempts: int = 20) -> str:
+        """The container's process may not be up yet when it starts: retry."""
+        outcome = "not tried"
+        for _ in range(attempts):
+            try:
+                outcome = await self.redeliver(container)
+            except Exception as exc:  # the container may be mid-restart
+                outcome = f"error: {type(exc).__name__}"
+            if outcome in ("delivered", "already has its files") or outcome.startswith("refused") or outcome in ("its server no longer exists", "not a built server's container"):
+                return outcome
+            await asyncio.sleep(0.5)
+        return outcome
+
+    async def watch_container_starts(self) -> None:
+        """Follow docker events; every start of a built server or sidecar gets
+        its files handed over again (if it runs the approved code)."""
+        args = ["docker", "events", "--format", "{{json .}}", "--filter", "type=container", "--filter", "event=start", "--filter", "label=omni.mcp.role"]
+        while True:
+            try:
+                proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                self._events_proc = proc
+                assert proc.stdout is not None
+                async for raw in proc.stdout:
+                    try:
+                        event = json.loads(raw)
+                    except ValueError:
+                        continue
+                    name = ((event.get("Actor") or {}).get("Attributes") or {}).get("name") or ""
+                    if name.startswith(self._images.prefix):
+                        asyncio.create_task(self.redeliver_with_retries(name), name=f"mcp-redeliver-{name[-12:]}")
+                await proc.wait()
+            except asyncio.CancelledError:
+                if getattr(self, "_events_proc", None) is not None and self._events_proc.returncode is None:
+                    self._events_proc.kill()
+                raise
+            except Exception:
+                logger.exception("watching docker events for built MCP servers failed; retrying")
+            await asyncio.sleep(2.0)
+
+    def start_event_watcher(self) -> None:
+        if getattr(self, "_events_task", None) is None or self._events_task.done():
+            self._events_task = asyncio.create_task(self.watch_container_starts(), name="mcp-docker-events")
+
+    async def stop_event_watcher(self) -> None:
+        task = getattr(self, "_events_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._events_task = None
 
     def endpoint_url(self, server_id: str, port: int) -> str:
         """Where the gateway reaches a deployed server: the sidecar's endpoint."""

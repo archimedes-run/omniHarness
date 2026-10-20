@@ -146,12 +146,12 @@ class Listener:
         subprocess.run(["docker", "network", "create", "--label", f"{LABEL[0]}={LABEL[1]}", self.net], check=True, capture_output=True)
         code = "import socket\ns=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',8443));s.listen()\nwhile True:\n c,a=s.accept();print('CONNECTION',a,flush=True);c.close()"
         label = f"{LABEL[0]}={LABEL[1]}"
-        run = ["docker", "run", "-d", "--rm", "--name", self.name, "--label", label, "--network", self.net, "--read-only", "--cap-drop", "ALL"]
+        run = ["docker", "run", "--pull=never", "-d", "--rm", "--name", self.name, "--label", label, "--network", self.net, "--read-only", "--cap-drop", "ALL"]
         subprocess.run([*run, "python:3.12-slim", "python", "-c", code], check=True, capture_output=True)
         self.ip = subprocess.run(["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", self.name], capture_output=True, text=True).stdout.strip()
         # The host, as a container sees it: a literal IP, no DNS involved.
         runner.resources.append(__import__("docker_ledger").Resource("container", f"{PREFIX}hostip-{os.getpid()}"))
-        probe = ["docker", "run", "--rm", "--name", f"{PREFIX}hostip-{os.getpid()}", "--label", label, "--network", self.net, "python:3.12-slim"]
+        probe = ["docker", "run", "--pull=never", "--rm", "--name", f"{PREFIX}hostip-{os.getpid()}", "--label", label, "--network", self.net, "python:3.12-slim"]
         lookup = "import socket;print(socket.gethostbyname('host.docker.internal'))"
         self.host_ip = subprocess.run([*probe, "python", "-c", lookup], capture_output=True, text=True).stdout.strip()
 

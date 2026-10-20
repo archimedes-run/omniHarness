@@ -10,5 +10,6 @@ RUN apk add --no-cache "squid=${SQUID_VERSION}" "dnsmasq=${DNSMASQ_VERSION}" "op
  && squid -v | grep -q -- "--with-openssl" \
  && rm -rf /var/cache/apk/*
 COPY entrypoint.sh /opt/omni/entrypoint.sh
-LABEL omni.egress_version="1"
+COPY sni_check.sh /opt/omni/sni_check.sh
+LABEL omni.egress_version="2"
 ENTRYPOINT ["/bin/sh", "/opt/omni/entrypoint.sh"]
