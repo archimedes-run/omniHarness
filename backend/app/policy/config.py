@@ -74,6 +74,8 @@ class ConfigLoader:
     #: loaded. A non-notifying read (the inspector) must not swallow a change
     #: that dispatch has yet to announce.
     _notified_text: str | None = field(default=None, repr=False)
+    #: The text `_last_good` was parsed from: an unchanged file is not re-parsed.
+    _parsed_text: str | None = field(default=None, repr=False)
     #: Why the most recent load did not produce new rules, or None when it did.
     #: With `kept_previous`, the inspector can say the rules shown are the LAST
     #: GOOD ones, still in force, and why the edit was refused (FR-029).
@@ -94,6 +96,16 @@ class ConfigLoader:
         except OSError as exc:
             return self._degrade(f"policy rules unreadable: {exc}")
 
+        if self._last_good is not None and raw == self._parsed_text:
+            # The same text parses to the same rules. The file is still read
+            # on every call (an edit takes effect at once); only the YAML
+            # parse, about 0.1 s for the shipped file, is skipped.
+            ruleset = self._last_good
+            self.last_error, self.kept_previous = None, False
+            if notify and raw != self._notified_text:
+                self._notify(raw, ruleset)
+            return ruleset
+
         try:
             doc = yaml.safe_load(raw) or {}
             ruleset = self._parse(doc)
@@ -104,15 +116,19 @@ class ConfigLoader:
             return self._degrade(f"policy rules malformed: {exc}")
 
         self._last_good = ruleset
+        self._parsed_text = raw
         self.last_error, self.kept_previous = None, False
         if notify and raw != self._notified_text:
-            self._notified_text = raw
-            for listener in self.on_change:
-                try:
-                    listener(ruleset)
-                except Exception:  # noqa: BLE001 — a listener must not break classification
-                    logger.exception("a rules-changed listener failed")
+            self._notify(raw, ruleset)
         return ruleset
+
+    def _notify(self, raw: str, ruleset: RuleSet) -> None:
+        self._notified_text = raw
+        for listener in self.on_change:
+            try:
+                listener(ruleset)
+            except Exception:  # noqa: BLE001 — a listener must not break classification
+                logger.exception("a rules-changed listener failed")
 
     def _degrade(self, message: str, *, found: bool = True) -> RuleSet:
         self.last_error = message

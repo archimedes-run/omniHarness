@@ -45,9 +45,7 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet)
     matched = False
     name = canonical_tool_name(tool_name)
 
-    for rule in ruleset.rules:
-        if not fnmatch.fnmatchcase(name, canonical_tool_name(rule.pattern)):
-            continue
+    for rule in _candidates(name, ruleset):
         matched = True
         tier, raised_by = rule.tier, None
         for exception in rule.exceptions:
@@ -66,3 +64,32 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet)
         return PolicyDecision(tool_name=tool_name, tier=UNKNOWN_TOOL_TIER, deciding_rule=None, refused=True)
 
     return PolicyDecision(tool_name=tool_name, tier=best[0], deciding_rule=best[1], raised_by=best[2])
+
+
+#: Per rule set: canonical exact patterns -> rule positions, and the globs. The
+#: shipped file has ~1,100 rules, almost all exact names; scanning each with
+#: fnmatch on every call cost ~1.4 ms per call and is checked for every tool on
+#: every model call. Keyed by identity: a RuleSet is immutable, and the loader
+#: returns the same object while its file is unchanged.
+_INDEX: dict[int, tuple[RuleSet, dict[str, list[int]], list[tuple[int, str]]]] = {}
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _candidates(name: str, ruleset: RuleSet) -> list[ClassificationRule]:
+    """The rules whose pattern matches `name` (canonical), in file order."""
+    entry = _INDEX.get(id(ruleset))
+    if entry is None or entry[0] is not ruleset:
+        exact: dict[str, list[int]] = {}
+        globs: list[tuple[int, str]] = []
+        for position, rule in enumerate(ruleset.rules):
+            pattern = canonical_tool_name(rule.pattern)
+            if _GLOB_CHARS.isdisjoint(pattern):
+                exact.setdefault(pattern, []).append(position)
+            else:
+                globs.append((position, pattern))
+        if len(_INDEX) > 32:
+            _INDEX.clear()
+        entry = _INDEX[id(ruleset)] = (ruleset, exact, globs)
+    _, exact, globs = entry
+    positions = sorted([*exact.get(name, ()), *(p for p, pattern in globs if fnmatch.fnmatchcase(name, pattern))])
+    return [ruleset.rules[p] for p in positions]
