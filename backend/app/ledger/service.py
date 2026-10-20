@@ -1,9 +1,12 @@
 """The Project Ledger's rules (Feature 005, slice 2).
 
-- A task's status is changed only by the user, or by a ledger_apply the user
-  confirmed (FR-013). Nothing else calls `set_status`.
+- A task's status is changed only by the user, or by a ledger_apply the policy
+  layer let through (FR-013): confirmed, or since Feature 006 a routine task
+  or note change at Tier 2. Nothing else calls `set_status`.
 - Every change says who made it (FR-007): `user` from the UI,
-  `assistant_confirmed` from a confirmed ledger_apply.
+  `assistant_confirmed` from a confirmed ledger_apply, `assistant_disclosed`
+  from a Tier 2 one the reply disclosed, `assistant_granted` from one a
+  standing grant let run in a scheduled run.
 - A confirmed ledger_apply is validated in full before anything is written,
   then written in one transaction: all of it, or none of it.
 - What the confirmation card lists is produced by `render`, from the same

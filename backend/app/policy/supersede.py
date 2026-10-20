@@ -34,14 +34,21 @@ CLAIMANT = "rules-reload"
 
 
 def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> list[PendingAction]:
-    """Resolve SUPERSEDED every open action the current rules no longer make Tier 3."""
+    """Resolve SUPERSEDED every open action the current rules make LESS
+    demanding than when it was stated.
+
+    Usually that is a Tier 3 action whose tool is now Tier 1 or 2. Since
+    Feature 006 a Tier 2 call can also wait (a scheduled run with no standing
+    grant covering it, or over the run's cap): it was stated at Tier 2, so it
+    stays open while its call is still Tier 2, and is superseded only if the
+    call becomes Tier 1."""
     if ruleset.unreadable:
         # Unreadable rules make every tool Tier 3; nothing is less demanding.
         return []
     superseded = []
     for action in store.open_actions(now):
         decision = classify(action.tool_name, action.arguments, ruleset)
-        if decision.tier is Tier.TIER_3 and not decision.refused:
+        if not decision.refused and decision.tier >= min(action.tier_at_statement, Tier.TIER_3):
             continue
         # Claimed first, through the same one-shot claim confirmation uses, so
         # a supersede cannot race a confirmation on another worker into a

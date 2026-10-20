@@ -120,7 +120,7 @@ class MovedView(BaseModel):
 Outside = tuple[list[SourceItem] | None, SourceState]
 
 _TASK_STATUS = {"done": "Task done", "doing": "Task started", "blocked": "Task blocked", "dropped": "Task dropped", "todo": "Task reopened"}
-_BY = {"user": "you", "assistant_confirmed": "the assistant, confirmed by you"}
+_BY = {"user": "you", "assistant_confirmed": "the assistant, confirmed by you", "assistant_disclosed": "the assistant, and it told you", "assistant_granted": "the assistant on its own, under a standing grant"}
 
 
 def _short(text: str, n: int = 120) -> str:

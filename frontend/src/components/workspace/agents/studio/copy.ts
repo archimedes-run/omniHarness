@@ -104,8 +104,8 @@ const enUS = {
     leadTools:
       "The lead agent uses every tool selected in the chat and every enabled skill.",
     autonomyIntro:
-      "In chat, anything irreversible waits for you. On a schedule nobody is there to ask, so choose what it may do on its own.",
-    mayDoLegend: "May do on its own (reversible)",
+      "In chat it does these and tells you in its reply. On a schedule nobody reads the reply as it happens, so it does only what you tick here, and each one is listed in the run's history. Anything that needs your OK always waits, in chat or on a schedule, whatever you tick.",
+    mayDoLegend: "May do on its own on a schedule (reversible)",
     saveAgentFirst:
       "Save the agent first, then choose what it may do on its own.",
     grantWhy: (why: string) => `Not available: ${why}`,
@@ -118,10 +118,10 @@ const enUS = {
     draftsAlways:
       "Draft messages (never send): always allowed, because a draft never leaves without you.",
     capNote: (cap: number) =>
-      `At most ${cap} of these in one run. Past that, the run waits for you on Home.`,
-    alwaysWaits: "Always waits for you",
+      `At most ${cap} of these actions in one run (a change to 5 tasks counts as 5). Past that, the rest wait for you on Home.`,
+    alwaysWaits: "Always waits for you, ticked or not",
     alwaysWaitsLead:
-      "Anything that can't be undone or reaches other people. Generated from the rules in force:",
+      "Anything that can't be undone, reaches other people, or starts something new, such as a project or a goal. Generated from the rules in force:",
     showAll: (n: number) => `Show all ${n}`,
     showFewer: "Show fewer",
     autonomyUnreadable: (why: string) =>
@@ -340,8 +340,8 @@ const zhCN: StudioCopy = {
     skillOff: "已关闭",
     leadTools: "主智能体使用聊天中选中的所有工具和所有已启用的技能。",
     autonomyIntro:
-      "在聊天中，任何不可撤销的操作都会等你确认。按日程运行时没有人可以询问，所以请选择它可以自行执行的操作。",
-    mayDoLegend: "可自行执行（可撤销）",
+      "在聊天中，它会直接执行这些操作，并在回复中告诉你。按日程运行时没有人即时查看回复，所以它只会执行你在这里勾选的操作，每一项都会记录在运行历史中。任何需要你确认的操作始终会等你，无论是在聊天中还是按日程运行，也无论你勾选了什么。",
+    mayDoLegend: "按日程运行时可自行执行（可撤销）",
     saveAgentFirst: "请先保存智能体，再选择它可以自行执行的操作。",
     grantWhy: (why) => `不可用：${why}`,
     because: (origin, source) =>
@@ -352,9 +352,11 @@ const zhCN: StudioCopy = {
           : "未记录原因",
     draftsAlways:
       "起草消息（从不发送）：始终允许，因为草稿不会在你不知情时发出。",
-    capNote: (cap) => `每次运行最多 ${cap} 次。超过后，运行会在首页等待你。`,
-    alwaysWaits: "始终等待你确认",
-    alwaysWaitsLead: "任何不可撤销或会触达他人的操作。根据当前生效的规则生成：",
+    capNote: (cap) =>
+      `每次运行最多 ${cap} 项操作（修改 5 个任务算 5 项）。超过后，其余操作会在首页等待你。`,
+    alwaysWaits: "始终等待你确认，无论是否勾选",
+    alwaysWaitsLead:
+      "任何不可撤销、会触达他人或新建内容（如项目或目标）的操作。根据当前生效的规则生成：",
     showAll: (n) => `显示全部 ${n} 项`,
     showFewer: "收起",
     autonomyUnreadable: (why) => `无法判断它可自行执行的操作：${why}`,

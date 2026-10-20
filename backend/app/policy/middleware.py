@@ -34,6 +34,7 @@ from .limits import describe_expiry
 from .lineage import initiation_origin
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
+from .provenance import DISCLOSED, GRANTED, executed_as
 from .targets import source_argument
 
 logger = logging.getLogger(__name__)
@@ -91,22 +92,23 @@ class PolicyMiddleware(AgentMiddleware):
                 return handler(request)
 
         if decision.tier is Tier.TIER_2:
-            with inviting_turn(self._inviting_for(request)):
+            grant = self._scheduled_hold(request, decision)
+            if isinstance(grant, str):
+                return self._require_confirmation(request, decision, extra_note=grant)
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED):
                 result = handler(request)
-            self.ledger.record(
-                tool_name=decision.tool_name,
-                arguments=self._arguments(request),
-                result=result,
-            )
+            if grant:
+                self._record_grant_use(request, decision, grant)
+            else:
+                self.ledger.record(
+                    tool_name=decision.tool_name,
+                    arguments=self._arguments(request),
+                    result=result,
+                )
             return result
 
-        grant = self._standing_grant(request, decision)
-        if isinstance(grant, list):
-            with inviting_turn(self._inviting_for(request)):
-                result = handler(request)
-            self._record_grant_use(request, decision, grant)
-            return result
-        return self._require_confirmation(request, decision, extra_note=grant or "")
+        # Tier 3 always asks: a standing grant never skips a confirmation.
+        return self._require_confirmation(request, decision)
 
     async def awrap_tool_call(self, request, handler):
         # Any agent this call invites (the `task` tool) starts from this
@@ -122,8 +124,14 @@ class PolicyMiddleware(AgentMiddleware):
                 return await handler(request)
 
         if decision.tier is Tier.TIER_2:
-            with inviting_turn(self._inviting_for(request)):
+            grant = self._scheduled_hold(request, decision)
+            if isinstance(grant, str):
+                return self._require_confirmation(request, decision, extra_note=grant)
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED):
                 result = await handler(request)
+            if grant:
+                self._record_grant_use(request, decision, grant)
+                return result
             # PASS THE TARGETS WHEN THEY WERE GENUINELY RESOLVED, and not
             # otherwise. `covered()` requires the reply to name every target,
             # so handing it the fallback — a repr of the whole call — makes
@@ -136,37 +144,31 @@ class PolicyMiddleware(AgentMiddleware):
             self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
             return result
 
-        grant = self._standing_grant(request, decision)
-        if isinstance(grant, list):
-            with inviting_turn(self._inviting_for(request)):
-                result = await handler(request)
-            self._record_grant_use(request, decision, grant)
-            return result
-        return self._require_confirmation(request, decision, extra_note=grant or "")
+        # Tier 3 always asks: a standing grant never skips a confirmation.
+        return self._require_confirmation(request, decision)
 
     # -- standing grants (Feature 006, app/policy/grants.py) ----------------
     #
-    # Checked HERE, on the Tier 3 path, so no caller can skip it: a grant lets
-    # a reversible Tier 3 call run without a confirmation, in a scheduled run
-    # only, up to the per-run cap. Anything else falls through to the normal
-    # Tier 3 proposal.
+    # Checked HERE, on the Tier 2 path, so no caller can skip it. Tier 3 never
+    # reaches it: it always asks. In a scheduled run nobody reads the reply as
+    # it happens, so a grant-governed Tier 2 call (the routine ledger ops)
+    # runs only under the agent's standing grant and within the run's cap;
+    # otherwise it waits like a proposal. In chat a grant changes nothing.
 
-    def _standing_grant(self, request, decision) -> list[str] | str | None:
-        """The granted classes covering this call; a note (str) when a grant
-        covers it but the run's cap is spent; None when no grant applies."""
-        from .grants import GRANT_CAP_PER_RUN, covering_classes, granted_classes
+    def _scheduled_hold(self, request, decision) -> list[str] | str | None:
+        """None: run as an ordinary Tier 2 call. A list: run under these
+        granted classes. A str: do not run; wait, with this note."""
+        from .grants import GRANT_CAP_PER_RUN, covering_classes, governed_by_grants, granted_classes
         from .provenance import is_synthetic_turn
 
         context = self._runtime_context(request) or {}
-        if not is_synthetic_turn(context):
-            return None  # chat: the user is there to ask
+        if not is_synthetic_turn(context) or not governed_by_grants(decision.tool_name):
+            return None
         agent = self._requester(request)
         granted = granted_classes(self._user_id(context), agent)
-        if not granted:
-            return None
-        used = covering_classes(decision, self._arguments(request), granted, self.loader.load())
+        used = covering_classes(decision, self._arguments(request), granted, self.loader.load()) if granted else None
         if used is None:
-            return None
+            return f"Nobody is there to ask in a scheduled run, and none of {agent}'s standing grants covers this, so it waits for you."
         key = self._run_key(context)
         if self._granted_in_run.get(key, 0) >= GRANT_CAP_PER_RUN:
             logger.warning("policy: %s's standing grant covers %s, but this run already took %d granted actions; it waits", agent, decision.tool_name, GRANT_CAP_PER_RUN)

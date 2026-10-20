@@ -29,6 +29,10 @@ DO NOT assume this works. Read it, and test it from inside a middleware.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 #: Set by Feature 002's injector. Structural — a message body cannot reach it.
 PROVENANCE_KEY = "turn_provenance"
 RULE_KEY = "trigger_rule_id"
@@ -48,3 +52,33 @@ def is_synthetic_turn(runtime_context: dict | None) -> bool:
     if not runtime_context:
         return False
     return runtime_context.get(PROVENANCE_KEY) == SYNTHETIC
+
+
+# -- how a write was authorised, for the record it leaves ---------------------
+#
+# A ledger row says who made each change (Feature 005, FR-007). Since Feature
+# 006 a routine ledger write can run at Tier 2 (disclosed in the reply) or
+# under a standing grant in a scheduled run, so "the assistant, confirmed by
+# you" is no longer true of every assistant write. The policy middleware sets
+# this around the handler it runs; the confirmation route runs tools outside
+# it, so the default is the confirmed case.
+
+CONFIRMED = "confirmed"
+DISCLOSED = "disclosed"
+GRANTED = "granted"
+
+_executed_as: ContextVar[str] = ContextVar("policy_executed_as", default=CONFIRMED)
+
+
+@contextmanager
+def executed_as(how: str) -> Iterator[None]:
+    token = _executed_as.set(how)
+    try:
+        yield
+    finally:
+        _executed_as.reset(token)
+
+
+def current_execution() -> str:
+    """confirmed, disclosed (Tier 2) or granted (a standing grant)."""
+    return _executed_as.get()

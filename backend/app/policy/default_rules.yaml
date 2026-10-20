@@ -35,8 +35,9 @@
 # Tier 3 = irreversible / outbound / spawning — stated, confirmed, then done.
 #
 # `reversible` (Feature 006) is a SEPARATE label from the tier: can the user
-# undo what the call does? Only a reversible tool may ever be covered by an
-# agent's standing grant (app/policy/grants.py), and only in a scheduled run.
+# undo what the call does? A standing grant (app/policy/grants.py) only ever
+# covers a reversible Tier 2 call, and only matters in a scheduled run: there,
+# a grant-governed Tier 2 call runs only under a grant. Tier 3 always asks.
 # Every rule carries one; a rule without it counts as irreversible. An
 # exception that raises the tier makes that call irreversible too.
 
@@ -58,20 +59,26 @@ policy:
       reversible: true
 
     # ---------------------------------------------------------------------
-    # Feature 005 — the Project Ledger. Reading is silent. Every write the
-    # assistant proposes is stated in full and waits for the user (FR-009):
-    # a project the user did not ask for is not "reversible" in any sense
-    # that matters to them.
+    # Feature 005 — the Project Ledger. Reading is silent. A new project or
+    # goal, or linking a chat, is stated in full and waits for the user
+    # (FR-009): a project the user did not ask for is not "reversible" in any
+    # sense that matters to them. Routine task and note changes are Tier 2
+    # since Feature 006 (see ledger_apply below).
     # ---------------------------------------------------------------------
     - pattern: "ledger_read"
       tier: 1
       reversible: true
     - pattern: "ledger_apply"
-      tier: 3
-      # Every op it offers is a ledger row the user can change back. Grants
-      # narrow it further by op (grants.ACTION_CLASSES): create_project and
-      # link_thread are never granted.
+      # Tier 2 (run, then disclose) ONLY for the routine, reversible ops:
+      # create or update a task, add a note (user decision 2026-10-20). In a
+      # scheduled run those need the agent's standing grant (grants.py).
+      # Anything else (a new project or goal, linking a chat) raises to Tier 3,
+      # and Tier 3 always asks, grant or not.
+      tier: 2
       reversible: true
+      exceptions:
+        - unless: {changes: ledger_changes_reversible}
+          tier: 3
 
     # ---------------------------------------------------------------------
     # Feature 002 — trigger engine. Exposes no agent-callable tools; it

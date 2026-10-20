@@ -33,7 +33,7 @@ Phases 2 to 5 add backend capability where the mockups need data that does not e
 | Article | Compliance |
 |---|---|
 | I. Gateway only | Every new data path goes through `/api/*` routers. The frontend never reaches the core directly. |
-| II. Three tiers | Phase 1 adds no tools. Phase 2: called-in agents run under the same `PolicyMiddleware`. Phase 3: standing grants live inside the policy layer, never around it, and are limited to action classes marked reversible (Open Question 5). |
+| II. Three tiers | Phase 1 adds no tools. Phase 2: called-in agents run under the same `PolicyMiddleware`. Phase 3: standing grants live inside the policy layer, never around it, are limited to action classes marked reversible (Open Question 5), and only change Tier 2 behaviour in scheduled runs: Tier 3 always asks. |
 | III. Provenance | @-mentions count only when typed in user turns. Content inside a tool result cannot call in an agent. |
 | IV. Human in the loop | No session approvals are relayed. "Open session" opens the session view. |
 | V. Non-goals | Drafts, never sends. Gmail's catalog copy is corrected to "draft" (design-notes #21). |
@@ -145,7 +145,8 @@ Two defects block multi-agent chat (AUDIT-2026-10 addendum, 2026-10-20):
 - **Agent fields**: `display_name`, `avatar`, `projects`, `schedule` and `autonomy`, in `agents_config.py` and `routers/agents.py`, with "chat to create" (`setup_agent_tool.py`) kept.
 - **Drafts**: `routers/drafts.py`, `POST /api/drafts/{field_type}` for `agent_instructions`, `agent_description`, `skill_when` and `skill_body`. Each returns text and never writes, which a gate test asserts.
 - **Standing grants**:
-  - `backend/app/policy/grants.py`, checked in `middleware.py` before the Tier 3 path, with an action class read from `default_rules.yaml` (`reversible: true`, tracked);
+  - `backend/app/policy/grants.py`, checked in `middleware.py` on the Tier 2 path of a scheduled run (review round 2: the grantable ledger ops are Tier 2, and Tier 3 never consults grants), with an action class read from `default_rules.yaml` (`reversible: true`, tracked);
+  - the per-run cap counts actions and is reserved atomically in a SQLite counter under the policy state dir, keyed by the trigger firing (`trigger_firing_id`), so a retry continues it;
   - the audit goes to `audit.py`;
   - the API is `routers/policy.py`.
   - Three sabotages: a grant applies in a chat run; a grant covers an irreversible class; a revoked grant still applies on the next call.

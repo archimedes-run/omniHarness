@@ -123,7 +123,7 @@ class LedgerChangeRow(Base):
     owner_id: Mapped[str | None] = mapped_column(String(64))
     entity: Mapped[str] = mapped_column(String(16), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    # user | assistant_confirmed
+    # user | assistant_confirmed | assistant_disclosed (Tier 2) | assistant_granted (standing grant)
     actor: Mapped[str] = mapped_column(String(24), nullable=False)
     pending_action_id: Mapped[str | None] = mapped_column(String(64))
     before: Mapped[dict | None] = mapped_column(JSON)
