@@ -1,31 +1,34 @@
 """Standing grants: what an agent may do on its own in a scheduled run (Feature 006 Phase 3, FR-302).
 
-Nobody is there to ask in a scheduled run, so an agent may be given standing
-permission for a few REVERSIBLE action classes. The rules, each enforced here
-and in PolicyMiddleware at the tool-dispatch chokepoint, not only in the UI:
+THE TIERS DECIDE FIRST, AND TIER 3 ALWAYS ASKS (user decision 2026-10-20). A
+grant never skips a confirmation. The routine, reversible ledger ops (create
+or update a task, add a note) are Tier 2 in the shipped rules: run, then
+disclose. Grants only change how those GRANT-GOVERNED Tier 2 calls behave in a
+SCHEDULED run, where nobody reads the reply as it happens:
 
-  * SCHEDULED RUNS ONLY. A grant applies when the turn was injected by the
-    trigger engine (provenance.is_synthetic_turn). In chat it never applies:
-    the user is there, and Tier 3 asks.
-  * REVERSIBLE ONLY. A class is grantable only when the rule deciding its tool
-    is labelled `reversible: true` (default_rules.yaml), and a call whose tier
-    an exception raised is never covered. The API refuses to store a grant for
-    anything else, and dispatch re-checks, so a hand-edited config cannot
-    widen it.
+  * IN CHAT a grant changes nothing: Tier 2 runs and the reply says so.
+  * IN A SCHEDULED RUN (provenance.is_synthetic_turn) a grant-governed Tier 2
+    call runs only when a granted class covers every change in it, and within
+    the cap; otherwise it waits on Home's "Waiting on you" like a proposal.
+  * REVERSIBLE TIER 2 ONLY. A class is grantable only when the rule deciding
+    its tool is Tier 2 and labelled `reversible: true` (default_rules.yaml);
+    a call whose tier an exception raised is Tier 3 and asks. The API refuses
+    to store a grant for anything else, and dispatch re-checks, so a
+    hand-edited config cannot widen it.
   * CONTENT-DERIVED RUNS STILL USE IT (user decision 2026-10-20): what caused
     the call (the schedule's turn, or a page the agent read) is recorded with
     every granted action, not used to refuse it.
-  * CAPPED PER RUN: at most GRANT_CAP_PER_RUN granted actions in one run.
-    Past that, each further one waits as an ordinary Tier 3 proposal, which
-    is what Home's "Waiting on you" lists.
+  * CAPPED PER RUN: at most GRANT_CAP_PER_RUN granted ACTIONS in one run (a
+    ledger_apply with N changes is N actions). Past that, each further call
+    waits.
   * AUDITED: every use is a line in the policy audit log with its origin, and
     the run's reply discloses it.
   * REVOCABLE, EFFECTIVE FROM THE NEXT CALL: the grant is read from the
     agent's current version on every call (config_versions), never cached.
 
 Grants are part of the agent's config ("autonomy": [class ids]) and are
-written only through the versioned store, so each grant and revocation is a
-version with who and when, and can be undone.
+written only through the versioned store, by the Autonomy action alone: undo
+and every other edit keep the grants as they are (config_versions.write_agent).
 """
 
 from __future__ import annotations
@@ -86,21 +89,23 @@ def grantable(class_id: str, ruleset: RuleSet) -> tuple[bool, str]:
     action = BY_ID.get(class_id)
     if action is None:
         return False, f"unknown action class {class_id!r}"
-    decision = rule_for(action.tool, ruleset)
-    if decision.deciding_rule is None or decision.deciding_rule.reversible is not True:
+    rule = rule_for(action.tool, ruleset).deciding_rule
+    if rule is None or rule.reversible is not True:
         return False, f"{action.label}: its tool ({action.tool}) is not labelled reversible in the rules in force, so it always waits for you"
+    if rule.tier is not Tier.TIER_2:
+        return False, f"{action.label}: its tool ({action.tool}) is Tier {int(rule.tier)} in the rules in force, and only a Tier 2 action can be granted; Tier 3 always asks you"
     return True, ""
 
 
 def covering_classes(decision: PolicyDecision, arguments: dict[str, Any], granted: list[str], ruleset: RuleSet) -> list[str] | None:
     """The granted classes that together cover this call, or None.
 
-    None unless EVERY change in the call is covered by a granted, grantable
-    class, the deciding rule is labelled reversible, and no exception raised
-    the tier (a raise means this call is the irreversible case of its tool).
+    None unless the call is Tier 2 (a grant never covers Tier 3), EVERY change
+    in it is covered by a granted, grantable class, the deciding rule is
+    labelled reversible, and no exception raised the tier.
     """
     rule = decision.deciding_rule
-    if decision.tier is not Tier.TIER_3 or rule is None or rule.reversible is not True or decision.raised_by is not None:
+    if decision.tier is not Tier.TIER_2 or rule is None or rule.reversible is not True or decision.raised_by is not None:
         return None
     usable = [BY_ID[c] for c in granted if c in BY_ID and BY_ID[c].tool == decision.tool_name and grantable(c, ruleset)[0]]
     if not usable:
@@ -133,7 +138,13 @@ def granted_classes(user_id: str, agent: str) -> list[str]:
     return [g for g in granted if isinstance(g, str)]
 
 
+def governed_by_grants(tool_name: str) -> bool:
+    """A tool some action class names: in a scheduled run, its Tier 2 calls
+    run only under a grant."""
+    return any(c.tool == tool_name for c in ACTION_CLASSES)
+
+
 def always_waits(ruleset: RuleSet) -> list[str]:
-    """Tier 3 rules that are not reversible: what never runs without the user.
+    """Tier 3 rules: what never runs without the user, grant or not.
     Generated from the rules in force (design-notes #13), never hand-written."""
-    return [r.pattern for r in ruleset.rules if r.tier is Tier.TIER_3 and r.reversible is not True]
+    return [r.pattern for r in ruleset.rules if r.tier is Tier.TIER_3]

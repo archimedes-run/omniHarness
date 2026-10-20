@@ -88,9 +88,28 @@ def explicitly_true(value: Any) -> bool:
     return value is True
 
 
+#: The ledger ops that are routine and reversible (Feature 006, user decision
+#: 2026-10-20): a task created or updated (dropping one included: changing its
+#: status brings it back) and a note added. These run at Tier 2, disclosed in
+#: the reply; in a scheduled run they need the agent's standing grant
+#: (grants.ACTION_CLASSES covers exactly these). Everything else ledger_apply
+#: offers (a new project or goal, linking a chat) stays Tier 3 and always asks.
+REVERSIBLE_LEDGER_OPS = frozenset({"create_task", "update_task", "add_note"})
+
+
+def ledger_changes_reversible(value: Any) -> bool:
+    """True only when `value` is a non-empty list of changes, each a dict whose
+    op is in REVERSIBLE_LEDGER_OPS. An empty list, a non-list, or any other op
+    has not established it, so the tier raises."""
+    if not isinstance(value, list) or not value:
+        return False
+    return all(isinstance(change, dict) and change.get("op") in REVERSIBLE_LEDGER_OPS for change in value)
+
+
 #: The whole vocabulary a rules file may name.
 PREDICATES: dict[str, Callable[[Any], bool]] = {
     "read_only_sql": read_only_sql,
     "branch_is_not_default": branch_is_not_default,
     "explicitly_true": explicitly_true,
+    "ledger_changes_reversible": ledger_changes_reversible,
 }
