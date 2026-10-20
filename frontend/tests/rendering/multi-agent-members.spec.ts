@@ -1,3 +1,5 @@
+import { mkdirSync } from "fs";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import { lowContrastText } from "./contrast-probe";
@@ -10,8 +12,8 @@ import { lowContrastText } from "./contrast-probe";
  * NO BACKEND: history, membership, agents and the pending set are intercepted.
  */
 const THREAD = "44444444-5555-6666-7777-888888888888";
-const SHOTS =
-  "/private/tmp/claude-224110745/-Users-rishabh-sharma-Documents-OmniHarness/2fca2676-46f9-4323-a9df-ccedea8c5376/scratchpad/review/chat";
+// Review screenshots only when a folder is named (CI has no local scratch folder).
+const SHOTS = process.env.CHAT_SHOTS_DIR;
 const HOUR = 60 * 60 * 1000;
 
 const MESSAGES = [
@@ -187,9 +189,12 @@ for (const scheme of ["dark", "light"] as const) {
         menu.getByRole("option", { name: /evening-wrap-up/ }),
       ).toContainText("Project status");
 
-      await page.screenshot({
-        path: `${SHOTS}/chat-members-live-${scheme}.png`,
-      });
+      if (SHOTS) {
+        mkdirSync(SHOTS, { recursive: true });
+        await page.screenshot({
+          path: `${SHOTS}/chat-members-live-${scheme}.png`,
+        });
+      }
     });
 
     test("all text with the @ menu open meets WCAG AA", async ({ page }) => {
