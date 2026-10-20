@@ -162,26 +162,24 @@ test.describe("the theme toggle changes what the user sees", () => {
   });
 
   /**
-   * The dark background is a CHOSEN value, pinned exactly.
-   *
-   * This assertion used to say "charcoal, not neutral black" and checked that
-   * blue led red — encoding #36454f, a blue-grey. The chosen colour is now
-   * #28282B, a near-neutral dark grey, so that check expressed an intent the
-   * design no longer has: it would have passed on #28282B by two points of
-   * blue while asserting nothing anyone cares about.
-   *
-   * A brand colour is worth pinning exactly rather than characterising. The
-   * failure message carries the intended value, so a future change is a
-   * deliberate edit here rather than a puzzle.
+   * The dark background is a CHOSEN value, pinned exactly: Graphite's
+   * #121316 (Feature 006; it was #28282B before). A brand colour is pinned
+   * rather than characterised, so a change is a deliberate edit here.
    */
-  test("the dark background is the chosen #28282B", async ({ page }) => {
+  test("the dark background is Graphite's #121316", async ({ page }) => {
     await load(page, "dark");
     const [r, g, b] = await token(page, "--background");
 
     expect(
       { r, g, b },
-      `--background renders rgb(${r}, ${g}, ${b}); #28282B is rgb(40, 40, 43)`,
-    ).toEqual({ r: 40, g: 40, b: 43 });
+      `--background renders rgb(${r}, ${g}, ${b}); #121316 is rgb(18, 19, 22)`,
+    ).toEqual({ r: 18, g: 19, b: 22 });
+  });
+
+  test("the light background is #F7F7F8", async ({ page }) => {
+    await load(page, "light");
+    const [r, g, b] = await token(page, "--background");
+    expect({ r, g, b }).toEqual({ r: 247, g: 247, b: 248 });
   });
 
   /**
@@ -202,20 +200,34 @@ test.describe("the theme toggle changes what the user sees", () => {
     ["--secondary-foreground", "--secondary"],
     ["--accent-foreground", "--accent"],
     ["--primary-foreground", "--primary"],
+    ["--foreground-2", "--card"],
+    ["--muted-foreground", "--card"],
+    ["--muted-foreground", "--surface-raised"],
+    ["--primary", "--card"],
+    ["--success", "--card"],
+    ["--warning", "--card"],
+    ["--destructive", "--card"],
+    ["--success-foreground", "--success"],
+    ["--warning-foreground", "--warning"],
+    ["--destructive-foreground", "--destructive"],
+    ["--sidebar-foreground", "--sidebar-accent"],
   ];
 
-  for (const [fg, bg] of PAIRS) {
-    test(`${fg} on ${bg} meets WCAG AA in dark mode`, async ({ page }) => {
-      await load(page, "dark");
-      const ratio = contrast(await token(page, fg), await token(page, bg));
-      expect(
-        ratio,
-        `${fg} on ${bg} is ${ratio.toFixed(2)}:1, below the 4.5:1 AA floor for ` +
-          `normal text — this is what "invisible until you hover over it" looks ` +
-          `like as a number.`,
-      ).toBeGreaterThanOrEqual(4.5);
-    });
-  }
+  for (const scheme of ["light", "dark"] as const)
+    for (const [fg, bg] of PAIRS) {
+      test(`${fg} on ${bg} meets WCAG AA in ${scheme} mode`, async ({
+        page,
+      }) => {
+        await load(page, scheme);
+        const ratio = contrast(await token(page, fg), await token(page, bg));
+        expect(
+          ratio,
+          `${fg} on ${bg} is ${ratio.toFixed(2)}:1, below the 4.5:1 AA floor for ` +
+            `normal text — this is what "invisible until you hover over it" looks ` +
+            `like as a number.`,
+        ).toBeGreaterThanOrEqual(4.5);
+      });
+    }
 });
 
 /**

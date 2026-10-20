@@ -72,10 +72,6 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --font-sans:
-    ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol", "Noto Color Emoji";
-
   --animate-fade-in: fade-in 1.1s;
   @keyframes fade-in {
     0% {
@@ -148,6 +144,16 @@
 }
 
 @theme inline {
+  /* Inter and JetBrains Mono, self-hosted by next/font (src/app/layout.tsx
+   * sets --font-inter and --font-jetbrains-mono on <html>). font-mono is for
+   * ids, paths and code. */
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono:
+    var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Radii 8 / 10 / 14: rounded-md (controls), rounded-lg (cards),
+   * rounded-xl (panels and sheets). --radius is 10px. */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -157,6 +163,9 @@
   --radius-4xl: calc(var(--radius) + 16px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-foreground-2: var(--foreground-2);
+  --color-surface-raised: var(--surface-raised);
+  --color-border-strong: var(--border-strong);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -230,127 +239,112 @@
   }
 }
 
-:root {
+/* ---------------------------------------------------------------------------
+ * Theme tokens (Feature 006, "Graphite"). One semantic set, a light and a dark
+ * value each; every role, both values and their measured contrast are listed
+ * in specs/006-workspace-studio/tokens.md. Components use the Tailwind
+ * utilities these feed (bg-background, text-muted-foreground, border-border,
+ * bg-surface-raised, text-foreground-2, border-border-strong, ...) and never a
+ * hex or palette literal: tests/unit/colour-tokens.test.ts enforces that, and
+ * tests/rendering/contrast.spec.ts measures every page in both themes.
+ *
+ * `.light` and `.dark` also work on any element, so a preview (the theme
+ * cards in Settings > Appearance) can show the other theme with the same
+ * tokens instead of a copy of them.
+ * ------------------------------------------------------------------------- */
+:root,
+.light {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.975 0 0);
-  /* 0.5, not 0.556: muted text sits on --muted as often as on the page, and
-   * 0.556 measured 3.98:1 there, under WCAG AA (Phase 2.5 contrast audit). */
-  --muted-foreground: oklch(0.5 0 0);
-  --accent: oklch(0.94 0 0);
-  --accent-foreground: oklch(0.145 0 0);
-  --destructive: oklch(0.53 0.22 27.325);
-  /* Text ON a destructive fill: white on the light theme's dark red, near-black
-   * on the dark theme's light red (white measured 1.68:1 there). */
-  --destructive-foreground: oklch(1 0 0);
-  /* Status colours as tokens, so "worked" and "needs attention" follow the
-   * theme instead of a fixed palette shade (Phase 2.5). AA on --background
-   * and on their own 10% tint. */
-  --success: oklch(0.5 0.13 155);
-  /* An accent for "this is the active/selected thing" (the MCP server page's
-   * indigo), AA as text on the page and with its foreground as a fill. */
-  --highlight: oklch(0.5 0.2 278);
-  --highlight-foreground: oklch(1 0 0);
-  --success-foreground: oklch(1 0 0);
-  --warning-foreground: oklch(1 0 0);
-  --warning: oklch(0.52 0.12 65);
-  --border: oklch(0.9 0 0);
-  --input: oklch(0.92 0 0);
-  --ring: transparent;
+  --background: #f7f7f8;
+  --foreground: #17181b;
+  --foreground-2: #2f333a;
+  --card: #ffffff;
+  --card-foreground: #17181b;
+  --popover: #ffffff;
+  --popover-foreground: #17181b;
+  --surface-raised: #f1f2f4;
+  --primary: #3355d6;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f2f4;
+  --secondary-foreground: #17181b;
+  --muted: #f1f2f4;
+  --muted-foreground: #5a606b;
+  --accent: #f1f2f4;
+  --accent-foreground: #17181b;
+  --destructive: #b3261e;
+  --destructive-foreground: #ffffff;
+  --success: #1e7a4b;
+  --success-foreground: #ffffff;
+  --warning: #8a5300;
+  --warning-foreground: #ffffff;
+  /* "This is the active/selected thing": the accent. */
+  --highlight: #3355d6;
+  --highlight-foreground: #ffffff;
+  --border: #dddfe3;
+  --border-strong: #c9ccd3;
+  --input: #c9ccd3;
+  --ring: #3355d6;
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(1 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.9 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #eff0f2;
+  --sidebar-foreground: #2f333a;
+  --sidebar-primary: #3355d6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e4e6ea;
+  --sidebar-accent-foreground: #17181b;
+  --sidebar-border: #dddfe3;
+  --sidebar-ring: #3355d6;
+  color-scheme: light;
 }
 
+/* Graphite. Surfaces rise in lightness with elevation: background < sidebar
+ * < card < raised (popovers, hovers, selected rows). */
 .dark {
-  /* Anchored on #28282B, the chosen background: a near-neutral dark grey.
-     Every surface shares its faint hue (~286) at rising lightness, so panels
-     lift off the background without introducing a colour cast.
-
-     An earlier version of this block was blue-grey (#36454f). That was my
-     reading of "charcoal kinda" and it was wrong by a whole hue family; the
-     value is now pinned exactly in tests/rendering/theme.spec.ts rather than
-     characterised, because a chosen colour is not a range.
-
-     Every foreground is pure white except --muted-foreground (#d0d0d6), held
-     just off white so secondary text stays distinguishable from primary. It
-     measures 9.57:1 against the background; the eight foreground/surface pairs
-     asserted in the rendering spec run from 8.24:1 to 14.7:1, against a 4.5:1
-     AA floor. Measured from painted pixels, not from these declarations. */
-  /* A real dark palette, not the light one with the charts swapped.
-   *
-   * This block previously duplicated :root for 24 of its 31 tokens — including
-   * --background (white), --foreground, --card and --primary — so toggling the
-   * theme set class="dark" on <html>, reassigned every variable to the value it
-   * already had, and changed nothing a user could see except the chart palette.
-   * The toggle was never broken; there was simply no dark theme to switch to.
-   *
-   * tests/theme.test.ts asserts these differ, because a near-copy is the
-   * natural result of scaffolding a theme block and is invisible in review.
-   *
-   * Lightness runs the light scale inverted: surfaces dark and rising with
-   * elevation (background < card < popover), text light, borders low-contrast.
-   */
-  --background: oklch(0.278 0.0055 286.04);
-  --foreground: oklch(1 0 0);
-  --card: oklch(0.3107 0.0071 285.98);
-  --card-foreground: oklch(1 0 0);
-  --popover: oklch(0.3309 0.0087 285.91);
-  --popover-foreground: oklch(1 0 0);
-  --primary: oklch(1 0 0);
-  --primary-foreground: oklch(0.278 0.0055 286.04);
-  --secondary: oklch(0.3546 0.0103 285.86);
-  --secondary-foreground: oklch(1 0 0);
-  --muted: oklch(0.3546 0.0103 285.86);
-  /* Kept above 0.6 so muted text stays legible on --muted; the light value
-   * (0.556) is a contrast failure against a dark surface. */
-  --muted-foreground: oklch(0.8594 0.0082 286.23);
-  --accent: oklch(0.393 0.0117 285.85);
-  --accent-foreground: oklch(1 0 0);
-  --destructive: oklch(0.76 0.16 22.216);
-  --destructive-foreground: oklch(0.2 0.02 22.216);
-  --success: oklch(0.8 0.15 155);
-  --highlight: oklch(0.78 0.12 278);
-  --highlight-foreground: oklch(0.2 0.03 278);
-  --success-foreground: oklch(0.2 0.04 155);
-  --warning-foreground: oklch(0.2 0.04 80);
-  --warning: oklch(0.83 0.13 80);
-  --border: oklch(0.393 0.0117 285.85);
-  --input: oklch(0.4268 0.0131 285.83);
-  --ring: transparent;
+  --background: #121316;
+  --foreground: #ecedef;
+  --foreground-2: #c9ccd2;
+  --card: #1c1e23;
+  --card-foreground: #ecedef;
+  --popover: #24272d;
+  --popover-foreground: #ecedef;
+  --surface-raised: #24272d;
+  --primary: #8fa8ff;
+  --primary-foreground: #121316;
+  --secondary: #24272d;
+  --secondary-foreground: #ecedef;
+  --muted: #24272d;
+  --muted-foreground: #9ea3ad;
+  --accent: #24272d;
+  --accent-foreground: #ecedef;
+  --destructive: #ff8a80;
+  --destructive-foreground: #121316;
+  --success: #6fd3a0;
+  --success-foreground: #121316;
+  --warning: #f2b65a;
+  --warning-foreground: #121316;
+  --highlight: #8fa8ff;
+  --highlight-foreground: #121316;
+  --border: #2e3138;
+  --border-strong: #4a4e57;
+  --input: #3a3e46;
+  --ring: #8fa8ff;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.3107 0.0071 285.98);
-  --sidebar-foreground: oklch(1 0 0);
-  --sidebar-primary: oklch(1 0 0);
-  --sidebar-primary-foreground: oklch(0.278 0.0055 286.04);
-  --sidebar-accent: oklch(0.393 0.0117 285.85);
-  --sidebar-accent-foreground: oklch(1 0 0);
-  --sidebar-border: oklch(0.393 0.0117 285.85);
-  --sidebar-ring: oklch(0.6363 0.0133 286.02);
-  font-weight: 300;
+  --sidebar: #17181c;
+  --sidebar-foreground: #c9ccd2;
+  --sidebar-primary: #8fa8ff;
+  --sidebar-primary-foreground: #121316;
+  --sidebar-accent: #24272d;
+  --sidebar-accent-foreground: #ecedef;
+  --sidebar-border: #2e3138;
+  --sidebar-ring: #8fa8ff;
+  color-scheme: dark;
 }
 
 @layer base {
