@@ -22,8 +22,8 @@ const SECTIONS = {
     ),
   ),
   memory: dynamic(() =>
-    import("@/components/workspace/settings/memory-settings-page").then(
-      (m) => m.MemorySettingsPage,
+    import("@/components/workspace/settings/memory/memory-page").then(
+      (m) => m.MemoryPage,
     ),
   ),
   tools: dynamic(() =>

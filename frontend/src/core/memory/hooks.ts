@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  applyMemoryCleanup,
   clearMemory,
   createMemoryFact,
   deleteMemoryFact,
   importMemory,
   loadMemory,
+  previewMemoryCleanup,
   updateMemoryFact,
+  updateMemorySection,
 } from "./api";
 import type {
   MemoryFactInput,
@@ -77,6 +80,39 @@ export function useUpdateMemoryFact() {
       factId: string;
       input: MemoryFactPatchInput;
     }) => updateMemoryFact(factId, input),
+    onSuccess: (memory) => {
+      queryClient.setQueryData<UserMemory>(["memory"], memory);
+    },
+  });
+}
+
+export function useUpdateMemorySection() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      group,
+      key,
+      summary,
+    }: {
+      group: string;
+      key: string;
+      summary: string;
+    }) => updateMemorySection(group, key, summary),
+    onSuccess: (memory) => {
+      queryClient.setQueryData<UserMemory>(["memory"], memory);
+    },
+  });
+}
+
+/** A mutation, not a query: a preview calls the model and must be asked for. */
+export function useMemoryCleanupPreview() {
+  return useMutation({ mutationFn: previewMemoryCleanup });
+}
+
+export function useApplyMemoryCleanup() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: applyMemoryCleanup,
     onSuccess: (memory) => {
       queryClient.setQueryData<UserMemory>(["memory"], memory);
     },

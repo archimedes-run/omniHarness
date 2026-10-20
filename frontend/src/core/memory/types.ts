@@ -52,3 +52,22 @@ export interface UserMemory {
   };
   facts: MemoryFact[];
 }
+
+/** A summary section's address: "user.topOfMind", "history.recentMonths". */
+export type MemorySectionGroup = "user" | "history";
+
+export interface MemoryCleanupSection {
+  group: MemorySectionGroup;
+  key: string;
+  before: string;
+  after: string;
+  changed: boolean;
+}
+
+/** What the one-time cleanup would change. Nothing is saved until applied. */
+export interface MemoryCleanupPreview {
+  /** lastUpdated when previewed; applying is refused if memory changed. */
+  version: string;
+  sections: MemoryCleanupSection[];
+  factsToRemove: { id: string | null; content: string; markers: string[] }[];
+}

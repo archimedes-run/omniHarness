@@ -2,6 +2,7 @@ import { fetch } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
 
 import type {
+  MemoryCleanupPreview,
   MemoryFactInput,
   MemoryFactPatchInput,
   UserMemory,
@@ -146,4 +147,57 @@ export async function updateMemoryFact(
     },
   );
   return readMemoryResponse(response, "Failed to update memory fact");
+}
+
+/** Correct one summary section (Phase 2.6). */
+export async function updateMemorySection(
+  group: string,
+  key: string,
+  summary: string,
+): Promise<UserMemory> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/memory/sections/${encodeURIComponent(group)}/${encodeURIComponent(key)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ summary }),
+    },
+  );
+  return readMemoryResponse(response, "Failed to save the summary");
+}
+
+/** Rewrite the summaries under the durability rules. Saves nothing. */
+export async function previewMemoryCleanup(): Promise<MemoryCleanupPreview> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/memory/cleanup/preview`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as {
+      detail?: unknown;
+    };
+    throw new Error(
+      typeof detail.detail === "string"
+        ? detail.detail
+        : `The cleanup could not be prepared (${response.status}).`,
+    );
+  }
+  return response.json() as Promise<MemoryCleanupPreview>;
+}
+
+/** Save the parts of a cleanup the user accepted. */
+export async function applyMemoryCleanup(body: {
+  version: string;
+  sections: Record<string, string>;
+  factsToRemove: string[];
+}): Promise<UserMemory> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/memory/cleanup/apply`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return readMemoryResponse(response, "Failed to apply the cleanup");
 }
