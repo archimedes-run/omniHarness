@@ -154,7 +154,11 @@ async def github_items(app_state: Any, user_id: str, since: datetime) -> tuple[l
             else:
                 at = it.get("updated_at") or ""
                 text = f"PR #{it.get('number')} in {repo} has failing checks: {title}"
-            out.append(SourceItem(at=str(at), source="github", text=text, known="reported", url=it.get("html_url")))
+            # The link is BUILT from the repository and number fetched, never
+            # taken from the payload (display_safe.github_pr_link).
+            from app.gateway.display_safe import github_pr_link
+
+            out.append(SourceItem(at=str(at), source="github", text=text, known="reported", url=github_pr_link(repo, it.get("number"))))
     return out, "ok"
 
 

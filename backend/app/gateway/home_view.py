@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
-from app.gateway.display_safe import safe_field
+from app.gateway.display_safe import provider_link, safe_field
 from app.gateway.home_sources import CalendarView, Known, SourceItem, SourceState
 from app.gateway.inbox_view import describe_alerts
 from app.trigger_engine.models import Rule, TriggerType
@@ -192,6 +192,7 @@ def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str],
         sources[name] = state
         for it in found or []:
             if _when(it.at) >= since:
-                items.append(MovedItem(at=it.at, source=it.source, text=safe_field(it.text), known=it.known, url=it.url))
+                # Live only if it is provably the provider's own link.
+                items.append(MovedItem(at=it.at, source=it.source, text=safe_field(it.text), known=it.known, url=provider_link(it.source, it.url)))
     items.sort(key=lambda i: _when(i.at), reverse=True)
     return MovedView(items=items[:MOVED_LIMIT], sources=sources)

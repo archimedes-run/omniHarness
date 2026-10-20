@@ -60,3 +60,21 @@ export function safeLines(text: string | null | undefined): string {
     .map((line) => safeField(line))
     .join("\n");
 }
+
+const GITHUB_PR =
+  /^https:\/\/github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}\/pull\/[0-9]{1,9}$/;
+const GCAL =
+  /^https:\/\/(calendar\.google\.com\/calendar\/|www\.google\.com\/calendar\/)[A-Za-z0-9/?=&%._~+-]*$/;
+
+/** A link stays LIVE only when it provably is the provider's own link for
+ *  the item (mirror of display_safe.provider_link); otherwise null, and the
+ *  item is shown as safe text. */
+export function providerLink(
+  source: string,
+  url: string | null | undefined,
+): string | null {
+  const text = url ?? "";
+  if (source === "github" && GITHUB_PR.test(text)) return text;
+  if (source === "calendar" && GCAL.test(text)) return text;
+  return null;
+}

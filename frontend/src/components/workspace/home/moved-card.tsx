@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { safeField } from "@/core/display/safe";
+import { providerLink, safeField } from "@/core/display/safe";
 import { useMovedToday } from "@/core/home/hooks";
 import { clock } from "@/core/home/logic";
 
@@ -45,9 +45,9 @@ export function MovedCard({ now }: { now: Date }) {
             {clock(item.at)}
           </span>
           <span className="text-foreground min-w-0">
-            {item.url ? (
+            {providerLink(item.source, item.url) ? (
               <a
-                href={item.url}
+                href={providerLink(item.source, item.url)!}
                 target="_blank"
                 rel="noreferrer"
                 className="hover:underline"

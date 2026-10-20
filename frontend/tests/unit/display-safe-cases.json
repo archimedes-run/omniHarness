@@ -25,5 +25,25 @@
       "line one\nline ‮two https://x.example",
       "line one\nline two hxxps://x[.]example"
     ]
+  ],
+  "links": [
+    ["github", "https://github.com/acme/app/pull/12", true],
+    ["github", "https://github.com.evil.example/acme/app/pull/12", false],
+    [
+      "github",
+      "https://github.com/acme/app/pull/12?next=https://evil.example",
+      false
+    ],
+    ["github", "http://github.com/acme/app/pull/12", false],
+    ["github", "javascript:alert(1)", false],
+    ["calendar", "https://calendar.google.com/calendar/event?eid=abc123", true],
+    ["calendar", "https://www.google.com/calendar/event?eid=abc", true],
+    [
+      "calendar",
+      "https://calendar.google.com.evil.example/calendar/event",
+      false
+    ],
+    ["calendar", "https://www.google.com/url?q=https://evil.example", false],
+    ["session", "https://github.com/acme/app/pull/12", false]
   ]
 }

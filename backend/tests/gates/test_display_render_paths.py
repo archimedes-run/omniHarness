@@ -34,6 +34,15 @@ RENDER_PATHS: dict[tuple[str, str], str] = {
     ("app/gateway/home_view.py", "describe_moved"): "Home: what moved today (outside sources)",
     ("app/ledger/controller.py", "apply"): "chat: the ledger step's disclosed text",
 }
+
+#: Render paths that put a LIVE link on screen: each must pass it through
+#: provider_link (or build it with github_pr_link) so only a provably
+#: provider-own link stays live.
+LINK_PATHS: dict[tuple[str, str], str] = {
+    ("app/gateway/home_view.py", "describe_moved"): "Home: what moved today (an outside item's link)",
+    ("app/gateway/home_sources.py", "github_items"): "Home: a GitHub PR's link",
+}
+LINKERS = frozenset({"provider_link", "github_pr_link"})
 SANITISERS = frozenset({"safe_field", "safe_lines"})
 
 
@@ -61,3 +70,48 @@ def test_the_backend_sanitiser_agrees_with_the_shared_cases() -> None:
         assert safe_field(safe_field(given)) == expected, given
     for given, expected in cases["lines"]:
         assert safe_lines(given) == expected, given
+
+
+@pytest.mark.parametrize(("path", "function"), list(LINK_PATHS))
+def test_each_live_link_is_proven_the_providers_own(path: str, function: str) -> None:
+    node = _function(BACKEND / path, function)
+    assert node is not None, f"stale LINK_PATHS entry: {path}:{function}"
+    calls = {getattr(n.func, "id", None) or getattr(n.func, "attr", None) for n in ast.walk(node) if isinstance(n, ast.Call)}
+    assert calls & LINKERS, f"{path}:{function} puts a live link on screen without display_safe.provider_link/github_pr_link"
+
+
+@pytest.mark.parametrize(
+    ("source", "url", "live"),
+    [
+        ("github", "https://github.com/acme/app/pull/12", True),
+        ("github", "https://github.com.evil.example/acme/app/pull/12", False),
+        ("github", "https://github.com/acme/app/pull/12?next=https://evil.example", False),
+        ("github", "http://github.com/acme/app/pull/12", False),
+        ("github", "https://evil.example/acme/app/pull/12", False),
+        ("github", "javascript:alert(1)", False),
+        ("calendar", "https://calendar.google.com/calendar/event?eid=abc123", True),
+        ("calendar", "https://www.google.com/calendar/event?eid=abc", True),
+        ("calendar", "https://calendar.google.com.evil.example/calendar/event", False),
+        ("calendar", "https://www.google.com/url?q=https://evil.example", False),
+        ("session", "https://github.com/acme/app/pull/12", False),
+    ],
+)
+def test_provider_link_keeps_only_the_providers_own_links(source: str, url: str, live: bool) -> None:
+    from app.gateway.display_safe import provider_link
+
+    assert (provider_link(source, url) == url) is live
+
+
+def test_a_github_link_is_built_from_the_fetched_fields() -> None:
+    from app.gateway.display_safe import github_pr_link
+
+    assert github_pr_link("acme/app", 12) == "https://github.com/acme/app/pull/12"
+    assert github_pr_link("acme/app/../../evil", 12) is None
+    assert github_pr_link("acme/app", "12") is None
+
+
+def test_the_backend_link_check_agrees_with_the_shared_cases() -> None:
+    from app.gateway.display_safe import provider_link
+
+    for source, url, live in json.loads(CASES.read_text(encoding="utf-8"))["links"]:
+        assert (provider_link(source, url) == url) is live, (source, url)

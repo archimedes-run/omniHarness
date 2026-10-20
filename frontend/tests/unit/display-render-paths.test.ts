@@ -52,7 +52,19 @@ function files(dir: string): string[] {
   });
 }
 
+/** Components that put an item's own link on screen: each must pass it
+ *  through providerLink, so only a provably provider-own link is live. */
+const LINK_PATHS: Record<string, string> = {
+  "components/workspace/home/moved-card.tsx": "Home: an outside item's link",
+};
+
 describe("content-derived text is shown only through core/display/safe", () => {
+  it.each(Object.keys(LINK_PATHS))("%s proves its links", (file) => {
+    const source = readFileSync(join(SRC, file), "utf-8");
+    expect(source, `${file}: ${LINK_PATHS[file]}`).toMatch(/\bproviderLink\(/);
+    expect(source).not.toMatch(/href=\{item\.url\}/);
+  });
+
   it.each(Object.keys(RENDER_PATHS))("%s calls the sanitiser", (file) => {
     const source = readFileSync(join(SRC, file), "utf-8");
     expect(source, `${file}: ${RENDER_PATHS[file]}`).toMatch(
