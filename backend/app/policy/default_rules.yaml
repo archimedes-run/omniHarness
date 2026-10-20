@@ -39,6 +39,17 @@ policy:
       tier: 1
 
     # ---------------------------------------------------------------------
+    # Feature 005 — the Project Ledger. Reading is silent. Every write the
+    # assistant proposes is stated in full and waits for the user (FR-009):
+    # a project the user did not ask for is not "reversible" in any sense
+    # that matters to them.
+    # ---------------------------------------------------------------------
+    - pattern: "ledger_read"
+      tier: 1
+    - pattern: "ledger_apply"
+      tier: 3
+
+    # ---------------------------------------------------------------------
     # Feature 002 — trigger engine. Exposes no agent-callable tools; it
     # injects turns. Listed so the absence is deliberate rather than an
     # oversight, and so a tool added later does not silently inherit Tier 1.
@@ -54,6 +65,14 @@ policy:
     - pattern: "present_files"
       tier: 1
     - pattern: "tool_search"
+      tier: 1
+    # The agent's own to-do list: it changes only this conversation's state,
+    # reaches nothing outside it, and is rewritten freely. Unclassified, it
+    # fell to Tier 3, so every to-do update asked for a confirmation, and a
+    # confirmation from the card ran it outside the agent, where its state
+    # update was lost (found 2026-10-19, Feature 005: promoting to-dos to
+    # project tasks never had a list to promote).
+    - pattern: "write_todos"
       tier: 1
 
     # Local reads, listings and metadata. Added 2026-08-25 after enumerating

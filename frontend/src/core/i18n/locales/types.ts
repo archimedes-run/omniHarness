@@ -120,6 +120,7 @@ export interface Translations {
     inbox: string;
     automations: string;
     connections: string;
+    projects: string;
     settings: string;
   };
 

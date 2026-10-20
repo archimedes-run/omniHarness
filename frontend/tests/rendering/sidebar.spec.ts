@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * Phase 2.6 — the sidebar: New chat · Chats · Inbox · Automations · Connections
+ * The sidebar: New chat · Chats · Inbox · Projects (Feature 005) · Automations · Connections
  * · Agents, and More (with Settings) in the footer. The failing-source count
  * stays visible on Connections without opening anything (Feature 004 FR-041);
  * a dot on More says something inside it needs attention.
@@ -45,7 +45,7 @@ async function serve(page: Page, { failing = 0, keptPrevious = false } = {}) {
   await page.goto("/workspace/chats");
 }
 
-test("the sidebar reads New chat, Chats, Inbox, Automations, Connections, Agents", async ({
+test("the sidebar reads New chat, Chats, Inbox, Projects, Automations, Connections, Agents", async ({
   page,
 }) => {
   await serve(page);
@@ -60,6 +60,7 @@ test("the sidebar reads New chat, Chats, Inbox, Automations, Connections, Agents
         "New chat",
         "Chats",
         "Inbox",
+        "Projects",
         "Automations",
         "Connections",
         "Agents",
@@ -70,6 +71,7 @@ test("the sidebar reads New chat, Chats, Inbox, Automations, Connections, Agents
     "New chat",
     "Chats",
     "Inbox",
+    "Projects",
     "Automations",
     "Connections",
     "Agents",

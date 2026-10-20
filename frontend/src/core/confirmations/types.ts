@@ -25,6 +25,9 @@ export interface PendingAction {
   requires_typed_count: boolean;
   /** Failed redaction: the text fields carry a sentence saying so (FR-031). */
   withheld: boolean;
+  /** The call's arguments, only for tools whose plan can be edited before
+   *  confirming (ledger_apply). Absent otherwise. */
+  arguments?: Record<string, unknown> | null;
 }
 
 export interface PendingList {

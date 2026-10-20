@@ -118,6 +118,26 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.workflow_step_run_repo = None
             app.state.workflow_artifact_link_repo = None
 
+        # The Project Ledger (Feature 005): a SYNCHRONOUS repository on the
+        # same database, because confirmed Tier 3 tools run with a sync
+        # invoke (omniharness/persistence/ledger/sql.py). The ledger tools
+        # exist only while this controller is registered.
+        from omniharness.runtime.ledger.controller import set_ledger_controller
+
+        if sf is not None:
+            from app.ledger.controller import GatewayLedgerController
+            from app.ledger.service import LedgerService
+            from omniharness.persistence.ledger import LedgerRepository, make_sync_engine
+
+            ledger_engine = make_sync_engine(config.database.app_sqlalchemy_url)
+            stack.callback(ledger_engine.dispose)
+            app.state.ledger_service = LedgerService(LedgerRepository(ledger_engine))
+            set_ledger_controller(GatewayLedgerController(app.state.ledger_service))
+            stack.callback(set_ledger_controller, None)
+        else:
+            app.state.ledger_service = None
+            set_ledger_controller(None)
+
         # Composio connections repository (always enabled when DB is available)
         if sf is not None:
             from omniharness.persistence.composio_connections import ComposioConnectionRepository

@@ -16,6 +16,7 @@ there is no matching entity directory.
 
 from omniharness.persistence.composio_connections.model import ComposioConnectionRow
 from omniharness.persistence.feedback.model import FeedbackRow
+from omniharness.persistence.ledger.model import LedgerChangeRow, LedgerGoalRow, LedgerLinkRow, LedgerNoteRow, LedgerProjectRow, LedgerTaskRow
 from omniharness.persistence.mcp_secrets.model import McpSecretRow
 from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.models.run_event import RunEventRow
@@ -32,6 +33,12 @@ from omniharness.persistence.workflows.model import WorkflowRow
 __all__ = [
     "ComposioConnectionRow",
     "FeedbackRow",
+    "LedgerChangeRow",
+    "LedgerGoalRow",
+    "LedgerLinkRow",
+    "LedgerNoteRow",
+    "LedgerProjectRow",
+    "LedgerTaskRow",
     "McpSecretRow",
     "McpServerRow",
     "RunEventRow",

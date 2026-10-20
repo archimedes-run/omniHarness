@@ -27,3 +27,25 @@ async function resolve(
 export const confirmAction = (id: string, typedCount?: number) =>
   resolve(id, "confirm", typedCount);
 export const declineAction = (id: string) => resolve(id, "decline");
+
+/** The user edits the stated plan and confirms the edit (Feature 005). The
+ *  original is superseded and never runs; the edit is stated anew and
+ *  confirmed in one step. */
+export async function editAndConfirm(
+  id: string,
+  args: Record<string, unknown>,
+  typedCount?: number,
+): Promise<ResolveResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/confirmations/${id}/edit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        arguments: args,
+        typed_count: typedCount ?? null,
+      }),
+    },
+  );
+  return response.json() as Promise<ResolveResult>;
+}

@@ -24,6 +24,7 @@ from app.gateway.routers import (
     confirmations,
     feedback,
     inbox,
+    ledger,
     mcp,
     mcp_studio,
     memory,
@@ -529,6 +530,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Inbox: alerts the engine held, failed or delivered (Phase 2.5).
     app.include_router(inbox.router)
+
+    # The Project Ledger: projects, goals, tasks, decisions, links (Feature 005).
+    app.include_router(ledger.router)
 
     # Tool source status: configured, disabled, unreachable or live (FR-040).
     app.include_router(tool_sources.router)

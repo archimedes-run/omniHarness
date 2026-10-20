@@ -21,6 +21,7 @@ what chat could not.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -51,6 +52,10 @@ class PendingActionResponse(BaseModel):
     requires_typed_count: bool
     #: The plan or a target failed redaction and is not shown (FR-031, SC-015).
     withheld: bool = False
+    #: The call's arguments, for tools whose plan can be edited before it is
+    #: confirmed (Feature 005: ledger_apply). Absent for every other tool, and
+    #: absent when they failed redaction.
+    arguments: dict[str, Any] | None = None
 
 
 class PendingListResponse(BaseModel):
@@ -65,6 +70,18 @@ class PendingListResponse(BaseModel):
 class ResolveRequest(BaseModel):
     #: Required above the threshold; the count of resolved targets (FR-009).
     typed_count: int | None = Field(default=None)
+
+
+class EditRequest(BaseModel):
+    #: The full replacement arguments, as the edited card shows them.
+    arguments: dict[str, Any]
+    #: Required above the threshold, as for a confirmation (FR-009).
+    typed_count: int | None = Field(default=None)
+
+
+#: Tools whose stated plan the user may edit before confirming. The edit is a
+#: new plan stated by the user's own hand, through this trusted channel.
+EDITABLE_TOOLS = frozenset({"ledger_apply"})
 
 
 class ResolveResponse(BaseModel):
@@ -93,6 +110,15 @@ def _policy(request: Request):
     return app_config, middleware, flow
 
 
+def _user_id(ctx) -> str:
+    """The confirming user's id. AuthContext carries it as `.user.id`; this
+    read `ctx.user_id`, which does not exist, so every confirmation from the
+    card ran its tool as "default" (found by the ledger, whose rows are owned
+    by the user)."""
+    user = getattr(ctx, "user", None)
+    return str(user.id) if user is not None and getattr(user, "id", None) else "default"
+
+
 async def _runner(request: Request, thread_id: str | None, user_id: str):
     """Rebuild the tool surface this action's THREAD was using."""
     from omniharness.config import get_app_config
@@ -114,7 +140,16 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
             # Loud. A confirmation that cannot execute must say why; the defect
             # this whole feature exists to close was a quiet one.
             raise LookupError(f"tool {tool_name!r} is not available to this thread, so the confirmation cannot be completed")
-        return tool.invoke(arguments)
+        # The thread and user the action belongs to reach a tool that reads
+        # its runtime (the ledger tools do). Invoking with the stored arguments
+        # alone failed validation for any such tool, after the claim had been
+        # taken (the chat path already does this; see _with_injected).
+        from types import SimpleNamespace
+
+        from app.policy.middleware import _with_injected
+
+        runtime = SimpleNamespace(context={"thread_id": thread_id, "user_id": user_id}, config={}, stream_writer=None, store=None)
+        return tool.invoke(_with_injected(tool, arguments, runtime, {}))
 
     return run
 
@@ -123,6 +158,10 @@ def _view(action, threshold: int) -> PendingActionResponse:
     # The plan names what it acts on, often in the words of an email or a page.
     plan_text, plan_withheld = for_display(action.plan_text)
     targets, targets_withheld = all_for_display(list(action.targets))
+    arguments = None
+    if action.tool_name in EDITABLE_TOOLS:
+        _, args_withheld = for_display(json.dumps(action.arguments, default=str))
+        arguments = None if args_withheld else action.arguments
     return PendingActionResponse(
         id=action.id,
         tool_name=action.tool_name,
@@ -135,6 +174,7 @@ def _view(action, threshold: int) -> PendingActionResponse:
         threshold_targets=threshold,
         requires_typed_count=len(action.targets) > threshold,
         withheld=plan_withheld or targets_withheld,
+        arguments=arguments,
     )
 
 
@@ -174,7 +214,7 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     _, middleware, flow = _policy(request)
     action = middleware.pending.get(action_id)
     ctx = get_auth_context(request)
-    user_id = getattr(ctx, "user_id", None) or "default"
+    user_id = _user_id(ctx)
 
     run_tool = await _runner(request, action.thread_id if action else None, user_id)
 
@@ -183,6 +223,57 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # record with itself and drift could never be detected here.
     result = flow.explicit(action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count)
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail=result.detail)
+
+
+@router.post("/{action_id}/edit", response_model=ResolveResponse)
+@require_permission("threads", "write")
+async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) -> ResolveResponse:
+    """The user edits a stated plan and confirms the edited one (Feature 005 FR-010).
+
+    The original is claimed and resolved SUPERSEDED, never run. The edit
+    becomes a NEW pending action whose plan and targets are stated from the
+    edited arguments by the same functions chat uses, and it is confirmed in
+    the same step: the person who wrote the edit is the person confirming
+    it, through this trusted channel. Only tools in EDITABLE_TOOLS.
+    """
+    from app.gateway.authz import get_auth_context
+    from app.policy.confirm_flow import take_claim
+    from app.policy.models import Outcome, PendingAction, Tier, default_expiry
+
+    _, middleware, flow = _policy(request)
+    now = datetime.now(UTC)
+    action = middleware.pending.get(action_id)
+    if action is None or action.outcome is not None or action.is_expired(now):
+        return ResolveResponse(outcome="already_resolved", action_id=action_id, message="That plan is no longer open, so it cannot be edited.")
+    if action.tool_name not in EDITABLE_TOOLS:
+        raise HTTPException(status_code=422, detail=f"{action.tool_name} plans cannot be edited here")
+    claimed = take_claim(middleware.pending, action_id, "edit")
+    if claimed is None:
+        return ResolveResponse(outcome="already_resolved", action_id=action_id, message="Another route resolved that plan first.")
+
+    arguments = body.arguments
+    targets = list(middleware.resolve_targets(action.tool_name, arguments)) if middleware.resolve_targets else [f"{action.tool_name}({arguments})"]
+    ruleset = middleware.loader.load()
+    edited = PendingAction(
+        plan_text="",
+        tool_name=action.tool_name,
+        arguments=arguments,
+        targets=targets,
+        tier_at_statement=Tier.TIER_3,
+        expires_at=default_expiry(now, ruleset.expires_after_seconds),
+        thread_id=action.thread_id,
+        requester=action.requester,
+        delegation_chain=action.delegation_chain,
+    )
+    edited.plan_text = middleware._plan_text_for(edited)
+    middleware.pending.save(edited)
+    middleware.pending.resolve(claimed, Outcome.SUPERSEDED, f"replaced by your edit ({edited.id}); the original was NOT run")
+
+    ctx = get_auth_context(request)
+    user_id = _user_id(ctx)
+    run_tool = await _runner(request, edited.thread_id, user_id)
+    result = flow.explicit(edited.id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count)
+    return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail={**result.detail, "replaced": action_id})
 
 
 @router.post("/{action_id}/confirm", response_model=ResolveResponse)

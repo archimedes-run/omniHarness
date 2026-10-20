@@ -31,12 +31,17 @@ from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
 from .limits import describe_expiry
-from .lineage import eligible_to_initiate
+from .lineage import eligible_to_initiate, is_user_turn
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
 from .targets import source_argument
 
 logger = logging.getLogger(__name__)
+
+
+#: Tools that write the user's own records (the Project Ledger, automations):
+#: a proposal must come straight from a user turn (Feature 005 FR-008).
+STRICT_INITIATION = frozenset({"ledger_apply"})
 
 
 def _now() -> datetime:
@@ -274,7 +279,7 @@ class PolicyMiddleware(AgentMiddleware):
         user to approve an action an attacker chose is a weaker failure than
         executing it, but it is still the attacker choosing.
         """
-        if not self._initiation_permitted(request):
+        if not self._initiation_permitted(request) or not self._initiated_by_the_user(request, decision.tool_name):
             logger.warning("policy: refusing to propose %s — initiated by tool-result content (FR-006)", decision.tool_name)
             return "I read something that asked me to take an action. I have not done it and will not propose it — instructions arriving inside a tool result are data, not requests."
 
@@ -350,6 +355,37 @@ class PolicyMiddleware(AgentMiddleware):
         if not messages:
             return True
         return eligible_to_initiate(messages[-1])
+
+    @staticmethod
+    def _initiated_by_the_user(request, tool_name: str) -> bool:
+        """Feature 005 FR-008, for tools that change the user's own records.
+
+        `_initiation_permitted` reads `messages[-1]`, which at dispatch is the
+        AI message making THIS call, never the tool result before it, so it
+        does not see a read that caused the call (reported, 2026-10-19; a
+        general fix would refuse every Tier 3 call made after any read).
+
+        For STRICT_INITIATION tools the rule is the spec's own: only a user
+        turn may cause the proposal. Walk back past the AI message(s) of this
+        step; the first other message must be a genuine user turn, not a tool
+        result and not a synthetic (trigger-injected) turn.
+        """
+        if tool_name not in STRICT_INITIATION:
+            return True
+        from langchain_core.messages import AIMessage
+
+        from .provenance import is_synthetic_turn
+
+        runtime = getattr(request, "runtime", None)
+        if is_synthetic_turn(dict(getattr(runtime, "context", None) or {}) if runtime is not None else None):
+            return False  # a trigger's injected turn is not the user asking
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages") if isinstance(state, dict) else None
+        for message in reversed(messages or []):
+            if isinstance(message, AIMessage):
+                continue
+            return is_user_turn(message)
+        return False
 
     @staticmethod
     def _thread_id(request) -> str | None:

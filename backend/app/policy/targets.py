@@ -37,9 +37,30 @@ from typing import Any
 _NAMEABLE = (str, int, float)
 
 
+#: Tools whose arguments are structured changes rather than a list of names,
+#: with the renderer that states each change in words. Not a heuristic: the
+#: same structured changes the tool writes are what the plan lists, so the
+#: user confirms exactly what will be stored (Feature 005 FR-010).
+#: (tool name -> (argument holding the changes, renderer))
+STRUCTURED: dict[str, tuple[str, Any]] = {}
+
+
+def _structured() -> dict[str, tuple[str, Any]]:
+    if not STRUCTURED:
+        from app.ledger.service import render
+
+        STRUCTURED["ledger_apply"] = ("changes", render)
+    return STRUCTURED
+
+
 def resolve_targets(tool_name: str, arguments: dict[str, Any] | None) -> list[str]:
     """The specific items this call will act on, or one honest fallback."""
     args = arguments or {}
+    if tool_name in _structured():
+        key, renderer = _structured()[tool_name]
+        lines = renderer(args.get(key))
+        if lines:
+            return lines
     candidates = [(key, value) for key, value in args.items() if isinstance(value, list) and value and all(isinstance(item, _NAMEABLE) for item in value)]
 
     if len(candidates) == 1:
@@ -63,5 +84,8 @@ def source_argument(arguments: dict[str, Any] | None) -> str | None:
     scope could not be itemised rather than implying a specific list.
     """
     args = arguments or {}
+    for key, _ in _structured().values():
+        if isinstance(args.get(key), list) and args[key]:
+            return key
     candidates = [key for key, value in args.items() if isinstance(value, list) and value and all(isinstance(item, _NAMEABLE) for item in value)]
     return candidates[0] if len(candidates) == 1 else None

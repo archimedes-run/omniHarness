@@ -12,6 +12,8 @@ import {
 import { PendingConfirmations } from "@/components/workspace/confirmations/pending-confirmations";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
+import { PromoteTodos } from "@/components/workspace/ledger/promote-todos";
+import { ThreadProjects } from "@/components/workspace/ledger/thread-projects";
 import {
   MessageList,
   MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
@@ -144,6 +146,12 @@ export default function ChatPage() {
                   setLocalSettings("tokenUsage", preferences)
                 }
               />
+              {!isNewThread && (
+                <ThreadProjects
+                  threadId={threadId}
+                  title={thread.values.title ?? undefined}
+                />
+              )}
               <ExportTrigger threadId={threadId} />
               <ArtifactTrigger />
             </div>
@@ -185,6 +193,14 @@ export default function ChatPage() {
                       todos={thread.values.todos ?? []}
                       hidden={
                         !thread.values.todos || thread.values.todos.length === 0
+                      }
+                      action={
+                        !isNewThread && (
+                          <PromoteTodos
+                            threadId={threadId}
+                            todos={thread.values.todos ?? []}
+                          />
+                        )
                       }
                     />
                   </div>

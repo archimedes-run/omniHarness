@@ -2,6 +2,7 @@
 
 import {
   BotIcon,
+  FolderKanbanIcon,
   InboxIcon,
   MessagesSquare,
   PlugIcon,
@@ -22,9 +23,10 @@ import { useInboxCount } from "@/core/inbox/hooks";
 import { useToolSources } from "@/core/tool-sources/hooks";
 
 /**
- * The sidebar (Phase 2.6): New chat (in the header) · Chats · Inbox ·
+ * The sidebar: New chat (in the header) · Chats · Inbox · Projects ·
  * Automations · Connections · Agents, and More (Settings and the rest) in the
- * footer. Projects and Today arrive with Feature 005. Coding sessions keep
+ * footer. Projects arrived with Feature 005 slice 2; Today replaces Inbox in
+ * slice 3. Coding sessions keep
  * their route, off the sidebar.
  */
 export function WorkspaceNavChatList() {
@@ -73,6 +75,17 @@ export function WorkspaceNavChatList() {
               </SidebarMenuBadge>
             )
           )}
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/projects")}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/projects">
+              <FolderKanbanIcon />
+              <span>{t.sidebar.projects}</span>
+            </Link>
+          </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
