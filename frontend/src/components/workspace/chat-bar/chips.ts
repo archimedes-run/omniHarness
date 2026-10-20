@@ -137,3 +137,41 @@ export function insertMention(
   const token = `${mentionToken(name)} `;
   return { text: before + token + after, caret: before.length + token.length };
 }
+
+/**
+ * What a file chip's preview says about a file that is not an image: its
+ * name, its type and its size, each "unknown" in words when it cannot be told.
+ */
+export function fileFacts(f: {
+  filename?: string;
+  mediaType?: string;
+  size?: number;
+}): { name: string; type: string; size: string } {
+  const name = f.filename?.trim() ? f.filename.trim() : "Attachment";
+  const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1];
+  // "application/octet-stream" is the browser's "no idea": not a type.
+  const media = f.mediaType?.trim();
+  const type =
+    media && media !== "application/octet-stream"
+      ? media
+      : ext
+        ? `${ext.toUpperCase()} file`
+        : "Type unknown";
+  return { name, type, size: formatBytes(f.size) };
+}
+
+/** 1,536 bytes reads "1.5 KB"; no size reads "Size unknown". */
+export function formatBytes(bytes: number | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) {
+    return "Size unknown";
+  }
+  if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let n = bytes / 1024;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n >= 10 ? Math.round(n) : Math.round(n * 10) / 10} ${units[i]}`;
+}
