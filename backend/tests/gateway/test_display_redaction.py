@@ -99,6 +99,13 @@ def audit_client(tmp_path, monkeypatch):
     action.claimed_by = "worker-1"
     action.resolve(Outcome.EXECUTED)
     PolicyAuditLog(path=tmp_path / "state" / "audit.jsonl", actor="default").record_tier3(action)
+
+    # The stub user is the owner: the audit list shows only the caller's own
+    # (or, for the owner, the system's) entries. Ownership is tested in tests/security.
+    async def _is_owner(user):
+        return True
+
+    monkeypatch.setattr("app.gateway.ownership.is_owner", _is_owner)
     app = make_authed_test_app()
     app.include_router(policy_router.router)
     return TestClient(app)

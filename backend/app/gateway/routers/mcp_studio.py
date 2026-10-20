@@ -735,7 +735,7 @@ async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResp
 
 
 @router.delete("/servers/{server_id}", status_code=204)
-@require_permission("threads", "write")
+@require_permission("threads", "delete")
 async def delete_mcp_server(server_id: str, request: Request) -> None:
     """Delete a server and everything it left running or stored.
 

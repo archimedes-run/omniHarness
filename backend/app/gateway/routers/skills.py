@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.gateway.authz import permission_dependency
 from app.gateway.deps import get_config
 from app.gateway.path_utils import resolve_thread_virtual_path
 from omniharness.agents.lead_agent.prompt import refresh_skills_system_prompt_cache_async
@@ -187,7 +188,7 @@ async def update_custom_skill(skill_name: str, request: CustomSkillUpdateRequest
         raise HTTPException(status_code=500, detail=f"Failed to update custom skill: {str(e)}")
 
 
-@router.delete("/skills/custom/{skill_name}", summary="Delete Custom Skill")
+@router.delete("/skills/custom/{skill_name}", summary="Delete Custom Skill", dependencies=[Depends(permission_dependency("threads", "delete"))])
 async def delete_custom_skill(skill_name: str, config: AppConfig = Depends(get_config)) -> dict[str, bool]:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
