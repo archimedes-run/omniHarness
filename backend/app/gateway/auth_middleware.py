@@ -18,8 +18,9 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
 from app.gateway.auth.errors import AuthErrorCode, AuthErrorResponse
-from app.gateway.authz import _ALL_PERMISSIONS, AuthContext
+from app.gateway.authz import AuthContext, permissions_for
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, get_internal_user, is_valid_internal_auth_token
+from app.gateway.ownership import SECOND_ACCOUNT_REFUSED, account_admitted
 from omniharness.runtime.user_context import reset_current_user, set_current_user
 
 # Paths that never require authentication.
@@ -119,12 +120,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
             except HTTPException as exc:
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
+        # Single-owner baseline (item a): a valid session for any account but
+        # the owner's is refused here, on every route, with a plain reason.
+        if not await account_admitted(user):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": AuthErrorResponse(code=AuthErrorCode.ACCOUNT_NOT_PERMITTED, message=SECOND_ACCOUNT_REFUSED).model_dump()},
+            )
+
         # Stamp both request.state.user (for the contextvar pattern)
         # and request.state.auth (so @require_permission's "auth is
         # None" branch short-circuits instead of running the entire
         # JWT-decode + DB-lookup pipeline a second time per request).
         request.state.user = user
-        request.state.auth = AuthContext(user=user, permissions=_ALL_PERMISSIONS)
+        request.state.auth = AuthContext(user=user, permissions=await permissions_for(user))
         token = set_current_user(user)
         try:
             return await call_next(request)

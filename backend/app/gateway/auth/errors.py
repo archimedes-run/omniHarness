@@ -21,6 +21,10 @@ class AuthErrorCode(StrEnum):
     PROVIDER_NOT_FOUND = "provider_not_found"
     NOT_AUTHENTICATED = "not_authenticated"
     SYSTEM_ALREADY_INITIALIZED = "system_already_initialized"
+    #: Registration after the owner account exists (single-owner baseline).
+    REGISTRATION_CLOSED = "registration_closed"
+    #: A valid account that is not the owner (single-owner baseline).
+    ACCOUNT_NOT_PERMITTED = "account_not_permitted"
 
 
 class TokenError(StrEnum):
