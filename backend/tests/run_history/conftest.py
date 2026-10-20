@@ -81,6 +81,11 @@ def make_gateway(tmp_path, monkeypatch) -> Callable:
         finally:
             reset_app_config()
             reset_extensions_config()
+            # The lifespan sets this process-global when mcp_builder is on and
+            # never clears it on shutdown; a later test would inherit it.
+            from omniharness.runtime.mcp.controller import reset_mcp_build_controller
+
+            reset_mcp_build_controller()
 
     return _make
 
