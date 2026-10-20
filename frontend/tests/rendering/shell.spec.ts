@@ -282,8 +282,8 @@ test("a link to a panel opens it", async ({ page }) => {
 });
 
 for (const [id, text] of [
-  ["agents", "launch-researcher"],
-  ["skills", "launch-checklist"],
+  ["agents", "Launch researcher"],
+  ["skills", "Launch checklist"],
   ["automations", "launch-brief"],
   ["tasks", "Beta launch"],
 ] as const) {

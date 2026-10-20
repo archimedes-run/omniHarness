@@ -102,8 +102,8 @@ for (const route of ["/workspace/chats/new", "/workspace/home"])
  * Markers are literals only that panel's component contains.
  */
 const PANEL_MARKERS: Record<string, RegExp> = {
-  agents: /Custom agents are turned off/,
-  skills: /mode=skill/,
+  agents: /overview-works-on/,
+  skills: /skill-preview-toggle/,
   automations: /every weekday at 9, brief me/,
   tasks: /Evidence is not set up yet/,
 };
