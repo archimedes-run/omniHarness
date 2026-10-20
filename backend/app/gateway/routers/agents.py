@@ -2,13 +2,13 @@
 
 import logging
 import re
-import shutil
+from typing import Literal
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import permission_dependency
+from omniharness.config import config_versions
 from omniharness.config.agents_api_config import get_agents_api_config
 from omniharness.config.agents_config import AgentConfig, list_custom_agents, load_agent_config, load_agent_soul
 from omniharness.config.paths import get_paths
@@ -31,6 +31,7 @@ class AgentResponse(BaseModel):
     soul: str | None = Field(default=None, description="SOUL.md content")
     display_name: str | None = Field(default=None, description="Name shown to people; None shows the title-cased slug")
     projects: list[str] | None = Field(default=None, description="Ledger project ids this agent works on")
+    version: int = Field(default=0, description="Current version in the versioned store (0: none yet); send it back as base_version")
 
 
 class AgentsListResponse(BaseModel):
@@ -50,6 +51,7 @@ class AgentCreateRequest(BaseModel):
     soul: str = Field(default="", description="SOUL.md content — agent personality and behavioral guardrails")
     display_name: str | None = Field(default=None, max_length=80, description="Name shown to people")
     projects: list[str] | None = Field(default=None, description="Ledger project ids this agent works on")
+    source: Literal["manual", "draft"] = Field(default="manual", description="manual, or draft when a one-sentence draft filled it")
 
 
 class AgentUpdateRequest(BaseModel):
@@ -62,6 +64,28 @@ class AgentUpdateRequest(BaseModel):
     soul: str | None = Field(default=None, description="Updated SOUL.md content")
     display_name: str | None = Field(default=None, max_length=80, description="Updated name shown to people")
     projects: list[str] | None = Field(default=None, description="Updated ledger project ids")
+    base_version: int | None = Field(default=None, description="The version this edit was made from; refused when it is no longer current")
+    source: Literal["manual", "draft"] = Field(default="manual", description="manual, or draft when a one-sentence draft filled it")
+
+
+class AgentUndoRequest(BaseModel):
+    to_version: int = Field(..., ge=1, description="The version to restore, as a new version")
+    base_version: int = Field(..., ge=0, description="The version the undo was chosen from")
+
+
+class AgentVersionSummary(BaseModel):
+    version: int
+    at: str
+    who: str
+    source: str
+    changed: list[str]
+    deleted: bool
+
+
+class AgentVersionsResponse(BaseModel):
+    name: str
+    current: int
+    versions: list[AgentVersionSummary]
 
 
 def _validate_agent_name(name: str) -> None:
@@ -109,6 +133,7 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
         soul=soul,
         display_name=agent_cfg.display_name,
         projects=agent_cfg.projects,
+        version=config_versions.agent_version(user_id or get_effective_user_id(), agent_cfg.name),
     )
 
 
@@ -232,43 +257,28 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
     if agent_dir.exists() or legacy_dir.exists():
         raise HTTPException(status_code=409, detail=f"Agent '{normalized_name}' already exists")
 
+    config_data: dict = {"name": normalized_name}
+    if request.description:
+        config_data["description"] = request.description
+    if request.model is not None:
+        config_data["model"] = request.model
+    if request.tool_groups is not None:
+        config_data["tool_groups"] = request.tool_groups
+    if request.skills is not None:
+        config_data["skills"] = request.skills
+    if request.display_name and request.display_name.strip():
+        config_data["display_name"] = request.display_name.strip()
+    if request.projects is not None:
+        config_data["projects"] = request.projects
+
     try:
-        agent_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write config.yaml
-        config_data: dict = {"name": normalized_name}
-        if request.description:
-            config_data["description"] = request.description
-        if request.model is not None:
-            config_data["model"] = request.model
-        if request.tool_groups is not None:
-            config_data["tool_groups"] = request.tool_groups
-        if request.skills is not None:
-            config_data["skills"] = request.skills
-        if request.display_name and request.display_name.strip():
-            config_data["display_name"] = request.display_name.strip()
-        if request.projects is not None:
-            config_data["projects"] = request.projects
-
-        config_file = agent_dir / "config.yaml"
-        with open(config_file, "w", encoding="utf-8") as f:
-            yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
-
-        # Write SOUL.md
-        soul_file = agent_dir / "SOUL.md"
-        soul_file.write_text(request.soul, encoding="utf-8")
-
+        # Through the versioned store: this is version 1 (or the next one, for
+        # a name that was deleted before).
+        config_versions.write_agent(user_id, normalized_name, {"config": config_data, "soul": request.soul}, who=f"user:{user_id}", source=request.source)
         logger.info(f"Created agent '{normalized_name}' at {agent_dir}")
-
         agent_cfg = load_agent_config(normalized_name, user_id=user_id)
         return _agent_config_to_response(agent_cfg, include_soul=True, user_id=user_id)
-
-    except HTTPException:
-        raise
     except Exception as e:
-        # Clean up on failure
-        if agent_dir.exists():
-            shutil.rmtree(agent_dir)
         logger.error(f"Failed to create agent '{request.name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create agent: {str(e)}")
 
@@ -311,60 +321,70 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
             detail=(f"Agent '{name}' only exists in the legacy shared layout and is not scoped to a user. Run scripts/migrate_user_isolation.py to move legacy agents into the per-user layout before updating."),
         )
 
-    try:
-        # Update config if any config fields changed
-        # Use model_fields_set to distinguish "field omitted" from "explicitly set to null".
-        # This is critical for skills where None means "inherit all" (not "don't change").
-        fields_set = request.model_fields_set
-        config_changed = bool(fields_set & {"description", "model", "tool_groups", "skills", "display_name", "projects"})
-
-        if config_changed:
-            updated: dict = {
-                "name": agent_cfg.name,
-                "description": request.description if "description" in fields_set else agent_cfg.description,
-            }
-            new_model = request.model if "model" in fields_set else agent_cfg.model
-            if new_model is not None:
-                updated["model"] = new_model
-
-            new_tool_groups = request.tool_groups if "tool_groups" in fields_set else agent_cfg.tool_groups
-            if new_tool_groups is not None:
-                updated["tool_groups"] = new_tool_groups
-
-            # skills: None = inherit all, [] = no skills, ["a","b"] = whitelist
-            if "skills" in fields_set:
-                new_skills = request.skills
+    fields_set = request.model_fields_set
+    current = config_versions.current_agent_snapshot(user_id, name) or {"config": {"name": name}, "soul": ""}
+    # Start from what is on record, so a key this endpoint does not know (the
+    # autonomy list, a future field) is kept, not dropped.
+    config = dict(current.get("config") or {"name": name})
+    config["name"] = agent_cfg.name
+    # model_fields_set tells "omitted" from "set to null": for skills, None
+    # means "every enabled skill", not "unchanged".
+    for key in ("description", "model", "tool_groups", "skills", "projects"):
+        if key in fields_set:
+            value = getattr(request, key)
+            if value is None and key != "description":
+                config.pop(key, None)
             else:
-                new_skills = agent_cfg.skills
-            if new_skills is not None:
-                updated["skills"] = new_skills
+                config[key] = value if value is not None else ""
+    if "display_name" in fields_set:
+        if request.display_name and request.display_name.strip():
+            config["display_name"] = request.display_name.strip()
+        else:
+            config.pop("display_name", None)
+    soul = request.soul if request.soul is not None else (current.get("soul") or "")
 
-            new_display = request.display_name if "display_name" in fields_set else agent_cfg.display_name
-            if new_display and new_display.strip():
-                updated["display_name"] = new_display.strip()
-            new_projects = request.projects if "projects" in fields_set else agent_cfg.projects
-            if new_projects is not None:
-                updated["projects"] = new_projects
-
-            config_file = agent_dir / "config.yaml"
-            with open(config_file, "w", encoding="utf-8") as f:
-                yaml.dump(updated, f, default_flow_style=False, allow_unicode=True)
-
-        # Update SOUL.md if provided
-        if request.soul is not None:
-            soul_path = agent_dir / "SOUL.md"
-            soul_path.write_text(request.soul, encoding="utf-8")
-
-        logger.info(f"Updated agent '{name}'")
-
-        refreshed_cfg = load_agent_config(name, user_id=user_id)
-        return _agent_config_to_response(refreshed_cfg, include_soul=True, user_id=user_id)
-
-    except HTTPException:
-        raise
+    try:
+        config_versions.write_agent(user_id, name, {"config": config, "soul": soul}, who=f"user:{user_id}", source=request.source, base_version=request.base_version)
+    except config_versions.StaleWriteError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to update agent '{name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update agent: {str(e)}")
+
+    logger.info(f"Updated agent '{name}'")
+    refreshed_cfg = load_agent_config(name, user_id=user_id)
+    return _agent_config_to_response(refreshed_cfg, include_soul=True, user_id=user_id)
+
+
+@router.get("/agents/{name}/versions", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=AgentVersionsResponse, summary="An agent's version history")
+async def agent_versions(name: str) -> AgentVersionsResponse:
+    _require_agents_api_enabled()
+    user_id = get_effective_user_id()
+    if name != config_versions.LEAD_AGENT:
+        _validate_agent_name(name)
+        name = _normalize_agent_name(name)
+    versions = config_versions.agent_history(user_id, name)
+    return AgentVersionsResponse(
+        name=name,
+        current=versions[-1].version if versions else 0,
+        versions=[AgentVersionSummary(**v.summary()) for v in reversed(versions)],
+    )
+
+
+@router.post("/agents/{name}/undo", dependencies=[Depends(permission_dependency("threads", "write"))], response_model=AgentVersionsResponse, summary="Restore an earlier version as a new one")
+async def undo_agent(name: str, request: AgentUndoRequest) -> AgentVersionsResponse:
+    _require_agents_api_enabled()
+    user_id = get_effective_user_id()
+    if name != config_versions.LEAD_AGENT:
+        _validate_agent_name(name)
+        name = _normalize_agent_name(name)
+    try:
+        config_versions.undo("agent", name, request.to_version, who=f"user:{user_id}", base_version=request.base_version, user_id=user_id)
+    except config_versions.StaleWriteError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except config_versions.VersionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return await agent_versions(name)
 
 
 class UserProfileResponse(BaseModel):
@@ -467,7 +487,8 @@ async def delete_agent(name: str) -> None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
 
     try:
-        shutil.rmtree(agent_dir)
+        # A version too: a deleted agent can be brought back with undo.
+        config_versions.write_agent(user_id, name, None, who=f"user:{user_id}", source="manual")
         logger.info(f"Deleted agent '{name}' from {agent_dir}")
     except Exception as e:
         logger.error(f"Failed to delete agent '{name}': {e}", exc_info=True)

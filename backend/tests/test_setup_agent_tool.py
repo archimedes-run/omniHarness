@@ -28,12 +28,13 @@ def _make_paths_mock(tmp_path: Path):
     paths.base_dir = tmp_path
     paths.agent_dir = lambda name: tmp_path / "agents" / name
     paths.user_agent_dir = lambda user_id, name: tmp_path / "users" / user_id / "agents" / name
+    paths.user_agents_dir = lambda user_id: tmp_path / "users" / user_id / "agents"
     return paths
 
 
 def _call_setup_agent(tmp_path: Path, soul: str, description: str, agent_name: str = "test-agent"):
     """Call the underlying setup_agent function directly, bypassing langchain tool wrapper."""
-    with patch("omniharness.tools.builtins.setup_agent_tool.get_paths", return_value=_make_paths_mock(tmp_path)):
+    with patch("omniharness.config.agents_config.get_paths", return_value=_make_paths_mock(tmp_path)):
         return setup_agent.func(
             soul=soul,
             description=description,
@@ -87,7 +88,7 @@ class TestSetupAgentNoDataLoss:
         old_soul = agent_dir / "SOUL.md"
         old_soul.write_text("original soul content", encoding="utf-8")
 
-        with patch("omniharness.tools.builtins.setup_agent_tool.get_paths", return_value=_make_paths_mock(tmp_path)):
+        with patch("omniharness.config.agents_config.get_paths", return_value=_make_paths_mock(tmp_path)):
             # Force soul_file.write_text to raise after directory already exists
             with patch.object(Path, "write_text", side_effect=OSError("disk full")):
                 setup_agent.func(
@@ -107,7 +108,7 @@ class TestSetupAgentNoDataLoss:
         agent_dir = tmp_path / "users" / "test-user-autouse" / "agents" / "test-agent"
         assert not agent_dir.exists()
 
-        with patch("omniharness.tools.builtins.setup_agent_tool.get_paths", return_value=_make_paths_mock(tmp_path)):
+        with patch("omniharness.config.agents_config.get_paths", return_value=_make_paths_mock(tmp_path)):
             with patch("yaml.dump", side_effect=OSError("write error")):
                 setup_agent.func(
                     soul="new soul",

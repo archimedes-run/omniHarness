@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -8,8 +9,10 @@ from app.gateway.authz import permission_dependency
 from app.gateway.deps import get_config
 from app.gateway.path_utils import resolve_thread_virtual_path
 from omniharness.agents.lead_agent.prompt import refresh_skills_system_prompt_cache_async
+from omniharness.config import config_versions
 from omniharness.config.app_config import AppConfig
 from omniharness.config.extensions_config import ExtensionsConfig, SkillStateConfig, get_extensions_config, reload_extensions_config
+from omniharness.runtime.user_context import get_effective_user_id
 from omniharness.skills import Skill
 from omniharness.skills.installer import SkillAlreadyExistsError
 from omniharness.skills.security_scanner import scan_skill_content
@@ -60,10 +63,33 @@ class SkillInstallResponse(BaseModel):
 
 class CustomSkillContentResponse(SkillResponse):
     content: str = Field(..., description="Raw SKILL.md content")
+    version: int = Field(0, description="Current version in the versioned store (0: none yet); send it back as base_version")
+
+
+class SkillVersionSummary(BaseModel):
+    version: int
+    at: str
+    who: str
+    source: str
+    changed: list[str]
+    deleted: bool
+
+
+class SkillVersionsResponse(BaseModel):
+    name: str
+    current: int
+    versions: list[SkillVersionSummary]
+
+
+class SkillUndoRequest(BaseModel):
+    to_version: int = Field(..., ge=1)
+    base_version: int = Field(..., ge=0)
 
 
 class CustomSkillUpdateRequest(BaseModel):
     content: str = Field(..., description="Replacement SKILL.md content")
+    base_version: int | None = Field(None, description="The version this edit was made from; refused when it is no longer current")
+    source: Literal["manual", "draft"] = Field("manual", description="manual, or draft when a one-sentence draft filled it")
 
 
 class CustomSkillHistoryResponse(BaseModel):
@@ -109,7 +135,12 @@ async def list_skills(config: AppConfig = Depends(get_config)) -> SkillsListResp
 async def install_skill(request: SkillInstallRequest, config: AppConfig = Depends(get_config)) -> SkillInstallResponse:
     try:
         skill_file_path = resolve_thread_virtual_path(request.thread_id, request.path)
-        result = await get_or_new_skill_storage(app_config=config).ainstall_skill_from_archive(skill_file_path)
+        storage = get_or_new_skill_storage(app_config=config)
+        result = await storage.ainstall_skill_from_archive(skill_file_path)
+        # The archive is unpacked by the installer (its own path checks); the
+        # result is then recorded as a version, so it shows in history and
+        # can be undone like any other change.
+        config_versions.record_installed(result["skill_name"], who="user:" + get_effective_user_id(), storage=storage)
         await refresh_skills_system_prompt_cache_async()
         return SkillInstallResponse(**result)
     except FileNotFoundError as e:
@@ -138,6 +169,7 @@ async def list_custom_skills(config: AppConfig = Depends(get_config)) -> SkillsL
 class CustomSkillCreateRequest(BaseModel):
     name: str = Field(..., description="Hyphen-case skill name; must match the SKILL.md frontmatter")
     content: str = Field(..., description="Full SKILL.md content, frontmatter included")
+    source: Literal["manual", "draft"] = Field("manual", description="manual, or draft when a one-sentence draft filled it")
 
 
 class SkillFile(BaseModel):
@@ -153,6 +185,7 @@ class SkillFilesResponse(BaseModel):
 class SkillFileWriteRequest(BaseModel):
     path: str = Field(..., description="references/, templates/, scripts/ or assets/ path inside the skill")
     content: str = Field(..., max_length=512_000, description="Text content")
+    base_version: int | None = Field(None, description="The version this was added from; refused when it is no longer current")
 
 
 @router.post("/skills/custom", response_model=CustomSkillContentResponse, status_code=201, summary="Create Custom Skill")
@@ -168,10 +201,13 @@ async def create_custom_skill(request: CustomSkillCreateRequest, config: AppConf
         scan = await scan_skill_content(request.content, executable=False, location=f"{name}/{SKILL_MD_FILE}", app_config=config)
         if scan.decision == "block":
             raise HTTPException(status_code=400, detail=f"Security scan blocked the skill: {scan.reason}")
-        storage.write_custom_skill(name, SKILL_MD_FILE, request.content)
-        storage.append_history(
+        config_versions.write_skill(
             name,
-            {
+            {SKILL_MD_FILE: request.content},
+            who="user:" + get_effective_user_id(),
+            source=request.source,
+            base_version=None,
+            extra={
                 "action": "human_create",
                 "author": "human",
                 "thread_id": None,
@@ -180,6 +216,7 @@ async def create_custom_skill(request: CustomSkillCreateRequest, config: AppConf
                 "new_content": request.content,
                 "scanner": {"decision": scan.decision, "reason": scan.reason},
             },
+            storage=storage,
         )
         await refresh_skills_system_prompt_cache_async()
         return await get_custom_skill(name, config)
@@ -226,10 +263,21 @@ async def write_custom_skill_file(skill_name: str, request: SkillFileWriteReques
     if scan.decision == "block":
         raise HTTPException(status_code=400, detail=f"Security scan blocked the file: {scan.reason}")
     prev = target.read_text(encoding="utf-8") if target.exists() else None
-    storage.write_custom_skill(name, request.path, request.content)
-    storage.append_history(
+    try:
+        _write_file_version(name, request, prev, scan, storage)
+    except config_versions.StaleWriteError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return await list_custom_skill_files(name, config)
+
+
+def _write_file_version(name: str, request: SkillFileWriteRequest, prev: str | None, scan, storage) -> None:
+    config_versions.write_skill(
         name,
-        {
+        {request.path: request.content},
+        who="user:" + get_effective_user_id(),
+        source="manual",
+        base_version=request.base_version,
+        extra={
             "action": "human_file",
             "author": "human",
             "thread_id": None,
@@ -238,8 +286,8 @@ async def write_custom_skill_file(skill_name: str, request: SkillFileWriteReques
             "new_content": request.content,
             "scanner": {"decision": scan.decision, "reason": scan.reason},
         },
+        storage=storage,
     )
-    return await list_custom_skill_files(name, config)
 
 
 @router.get("/skills/custom/{skill_name}", response_model=CustomSkillContentResponse, summary="Get Custom Skill Content")
@@ -250,7 +298,8 @@ async def get_custom_skill(skill_name: str, config: AppConfig = Depends(get_conf
         skill = next((s for s in skills if s.name == skill_name and s.category == SkillCategory.CUSTOM), None)
         if skill is None:
             raise HTTPException(status_code=404, detail=f"Custom skill '{skill_name}' not found")
-        return CustomSkillContentResponse(**_skill_to_response(skill).model_dump(), content=get_or_new_skill_storage(app_config=config).read_custom_skill(skill_name))
+        storage = get_or_new_skill_storage(app_config=config)
+        return CustomSkillContentResponse(**_skill_to_response(skill).model_dump(), content=storage.read_custom_skill(skill_name), version=config_versions.skill_version(skill_name, storage))
     except HTTPException:
         raise
     except Exception as e:
@@ -269,10 +318,13 @@ async def update_custom_skill(skill_name: str, request: CustomSkillUpdateRequest
         if scan.decision == "block":
             raise HTTPException(status_code=400, detail=f"Security scan blocked the edit: {scan.reason}")
         prev_content = storage.read_custom_skill(skill_name)
-        storage.write_custom_skill(skill_name, SKILL_MD_FILE, request.content)
-        storage.append_history(
+        config_versions.write_skill(
             skill_name,
-            {
+            {SKILL_MD_FILE: request.content},
+            who="user:" + get_effective_user_id(),
+            source=request.source,
+            base_version=request.base_version,
+            extra={
                 "action": "human_edit",
                 "author": "human",
                 "thread_id": None,
@@ -281,11 +333,14 @@ async def update_custom_skill(skill_name: str, request: CustomSkillUpdateRequest
                 "new_content": request.content,
                 "scanner": {"decision": scan.decision, "reason": scan.reason},
             },
+            storage=storage,
         )
         await refresh_skills_system_prompt_cache_async()
         return await get_custom_skill(skill_name, config)
     except HTTPException:
         raise
+    except config_versions.StaleWriteError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -300,17 +355,23 @@ async def delete_custom_skill(skill_name: str, config: AppConfig = Depends(get_c
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
         storage = get_or_new_skill_storage(app_config=config)
-        storage.delete_custom_skill(
+        storage.ensure_custom_skill_is_editable(skill_name)
+        # A version too: a deleted skill can be brought back with undo.
+        config_versions.write_skill(
             skill_name,
-            history_meta={
+            None,
+            who="user:" + get_effective_user_id(),
+            source="manual",
+            extra={
                 "action": "human_delete",
                 "author": "human",
                 "thread_id": None,
                 "file_path": SKILL_MD_FILE,
-                "prev_content": None,
+                "prev_content": storage.read_custom_skill(skill_name),
                 "new_content": None,
                 "scanner": {"decision": "allow", "reason": "Deletion requested."},
             },
+            storage=storage,
         )
         await refresh_skills_system_prompt_cache_async()
         return {"success": True}
@@ -368,8 +429,7 @@ async def rollback_custom_skill(skill_name: str, request: SkillRollbackRequest, 
         if scan.decision == "block":
             storage.append_history(skill_name, history_entry)
             raise HTTPException(status_code=400, detail=f"Rollback blocked by security scanner: {scan.reason}")
-        storage.write_custom_skill(skill_name, SKILL_MD_FILE, target_content)
-        storage.append_history(skill_name, history_entry)
+        config_versions.write_skill(skill_name, {SKILL_MD_FILE: target_content}, who="user:" + get_effective_user_id(), source="undo", extra=history_entry, storage=storage)
         await refresh_skills_system_prompt_cache_async()
         return await get_custom_skill(skill_name, config)
     except HTTPException:
@@ -383,6 +443,33 @@ async def rollback_custom_skill(skill_name: str, request: SkillRollbackRequest, 
     except Exception as e:
         logger.error("Failed to roll back custom skill %s: %s", skill_name, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to roll back custom skill: {str(e)}")
+
+
+@router.get("/skills/custom/{skill_name}/versions", response_model=SkillVersionsResponse, summary="A custom skill's version history")
+async def custom_skill_versions(skill_name: str, config: AppConfig = Depends(get_config)) -> SkillVersionsResponse:
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    versions = config_versions.skill_history(name, storage)
+    return SkillVersionsResponse(name=name, current=versions[-1].version if versions else 0, versions=[SkillVersionSummary(**v.summary()) for v in reversed(versions)])
+
+
+@router.post("/skills/custom/{skill_name}/undo", response_model=SkillVersionsResponse, summary="Restore an earlier version of a custom skill as a new one")
+async def undo_custom_skill(skill_name: str, request: SkillUndoRequest, config: AppConfig = Depends(get_config)) -> SkillVersionsResponse:
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+        config_versions.undo("skill", name, request.to_version, who="user:" + get_effective_user_id(), base_version=request.base_version, storage=storage)
+    except config_versions.StaleWriteError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except config_versions.VersionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await refresh_skills_system_prompt_cache_async()
+    return await custom_skill_versions(name, config)
 
 
 @router.get(
