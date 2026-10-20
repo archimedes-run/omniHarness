@@ -175,6 +175,7 @@ export const enUS: Translations = {
     agents: "Agents",
     inbox: "Inbox",
     automations: "Automations",
+    connections: "Connections",
     settings: "Settings",
   },
 

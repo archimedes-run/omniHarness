@@ -119,6 +119,7 @@ export interface Translations {
     agents: string;
     inbox: string;
     automations: string;
+    connections: string;
     settings: string;
   };
 

@@ -98,8 +98,8 @@ async function serve(page: Page, body: Record<string, unknown>) {
       body: JSON.stringify(MCP_CONFIG),
     });
   });
-  // Phase 2.5: tool sources moved to Settings → Connections.
-  await page.goto("/workspace/settings/connections");
+  // Phase 2.6: Connections is a sidebar item (it was Settings → Connections).
+  await page.goto("/workspace/connections");
   return puts;
 }
 
