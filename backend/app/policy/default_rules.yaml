@@ -39,6 +39,17 @@ policy:
       tier: 1
 
     # ---------------------------------------------------------------------
+    # Feature 005 — the Project Ledger. Reading is silent. Every write the
+    # assistant proposes is stated in full and waits for the user (FR-009):
+    # a project the user did not ask for is not "reversible" in any sense
+    # that matters to them.
+    # ---------------------------------------------------------------------
+    - pattern: "ledger_read"
+      tier: 1
+    - pattern: "ledger_apply"
+      tier: 3
+
+    # ---------------------------------------------------------------------
     # Feature 002 — trigger engine. Exposes no agent-callable tools; it
     # injects turns. Listed so the absence is deliberate rather than an
     # oversight, and so a tool added later does not silently inherit Tier 1.

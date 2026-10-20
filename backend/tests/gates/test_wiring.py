@@ -379,6 +379,17 @@ def test_nothing_is_built_and_never_called() -> None:
     assert not stale, "whitelisted but actually reached (or gone) — remove the entry:\n" + "\n".join(stale)
 
 
+#: Feature 005 modules: written under "wiring gate from day one" (FR-070).
+#: Nothing in them may be whitelisted as unwired; a definition there is wired
+#: or it is deleted. (Reasons like "public API" remain possible.)
+FEATURE_005_MODULES = ("app.ledger", "omniharness.persistence.ledger", "omniharness.runtime.ledger", "omniharness.tools.builtins.ledger_tool", "session_watcher.adapters.codex", "session_watcher.todos")
+
+
+def test_feature_005_code_carries_no_unwired_entries() -> None:
+    offending = [q for q, reason in _whitelist().items() if q.split(":")[0].startswith(FEATURE_005_MODULES) and "UNWIRED" in reason.upper()]
+    assert not offending, "Feature 005 code is wired from day one (FR-070); these are whitelisted as unwired:\n" + "\n".join(offending)
+
+
 def test_the_gate_is_green_only_because_of_its_whitelist() -> None:
     """SC-022 / T081: on today's tree the gate FINDS things. A gate that finds
     nothing on a real codebase is more likely blind than the codebase clean."""

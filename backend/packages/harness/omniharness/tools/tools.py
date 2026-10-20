@@ -171,6 +171,15 @@ def get_available_tools(
     if get_mcp_build_controller() is not None:
         builtin_tools.append(mcp_build_tool)
 
+    # Add the Project Ledger tools only when a LedgerController is registered
+    # (gateway mode, Feature 005).
+    from omniharness.runtime.ledger.controller import get_ledger_controller
+
+    if get_ledger_controller() is not None:
+        from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
+
+        builtin_tools.extend([ledger_read_tool, ledger_apply_tool])
+
     # Add subagent tools only if enabled via runtime parameter
     if subagent_enabled:
         builtin_tools.extend(SUBAGENT_TOOLS)
