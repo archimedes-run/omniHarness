@@ -349,6 +349,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             startup_check(app.state.config)
         except Exception:
             logger.exception("policy: the startup tool-coverage check failed")
+        # "Continue <agent>" is spent only when the agent re-enters its
+        # delegation successfully; one held when the process stopped is
+        # released, so it can be pressed again.
+        try:
+            from app.gateway.routers.confirmations import install_continue_listener
+
+            install_continue_listener()
+        except Exception:
+            logger.exception("The Continue listener could not be installed")
+
         # Confirmed results still waiting to be posted into their chat (the
         # gateway stopped while a reply held the thread): posted now, once.
         try:

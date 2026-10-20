@@ -23,6 +23,7 @@ twice, which is visible clutter.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -62,6 +63,7 @@ def _to_dict(action: PendingAction) -> dict:
         "post_state": action.post_state,
         "post_content": action.post_content,
         "post_attempts": action.post_attempts,
+        "continued": action.continued,
     }
 
 
@@ -90,6 +92,7 @@ def _from_dict(raw: dict) -> PendingAction:
         post_state=raw.get("post_state") or "",
         post_content=raw.get("post_content") or "",
         post_attempts=int(raw.get("post_attempts") or 0),
+        continued=bool(raw.get("continued")),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
@@ -175,27 +178,79 @@ class PendingStore:
     def set_post_state(self, action_id: str, state: str, content: str | None = None, *, attempts: int | None = None) -> None:
         """Record the post's progress on the stored action (re-read first, so
         the resolution saved meanwhile is never overwritten)."""
-        action = self.get(action_id)
-        if action is None:
-            return
-        action.post_state = state
-        if content is not None:
-            action.post_content = content
-        if attempts is not None:
-            action.post_attempts = attempts
-        self.save(action)
+        with self.locked(action_id):
+            action = self.get(action_id)
+            if action is None:
+                return
+            action.post_state = state
+            if content is not None:
+                action.post_content = content
+            if attempts is not None:
+                action.post_attempts = attempts
+            self.save(action)
+
+    def _continue_path(self, action_id: str) -> Path:
+        return self.directory / f"{action_id}.continued"
 
     def take_continue(self, action_id: str) -> bool:
-        """ONE "Continue <agent>" per executed action: True for exactly one
-        caller (an atomic file link, as for the claim), False for every replay."""
+        """Start the ONE "Continue <agent>" of an executed action: True for
+        exactly one caller at a time (an atomic file link, as for the claim).
+
+        The link is held while the Continue runs. It is SPENT only by success
+        (finish_continue(ok=True) records `continued`); a Continue that is
+        refused, fails or crashes releases it, so it can be pressed again.
+        """
         source = self._path(action_id)
         if not source.exists():
             return False
+        action = self.get(action_id)
+        if action is None or action.continued:
+            return False
         try:
-            os.link(source, self.directory / f"{action_id}.continued")
+            os.link(source, self._continue_path(action_id))
         except FileExistsError:
             return False
         return True
+
+    def release_continue(self, action_id: str) -> None:
+        """A Continue that did not happen (refused, failed): pressable again."""
+        with contextlib.suppress(FileNotFoundError):
+            self._continue_path(action_id).unlink()
+
+    def finish_continue(self, action_id: str, succeeded: bool) -> None:
+        if succeeded:
+            with self.locked(action_id):
+                action = self.get(action_id)
+                if action is not None:
+                    action.continued = True
+                    self.save(action)
+        else:
+            self.release_continue(action_id)
+
+    def recover_continues(self) -> list[str]:
+        """At startup: a Continue held when the process stopped never finished,
+        so it is released (pressable again) unless it was recorded as done."""
+        released = []
+        for link in sorted(self.directory.glob("*.continued")):
+            action = self.get(link.stem)
+            if action is None or not action.continued:
+                with contextlib.suppress(FileNotFoundError):
+                    link.unlink()
+                released.append(link.stem)
+        return released
+
+    @contextlib.contextmanager
+    def locked(self, action_id: str):
+        """Serialise read-modify-write of one action's record, across threads
+        and processes (an flock on a per-action lock file)."""
+        import fcntl
+
+        with open(self.directory / f"{action_id}.lock", "a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def claim(self, action_id: str, claimant: str) -> PendingAction | None:
         """Take exclusive ownership. Returns the claimed action for exactly one

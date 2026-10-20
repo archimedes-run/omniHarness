@@ -217,6 +217,10 @@ class PendingAction:
     #: Failed attempts to post it (transient errors). At POST_ATTEMPTS_CAP the
     #: post is given up as "failed", shown on the card, never retried forever.
     post_attempts: int = 0
+    #: "Continue <agent>" re-entered the delegation SUCCESSFULLY for this
+    #: action. Only then is Continue spent; a refused, failed or crashed one
+    #: can be pressed again.
+    continued: bool = False
 
     @property
     def confirmable_by_typing(self) -> bool:

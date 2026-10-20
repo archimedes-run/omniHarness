@@ -154,6 +154,11 @@ _CONFIRM_POOL = ThreadPoolExecutor(max_workers=CONFIRM_WORKERS, thread_name_pref
 class _ConfirmSlots:
     """Admission to _CONFIRM_POOL: NEVER a queue.
 
+    PER PROCESS. With several gateway workers, each has its own pool and its
+    own slots, so one user's limit is CONFIRMS_PER_USER per worker. That is a
+    limit on this process's threads, not a global rate limit; the claim (one
+    execution per action) is what holds across workers.
+
     A slot is taken before a confirmed call is claimed and handed to the pool,
     and there are never more slots than workers, so a confirmation either
     starts at once or is refused at once with a reason ("confirm_busy",
@@ -378,23 +383,31 @@ async def post_result(*, checkpointer: Any, run_manager: Any, store: Any, action
     seen: dict[str, str] = {}
 
     async def write() -> bool:
+        # ONE classification for every path: the direct write, a write queued
+        # behind a run (drained when it ends) and the startup drain. A
+        # transient failure in the drain used to be logged and left "waiting"
+        # with no retry (review of PR #58).
         outcome = await _append_to_checkpoint(checkpointer, action.thread_id, message)
-        seen["outcome"] = outcome
         if outcome == WRITTEN:
             store.set_post_state(action.id, "posted")
+            seen["state"] = "written"
         elif outcome == GONE:
             store.set_post_state(action.id, "dropped")
-        return outcome != ERROR
+            seen["state"] = "dropped"
+        else:
+            seen["state"] = _schedule_retry(checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+        return True
 
     state = await run_manager.write_when_idle(action.thread_id, write)
     if state == "queued":
         return "queued"
-    outcome = seen.get("outcome", ERROR)
-    if outcome == WRITTEN:
-        return "written"
-    if outcome == GONE:
-        return "dropped"
-    return _schedule_retry(checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+    if state == "elsewhere":
+        # Another worker's run holds the chat: wait and try again. Not a
+        # failure, so it does not count toward the retry cap; durable all the
+        # same (the record says "waiting"; the startup drain also posts it).
+        _schedule(ELSEWHERE_RETRY_DELAY, checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+        return "queued"
+    return seen.get("state", "failed")
 
 
 def _schedule_retry(*, checkpointer: Any, run_manager: Any, store: Any, action: Any, message: Any) -> str:
@@ -406,20 +419,46 @@ def _schedule_retry(*, checkpointer: Any, run_manager: Any, store: Any, action: 
         logger.warning("gave up posting the confirmed result %s after %d attempts", action.id, attempts - 1)
         return "failed"
     store.set_post_state(action.id, "waiting", attempts=attempts)
-    delay = POST_RETRY_DELAYS[attempts - 1]
+    _schedule(POST_RETRY_DELAYS[attempts - 1], checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+    return "retrying"
 
+
+#: How long to wait before trying again when another worker's run holds the chat.
+ELSEWHERE_RETRY_DELAY = 5.0
+
+
+def _schedule(delay: float, **post: Any) -> None:
     async def again() -> None:
         await asyncio.sleep(delay)
-        await post_result(checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+        await post_result(**post)
 
     task = asyncio.get_running_loop().create_task(again())
     _RETRIES.add(task)
     task.add_done_callback(_RETRIES.discard)
-    return "retrying"
 
 
 #: Retry tasks in flight (held so they are not garbage collected).
 _RETRIES: set[asyncio.Task] = set()
+
+
+def install_continue_listener() -> None:
+    """Wire the harness's Continue outcome to the pending store, and release
+    any Continue left held by a stopped process (lifespan)."""
+    from app.policy.registration import build
+    from omniharness.agents.called_agents import set_resume_listener
+    from omniharness.config import get_app_config
+
+    def finished(action_id: str, succeeded: bool) -> None:
+        middleware = build(get_app_config())
+        if middleware is not None:
+            middleware.pending.finish_continue(action_id, succeeded)
+
+    set_resume_listener(finished)
+    middleware = build(get_app_config())
+    if middleware is not None:
+        released = middleware.pending.recover_continues()
+        if released:
+            logger.info("Released %d Continue(s) left unfinished by a stopped process", len(released))
 
 
 async def drain_waiting_posts(app: Any) -> int:
@@ -638,21 +677,44 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
             action_id=action_id,
             message=f"{CONFIRMS_PER_USER} confirmed actions are already running, so this one has not started. Nothing has run. Confirm again when one finishes.",
         )
+    from app.gateway.deps import get_checkpointer, get_run_manager
+
+    # Only a result that is posted into a chat needs the thread's stores.
+    checkpointer, run_manager = (get_checkpointer(request), get_run_manager(request)) if posts else (None, None)
     try:
         run_tool = await _runner(request, action.thread_id if action else None, user_id)
+    except BaseException:
+        _SLOTS.give_back(user_id)
+        raise
+    # SHIELDED: the confirmation, its slot and its post are one detached task.
+    # A client that disconnects cancels only its wait: the confirmed call keeps
+    # its slot until the pool thread finishes, and its result is still posted.
+    work = asyncio.get_running_loop().create_task(
+        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via),
+    )
+    _CONFIRMING.add(work)
+    work.add_done_callback(_CONFIRMING.discard)
+    return await asyncio.shield(work)
+
+
+#: Confirmations in flight (held so a disconnected request's task finishes).
+_CONFIRMING: set[asyncio.Task] = set()
+
+
+async def _confirm_and_post(middleware: Any, flow: Any, action: Any, action_id: str, run_tool: Any, typed_count: int | None, user_id: str, checkpointer: Any, run_manager: Any, via: str = "button") -> ResolveResponse:
+    try:
         # No targets passed: the flow re-checks them itself (FR-029).
         # OFF THE EVENT LOOP AND OFF THE DEFAULT POOL: a confirmed delegation
         # runs its subagent to the end before the flow returns. A slot was
-        # taken above, so the pool always has a free worker: this never queues.
+        # taken, so the pool always has a free worker: this never queues.
         answered = {"via": via, "thread_id": None, "user_id": user_id, "message_id": None}
-        result = await _off_the_request_pool(flow.explicit, action_id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
+        result = await _off_the_request_pool(flow.explicit, action_id, confirm=True, run_tool=run_tool, supplied_count=typed_count, answered=answered)
     finally:
         _SLOTS.give_back(user_id)
 
     detail = _response_detail(result.detail)
     message = for_display(result.message)[0]
     if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
-        from app.gateway.deps import get_checkpointer, get_run_manager
         from app.policy.surface_run import report_message
 
         # The report as recorded with EXECUTED (already redacted).
@@ -662,7 +724,7 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
         detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
         # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
         # written and read back; every other state says what happened.
-        posted = await post_result(checkpointer=get_checkpointer(request), run_manager=get_run_manager(request), store=middleware.pending, action=action, message=report)
+        posted = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=action, message=report)
         detail["posted_to_thread"] = posted == "written"
         detail["post_queued"] = posted == "queued"
         detail["post_state"] = posted
