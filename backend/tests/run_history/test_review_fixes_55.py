@@ -550,3 +550,85 @@ async def test_the_trim_writes_nothing_when_nothing_is_old_or_the_thread_changed
         app = SimpleNamespace(state=SimpleNamespace(checkpointer=cp, run_store=None, run_event_store=None))
         assert await trim_thread(app, "t1", now - timedelta(days=30))
         assert writes == [], f"{case}: the trim rewrote the thread"
+
+
+@pytest.mark.asyncio
+async def test_a_big_trim_stops_short_and_resumes(tmp_path, monkeypatch) -> None:
+    """A trim that would rewrite more checkpoints than MAX_TRIM_WRITES stops
+    (TrimIncomplete) and the next call finishes: no single call can run into
+    STEP_TIMEOUT, and every rewrite stands on its own."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from langgraph.checkpoint.base import empty_checkpoint
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    import app.run_history.delete as delete
+
+    monkeypatch.setattr(delete, "MAX_TRIM_WRITES", 2)
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    cfg = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "cp.sqlite")) as cp:
+        msgs = [{"type": "ai", "id": "old", "content": "OLD-MAIL"}]
+        for n in range(1, 5):
+            c = empty_checkpoint()
+            c["id"] = f"1ef00000-0000-6000-8000-{n:012d}"
+            c["ts"] = (now - timedelta(days=40 - n)).isoformat()
+            if n == 4:
+                msgs = [*msgs, {"type": "human", "id": "p", "content": "me"}]
+                c["ts"] = (now - timedelta(days=1)).isoformat()
+            c["channel_values"] = {"messages": msgs}
+            c["channel_versions"] = {"messages": n}
+            await cp.aput(cfg, c, {}, {})
+        app = SimpleNamespace(state=SimpleNamespace(checkpointer=cp, run_store=None, run_event_store=None))
+        with pytest.raises(delete.TrimIncomplete):
+            await delete.trim_thread(app, "t1", now - timedelta(days=30))
+        assert await delete.trim_thread(app, "t1", now - timedelta(days=30))
+        everything = str([t.checkpoint["channel_values"] async for t in cp.alist(cfg)])
+        assert "OLD-MAIL" not in everything and "'me'" in everything
+
+
+def test_an_explicit_delete_that_failed_is_still_finished_whole(gateway) -> None:
+    """Only the person's own "Delete run history" is finished whole on retry,
+    person's messages included (the dialog says so); a retention failure is
+    re-checked instead (the reviewer's test covers that side)."""
+    from app.run_history.delete import sweep_threads
+
+    client, _ = gateway
+    h = client.app.state.run_history
+    tid = _thread(client, "MY-WORDS", kind="human")
+    h.note_thread(tid, "r")
+    h.mark_threads_pending([tid])
+    h.thread_failed(tid, "OSError", reason="retention")  # must not downgrade the explicit intent
+    client.portal.call(sweep_threads, client.app)
+    assert client.get(f"/api/threads/{tid}").status_code == 404
+
+
+def test_reading_the_key_during_rotations_never_fails(tmp_path) -> None:
+    import threading
+
+    from app.run_history.crypto import StoreKey
+
+    writer = StoreKey(tmp_path / "k" / "run_store.key", forbidden=[])
+    writer.key()
+    errors: list = []
+    stop = threading.Event()
+
+    def reader():
+        r = StoreKey(tmp_path / "k" / "run_store.key", forbidden=[])
+        while not stop.is_set():
+            try:
+                r._cached = None
+                r.key()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+    threads = [threading.Thread(target=reader) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for _ in range(30):
+        writer.rotate()
+    stop.set()
+    for t in threads:
+        t.join()
+    assert not errors, errors[:3]
