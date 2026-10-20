@@ -2088,7 +2088,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("private", message_id=10)
@@ -2104,7 +2104,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("private", message_id=11, reply_to_message_id=5)
@@ -2120,7 +2120,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("group", message_id=20)
@@ -2136,7 +2136,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("group", message_id=21, reply_to_message_id=15)
@@ -2152,7 +2152,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("supergroup", message_id=25)
@@ -2168,7 +2168,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("private", message_id=30, text="/new")
@@ -2185,7 +2185,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("group", message_id=31, text="/status")
@@ -2202,7 +2202,7 @@ class TestTelegramPrivateChatThread:
 
         async def go():
             bus = MessageBus()
-            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
+            ch = TelegramChannel(bus=bus, config={"bot_token": "test-token", "allowed_users": [42]})
             ch._main_loop = asyncio.get_event_loop()
 
             update = _make_telegram_update("group", message_id=32, reply_to_message_id=20, text="/status")
