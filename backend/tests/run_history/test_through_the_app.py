@@ -39,7 +39,7 @@ def test_deleting_the_history_needs_confirmation(gateway) -> None:
     assert client.delete("/api/run-history/runs", params={"confirm": "yes"}).status_code == 422
     assert client.app.state.run_history.count() == 1
     resp = client.delete("/api/run-history/runs", params={"confirm": "delete-all"})
-    assert resp.status_code == 200 and resp.json() == {"deleted": 1}
+    assert resp.status_code == 200 and resp.json() == {"deleted": 1, "threads_deleted": 0, "threads_failed": []}
     assert client.get("/api/run-history/settings").json()["runs"] == 0
 
 

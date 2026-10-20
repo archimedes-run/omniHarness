@@ -49,5 +49,10 @@ class RuleThreadMap:
         """
         self._store.delete(rule_id)
 
+    def thread_of(self, rule_id: str) -> str | None:
+        """This rule's recorded thread, without creating one."""
+        existing = self._store.get(rule_id)
+        return existing if isinstance(existing, str) and existing else None
+
     def known_rules(self) -> list[str]:
         return self._store.keys()

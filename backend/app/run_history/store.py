@@ -407,6 +407,12 @@ class RunHistory:
             out["body"] = {"withheld": BLOB_MISSING}
         return out
 
+    def thread_ids(self, *, kind: str | None = None) -> set[str]:
+        """Every thread a stored run names (of `kind`, when given)."""
+        sql = "SELECT DISTINCT thread_id FROM runs WHERE thread_id IS NOT NULL" + (" AND kind = ?" if kind else "")
+        with self._connect() as c:
+            return {r[0] for r in c.execute(sql, (kind,) if kind else ()).fetchall()}
+
     def used_bytes(self) -> int:
         with self._connect() as c:
             return int(c.execute("SELECT COALESCE(SUM(size), 0) FROM runs").fetchone()[0])

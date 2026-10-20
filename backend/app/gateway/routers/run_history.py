@@ -2,7 +2,8 @@
 
 Local only. Every run was redacted before it was stored (app/run_history).
 Deleting the whole history names what it deletes (`confirm=delete-all`) so a
-stray request cannot do it.
+stray request cannot do it, needs threads:delete, and deletes the automations'
+conversation threads too (app/run_history/delete.py).
 """
 
 from __future__ import annotations
@@ -49,7 +50,12 @@ class RunDetail(RunSummaryView):
 
 
 class Deleted(BaseModel):
+    #: Runs deleted from the run history.
     deleted: int
+    #: Automation threads deleted with them (checkpoints, record, files, traces).
+    threads_deleted: int = 0
+    #: Threads that could not be deleted, by id: their content is NOT gone.
+    threads_failed: list[str] = Field(default_factory=list)
 
 
 def _history(request: Request):
@@ -80,11 +86,20 @@ async def put_settings(body: RetentionSettings, request: Request) -> HistorySett
 
 
 @router.delete("/runs", response_model=Deleted)
-@require_permission("threads", "write")
+@require_permission("threads", "delete")
 async def delete_all(confirm: str, request: Request) -> Deleted:
+    """Every stored run AND every automation conversation thread (see
+    app/run_history/delete.py for exactly what goes and what stays)."""
+    from app.run_history.delete import ThreadsBusy, delete_history_and_threads
+
     if confirm != "delete-all":
         raise HTTPException(status_code=422, detail="Deleting the run history needs confirm=delete-all.")
-    return Deleted(deleted=_history(request).delete_all())
+    _history(request)
+    try:
+        result = await delete_history_and_threads(request.app)
+    except ThreadsBusy as exc:
+        raise HTTPException(status_code=409, detail="An automation is running right now. Nothing was deleted; try again when it finishes.") from exc
+    return Deleted(deleted=result.runs, threads_deleted=len(result.threads_deleted), threads_failed=sorted(result.threads_failed))
 
 
 @router.get("/runs", response_model=list[RunSummaryView])
