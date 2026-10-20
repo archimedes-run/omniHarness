@@ -477,9 +477,12 @@ policy:
     # or FIND: Tier 1. Anything else: Tier 3 — including reads named another
     # way (GITHUB_ISSUES_GET, GITHUB_CHECK_...). Lowering one is an edit here.
     # EXCEPT: a read whose name contains SECRET, KEY, TOKEN, CREDENTIAL,
-    # WEBHOOK, ADMIN or PERMISSION is Tier 3 (decided 2026-10-20): what it
-    # reveals is about access, not content. Generated from the SDK's list; the
-    # test checks every line against it.
+    # WEBHOOK, ADMIN, PERMISSION or VARIABLE is Tier 3 (decided 2026-10-20):
+    # what it reveals is access or configuration, not content (Actions
+    # variables are plaintext and often hold configuration values).
+    # GENERATED: the word list and the rule live in
+    # tests/policy/github_connector_policy.py, which rewrites these lines;
+    # the tests fail if they differ from what it would write.
     - {pattern: "connector-github_GITHUB_ACCEPT_A_REPOSITORY_INVITATION", tier: 3}
     - {pattern: "connector-github_GITHUB_ACTIVITY_LIST_REPO_S_STARRED_BY_AUTHENTICATED_USER", tier: 3}
     - {pattern: "connector-github_GITHUB_ACTIVITY_LIST_STARGAZERS_FOR_REPO", tier: 3}
@@ -788,7 +791,7 @@ policy:
     - {pattern: "connector-github_GITHUB_GET_AN_ENVIRONMENT", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_AN_ENVIRONMENT_PUBLIC_KEY", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_AN_ENVIRONMENT_SECRET", tier: 3}
-    - {pattern: "connector-github_GITHUB_GET_AN_ENVIRONMENT_VARIABLE", tier: 1}
+    - {pattern: "connector-github_GITHUB_GET_AN_ENVIRONMENT_VARIABLE", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_AN_IMPORT_STATUS", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_AN_ISSUE", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_AN_ISSUE_COMMENT", tier: 1}
@@ -801,7 +804,7 @@ policy:
     - {pattern: "connector-github_GITHUB_GET_AN_ORGANIZATION_ROLE", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_AN_ORGANIZATION_RULE_SUITE", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_AN_ORGANIZATION_SECRET", tier: 3}
-    - {pattern: "connector-github_GITHUB_GET_AN_ORGANIZATION_VARIABLE", tier: 1}
+    - {pattern: "connector-github_GITHUB_GET_AN_ORGANIZATION_VARIABLE", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_AN_ORGANIZATION_WEBHOOK", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_AN_SSH_SIGNING_KEY_FOR_THE_AUTHENTICATED_USER", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_APPS_WITH_ACCESS_TO_THE_PROTECTED_BRANCH", tier: 1}
@@ -869,7 +872,7 @@ policy:
     - {pattern: "connector-github_GITHUB_GET_A_REPOSITORY_SECRET", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_A_REPOSITORY_SECURITY_ADVISORY", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_A_REPOSITORY_SUBSCRIPTION", tier: 1}
-    - {pattern: "connector-github_GITHUB_GET_A_REPOSITORY_VARIABLE", tier: 1}
+    - {pattern: "connector-github_GITHUB_GET_A_REPOSITORY_VARIABLE", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_A_REPOSITORY_WEBHOOK", tier: 3}
     - {pattern: "connector-github_GITHUB_GET_A_REVIEW_COMMENT_FOR_A_PULL_REQUEST", tier: 1}
     - {pattern: "connector-github_GITHUB_GET_A_REVIEW_FOR_A_PULL_REQUEST", tier: 1}
@@ -1022,7 +1025,7 @@ policy:
     - {pattern: "connector-github_GITHUB_LIST_ENVIRONMENTS", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_ENVIRONMENT_CUSTOM_DEPLOYMENT_RULES", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_ENVIRONMENT_SECRETS", tier: 3}
-    - {pattern: "connector-github_GITHUB_LIST_ENVIRONMENT_VARIABLES", tier: 1}
+    - {pattern: "connector-github_GITHUB_LIST_ENVIRONMENT_VARIABLES", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_EVENTS_FOR_THE_AUTHENTICATED_USER", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_EVENTS_RECEIVED_BY_THE_AUTHENTICATED_USER", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_FAILED_ORGANIZATION_INVITATIONS", tier: 1}
@@ -1072,7 +1075,7 @@ policy:
     - {pattern: "connector-github_GITHUB_LIST_ORGANIZATION_REPOSITORIES", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_ORGANIZATION_RULE_SUITES", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_ORGANIZATION_SECRETS", tier: 3}
-    - {pattern: "connector-github_GITHUB_LIST_ORGANIZATION_VARIABLES", tier: 1}
+    - {pattern: "connector-github_GITHUB_LIST_ORGANIZATION_VARIABLES", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_ORGANIZATION_WEBHOOKS", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_ORG_LEVEL_CODESPACES_SECRETS", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_ORG_REPOS_WITHGITHUB_ACTIONS_ENABLED", tier: 1}
@@ -1137,7 +1140,7 @@ policy:
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_LANGUAGES", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_NOTIFICATIONS_FOR_THE_AUTHENTICATED_USER", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_ORGANIZATION_SECRETS", tier: 3}
-    - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_ORGANIZATION_VARIABLES", tier: 1}
+    - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_ORGANIZATION_VARIABLES", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_PROJECTS", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_RULE_SUITES", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_SECRETS", tier: 3}
@@ -1146,7 +1149,7 @@ policy:
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_SECURITY_ADVISORIES_FOR_AN_ORGANIZATION", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_TAGS", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_TEAMS", tier: 1}
-    - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_VARIABLES", tier: 1}
+    - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_VARIABLES", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_WEBHOOKS", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_REPOSITORY_WORKFLOWS", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_REPOS_WITH_GHACTIONS_CACHE_USAGE", tier: 1}
@@ -1164,7 +1167,7 @@ policy:
     - {pattern: "connector-github_GITHUB_LIST_SECRET_SCANNING_ALERTS_FOR_A_REPOSITORY", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_SECURITY_MANAGER_TEAMS", tier: 1}
     - {pattern: "connector-github_GITHUB_LIST_SELECTED_REPOSITORIES_FOR_AN_ORGANIZATION_SECRET", tier: 3}
-    - {pattern: "connector-github_GITHUB_LIST_SELECTED_REPOSITORIES_FOR_AN_ORGANIZATION_VARIABLE", tier: 1}
+    - {pattern: "connector-github_GITHUB_LIST_SELECTED_REPOSITORIES_FOR_AN_ORGANIZATION_VARIABLE", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_SELECTED_REPOSITORIES_FOR_A_USER_SECRET", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_SELECTED_REPOS_FOR_SECRET_ACCESS", tier: 3}
     - {pattern: "connector-github_GITHUB_LIST_SELF_HOSTED_RUNNERS_FOR_AN_ORGANIZATION", tier: 1}
