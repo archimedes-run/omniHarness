@@ -95,6 +95,20 @@ CHANNEL_HEADER_NAME = "X-OmniHarness-Channel"
 CHANNEL_OWNER_HEADER_NAME = "X-OmniHarness-Channel-Sender-Is-Owner"
 
 
+def channel_header_present(request) -> bool:
+    """Any channel header WITH the internal token: the request relays a channel
+    message, whether or not the name is valid (an invalid name is still relayed,
+    never a direct internal turn)."""
+    headers = getattr(request, "headers", None) or {}
+    return is_valid_internal_auth_token(headers.get(INTERNAL_AUTH_HEADER_NAME)) and headers.get(CHANNEL_HEADER_NAME) is not None
+
+
+def trigger_grant_presented(request) -> bool:
+    """A scheduled-run grant header was sent with the internal token."""
+    headers = getattr(request, "headers", None) or {}
+    return is_valid_internal_auth_token(headers.get(INTERNAL_AUTH_HEADER_NAME)) and headers.get(TRIGGER_GRANT_HEADER_NAME) is not None
+
+
 def channel_sender_is_owner(request) -> bool:
     headers = getattr(request, "headers", None) or {}
     return channel_of(request) is not None and headers.get(CHANNEL_OWNER_HEADER_NAME) == "1"
@@ -109,7 +123,9 @@ def channel_of(request) -> str | None:
     return name if isinstance(name, str) and re.fullmatch(r"[a-z0-9_-]{1,32}", name) else None
 
 
-GRANT_TTL_SECONDS = 120
+#: Generous, because a grant is issued right before its one request and is
+#: single-use: a long queue behind busy workers must not refuse a real run.
+GRANT_TTL_SECONDS = 600
 _NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 
 

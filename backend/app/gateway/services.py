@@ -88,8 +88,22 @@ def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True)
 
     if raw_input is None:
         return {}
+    if not isinstance(raw_input, Mapping):
+        raise ValueError("input must be an object")
+    unknown = sorted(k for k in raw_input if k != "messages")
+    if unknown:
+        # Only messages are input. Any other key would be written straight into
+        # graph state, past every check here.
+        logger.info("normalize_input: dropped input keys %s", unknown)
     messages = raw_input.get("messages")
-    if messages and isinstance(messages, list):
+    if messages is None:
+        return {}
+    if not isinstance(messages, list):
+        # A single object used to pass through untouched, keeping any client
+        # kwargs, a forged user-turn marker included.
+        raise ValueError("input.messages must be a list")
+    raw_input = {"messages": messages}
+    if messages:
         converted = []
         for msg in messages:
             if isinstance(msg, dict):
@@ -183,6 +197,9 @@ _SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id
 #: (invited_agent, delegation_chain, sandbox_id, ...) can never arrive from a
 #: request, including keys nobody has thought of yet.
 _CLIENT_CONFIGURABLE_KEYS: frozenset[str] = _CLIENT_CONTEXT_KEYS | {"thread_id", "checkpoint_ns", "checkpoint_id"}
+#: Run metadata a client may set (descriptive only). Everything else, e.g.
+#: callbacks, __pregel_*, continue_action, is dropped.
+_CLIENT_METADATA_KEYS: frozenset[str] = frozenset({"title", "source"})
 _CLIENT_TOP_LEVEL_CONFIG_KEYS: frozenset[str] = frozenset({"recursion_limit", "tags", "run_name", "max_concurrency", "metadata", "configurable", "context"})
 
 
@@ -251,10 +268,12 @@ def apply_server_owned_context(
                 container.pop(key)
         elif container is not None:
             config.pop(name)
+    if config.get("metadata") is not None and not isinstance(config.get("metadata"), dict):
+        config.pop("metadata")
     for container in (config.get("metadata"), metadata):
         if isinstance(container, dict):
-            for key in _SERVER_OWNED_METADATA_KEYS:
-                container.pop(key, None)
+            for key in [k for k in container if k not in _CLIENT_METADATA_KEYS]:
+                container.pop(key)
 
     context = config.get("context")
     if not isinstance(context, dict):
@@ -538,10 +557,28 @@ async def start_run(
 
     # A channel message is the user's own turn only when the channel's explicit
     # allowlist vouched for the sender; otherwise it is relayed content.
-    from app.gateway.internal_auth import channel_of, channel_sender_is_owner
+    from app.gateway.internal_auth import channel_header_present, channel_of, channel_sender_is_owner, trigger_grant_presented
 
-    relayed = channel_of(request) is not None and not channel_sender_is_owner(request)
-    graph_input = normalize_input(body.input, user_turn=not relayed)
+    relayed = channel_header_present(request) and not channel_sender_is_owner(request)
+
+    # Scheduled-run provenance, decided BEFORE the input is read: only a grant
+    # the trigger engine issued for exactly this request marks a turn synthetic.
+    # A claim WITH a grant that fails (expired, replayed, mismatched) is refused
+    # outright; it must never fall back to an ordinary, user-tagged turn.
+    from app.policy.provenance import SYNTHETIC
+
+    synthetic_rule_id: str | None = None
+    claimed, rule_id = _client_provenance(body)
+    if claimed == SYNTHETIC and trigger_grant_presented(request):
+        if not await is_trigger_engine_request(request):
+            raise HTTPException(status_code=403, detail="scheduled-run grant refused (expired, already used, or not for this request)")
+        synthetic_rule_id = rule_id or ""
+
+    # A scheduled turn's "human" message is a rule's prompt, never the person.
+    try:
+        graph_input = normalize_input(body.input, user_turn=not relayed and synthetic_rule_id is None)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
     except ValueError as exc:
@@ -570,12 +607,6 @@ async def start_run(
 
     # Scheduled-run provenance: only the trigger engine's own credential may
     # mark a turn synthetic. Anyone else's claim is dropped.
-    synthetic_rule_id: str | None = None
-    from app.policy.provenance import SYNTHETIC
-
-    claimed, rule_id = _client_provenance(body)
-    if claimed == SYNTHETIC and await is_trigger_engine_request(request):
-        synthetic_rule_id = rule_id or ""
 
     run_metadata = dict(body.metadata or {})
     apply_server_owned_context(

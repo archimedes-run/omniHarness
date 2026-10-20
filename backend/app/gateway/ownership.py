@@ -1,10 +1,10 @@
 """Who may act here, and on whose records (the security baseline).
 
 ONE OWNER. OmniHarness is single-user until multi-user is designed. The owner
-is explicit and deterministic: ``OMNI_HARNESS_OWNER_USER_ID`` if set, else the
-earliest-created account of any role (on a fresh install, the one
-``/initialize`` or the first ``/register`` creates). It is logged at startup,
-by id only. Every other account is refused at the door, with a plain
+is explicit and PINNED: ``OMNI_HARNESS_OWNER_USER_ID`` if set, else the account
+named by the ``first_account_claim`` row (written with the first account; on an
+older install, pinned at startup to the earliest enabled account). Never
+re-resolved by date. It is logged at startup, by id only. Every other account is refused at the door, with a plain
 reason, and holds no permissions. The internal principal (trigger engine,
 channels; ``X-OmniHarness-Internal-Token``) is the system acting for the owner.
 
@@ -90,16 +90,22 @@ OWNER_ENV = "OMNI_HARNESS_OWNER_USER_ID"
 async def owner_user_id() -> str | None:
     """The owner account's id. None on a fresh install (no accounts yet).
 
-    ``OMNI_HARNESS_OWNER_USER_ID`` when set; otherwise the earliest-created
-    account (ties broken by id). An explicit id that matches no account makes
-    NOBODY the owner (fail closed), and startup logs it.
+    PINNED, never re-resolved by date: the ``first_account_claim`` row names
+    the owner (written atomically with the first account, or by
+    :func:`pin_owner` at startup on an install that predates it). Re-enabling
+    an older account therefore never makes it the owner.
+
+    Order: ``OMNI_HARNESS_OWNER_USER_ID`` if set; else the pinned owner; else
+    (no pin yet: an install that predates pinning, before startup pinned it)
+    the earliest-created ENABLED account. A disabled owner is no owner: nobody
+    gets in (fail closed). An explicit id that matches no account: nobody.
     """
     import os
 
     from sqlalchemy import select
 
     from omniharness.persistence.engine import get_session_factory
-    from omniharness.persistence.user.model import UserRow
+    from omniharness.persistence.user.model import FirstAccountClaimRow, UserRow
 
     sf = get_session_factory()
     if sf is None:
@@ -108,11 +114,45 @@ async def owner_user_id() -> str | None:
     async with sf() as session:
         # A disabled account is never the owner.
         enabled = UserRow.disabled_at.is_(None)
+        if not explicit:
+            pinned = (await session.execute(select(FirstAccountClaimRow.user_id).where(FirstAccountClaimRow.id == 1))).scalar_one_or_none()
+            explicit = pinned or ""
         if explicit:
             row = (await session.execute(select(UserRow.id).where(UserRow.id == explicit, enabled))).scalar_one_or_none()
         else:
             row = (await session.execute(select(UserRow.id).where(enabled).order_by(UserRow.created_at, UserRow.id).limit(1))).scalar_one_or_none()
     return str(row) if row is not None else None
+
+
+async def pin_owner() -> str | None:
+    """Startup migration: pin the CURRENTLY resolved owner if nothing is pinned.
+
+    On the live install that is the earliest enabled account (after the
+    '!disabled!' migration ran). Idempotent; never changes an existing pin.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from omniharness.persistence.engine import get_session_factory
+    from omniharness.persistence.user.model import FirstAccountClaimRow
+
+    sf = get_session_factory()
+    if sf is None:
+        return None
+    async with sf() as session:
+        if await session.get(FirstAccountClaimRow, 1) is not None:
+            return None
+    owner = await owner_user_id()
+    if owner is None:
+        return None
+    async with sf() as session:
+        try:
+            session.add(FirstAccountClaimRow(id=1, user_id=owner))
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return None
+    logger.info("Pinned the owner account: %s", owner)
+    return owner
 
 
 async def log_owner_at_startup() -> str | None:
@@ -121,6 +161,7 @@ async def log_owner_at_startup() -> str | None:
 
     from omniharness.runtime.user_context import set_legacy_data_owner
 
+    await pin_owner()
     owner = await owner_user_id()
     # The legacy shared agents/ directory is the owner's (agents_config).
     set_legacy_data_owner(owner)

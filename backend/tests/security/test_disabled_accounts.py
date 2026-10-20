@@ -63,8 +63,8 @@ def test_disable_is_reversible(sec) -> None:
 
 
 def test_a_disabled_account_is_never_the_owner(sec) -> None:
-    """Disabling the owner (forced) moves ownership to the earliest ENABLED
-    account; the disabled one is refused although it is the earliest."""
+    """The owner is PINNED: disabling it (forced) locks everyone out; no other
+    account, earlier or later, becomes the owner."""
     from app.gateway.auth.accounts import AccountError, set_disabled
 
     try:
@@ -74,7 +74,9 @@ def test_a_disabled_account_is_never_the_owner(sec) -> None:
         pass
     _call(sec.owner, set_disabled, OWNER[0], disabled=True, force=True)
     assert login(sec.app, *OWNER)[1].status_code == 401
-    assert login(sec.app, *SECOND)[1].status_code == 200  # the door is CLOSED: it is the owner now
+    assert login(sec.app, *SECOND)[1].status_code == 401  # nobody else became the owner
+    _call(sec.owner, set_disabled, OWNER[0], disabled=False)
+    assert login(sec.app, *OWNER)[1].status_code == 200
 
 
 def test_the_prefix_hack_migrates_to_disabled_at(make_gateway) -> None:

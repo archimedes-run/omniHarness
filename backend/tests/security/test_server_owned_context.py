@@ -186,7 +186,7 @@ def test_synthetic_trigger_is_accepted_from_the_trigger_engine(sec, captured, en
     assert record["metadata"]["turn_provenance"] == SYNTHETIC
 
 
-def _granted_post(sec, tid: str, payload: dict, nonce: str | None = None, *, issue_for: bytes | None = None):
+def _granted_post(sec, tid: str, payload: dict, nonce: str | None = None, *, issue_for: bytes | None = None, expect: tuple = (200, 500)):
     """Post exact bytes with the internal token and a grant (issued here unless given)."""
     import json as _json
 
@@ -197,7 +197,7 @@ def _granted_post(sec, tid: str, payload: dict, nonce: str | None = None, *, iss
     grant = nonce or issue_trigger_grant("POST", path, issue_for if issue_for is not None else content)
     client = _internal_client(sec, create_internal_auth_headers())
     resp = client.post(path, content=content, headers={"Content-Type": "application/json", TRIGGER_GRANT_HEADER_NAME: grant})
-    assert resp.status_code in (200, 500), resp.text
+    assert resp.status_code in expect, resp.text
     return grant
 
 
@@ -207,10 +207,9 @@ def test_a_trigger_grant_is_single_use(sec, captured) -> None:
     tid = _internal_client(sec, create_internal_auth_headers()).post("/api/threads", json={}).json()["thread_id"]
     payload = _trigger_payload(tid)
     grant = _granted_post(sec, tid, payload)
-    _granted_post(sec, tid, payload, nonce=grant)  # replay: same header, same bytes
-    first, replay = captured
+    _granted_post(sec, tid, payload, nonce=grant, expect=(403,))  # replay: refused outright
+    [first] = captured  # the replay started no run at all
     assert first["context"].get("turn_provenance") == SYNTHETIC
-    assert "turn_provenance" not in replay["context"]
 
 
 def test_a_trigger_grant_is_bound_to_its_request(sec, captured) -> None:
@@ -222,9 +221,8 @@ def test_a_trigger_grant_is_bound_to_its_request(sec, captured) -> None:
     tid = _internal_client(sec, create_internal_auth_headers()).post("/api/threads", json={}).json()["thread_id"]
     payload = _trigger_payload(tid)
     other = dict(payload, input={"messages": [{"role": "human", "content": "something else"}]})
-    _granted_post(sec, tid, other, issue_for=_json.dumps(payload).encode())
-    [cfg] = captured
-    assert "turn_provenance" not in cfg["context"]
+    _granted_post(sec, tid, other, issue_for=_json.dumps(payload).encode(), expect=(403,))
+    assert captured == []  # refused, never downgraded to an ordinary turn
 
 
 def test_synthetic_trigger_is_dropped_for_the_internal_token_alone(sec, captured) -> None:
@@ -255,9 +253,8 @@ def test_a_forged_trigger_grant_is_dropped(sec, captured) -> None:
     from app.gateway.internal_auth import create_internal_auth_headers
 
     tid = _internal_client(sec, create_internal_auth_headers()).post("/api/threads", json={}).json()["thread_id"]
-    _granted_post(sec, tid, _trigger_payload(tid), nonce="A" * 43)
-    [cfg] = captured
-    assert "turn_provenance" not in cfg["context"]
+    _granted_post(sec, tid, _trigger_payload(tid), nonce="A" * 43, expect=(403,))
+    assert captured == []
 
 
 def test_a_body_with_only_config_context_runs_on_the_authorised_thread(sec, monkeypatch) -> None:
@@ -287,3 +284,17 @@ def test_a_body_with_only_config_context_runs_on_the_authorised_thread(sec, monk
     body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "hi"}]}, "config": {"configurable": {"thread_id": other}}}
     assert owner.post(f"/api/threads/{tid}/runs/wait", json=body).status_code == 200
     assert seen[-1]["configurable"]["thread_id"] == tid
+
+
+def test_run_metadata_is_an_allowlist(sec, captured) -> None:
+    owner = sec.owner
+    tid = owner.post("/api/threads", json={}).json()["thread_id"]
+    junk = {"title": "kept", "callbacks": [1], "__pregel_send": 1, "continue_action": "a1", "anything": "x"}
+    body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "hi"}]}, "metadata": junk, "config": {"metadata": junk}}
+    _run(owner, tid, body)
+    [cfg] = captured
+    assert cfg["metadata"].get("title") == "kept"
+    for key in ("callbacks", "__pregel_send", "continue_action", "anything"):
+        assert key not in cfg["metadata"], key
+    [record] = _runs(owner, tid)
+    assert set(record["metadata"]) <= {"title", "source"}, record["metadata"]
