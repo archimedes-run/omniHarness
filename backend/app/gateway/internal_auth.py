@@ -25,6 +25,7 @@ one process both mints and validates.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import re
@@ -225,8 +226,6 @@ def get_internal_user():
 
 #: Prefix of the message id the trigger engine gives its injected prompt.
 TURN_ID_PREFIX = "trigger-turn-"
-#: Signed turn ids already accepted once (single use, per process).
-_CONSUMED_TURN_IDS: set[str] = set()
 
 
 def sign_turn_id(nonce: str, thread_id: str = "") -> str:
@@ -240,13 +239,14 @@ def sign_turn_id(nonce: str, thread_id: str = "") -> str:
     return f"{TURN_ID_PREFIX}{nonce}.{mac}"
 
 
-def accept_turn_id(value: object, *, thread_id: str, from_trigger_engine: bool) -> bool:
+def accept_turn_id(value: object, *, thread_id: str, from_trigger_engine: bool, consume) -> bool:
     """True once for a valid id the engine signed for `thread_id`, on the
-    engine's own request; False for anything else, and for any id seen before."""
+    engine's own request. `consume(id)` must record the id DURABLY and say
+    whether it was new (RunHistory.consume_turn_id: a primary key in the
+    database every worker shares), so a replay to any worker is refused."""
     if not from_trigger_engine or not isinstance(value, str) or not value.startswith(TURN_ID_PREFIX) or "." not in value:
         return False
     nonce, _, _mac = value[len(TURN_ID_PREFIX) :].rpartition(".")
-    if not nonce or not secrets.compare_digest(sign_turn_id(nonce, thread_id), value) or value in _CONSUMED_TURN_IDS:
+    if not nonce or not secrets.compare_digest(sign_turn_id(nonce, thread_id), value):
         return False
-    _CONSUMED_TURN_IDS.add(value)
-    return True
+    return bool(consume(value))

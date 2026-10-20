@@ -111,11 +111,18 @@ def test_a_webhook_url_in_config_yaml_is_registered(tmp_path) -> None:
 
 
 def test_the_trigger_engine_credential_is_a_known_secret(gateway) -> None:
-    from app.gateway.internal_auth import _trigger_engine_token
+    """ADAPTED after the rebase: the security baseline REMOVED the derived
+    trigger-engine credential (_trigger_engine_token) in favour of single-use,
+    request-bound grants (internal_auth.issue_trigger_grant, 120 s, redeemed by
+    atomic rename). No long-lived engine credential exists to leak; the one
+    long-lived internal credential left, the internal auth token, must be
+    redacted."""
+    from app.gateway import internal_auth
 
-    tok = _trigger_engine_token()
-    out, _ = default_redactor()(f"x-omniharness-trigger-engine: {tok}")
-    assert tok not in out, "the derived trigger-engine credential is not redacted"
+    assert not hasattr(internal_auth, "_trigger_engine_token")
+    tok = internal_auth._INTERNAL_AUTH_TOKEN
+    out, _ = default_redactor()(f"x-omniharness-internal-token: {tok}")
+    assert tok not in out, "the internal auth token is not redacted"
 
 
 # -- injected content / provenance ---------------------------------------------------
