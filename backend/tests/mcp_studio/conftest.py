@@ -2,8 +2,8 @@
 
 `create_app()` with its real lifespan and auth ON (login cookies, CSRF), on a
 temporary config, database and extensions_config.json, with the MCP builder
-enabled. Docker is the one thing faked: the manager's `_docker_run` is swapped
-for a recorder that never touches a real daemon.
+enabled. Docker is the one thing faked: the manager's DockerRunner (#59) is
+swapped for a recorder that never touches a real daemon.
 """
 
 from __future__ import annotations
@@ -35,9 +35,13 @@ class FakeDocker:
         self.calls: list[list[str]] = []
         self.results: dict[str, tuple[int, str, str]] = {}
 
-    async def __call__(self, args: list[str], *, timeout: float = 120.0, cwd: str | None = None) -> tuple[int, str, str]:
+    async def run(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, str, str]:
         self.calls.append(list(args))
         return self.results.get(args[1], (0, "", ""))
+
+    async def run_bytes(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, bytes, str]:
+        rc, out, err = await self.run(args, stdin=stdin, timeout=timeout)
+        return rc, out.encode(), err
 
 
 class Studio(SimpleNamespace):
@@ -59,8 +63,13 @@ class Studio(SimpleNamespace):
 
     def make_server(self, name: str = "GitHub Issue Connector", *, deployed: bool = True) -> str:
         app = self.client.app
-        row = self.run(app.state.mcp_server_repo.create, name=name, owner_id=self.owner_id, source_code="print('x')\n")
+        repo = app.state.mcp_server_repo
+        row = self.run(repo.create, name=name, owner_id=self.owner_id, source_code="print('x')\n")
         if deployed:
+            # #59: a deployed server is one whose code was approved, by hash.
+            sha = row["code_sha256"]
+            self.run(repo.set_pending_approval, row["id"], {"code_sha256": sha, "egress_hosts": [], "tool_tiers": {}}, user_id=self.owner_id)
+            self.run(repo.commit_approval, row["id"], expected_sha256=sha, user_id=self.owner_id)
             self.run(
                 app.state.mcp_server_repo.update_container_info,
                 row["id"],
@@ -120,7 +129,7 @@ def studio(tmp_path, monkeypatch):
         docker = FakeDocker()
         manager = client.app.state.mcp_server_manager
         assert manager is not None, "the lifespan did not wire the MCP server manager"
-        manager._docker_run = docker
+        manager._runner = docker
 
         s = Studio(client=client, docker=docker, extensions=extensions, tmp=tmp_path)
         resp = client.post("/api/v1/auth/initialize", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD})

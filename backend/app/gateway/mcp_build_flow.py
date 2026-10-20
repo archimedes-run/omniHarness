@@ -252,11 +252,15 @@ def describe_build(
         steps.append(_step("done", "You approved its first run"))
         steps.append(_step("waiting", f"Turning on: {current['label']}" if current else "Turning on"))
         return done("turning_on", "Turning on")
-    if approved and phase == "failed" and any(s.get("status") == "failed" for s in deploy_steps):
+    if phase == "failed" and any(s.get("status") == "failed" for s in deploy_steps):
+        # #59: an approval is committed only when the deploy succeeds, so a
+        # failed turn-on leaves the code unapproved; it needs approving again.
         failed = next(s for s in deploy_steps if s.get("status") == "failed")
-        steps.append(_step("done", "You approved its first run"))
-        steps.append(_step("failed", f"Couldn't turn on: {failed.get('detail') or error or 'no reason given'}"))
-        return done("turn_on_failed", "Couldn't turn on", failed.get("detail") or error)
+        reason = error or failed.get("detail") or "no reason given"
+        steps.append(_step("failed", f"Couldn't turn on: {reason}"))
+        if not approved:
+            steps.append(_step("waiting", "Not approved: approve it again to retry"))
+        return done("turn_on_failed", "Couldn't turn on", reason)
     if approved and status == "deployed":
         steps.append(_step("done", "You approved its first run"))
         steps.append(_step("done", "On: agents can use its tools"))
@@ -281,6 +285,12 @@ def describe_build(
         why = (sandbox or {}).get("error") or "The server started, but no tools were found."
         return done("tests_failed", "Tests failed", why)
     if phase == "verified" and not approved:
+        if server.get("approved_code_sha256") and server.get("container_id"):
+            # #59 (Q3): the approved version keeps running; the new code gets
+            # placeholders only until it is approved.
+            steps.append(_step("done", "The approved version is still on"))
+            steps.append(_step("waiting", "New code is waiting for your approval"))
+            return done("awaiting_approval", "Waiting for your approval", "New code is waiting for your approval; the approved version is still on")
         steps.append(_step("waiting", "First real run needs your approval"))
         return done("awaiting_approval", "Waiting for your approval")
     if approved:

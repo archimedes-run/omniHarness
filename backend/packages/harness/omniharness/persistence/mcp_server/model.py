@@ -25,6 +25,17 @@ class McpServerRow(Base):
     # Explicit human-review approval gate; defaults False — must be set by a
     # privileged action before the server can be registered for agent use.
     approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Feature 006 #59: approval is bound to the code. ``approved_code_sha256``
+    # names the code the user approved (the version that may run with real
+    # secrets); ``approval`` holds what they approved alongside it (egress
+    # hosts, tool tiers, who, when). Whether the CURRENT code is approved is
+    # derived (``approval_state``), never stored. ``pending_approval`` exists
+    # only while an approval is turning on: it becomes ``approval`` after the
+    # deploy succeeds and is cleared on failure. The legacy ``approved``
+    # boolean above is no longer read.
+    approved_code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    pending_approval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # JSON list of hostname strings the server is allowed to reach.
     egress_hosts: Mapped[list] = mapped_column(JSON, default=list)
     # Agent-generated source code stored for security scanning.

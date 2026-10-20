@@ -1,0 +1,196 @@
+"""Approval is bound to the code's hash (#59), through the gateway `create_app()` builds.
+
+* T4: code changed after approval is not approved; it can't be deployed or
+  enabled with the old hash.
+* T5: a failed deploy leaves nothing approved.
+* T15: code changed while an approval is turning on (the image is building)
+  is caught before `docker run`; nothing runs and nothing is approved.
+
+Docker is the recording fake behind the production `DockerRunner` port.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import json
+import time
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from mcp_fakes import FakeDockerRunner
+
+from omniharness.persistence.mcp_server.approval import code_sha256
+
+DESCRIPTION = "list my open github issues"
+
+CODE_V1 = """from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("issues")
+
+
+@mcp.tool()
+def whoami() -> str:
+    \"\"\"Says hello.\"\"\"
+    return "v1"
+"""
+CODE_V2 = CODE_V1.replace('"v1"', '"v2, now reading https://evil.example/collect"')
+
+TOOLS = ([{"name": "whoami", "description": "Says hello."}], [{"tool": "whoami", "ok": True, "output_type": "pass"}])
+
+
+@pytest.fixture
+def built(builder_gateway, monkeypatch):
+    """A built server whose sandbox tests passed, with docker faked."""
+
+    async def fake_run_agent(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.gateway.routers.mcp_studio.run_agent", fake_run_agent)
+    app, client = builder_gateway.app, builder_gateway.client
+    manager = app.state.mcp_server_manager
+    runner = FakeDockerRunner()
+    manager._runner = runner
+    allow = AsyncMock(return_value=type("R", (), {"decision": "allow", "reason": "ok"})())
+    patches = [
+        patch("app.gateway.mcp_server_manager.scan_python_code", allow),
+        patch.object(manager, "_run_server_sandbox_test", AsyncMock(return_value=TOOLS)),
+    ]
+    for p in patches:
+        p.start()
+    resp = client.post("/api/mcp-studio/builds", json={"description": DESCRIPTION})
+    assert resp.status_code == 201, resp.text
+    sid = resp.json()["server_id"]
+    submit(builder_gateway, sid, CODE_V1)
+    yield builder_gateway, sid, runner, manager
+    for p in patches:
+        p.stop()
+
+
+def on_loop(gw, fn, **kwargs):
+    """Run a manager coroutine on the app's own event loop."""
+    return gw.client.portal.call(functools.partial(fn, **kwargs))
+
+
+def submit(gw, sid: str, code: str):
+    """What the agent's mcp_build tool does: store the code and test it."""
+    manager = gw.app.state.mcp_server_manager
+    return on_loop(gw, manager.submit_source_and_test, server_id=sid, user_id=gw.user_id, source_code=code)
+
+
+def server(gw, sid: str) -> dict:
+    resp = gw.client.get(f"/api/mcp-studio/servers/{sid}")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def wait_for(gw, sid: str, states: set[str], timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        s = server(gw, sid)
+        if s["state"] in states:
+            return s
+        time.sleep(0.02)
+    raise AssertionError(f"never reached {states}: {server(gw, sid)}")
+
+
+def test_t4_code_changed_after_approval_is_not_approved(built) -> None:
+    gw, sid, runner, _ = built
+    s = server(gw, sid)
+    assert s["state"] == "awaiting_approval" and s["approved"] is False
+    assert s["code_sha256"] == code_sha256(CODE_V1)
+
+    resp = gw.client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": s["code_sha256"]})
+    assert resp.status_code == 200, resp.text
+    s = wait_for(gw, sid, {"enabled", "turn_on_failed"})
+    assert s["state"] == "enabled", s
+    assert s["approved"] is True
+    assert s["approved_code_sha256"] == code_sha256(CODE_V1)
+
+    # The agent submits new code through the mcp_build path.
+    submit(gw, sid, CODE_V2)
+    s = server(gw, sid)
+    assert s["approved"] is False, s
+    assert s["state"] == "awaiting_approval", s
+    assert s["state_reason"] == "New code is waiting for your approval; the approved version is still on"
+    # The new code's outbound hosts were read from it, not carried over.
+    assert "evil.example" in s["egress_hosts"]
+
+    runs_before = len(runner.ran())
+    assert gw.client.post(f"/api/mcp-studio/servers/{sid}/deploy").status_code == 403
+    resp = gw.client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": code_sha256(CODE_V1)})
+    assert resp.status_code == 409, resp.text
+    assert len(runner.ran()) == runs_before, "nothing may start for unapproved code"
+
+
+def test_t4_a_stored_approval_for_other_code_is_not_approval(built) -> None:
+    """Layer 2: even an approval record left in place (no clear) does not
+    approve code with another hash: approval is derived on every read."""
+    gw, sid, _, manager = built
+    repo = gw.app.state.mcp_server_repo
+
+    async def forge():
+        from omniharness.persistence.mcp_server.model import McpServerRow
+
+        async with repo._sf() as session:
+            row = await session.get(McpServerRow, sid)
+            old = code_sha256("print('some other code')")
+            row.approval = {"code_sha256": old, "egress_hosts": list(row.egress_hosts or [])}
+            row.approved_code_sha256 = old
+            row.approved = True
+            await session.commit()
+
+    gw.client.portal.call(forge)
+    s = server(gw, sid)
+    assert s["approved"] is False, s
+    assert gw.client.post(f"/api/mcp-studio/servers/{sid}/deploy").status_code == 403
+
+
+def test_t5_a_failed_deploy_leaves_nothing_approved(built) -> None:
+    gw, sid, runner, _ = built
+    runner.results["run"] = (1, "", "port is already allocated")
+    sha = server(gw, sid)["code_sha256"]
+    resp = gw.client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": sha})
+    assert resp.status_code == 200, resp.text
+    s = wait_for(gw, sid, {"turn_on_failed", "enabled"})
+    assert s["state"] == "turn_on_failed", s
+    assert s["approved"] is False
+    assert s["approved_code_sha256"] is None
+    assert any("approve it again" in step["text"] for step in s["steps"]), s["steps"]
+    row = gw.client.portal.call(functools.partial(gw.app.state.mcp_server_repo.get, sid, user_id=gw.user_id))
+    assert row["pending_approval"] is None
+    assert json.loads(gw.extensions.read_text())["mcpServers"] == {}
+
+
+def test_t5_a_pending_approval_with_no_container_is_not_approval(built) -> None:
+    """A gateway that died mid-deploy leaves a pending approval and no
+    container: that reads as not approved."""
+    gw, sid, _, manager = built
+    sha = server(gw, sid)["code_sha256"]
+    on_loop(gw, manager.begin_approval, server_id=sid, user_id=gw.user_id, code_sha256_seen=sha)
+    s = server(gw, sid)
+    assert s["approved"] is False
+    assert gw.client.post(f"/api/mcp-studio/servers/{sid}/connect").status_code == 403
+
+
+def test_t15_code_changed_while_turning_on_never_runs(built) -> None:
+    gw, sid, runner, _ = built
+    runner.hold_build = asyncio.Event()
+    runner.build_started = asyncio.Event()
+    sha = server(gw, sid)["code_sha256"]
+    resp = gw.client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": sha})
+    assert resp.status_code == 200, resp.text
+    deadline = time.monotonic() + 5
+    while not runner.build_started.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert runner.build_started.is_set(), "the deploy never reached docker build"
+
+    # While the image builds, the agent submits new code.
+    submit(gw, sid, CODE_V2)
+    gw.client.portal.call(runner.hold_build.set)
+
+    s = wait_for(gw, sid, {"turn_on_failed", "enabled"})
+    assert s["state"] == "turn_on_failed", s
+    assert "changed while turning on" in (s["state_reason"] or ""), s
+    assert runner.ran() == [], [c.args for c in runner.ran()]
+    assert s["approved"] is False and s["approved_code_sha256"] is None

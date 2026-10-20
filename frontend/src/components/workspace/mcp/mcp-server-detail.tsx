@@ -328,16 +328,6 @@ async function apiGetSecretsInfo(
   }>;
 }
 
-/** Feature 006: the user approves a server's first real run before it is
- * deployed with its real keys; the gateway refuses an unapproved deploy. */
-async function apiApprove(id: string): Promise<void> {
-  const r = await apiFetch(`/api/mcp-studio/servers/${id}/approve`, {
-    method: "POST",
-  });
-  if (!r.ok)
-    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
-}
-
 async function apiDeploy(id: string): Promise<McpBuildStatus> {
   const r = await apiFetch(`/api/mcp-studio/servers/${id}/deploy`, {
     method: "POST",
@@ -2440,7 +2430,12 @@ function DeployView({
   const handleDeploy = async () => {
     setError(null);
     try {
-      if (!server.approved) await apiApprove(server.id);
+      // #59: approval is given on the Build board, for the code by its hash;
+      // this page only turns an already-approved server back on.
+      if (!server.approved) {
+        setError("Approve it on the Build board first: Connections > Build.");
+        return;
+      }
       const result = await apiDeploy(server.id);
       onBuildStatusChanged(result);
     } catch (err) {
@@ -2605,7 +2600,9 @@ function DeployView({
             disabled={!canDeploy}
             onClick={() => void handleDeploy()}
           >
-            {server.approved ? "Deploy to Docker" : "Approve and deploy"}
+            {server.approved
+              ? "Deploy to Docker"
+              : "Approve on the Build board"}
           </Button>
         ) : (
           <div className="flex flex-col gap-2">

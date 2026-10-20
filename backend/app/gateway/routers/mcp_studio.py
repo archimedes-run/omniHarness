@@ -9,8 +9,7 @@ GET  /api/mcp-studio/servers/{id}/build             build status snapshot
 PUT  /api/mcp-studio/servers/{id}/secrets           write secrets (write-only)
 POST /api/mcp-studio/servers/{id}/secrets/reveal    one stored value, owner only, password re-entered
 POST /api/mcp-studio/servers/{id}/test              trigger test pipeline
-POST /api/mcp-studio/servers/{id}/approve           mark server approved
-POST /api/mcp-studio/servers/{id}/register          register approved server for agent use
+POST /api/mcp-studio/servers/{id}/enable            approve the code you saw (by hash) and turn it on
 POST /api/mcp-studio/servers/{id}/stop              stop and remove the server's container
 DELETE /api/mcp-studio/servers/{id}                 remove container, config entry, secrets, record
 
@@ -98,6 +97,11 @@ class McpServerResponse(BaseModel):
     egress_hosts: list[str]
     source_code: str | None
     files: dict[str, str] | None
+    # #59: the hash of the stored code, and the hash of the approved version
+    # (None when nothing was ever approved). ``approved`` is derived: the two
+    # are equal and the hosts are the approved hosts.
+    code_sha256: str | None = None
+    approved_code_sha256: str | None = None
     created_at: str
     updated_at: str
     # Feature 006 (MCP Suite > Build): where the build is, in words.
@@ -132,7 +136,6 @@ class McpServerCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=1024)
     template_type: str | None = Field(default=None, description="api_wrapper | database_connector | custom_tool")
     language: str | None = Field(default="python")
-    egress_hosts: list[str] = Field(default_factory=list)
 
 
 class McpServerCreateResponse(BaseModel):
@@ -210,6 +213,8 @@ def _server_to_response(server: dict, phase: str = "idle") -> McpServerResponse:
         egress_hosts=server.get("egress_hosts") or [],
         source_code=source_code,
         files=files,
+        code_sha256=server.get("code_sha256"),
+        approved_code_sha256=server.get("approved_code_sha256"),
         created_at=server["created_at"],
         updated_at=server["updated_at"],
     )
@@ -358,29 +363,43 @@ async def start_build(body: StartBuildRequest, request: Request) -> StartBuildRe
 # ---------------------------------------------------------------------------
 
 
+class EnableRequest(BaseModel):
+    #: The hash of the code the user was shown. Approval is for that code only.
+    code_sha256: str = Field(..., min_length=64, max_length=64)
+    #: Tier per tool (1, 2 or 3). A tool not named here starts at Tier 3.
+    tool_tiers: dict[str, int] = Field(default_factory=dict)
+
+
 @router.post("/servers/{server_id}/enable", response_model=McpServerResponse)
 @require_permission("threads", "write")
-async def enable_mcp_server(server_id: str, request: Request) -> McpServerResponse:
-    """The user approves the first real run, and the server is turned on.
+async def enable_mcp_server(server_id: str, body: EnableRequest, request: Request) -> McpServerResponse:
+    """The user approves the code they saw, and the server is turned on.
 
-    Approval needs the sandbox tests to have passed (phase verified); then the
-    server is deployed with its real credentials and connected for agents.
-    Without this call nothing turns a built server on.
+    The approval names the code by its hash: it is refused unless the sandbox
+    tests passed and the hash is the stored code's. It is recorded as pending
+    and becomes the approval only when the deploy succeeds; a failed deploy
+    leaves the server unapproved (#59). Nothing else turns a built server on.
     """
     _check_flag(request)
     user_id = _get_user_id(request)
     manager = get_mcp_server_manager(request)
     try:
-        await manager.approve(server_id=server_id, user_id=user_id)
+        await manager.begin_approval(server_id=server_id, user_id=user_id, code_sha256_seen=body.code_sha256, tool_tiers=body.tool_tiers)
     except PermissionError as exc:
         if "not found" in str(exc):
             raise HTTPException(status_code=404, detail="MCP server not found") from exc
+        if "code changed" in str(exc):
+            raise HTTPException(status_code=409, detail="The code changed since you opened it; review it again.") from exc
         raise HTTPException(status_code=409, detail="It can be approved only after its sandbox tests pass.") from exc
-    try:
-        await manager.deploy(server_id=server_id, user_id=user_id, connect_after=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    server = await get_mcp_server_repo(request).get(server_id)
+    try:
+        await manager.deploy(server_id=server_id, user_id=user_id, connect_after=True)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail="The code changed since you opened it; review it again.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    server = await get_mcp_server_repo(request).get(server_id, user_id=user_id)
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await _described(request, server, user_id)
@@ -402,8 +421,8 @@ async def list_mcp_servers(
 ) -> McpServerListResponse:
     _check_flag(request)
     repo = get_mcp_server_repo(request)
-    servers = await repo.list_servers(search=search, status=status, limit=limit, offset=offset)
-    user_id = _user_or_none(request)
+    user_id = _get_user_id(request)
+    servers = await repo.list_servers(search=search, status=status, limit=limit, offset=offset, user_id=user_id)
     items = [await _described(request, s, user_id) for s in servers]
     return McpServerListResponse(servers=items, total=len(items))
 
@@ -425,12 +444,14 @@ async def create_mcp_server(
 
     extracted = extract_secrets(body.description) if body.description else None
     description = extracted.text if extracted else None
+    # Outbound hosts are read from the code the agent writes, never taken
+    # from the client (#59): they are part of what the user approves.
     server = await repo.create(
         name=body.name,
         owner_id=user_id,
         language=body.language or "python",
         description=description,
-        egress_hosts=body.egress_hosts,
+        egress_hosts=[],
     )
     server_id = server["id"]
     if extracted and extracted.secrets:
@@ -448,8 +469,6 @@ async def create_mcp_server(
     if description:
         prompt_parts.append(f"Description: {description}")
     prompt_parts.append(f"Template type: {template_hint}")
-    if body.egress_hosts:
-        prompt_parts.append(f"Allowed egress hosts: {', '.join(body.egress_hosts)}")
     if extracted and extracted.secrets:
         prompt_parts.append("Secrets are stored for this server and NOT shown to you; read " + ", ".join(f"os.environ['{n}']" for n in extracted.secrets) + " inside the tool handlers.")
     prompt_parts.append("\nWrite the complete server.py source code, then call mcp_build with the server_id and source_code.")
@@ -471,7 +490,7 @@ async def create_mcp_server(
 async def get_mcp_server(server_id: str, request: Request) -> McpServerResponse:
     _check_flag(request)
     repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
+    server = await repo.get(server_id, user_id=_get_user_id(request))
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await _described(request, server, _user_or_none(request))
@@ -526,7 +545,7 @@ async def write_mcp_secrets(
 
     # Verify ownership before touching the vault
     repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
+    server = await repo.get(server_id, user_id=_get_user_id(request))
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
 
@@ -563,7 +582,7 @@ async def get_mcp_secrets_info(server_id: str, request: Request) -> McpSecretsIn
     user_id = _get_user_id(request)
 
     repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
+    server = await repo.get(server_id, user_id=_get_user_id(request))
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
 
@@ -693,54 +712,6 @@ async def trigger_mcp_test(server_id: str, request: Request) -> McpBuildStatusRe
 
 
 # ---------------------------------------------------------------------------
-# POST /servers/{id}/approve
-# ---------------------------------------------------------------------------
-
-
-@router.post("/servers/{server_id}/approve", response_model=McpServerResponse)
-@require_permission("threads", "write")
-async def approve_mcp_server(server_id: str, request: Request) -> McpServerResponse:
-    _check_flag(request)
-    user_id = _get_user_id(request)
-    manager = get_mcp_server_manager(request)
-
-    try:
-        await manager.approve(server_id=server_id, user_id=user_id)
-    except PermissionError:
-        raise HTTPException(status_code=404, detail="MCP server not found")
-
-    repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
-    if server is None:
-        raise HTTPException(status_code=404, detail="MCP server not found")
-    return _server_to_response(server, "idle")
-
-
-# ---------------------------------------------------------------------------
-# POST /servers/{id}/register
-# ---------------------------------------------------------------------------
-
-
-@router.post("/servers/{server_id}/register", response_model=McpServerResponse)
-@require_permission("threads", "write")
-async def register_mcp_server(server_id: str, request: Request) -> McpServerResponse:
-    _check_flag(request)
-    user_id = _get_user_id(request)
-    manager = get_mcp_server_manager(request)
-
-    try:
-        record = await manager.register(server_id=server_id, user_id=user_id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=404 if "not found" in str(exc) else 403, detail=str(exc)) from exc
-
-    repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
-    if server is None:
-        raise HTTPException(status_code=404, detail="MCP server not found")
-    return _server_to_response(server, record.phase)
-
-
-# ---------------------------------------------------------------------------
 # POST /servers/{id}/stop
 # ---------------------------------------------------------------------------
 
@@ -762,7 +733,7 @@ async def stop_mcp_server(server_id: str, request: Request) -> McpServerResponse
         raise HTTPException(status_code=502, detail=f"The server was not stopped: {exc}") from exc
 
     repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
+    server = await repo.get(server_id, user_id=_get_user_id(request))
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return _server_to_response(server, record.phase)

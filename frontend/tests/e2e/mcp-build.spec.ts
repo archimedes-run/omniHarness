@@ -72,8 +72,13 @@ function gateway(page: Page) {
   });
   void page.route("**/api/mcp-studio/servers/srv-1/enable", async (route) => {
     calls.push("enable");
+    const body = route.request().postDataJSON() as { code_sha256?: string };
     if (server?.state !== "awaiting_approval") {
       return route.fulfill(json({ detail: "not yet" }, 409));
+    }
+    // #59: the approval names the code it is for, by its hash.
+    if (body.code_sha256 !== server.code_sha256) {
+      return route.fulfill(json({ detail: "The code changed" }, 409));
     }
     server = {
       ...server,
@@ -100,6 +105,7 @@ function gateway(page: Page) {
       ...server!,
       status: "verified",
       phase: "verified",
+      code_sha256: "a".repeat(64),
       state: "awaiting_approval",
       state_label: "Waiting for your approval",
       tool_count: 1,

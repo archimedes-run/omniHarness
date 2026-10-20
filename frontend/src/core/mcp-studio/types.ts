@@ -25,7 +25,12 @@ export interface BuiltServer {
   description: string | null;
   status: string;
   phase: string;
+  /** True only when the stored code is the approved code (derived, #59). */
   approved: boolean;
+  /** SHA-256 of the stored code; null before any code exists. */
+  code_sha256?: string | null;
+  /** SHA-256 of the version the user approved; null if none ever was. */
+  approved_code_sha256?: string | null;
   detected_secrets: string[];
   created_at: string;
   updated_at: string;

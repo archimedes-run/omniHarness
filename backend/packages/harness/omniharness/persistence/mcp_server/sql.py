@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omniharness.persistence.mcp_server.approval import code_sha256, current_code_approved
 from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.timestamps import utc_iso
 from omniharness.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
@@ -20,6 +21,14 @@ class McpServerRepository:
 
     @staticmethod
     def _row_to_dict(row: McpServerRow) -> dict[str, Any]:
+        out = McpServerRepository._raw_dict(row)
+        # Derived on every read: the stored code is the approved code.
+        out["approved"] = current_code_approved(out)
+        out["code_sha256"] = code_sha256(out.get("source_code"))
+        return out
+
+    @staticmethod
+    def _raw_dict(row: McpServerRow) -> dict[str, Any]:
         return {
             "id": row.id,
             "owner_id": row.owner_id,
@@ -28,7 +37,9 @@ class McpServerRepository:
             "description": row.description,
             "status": row.status,
             "detected_secrets": row.detected_secrets or [],
-            "approved": bool(row.approved),
+            "approved_code_sha256": row.approved_code_sha256,
+            "approval": row.approval,
+            "pending_approval": row.pending_approval,
             "egress_hosts": row.egress_hosts or [],
             "source_code": row.source_code,
             "tools_discovered": row.tools_discovered or [],
@@ -136,6 +147,13 @@ class McpServerRepository:
             row = await session.get(McpServerRow, server_id)
             if row is None or row.owner_id != user_id:
                 return False
+            if row.source_code != source_code:
+                # New code is never approved code: an approval that was turning
+                # on is dropped, and the legacy flag is cleared. The record of
+                # the approved version stays, so the approved container can keep
+                # running; whether THIS code is approved is derived (approval.py).
+                row.pending_approval = None
+                row.approved = False
             row.source_code = source_code
             row.updated_at = datetime.now(UTC)
             await session.commit()
@@ -175,16 +193,44 @@ class McpServerRepository:
             await session.commit()
         return True
 
-    async def set_approved(self, server_id: str, approved: bool, *, user_id: str) -> bool:
-        """Set the approval flag for a server the caller owns.
+    async def set_pending_approval(self, server_id: str, pending: dict[str, Any] | None, *, user_id: str) -> bool:
+        """Record (or clear) an approval that is turning on."""
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.pending_approval = pending
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
 
-        Returns True if updated, False if not found / not owner.
+    async def commit_approval(self, server_id: str, *, expected_sha256: str, user_id: str) -> bool:
+        """Make the pending approval THE approval, if it is still for the stored code.
+
+        Returns False (and changes nothing) when there is no pending approval,
+        it names other code, or the stored code changed meanwhile.
         """
         async with self._sf() as session:
             row = await session.get(McpServerRow, server_id)
             if row is None or row.owner_id != user_id:
                 return False
-            row.approved = approved
+            pending = row.pending_approval or None
+            if not pending or pending.get("code_sha256") != expected_sha256 or code_sha256(row.source_code) != expected_sha256:
+                return False
+            row.approval = dict(pending)
+            row.approved_code_sha256 = expected_sha256
+            row.pending_approval = None
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+        return True
+
+    async def update_egress_hosts(self, server_id: str, hosts: list[str], *, user_id: str) -> bool:
+        """Persist the outbound hosts read from the stored code (never from a client)."""
+        async with self._sf() as session:
+            row = await session.get(McpServerRow, server_id)
+            if row is None or row.owner_id != user_id:
+                return False
+            row.egress_hosts = list(hosts)
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return True

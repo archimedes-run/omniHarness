@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import io
 import json
 import logging
 import re
 import socket
 import sys
+import tarfile
 import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -41,8 +43,10 @@ from pathlib import Path
 from typing import Literal
 
 from app.gateway.mcp_build_flow import placeholder, scrub
+from app.gateway.mcp_docker import CliDockerRunner, DockerRunner
 from app.gateway.mcp_egress import build_egress_rules
 from app.gateway.mcp_secrets import McpSecretsVault
+from omniharness.persistence.mcp_server.approval import code_sha256
 from omniharness.persistence.mcp_server.sql import McpServerRepository
 from omniharness.skills.code_scanner import scan_python_code, scan_python_code_static
 
@@ -144,6 +148,19 @@ def _init_deploy_steps() -> list[dict]:
     return steps
 
 
+def _tar_context(files: dict[str, str]) -> bytes:
+    """A docker build context as an in-memory tar (no files on disk)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, text in files.items():
+            data = text.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
 def _patch_main_for_sse(source: str) -> str:
     """Replace the __main__ block with the canonical dual-transport form.
 
@@ -235,9 +252,14 @@ class MCPServerManager:
     Created once in the app lifespan and stored on ``app.state``.
     """
 
-    def __init__(self, repo: McpServerRepository, vault: McpSecretsVault) -> None:
+    def __init__(self, repo: McpServerRepository, vault: McpSecretsVault, runner: DockerRunner | None = None) -> None:
         self._repo = repo
         self._vault = vault
+        self._runner: DockerRunner = runner or CliDockerRunner()
+        # Per-server lock held while the stored code changes and while a deploy
+        # makes its final check before `docker run`: new code can't slip in
+        # between "this is the approved code" and starting it (#59, T15).
+        self._source_locks: dict[str, asyncio.Lock] = {}
         # In-memory phase tracking: server_id → MCPBuildRecord
         self._records: dict[str, MCPBuildRecord] = {}
         self._lock = asyncio.Lock()
@@ -260,6 +282,12 @@ class MCPServerManager:
     def build_run(self, server_id: str) -> object | None:
         """The build run this process started for *server_id*, if any."""
         return self._build_runs.get(server_id)
+
+    def _source_lock(self, server_id: str) -> asyncio.Lock:
+        lock = self._source_locks.get(server_id)
+        if lock is None:
+            lock = self._source_locks[server_id] = asyncio.Lock()
+        return lock
 
     def is_testing(self, server_id: str) -> bool:
         """True while a sandbox test of *server_id* is running."""
@@ -489,7 +517,8 @@ class MCPServerManager:
         Ownership gate is at the top — identical to every other mutating method.
         """
         await self._load_and_verify(server_id, user_id)
-        await self._repo.update_source_code(server_id, source_code, user_id=user_id)
+        async with self._source_lock(server_id):
+            await self._repo.update_source_code(server_id, source_code, user_id=user_id)
         return await self.test_server(server_id=server_id, user_id=user_id)
 
     async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
@@ -527,7 +556,6 @@ class MCPServerManager:
             server = await self._load_and_verify(server_id, user_id)
 
             source = server.get("source_code") or ""
-            egress_hosts = server.get("egress_hosts") or []
 
             # Stage 1: static scan (immediate, no LLM) — hard-blocks dangerous patterns.
             if source:
@@ -550,13 +578,11 @@ class MCPServerManager:
             # secret — discovery (Phase 1 of the sandbox test) catches that separately.
             required_key_names = self._vault.scan_for_required_keys(source) if source else []
 
-            # Auto-populate egress_hosts from URL literals when the build flow didn't set
-            # them explicitly. Without this, the LLM scanner has no declared allowlist and
-            # treats standard Bearer-auth to the server's own API as potential exfiltration.
-            if source and not egress_hosts:
-                egress_hosts = self._extract_egress_hosts(source)
-                if egress_hosts:
-                    logger.debug("Auto-extracted egress hosts for %s: %s", server_id, egress_hosts)
+            # The outbound hosts are read from THIS code, and only from it (#59):
+            # the same bytes that are hashed for approval. A client never sets
+            # them. Persisted, so the approval screen shows what will be enforced.
+            egress_hosts = self._extract_egress_hosts(source) if source else []
+            await self._repo.update_egress_hosts(server_id, egress_hosts, user_id=user_id)
 
             # Stage 3: LLM scan for intent-level threats. egress_hosts are passed so the
             # reviewer can distinguish a normal API connector (sending its key to its own
@@ -641,63 +667,45 @@ class MCPServerManager:
                 self._records[server_id] = record
             return record
 
-    async def approve(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Mark a server as approved.
+    async def begin_approval(
+        self,
+        *,
+        server_id: str,
+        user_id: str,
+        code_sha256_seen: str,
+        tool_tiers: dict[str, int] | None = None,
+    ) -> dict:
+        """Record the user's approval of the code they saw, as PENDING.
 
-        Requires phase=="verified": the server must have completed the sandbox
-        test and discovered at least one tool. Servers in "testing" (sandbox
-        failed or no tools found) or any other phase cannot be approved.
-        """
-        await self._load_and_verify(server_id, user_id)
-        async with self._lock:
-            current = self._records.get(server_id)
-        current_phase = current.phase if current is not None else "unknown"
-        if current_phase != "verified":
-            raise PermissionError(f"MCP server {server_id!r} cannot be approved from phase {current_phase!r}. Run POST /test first; the server must reach 'verified' (sandbox connected + tools discovered) before it can be approved.")
-        await self._repo.set_approved(server_id, True, user_id=user_id)
-        # Preserve all build data — only the phase changes on approve/register/stop.
-        # Creating a blank MCPBuildRecord here would wipe tools_discovered / test_results,
-        # causing the MCP Tools panel to show "0 tools discovered" after deploy.
-        async with self._lock:
-            existing = self._records.get(server_id)
-        record = MCPBuildRecord(
-            server_id=server_id,
-            phase="idle",
-            owner_id=user_id,
-            required_key_names=existing.required_key_names if existing else [],
-            tools_discovered=existing.tools_discovered if existing else [],
-            test_results=existing.test_results if existing else [],
-            last_verified_at=existing.last_verified_at if existing else None,
-        )
-        async with self._lock:
-            self._records[server_id] = record
-        return record
-
-    async def register(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Register an approved server for agent use.
-
-        Raises ``PermissionError`` if not approved — unapproved servers must
-        not be accessible to the agent.
+        Refused (``PermissionError``) unless the sandbox tests passed (phase
+        verified) and *code_sha256_seen* is the hash of the code stored now.
+        The approval only becomes real when the deploy succeeds
+        (``_run_docker_deploy`` commits it); a failed deploy clears it, so
+        nothing is left approved that never turned on (#59).
         """
         server = await self._load_and_verify(server_id, user_id)
-        if not server.get("approved"):
-            raise PermissionError(f"MCP server {server_id!r} has not been approved for registration")
-
-        await self._repo.update_status(server_id, "deployed", user_id=user_id)
-        async with self._lock:
-            existing = self._records.get(server_id)
-        record = MCPBuildRecord(
-            server_id=server_id,
-            phase="ready",
-            owner_id=user_id,
-            required_key_names=existing.required_key_names if existing else [],
-            tools_discovered=existing.tools_discovered if existing else [],
-            test_results=existing.test_results if existing else [],
-            last_verified_at=existing.last_verified_at if existing else None,
-        )
-        async with self._lock:
-            self._records[server_id] = record
-        return record
+        current = code_sha256(server.get("source_code"))
+        if current is None:
+            raise ValueError("No source code — build the server first")
+        status = await self.get_status(server_id=server_id, user_id=user_id)
+        if status.phase != "verified" and server.get("status") != "verified":
+            raise PermissionError(f"MCP server {server_id!r} cannot be approved from phase {status.phase!r}: its sandbox tests must pass first")
+        if code_sha256_seen != current:
+            raise PermissionError("code changed: the code you approved is not the code stored now")
+        tools = {t.get("name") for t in (server.get("tools_discovered") or status.tools_discovered or [])}
+        tiers = dict(tool_tiers or {})
+        for name, tier in tiers.items():
+            if name not in tools or tier not in (1, 2, 3):
+                raise ValueError(f"invalid tier for tool {name!r}")
+        pending = {
+            "code_sha256": current,
+            "egress_hosts": list(server.get("egress_hosts") or []),
+            "tool_tiers": {name: tiers.get(name, 3) for name in sorted(t for t in tools if t)},
+            "approved_by": user_id,
+            "approved_at": datetime.now(UTC).isoformat(),
+        }
+        await self._repo.set_pending_approval(server_id, pending, user_id=user_id)
+        return pending
 
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Stop a server: stop and remove its container, drop its agent config entry.
@@ -743,7 +751,7 @@ class MCPServerManager:
         name = _container_name(server_id)
         for verb in ("stop", "rm"):
             try:
-                rc, _, err = await self._docker_run(["docker", verb, name], timeout=60.0)
+                rc, _, err = await self._runner.run(["docker", verb, name], timeout=60.0)
             except FileNotFoundError:
                 # No docker CLI here. If a container was recorded, it may still be
                 # running somewhere we cannot reach: say so. If none ever was,
@@ -787,7 +795,10 @@ class MCPServerManager:
             rec = self._records.get(server_id)
             if rec is None:
                 return
-            steps = [{**s, "status": "failed"} if s["key"] == failed_key else s for s in rec.deploy_steps]
+            # A test run may have replaced the record mid-deploy (new code
+            # submitted): the failure is still shown as a deploy step.
+            current = rec.deploy_steps or _init_deploy_steps()
+            steps = [{**s, "status": "failed", "detail": error} if s["key"] == failed_key else ({**s, "status": "pending"} if s["status"] == "running" else s) for s in current]
             self._records[server_id] = dataclasses.replace(rec, phase="failed", error=error, deploy_steps=steps)
 
     @staticmethod
@@ -801,17 +812,6 @@ class MCPServerManager:
                     continue
         raise RuntimeError(f"No free port found in range {start}–{start + 100}")
 
-    @staticmethod
-    async def _docker_run(args: list[str], *, timeout: float = 120.0, cwd: str | None = None) -> tuple[int, str, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return proc.returncode or 0, (out or b"").decode(), (err or b"").decode()
-
     async def deploy(self, *, server_id: str, user_id: str, connect_after: bool = False) -> MCPBuildRecord:
         """Validate, mark as deploying, fire Docker work in background, return immediately.
 
@@ -824,14 +824,16 @@ class MCPServerManager:
         source code exists. Secrets are injected as env vars and NOT logged.
         """
         server = await self._load_and_verify(server_id, user_id)
-        # Feature 006: a built server's first real run is the user's to
-        # approve. Deploying gives it the real credentials, so it needs that
-        # approval; nothing else sets it.
-        if not server.get("approved"):
-            raise PermissionError(f"MCP server {server_id!r} has not been approved: approve its first run before turning it on")
         source = server.get("source_code") or ""
-        if not source:
-            raise ValueError("No source code — build the server first")
+        # Feature 006 #59: deploying gives the code real credentials, so the
+        # code stored NOW must be the approved code, or be the code of an
+        # approval that is turning on. Nothing else turns a server on.
+        current = code_sha256(source)
+        pending = server.get("pending_approval") or None
+        if current is not None and (server.get("approved") or (pending and pending.get("code_sha256") == current)):
+            expected = current
+        else:
+            raise PermissionError(f"MCP server {server_id!r} has not been approved: approve its first run before turning it on")
 
         async with self._lock:
             existing = self._records.get(server_id)
@@ -854,6 +856,7 @@ class MCPServerManager:
                 server_id=server_id,
                 user_id=user_id,
                 source=source,
+                expected_sha256=expected,
                 existing=existing,
                 connect_after=connect_after,
             ),
@@ -867,10 +870,20 @@ class MCPServerManager:
         server_id: str,
         user_id: str,
         source: str,
-        existing: MCPBuildRecord | None,
+        expected_sha256: str | None = None,
+        existing: MCPBuildRecord | None = None,
         connect_after: bool = False,
     ) -> None:
-        """Background task: docker build + docker run, update in-memory record when done."""
+        """Background task: docker build + docker run, update in-memory record when done.
+
+        The approval this deploy carries (pending or existing) is for
+        *expected_sha256*. Right before ``docker run``, under the same lock a
+        code change takes, the stored code is read again and must still hash
+        to it; otherwise nothing is started and the pending approval is
+        dropped (#59, T15). A pending approval is committed only after the
+        container is up; any failure clears it.
+        """
+        expected_sha256 = expected_sha256 or code_sha256(source)
 
         def _make_record(phase: str, **kwargs: object) -> MCPBuildRecord:
             return MCPBuildRecord(
@@ -891,29 +904,21 @@ class MCPServerManager:
         try:
             # ── Step 1: Preparing ──────────────────────────────────────────
             # (already set to "running" by deploy(); just do the work)
-            with tempfile.TemporaryDirectory(prefix="omni_mcp_build_") as tmpdir:
-                build_dir = Path(tmpdir)
-                (build_dir / "server.py").write_text(patched)
-                (build_dir / "Dockerfile").write_text(_DOCKERFILE_TEMPLATE)
+            if code_sha256(source) != expected_sha256:
+                await self._refuse_changed(server_id, user_id, "preparing")
+                return
+            context = _tar_context({"server.py": patched, "Dockerfile": _DOCKERFILE_TEMPLATE})
+            await self._advance_step(server_id, "preparing", "building", detail="Source patched for SSE transport")
 
-                await self._advance_step(server_id, "preparing", "building", detail="Source patched for SSE transport")
-
-                # ── Step 2: Building ──────────────────────────────────────
-                rc, _, err = await self._docker_run(
-                    ["docker", "build", "-t", image_tag, "."],
-                    timeout=300.0,
-                    cwd=str(build_dir),
-                )
-                if rc != 0:
-                    await self._fail_step(server_id, "building", f"docker build failed: {err[:400]}")
-                    return
+            # ── Step 2: Building ──────────────────────────────────────
+            rc, _, err = await self._runner.run(["docker", "build", "-t", image_tag, "-"], stdin=context, timeout=300.0)
+            if rc != 0:
+                await self._fail_deploy(server_id, user_id, "building", f"docker build failed: {err[:400]}")
+                return
 
             await self._advance_step(server_id, "building", "launching", detail="Image built successfully")
 
             # ── Step 3: Launching ─────────────────────────────────────────
-            # Remove any previous container (non-fatal)
-            await self._docker_run(["docker", "rm", "-f", container_name], timeout=15.0)
-
             host_port = self._find_free_port()
 
             # Decrypt real secrets — injected as env vars, NOT logged
@@ -940,13 +945,31 @@ class MCPServerManager:
                 run_args += ["-e", f"{k}={v}"]
             run_args.append(image_tag)
 
-            rc, out, err = await self._docker_run(run_args, timeout=30.0)
+            async with self._source_lock(server_id):
+                # The final check: the code stored now is the code this
+                # approval is for. A change made while the image built is
+                # caught here, before anything runs with real secrets.
+                row = await self._repo.get(server_id, user_id=user_id)
+                if row is None or code_sha256(row.get("source_code")) != expected_sha256:
+                    await self._refuse_changed(server_id, user_id, "launching")
+                    return
+                # Remove any previous container (non-fatal), then start this one.
+                await self._runner.run(["docker", "rm", "-f", container_name], timeout=15.0)
+                rc, out, err = await self._runner.run(run_args, timeout=30.0)
             if rc != 0:
-                await self._fail_step(server_id, "launching", f"docker run failed: {err[:400]}")
+                await self._fail_deploy(server_id, user_id, "launching", f"docker run failed: {err[:400]}")
                 return
 
             container_id = out.strip()[:128]
             await self._advance_step(server_id, "launching", "registering", detail=f"Container started on port {host_port}")
+
+            # A pending approval becomes the approval only now that it runs.
+            row = await self._repo.get(server_id, user_id=user_id)
+            if row is not None and (row.get("pending_approval") or {}).get("code_sha256") == expected_sha256:
+                if not await self._repo.commit_approval(server_id, expected_sha256=expected_sha256, user_id=user_id):
+                    await self._runner.run(["docker", "rm", "-f", container_name], timeout=15.0)
+                    await self._fail_deploy(server_id, user_id, "registering", "the code changed while turning on; review it again")
+                    return
 
             # ── Step 4: Registering ───────────────────────────────────────
             await self._repo.update_container_info(
@@ -975,7 +998,19 @@ class MCPServerManager:
 
         except Exception as exc:
             logger.error("Docker deploy failed for %s: %s", server_id[:12], exc)
-            await self._fail_step(server_id, "launching", f"deploy error: {str(exc)[:400]}")
+            await self._fail_deploy(server_id, user_id, "launching", f"deploy error: {str(exc)[:400]}")
+
+    async def _fail_deploy(self, server_id: str, user_id: str, step: str, error: str) -> None:
+        """A deploy failed: the step says why, and an approval that was
+        turning on is dropped, so nothing stays approved that never ran."""
+        await self._fail_step(server_id, step, error)
+        try:
+            await self._repo.set_pending_approval(server_id, None, user_id=user_id)
+        except Exception:
+            logger.exception("could not clear the pending approval of %s", server_id[:12])
+
+    async def _refuse_changed(self, server_id: str, user_id: str, step: str) -> None:
+        await self._fail_deploy(server_id, user_id, step, "The code changed while turning on; review it again")
 
     async def undeploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Stop and remove the Docker container for this server (same as ``stop``)."""

@@ -382,11 +382,13 @@ function Detail({ server }: { server: BuiltServer }) {
             Discard
           </Button>
         )}
-        {server.state === "awaiting_approval" && (
+        {server.state === "awaiting_approval" && server.code_sha256 && (
           <Button
             className="rounded-lg font-semibold"
             disabled={busy}
-            onClick={() => void act(() => approveAndEnable(server.id))}
+            onClick={() =>
+              void act(() => approveAndEnable(server.id, server.code_sha256!))
+            }
           >
             {busy ? "Turning on…" : "Approve and turn on"}
           </Button>

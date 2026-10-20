@@ -37,10 +37,19 @@ export async function startBuild(
   );
 }
 
-/** Approve the first real run and turn the server on. */
-export async function approveAndEnable(id: string): Promise<BuiltServer> {
+/** Approve the code you were shown (named by its hash) and turn it on.
+ * The gateway refuses if the stored code is no longer that code. */
+export async function approveAndEnable(
+  id: string,
+  codeSha256: string,
+  toolTiers: Record<string, 1 | 2 | 3> = {},
+): Promise<BuiltServer> {
   return json(
-    await fetch(`${base()}/servers/${id}/enable`, { method: "POST" }),
+    await fetch(`${base()}/servers/${id}/enable`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code_sha256: codeSha256, tool_tiers: toolTiers }),
+    }),
   );
 }
 

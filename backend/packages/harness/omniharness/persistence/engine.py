@@ -180,6 +180,10 @@ async def _run_additive_migrations(backend: str) -> None:
         ("mcp_secrets", "key_hint", "VARCHAR(8)", "NULL"),
         ("mcp_servers", "container_id", "VARCHAR(128)", "NULL"),
         ("mcp_servers", "container_port", "INTEGER", "NULL"),
+        # Feature 006 #59: approval bound to a code hash
+        ("mcp_servers", "approved_code_sha256", "VARCHAR(64)", "NULL"),
+        ("mcp_servers", "approval", "JSON", "NULL"),
+        ("mcp_servers", "pending_approval", "JSON", "NULL"),
         # Phase 1 platform event discriminator (migration 0011)
         ("run_events", "source", "VARCHAR(32)", "NULL"),
         # Phase 1 Slice 1: additive workflow columns (migration 0012)
