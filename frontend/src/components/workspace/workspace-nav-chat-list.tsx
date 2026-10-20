@@ -32,8 +32,10 @@ export function WorkspaceNavChatList() {
   const waiting = useInboxCount();
   // FR-041 (Feature 004): a tool source that failed to load reaches the user
   // without opening anything: a count on MCP Suite.
-  const { view: sources } = useToolSources();
-  const failing = sources?.failing ?? 0;
+  // Unreadable is "?", never a quiet zero (FR-008's rule, here too).
+  const { view: sources, error: sourcesError } = useToolSources();
+  const failing: number | null =
+    sourcesError != null ? null : (sources?.failing ?? 0);
   const waitingLabel =
     waiting === null ? t.sidebar.cannotTellWaiting : t.sidebar.waiting(waiting);
   return (
@@ -101,15 +103,25 @@ export function WorkspaceNavChatList() {
               <span>{t.sidebar.mcpSuite}</span>
             </Link>
           </SidebarMenuButton>
-          {failing > 0 && (
+          {(failing === null || failing > 0) && (
+            // Amber, as on the board: unreachable is a warning, not an error.
             <SidebarMenuBadge
-              className="text-destructive max-md:top-3"
+              className="text-warning max-md:top-3"
               data-testid="failing-sources"
+              data-count={failing ?? "unknown"}
               role="img"
-              aria-label={t.sidebar.failingSources(failing)}
-              title={t.sidebar.failingSources(failing)}
+              aria-label={
+                failing === null
+                  ? t.sidebar.cannotTellSources
+                  : t.sidebar.failingSources(failing)
+              }
+              title={
+                failing === null
+                  ? t.sidebar.cannotTellSources
+                  : t.sidebar.failingSources(failing)
+              }
             >
-              {failing}
+              {failing ?? "?"}
             </SidebarMenuBadge>
           )}
         </SidebarMenuItem>

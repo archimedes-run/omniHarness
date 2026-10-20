@@ -122,6 +122,7 @@ export const zhCN: Translations = {
     about: "关于",
     waiting: (count: number) => `${count} 项等待你处理`,
     cannotTellWaiting: "无法确定有什么在等待",
+    cannotTellSources: "无法确定工具来源是否正常",
     failingSources: (count: number) => `${count} 个工具来源失败`,
   },
 
