@@ -50,8 +50,33 @@ KNOWN_INERT_TYPES = frozenset(
         "frame-link",
         "agent-setting",
         "file-history-delta",
+        # Request bookkeeping and per-session ledgers, found on a real
+        # ~/.claude in October 2026 (watcher /health counted them as drift).
+        # Shapes, keys only: api-request {id, base, params, tail, shapeHash,
+        # requestDigest, timestamp}; api-request-blob {hash, message} with no
+        # timestamp; api-request-shape {shape, shapeHash, timestamp};
+        # cost-state {totalCostUSD, modelUsage, total*Duration, no timestamp};
+        # artifact-comment-monitor and artifact-autoreact-ledger {artifacts, v}.
+        # None of them says what the session is doing.
+        "api-request",
+        "api-request-blob",
+        "api-request-shape",
+        "cost-state",
+        "artifact-comment-monitor",
+        "artifact-autoreact-ledger",
     }
 )
+
+#: The one record that links two sessions. Observed shape (a real corpus,
+#: keys only): {"type": "continued-in", "sessionId": <earlier>,
+#: "continuedInSessionId": <later>, "timestamp"}, written as the LAST line of
+#: the earlier session's file. The later session's file, in the same project
+#: folder, starts with a copy of the earlier history re-keyed to the new
+#: sessionId. The pointer runs forward only: nothing in the later file names
+#: the earlier one by a dedicated key. It carries no status meaning, so it is
+#: not drift, and it is not an event; it is read for the link.
+CONTINUED_IN = "continued-in"
+KNOWN_TYPES = KNOWN_INERT_TYPES | {CONTINUED_IN}
 
 
 def _text_of(message: object) -> str:
@@ -185,6 +210,8 @@ class _FileState:
     offset: int = 0  # bytes consumed, always at a line boundary
     lineno: int = 0
     sessions: dict[str, _SessionAccum] = field(default_factory=dict)
+    #: earlier session id -> the session it was continued in, as recorded.
+    continued_in: dict[str, str] = field(default_factory=dict)
 
 
 class ClaudeCodeAdapter(SessionAdapter):
@@ -292,7 +319,8 @@ class ClaudeCodeAdapter(SessionAdapter):
                         ref.files_changed.append(changed)
                 for raw_type, n in acc.unclassified.items():
                     ref.unclassified_types[raw_type] = ref.unclassified_types.get(raw_type, 0) + n
-        return list(refs.values())
+        links = {pred: cont for state in self._files.values() for pred, cont in state.continued_in.items()}
+        return fold_continuations(refs, links)
 
     def _consume(self, path: Path, state: _FileState) -> None:
         data = self._source.read_from(path, state.offset)
@@ -317,6 +345,11 @@ class ClaudeCodeAdapter(SessionAdapter):
                 self._source.note_skip(SkipReason.MALFORMED, path, lineno)
                 continue
 
+            if raw.get("type") == CONTINUED_IN:
+                pred, cont = _sid_of(raw), raw.get("continuedInSessionId")
+                if pred and isinstance(cont, str) and cont and cont != pred:
+                    state.continued_in[pred] = cont
+
             parsed = self.parse(raw, path, lineno)
             if parsed is None:
                 reason, rt = self._why_skipped(raw)
@@ -337,7 +370,7 @@ class ClaudeCodeAdapter(SessionAdapter):
                 parsed.kind = classify(parsed.raw_type, is_first=True, stop_reason=parsed.stop_reason)
             if parsed.kind is None and parsed.raw_type:
                 acc.unclassified[parsed.raw_type] = acc.unclassified.get(parsed.raw_type, 0) + 1
-                if parsed.raw_type not in KNOWN_INERT_TYPES:
+                if parsed.raw_type not in KNOWN_TYPES:
                     self._source.stats.unknown_types[parsed.raw_type] += 1
             # Sidechain records advance the parent's activity clock but do
             # not become sessions of their own — a subagent is not a
@@ -366,10 +399,10 @@ class ClaudeCodeAdapter(SessionAdapter):
         if raw_type is None:
             return SkipReason.UNKNOWN_TYPE, None
         if not isinstance(raw.get("timestamp"), str) or not raw.get("timestamp"):
-            if raw_type in KNOWN_INERT_TYPES:
+            if raw_type in KNOWN_TYPES:
                 return SkipReason.INERT_TYPE, raw_type
             return SkipReason.UNKNOWN_TYPE, raw_type
-        return (SkipReason.INERT_TYPE if raw_type in KNOWN_INERT_TYPES else SkipReason.UNKNOWN_TYPE), raw_type
+        return (SkipReason.INERT_TYPE if raw_type in KNOWN_TYPES else SkipReason.UNKNOWN_TYPE), raw_type
 
 
 def _sid_of(raw: object) -> str:
@@ -378,3 +411,41 @@ def _sid_of(raw: object) -> str:
         if isinstance(sid, str):
             return sid
     return ""
+
+
+def fold_continuations(refs: dict[str, SessionRef], links: dict[str, str]) -> list[SessionRef]:
+    """Show a continued session and its continuation as ONE session.
+
+    `links` maps an earlier session to the one it was continued in, as the
+    earlier session's own `continued-in` record says. When both are in view the
+    earlier one is folded into the later: its records join (the later file
+    usually repeats them, so repeats are dropped), and the later one carries
+    `continued_from`. When only the earlier one is in view it stays listed with
+    `continued_in`: the link is recorded, the continuation is not seen.
+
+    Chains (A continued in B, B in C) fold to the newest. A cycle is not
+    followed past its first repeat.
+    """
+    for pred in list(links):
+        ref = refs.get(pred)
+        if ref is None:
+            continue
+        head, seen = links[pred], {pred}
+        while head in links and head not in seen and links[head] in refs:
+            seen.add(head)
+            head = links[head]
+        target = refs.get(head)
+        if target is None or target is ref:
+            ref.continued_in = head
+            continue
+        have = {(r.at, r.raw_type, r.text) for r in target.records}
+        target.records[:0] = [r for r in ref.records if (r.at, r.raw_type, r.text) not in have]
+        target.files_changed[:0] = [f for f in ref.files_changed if f not in target.files_changed]
+        if target.todos is None:
+            target.todos = ref.todos
+        # The NEAREST recorded predecessor: a direct link always wins, a link
+        # further up a chain only fills a gap.
+        if links[pred] == head or target.continued_from is None:
+            target.continued_from = pred
+        del refs[pred]
+    return list(refs.values())
