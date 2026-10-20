@@ -267,6 +267,8 @@ async def write_custom_skill_file(skill_name: str, request: SkillFileWriteReques
         _write_file_version(name, request, prev, scan, storage)
     except config_versions.StaleWriteError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:  # a limit (skills.validation.check_skill_limits)
+        raise HTTPException(status_code=400, detail=str(e))
     return await list_custom_skill_files(name, config)
 
 
@@ -519,10 +521,13 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
 
+    # Whose agent: the caller's, passed explicitly rather than left to the
+    # ambient user context.
+    user_id = get_effective_user_id()
     agent_cfg = None
     if request.agent_name:
         try:
-            agent_cfg = load_agent_config(request.agent_name.lower())
+            agent_cfg = load_agent_config(request.agent_name.lower(), user_id=user_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"Agent '{request.agent_name}' not found")
     available = set(agent_cfg.skills) if agent_cfg and agent_cfg.skills is not None else None
@@ -535,7 +540,7 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
 
     container = config.skills.container_path
     paths = {s.get_container_file_path(container): s.name for s in skills}
-    system = apply_prompt_template(agent_name=agent_cfg.name if agent_cfg else None, available_skills=available, app_config=config)
+    system = apply_prompt_template(agent_name=agent_cfg.name if agent_cfg else None, available_skills=available, app_config=config, user_id=user_id)
     tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config)
     try:
         model = create_chat_model(name=model_name, thinking_enabled=False, app_config=config).bind_tools(tools)

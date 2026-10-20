@@ -103,13 +103,13 @@ def _names(value) -> list[str]:
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
 
 
-def _agent_model(agent_name: str | None, config: AppConfig) -> str:
+def _agent_model(agent_name: str | None, config: AppConfig, user_id: str) -> str:
     requested = None
     if agent_name:
         from omniharness.config.agents_config import load_agent_config
 
         try:
-            cfg = load_agent_config(agent_name.lower())
+            cfg = load_agent_config(agent_name.lower(), user_id=user_id)
             requested = cfg.model if cfg else None
         except (FileNotFoundError, ValueError):
             requested = None
@@ -136,7 +136,10 @@ async def draft(kind: DraftKind, request: DraftRequest, config: AppConfig = Depe
 
         groups = [g.name for g in config.tool_groups]
         skills = [s.name for s in get_or_new_skill_storage(app_config=config).load_skills(enabled_only=True)]
-        model_name = _agent_model(request.agent_name, config)
+        from omniharness.runtime.user_context import get_effective_user_id
+
+        # Whose agent picks the model: the caller's, passed explicitly.
+        model_name = _agent_model(request.agent_name, config, get_effective_user_id())
         system = AGENT_PROMPT.format(groups=", ".join(groups) or "(none)", skills=", ".join(skills) or "(none)")
         data = _json_object(await _ask(model_name, system, request.sentence, config))
         suggested_groups, suggested_skills = _names(data.get("tool_groups")), _names(data.get("skills"))

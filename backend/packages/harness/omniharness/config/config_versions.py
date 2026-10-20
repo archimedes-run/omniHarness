@@ -390,6 +390,11 @@ def write_skill(name: str, changes: dict[str, str | None] | None, *, who: str, s
                 else:
                     files[path] = text
             after = {"files": files}
+        if after is not None:
+            from omniharness.skills.validation import check_skill_limits
+
+            # Refused before anything is written (SkillLimitError is a ValueError).
+            check_skill_limits(name, {path: len(text.encode("utf-8")) for path, text in after["files"].items()})
         changed = _changed((before or {}).get("files") if before else None, after["files"] if after else None)
         _materialise_skill(name, after, storage)
         record = {**(extra or {}), "version": current + 1, "at": now, "ts": now, "who": who, "source": source, "changed": changed, "snapshot": after}

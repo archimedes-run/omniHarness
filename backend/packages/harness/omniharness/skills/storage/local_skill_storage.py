@@ -140,6 +140,9 @@ class LocalSkillStorage(SkillStorage):
             if target.exists():
                 raise SkillAlreadyExistsError(f"Skill '{skill_name}' already exists")
 
+            from omniharness.skills.validation import check_skill_limits, skill_dir_sizes
+
+            check_skill_limits(skill_name, skill_dir_sizes(skill_dir))
             await _scan_skill_archive_contents_or_raise(skill_dir, skill_name)
 
             with tempfile.TemporaryDirectory(prefix=f".installing-{skill_name}-", dir=custom_dir) as staging_root:

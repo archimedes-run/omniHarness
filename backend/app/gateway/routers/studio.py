@@ -111,10 +111,18 @@ def _autonomy_view(agent: str, user_id: str, config: AppConfig) -> AutonomyView:
     return AutonomyView(agent=agent, version=config_versions.agent_version(user_id, agent), classes=classes, cap_per_run=GRANT_CAP_PER_RUN, always_waits=always_waits(ruleset), rules_error=error)
 
 
+def _require_agents_api_enabled() -> None:
+    """Grants are part of an agent's config: the same switch as the agents API."""
+    from app.gateway.routers.agents import _require_agents_api_enabled as require
+
+    require()
+
+
 @router.get("/agents/{name}/autonomy", response_model=AutonomyView, summary="What an agent may do on its own in a scheduled run")
 async def get_autonomy(name: str, config: AppConfig = Depends(get_config)) -> AutonomyView:
     from omniharness.runtime.user_context import get_effective_user_id
 
+    _require_agents_api_enabled()
     user_id = get_effective_user_id()
     return _autonomy_view(_agent_or_404(name, user_id), user_id, config)
 
@@ -127,6 +135,7 @@ async def put_autonomy(name: str, request: AutonomyUpdate, config: AppConfig = D
     from omniharness.config import config_versions
     from omniharness.runtime.user_context import get_effective_user_id
 
+    _require_agents_api_enabled()
     user_id = get_effective_user_id()
     agent = _agent_or_404(name, user_id)
     ruleset, _ = _rules(config)
@@ -169,6 +178,7 @@ async def grant_uses(name: str, config: AppConfig = Depends(get_config)) -> list
     from app.policy.audit import PolicyAuditLog
     from omniharness.runtime.user_context import get_effective_user_id
 
+    _require_agents_api_enabled()
     user_id = get_effective_user_id()
     agent = name.strip().lower() if name != "lead_agent" else name
     entries = PolicyAuditLog(path=Path(config.policy.state_dir) / "audit.jsonl", actor="default").entries()

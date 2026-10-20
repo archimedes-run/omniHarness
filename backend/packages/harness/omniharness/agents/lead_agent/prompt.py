@@ -542,7 +542,7 @@ combined with a FastAPI gateway for REST API access [citation:FastAPI](https://f
 """
 
 
-def _get_memory_context(agent_name: str | None = None, *, app_config: AppConfig | None = None) -> str:
+def _get_memory_context(agent_name: str | None = None, *, app_config: AppConfig | None = None, user_id: str | None = None) -> str:
     """Get memory context for injection into system prompt.
 
     Args:
@@ -567,7 +567,7 @@ def _get_memory_context(agent_name: str | None = None, *, app_config: AppConfig 
         if not config.enabled or not config.injection_enabled:
             return ""
 
-        memory_data = get_memory_data(agent_name, user_id=get_effective_user_id())
+        memory_data = get_memory_data(agent_name, user_id=user_id or get_effective_user_id())
         memory_content = format_memory_for_injection(memory_data, max_tokens=config.max_injection_tokens)
 
         if not memory_content.strip():
@@ -647,9 +647,9 @@ def get_skills_prompt_section(available_skills: set[str] | None = None, *, app_c
     return _get_cached_skills_prompt_section(skill_signature, available_key, container_base_path, skill_evolution_section)
 
 
-def get_agent_soul(agent_name: str | None) -> str:
+def get_agent_soul(agent_name: str | None, *, user_id: str | None = None) -> str:
     # Append SOUL.md (agent personality) if present
-    soul = load_agent_soul(agent_name)
+    soul = load_agent_soul(agent_name, user_id=user_id)
     if soul:
         return f"<soul>\n{soul}\n</soul>\n" if soul else ""
     return ""
@@ -763,9 +763,11 @@ def apply_prompt_template(
     agent_name: str | None = None,
     available_skills: set[str] | None = None,
     app_config: AppConfig | None = None,
+    user_id: str | None = None,
 ) -> str:
-    # Get memory context
-    memory_context = _get_memory_context(agent_name, app_config=app_config)
+    # Get memory context. `user_id`: whose agent and memory; None reads the
+    # effective user from context (a run); a request handler passes its own.
+    memory_context = _get_memory_context(agent_name, app_config=app_config, user_id=user_id)
 
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents
@@ -803,7 +805,7 @@ def apply_prompt_template(
     # Format the prompt with dynamic skills and memory
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
         agent_name=agent_name or "OmniHarness 2.0",
-        soul=get_agent_soul(agent_name),
+        soul=get_agent_soul(agent_name, user_id=user_id),
         self_update_section=_build_self_update_section(agent_name),
         skills_section=skills_section,
         deferred_tools_section=deferred_tools_section,
