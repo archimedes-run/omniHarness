@@ -41,8 +41,16 @@ class TelegramChannel(Channel):
                 self._allowed_users.add(int(uid))
             except (ValueError, TypeError):
                 pass
-        # chat_id -> last sent message_id for threaded replies
+        # chat_id -> last sent message_id for threaded replies (below)
         self._last_bot_message: dict[str, int] = {}
+
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        """Only an EXPLICIT allowlist vouches for a sender ("empty = allow all"
+        lets anyone who finds the bot talk to it, but never as the user)."""
+        try:
+            return bool(self._allowed_users) and int(str(user_id)) in self._allowed_users
+        except (TypeError, ValueError):
+            return False
 
     async def start(self) -> None:
         if self._running:

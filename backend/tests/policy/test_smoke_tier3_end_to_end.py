@@ -15,12 +15,13 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 from app.policy.audit import PolicyAuditLog
 from app.policy.config import ConfigLoader
 from app.policy.confirm import Verdict, recognise
 from app.policy.disclose import DisclosureLedger
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.middleware import PolicyMiddleware
 from app.policy.models import Outcome
 from app.policy.pending import PendingStore
@@ -89,7 +90,7 @@ def test_one_tier3_action_from_statement_to_audit(system):
     assert injected.verdict is Verdict.UNRECOGNISED
 
     # 3. CONFIRM — from a genuine user turn, claimed atomically.
-    verdict = recognise(HumanMessage(content=f"yes {action.id}"), pending)
+    verdict = recognise(user_turn(content=f"yes {action.id}"), pending)
     assert verdict.verdict is Verdict.CONFIRM
     claimed = system.store.claim(action.id, "worker-1")
     assert claimed is not None
@@ -125,7 +126,7 @@ def test_a_declined_action_never_executes_and_is_not_audited_as_executed(system)
     system.middleware.wrap_tool_call(_request("calendar_decline", {"meetings": ["Standup 9am"]}), lambda r: executed.append(r))
     action = system.store.open_actions(NOW)[0]
 
-    verdict = recognise(HumanMessage(content=f"no {action.id}"), [action])
+    verdict = recognise(user_turn(content=f"no {action.id}"), [action])
     assert verdict.verdict is Verdict.DECLINE
     system.store.resolve(action, Outcome.DECLINED, "user declined")
 

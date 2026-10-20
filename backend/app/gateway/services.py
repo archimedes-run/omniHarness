@@ -75,8 +75,17 @@ def normalize_stream_modes(raw: list[str] | str | None) -> list[str]:
     return raw if raw else ["values"]
 
 
-def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
-    """Convert LangGraph Platform input format to LangChain state dict."""
+def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True) -> dict[str, Any]:
+    """Convert LangGraph Platform input format to LangChain state dict.
+
+    The person's own human message(s) are tagged as the user's turn
+    (lineage.USER_TURN_MARKER), here and nowhere else. Every message is
+    rebuilt from role and content only, so a marker a client put in
+    ``additional_kwargs`` never survives, and a message with any other role is
+    never the user's turn.
+    """
+    from app.policy.lineage import user_turn as tagged
+
     if raw_input is None:
         return {}
     messages = raw_input.get("messages")
@@ -86,13 +95,14 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
             if isinstance(msg, dict):
                 role = msg.get("role", msg.get("type", "user"))
                 content = msg.get("content", "")
-                if role in ("user", "human"):
-                    converted.append(HumanMessage(content=content))
+                if role in ("user", "human") and user_turn:
+                    converted.append(tagged(content))
                 else:
                     # TODO: handle other message types (system, ai, tool)
                     converted.append(HumanMessage(content=content))
             else:
-                converted.append(msg)
+                # Not from JSON: never trusted as a user turn.
+                converted.append(HumanMessage(content=getattr(msg, "content", str(msg))))
         return {**raw_input, "messages": converted}
     return raw_input
 
@@ -526,7 +536,12 @@ async def start_run(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    graph_input = normalize_input(body.input)
+    # A channel message is the user's own turn only when the channel's explicit
+    # allowlist vouched for the sender; otherwise it is relayed content.
+    from app.gateway.internal_auth import channel_of, channel_sender_is_owner
+
+    relayed = channel_of(request) is not None and not channel_sender_is_owner(request)
+    graph_input = normalize_input(body.input, user_turn=not relayed)
     try:
         config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
     except ValueError as exc:
@@ -561,8 +576,6 @@ async def start_run(
     claimed, rule_id = _client_provenance(body)
     if claimed == SYNTHETIC and await is_trigger_engine_request(request):
         synthetic_rule_id = rule_id or ""
-
-    from app.gateway.internal_auth import channel_of
 
     run_metadata = dict(body.metadata or {})
     apply_server_owned_context(

@@ -20,12 +20,13 @@ from types import SimpleNamespace
 import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool as make_tool
 
 from app.policy.audit import PolicyAuditLog
 from app.policy.config import ConfigLoader
 from app.policy.disclose import DisclosureLedger
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.middleware import PolicyMiddleware
 from app.policy.models import Outcome
 from app.policy.pending import PendingStore
@@ -103,14 +104,14 @@ def _agent(system):
 def test_a_confirmed_tier3_action_executes_once_and_is_audited(system):
     """T001. Fails on main with the action still open."""
     agent = _agent(system)
-    first = agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    first = agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
 
     assert EXECUTED == [], "the action executed WITHOUT confirmation — a worse failure than the one under test"
     pending = system.store.open_actions(NOW)
     assert len(pending) == 1, "no pending action was created; the proposal half is broken, not the grant half"
 
     # The user says yes, in the ordinary way, in the conversation.
-    agent.invoke({"messages": [*first["messages"], HumanMessage(content="yes")]})
+    agent.invoke({"messages": [*first["messages"], user_turn(content="yes")]})
 
     assert EXECUTED == [{"meetings": ["Standup 9am", "Review 2pm"]}], "the user confirmed and nothing happened. Tier 3 is deny-with-explanation: approve, nothing; approve again, nothing; learn to do it by hand instead."
     assert not system.store.open_actions(NOW), "the action is still open after being confirmed"
@@ -122,7 +123,7 @@ def test_the_proposal_half_works_so_the_failure_localises(system):
     """T002. Without this, 'nothing executed' and 'nothing was proposed' are
     the same red, and the first would be blamed on the wrong half."""
     agent = _agent(system)
-    agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
 
     pending = system.store.open_actions(NOW)
     assert len(pending) == 1

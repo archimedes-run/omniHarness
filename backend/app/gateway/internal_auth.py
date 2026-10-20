@@ -90,6 +90,16 @@ TRIGGER_GRANT_HEADER_NAME = "X-OmniHarness-Trigger-Grant"
 CHANNEL_HEADER_NAME = "X-OmniHarness-Channel"
 
 
+#: Sent by the channel manager only when the channel's explicit allowlist says
+#: the sender is the owner. Honoured only with the internal token.
+CHANNEL_OWNER_HEADER_NAME = "X-OmniHarness-Channel-Sender-Is-Owner"
+
+
+def channel_sender_is_owner(request) -> bool:
+    headers = getattr(request, "headers", None) or {}
+    return channel_of(request) is not None and headers.get(CHANNEL_OWNER_HEADER_NAME) == "1"
+
+
 def channel_of(request) -> str | None:
     """The channel name, only for an internal-token request; else None."""
     headers = getattr(request, "headers", None) or {}

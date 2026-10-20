@@ -227,9 +227,11 @@ def test_a_typed_reply_is_recorded_with_its_thread_user_and_message(sec, agent_t
 
 
 def test_a_channel_reply_is_recorded_as_that_channel(sec, agent_turns) -> None:
-    from app.gateway.internal_auth import CHANNEL_HEADER_NAME, create_internal_auth_headers
+    from app.gateway.internal_auth import CHANNEL_HEADER_NAME, CHANNEL_OWNER_HEADER_NAME, create_internal_auth_headers
 
-    channel = {**create_internal_auth_headers(), CHANNEL_HEADER_NAME: "telegram"}
+    # A sender the channel's allowlist vouches for as the owner (an unvouched
+    # one is relayed content: tests/security/test_user_turns.py).
+    channel = {**create_internal_auth_headers(), CHANNEL_HEADER_NAME: "telegram", CHANNEL_OWNER_HEADER_NAME: "1"}
     tid = sec.owner.post("/api/threads", json={}, headers=channel).json()["thread_id"]
 
     def say(text: str) -> None:
