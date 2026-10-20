@@ -46,6 +46,7 @@ from app.gateway.deps import (
     get_run_manager,
     get_stream_bridge,
 )
+from app.gateway.mcp_build_flow import build_prompt, describe_build, extract_secrets, scrub, server_name_from
 from app.gateway.mcp_server_manager import McpDeployInProgressError, McpTeardownError
 from app.gateway.services import (
     build_run_config,
@@ -80,6 +81,11 @@ def _get_user_id(request: Request) -> str:
 # ---------------------------------------------------------------------------
 
 
+class BuildStep(BaseModel):
+    status: str
+    text: str
+
+
 class McpServerResponse(BaseModel):
     id: str
     name: str
@@ -94,6 +100,26 @@ class McpServerResponse(BaseModel):
     files: dict[str, str] | None
     created_at: str
     updated_at: str
+    # Feature 006 (MCP Suite > Build): where the build is, in words.
+    state: str | None = None
+    state_label: str | None = None
+    state_reason: str | None = None
+    steps: list[BuildStep] = Field(default_factory=list)
+    tool_count: int | None = None
+    tests_passed: int | None = None
+    tests_total: int | None = None
+    thread_id: str | None = None
+
+
+class StartBuildRequest(BaseModel):
+    description: str = Field(..., min_length=3, max_length=1024)
+
+
+class StartBuildResponse(BaseModel):
+    server_id: str
+    thread_id: str
+    name: str
+    secret_placeholders: list[str]
 
 
 class McpServerListResponse(BaseModel):
@@ -189,81 +215,62 @@ def _server_to_response(server: dict, phase: str = "idle") -> McpServerResponse:
     )
 
 
-# ---------------------------------------------------------------------------
-# GET /servers
-# ---------------------------------------------------------------------------
-
-
-@router.get("/servers", response_model=McpServerListResponse)
-@require_permission("threads", "read")
-async def list_mcp_servers(
-    request: Request,
-    search: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-) -> McpServerListResponse:
-    _check_flag(request)
-    repo = get_mcp_server_repo(request)
+async def _described(request: Request, server: dict, user_id: str | None) -> McpServerResponse:
+    """The server, with where its build is in words (Feature 006)."""
     manager = getattr(request.app.state, "mcp_server_manager", None)
-    servers = await repo.list_servers(search=search, status=status, limit=limit, offset=offset)
-    items = []
-    for s in servers:
-        phase = "idle"
-        if manager is not None:
-            record = manager._records.get(s["id"])
-            if record is not None:
-                phase = record.phase
-        items.append(_server_to_response(s, phase))
-    return McpServerListResponse(servers=items, total=len(items))
-
-
-# ---------------------------------------------------------------------------
-# POST /servers — create record + kick off agent run
-# ---------------------------------------------------------------------------
-
-
-@router.post("/servers", response_model=McpServerCreateResponse, status_code=201)
-@require_permission("threads", "write")
-async def create_mcp_server(
-    body: McpServerCreateRequest,
-    request: Request,
-) -> McpServerCreateResponse:
-    _check_flag(request)
-    user_id = _get_user_id(request)
-    repo = get_mcp_server_repo(request)
-
-    server = await repo.create(
-        name=body.name,
-        owner_id=user_id,
-        language=body.language or "python",
-        description=body.description,
-        egress_hosts=body.egress_hosts,
+    record = None
+    if manager is not None and user_id is not None:
+        try:
+            record = await manager.get_status(server_id=server["id"], user_id=user_id)
+        except PermissionError:
+            record = None
+    run = manager.build_run(server["id"]) if manager is not None else None
+    stored: set[str] | None = None
+    vault = getattr(request.app.state, "mcp_secrets_vault", None)
+    if vault is not None and user_id is not None:
+        try:
+            stored = {k["key_name"] for k in await vault.list_key_info(server_id=server["id"], owner_id=user_id)}
+        except Exception:
+            stored = None
+    run_status = getattr(getattr(run, "status", None), "value", None)
+    secrets = await manager.stored_secrets(server_id=server["id"], user_id=user_id) if manager is not None and user_id is not None else {}
+    desc = describe_build(
+        server,
+        phase=record.phase if record else None,
+        error=scrub(record.error, secrets) if record and record.error else None,
+        tools=record.tools_discovered if record else [],
+        test_results=record.test_results if record else [],
+        deploy_steps=record.deploy_steps if record else [],
+        testing_now=manager.is_testing(server["id"]) if manager is not None else False,
+        run_status=run_status,
+        run_error=scrub(run.error, secrets) if run is not None and getattr(run, "error", None) else None,
+        stored_secrets=stored,
     )
-    server_id = server["id"]
+    response = _server_to_response(server, record.phase if record else "idle")
+    return response.model_copy(
+        update={
+            "state": desc.state,
+            "state_label": desc.label,
+            "state_reason": desc.reason,
+            "steps": [BuildStep(**step) for step in desc.steps],
+            "tool_count": desc.tool_count,
+            "tests_passed": desc.tests_passed,
+            "tests_total": desc.tests_total,
+            "thread_id": getattr(run, "thread_id", None),
+        }
+    )
+
+
+def _user_or_none(request: Request) -> str | None:
+    auth = getattr(request.state, "auth", None)
+    return str(auth.user.id) if auth and auth.user else None
+
+
+async def _start_build_run(request: Request, *, server_id: str, name: str, message: str, user_id: str) -> str:
+    """Start the build agent on *message* (already free of secret values)."""
     thread_id = uuid.uuid4().hex
-
-    # Build the initial message that kicks off the mcp-server-builder skill
-    template_hint = body.template_type or "custom_tool"
-    prompt_parts = [
-        "Use the mcp-server-builder skill to build an MCP server.",
-        f"Server ID: {server_id}",
-        f"Name: {body.name}",
-    ]
-    if body.description:
-        prompt_parts.append(f"Description: {body.description}")
-    prompt_parts.append(f"Template type: {template_hint}")
-    if body.egress_hosts:
-        prompt_parts.append(f"Allowed egress hosts: {', '.join(body.egress_hosts)}")
-    prompt_parts.append("\nWrite the complete server.py source code, then call mcp_build with the server_id and source_code.")
-    initial_message = "\n".join(prompt_parts)
-
-    graph_input = normalize_input({"messages": [{"role": "user", "content": initial_message}]})
-    config = build_run_config(
-        thread_id,
-        None,
-        {"mcp_server_id": server_id, "mcp_server_name": body.name},
-    )
+    graph_input = normalize_input({"messages": [{"role": "user", "content": message}]})
+    config = build_run_config(thread_id, None, {"mcp_server_id": server_id, "mcp_server_name": name})
     config.setdefault("context", {})["user_id"] = user_id
 
     bridge = get_stream_bridge(request)
@@ -290,6 +297,10 @@ async def create_mcp_server(
     except Exception:
         pass
 
+    manager = getattr(request.app.state, "mcp_server_manager", None)
+    if manager is not None:
+        manager.note_build_run(server_id, record)
+
     agent_factory = resolve_agent_factory(None)
     task = asyncio.create_task(
         run_agent(
@@ -307,6 +318,145 @@ async def create_mcp_server(
         )
     )
     record.task = task
+    return thread_id
+
+
+# ---------------------------------------------------------------------------
+# POST /builds — describe a tool in words (Feature 006, MCP Suite > Build)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/builds", response_model=StartBuildResponse, status_code=201)
+@require_permission("threads", "write")
+async def start_build(body: StartBuildRequest, request: Request) -> StartBuildResponse:
+    """Create a server from a description and start the build agent on it.
+
+    Any secret in the description is lifted out first: stored in the vault
+    under an environment-variable name, and replaced by a placeholder in the
+    stored description and in the prompt. The model never sees the value.
+    """
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    extracted = extract_secrets(body.description.strip())
+    name = server_name_from(extracted.text)
+    repo = get_mcp_server_repo(request)
+    server = await repo.create(name=name, owner_id=user_id, language="python", description=extracted.text, egress_hosts=[])
+    server_id = server["id"]
+    if extracted.secrets:
+        vault = get_mcp_secrets_vault(request)
+        for key_name, value in extracted.secrets.items():
+            await vault.store(server_id=server_id, owner_id=user_id, key_name=key_name, plaintext_value=value)
+    message = build_prompt(server_id=server_id, name=name, description=extracted.text, secret_names=list(extracted.secrets))
+    secret_names = list(extracted.secrets)
+    del extracted  # the values are in the vault now, and nowhere else
+    thread_id = await _start_build_run(request, server_id=server_id, name=name, message=message, user_id=user_id)
+    return StartBuildResponse(server_id=server_id, thread_id=thread_id, name=name, secret_placeholders=secret_names)
+
+
+# ---------------------------------------------------------------------------
+# POST /servers/{id}/enable — "Approve and turn on"
+# ---------------------------------------------------------------------------
+
+
+@router.post("/servers/{server_id}/enable", response_model=McpServerResponse)
+@require_permission("threads", "write")
+async def enable_mcp_server(server_id: str, request: Request) -> McpServerResponse:
+    """The user approves the first real run, and the server is turned on.
+
+    Approval needs the sandbox tests to have passed (phase verified); then the
+    server is deployed with its real credentials and connected for agents.
+    Without this call nothing turns a built server on.
+    """
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    manager = get_mcp_server_manager(request)
+    try:
+        await manager.approve(server_id=server_id, user_id=user_id)
+    except PermissionError as exc:
+        if "not found" in str(exc):
+            raise HTTPException(status_code=404, detail="MCP server not found") from exc
+        raise HTTPException(status_code=409, detail="It can be approved only after its sandbox tests pass.") from exc
+    try:
+        await manager.deploy(server_id=server_id, user_id=user_id, connect_after=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    server = await get_mcp_server_repo(request).get(server_id)
+    if server is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return await _described(request, server, user_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /servers
+# ---------------------------------------------------------------------------
+
+
+@router.get("/servers", response_model=McpServerListResponse)
+@require_permission("threads", "read")
+async def list_mcp_servers(
+    request: Request,
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> McpServerListResponse:
+    _check_flag(request)
+    repo = get_mcp_server_repo(request)
+    servers = await repo.list_servers(search=search, status=status, limit=limit, offset=offset)
+    user_id = _user_or_none(request)
+    items = [await _described(request, s, user_id) for s in servers]
+    return McpServerListResponse(servers=items, total=len(items))
+
+
+# ---------------------------------------------------------------------------
+# POST /servers — create record + kick off agent run
+# ---------------------------------------------------------------------------
+
+
+@router.post("/servers", response_model=McpServerCreateResponse, status_code=201)
+@require_permission("threads", "write")
+async def create_mcp_server(
+    body: McpServerCreateRequest,
+    request: Request,
+) -> McpServerCreateResponse:
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    repo = get_mcp_server_repo(request)
+
+    extracted = extract_secrets(body.description) if body.description else None
+    description = extracted.text if extracted else None
+    server = await repo.create(
+        name=body.name,
+        owner_id=user_id,
+        language=body.language or "python",
+        description=description,
+        egress_hosts=body.egress_hosts,
+    )
+    server_id = server["id"]
+    if extracted and extracted.secrets:
+        vault = get_mcp_secrets_vault(request)
+        for key_name, value in extracted.secrets.items():
+            await vault.store(server_id=server_id, owner_id=user_id, key_name=key_name, plaintext_value=value)
+
+    # Build the initial message that kicks off the mcp-server-builder skill
+    template_hint = body.template_type or "custom_tool"
+    prompt_parts = [
+        "Use the mcp-server-builder skill to build an MCP server.",
+        f"Server ID: {server_id}",
+        f"Name: {body.name}",
+    ]
+    if description:
+        prompt_parts.append(f"Description: {description}")
+    prompt_parts.append(f"Template type: {template_hint}")
+    if body.egress_hosts:
+        prompt_parts.append(f"Allowed egress hosts: {', '.join(body.egress_hosts)}")
+    if extracted and extracted.secrets:
+        prompt_parts.append("Secrets are stored for this server and NOT shown to you; read " + ", ".join(f"os.environ['{n}']" for n in extracted.secrets) + " inside the tool handlers.")
+    prompt_parts.append("\nWrite the complete server.py source code, then call mcp_build with the server_id and source_code.")
+    initial_message = "\n".join(prompt_parts)
+    del extracted
+
+    thread_id = await _start_build_run(request, server_id=server_id, name=body.name, message=initial_message, user_id=user_id)
 
     return McpServerCreateResponse(server_id=server_id, thread_id=thread_id)
 
@@ -324,13 +474,7 @@ async def get_mcp_server(server_id: str, request: Request) -> McpServerResponse:
     server = await repo.get(server_id)
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    manager = getattr(request.app.state, "mcp_server_manager", None)
-    phase = "idle"
-    if manager is not None:
-        r = manager._records.get(server_id)
-        if r is not None:
-            phase = r.phase
-    return _server_to_response(server, phase)
+    return await _described(request, server, _user_or_none(request))
 
 
 # ---------------------------------------------------------------------------
@@ -645,7 +789,8 @@ async def deploy_mcp_server(server_id: str, request: Request) -> McpBuildStatusR
     try:
         record = await manager.deploy(server_id=server_id, user_id=user_id)
     except PermissionError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Not approved yet is a refusal (403), not an absence.
+        raise HTTPException(status_code=403 if "approve" in str(exc) else 404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -720,7 +865,7 @@ async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResp
     try:
         result = await manager.connect(server_id=server_id, user_id=user_id)
     except PermissionError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=403 if "approved" in str(exc) else 404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

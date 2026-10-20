@@ -269,8 +269,9 @@ async def test_secret_value_scrubbed_from_test_results_output() -> None:
     # The real secret must not appear anywhere in the stored record
     record_str = str(record)
     assert "super-secret-value-xyz" not in record_str, "Real secret value must be scrubbed from test_results before storage"
-    # The scrubbed output must contain the REDACTED placeholder
-    assert any("[REDACTED]" in str(tr) for tr in record.test_results), "Scrubbed output should contain [REDACTED] marker"
+    # Feature 006: the value becomes its named placeholder, so the log still
+    # says WHICH secret was there without saying what it is.
+    assert any("{{secret:SECRET}}" in str(tr) for tr in record.test_results), "Scrubbed output should name the secret's placeholder"
     await engine.dispose()
 
 

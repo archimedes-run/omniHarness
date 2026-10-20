@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from app.gateway.mcp_build_flow import placeholder, scrub
 from app.gateway.mcp_egress import build_egress_rules
 from app.gateway.mcp_secrets import McpSecretsVault
 from omniharness.persistence.mcp_server.sql import McpServerRepository
@@ -244,10 +245,33 @@ class MCPServerManager:
         # Ensures only one test_server call runs at a time per server; concurrent
         # callers wait for the in-flight test to finish and return its result.
         self._test_locks: dict[str, asyncio.Lock] = {}
+        # Feature 006 Build: server_id -> the build agent's run, so "drafting"
+        # is observed (a run in progress), not assumed. In memory only.
+        self._build_runs: dict[str, object] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def note_build_run(self, server_id: str, run: object) -> None:
+        """Remember the agent run that is building *server_id*."""
+        self._build_runs[server_id] = run
+
+    def build_run(self, server_id: str) -> object | None:
+        """The build run this process started for *server_id*, if any."""
+        return self._build_runs.get(server_id)
+
+    def is_testing(self, server_id: str) -> bool:
+        """True while a sandbox test of *server_id* is running."""
+        lock = self._test_locks.get(server_id)
+        return bool(lock and lock.locked())
+
+    async def stored_secrets(self, *, server_id: str, user_id: str) -> dict[str, str]:
+        """The values stored for *server_id* (for scrubbing only; never returned)."""
+        try:
+            return await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+        except Exception:
+            return {}
 
     async def start(self) -> None:
         logger.info("MCPServerManager started")
@@ -311,19 +335,6 @@ class MCPServerManager:
         async with self._lock:
             self._records.setdefault(server_id, record)
             return self._records[server_id]
-
-    @staticmethod
-    def _scrub_output(text: str, secret_values: frozenset[str]) -> str:
-        """Replace exact secret value substrings in text with [REDACTED].
-
-        Defense-in-depth: real secrets are never injected into the subprocess env
-        (placeholder values are used), but this closes any unexpected leak path.
-        Called after collecting test_results; the frozenset is immediately discarded.
-        """
-        for val in secret_values:
-            if val and val in text:
-                text = text.replace(val, "[REDACTED]")
-        return text
 
     @staticmethod
     def _is_auth_error(msg: str) -> bool:
@@ -413,23 +424,24 @@ class MCPServerManager:
             if not tools_discovered:
                 return [], []
 
-            # ── Phase 2: Test-calls — real secrets, validates live connectivity ─
-            # The code scanner has already approved the server. Real credentials let
-            # tools with zero required args (whoami, rate_limit, health checks, etc.)
-            # make genuine API calls so the user can verify their keys work.
-            # Tools that require arguments (owner, repo, id) get Pydantic/validation
-            # errors with empty {}, which the "args" badge explains in the UI.
-            # The output-scrub step below redacts any credential that leaks into output.
-            real_env: dict[str, str] = {}
+            # ── Phase 2: Test-calls — PLACEHOLDER secrets (Feature 006) ─────
+            # The sandbox is away from your data: tests never get the real
+            # credentials. Each key the code reads is set to its placeholder, so
+            # a tool that needs it answers with an auth error ("auth" badge,
+            # still callable) instead of making a real call. The first real
+            # run is the one the user approves (deploy). Tools that require
+            # arguments get validation errors with empty {} ("args" badge).
+            names = set(self._vault.scan_for_required_keys(source_code))
             try:
-                real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
+                names |= {k["key_name"] for k in await self._vault.list_key_info(server_id=server_id, owner_id=user_id)}
             except Exception:
-                pass  # No secrets stored yet — test still runs, tools that need keys will fail
+                pass  # names only; the code's own reads are already covered
+            placeholder_env = {name: placeholder(name) for name in names}
 
             test_params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(server_file)],
-                env={**base_env, **real_env},
+                env={**base_env, **placeholder_env},
             )
             try:
                 async with asyncio.timeout(30):
@@ -588,21 +600,17 @@ class MCPServerManager:
                     logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
                     test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})
 
-            # Defense-in-depth scrub: replace any exact secret value substrings in
-            # test_results output/error fields with [REDACTED], then discard the values.
-            # Real secrets are now injected into the test subprocess, so this scrub
-            # is important — a tool that echoes its own env vars would leak here without it.
-            if required_key_names and test_results:
-                try:
-                    real_secrets = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
-                    secret_vals = frozenset(v for v in real_secrets.values() if v)
-                    del real_secrets  # discard plaintext values immediately
-                    for tr in test_results:
-                        for field_name in ("output", "error"):
-                            if field_name in tr and tr[field_name]:
-                                tr[field_name] = self._scrub_output(str(tr[field_name]), secret_vals)
-                except Exception:
-                    pass  # scrub failure is non-fatal
+            # Defense in depth: every stored value that appears in test output
+            # or errors becomes its placeholder ({{secret:NAME}}) before it is
+            # stored, returned to the build agent, or shown. Always, not only
+            # when the code was seen to read a key.
+            if test_results:
+                stored = await self.stored_secrets(server_id=server_id, user_id=user_id)
+                for tr in test_results:
+                    for field_name in ("output", "error"):
+                        if field_name in tr and tr[field_name]:
+                            tr[field_name] = scrub(str(tr[field_name]), stored)
+                del stored
 
             # "verified" = scan gates passed AND server connected AND at least one tool found.
             # "testing"  = scan gates passed but server didn't connect or no tools found.
@@ -804,7 +812,7 @@ class MCPServerManager:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode or 0, (out or b"").decode(), (err or b"").decode()
 
-    async def deploy(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
+    async def deploy(self, *, server_id: str, user_id: str, connect_after: bool = False) -> MCPBuildRecord:
         """Validate, mark as deploying, fire Docker work in background, return immediately.
 
         The endpoint returns a ``{phase: "deploying"}`` record right away so the
@@ -816,6 +824,11 @@ class MCPServerManager:
         source code exists. Secrets are injected as env vars and NOT logged.
         """
         server = await self._load_and_verify(server_id, user_id)
+        # Feature 006: a built server's first real run is the user's to
+        # approve. Deploying gives it the real credentials, so it needs that
+        # approval; nothing else sets it.
+        if not server.get("approved"):
+            raise PermissionError(f"MCP server {server_id!r} has not been approved: approve its first run before turning it on")
         source = server.get("source_code") or ""
         if not source:
             raise ValueError("No source code — build the server first")
@@ -842,6 +855,7 @@ class MCPServerManager:
                 user_id=user_id,
                 source=source,
                 existing=existing,
+                connect_after=connect_after,
             ),
             name=f"mcp-deploy-{server_id[:12]}",
         )
@@ -854,6 +868,7 @@ class MCPServerManager:
         user_id: str,
         source: str,
         existing: MCPBuildRecord | None,
+        connect_after: bool = False,
     ) -> None:
         """Background task: docker build + docker run, update in-memory record when done."""
 
@@ -941,8 +956,6 @@ class MCPServerManager:
                 status="deployed",
                 user_id=user_id,
             )
-            await self._repo.set_approved(server_id, True, user_id=user_id)
-
             # Finalize: mark registering done and flip phase to deployed
             async with self._lock:
                 rec = self._records.get(server_id)
@@ -956,6 +969,9 @@ class MCPServerManager:
                         deploy_steps=final_steps,
                     )
             logger.info("MCP server %s deployed: container=%s port=%s", server_id[:12], container_id[:12], host_port)
+            if connect_after:
+                # "Approve and turn on": the agents get its tools now.
+                await self.connect(server_id=server_id, user_id=user_id)
 
         except Exception as exc:
             logger.error("Docker deploy failed for %s: %s", server_id[:12], exc)
@@ -977,6 +993,8 @@ class MCPServerManager:
         from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
 
         db_server = await self._load_and_verify(server_id, user_id)
+        if not db_server.get("approved"):
+            raise PermissionError(f"MCP server {server_id!r} has not been approved")
         async with self._lock:
             record = self._records.get(server_id)
 

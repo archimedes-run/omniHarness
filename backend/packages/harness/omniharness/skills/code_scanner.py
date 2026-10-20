@@ -54,7 +54,9 @@ _STATIC_BLOCK: list[tuple[re.Pattern, str]] = [
 # os.getenv key extraction
 # ---------------------------------------------------------------------------
 
-_GETENV_RE = re.compile(r"""os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]""")
+# os.getenv("K"), os.environ.get("K") and os.environ["K"] (Feature 006: the
+# build prompt tells the agent to read keys with os.environ).
+_GETENV_RE = re.compile(r"""os\.(?:getenv|environ\.get)\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.environ\[\s*['"]([A-Z_][A-Z0-9_]*)['"]\s*\]""")
 
 # Env-var name suffixes that are config/tuning knobs, not credentials.
 # These are excluded from the "required secrets" list shown in the UI.
@@ -71,7 +73,7 @@ def extract_env_keys(source_code: str) -> list[str]:
     Config/tuning knobs (LOG_LEVEL, DEBUG, MODE, DIR, PORT, …) are excluded —
     only names that look like secrets or API keys are returned.
     """
-    keys = list(dict.fromkeys(_GETENV_RE.findall(source_code)))
+    keys = list(dict.fromkeys(a or b for a, b in _GETENV_RE.findall(source_code)))
     return [k for k in keys if not _CONFIG_SUFFIX_RE.search(k)]
 
 
