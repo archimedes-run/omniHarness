@@ -21,13 +21,14 @@ what chat could not.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_thread_tool_selection_repo
@@ -81,6 +82,11 @@ class PendingListResponse(BaseModel):
 
 
 class ResolveRequest(BaseModel):
+    #: NOTHING ELSE IS ACCEPTED. The call that runs is the one recorded when it
+    #: was proposed, with the arguments the card shows; a request naming a
+    #: tool, arguments or a tool surface is refused (422), not ignored.
+    model_config = ConfigDict(extra="forbid")
+
     #: Required above the threshold; the count of resolved targets (FR-009).
     typed_count: int | None = Field(default=None)
 
@@ -138,16 +144,27 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
     from omniharness.tools.tools import get_available_tools
 
     sources: set[str] = set()
+    current: list[str] | None = None
     if thread_id:
         # Annotated because the dependency is generic; without it mypy cannot
         # infer the repo's type and the whole function goes unchecked.
         selection: Any = get_thread_tool_selection_repo(request)
-        sources = set(await selection.get_sources(thread_id=thread_id))
+        current = list(await selection.get_sources(thread_id=thread_id))
+        sources = set(current)
 
     tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=get_app_config())
     registry = {getattr(t, "name", ""): t for t in tools}
 
     def run(tool_name: str, arguments: dict) -> Any:
+        from app.policy.surface_run import confirming_action, run_on_surface
+
+        action = confirming_action()
+        if action is not None and action.surface:
+            # The PROPOSING run's tools, rebuilt (plan.md §2.0). The thread's
+            # selection alone has no `task` and none of a subagent's own tools,
+            # so a confirmed delegation or subagent action failed here with
+            # LookupError (AUDIT-2026-10 addendum).
+            return run_on_surface(action, tool_name, arguments, selection=current)
         tool = registry.get(tool_name)
         if tool is None:
             # Loud. A confirmation that cannot execute must say why; the defect
@@ -159,12 +176,48 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
         # taken (the chat path already does this; see _with_injected).
         from types import SimpleNamespace
 
-        from app.policy.middleware import _with_injected
+        from app.policy.surface_run import invoke
 
         runtime = SimpleNamespace(context={"thread_id": thread_id, "user_id": user_id}, config={}, stream_writer=None, store=None)
-        return tool.invoke(_with_injected(tool, arguments, runtime, {}))
+        return invoke(tool, arguments, runtime=runtime, state={}, call_id=f"confirmed-{tool_name}")
 
+    def unavailable(action: Any) -> str | None:
+        from app.policy.surface_run import unavailable_reason
+
+        return unavailable_reason(action, current)
+
+    run.unavailable = unavailable  # type: ignore[attr-defined]
     return run
+
+
+async def post_to_thread(request: Request, thread_id: str, message: Any) -> bool:
+    """Append one message to a thread's latest checkpoint. False if it could not.
+
+    How a call confirmed from its CARD reaches the conversation: the card's
+    route has no run to answer in, so the result is written into the thread,
+    attributed to the agent that proposed it (plan.md §2.0). The same shape
+    `POST /api/threads/{id}/state` writes.
+    """
+    from app.gateway.deps import get_checkpointer
+    from omniharness.utils.time import now_iso
+
+    checkpointer = get_checkpointer(request)
+    config: dict[str, Any] = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    try:
+        current = await checkpointer.aget_tuple(config)
+        if current is None:
+            return False
+        checkpoint: dict[str, Any] = dict(getattr(current, "checkpoint", {}) or {})
+        metadata: dict[str, Any] = dict(getattr(current, "metadata", {}) or {})
+        values: dict[str, Any] = dict(checkpoint.get("channel_values", {}))
+        values["messages"] = [*list(values.get("messages") or []), message]
+        checkpoint["channel_values"] = values
+        metadata.update({"updated_at": now_iso(), "source": "update", "step": metadata.get("step", 0) + 1})
+        await checkpointer.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, checkpoint, metadata, {})
+        return True
+    except Exception:  # noqa: BLE001 — reported to the caller, which says so
+        logger.exception("could not post the confirmed result to thread %s", thread_id)
+        return False
 
 
 def _view(action, threshold: int) -> PendingActionResponse:
@@ -249,9 +302,22 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # No targets passed: the flow re-checks them itself (FR-029). This route
     # used to pass the action's own recorded targets, so the check compared the
     # record with itself and drift could never be detected here.
+    # OFF THE EVENT LOOP: a confirmed delegation runs its subagent to the end
+    # before the flow returns, and that must not stall every other request.
     answered = {"via": "button", "thread_id": None, "user_id": user_id, "message_id": None}
-    result = flow.explicit(action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
-    return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail=result.detail)
+    result = await asyncio.to_thread(flow.explicit, action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
+    detail = dict(result.detail)
+    message = result.message
+    if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
+        from app.policy.surface_run import report_message
+
+        report = report_message(action, detail.get("result"))
+        message = str(report.content)
+        detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
+        # FAILING SOURCES ARE VISIBLE: when the thread could not be written,
+        # the card says so rather than implying the chat shows it.
+        detail["posted_to_thread"] = await post_to_thread(request, action.thread_id, report)
+    return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=message, detail=detail)
 
 
 @router.post("/{action_id}/edit", response_model=ResolveResponse)
@@ -298,6 +364,12 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
         requester=action.requester,
         delegation_chain=action.delegation_chain,
         owner_id=action.owner_id,
+        origin=action.origin,
+        origin_source=action.origin_source,
+        origin_via=action.origin_via,
+        # The SERVER's record of who proposed it and with what tools, carried
+        # over; the edit changes the arguments, never the proposer.
+        surface=dict(action.surface),
     )
     edited.plan_text = middleware._plan_text_for(edited)
     middleware.pending.save(edited)

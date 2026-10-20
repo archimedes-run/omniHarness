@@ -1,9 +1,12 @@
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 
 from omniharness.agents.lead_agent.prompt import apply_prompt_template
 from omniharness.agents.memory.summarization_hook import memory_flush_hook
@@ -368,24 +371,21 @@ def make_lead_agent(config: RunnableConfig):
     return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
 
 
-def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
-    # Lazy import to avoid circular dependency
-    from omniharness.tools import get_available_tools
-    from omniharness.tools.builtins import setup_agent, update_agent
-    from omniharness.tools.tools import resolve_model_tool_cap
+@dataclass(frozen=True)
+class _LeadInputs:
+    """What a lead run's tools and prompt are assembled from, resolved once."""
 
-    cfg = _get_runtime_config(config)
-    resolved_app_config = app_config
+    model_name: str
+    agent_name: str | None
+    agent_config: Any
+    available_skills: set[str] | None
+    is_bootstrap: bool
+    subagent_enabled: bool
 
-    thinking_enabled = cfg.get("thinking_enabled", True)
-    reasoning_effort = cfg.get("reasoning_effort", None)
-    requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
-    is_plan_mode = cfg.get("is_plan_mode", False)
-    subagent_enabled = cfg.get("subagent_enabled", False)
-    max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
-    is_bootstrap = cfg.get("is_bootstrap", False)
+
+def _resolve_lead_inputs(cfg: dict, *, app_config: AppConfig) -> _LeadInputs:
+    is_bootstrap = bool(cfg.get("is_bootstrap", False))
     agent_name = validate_agent_name(cfg.get("agent_name"))
-
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     available_skills = _available_skill_names(agent_config, is_bootstrap)
     if not is_bootstrap:
@@ -393,14 +393,131 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         def _enabled_skill_names() -> set[str]:
             from omniharness.agents.lead_agent.prompt import get_enabled_skills_for_config
 
-            return {skill.name for skill in get_enabled_skills_for_config(resolved_app_config)}
+            return {skill.name for skill in get_enabled_skills_for_config(app_config)}
 
         available_skills = _effective_skill_names(available_skills, cfg.get("excluded_skills"), enabled_skill_names=_enabled_skill_names)
+    requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
     agent_model_name = agent_config.model if agent_config and agent_config.model else None
-
     # Final model name resolution: request → agent config → global default, with fallback for unknown names
-    model_name = _resolve_model_name(requested_model_name or agent_model_name, app_config=resolved_app_config)
+    model_name = _resolve_model_name(requested_model_name or agent_model_name, app_config=app_config)
+    return _LeadInputs(
+        model_name=model_name,
+        agent_name=agent_name,
+        agent_config=agent_config,
+        available_skills=available_skills,
+        is_bootstrap=is_bootstrap,
+        subagent_enabled=bool(cfg.get("subagent_enabled", False)),
+    )
+
+
+def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfig) -> list[BaseTool]:
+    """THE lead agent's tool list. One function, two callers.
+
+    `_make_lead_agent` builds the run's tools with it, and a Tier 3 action the
+    lead proposed is confirmed against the same list rebuilt by it
+    (omniharness.agents.tool_surface): confirming from the card used to rebuild
+    the thread's tools WITHOUT `task`, so a confirmed delegation failed with
+    LookupError (AUDIT-2026-10, addendum).
+    """
+    from omniharness.tools import get_available_tools
+    from omniharness.tools.builtins import setup_agent, update_agent
+    from omniharness.tools.tools import resolve_model_tool_cap
+
+    skills_for_tool_policy = _load_enabled_skills_for_tool_policy(inputs.available_skills, app_config=app_config)
+
+    # MCP and ACP tools are dynamically registered and unknown at skill authoring
+    # time, so they must never be dropped by skill allowed-tools policies.
+    def _dynamic_tool_names() -> set[str]:
+        names: set[str] = set()
+        try:
+            from omniharness.mcp.cache import get_cached_mcp_tools
+
+            names.update(t.name for t in (get_cached_mcp_tools() or []))
+        except Exception:
+            pass
+        try:
+            from omniharness.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
+
+            acp_agents = getattr(app_config, "acp_agents", {}) or {}
+            if acp_agents:
+                names.add(build_invoke_acp_agent_tool(acp_agents).name)
+        except Exception:
+            pass
+        return names
+
+    always_include = _dynamic_tool_names()
+
+    if inputs.is_bootstrap:
+        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config) + [setup_agent]
+        return filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include)
+
+    # Custom agents can update their own SOUL.md / config via update_agent.
+    # The default agent (no agent_name) does not see this tool.
+    extra_tools = [update_agent] if inputs.agent_name else []
+
+    # Per-conversation tool selection (namespaced source ids) + owning user, both
+    # threaded through the runtime context by the gateway at launch. When present,
+    # the tool array is assembled as pinned ∪ (selection ∩ user-accessible),
+    # connector tools resolve live per-user, and the provider cap is enforced.
+    # NOTE: connector specs are rebuilt every turn (no per-turn memoization) so
+    # per-user isolation can never be undone by a stale cache.
+    raw_selection = cfg.get("selected_sources")
+    selected_sources = set(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
+    run_user_id = cfg.get("user_id")
+    model_config = app_config.get_model_config(inputs.model_name)
+    max_tools = resolve_model_tool_cap(model_config) if (selected_sources is not None and model_config is not None) else None
+
+    tools = get_available_tools(
+        model_name=inputs.model_name,
+        groups=inputs.agent_config.tool_groups if inputs.agent_config else None,
+        subagent_enabled=inputs.subagent_enabled,
+        app_config=app_config,
+        selected_sources=selected_sources,
+        user_id=run_user_id,
+        max_tools=max_tools,
+    )
+    return filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include)
+
+
+def lead_agent_tools(cfg: dict, *, app_config: AppConfig | None = None) -> list[BaseTool]:
+    """The tools a lead run with this runtime config had (see _assemble_lead_tools)."""
+    resolved = app_config or get_app_config()
+    return _assemble_lead_tools(cfg, _resolve_lead_inputs(cfg, app_config=resolved), app_config=resolved)
+
+
+def lead_run_metadata(cfg: dict, *, app_config: AppConfig | None = None) -> dict:
+    """The run metadata a lead run with this config publishes, which the `task`
+    tool reads to give its subagent the lead's model, tool groups and skills."""
+    resolved = app_config or get_app_config()
+    inputs = _resolve_lead_inputs(cfg, app_config=resolved)
+    return _lead_metadata(inputs)
+
+
+def _lead_metadata(inputs: _LeadInputs) -> dict:
+    return {
+        "agent_name": inputs.agent_name or "default",
+        "model_name": inputs.model_name or "default",
+        "subagent_enabled": inputs.subagent_enabled,
+        "tool_groups": inputs.agent_config.tool_groups if inputs.agent_config else None,
+        "available_skills": sorted(inputs.available_skills) if inputs.available_skills is not None else None,
+    }
+
+
+def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
+    cfg = _get_runtime_config(config)
+    resolved_app_config = app_config
+
+    thinking_enabled = cfg.get("thinking_enabled", True)
+    reasoning_effort = cfg.get("reasoning_effort", None)
+    is_plan_mode = cfg.get("is_plan_mode", False)
+    max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
+
+    inputs = _resolve_lead_inputs(cfg, app_config=resolved_app_config)
+    model_name = inputs.model_name
+    agent_name = inputs.agent_name
+    available_skills = inputs.available_skills
+    subagent_enabled = inputs.subagent_enabled
 
     model_config = resolved_app_config.get_model_config(model_name)
 
@@ -427,47 +544,20 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     config["metadata"].update(
         {
-            "agent_name": agent_name or "default",
-            "model_name": model_name or "default",
+            **_lead_metadata(inputs),
             "thinking_enabled": thinking_enabled,
             "reasoning_effort": reasoning_effort,
             "is_plan_mode": is_plan_mode,
-            "subagent_enabled": subagent_enabled,
-            "tool_groups": agent_config.tool_groups if agent_config else None,
-            "available_skills": sorted(available_skills) if available_skills is not None else None,
         }
     )
 
-    skills_for_tool_policy = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config)
+    tools = _assemble_lead_tools(cfg, inputs, app_config=resolved_app_config)
 
-    # MCP and ACP tools are dynamically registered and unknown at skill authoring
-    # time, so they must never be dropped by skill allowed-tools policies.
-    def _dynamic_tool_names() -> set[str]:
-        names: set[str] = set()
-        try:
-            from omniharness.mcp.cache import get_cached_mcp_tools
-
-            names.update(t.name for t in (get_cached_mcp_tools() or []))
-        except Exception:
-            pass
-        try:
-            from omniharness.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
-
-            acp_agents = getattr(resolved_app_config, "acp_agents", {}) or {}
-            if acp_agents:
-                names.add(build_invoke_acp_agent_tool(acp_agents).name)
-        except Exception:
-            pass
-        return names
-
-    always_include = _dynamic_tool_names()
-
-    if is_bootstrap:
+    if inputs.is_bootstrap:
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
-        tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config),
-            tools=filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include),
+            tools=tools,
             middleware=_build_middlewares(config, model_name=model_name, app_config=resolved_app_config),
             system_prompt=apply_prompt_template(
                 subagent_enabled=subagent_enabled,
@@ -478,34 +568,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             state_schema=ThreadState,
         )
 
-    # Custom agents can update their own SOUL.md / config via update_agent.
-    # The default agent (no agent_name) does not see this tool.
-    extra_tools = [update_agent] if agent_name else []
-
-    # Per-conversation tool selection (namespaced source ids) + owning user, both
-    # threaded through the runtime context by the gateway at launch. When present,
-    # the tool array is assembled as pinned ∪ (selection ∩ user-accessible),
-    # connector tools resolve live per-user, and the provider cap is enforced.
-    # NOTE: connector specs are rebuilt every turn (no per-turn memoization) so
-    # per-user isolation can never be undone by a stale cache.
-    raw_selection = cfg.get("selected_sources")
-    selected_sources = set(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
-    run_user_id = cfg.get("user_id")
-    max_tools = resolve_model_tool_cap(model_config) if selected_sources is not None else None
-
-    # Default lead agent
-    tools = get_available_tools(
-        model_name=model_name,
-        groups=agent_config.tool_groups if agent_config else None,
-        subagent_enabled=subagent_enabled,
-        app_config=resolved_app_config,
-        selected_sources=selected_sources,
-        user_id=run_user_id,
-        max_tools=max_tools,
-    )
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config),
-        tools=filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include),
+        tools=tools,
         middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name, app_config=resolved_app_config),
         system_prompt=apply_prompt_template(
             subagent_enabled=subagent_enabled,

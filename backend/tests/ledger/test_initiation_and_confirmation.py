@@ -89,7 +89,7 @@ def test_t014_a_user_requested_ledger_proposal_confirms_by_typing(gateway) -> No
 
     out = agent.invoke({"messages": [*first["messages"], user_turn(content="yes")]}, context=ctx)
 
-    assert out["messages"][-1].content == "Done."
+    assert out["messages"][-1].content.startswith("Done. I ran **")
     assert [p["name"] for p in gateway.client.get("/api/ledger/projects").json()] == ["Mine"]
 
 
