@@ -38,7 +38,7 @@ export function PendingConfirmations({
   /** All but these: the cards not raised at a point the chat shows. */
   exclude?: string[];
   /** In a chat: "Continue <agent>" once a call it stopped for has run. */
-  onContinue?: (agent: string) => void;
+  onContinue?: (agent: string, actionId: string) => void;
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
