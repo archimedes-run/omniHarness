@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.run_history.store import TRIGGER, RunHistory
+from app.run_history.store import TRIGGER, TRIGGER_WITH_EVENT, RunHistory
 from omniharness.runtime.user_context import DEFAULT_USER_ID
 
 #: The run kind for a trigger rule's run; source_id is the rule id.
@@ -13,6 +13,8 @@ AUTOMATION = "automation"
 
 def automation_recorder(history: RunHistory) -> Callable[[dict], None]:
     def _record(run: dict) -> None:
+        body = run.get("body") or {}
+        first = prompt_provenance(body)
         history.record(
             kind=AUTOMATION,
             source_id=run["rule_id"],
@@ -22,9 +24,9 @@ def automation_recorder(history: RunHistory) -> Callable[[dict], None]:
             finished_at=run.get("finished_at"),
             status=run.get("status", "completed"),
             error=run.get("error"),
-            body=_with_body_provenance(run.get("body") or {}),
+            body={**body, "provenance": {"prompt": first, "event": "untrusted_source_data", "reply": "assistant"}},
             # The turn starts with the prompt the engine injected, not a person.
-            first_human=TRIGGER,
+            first_human=first,
             # WHO OWNS A SCHEDULED RUN: the system user. The engine injects
             # its turns as the internal principal, and the server sets that
             # run's context user_id to DEFAULT_USER_ID ("the system acting for
@@ -36,6 +38,9 @@ def automation_recorder(history: RunHistory) -> Callable[[dict], None]:
     return _record
 
 
-def _with_body_provenance(body: dict) -> dict:
-    """Where the run's top-level parts came from, alongside the messages'."""
-    return {**body, "provenance": {"prompt": TRIGGER, "event": "untrusted_source_data", "reply": "assistant"}}
+def prompt_provenance(body: dict) -> str:
+    """TRIGGER only when the prompt IS the rule's own text. When event text was
+    rendered into it (or the template is not known), the prompt carries words
+    an outsider wrote: TRIGGER_WITH_EVENT, untrusted."""
+    template = body.get("prompt_template")
+    return TRIGGER if isinstance(template, str) and template == body.get("prompt") else TRIGGER_WITH_EVENT

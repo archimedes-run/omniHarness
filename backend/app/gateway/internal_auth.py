@@ -221,3 +221,23 @@ async def is_trigger_engine_request(request) -> bool:
 def get_internal_user():
     """Return the synthetic user used for trusted internal channel calls."""
     return SimpleNamespace(id=DEFAULT_USER_ID, system_role="internal")
+
+
+#: Prefix of the message id the trigger engine gives its injected prompt.
+TURN_ID_PREFIX = "trigger-turn-"
+
+
+def sign_turn_id(nonce: str) -> str:
+    """A message id only this server can mint: the gateway keeps a caller's
+    message id (so the engine can find its own turn) ONLY when it carries this
+    signature. A client-chosen id is dropped, so it can never replace an
+    earlier message (add_messages replaces by id)."""
+    mac = hmac.new(_INTERNAL_AUTH_TOKEN.encode(), nonce.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{TURN_ID_PREFIX}{nonce}.{mac}"
+
+
+def is_signed_turn_id(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith(TURN_ID_PREFIX) or "." not in value:
+        return False
+    nonce, _, mac = value[len(TURN_ID_PREFIX) :].rpartition(".")
+    return bool(nonce) and secrets.compare_digest(sign_turn_id(nonce), value) and len(mac) == 32

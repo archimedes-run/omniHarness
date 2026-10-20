@@ -117,7 +117,9 @@ class TurnInjector:
         # drops `configurable` wholesale, taking `thread_id` with it. The
         # gateway mirrors the whitelisted keys across instead — see
         # `_mirror_runtime_visible_keys` in app/gateway/services.py.
-        marker = f"trigger-turn-{uuid.uuid4().hex}"
+        from app.gateway.internal_auth import sign_turn_id
+
+        marker = sign_turn_id(uuid.uuid4().hex)
         payload = {
             "assistant_id": self.assistant_id,
             # The id marks where THIS turn starts in the thread runs/wait

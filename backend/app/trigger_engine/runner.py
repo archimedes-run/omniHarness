@@ -123,28 +123,31 @@ class RuleRunner:
             reset = getattr(self.injector, "reset_turn", None)
             if reset is not None:
                 reset()
-            try:
-                # Held across resolving the thread AND running the turn: a
-                # delete of the automations' threads on any worker waits for
-                # it (or refuses), and never lands mid-firing.
-                with self._firing_lock():
+            # Held across resolving the thread, running the turn AND recording
+            # it: a delete of the automations' threads on any worker waits for
+            # (or refuses) the whole firing, and never lands between the turn
+            # and its record.
+            failure: Exception | None = None
+            with self._firing_lock():
+                try:
                     firing.thread_id = self.threads.thread_for(rule.id)
                     if self.default_tools:
                         self.injector.configure_tools(firing.thread_id, list(self.default_tools))
                     raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
-                if not raw.strip() and rule.type is not TriggerType.WATCHER:
-                    # A watcher alert still says something without a reply (its
-                    # header names the session); anything else would arrive as
-                    # "(the assistant returned nothing)", which is not a message.
-                    raise EmptyReply("the run completed with no reply")
-                firing.body = compose_proactive(rule, event, raw, late=False)
-                firing.reply = with_late_note(event, firing.body)
-            except Exception as exc:  # noqa: BLE001 — one firing, not the rule
-                self._record(rule, firing, started, raw, error=f"{type(exc).__name__}: {exc}")
-                if self._give_up(rule, firing, key, exc, now):
+                    if not raw.strip() and rule.type is not TriggerType.WATCHER:
+                        # A watcher alert still says something without a reply (its
+                        # header names the session); anything else would arrive as
+                        # "(the assistant returned nothing)", which is not a message.
+                        raise EmptyReply("the run completed with no reply")
+                    firing.body = compose_proactive(rule, event, raw, late=False)
+                    firing.reply = with_late_note(event, firing.body)
+                except Exception as exc:  # noqa: BLE001 — one firing, not the rule
+                    failure = exc
+                self._record(rule, firing, started, raw, error=f"{type(failure).__name__}: {failure}" if failure else None)
+            if failure is not None:
+                if self._give_up(rule, firing, key, failure, now):
                     fired.append(firing)
                 continue
-            self._record(rule, firing, started, raw, error=None)
 
             # Recorded BEFORE delivery: a crash between injection and delivery
             # must not cause the same event to fire again on the next cycle.
@@ -178,6 +181,9 @@ class RuleRunner:
                         "rule_id": rule.id,
                         "event": {"type": str(firing.event.type), "id": firing.event.event_id, "fields": dict(firing.event.fields)},
                         "prompt": firing.prompt,
+                        # The rule's own text: when the prompt differs, event
+                        # text was rendered into it (untrusted provenance).
+                        "prompt_template": rule.prompt,
                         "messages": list(getattr(self.injector, "last_turn", []) or []),
                         # False: the turn could not be found in the thread, so
                         # no messages were kept (never the earlier turns).
