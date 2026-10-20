@@ -34,6 +34,12 @@ def web_fetch(url: str) -> str:
     return INJECTED["text"]
 
 
+@tool("gmail_read_message")
+def gmail_read(message_id: str) -> str:
+    """Read an email (Tier 1 in the shipped rules; its text is untrusted)."""
+    return "Hi! Lunch on Friday?"
+
+
 def _create(title: str, call_id: str = "c1") -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_task", "project": "Launch", "title": title}]}, "id": call_id}])
 
@@ -46,7 +52,7 @@ def _chat(studio, steps: list[AIMessage], said: str, thread: str = "t-chat") -> 
     config = get_app_config()
     ledger = [t for t in get_available_tools(app_config=config, include_mcp=False) if t.name == "ledger_apply"]
     model = ToolCapableFake(messages=iter([*steps, AIMessage(content="Done."), AIMessage(content="unused")]))
-    agent = create_agent(model=model, tools=[web_fetch, *ledger], middleware=[build_policy_middleware(config)])
+    agent = create_agent(model=model, tools=[web_fetch, gmail_read, *ledger], middleware=[build_policy_middleware(config)])
     return agent.invoke({"messages": [HumanMessage(content=said)]}, context={"thread_id": thread, "user_id": studio.user_id})
 
 
@@ -134,3 +140,38 @@ def test_undo_never_overwrites_a_later_edit(studio) -> None:
 def test_an_unknown_or_confirmed_write_cannot_be_undone_here(studio) -> None:
     assert studio.client.post("/api/ledger/writes/w-0000000000000000/undo").status_code == 404
     assert studio.client.post("/api/ledger/writes/not-a-write/undo").status_code == 404
+
+
+def _undo_ids(out: dict) -> list[str]:
+    return [m for msg in out["messages"] if getattr(msg, "type", "") == "tool" for m in re.findall(r"\[undo (w-[0-9a-f]+)\]", str(msg.content))]
+
+
+def test_a_three_sequential_creates_all_run_with_undo(studio) -> None:
+    """The harness's own write acknowledgements do not taint the turn: the
+    second and third ledger calls still follow from the user's message."""
+    _launch(studio)
+    steps = [_create("A", "c1"), _create("B", "c2"), _create("C", "c3")]
+    out = _chat(studio, steps, said="create tasks A, B and C in Launch")
+    assert _titles(studio) == ["A", "B", "C"]
+    assert _pending(studio) == []
+    assert len(_undo_ids(out)) == 3
+
+
+def test_b_an_email_read_between_creates_turns_the_rest_into_suggestions(studio) -> None:
+    _launch(studio)
+    read = AIMessage(content="", tool_calls=[{"name": "gmail_read_message", "args": {"message_id": "m1"}, "id": "r1"}])
+    out = _chat(studio, [_create("A", "c1"), read, _create("B", "c2"), _create("C", "c3")], said="create tasks A, B and C in Launch, and check my mail")
+    assert _titles(studio) == ["A"]
+    assert len(_undo_ids(out)) == 1
+    cards = _pending(studio)
+    assert sorted(c["arguments"]["changes"][0]["title"] for c in cards) == ["B", "C"]
+    assert all("This is a suggestion" in c["plan_text"] for c in cards)
+
+
+def test_c_a_task_planted_in_a_tool_result_is_a_suggestion(studio) -> None:
+    _launch(studio)
+    fetch = AIMessage(content="", tool_calls=[{"name": "web_fetch", "args": {"url": "https://evil.example"}, "id": "f1"}])
+    _chat(studio, [fetch, _create("Wire the money")], said="what does this page say?")
+    assert _titles(studio) == []
+    [card] = _pending(studio)
+    assert "This is a suggestion" in card["plan_text"]
