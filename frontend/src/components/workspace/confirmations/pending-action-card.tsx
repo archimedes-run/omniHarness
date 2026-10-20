@@ -44,6 +44,11 @@ export function PendingActionCard({
     action.tool_name === "ledger_apply" &&
     Array.isArray(action.arguments?.changes);
   const [draft, setDraft] = useState<LedgerChange[] | null>(null);
+  // Once it has run, been declined or been resolved elsewhere, the actions
+  // are gone: the result says what happened, and nothing is left to press.
+  const settled =
+    result != null &&
+    !["unrecognised", "threshold_not_met"].includes(result.outcome);
   // FR-005: the clock drives expiry, not the fetch. Without this an action
   // that lapses while you are reading it still looks actionable, and pressing
   // Confirm would fail for a reason the screen never showed.
@@ -137,7 +142,7 @@ export function PendingActionCard({
 
         {result && <ResolveMessage result={result} />}
 
-        {draft ? (
+        {settled ? null : draft ? (
           <div className="flex gap-2">
             <Button
               data-testid="save-and-confirm"

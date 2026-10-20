@@ -63,9 +63,23 @@ def _owner(value: Any) -> dict | None:
 
 
 def render(changes: list[dict]) -> list[str]:
-    """One plain line per change: what the confirmation card lists."""
+    """One plain line per change: what the confirmation card lists.
+
+    A project or goal created earlier in the same plan is named by its name,
+    not by the plan-internal ref the model gave it ("p1").
+    """
+    names: dict[str, str] = {}
+    for c in changes or []:
+        if isinstance(c, dict) and c.get("ref") and c.get("op") in ("create_project", "create_goal"):
+            names[str(c["ref"])] = str(c.get("name") or c.get("title") or c["ref"])
+
+    def name(ref: Any) -> str:
+        return f"“{names[str(ref)]}”" if str(ref) in names else str(ref if ref is not None else "?")
+
     lines = []
     for c in changes or []:
+        if isinstance(c, dict):
+            c = {**c, **{k: name(c[k]) for k in ("project", "goal") if k in c}}
         op = c.get("op") if isinstance(c, dict) else None
         if op == "create_project":
             why = f" — {c['why']}" if c.get("why") else ""
@@ -76,7 +90,8 @@ def render(changes: list[dict]) -> list[str]:
         elif op == "create_task":
             due = f", due {c['due_date']}" if c.get("due_date") else ""
             owner = f", owner {c['owner']}" if c.get("owner") else ""
-            lines.append(f"Add task “{c.get('title', '')}” to {c.get('project', '?')}{due}{owner}")
+            goal = f", under goal {c['goal']}" if c.get("goal") else ""
+            lines.append(f"Add task “{c.get('title', '')}” to {c.get('project', '?')}{goal}{due}{owner}")
         elif op == "update_task":
             fields = ", ".join(f"{k} → {c[k]}" for k in ("title", "status", "due_date", "owner") if k in c)
             lines.append(f"Change task {c.get('task', '?')} in {c.get('project', '?')}: {fields or 'nothing'}")
@@ -104,6 +119,7 @@ class LedgerService:
                 raise LedgerError(f"unknown change {change!r}; ops are {', '.join(OPS)}")
         done: list[str] = []
         refs: dict[str, str] = {}
+        goal_refs: dict[str, str] = {}
         with self.repo.transaction() as s:
             for c in changes:
                 op = c["op"]
@@ -115,6 +131,9 @@ class LedgerService:
                     row = self.repo.create(s, "project", **stamp, name=_text(c, "name", limit=120, required=True), why=_text(c, "why", limit=2000), context=_text(c, "context", limit=8000), status=status)
                     if c.get("ref"):
                         refs[str(c["ref"])] = row["id"]
+                    if thread_id:
+                        # US1: the project links to the chat it was captured in.
+                        self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="Where it was captured")
                     done.append(f"Created project “{row['name']}”.")
                     continue
                 project = self._project(s, user_id, c.get("project"), refs)
@@ -128,6 +147,8 @@ class LedgerService:
                         definition_of_done=_text(c, "definition_of_done", limit=4000, required=True),
                         target_date=_date(c.get("target_date"), "target_date"),
                     )
+                    if c.get("ref"):
+                        goal_refs[str(c["ref"])] = row["id"]
                     done.append(f"Added goal “{row['title']}” to {project['name']}.")
                 elif op == "create_task":
                     status = c.get("status") or "todo"
@@ -142,6 +163,7 @@ class LedgerService:
                         status=status,
                         due_date=_date(c.get("due_date"), "due_date"),
                         owner=_owner(c.get("owner")),
+                        goal_id=self._goal(s, project, c["goal"], goal_refs) if c.get("goal") else None,
                         declared_files=list(c.get("declared_files") or []),
                     )
                     if thread_id and c.get("todo_ref"):
@@ -190,6 +212,24 @@ class LedgerService:
         if len(matches) > 1:
             raise LedgerError(f"more than one project is called {key!r}; name it by id")
         raise LedgerError(f"there is no project {key!r}")
+
+    @staticmethod
+    def _goal(s, project: dict, ref: Any, goal_refs: dict[str, str]) -> str:
+        """A goal by in-plan ref, id, or exact title within the project."""
+        from sqlalchemy import func, select
+
+        from omniharness.persistence.ledger import LedgerGoalRow
+
+        key = str(ref)
+        if key in goal_refs:
+            return goal_refs[key]
+        row = s.get(LedgerGoalRow, key)
+        if row is not None and row.project_id == project["id"]:
+            return row.id
+        matches = s.scalars(select(LedgerGoalRow).where(LedgerGoalRow.project_id == project["id"], func.lower(LedgerGoalRow.title) == key.lower())).all()
+        if len(matches) == 1:
+            return matches[0].id
+        raise LedgerError(f"{project['name']} has no goal {key!r}")
 
     @staticmethod
     def _task(s, project: dict, ref: Any) -> dict:

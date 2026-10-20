@@ -266,7 +266,9 @@ function Goals({ projectId, goals }: { projectId: string; goals: Goal[] }) {
                   {goal.title}
                 </p>
                 <p className="text-muted-foreground shrink-0 text-xs">
-                  {`${goal.progress.done} of ${goal.progress.total} done`}
+                  {goal.progress.total === 0
+                    ? "No tasks yet"
+                    : `${goal.progress.done} of ${goal.progress.total} done`}
                   {goal.target_date && ` · target ${goal.target_date}`}
                 </p>
               </div>

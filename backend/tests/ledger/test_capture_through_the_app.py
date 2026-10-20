@@ -14,8 +14,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 CHANGES = [
     {"op": "create_project", "ref": "p", "name": "Beta launch", "why": "Ship the public beta by Dec 1"},
-    {"op": "create_goal", "project": "p", "title": "Public beta live", "definition_of_done": "Anyone can sign up", "target_date": "2026-12-01"},
-    {"op": "create_task", "project": "p", "title": "Landing page", "due_date": "2026-11-01"},
+    {"op": "create_goal", "ref": "g", "project": "p", "title": "Public beta live", "definition_of_done": "Anyone can sign up", "target_date": "2026-12-01"},
+    {"op": "create_task", "project": "p", "goal": "g", "title": "Landing page", "due_date": "2026-11-01"},
     {"op": "create_task", "project": "p", "title": "Waitlist"},
 ]
 
@@ -55,9 +55,9 @@ def test_a_proposed_project_is_stored_only_after_confirmation(gateway) -> None:
     # FR-010: the card lists exactly the changes, rendered from the arguments.
     assert action["targets"] == [
         "Create project “Beta launch” — Ship the public beta by Dec 1",
-        "Add goal “Public beta live” to p, target 2026-12-01: done when Anyone can sign up",
-        "Add task “Landing page” to p, due 2026-11-01",
-        "Add task “Waitlist” to p",
+        "Add goal “Public beta live” to “Beta launch”, target 2026-12-01: done when Anyone can sign up",
+        "Add task “Landing page” to “Beta launch”, under goal “Public beta live”, due 2026-11-01",
+        "Add task “Waitlist” to “Beta launch”",
     ]
     assert action["arguments"] == {"changes": CHANGES}
 
@@ -69,6 +69,12 @@ def test_a_proposed_project_is_stored_only_after_confirmation(gateway) -> None:
     view = gateway.client.get(f"/api/ledger/projects/{project['id']}").json()
     assert [t["short_id"] for t in view["tasks"]] == ["T-1", "T-2"]
     assert view["goals"][0]["target_date"] == "2026-12-01"
+    # The task named under the goal counts toward it.
+    assert view["goals"][0]["progress"] == {"done": 0, "total": 1}
+    # The project links to the chat it was captured in (US1).
+    assert [(link["to_kind"], link["to_ref"]) for link in view["links"]] == [("thread", "thread-1")]
+    # Times carry their zone, so a browser does not read UTC as local.
+    assert project["updated_at"].endswith("+00:00")
 
 
 def test_an_edited_plan_is_what_is_stored_and_the_original_never_runs(gateway) -> None:
@@ -76,7 +82,8 @@ def test_an_edited_plan_is_what_is_stored_and_the_original_never_runs(gateway) -
     [action] = pending(gateway)
     edited = [dict(c) for c in CHANGES]
     edited[0]["name"] = "Public beta"
-    edited = edited[:1] + edited[2:3]  # keep the project and one task
+    # Keep the project and one task, without the goal it named (also removed).
+    edited = edited[:1] + [{k: v for k, v in edited[2].items() if k != "goal"}]
 
     resp = gateway.client.post(f"/api/confirmations/{action['id']}/edit", json={"arguments": {"changes": edited}})
     assert resp.json()["outcome"] == "executed", resp.text

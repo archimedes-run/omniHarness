@@ -56,7 +56,12 @@ def make_sync_engine(async_url: str) -> Engine:
 
 
 def _plain(value: Any) -> Any:
-    if isinstance(value, datetime | date):
+    if isinstance(value, datetime):
+        # SQLite drops the zone of a DateTime(timezone=True) column; every
+        # time here is written in UTC, so say so. Without it a browser read
+        # the time as local and showed "updated in about 4 hours" (EDT).
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     return value
 

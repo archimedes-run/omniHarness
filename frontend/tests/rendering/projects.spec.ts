@@ -421,3 +421,14 @@ test("a chat's open to-dos can be promoted to project tasks", async ({
     },
   });
 });
+
+test("once confirmed, the card shows the result and nothing left to press", async ({
+  page,
+}) => {
+  await chat(page, { actions: [ACTION] });
+  const card = page.getByTestId("pending-action");
+  await card.getByTestId("confirm").click();
+  await expect(card.getByTestId("resolve-message")).toContainText("Done.");
+  await expect(card.getByTestId("confirm")).toHaveCount(0);
+  await expect(card.getByTestId("edit")).toHaveCount(0);
+});
