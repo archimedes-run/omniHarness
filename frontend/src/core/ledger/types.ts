@@ -17,6 +17,8 @@ export interface ProjectSummary extends Project {
   open_tasks: number;
   overdue: number;
   done_tasks: number;
+  /** The earliest due date of an open task. Absent from an older gateway. */
+  next_due?: string | null;
 }
 
 export interface Goal {
