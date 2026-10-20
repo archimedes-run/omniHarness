@@ -1,14 +1,14 @@
 "use client";
 
+import * as SwitchPrimitive from "@radix-ui/react-switch";
 import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNowStrict } from "date-fns";
-import { LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
+import { CodeXmlIcon, LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BrandLogo } from "@/components/brand";
+import { BrandLogo, resolveBrand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Agent } from "@/core/agents/types";
 import type { Project } from "@/core/ledger/types";
@@ -158,7 +158,7 @@ export function ContextPicker(props: PickerProps) {
       data-testid="context-picker"
       onKeyDown={onKeyDown}
       className={cn(
-        "bg-popover text-popover-foreground border-border-strong absolute inset-x-0 z-50 flex max-h-[62vh] flex-col overflow-hidden rounded-xl border shadow-xl",
+        "bg-card text-card-foreground border-input absolute inset-x-0 z-50 flex max-h-[62vh] flex-col overflow-hidden rounded-xl border text-sm shadow-xl",
         props.placement === "bottom" ? "top-full mt-2.5" : "bottom-full mb-2.5",
       )}
     >
@@ -176,7 +176,7 @@ export function ContextPicker(props: PickerProps) {
               <TabsTrigger
                 key={t.id}
                 value={t.id}
-                className="data-[state=active]:bg-primary-subtle data-[state=active]:text-foreground text-foreground-2 min-h-9 rounded-md px-3 py-1.5 font-normal data-[state=active]:font-medium data-[state=active]:shadow-none max-sm:min-h-11"
+                className="data-[state=active]:bg-primary-subtle dark:data-[state=active]:bg-primary-subtle data-[state=active]:text-foreground text-foreground-2 dark:text-foreground-2 min-h-9 flex-none rounded-md border-0 px-3 py-1.5 font-normal data-[state=active]:font-medium data-[state=active]:shadow-none max-sm:min-h-11"
               >
                 {t.label}
               </TabsTrigger>
@@ -407,6 +407,51 @@ function AgentsTab({
 }
 
 /**
+ * Chat-Picker.dc.html's switch: 36 x 20, the accent track with a dark thumb
+ * when on, a raised track with a strong border and a muted thumb when off.
+ */
+function PickerSwitch(
+  props: React.ComponentProps<typeof SwitchPrimitive.Root>,
+) {
+  return (
+    <SwitchPrimitive.Root
+      className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-surface-raised data-[state=unchecked]:border-border-strong focus-visible:ring-ring inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent px-px transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
+      {...props}
+    >
+      <SwitchPrimitive.Thumb className="data-[state=checked]:bg-primary-foreground data-[state=unchecked]:bg-muted-foreground pointer-events-none block size-4 rounded-full transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0" />
+    </SwitchPrimitive.Root>
+  );
+}
+
+/**
+ * A row's logo: the brand's own mark in a 28 px tile (radius 7). A local MCP
+ * server with no brand gets the board's code tile, named after the server.
+ */
+function SourceLogo({ row }: { row: IntegrationRow }) {
+  const branded = resolveBrand(row.logoSource) ?? resolveBrand(row.name);
+  if (row.kind === "local" && !branded) {
+    return (
+      <span
+        role="img"
+        aria-label={`${row.name}, a local MCP server`}
+        className="bg-surface-raised text-foreground-2 inline-flex size-7 shrink-0 items-center justify-center rounded-[7px]"
+        data-brand="local-server"
+      >
+        <CodeXmlIcon className="size-4" aria-hidden />
+      </span>
+    );
+  }
+  return (
+    <BrandLogo
+      source={row.logoSource}
+      name={row.name}
+      size={28}
+      className="rounded-[7px]"
+    />
+  );
+}
+
+/**
  * "Connect" on an app that is not connected: the same Composio sign-in pop-up
  * as MCP Suite (connectComposioToolkit), right here in the picker. Once it
  * completes, the live view is refetched and the row reads "Connected" with a
@@ -465,8 +510,9 @@ const CONNECT_TONE = {
   bad: "text-destructive",
 } as const;
 
+// Chat-Picker.dc.html: the row's action is a 13 px underlined link.
 const LINK_BUTTON =
-  "text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-sm underline-offset-2 hover:underline disabled:opacity-60 focus-visible:ring-ring rounded-sm outline-none focus-visible:ring-2";
+  "text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-[13px] underline underline-offset-2 disabled:opacity-60 focus-visible:ring-ring rounded-sm outline-none focus-visible:ring-2";
 
 function IntegrationsTab({
   integrations,
@@ -535,7 +581,7 @@ function IntegrationsTab({
               : null;
           return (
             <Row key={row.id}>
-              <BrandLogo source={row.logoSource} name={row.name} size={28} />
+              <SourceLogo row={row} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{row.name}</span>
                 {row.status === "Unreachable" && row.error && (
@@ -593,10 +639,7 @@ function IntegrationsTab({
                   Connect<span className="sr-only"> {row.name}</span>
                 </button>
               ) : action.kind === "link" && !(row.selected && !row.pinned) ? (
-                <Link
-                  href={MCP_SUITE_HREF}
-                  className="text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-sm underline-offset-2 hover:underline"
-                >
+                <Link href={MCP_SUITE_HREF} className={LINK_BUTTON}>
                   {action.label}
                   <span className="sr-only"> {row.name} in MCP Suite</span>
                 </Link>
@@ -606,7 +649,7 @@ function IntegrationsTab({
                 </span>
               ) : (
                 <span className="flex min-w-14 items-center justify-end">
-                  <Switch
+                  <PickerSwitch
                     checked={row.selected}
                     disabled={!row.selected && overCap}
                     aria-label={`Use ${row.name} in this chat${action.kind === "switch" && action.unverified ? " (not verified working)" : ""}`}
@@ -669,7 +712,7 @@ function SkillsTab({
               )}
             </span>
             {onToggleSkill && !chatSkillsError && (
-              <Switch
+              <PickerSwitch
                 checked={!removed.has(s.name)}
                 aria-label={`Use skill ${s.name} in this chat`}
                 onCheckedChange={(on) => onToggleSkill(s.name, on)}
