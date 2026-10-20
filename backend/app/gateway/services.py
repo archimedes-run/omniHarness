@@ -141,9 +141,12 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 #:   resolves inside the caller's own agents directory, because ``user_id`` is
 #:   server-set;
 #: - ``turn_provenance`` / ``trigger_rule_id``: only when the caller presents
-#:   the trigger engine's credential (internal_auth.is_trigger_engine_request);
+#:   a single-use grant the trigger engine issued for that exact request
+#:   (internal_auth.is_trigger_engine_request);
 #: - ``called_agent``: never from a request (set inside delegation only);
-#: - ``excluded_skills``: this thread's stored exclusions.
+#: - ``excluded_skills``: this thread's stored exclusions;
+#: - ``channel``: the IM channel, from the channel manager's header with the
+#:   internal token only (internal_auth.channel_of).
 SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
     {
         "user_id",
@@ -153,6 +156,7 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
         "trigger_rule_id",
         "called_agent",
         "excluded_skills",
+        "channel",
     }
 )
 
@@ -161,7 +165,15 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
 _CLIENT_CONTEXT_KEYS: frozenset[str] = _CONTEXT_CONFIGURABLE_KEYS - SERVER_OWNED_RUN_KEYS
 
 #: Metadata keys a client may never set on a run or a thread.
-_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id"}
+_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id", "invited_agent", "delegation_chain", "sandbox_id", "run_id"}
+
+#: ALLOWLISTS (security baseline, review round): what a client may put in each
+#: run-config container. Everything else is dropped before the server writes
+#: its own keys, so a key the runtime later reads as identity or authority
+#: (invited_agent, delegation_chain, sandbox_id, ...) can never arrive from a
+#: request, including keys nobody has thought of yet.
+_CLIENT_CONFIGURABLE_KEYS: frozenset[str] = _CLIENT_CONTEXT_KEYS | {"thread_id", "checkpoint_ns", "checkpoint_id"}
+_CLIENT_TOP_LEVEL_CONFIG_KEYS: frozenset[str] = frozenset({"recursion_limit", "tags", "run_name", "max_concurrency", "metadata", "configurable", "context"})
 
 
 def _client_requested_agent(body: Any) -> str | None:
@@ -220,7 +232,16 @@ def apply_server_owned_context(
     """
     from app.policy.provenance import PROVENANCE_KEY, RULE_KEY, SYNTHETIC
 
-    for container in (config.get("configurable"), config.get("context"), config.get("metadata"), metadata):
+    for key in [k for k in config if k not in _CLIENT_TOP_LEVEL_CONFIG_KEYS]:
+        config.pop(key)
+    for name, allowed in (("configurable", _CLIENT_CONFIGURABLE_KEYS), ("context", _CLIENT_CONTEXT_KEYS)):
+        container = config.get(name)
+        if isinstance(container, dict):
+            for key in [k for k in container if k not in allowed]:
+                container.pop(key)
+        elif container is not None:
+            config.pop(name)
+    for container in (config.get("metadata"), metadata):
         if isinstance(container, dict):
             for key in _SERVER_OWNED_METADATA_KEYS:
                 container.pop(key, None)
@@ -535,12 +556,13 @@ async def start_run(
     # Scheduled-run provenance: only the trigger engine's own credential may
     # mark a turn synthetic. Anyone else's claim is dropped.
     synthetic_rule_id: str | None = None
-    if is_trigger_engine_request(request):
-        from app.policy.provenance import SYNTHETIC
+    from app.policy.provenance import SYNTHETIC
 
-        claimed, rule_id = _client_provenance(body)
-        if claimed == SYNTHETIC:
-            synthetic_rule_id = rule_id or ""
+    claimed, rule_id = _client_provenance(body)
+    if claimed == SYNTHETIC and await is_trigger_engine_request(request):
+        synthetic_rule_id = rule_id or ""
+
+    from app.gateway.internal_auth import channel_of
 
     run_metadata = dict(body.metadata or {})
     apply_server_owned_context(
@@ -551,6 +573,9 @@ async def start_run(
         agent_name=agent_name,
         synthetic_rule_id=synthetic_rule_id,
     )
+    channel = channel_of(request)
+    if channel:
+        config["context"]["channel"] = channel
 
     # Feature 006: skills removed from this conversation (the chat bar's ×).
     # Always the server's stored value (the client's was dropped above).

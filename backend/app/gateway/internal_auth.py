@@ -25,9 +25,9 @@ one process both mints and validates.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import os
+import re
 import secrets
 from types import SimpleNamespace
 
@@ -69,32 +69,116 @@ def is_valid_internal_auth_token(token: str | None) -> bool:
     return isinstance(token, str) and bool(token) and secrets.compare_digest(token, _INTERNAL_AUTH_TOKEN)
 
 
-#: The trigger engine's own credential, on top of the internal token. Only a
-#: request carrying both may mark a turn "synthetic-trigger" (a scheduled run).
-#: The channels share the internal token but not this, so a Telegram message
-#: can never claim to be a scheduled run.
-TRIGGER_ENGINE_HEADER_NAME = "X-OmniHarness-Trigger-Engine"
+#: SCHEDULED-RUN GRANTS (security baseline). Only a request carrying a grant
+#: the trigger engine issued may mark a turn "synthetic-trigger".
+#:
+#: Why not a token: the engine runs inside the gateway, but under
+#: `uvicorn --workers N` its loopback call lands on ANY worker, so a secret held
+#: in one process cannot be checked by another; and anything derived from the
+#: internal token can be computed by every holder of that token (the channels).
+#:
+#: A grant is a random, single-use nonce, bound to the exact request
+#: (sha256 of method, path and body) and valid for GRANT_TTL_SECONDS. The engine
+#: writes it as a file in a 0700 directory under the runtime home that every
+#: worker shares; the worker that serves the request redeems it with an atomic
+#: rename, so a second use (a replay) finds nothing. No long-lived secret
+#: exists, in the environment or on disk.
+TRIGGER_GRANT_HEADER_NAME = "X-OmniHarness-Trigger-Grant"
+
+#: The IM channel a turn came from (Telegram, Slack...), sent by the channel
+#: manager. Honoured only with a valid internal token (channel_of).
+CHANNEL_HEADER_NAME = "X-OmniHarness-Channel"
 
 
-def _trigger_engine_token() -> str:
-    # Derived from the internal token, so every worker agrees with no extra
-    # configuration (the reason the internal token comes from the environment).
-    return hmac.new(_INTERNAL_AUTH_TOKEN.encode(), b"omniharness/trigger-engine/v1", hashlib.sha256).hexdigest()
+def channel_of(request) -> str | None:
+    """The channel name, only for an internal-token request; else None."""
+    headers = getattr(request, "headers", None) or {}
+    if not is_valid_internal_auth_token(headers.get(INTERNAL_AUTH_HEADER_NAME)):
+        return None
+    name = headers.get(CHANNEL_HEADER_NAME)
+    return name if isinstance(name, str) and re.fullmatch(r"[a-z0-9_-]{1,32}", name) else None
 
 
-def create_trigger_engine_auth_headers() -> dict[str, str]:
-    """Headers for the trigger engine's calls into the gateway."""
-    return {**create_internal_auth_headers(), TRIGGER_ENGINE_HEADER_NAME: _trigger_engine_token()}
+GRANT_TTL_SECONDS = 120
+_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 
 
-def is_trigger_engine_request(request) -> bool:
-    """True only when the request carries BOTH the internal token and the
-    trigger engine's credential."""
+def _grant_dir():
+    from omniharness.config.paths import get_paths
+
+    directory = get_paths().base_dir / "trigger_grants"
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    return directory
+
+
+def _request_digest(method: str, path: str, body: bytes) -> str:
+    return hashlib.sha256(method.upper().encode() + b"\0" + path.encode() + b"\0" + body).hexdigest()
+
+
+def issue_trigger_grant(method: str, path: str, body: bytes) -> str:
+    """Called by the trigger engine just before it sends ONE request."""
+    import json
+    import time
+
+    directory = _grant_dir()
+    now = time.time()
+    for stale in directory.glob("*.grant"):
+        try:
+            if now - stale.stat().st_mtime > GRANT_TTL_SECONDS:
+                stale.unlink()
+        except OSError:
+            pass
+    nonce = secrets.token_urlsafe(32)
+    payload = json.dumps({"digest": _request_digest(method, path, body), "expires": now + GRANT_TTL_SECONDS})
+    tmp = directory / f".{nonce}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+    os.replace(tmp, directory / f"{nonce}.grant")
+    return nonce
+
+
+def redeem_trigger_grant(nonce: str | None, method: str, path: str, body: bytes) -> bool:
+    """True once, for the request the grant was issued for; False otherwise."""
+    import json
+    import time
+
+    if not isinstance(nonce, str) or not _NONCE_RE.match(nonce):
+        return False
+    directory = _grant_dir()
+    claimed = directory / f".{nonce}.{secrets.token_hex(8)}.redeemed"
+    try:
+        os.rename(directory / f"{nonce}.grant", claimed)  # atomic: one redeemer wins
+    except OSError:
+        return False
+    try:
+        grant = json.loads(claimed.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    finally:
+        try:
+            claimed.unlink()
+        except OSError:
+            pass
+    if float(grant.get("expires", 0)) < time.time():
+        return False
+    return secrets.compare_digest(str(grant.get("digest", "")), _request_digest(method, path, body))
+
+
+async def is_trigger_engine_request(request) -> bool:
+    """The internal token AND a grant the engine issued for exactly this request."""
     headers = getattr(request, "headers", None) or {}
     if not is_valid_internal_auth_token(headers.get(INTERNAL_AUTH_HEADER_NAME)):
         return False
-    token = headers.get(TRIGGER_ENGINE_HEADER_NAME)
-    return isinstance(token, str) and bool(token) and secrets.compare_digest(token, _trigger_engine_token())
+    nonce = headers.get(TRIGGER_GRANT_HEADER_NAME)
+    if not isinstance(nonce, str):
+        return False
+    body = await request.body()
+    return redeem_trigger_grant(nonce, request.method, request.url.path, body)
 
 
 def get_internal_user():

@@ -16,7 +16,7 @@ from app.channels.commands import KNOWN_CHANNEL_COMMANDS
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 from app.channels.store import ChannelStore
 from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
-from app.gateway.internal_auth import create_internal_auth_headers
+from app.gateway.internal_auth import CHANNEL_HEADER_NAME, create_internal_auth_headers
 from omniharness.runtime.user_context import get_effective_user_id
 
 logger = logging.getLogger(__name__)
@@ -622,6 +622,10 @@ class ChannelManager:
             input={"messages": [{"role": "human", "content": msg.text}]},
             config=run_config,
             context=run_context,
+            # Which channel this turn came from. The gateway trusts it only
+            # alongside the internal token (services.start_run), and records
+            # it on any plan a typed reply here answers ("channel:<name>").
+            headers={CHANNEL_HEADER_NAME: msg.channel_name},
         )
 
         response_text = _extract_response_text(result)
