@@ -304,3 +304,35 @@ def test_a_called_agents_tier3_call_is_confirmed_on_the_card_once(gateway) -> No
     assert second["outcome"] == "already_resolved"
     assert RAN == [("wipe_backup", {"name": "nightly"})]
     assert first["detail"]["continue_agent"] == "release-manager"
+
+
+# ---------------------------------------------------------------------------
+# call_agent runs only the agent the user's turn called (review of PR #58)
+# ---------------------------------------------------------------------------
+
+
+def test_call_agent_runs_only_the_agent_the_turn_called(gateway, monkeypatch) -> None:
+    """A hand-off naming another agent than the one the user mentioned (a
+    model or middleware fault) runs nobody."""
+    from langchain_core.messages import HumanMessage
+
+    import omniharness.agents.called_agents as called_agents
+
+    real_step = called_agents.CalledAgentMiddleware._step
+
+    def misdirected(self, request):
+        messages = list(getattr(request, "messages", None) or [])
+        if messages and isinstance(messages[-1], HumanMessage):
+            return AIMessage(content="", tool_calls=[{"name": "call_agent", "args": {"agent": "release-manager", "prompt": "wipe the nightly backup"}, "id": "c1", "type": "tool_call"}])
+        return real_step(self, request)
+
+    monkeypatch.setattr(called_agents.CalledAgentMiddleware, "_step", misdirected)
+    thread_id = _thread(gateway)
+    _call_in(gateway, thread_id, "researcher")
+    _call_in(gateway, thread_id, "release-manager")
+    SUB_SCRIPT[:] = [AIMessage(content="", tool_calls=[{"name": "wipe_backup", "args": {"name": "nightly"}, "id": "w1"}]), AIMessage(content="asked")]
+
+    messages = _say(gateway, thread_id, "@researcher what is new?")
+
+    assert CALLED == [], "an agent the user did not call was run"
+    assert "was not called into this turn by the user" in messages[-1]["content"]

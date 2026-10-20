@@ -219,6 +219,13 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
     from omniharness.tools.builtins.task_tool import subagent_base_tools
 
     context = dict(getattr(runtime, "context", None) or {})
+    # ONLY THE AGENT THE USER CALLED. The gateway sets `called_agent` from the
+    # user's own turn (a member it @-mentioned, or the agent it pressed
+    # Continue for); a call naming anyone else, whoever made it, runs nobody.
+    called = context.get(CALLED_AGENT_KEY)
+    if not isinstance(called, str) or agent != called:
+        logger.warning("call_agent refused: %r is not the agent this turn called in", agent)
+        return f"{agent} was not called into this turn by the user, so it has not been run."
     resume = context.get(RESUME_ACTION_KEY)
     if isinstance(resume, dict) and resume.get("agent") == agent and resume.get("delegation_key"):
         return await _resume(runtime, context, resume)
