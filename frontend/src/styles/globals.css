@@ -166,6 +166,16 @@
   --color-foreground-2: var(--foreground-2);
   --color-surface-raised: var(--surface-raised);
   --color-border-strong: var(--border-strong);
+  --color-primary-subtle: var(--primary-subtle);
+  --color-overlay: var(--overlay);
+  --color-avatar-1: var(--avatar-1);
+  --color-avatar-1-foreground: var(--avatar-1-foreground);
+  --color-avatar-2: var(--avatar-2);
+  --color-avatar-2-foreground: var(--avatar-2-foreground);
+  --color-avatar-3: var(--avatar-3);
+  --color-avatar-3-foreground: var(--avatar-3-foreground);
+  --color-avatar-4: var(--avatar-4);
+  --color-avatar-4-foreground: var(--avatar-4-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -265,6 +275,20 @@
   --surface-raised: #f1f2f4;
   --primary: #3355d6;
   --primary-foreground: #ffffff;
+  /* Selected tab / selected "+" fill. Text on it uses the main text colour; muted
+   * text measures 4.41:1 on the dark value and fails AA. */
+  --primary-subtle: #e7ebfa;
+  /* Scrim behind panels and dialogs; use with an opacity (bg-overlay/60). */
+  --overlay: #17181b;
+  /* Agent avatars (1 = the lead). Foreground 3 is also the @mention colour. */
+  --avatar-1: #f1f2f4;
+  --avatar-1-foreground: #17181b;
+  --avatar-2: #e0e6fa;
+  --avatar-2-foreground: #2945b0;
+  --avatar-3: #eee6f7;
+  --avatar-3-foreground: #6b3fa0;
+  --avatar-4: #dff1e7;
+  --avatar-4-foreground: #1e6b44;
   --secondary: #f1f2f4;
   --secondary-foreground: #17181b;
   --muted: #f1f2f4;
@@ -313,6 +337,16 @@
   --surface-raised: #24272d;
   --primary: #8fa8ff;
   --primary-foreground: #121316;
+  --primary-subtle: #2f3a5c;
+  --overlay: #0c0d0f;
+  --avatar-1: #24272d;
+  --avatar-1-foreground: #ecedef;
+  --avatar-2: #2f3a5c;
+  --avatar-2-foreground: #b7c6ff;
+  --avatar-3: #3d2f4f;
+  --avatar-3-foreground: #c9a8ff;
+  --avatar-4: #23423a;
+  --avatar-4-foreground: #9fe3c0;
   --secondary: #24272d;
   --secondary-foreground: #ecedef;
   --muted: #24272d;

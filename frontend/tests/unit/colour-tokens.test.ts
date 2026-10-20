@@ -214,10 +214,7 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
     reason: "visual effect: the colours are its parameters",
     literals: ["#0070F3", "#38bdf8", "#7928CA", "#FF0080"],
   },
-  "components/ui/dialog.tsx": {
-    reason: "modal overlay: black at 50% in both themes",
-    literals: ["bg-black/50"],
-  },
+
   "components/ui/flickering-grid.tsx": {
     reason: "visual effect: computes its own rgba from the colour it is given",
     literals: ["rgb(", "rgba("],
@@ -226,10 +223,7 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
     reason: "visual effect: glow colour parameter",
     literals: ["rgba("],
   },
-  "components/ui/sheet.tsx": {
-    reason: "modal overlay: black at 50% in both themes",
-    literals: ["bg-black/50"],
-  },
+
   "components/ui/shine-border.tsx": {
     reason: "visual effect: the colours are its parameters",
     literals: ["#000000", "#fff"],

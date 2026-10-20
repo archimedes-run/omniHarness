@@ -7,8 +7,8 @@ so a preview can show the other theme with the same tokens. Components use the T
 `frontend/tests/unit/colour-tokens.test.ts` enforces that, and
 `frontend/tests/rendering/contrast.spec.ts` measures every audited page in both themes against WCAG AA.
 
-Values come from the design reference (`design/*.dc.html`). No value from the brief's table failed
-AA, so none was tuned. `--sidebar-accent` (light) is not in the table; it was chosen as `#E4E6EA`,
+Values come from the design reference (`design/*.dc.html`) and `design-notes.md`. No value from the
+brief's table failed AA, so none was tuned. `--sidebar-accent` (light) is not in the table; it was chosen as `#E4E6EA`,
 one step darker than the light sidebar, so a selected item reads without the inverted black fill
 the old theme used.
 
@@ -41,6 +41,12 @@ the old theme used.
 | `--sidebar-primary` / `-foreground` | `bg-sidebar-primary` | accent in the sidebar | `#3355D6` / `#FFFFFF` | `#8FA8FF` / `#121316` |
 | `--sidebar-border` | `border-sidebar-border` | sidebar border | `#DDDFE3` | `#2E3138` |
 | `--sidebar-ring` | `ring-sidebar-ring` | focus in the sidebar | `#3355D6` | `#8FA8FF` |
+| `--primary-subtle` | `bg-primary-subtle` | selected tab / selected "+" fill (text on it: `text-foreground`, never muted) | `#E7EBFA` | `#2F3A5C` |
+| `--overlay` | `bg-overlay/60` | scrim behind panels and dialogs | `#17181B` | `#0C0D0F` |
+| `--avatar-1` / `-foreground` | `bg-avatar-1 text-avatar-1-foreground` | agent avatar, the lead | `#F1F2F4` / `#17181B` | `#24272D` / `#ECEDEF` |
+| `--avatar-2` / `-foreground` | `bg-avatar-2 text-avatar-2-foreground` | agent avatar | `#E0E6FA` / `#2945B0` | `#2F3A5C` / `#B7C6FF` |
+| `--avatar-3` / `-foreground` | `bg-avatar-3 text-avatar-3-foreground` | agent avatar; foreground is also the @mention colour | `#EEE6F7` / `#6B3FA0` | `#3D2F4F` / `#C9A8FF` |
+| `--avatar-4` / `-foreground` | `bg-avatar-4 text-avatar-4-foreground` | agent avatar | `#DFF1E7` / `#1E6B44` | `#23423A` / `#9FE3C0` |
 | `--chart-1..5` | `bg-chart-N` | chart series (unchanged) | oklch, see CSS | oklch, see CSS |
 
 Opacity modifiers are fine (`bg-primary/10`, `border-border/60`).
@@ -65,8 +71,23 @@ Opacity modifiers are fine (`bg-primary/10`, `border-border/60`).
 | sidebar-foreground on sidebar | 11.12 | 11.02 |
 | sidebar-foreground on sidebar-accent | 10.15 | 9.30 |
 | primary on sidebar-accent | 4.93 | 6.57 |
+| foreground on primary-subtle | 14.93 | 9.53 |
+| muted-foreground on primary-subtle (NOT allowed) | 5.32 | **4.41, fails** |
+| primary on primary-subtle | 5.18 | 4.90 |
+| avatar-N-foreground on avatar-N (1..4) | 15.85 / 6.56 / 6.08 / 5.51 | 12.78 / 6.67 / 6.13 / 7.44 |
+| avatar-3-foreground (@mention) on card | 7.38 | 8.36 |
 
 `tests/rendering/theme.spec.ts` re-measures the token pairs from painted pixels in both themes.
+
+Colours derived from a token rather than given their own: link hover is the accent mixed with
+white (`hover:text-primary/80` or a `color-mix`), status-pill borders are the status colour at 35%
+(`border-success/35`). The mockups' logo placeholder fills are dropped (the real logos replace them).
+
+**Non-text contrast.** Borders against the background are about 1.4:1 and the input border about
+2:1, under the 3:1 non-text guideline, so no state may be carried by a border colour alone: an off
+switch is told by its knob (muted, 5.9:1), a field by its fill and its label, a selected tab by
+`bg-primary-subtle` plus `text-foreground` (the shadcn tabs already use `text-foreground` when
+active).
 
 ## Type and shape
 
