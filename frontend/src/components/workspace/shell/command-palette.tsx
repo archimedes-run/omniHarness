@@ -31,25 +31,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fetch } from "@/core/api/fetcher";
-import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
+import { saveAppearance, type Appearance } from "@/core/preferences";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
 import { PaletteResults, matches } from "./palette-results";
 import { PANEL_ICONS, PANEL_IDS, panelLabel, type PanelId } from "./panels";
 import { useShell } from "./shell-context";
 
-type Theme = "dark" | "light" | "system";
-
-/** Save the theme on the server too, where that exists. A gateway without the
- * preference route (404) or offline leaves the local choice in place. */
-function saveTheme(theme: Theme) {
-  void fetch(`${getBackendBaseURL()}/api/preferences/appearance`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ theme }),
-  }).catch(() => undefined);
+/** Save the theme on the server too (Settings > Appearance's store). A
+ * gateway without the route (404) or offline leaves the local choice. */
+function saveTheme(theme: Appearance) {
+  void saveAppearance(theme).catch(() => undefined);
 }
 
 interface Action {
@@ -107,7 +100,7 @@ export function CommandPalette() {
   }, [close]);
 
   const applyTheme = useCallback(
-    (theme: Theme) => {
+    (theme: Appearance) => {
       setTheme(theme);
       saveTheme(theme);
       close();

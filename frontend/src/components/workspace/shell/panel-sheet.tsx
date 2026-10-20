@@ -4,8 +4,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 import {
   Component,
-  Suspense,
-  lazy,
+  createElement,
   useEffect,
   useState,
   type ComponentType,
@@ -24,12 +23,35 @@ import {
 } from "./panels";
 import { useShell } from "./shell-context";
 
-const CONTENT: Record<PanelId, ComponentType<PanelProps>> = {
-  agents: lazy(PANEL_LOADERS.agents),
-  skills: lazy(PANEL_LOADERS.skills),
-  automations: lazy(PANEL_LOADERS.automations),
-  tasks: lazy(PANEL_LOADERS.tasks),
-};
+type Loaded = ComponentType<PanelProps> | "failed";
+const LOADED: Partial<Record<PanelId, Loaded>> = {};
+
+/**
+ * The panel's component once its code has arrived. Not React.lazy: React 19
+ * holds a Suspense fallback on screen for at least 300 ms, which made every
+ * first open take 300 ms however fast the chunk came.
+ */
+function usePanelComponent(id: PanelId): Loaded | null {
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    if (LOADED[id]) return;
+    let live = true;
+    PANEL_LOADERS[id]()
+      .then((m) => {
+        LOADED[id] = m.default;
+      })
+      .catch(() => {
+        LOADED[id] = "failed";
+      })
+      .finally(() => {
+        if (live) rerender((n) => n + 1);
+      });
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  return LOADED[id] ?? null;
+}
 
 /** A panel whose code failed to load says so: an empty sheet would read as
  * "nothing here". */
@@ -62,14 +84,46 @@ export function PanelSheet() {
   }, [panel]);
   const id = panel ?? shown;
   if (!id) return null;
+  return (
+    <SheetFor
+      id={id}
+      open={panel !== null}
+      closePanel={closePanel}
+      panelReturnFocus={panelReturnFocus}
+      t={t}
+    />
+  );
+}
 
+function SheetFor({
+  id,
+  open,
+  closePanel,
+  panelReturnFocus,
+  t,
+}: {
+  id: PanelId;
+  open: boolean;
+  closePanel: () => void;
+  panelReturnFocus: () => HTMLElement | null;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
   const Icon = PANEL_ICONS[id];
-  const Content = CONTENT[id];
+  const Content = usePanelComponent(id);
   const label = panelLabel(t, id);
+  const failed = (
+    <p
+      className="text-destructive p-6 text-sm"
+      role="alert"
+      data-testid="panel-failed"
+    >
+      {t.shell.panelFailed}
+    </p>
+  );
 
   return (
     <DialogPrimitive.Root
-      open={panel !== null}
+      open={open}
       onOpenChange={(open) => {
         if (!open) closePanel();
       }}
@@ -110,31 +164,22 @@ export function PanelSheet() {
             className="min-h-0 flex-1 overflow-y-auto"
             data-testid="panel-body"
           >
-            <PanelBoundary
-              key={id}
-              fallback={
-                <p
-                  className="text-destructive p-6 text-sm"
-                  role="alert"
-                  data-testid="panel-failed"
-                >
-                  {t.shell.panelFailed}
-                </p>
-              }
-            >
-              <Suspense
-                fallback={
-                  <p
-                    className="text-muted-foreground p-6 text-sm"
-                    data-testid="panel-loading"
-                  >
-                    {t.shell.loadingPanel}
-                  </p>
-                }
+            {Content === "failed" ? (
+              failed
+            ) : Content ? (
+              <PanelBoundary key={id} fallback={failed}>
+                {/* The component comes from the module cache, the same one
+                    on every render (not created here). */}
+                {createElement(Content, { onClose: closePanel })}
+              </PanelBoundary>
+            ) : (
+              <p
+                className="text-muted-foreground p-6 text-sm"
+                data-testid="panel-loading"
               >
-                <Content onClose={closePanel} />
-              </Suspense>
-            </PanelBoundary>
+                {t.shell.loadingPanel}
+              </p>
+            )}
           </div>
         </DialogPrimitive.Content>
       </DialogPortal>

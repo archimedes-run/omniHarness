@@ -207,6 +207,22 @@ test("a panel opens over the page with its name in the URL, and Esc brings you b
   await expect(capsule(page, "agents")).toBeFocused();
 });
 
+test("closing a panel you arrived on by link keeps the page's own params", async ({
+  page,
+}) => {
+  await serve(page);
+  // No entry was pushed for this panel, so closing rewrites the URL itself.
+  await page.goto("/workspace/connections?tab=suite&panel=agents");
+  await expect(sheet(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet(page)).toHaveCount(0);
+  const url = new URL(page.url());
+  expect(url.pathname).toBe("/workspace/connections");
+  expect(url.search).toBe("?tab=suite");
+  // Focus lands on the panel's capsule button, not on nothing.
+  await expect(capsule(page, "agents")).toBeFocused();
+});
+
 test("the close button closes it too, and focus returns", async ({ page }) => {
   await serve(page);
   await page.goto("/workspace/chats");
@@ -440,7 +456,9 @@ test("theme commands change the theme (and tolerate no server preference)", asyn
   await serve(page);
   const puts: unknown[] = [];
   await page.route("**/api/preferences/appearance", (route) => {
-    puts.push(route.request().postDataJSON());
+    if (route.request().method() === "PUT") {
+      puts.push(route.request().postDataJSON());
+    }
     return route.fulfill(json({ detail: "Not Found" }, 404));
   });
   await page.goto("/workspace/chats");
@@ -457,9 +475,9 @@ test("theme commands change the theme (and tolerate no server preference)", asyn
   await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
   await run("Use system theme");
   expect(puts).toEqual([
-    { theme: "dark" },
-    { theme: "light" },
-    { theme: "system" },
+    { appearance: "dark" },
+    { appearance: "light" },
+    { appearance: "system" },
   ]);
 });
 
