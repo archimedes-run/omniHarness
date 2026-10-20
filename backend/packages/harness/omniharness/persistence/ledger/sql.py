@@ -14,6 +14,7 @@ overwrite each other silently.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -78,11 +79,17 @@ def _new_id() -> str:
 class LedgerRepository:
     def __init__(self, engine: Engine) -> None:
         self._sf = sessionmaker(engine, expire_on_commit=False)
+        # One write transaction at a time in this process. A task's short id
+        # is read from its project's counter and written back; `with_for_update`
+        # does nothing on SQLite, so two concurrent applies (parallel
+        # ledger_apply calls in one model step, now that routine ledger writes
+        # run at Tier 2) both read T-2 and the second fails its unique check.
+        self._write_lock = threading.Lock()
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:
         """One unit of work: a confirmed ledger_apply is all or nothing."""
-        with self._sf() as session, session.begin():
+        with self._write_lock, self._sf() as session, session.begin():
             yield session
 
     # ---- writes (inside a transaction) -------------------------------------

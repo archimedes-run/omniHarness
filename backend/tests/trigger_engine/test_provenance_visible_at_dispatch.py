@@ -231,3 +231,14 @@ def test_tool_call_request_still_carries_no_config():
 
     fields = {f.name for f in dataclasses.fields(ToolCallRequest)}
     assert "config" not in fields, "ToolCallRequest now exposes config — _mirror_runtime_visible_keys may no longer be the only way to reach provenance at dispatch"
+
+
+def test_the_firing_id_reaches_tool_runtime_context():
+    """Feature 006: standing grants count a scheduled run's actions under its
+    firing id, read at dispatch, so it must cross the same bridge."""
+    from app.trigger_engine.injector import FIRING_KEY
+
+    config = _injected_payload_config()
+    config["configurable"][FIRING_KEY] = "fp-123"
+    assert FIRING_KEY in _CONTEXT_CONFIGURABLE_KEYS
+    assert _runtime_context_for(config).get(FIRING_KEY) == "fp-123"

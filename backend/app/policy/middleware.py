@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -30,6 +31,7 @@ from langchain.agents.middleware import AgentMiddleware
 from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
+from .grants import GrantedCall
 from .limits import describe_expiry
 from .lineage import initiation_origin
 from .models import Outcome, PendingAction, Tier, default_expiry
@@ -70,10 +72,9 @@ class PolicyMiddleware(AgentMiddleware):
     audit: Any = None
     actor: str = "default"
     now: Any = _now
-    #: Granted actions taken so far, per run (Feature 006 standing grants).
-    #: One middleware is built per run; keyed by thread as well, so a shared
-    #: instance still counts each run on its own.
-    _granted_in_run: dict = field(default_factory=dict, repr=False)
+    #: Granted actions per scheduled run, durable and reserved atomically
+    #: (grants.GrantRunCounts). None: no grant can be used (fails closed).
+    grant_runs: Any = None
 
     def __post_init__(self) -> None:
         super().__init__()
@@ -95,7 +96,7 @@ class PolicyMiddleware(AgentMiddleware):
             grant = self._scheduled_hold(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED):
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED), self._reserved(grant):
                 result = handler(request)
             if grant:
                 self._record_grant_use(request, decision, grant)
@@ -127,7 +128,7 @@ class PolicyMiddleware(AgentMiddleware):
             grant = self._scheduled_hold(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED):
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED), self._reserved(grant):
                 result = await handler(request)
             if grant:
                 self._record_grant_use(request, decision, grant)
@@ -155,32 +156,51 @@ class PolicyMiddleware(AgentMiddleware):
     # runs only under the agent's standing grant and within the run's cap;
     # otherwise it waits like a proposal. In chat a grant changes nothing.
 
-    def _scheduled_hold(self, request, decision) -> list[str] | str | None:
-        """None: run as an ordinary Tier 2 call. A list: run under these
-        granted classes. A str: do not run; wait, with this note."""
-        from .grants import GRANT_CAP_PER_RUN, covering_classes, governed_by_grants, granted_classes
-        from .provenance import is_synthetic_turn
+    def _scheduled_hold(self, request, decision) -> GrantedCall | str | None:
+        """None: run as an ordinary Tier 2 call. A GrantedCall: run under a
+        grant, its actions already reserved against the run's cap. A str: do
+        not run; wait, with this note."""
+        from .grants import GRANT_CAP_PER_RUN, GrantedCall, action_count, covering_classes, governed_by_grants, granted_classes
+        from .provenance import FIRING_KEY, is_synthetic_turn
 
         context = self._runtime_context(request) or {}
         if not is_synthetic_turn(context) or not governed_by_grants(decision.tool_name):
             return None
         agent = self._requester(request)
         granted = granted_classes(self._user_id(context), agent)
-        used = covering_classes(decision, self._arguments(request), granted, self.loader.load()) if granted else None
+        arguments = self._arguments(request)
+        used = covering_classes(decision, arguments, granted, self.loader.load()) if granted else None
         if used is None:
             return f"Nobody is there to ask in a scheduled run, and none of {agent}'s standing grants covers this, so it waits for you."
-        key = self._run_key(context)
-        if self._granted_in_run.get(key, 0) >= GRANT_CAP_PER_RUN:
-            logger.warning("policy: %s's standing grant covers %s, but this run already took %d granted actions; it waits", agent, decision.tool_name, GRANT_CAP_PER_RUN)
-            return f"This run already did {GRANT_CAP_PER_RUN} things on its own under {agent}'s standing grants, the most one run may do, so this one waits for you."
-        return used
+        run_key = str(context.get(FIRING_KEY) or "")
+        if not run_key or self.grant_runs is None:
+            logger.warning("policy: %s's standing grant covers %s, but the run's granted actions cannot be counted (firing id %r); it waits", agent, decision.tool_name, run_key)
+            return "This scheduled run's granted actions can't be counted, so nothing runs on its own under a standing grant; this waits for you."
+        actions = action_count(arguments)
+        # Reserved HERE, before the call runs, in one atomic write: parallel
+        # calls in the same step cannot take the run past the cap.
+        total = self.grant_runs.reserve(run_key, actions, GRANT_CAP_PER_RUN)
+        if total is None:
+            done = self.grant_runs.used(run_key)
+            logger.warning("policy: %s's standing grant covers %s (%d actions), but this run already took %d of %d; it waits", agent, decision.tool_name, actions, done, GRANT_CAP_PER_RUN)
+            return f"This run already did {done} of the {GRANT_CAP_PER_RUN} things one run may do on its own under {agent}'s standing grants, and this call would do {actions} more, so it waits for you."
+        return GrantedCall(classes=used, actions=actions, total=total, run_key=run_key)
 
-    def _record_grant_use(self, request, decision, classes: list[str]) -> None:
+    @contextmanager
+    def _reserved(self, grant):
+        """Give a granted call's reservation back if the call raises: actions
+        that did not happen do not count against the run."""
+        try:
+            yield
+        except BaseException:
+            if grant:
+                self.grant_runs.release(grant.run_key, grant.actions)
+            raise
+
+    def _record_grant_use(self, request, decision, grant: GrantedCall) -> None:
         from .lineage import initiation_origin
 
         context = self._runtime_context(request) or {}
-        key = self._run_key(context)
-        self._granted_in_run[key] = self._granted_in_run.get(key, 0) + 1
         arguments = self._arguments(request)
         targets = list(self.resolve_targets(decision.tool_name, arguments)) if self.resolve_targets else [f"{decision.tool_name}({arguments})"]
         # What caused it, for the run's history: the schedule's own turn, or
@@ -193,29 +213,25 @@ class PolicyMiddleware(AgentMiddleware):
                 agent=self._requester(request),
                 user_id=self._user_id(context),
                 tool=decision.tool_name,
-                classes=classes,
+                classes=grant.classes,
                 targets=targets,
                 thread_id=context.get("thread_id"),
                 rule_id=context.get("trigger_rule_id"),
                 origin=origin,
                 origin_source=source,
-                count_in_run=self._granted_in_run[key],
+                count_in_run=grant.total,
                 now=self.now(),
             )
         # Disclosed in the run's reply like a Tier 2 write: the person reading
         # it later sees what was done without them.
         self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets))
-        logger.info("policy: %s ran %s on its own under a standing grant (%s; origin %s)", self._requester(request), decision.tool_name, ", ".join(classes), origin)
+        logger.info("policy: %s ran %s on its own under a standing grant (%s; %d actions, %d in this run; origin %s)", self._requester(request), decision.tool_name, ", ".join(grant.classes), grant.actions, grant.total, origin)
 
     @staticmethod
     def _user_id(context: dict) -> str:
         from omniharness.runtime.user_context import get_effective_user_id
 
         return str(context.get("user_id") or get_effective_user_id())
-
-    @staticmethod
-    def _run_key(context: dict) -> tuple:
-        return (context.get("thread_id"), context.get("trigger_rule_id"))
 
     # -- internals ---------------------------------------------------------
 
@@ -569,15 +585,22 @@ class PolicyMiddleware(AgentMiddleware):
             return "user", "", ""
         return inherited, context.get(INVITED_SOURCE_KEY) or "", context.get(INVITED_VIA_KEY) or ""
 
-    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...]) -> Any:
+    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...], run_markers: tuple[tuple[str, str], ...] = ()) -> Any:
         """The mark an agent invited during this call starts from."""
         from omniharness.agents.invitation import TurnOrigin
 
-        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via)
+        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via, run_markers=run_markers)
 
     def _inviting_for(self, request) -> Any:
+        from .provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY
+
         origin, source, via = self._origin(request)
-        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request))
+        # An agent invited during a scheduled run is in that run: it gets the
+        # run's markers, so its grant-governed Tier 2 calls need a grant and
+        # count against the same cap (never treated as a chat with you).
+        context = self._runtime_context(request) or {}
+        markers = tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY) if context.get(k))
+        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), markers)
 
     @staticmethod
     def _thread_id(request) -> str | None:

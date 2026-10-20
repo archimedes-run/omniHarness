@@ -147,6 +147,9 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         # that reaches it is ``config["context"]``, via _build_runtime_context.
         "turn_provenance",
         "trigger_rule_id",
+        # Feature 006: which firing a scheduled run is, for the standing-grant
+        # cap (app/policy/grants.GrantRunCounts).
+        "trigger_firing_id",
     }
 )
 

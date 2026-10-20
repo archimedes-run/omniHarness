@@ -33,15 +33,18 @@ and every other edit keep the grants as they are (config_versions.write_agent).
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from .classify import classify
 from .config import RuleSet
 from .models import PolicyDecision, Tier
 
-#: The most granted actions one scheduled run may take (user decision
-#: 2026-10-20). The 21st waits for the user.
+#: The most granted ACTIONS one scheduled run may take (user decision
+#: 2026-10-20). A ledger_apply with N changes is N actions. The 21st waits.
 GRANT_CAP_PER_RUN = 20
 AUTONOMY_KEY = "autonomy"
 
@@ -148,3 +151,88 @@ def always_waits(ruleset: RuleSet) -> list[str]:
     """Tier 3 rules: what never runs without the user, grant or not.
     Generated from the rules in force (design-notes #13), never hand-written."""
     return [r.pattern for r in ruleset.rules if r.tier is Tier.TIER_3]
+
+
+def action_count(arguments: dict[str, Any]) -> int:
+    """How many actions a call takes, for the cap: one per change (a call
+    covering_classes accepted always has a non-empty list of them)."""
+    changes = arguments.get("changes")
+    return len(changes) if isinstance(changes, list) else 1
+
+
+@dataclass(frozen=True)
+class GrantedCall:
+    """A call a grant lets run: its classes, how many actions it takes, and
+    the run's count once they are reserved."""
+
+    classes: list[str]
+    actions: int
+    total: int
+    run_key: str
+
+
+class GrantRunCounts:
+    """Granted actions per scheduled run, DURABLE and ATOMIC.
+
+    Keyed by the trigger firing (trigger_firing_id: the event's fingerprint),
+    which is the same for every attempt at that firing, so a retry or a resume
+    continues the count rather than starting a fresh 20. A reservation is one
+    SQLite write transaction (BEGIN IMMEDIATE): the check and the increment
+    cannot interleave, across threads, event-loop tasks or worker processes,
+    so parallel calls in one step cannot take the run past the cap. The
+    actions are reserved BEFORE the call runs; a call that raises gives its
+    reservation back.
+    """
+
+    #: Rows older than this are dropped on write; a firing is long settled.
+    KEEP = timedelta(days=30)
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        db = self._connect()
+        try:
+            db.execute("CREATE TABLE IF NOT EXISTS grant_run_counts (run_key TEXT PRIMARY KEY, used INTEGER NOT NULL, updated_at TEXT NOT NULL)")
+        finally:
+            db.close()
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.path, timeout=30, isolation_level=None)
+
+    def reserve(self, run_key: str, actions: int, cap: int) -> int | None:
+        """Add `actions` to the run's count if the total stays within `cap`.
+        The new total, or None (nothing reserved) when it would not fit."""
+        now = datetime.now(UTC)
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT OR IGNORE INTO grant_run_counts (run_key, used, updated_at) VALUES (?, 0, ?)", (run_key, now.isoformat()))
+            cursor = db.execute(
+                "UPDATE grant_run_counts SET used = used + ?, updated_at = ? WHERE run_key = ? AND used + ? <= ?",
+                (actions, now.isoformat(), run_key, actions, cap),
+            )
+            total = db.execute("SELECT used FROM grant_run_counts WHERE run_key = ?", (run_key,)).fetchone()[0]
+            db.execute("DELETE FROM grant_run_counts WHERE updated_at < ?", ((now - self.KEEP).isoformat(),))
+            db.execute("COMMIT")
+        except BaseException:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        finally:
+            db.close()
+        return int(total) if cursor.rowcount == 1 else None
+
+    def release(self, run_key: str, actions: int) -> None:
+        db = self._connect()
+        try:
+            db.execute("UPDATE grant_run_counts SET used = MAX(used - ?, 0) WHERE run_key = ?", (actions, run_key))
+        finally:
+            db.close()
+
+    def used(self, run_key: str) -> int:
+        db = self._connect()
+        try:
+            row = db.execute("SELECT used FROM grant_run_counts WHERE run_key = ?", (run_key,)).fetchone()
+        finally:
+            db.close()
+        return int(row[0]) if row else 0

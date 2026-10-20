@@ -115,7 +115,9 @@ class RuleRunner:
                 firing.thread_id = self.threads.thread_for(rule.id)
                 if self.default_tools:
                     self.injector.configure_tools(firing.thread_id, list(self.default_tools))
-                raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
+                # The fingerprint names this firing for every attempt at it,
+                # so a retry continues the run's granted-action count.
+                raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt, firing_id=key)
                 if not raw.strip() and rule.type is not TriggerType.WATCHER:
                     # A watcher alert still says something without a reply (its
                     # header names the session); anything else would arrive as

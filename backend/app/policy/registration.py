@@ -21,6 +21,7 @@ from omniharness.agents.middlewares.policy_hook import register_policy_middlewar
 from .audit import PolicyAuditLog
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
+from .grants import GrantRunCounts
 from .middleware import PolicyMiddleware
 from .pending import PendingStore
 from .supersede import supersede_unneeded
@@ -73,6 +74,7 @@ def build(app_config) -> PolicyMiddleware | None:
         pending=pending,
         ledger=DisclosureLedger(),
         audit=PolicyAuditLog(path=state / "audit.jsonl", actor="default"),
+        grant_runs=GrantRunCounts(path=state / "grant_runs.sqlite3"),
     )
     return middleware
 
