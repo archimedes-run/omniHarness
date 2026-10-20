@@ -5,6 +5,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -30,6 +31,9 @@ interface ShellContextValue {
   openPalette: (returnFocusTo?: HTMLElement | null) => void;
   setPaletteOpen: (open: boolean) => void;
   paletteReturnFocus: () => HTMLElement | null;
+  /** The top bar's title, set by the page (null: derived from the path). */
+  title: string | null;
+  setTitle: (title: string | null) => void;
 }
 
 const ShellContext = createContext<ShellContextValue | null>(null);
@@ -63,6 +67,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   // the same page.
   const pushed = useRef<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [title, setTitle] = useState<string | null>(null);
 
   const openPanel = useCallback(
     (id: PanelId, returnFocusTo?: HTMLElement | null) => {
@@ -111,8 +116,10 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       openPalette,
       setPaletteOpen,
       paletteReturnFocus: () => paletteReturn.current,
+      title,
+      setTitle,
     }),
-    [panel, openPanel, closePanel, paletteOpen, openPalette],
+    [panel, openPanel, closePanel, paletteOpen, openPalette, title],
   );
 
   return (
@@ -124,4 +131,16 @@ export function useShell(): ShellContextValue {
   const value = useContext(ShellContext);
   if (!value) throw new Error("useShell must be used within a ShellProvider");
   return value;
+}
+
+/**
+ * A page's title in the top bar while the page is mounted (a thread names
+ * itself). Null or empty leaves the path's own title.
+ */
+export function useShellTitle(title: string | null | undefined) {
+  const { setTitle } = useShell();
+  useEffect(() => {
+    setTitle(title?.trim() ? title : null);
+    return () => setTitle(null);
+  }, [setTitle, title]);
 }

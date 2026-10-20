@@ -174,12 +174,12 @@ test("the capsule is on every workspace page", async ({ page }) => {
     await page.goto(path);
     const bar = page.getByRole("toolbar", { name: "Tools" });
     await expect(bar, path).toBeVisible();
+    // Only the four panels: Search has its own button in the right cell.
     await expect(bar.getByRole("button")).toHaveText([
       "Agents",
       "Skills",
       "Automations",
       "Tasks",
-      /⌘K|Ctrl K/,
     ]);
   }
 });
@@ -397,15 +397,18 @@ test('"/" opens the palette, except while typing in a text field', async ({
   await expect(field).toHaveValue("/");
 });
 
-test("the capsule's ⌘K button opens the palette and focus returns to it", async ({
+test("the Search button opens the palette and focus returns to it", async ({
   page,
 }) => {
   await serve(page);
   await page.goto("/workspace/chats");
-  await capsule(page, "palette").click();
+  const search = page.getByTestId("search-button");
+  await expect(search).toHaveText(/Search\s*(⌘K|Ctrl\+K)/);
+  expect((await search.boundingBox())!.height).toBe(36);
+  await search.click();
   await expect(palette(page)).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(capsule(page, "palette")).toBeFocused();
+  await expect(search).toBeFocused();
 });
 
 test("searching finds chats, projects, tasks, agents, skills and automations", async ({
@@ -538,4 +541,131 @@ test("palette options are reachable by keyboard and named", async ({
   ]) {
     await expect(page.getByRole("option", { name })).toHaveCount(1);
   }
+});
+
+// ── Top bar: the capsule on the true centre ─────────────────────────────
+
+/** Horizontal centres of the capsule and of the main area. */
+async function centres(page: Page) {
+  const main = (await page.getByTestId("capsule-bar").boundingBox())!;
+  const cap = (await page.getByTestId("capsule").boundingBox())!;
+  return {
+    main: main.x + main.width / 2,
+    capsule: cap.x + cap.width / 2,
+  };
+}
+
+for (const width of [1440, 1280, 1024]) {
+  test(`at ${width} px the capsule sits on the main area's centre, within 1 px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await serve(page);
+    for (const path of ["/workspace/chats/new", "/workspace/connections"]) {
+      await page.goto(path);
+      await expect(page.getByTestId("capsule")).toBeVisible();
+      const c = await centres(page);
+      expect(Math.abs(c.capsule - c.main), path).toBeLessThanOrEqual(1);
+    }
+  });
+}
+
+test("with the sidebar collapsed the capsule is still on the main area's centre", async ({
+  page,
+  context,
+}) => {
+  await context.addCookies([
+    { name: "sidebar_state", value: "false", url: "http://localhost:3000" },
+  ]);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await serve(page);
+  await page.goto("/workspace/chats/new");
+  await expect(page.getByTestId("capsule")).toBeVisible();
+  const main = (await page.getByTestId("capsule-bar").boundingBox())!;
+  expect(main.x).toBeLessThan(80);
+  const c = await centres(page);
+  expect(Math.abs(c.capsule - c.main)).toBeLessThanOrEqual(1);
+});
+
+test("a long title truncates on the left and never moves or overlaps the capsule", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await serve(page);
+  await page.goto("/workspace/chats/new");
+  await page.getByTestId("topbar-title").evaluate((el) => {
+    el.textContent = "A very long thread title ".repeat(12);
+  });
+  const c = await centres(page);
+  expect(Math.abs(c.capsule - c.main)).toBeLessThanOrEqual(1);
+  const title = (await page.getByTestId("topbar-title").boundingBox())!;
+  const cap = (await page.getByTestId("capsule").boundingBox())!;
+  expect(title.x + title.width).toBeLessThanOrEqual(cap.x);
+});
+
+test("the capsule's sizes, and the active button: pressed, tinted, medium weight", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await serve(page);
+  await page.goto("/workspace/chats");
+  const cap = page.getByTestId("capsule");
+  expect((await cap.boundingBox())!.height).toBe(44);
+  await expect(cap).toHaveCSS("border-top-left-radius", "22px");
+  const agents = capsule(page, "agents");
+  expect((await agents.boundingBox())!.height).toBe(34);
+  await expect(agents).toHaveAttribute("aria-pressed", "false");
+  await agents.click();
+  await expect(agents).toHaveAttribute("aria-pressed", "true");
+  await expect(agents).toHaveCSS("font-weight", "500");
+  const tint = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--primary-subtle")
+      .trim(),
+  );
+  const bg = await agents.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+  const probe = await page.evaluate((c) => {
+    const d = document.createElement("div");
+    d.style.backgroundColor = c;
+    document.body.appendChild(d);
+    const out = getComputedStyle(d).backgroundColor;
+    d.remove();
+    return out;
+  }, tint);
+  expect(bg).toBe(probe);
+  await expect(capsule(page, "skills")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+});
+
+test("below 900 px of main area the capsule shows icons only, named and with tooltips, centred, overlapping nothing", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await serve(page);
+  await page.goto("/workspace/chats/new");
+  const cap = page.getByTestId("capsule");
+  await expect(cap).toBeVisible();
+  for (const [id, name] of [
+    ["agents", "Agents"],
+    ["skills", "Skills"],
+    ["automations", "Automations"],
+    ["tasks", "Tasks"],
+  ] as const) {
+    const b = capsule(page, id);
+    await expect(b).toHaveAccessibleName(name);
+    await expect(b.getByText(name)).toBeHidden();
+  }
+  await capsule(page, "skills").hover();
+  await expect(page.getByRole("tooltip", { name: "Skills" })).toBeVisible();
+  const c = await centres(page);
+  expect(Math.abs(c.capsule - c.main)).toBeLessThanOrEqual(1);
+  const box = (await cap.boundingBox())!;
+  const title = (await page.getByTestId("topbar-title").boundingBox())!;
+  const search = (await page.getByTestId("search-button").boundingBox())!;
+  expect(title.x + title.width).toBeLessThanOrEqual(box.x);
+  expect(box.x + box.width).toBeLessThanOrEqual(search.x);
 });

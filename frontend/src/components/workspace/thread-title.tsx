@@ -5,10 +5,9 @@ import { useI18n } from "@/core/i18n/hooks";
 import type { AgentThreadState } from "@/core/threads";
 
 import { useThreadChat } from "./chats";
-import { FlipDisplay } from "./flip-display";
+import { useShellTitle } from "./shell/shell-context";
 
 export function ThreadTitle({
-  threadId,
   thread,
 }: {
   className?: string;
@@ -39,12 +38,7 @@ export function ThreadTitle({
     thread.values,
   ]);
 
-  if (!thread.values?.title) {
-    return null;
-  }
-  return (
-    <FlipDisplay uniqueKey={threadId}>
-      {thread.values.title ?? "Untitled"}
-    </FlipDisplay>
-  );
+  // Feature 006: the title is shown in the top bar's left cell.
+  useShellTitle(thread.values?.title ?? (isNewThread ? t.pages.newChat : null));
+  return null;
 }
