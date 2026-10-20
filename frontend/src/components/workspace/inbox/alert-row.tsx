@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import type { Alert, AlertState } from "@/core/inbox/types";
@@ -20,7 +21,14 @@ const VARIANT: Record<
   delivered: "secondary",
 };
 
-export function AlertRow({ alert }: { alert: Alert }) {
+export function AlertRow({
+  alert,
+  action,
+}: {
+  alert: Alert;
+  /** A control for this row (Home: dismiss). */
+  action?: ReactNode;
+}) {
   return (
     <li
       className="border-border space-y-1 rounded-md border p-3"
@@ -29,7 +37,10 @@ export function AlertRow({ alert }: { alert: Alert }) {
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-foreground font-medium">{alert.rule_id}</span>
-        <Badge variant={VARIANT[alert.state]}>{LABEL[alert.state]}</Badge>
+        <span className="flex items-center gap-1">
+          <Badge variant={VARIANT[alert.state]}>{LABEL[alert.state]}</Badge>
+          {action}
+        </span>
       </div>
       <p className="text-muted-foreground text-xs">
         {new Date(alert.at).toLocaleString()} · {alert.event_type}
