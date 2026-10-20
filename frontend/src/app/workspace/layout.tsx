@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { AppearanceSync } from "@/components/workspace/appearance-sync";
 import { AuthProvider } from "@/core/auth/AuthProvider";
 import { getServerSideUser } from "@/core/auth/server";
 import { assertNever } from "@/core/auth/types";
+import { getServerSideAppearance } from "@/core/preferences/server";
 
 import { WorkspaceContent } from "./workspace-content";
 
@@ -12,12 +14,16 @@ export const dynamic = "force-dynamic";
 export default async function WorkspaceLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const result = await getServerSideUser();
+  const [result, appearance] = await Promise.all([
+    getServerSideUser(),
+    getServerSideAppearance(),
+  ]);
 
   switch (result.tag) {
     case "authenticated":
       return (
         <AuthProvider initialUser={result.user}>
+          <AppearanceSync initial={appearance} />
           <WorkspaceContent>{children}</WorkspaceContent>
         </AuthProvider>
       );

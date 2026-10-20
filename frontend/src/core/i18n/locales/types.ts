@@ -375,6 +375,9 @@ export interface Translations {
       darkDescription: string;
       languageTitle: string;
       languageDescription: string;
+      savedToAccount: string;
+      saveFailed: string;
+      saving: string;
     };
     tools: {
       title: string;

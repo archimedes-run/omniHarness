@@ -455,6 +455,10 @@ export const enUS: Translations = {
       darkDescription: "Dim palette that reduces glare for focus.",
       languageTitle: "Language",
       languageDescription: "Switch between languages.",
+      savedToAccount: "Saved to your account. It follows you to every browser.",
+      saveFailed:
+        "Could not save to your account, so only this browser will remember it.",
+      saving: "Saving…",
     },
     tools: {
       title: "Tools",

@@ -436,6 +436,9 @@ export const zhCN: Translations = {
       darkDescription: "更暗的配色，减少眩光方便专注。",
       languageTitle: "语言",
       languageDescription: "在不同语言之间切换。",
+      savedToAccount: "已保存到你的账户，会在所有浏览器中生效。",
+      saveFailed: "无法保存到你的账户，只有当前浏览器会记住。",
+      saving: "正在保存…",
     },
     tools: {
       title: "工具",

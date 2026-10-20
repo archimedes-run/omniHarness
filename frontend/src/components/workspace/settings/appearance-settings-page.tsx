@@ -2,7 +2,14 @@
 
 import { MonitorSmartphoneIcon, MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useMemo, type ComponentType, type SVGProps } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type KeyboardEvent,
+  type SVGProps,
+} from "react";
 
 import {
   Select,
@@ -14,6 +21,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { enUS, isLocale, zhCN, type Locale } from "@/core/i18n";
 import { useI18n } from "@/core/i18n/hooks";
+import {
+  isAppearance,
+  saveAppearance,
+  type Appearance,
+} from "@/core/preferences";
 import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "./settings-section";
@@ -23,41 +35,66 @@ const languageOptions: { value: Locale; label: string }[] = [
   { value: "zh-CN", label: zhCN.locale.localName },
 ];
 
+type SaveState = "idle" | "saving" | "saved" | "failed";
+
 export function AppearanceSettingsPage() {
   const { t, locale, changeLocale } = useI18n();
-  const { theme, setTheme, systemTheme } = useTheme();
-  const currentTheme = (theme ?? "system") as "system" | "light" | "dark";
+  const { theme, setTheme } = useTheme();
+  const currentTheme: Appearance = isAppearance(theme) ? theme : "system";
+  const [save, setSave] = useState<SaveState>("idle");
+  const latest = useRef(0);
 
   const themeOptions = useMemo(
-    () => [
-      {
-        id: "system",
-        label: t.settings.appearance.system,
-        description: t.settings.appearance.systemDescription,
-        icon: MonitorSmartphoneIcon,
-      },
-      {
-        id: "light",
-        label: t.settings.appearance.light,
-        description: t.settings.appearance.lightDescription,
-        icon: SunIcon,
-      },
-      {
-        id: "dark",
-        label: t.settings.appearance.dark,
-        description: t.settings.appearance.darkDescription,
-        icon: MoonIcon,
-      },
-    ],
-    [
-      t.settings.appearance.dark,
-      t.settings.appearance.darkDescription,
-      t.settings.appearance.light,
-      t.settings.appearance.lightDescription,
-      t.settings.appearance.system,
-      t.settings.appearance.systemDescription,
-    ],
+    () =>
+      [
+        {
+          id: "light",
+          label: t.settings.appearance.light,
+          description: t.settings.appearance.lightDescription,
+          icon: SunIcon,
+        },
+        {
+          id: "dark",
+          label: t.settings.appearance.dark,
+          description: t.settings.appearance.darkDescription,
+          icon: MoonIcon,
+        },
+        {
+          id: "system",
+          label: t.settings.appearance.system,
+          description: t.settings.appearance.systemDescription,
+          icon: MonitorSmartphoneIcon,
+        },
+      ] as const,
+    [t],
   );
+
+  // Apply at once, then remember it on the server for this user. A failed
+  // save is said in words: this browser still remembers it, the account does not.
+  const choose = (value: Appearance) => {
+    setTheme(value);
+    const call = ++latest.current;
+    setSave("saving");
+    saveAppearance(value).then(
+      () => call === latest.current && setSave("saved"),
+      () => call === latest.current && setSave("failed"),
+    );
+  };
+
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onKeyDown = (event: KeyboardEvent, index: number) => {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = (index + step + themeOptions.length) % themeOptions.length;
+    refs.current[next]?.focus();
+    choose(themeOptions[next]!.id);
+  };
 
   return (
     <div className="space-y-8">
@@ -65,20 +102,39 @@ export function AppearanceSettingsPage() {
         title={t.settings.appearance.themeTitle}
         description={t.settings.appearance.themeDescription}
       >
-        <div className="grid gap-3 lg:grid-cols-3">
-          {themeOptions.map((option) => (
-            <ThemePreviewCard
+        <div
+          role="radiogroup"
+          aria-label={t.settings.appearance.themeTitle}
+          className="grid gap-3 sm:grid-cols-3"
+        >
+          {themeOptions.map((option, index) => (
+            <ThemeOption
               key={option.id}
+              ref={(el) => {
+                refs.current[index] = el;
+              }}
               icon={option.icon}
               label={option.label}
               description={option.description}
-              active={currentTheme === option.id}
-              mode={option.id as "system" | "light" | "dark"}
-              systemTheme={systemTheme}
-              onSelect={(value) => setTheme(value)}
+              mode={option.id}
+              checked={currentTheme === option.id}
+              onSelect={choose}
+              onKeyDown={(e) => onKeyDown(e, index)}
             />
           ))}
         </div>
+        <p
+          role="status"
+          data-testid="appearance-save-state"
+          className={cn(
+            "mt-3 min-h-5 text-xs",
+            save === "failed" ? "text-warning" : "text-muted-foreground",
+          )}
+        >
+          {save === "saving" && t.settings.appearance.saving}
+          {save === "saved" && t.settings.appearance.savedToAccount}
+          {save === "failed" && t.settings.appearance.saveFailed}
+        </p>
       </SettingsSection>
 
       <Separator />
@@ -111,86 +167,94 @@ export function AppearanceSettingsPage() {
   );
 }
 
-function ThemePreviewCard({
+function ThemeOption({
+  ref,
   icon: Icon,
   label,
   description,
-  active,
   mode,
-  systemTheme,
+  checked,
   onSelect,
+  onKeyDown,
 }: {
+  ref: (el: HTMLButtonElement | null) => void;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   label: string;
   description: string;
-  active: boolean;
-  mode: "system" | "light" | "dark";
-  systemTheme?: string;
-  onSelect: (mode: "system" | "light" | "dark") => void;
+  mode: Appearance;
+  checked: boolean;
+  onSelect: (mode: Appearance) => void;
+  onKeyDown: (event: KeyboardEvent) => void;
 }) {
-  const previewMode =
-    mode === "system" ? (systemTheme === "dark" ? "dark" : "light") : mode;
   return (
     <button
+      ref={ref}
       type="button"
+      role="radio"
+      aria-checked={checked}
+      tabIndex={checked ? 0 : -1}
+      data-testid={`theme-option-${mode}`}
       onClick={() => onSelect(mode)}
+      onKeyDown={onKeyDown}
       className={cn(
-        "group flex h-full flex-col gap-3 rounded-lg border p-4 text-left transition-all",
-        active
-          ? "border-primary ring-primary/30 shadow-sm ring-2"
-          : "hover:border-border hover:shadow-sm",
+        "bg-card text-card-foreground focus-visible:ring-ring flex min-h-11 flex-col gap-3 rounded-xl border p-3 text-left transition-colors outline-none focus-visible:ring-2",
+        checked ? "border-primary" : "hover:border-border-strong",
       )}
     >
-      <div className="flex items-start gap-3">
-        <div className="bg-muted rounded-md p-2">
-          <Icon className="size-4" />
+      {mode === "system" ? (
+        <div className="grid grid-cols-2 overflow-hidden rounded-lg border">
+          <Preview theme="light" className="rounded-none border-0" />
+          <Preview theme="dark" className="rounded-none border-0" />
         </div>
-        <div className="space-y-1">
-          <div className="text-sm leading-none font-semibold">{label}</div>
+      ) : (
+        <Preview theme={mode} />
+      )}
+      <div className="flex items-start gap-2">
+        <Icon aria-hidden className="text-muted-foreground mt-0.5 size-4" />
+        <div className="space-y-0.5">
+          <div className="text-sm font-medium">{label}</div>
           <p className="text-muted-foreground text-xs leading-snug">
             {description}
           </p>
         </div>
       </div>
-      <div
-        className={cn(
-          "relative overflow-hidden rounded-md border text-xs transition-colors",
-          previewMode === "dark"
-            ? "border-neutral-800 bg-neutral-900 text-neutral-200"
-            : "border-slate-200 bg-white text-slate-900",
-        )}
-      >
-        <div className="border-border/50 flex items-center gap-2 border-b px-3 py-2">
-          <div
-            className={cn(
-              "h-2 w-2 rounded-full",
-              previewMode === "dark" ? "bg-emerald-400" : "bg-emerald-500",
-            )}
-          />
-          <div className="h-2 w-10 rounded-full bg-current/20" />
-          <div className="h-2 w-6 rounded-full bg-current/15" />
-        </div>
-        <div className="grid grid-cols-[1fr_240px] gap-3 px-3 py-3">
-          <div className="space-y-2">
-            <div className="h-3 w-3/4 rounded-full bg-current/15" />
-            <div className="h-3 w-1/2 rounded-full bg-current/10" />
-            <div className="h-[90px] rounded-md border border-current/10 bg-current/5" />
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-md bg-current/10" />
-              <div className="space-y-2">
-                <div className="h-2 w-14 rounded-full bg-current/15" />
-                <div className="h-2 w-10 rounded-full bg-current/10" />
-              </div>
-            </div>
-            <div className="flex flex-col gap-1 rounded-md border border-dashed border-current/15 p-2">
-              <div className="h-2 w-3/5 rounded-full bg-current/15" />
-              <div className="h-2 w-2/5 rounded-full bg-current/10" />
-            </div>
-          </div>
+    </button>
+  );
+}
+
+/**
+ * A miniature of the workspace drawn with the real tokens: the `light` or
+ * `dark` class on the wrapper scopes every token to that theme, so the
+ * preview cannot drift from what the theme actually paints.
+ */
+function Preview({
+  theme,
+  className,
+}: {
+  theme: "light" | "dark";
+  className?: string;
+}) {
+  return (
+    <div
+      aria-hidden
+      className={cn(
+        theme,
+        "bg-background flex h-20 overflow-hidden rounded-lg border",
+        className,
+      )}
+    >
+      <div className="bg-sidebar border-sidebar-border flex w-1/4 flex-col gap-1 border-r p-1.5">
+        <div className="bg-primary h-1.5 w-3/4 rounded-full" />
+        <div className="bg-sidebar-accent h-1.5 rounded-full" />
+        <div className="bg-muted-foreground/40 h-1.5 w-2/3 rounded-full" />
+      </div>
+      <div className="flex flex-1 flex-col gap-1.5 p-2">
+        <div className="bg-foreground/70 h-1.5 w-1/2 rounded-full" />
+        <div className="bg-card flex flex-1 flex-col gap-1 rounded-md border p-1.5">
+          <div className="bg-foreground-2/50 h-1 w-3/4 rounded-full" />
+          <div className="bg-success h-1 w-1/3 rounded-full" />
         </div>
       </div>
-    </button>
+    </div>
   );
 }
