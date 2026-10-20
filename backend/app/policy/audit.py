@@ -64,7 +64,22 @@ class PolicyAuditLog:
         return entry
 
     def record_grant_use(
-        self, *, agent: str, user_id: str, tool: str, classes: list[str], targets: list[str], thread_id: str | None, rule_id: str | None, origin: str, origin_source: str, count_in_run: int, now: datetime | None = None
+        self,
+        *,
+        agent: str,
+        user_id: str,
+        tool: str,
+        classes: list[str],
+        targets: list[str],
+        thread_id: str | None,
+        rule_id: str | None,
+        origin: str,
+        origin_source: str,
+        count_in_run: int,
+        now: datetime | None = None,
+        firing_id: str | None = None,
+        write_id: str | None = None,
+        source_label: str = "",
     ) -> dict:
         """A Tier 3 call that ran WITHOUT a confirmation because a standing
         grant covered it (Feature 006). The other half of Article VIII: nobody
@@ -84,6 +99,11 @@ class PolicyAuditLog:
             "origin": origin,
             "origin_source": origin_source,
             "count_in_run": count_in_run,
+            # Feature 006 run summary: which firing, the write's Undo id, and
+            # what it came from in words (redacted; never the content's body).
+            "firing_id": firing_id,
+            "write_id": write_id,
+            "source_label": source_label,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
