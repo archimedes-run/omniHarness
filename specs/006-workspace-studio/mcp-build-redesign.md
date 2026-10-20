@@ -5,6 +5,7 @@ Branch: `006-E-mcp-build`. Prerequisite: the security baseline (review round 2, 
 
 Revision 2 (2026-10-20) addresses an independent review: 4 HIGH, 4 MED and 5 LOW findings (§10).
 Revision 3 (2026-10-20) records the user's answers to the four questions, and replaces our own proxy with **Squid** (§4, §10.2).
+Revision 5 (2026-10-20): **built** on this branch; what shipped and where it differs is in §11.
 Revision 4 (2026-10-20, **plan approved; building**) folds in the user's build-time changes (§10.3):
 - Alpine is pinned by digest;
 - **no secrets in environment variables at all**: they are delivered as 0400 files on a tmpfs;
@@ -680,3 +681,39 @@ No finding was rejected.
 **Open risk:** SSE through Squid's accel port must stream without buffering. T14's `tools/list` over SSE is the check. If it fails, the endpoint side moves to Squid's `http_port` in plain forward-to-peer mode, or we report back before choosing anything else.
 
 Out of scope, noted: `GET /servers/{id}/secrets/reveal` (`mcp_studio.py:565-584`) returns plaintext secrets to any holder of `threads:write`. Worth a re-auth or removal under item C.0.
+
+
+---
+
+## 11. What shipped (build notes, 2026-10-20)
+
+Built on `006-E-mcp-build` and pushed; PR #59 stays a gated draft.
+
+### Where the build differs from this plan, and what was learned
+
+1. **The SNI check is "the name the client sends must be allowlisted"; when NO name is sent, Squid 6.12 judges the CONNECT host instead.**
+   - Observed with `ssl::server_name --client-requested`: a tunnel to an allowlisted host with no SNI was spliced. A different, non-allowlisted SNI was terminated.
+   - This is the Host-header fronting residual the user accepted (§4). It reaches no host that is off the allowlist.
+2. **A refused CONNECT on the ssl-bump port is answered by Squid inside TLS.** The answer is its error page, with `X-Squid-Error`, over the throwaway certificate. So "never presented" is wrong for Squid's own error pages. It still holds for upstream traffic: TLS to any upstream is never decrypted. The tests read `X-Squid-Error`.
+3. **`PRIVATE_DESTINATIONS` leaves out `::ffff:0:0/96` and `::/128`.** `squid -k parse` (6.12) read them as `0.0.0.0/0`. Squid stores IPv4-mapped addresses as IPv4, so the IPv4 ranges cover them.
+4. **Squid needs `max_filedescriptors 1024` and `--ulimit nofile=4096`.** With Docker's default fd limit (1M) it sized its tables to about 670 MB and aborted.
+5. **The proxy login uses `$1$` MD5-crypt.** basic_ncsa_auth refused `{SHA}`, seen as 407. The MD5-crypt implementation was checked against `openssl passwd -1`.
+6. **`--dns 127.0.0.1` is unproven on Docker 29.5.3.** T13 stays green without it: Docker's resolver on an `--internal` network does not forward external names. The flag is kept anyway, as planned.
+7. **The runtime image takes `mcp`/`httpx` from the gateway's uv-installed environment, not pip.** Every file is checked against its `RECORD` hash (§1, revision 4). On a non-Linux gateway, and in the tests, the packages come from a throwaway container of `omni-harness-dev-gateway:latest`.
+8. **`/connect` is still a route.** The old detail page uses it. It is guarded by the derived approval and by the name checks.
+9. **The approval record is kept when code changes.** Only the pending approval is cleared, so the approved version can keep running (Q3), and approval is derived from the hash. T4's layer-1 sabotage ("remove the clear") became "derived check without the hash comparison".
+10. **Tool tiers live in the server's `extensions_config.json` entry** (`built.tool_tiers`), and the classifier reads the file by mtime. Without this, every gateway worker would not see an approval.
+11. **The look-alike check is stricter than the canonical tool name.** Case and all separators are ignored, so `git_hub`, `GitHub` and `git-hub` all collide with `github`.
+12. **The secrets file is "read-only" in this sense:** mode 0400, its directory 0500, both owned by the container's non-root user. A truly read-only tmpfs needs `CAP_SYS_ADMIN` or a host mount.
+13. **Restarts:** a container brought back by `--restart` waits for its files. The startup reconcile does **not** yet hand them over again (§4 promised it). This is still to do.
+14. **The `docker` and `internet` pytest markers** are registered in `backend/pyproject.toml`.
+
+### Sabotage results
+Every check was sabotaged: broken on purpose, seen to fail, and restored. Each result is listed in the stop report.
+
+Three sabotages turned their test red for a different reason than the targeted assertion:
+- dropping `--user`: a discovery timeout;
+- dropping `--internal`: a deploy failure;
+- the first T7(a): a later assertion.
+
+These are said in the report as such.
