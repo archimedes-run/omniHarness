@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from .confirm import Verdict, recognise
+from .confirm import Verdict, recognise, restate
 from .models import Outcome, PendingAction
 from .pending import PendingStore
 
@@ -112,7 +112,13 @@ class ConfirmationFlow:
             # unrecognised chat turn is usually just conversation.
             if not self._looks_like_an_answer(stripped):
                 return FlowResult(NO_VERDICT, expired_meanwhile=expired)
-            return FlowResult(UNRECOGNISED, verdict.action_id, verdict.reason, expired_meanwhile=expired)
+            # FR-035: an unrecognised answer restates the plan IN FULL, so the
+            # user is never asked to approve something they can no longer see.
+            # Several pending and none named: each is restated, with its id.
+            addressed = [a for a in pending if a.id == verdict.action_id] or pending
+            plans = "\n\n".join(restate(a) for a in addressed)
+            message = f"{verdict.reason[:1].upper()}{verdict.reason[1:]}.\n\n{plans}" if len(addressed) > 1 and verdict.reason else plans
+            return FlowResult(UNRECOGNISED, verdict.action_id, message, detail={"reason": verdict.reason}, expired_meanwhile=expired)
 
         if verdict.action_id is None:
             # A CONFIRM or DECLINE with no action attached should be
