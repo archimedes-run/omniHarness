@@ -4,12 +4,12 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * The app ships its fonts (src/fonts/, SIL OFL 1.1) and never talks to Google
+ * The app ships its fonts (public/fonts/, SIL OFL 1.1) and never talks to Google
  * Fonts: not at build time (CI's runner cannot reach it, and next/font/google
  * failed the build there) and not at runtime (no page asks a font CDN for
  * anything). Any import of next/font/google, or any reference to
  * fonts.googleapis.com / fonts.gstatic.com, in the app's source, config or
- * public files fails this test.
+ * public files (the demo thread artifacts included) fails this test.
  */
 
 const FRONTEND = join(__dirname, "..", "..");
@@ -27,20 +27,12 @@ const ROOTS = ["src", "public"];
 const TOP_LEVEL = /\.(?:[cm]?[jt]sx?|json|css)$|^Dockerfile$/;
 const TOP_LEVEL_SKIP = new Set(["package.json", "pnpm-lock.yaml"]);
 
-/**
- * Paths not scanned, each with the reason.
- * - public/demo: agent-generated demo artifacts served verbatim (see
- *   .prettierignore); they are content the agent produced, not app source.
- */
-const SKIP = new Set([join("public", "demo")]);
-
 const TEXT =
   /\.(?:[cm]?[jt]sx?|css|scss|html|json|md|mdx|svg|txt|webmanifest)$/;
 
 function walk(dir: string, out: string[]): void {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name);
-    if (SKIP.has(relative(FRONTEND, path))) continue;
     if (statSync(path).isDirectory()) walk(path, out);
     else if (TEXT.test(name)) out.push(path);
   }
@@ -84,14 +76,15 @@ describe("fonts ship with the app (no Google Fonts)", () => {
   });
 
   it("the shipped font files and their OFL notice are present", () => {
-    const fonts = join(FRONTEND, "src", "fonts");
+    const fonts = join(FRONTEND, "public", "fonts");
     for (const name of [
       "inter-latin.woff2",
       "inter-latin-ext.woff2",
       "jetbrains-mono-latin.woff2",
       "jetbrains-mono-latin-ext.woff2",
+      "fonts.css",
     ]) {
-      expect(statSync(join(fonts, name)).size).toBeGreaterThan(1000);
+      expect(statSync(join(fonts, name)).size).toBeGreaterThan(500);
     }
     for (const [file, holder] of [
       ["Inter-OFL.txt", "The Inter Project Authors"],

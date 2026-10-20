@@ -545,7 +545,7 @@ test.describe("Settings > Appearance", () => {
 });
 
 /**
- * The fonts ship in the repo (src/fonts/) and nothing is fetched from Google.
+ * The fonts ship in the repo (public/fonts/) and nothing is fetched from Google.
  * A family NAME in the computed font-family proves nothing (the name is there
  * whether or not the file ever loads), so this asserts the faces the browser
  * actually loaded: the next/font/local latin faces behind --font-inter and
@@ -623,4 +623,38 @@ test("Inter for text and JetBrains Mono for code, shipped with the app", async (
   );
   expect(external, "a font was fetched from outside the app").toEqual([]);
   expect(fontResponses.filter((r) => r.status >= 400)).toEqual([]);
+});
+
+/**
+ * The demo thread artifacts (public/demo/threads, served by the mock API for
+ * ?mock=true threads and NEXT_PUBLIC_STATIC_WEBSITE_ONLY) used to load their
+ * fonts from Google. They now link /fonts/fonts.css, which serves the same
+ * shipped files; this demo uses both Inter and JetBrains Mono.
+ */
+test("a demo artifact loads Inter and JetBrains Mono from the app", async ({
+  page,
+}) => {
+  const fontResponses: { url: string; status: number }[] = [];
+  page.on("response", (r) => {
+    const url = r.url();
+    if (/\.(woff2?|ttf|otf)(\?|$)/.test(url) || url.includes("fonts.g"))
+      fontResponses.push({ url, status: r.status() });
+  });
+  await page.goto(
+    "/mock/api/threads/fe3f7974-1bcb-4a01-a950-79673baafefd/artifacts/mnt/user-data/outputs/index.html",
+    { waitUntil: "networkidle" },
+  );
+  const loaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return [...document.fonts]
+      .filter((f) => f.status === "loaded")
+      .map((f) => f.family.replace(/^["']|["']$/g, ""));
+  });
+  expect(loaded).toEqual(expect.arrayContaining(["Inter", "JetBrains Mono"]));
+  expect(fontResponses.length).toBeGreaterThan(0);
+  expect(
+    fontResponses.filter(
+      (r) => !r.url.startsWith("http://localhost") || r.status >= 400,
+    ),
+  ).toEqual([]);
 });
