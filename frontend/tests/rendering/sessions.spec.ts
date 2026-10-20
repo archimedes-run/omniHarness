@@ -192,8 +192,17 @@ test("Claude Code and Codex sessions share one list, each labelled by agent, wit
   });
   const rows = page.getByTestId("session");
   await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0).getByTestId("agent")).toHaveText("Claude Code");
-  await expect(rows.nth(1).getByTestId("agent")).toHaveText("Codex");
+  // Feature 006: a provider mark, named by the agent label it replaces.
+  await expect(rows.nth(0).getByTestId("agent")).toHaveAccessibleName(
+    "Claude Code",
+  );
+  await expect(rows.nth(1).getByTestId("agent")).toHaveAccessibleName("Codex");
+  await expect(
+    rows.nth(0).getByTestId("agent").locator("[data-brand]"),
+  ).toHaveAttribute("data-brand", "anthropic");
+  await expect(
+    rows.nth(1).getByTestId("agent").locator("[data-brand]"),
+  ).toHaveAttribute("data-brand", "openai");
   await expect(rows.nth(0).getByTestId("plan")).toHaveCount(0);
 
   const plan = rows.nth(1).getByTestId("plan");

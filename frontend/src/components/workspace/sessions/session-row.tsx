@@ -5,6 +5,7 @@ import {
   CircleHelpIcon,
 } from "lucide-react";
 
+import { BrandLogo } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { WithheldNotice } from "@/components/workspace/withheld-notice";
 import { STATE_LABEL } from "@/core/sessions/logic";
@@ -36,11 +37,21 @@ export function SessionRow({ session }: { session: Row }) {
             {session.project}
           </span>
           {session.agent_label && (
+            // The provider's mark (Anthropic for Claude Code, OpenAI for
+            // Codex), named by the agent label it replaces.
             <span
-              className="text-muted-foreground shrink-0 text-xs"
+              className="shrink-0 self-center"
               data-testid="agent"
+              role="img"
+              aria-label={session.agent_label}
+              title={session.agent_label}
             >
-              {session.agent_label}
+              <BrandLogo
+                source={session.agent ?? session.agent_label}
+                name={session.agent_label}
+                size={18}
+                decorative
+              />
             </span>
           )}
         </span>
