@@ -179,6 +179,15 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             app.state.user_preference_repo = None
 
+        # What the user dismissed on Home (Feature 006): alerts and the name
+        # prompt, kept per user so the New chat badge can leave them out.
+        if sf is not None:
+            from omniharness.persistence.home_dismissals import HomeDismissalRepository
+
+            app.state.home_dismissal_repo = HomeDismissalRepository(sf)
+        else:
+            app.state.home_dismissal_repo = None
+
         # ComposioClient (only when COMPOSIO_API_KEY is set)
         import os
 
@@ -240,6 +249,7 @@ get_composio_client = _require("composio_client", "Composio client")
 get_thread_tool_selection_repo = _require("thread_tool_selection_repo", "Thread tool-selection repository")
 get_thread_skill_exclusion_repo = _require("thread_skill_exclusion_repo", "Thread skill-exclusion repository")
 get_user_preference_repo = _require("user_preference_repo", "User preferences")
+get_home_dismissal_repo = _require("home_dismissal_repo", "Home dismissals")
 
 
 def get_store(request: Request):

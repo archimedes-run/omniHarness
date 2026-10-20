@@ -88,12 +88,12 @@ async function serve(
   await page.goto("/workspace/chats");
 }
 
-test("the sidebar reads New chat, Chats, MCP Suite, then Recent chats", async ({
+test("the sidebar reads New chat, Chats, MCP Suite, then Recent", async ({
   page,
 }) => {
   await serve(page);
   const sidebar = page.locator('[data-sidebar="sidebar"]');
-  await expect(sidebar.getByText("Recent chats")).toBeVisible();
+  await expect(sidebar.getByText("Recent", { exact: true })).toBeVisible();
   const labels = (
     await sidebar
       .locator('[data-sidebar="group"]')
@@ -102,12 +102,12 @@ test("the sidebar reads New chat, Chats, MCP Suite, then Recent chats", async ({
       .allInnerTexts()
   ).map((l) => l.trim());
   expect(labels).toEqual(["New chat", "Chats", "MCP Suite"]);
-  // The nav comes before the divider, Recent chats after it.
+  // The nav comes before the divider, Recent after it.
   const order = await sidebar.evaluate((el) => {
     const nav = el.querySelector('a[href="/workspace/connections"]')!;
     const divider = el.querySelector('[data-sidebar="separator"]')!;
     const recent = Array.from(el.querySelectorAll("*")).find(
-      (n) => n.textContent === "Recent chats",
+      (n) => n.textContent === "Recent",
     )!;
     const before = (a: Node, b: Node) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -141,8 +141,13 @@ test("New chat counts what is waiting on you, and links to Home", async ({
   page,
 }) => {
   await serve(page, { pending: 1, alertsWaiting: 2 });
+  // Main board: New chat is Home (the dashboard with the chat bar under it).
   const newChat = page.locator(
-    '[data-sidebar="menu-item"]:has(a[href="/workspace/chats/new"])',
+    '[data-sidebar="menu-item"]:has(a[href="/workspace/home"])',
+  );
+  await expect(newChat.getByRole("link", { name: "New chat" })).toHaveAttribute(
+    "href",
+    "/workspace/home",
   );
   const badge = newChat.getByTestId("inbox-badge");
   await expect(badge).toHaveText("3");

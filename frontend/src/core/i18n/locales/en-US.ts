@@ -108,7 +108,7 @@ export const enUS: Translations = {
   sidebar: {
     newChat: "New chat",
     chats: "Chats",
-    recentChats: "Recent chats",
+    recentChats: "Recent",
     demoChats: "Demo chats",
     agents: "Agents",
     inbox: "Inbox",

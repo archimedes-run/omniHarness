@@ -90,6 +90,18 @@ export function lowContrastText(): LowContrast[] {
     return out;
   };
 
+  const covered = (el: HTMLElement): boolean => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+    const previous = el.style.pointerEvents;
+    el.style.pointerEvents = "auto";
+    const top = document.elementFromPoint(x, y);
+    el.style.pointerEvents = previous;
+    return top != null && !el.contains(top) && !top.contains(el);
+  };
+
   const found: LowContrast[] = [];
   const seen = new Set<Element>();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -105,6 +117,13 @@ export function lowContrastText(): LowContrast[] {
       el.scrollIntoView({ block: "center", behavior: "instant" });
       r = el.getBoundingClientRect();
       if (r.top < 0 || r.bottom > innerHeight) continue;
+    }
+    // Covered at its centre by something else (a docked chat bar over the
+    // end of a nested scroller): scroll it to the middle of its own
+    // scroller; text still covered is not seen, so it is not judged.
+    if (covered(el)) {
+      el.scrollIntoView({ block: "center", behavior: "instant" });
+      if (covered(el)) continue;
     }
     if (s.visibility === "hidden") continue;
     // Opacity multiplies down the tree: text in a faded-out layer (a demo

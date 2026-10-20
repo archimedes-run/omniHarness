@@ -28,7 +28,6 @@ const HEAVY: Record<string, RegExp> = {
 // and About render markdown on purpose, so they are listed separately below.
 const NON_CHAT = [
   "/workspace/chats",
-  "/workspace/home",
   "/workspace/automations",
   "/workspace/agents",
   "/workspace/sessions",
@@ -72,26 +71,30 @@ for (const route of NON_CHAT) {
   });
 }
 
-test("an empty chat page ships no code editor, highlighter or math renderer", async ({
-  page,
-}) => {
-  // Phase 2.6: shiki and katex load when a message needs them
-  // (markdown-lazy.spec.ts proves they do load then), codemirror when an
-  // artifact's editor opens.
-  const scripts = await scriptsOf(page, "/workspace/chats/new");
-  expect(
-    scripts.length,
-    "no scripts captured: the check saw nothing",
-  ).toBeGreaterThan(5);
-  // Each named: expect.not.arrayContaining passes unless ALL are present,
-  // which let a statically imported katex through.
-  const heavy = heavyIn(scripts);
-  for (const library of ["codemirror", "shiki", "katex"]) {
-    expect(heavy, `${library} shipped with an empty chat page`).not.toContain(
-      library,
-    );
-  }
-});
+// Feature 006: Home is where a new chat starts (Main board), so its chat bar
+// carries the chat runtime, loaded after the dashboard paints; it is held to
+// the empty chat page's budget.
+for (const route of ["/workspace/chats/new", "/workspace/home"])
+  test(`${route}: an empty chat page ships no code editor, highlighter or math renderer`, async ({
+    page,
+  }) => {
+    // Phase 2.6: shiki and katex load when a message needs them
+    // (markdown-lazy.spec.ts proves they do load then), codemirror when an
+    // artifact's editor opens.
+    const scripts = await scriptsOf(page, route);
+    expect(
+      scripts.length,
+      "no scripts captured: the check saw nothing",
+    ).toBeGreaterThan(5);
+    // Each named: expect.not.arrayContaining passes unless ALL are present,
+    // which let a statically imported katex through.
+    const heavy = heavyIn(scripts);
+    for (const library of ["codemirror", "shiki", "katex"]) {
+      expect(heavy, `${library} shipped with an empty chat page`).not.toContain(
+        library,
+      );
+    }
+  });
 
 /**
  * Feature 006: the capsule's panels are dynamic imports. A page that is not

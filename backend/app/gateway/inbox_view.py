@@ -11,7 +11,8 @@ firing's LATEST recorded outcome:
   * delivered      sent; shown as recent, not counted
 
 `waiting_count` is what the sidebar badge adds to the pending confirmations:
-waiting plus not-delivered, within the window. Pure; reads nothing itself.
+waiting plus not-delivered, within the window, leaving out what the user
+dismissed on Home (Feature 006). Pure; reads nothing itself.
 """
 
 from __future__ import annotations
@@ -36,14 +37,24 @@ class Alert(BaseModel):
     reason: str = ""
     #: The rule's conversation, where the message and any reply live.
     thread_id: str | None = None
+    #: The user dismissed it on Home: still listed, never counted.
+    dismissed: bool = False
+
+
+def alert_key(rule_id: str, event_id: str) -> str:
+    """The one key a dismissal names an alert by (Home sends the same)."""
+    return f"{rule_id}:{event_id}"
 
 
 class InboxAlerts(BaseModel):
     alerts: list[Alert]
     waiting_count: int
+    #: False when the dismissals could not be read: the count may then include
+    #: alerts the user already dismissed.
+    dismissals_readable: bool = True
 
 
-def describe_alerts(audit: list[dict], *, now: datetime, window: timedelta = WINDOW) -> InboxAlerts:
+def describe_alerts(audit: list[dict], *, now: datetime, window: timedelta = WINDOW, dismissed: set[str] | frozenset[str] = frozenset(), dismissals_readable: bool = True) -> InboxAlerts:
     latest: dict[tuple[str, str], dict] = {}
     for e in audit:
         key = (e.get("rule_id", ""), e.get("event_id", ""))
@@ -62,5 +73,7 @@ def describe_alerts(audit: list[dict], *, now: datetime, window: timedelta = WIN
         # listed only within the window.
         if state != "waiting" and now - at > window:
             continue
-        out.append(Alert(rule_id=e.get("rule_id", ""), event_id=e.get("event_id", ""), event_type=e.get("event_type", ""), at=e.get("at", ""), state=state, reason=e.get("reason", ""), thread_id=e.get("thread_id")))
-    return InboxAlerts(alerts=out, waiting_count=sum(1 for a in out if a.state in ("waiting", "not-delivered")))
+        rule_id, event_id = e.get("rule_id", ""), e.get("event_id", "")
+        gone = alert_key(rule_id, event_id) in dismissed
+        out.append(Alert(rule_id=rule_id, event_id=event_id, event_type=e.get("event_type", ""), at=e.get("at", ""), state=state, reason=e.get("reason", ""), thread_id=e.get("thread_id"), dismissed=gone))
+    return InboxAlerts(alerts=out, waiting_count=sum(1 for a in out if a.state in ("waiting", "not-delivered") and not a.dismissed), dismissals_readable=dismissals_readable)

@@ -321,7 +321,7 @@ test("/workspace/inbox (and the old /workspace/confirmations) land on Home", asy
   for (const old of ["/workspace/inbox", "/workspace/confirmations"]) {
     await page.goto(old);
     await expect(page).toHaveURL(/\/workspace\/home$/);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Home");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(/^Good /);
     await expect(
       page.getByRole("heading", { name: "Waiting on you" }),
     ).toBeVisible();

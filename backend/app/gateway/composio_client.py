@@ -152,3 +152,29 @@ def _extract_display(data: dict[str, Any]) -> str | None:
         if data.get(field):
             return str(data[field])
     return None
+
+
+#: The ONLY Composio tools the gateway itself may execute, for Home's reads
+#: (Feature 006). Each one reads; nothing here can create, change or delete.
+#: Agent tool calls go through the policy layer instead, never this path.
+READ_ONLY_SLUGS = frozenset({"GOOGLECALENDAR_EVENTS_LIST", "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS"})
+
+
+async def execute_read_tool(client: ComposioClient, *, slug: str, connected_account_id: str, user_id: str, arguments: dict[str, Any], timeout: float = 8.0) -> Any:
+    """Run one read-only Composio tool through the user's existing connection.
+
+    Raises ComposioError for a slug outside READ_ONLY_SLUGS, an HTTP failure,
+    or a call Composio reports as unsuccessful: the caller says "can't tell".
+    """
+    if slug not in READ_ONLY_SLUGS:
+        raise ComposioError(f"{slug} is not a read-only tool Home may run")
+    body = {"connected_account_id": connected_account_id, "user_id": user_id, "arguments": arguments}
+    # `_transport`: unset in production; tests stand in for Composio's HTTP.
+    async with httpx.AsyncClient(headers=client._headers, base_url=_BASE, timeout=timeout, transport=getattr(client, "_transport", None)) as http:
+        r = await http.post(f"/v3/tools/execute/{slug}", json=body)
+    if not r.is_success:
+        raise ComposioError(f"{slug}: HTTP {r.status_code}")
+    payload = r.json()
+    if payload.get("successful") is False:
+        raise ComposioError(f"{slug}: {str(payload.get('error') or 'unsuccessful')[:200]}")
+    return payload.get("data")
