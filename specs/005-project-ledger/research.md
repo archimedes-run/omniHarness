@@ -109,3 +109,11 @@ Date: 2026-10-19. Each item below gives the decision, the rationale, and the alt
 
 - **Decision**: the gateway feeds `CalendarSource.fetch_events` from the user's existing calendar connection, over the next 24 h (`DEFAULT_HORIZON`). Events attach to a project only through an explicit link to an event or a recurring series (FR-043). No connection means can't-tell.
 - **Rationale**: this wires the dormant source (plan-inputs) without a second calendar client.
+
+## R4b. The Codex adapter over the real ~/.codex (T031, 2026-10-19)
+
+The adapter ran read-only over the user's `~/.codex/sessions` before the fixtures were trusted (Article XII). Only structure was recorded:
+- 7 files became **5 sessions**. The 2 subagent rollouts attached to their parents through the top-level `parent_thread_id`.
+- **0 drift**: no unknown record types and no malformed lines. 3,237 records were inert by the explicit list.
+- **Positive control**: every session has a working folder and at least 3 observed completed turns.
+- Two sessions have confirmed plans, one of 3 items (all completed) and one of 5. The other three made no plan.

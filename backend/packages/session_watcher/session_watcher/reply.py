@@ -42,9 +42,25 @@ def humanize(seconds: int) -> str:
     return f"{days} day{'s' if days != 1 else ''}"
 
 
-def _line(s: dict) -> str:
-    """One session, worded by how well we actually know its state."""
+def _progress(s: dict) -> str:
+    """The agent's own plan, as of its last confirmed update: "plan 3/5 done"."""
+    todos = s.get("todos")
+    if not todos:
+        return ""
+    done = sum(1 for t in todos if t.get("status") == "completed")
+    return f" Plan {done}/{len(todos)} done."
+
+
+def _line(s: dict, *, label: bool = False) -> str:
+    """One session, worded by how well we actually know its state.
+
+    `label` names the agent ("omniHarness (Codex)"). It is on whenever more
+    than one agent is in the reply, and always for a non-Claude session, so a
+    Claude-only reply reads as it always has.
+    """
     project = s.get("project") or "(unknown project)"
+    if label or (s.get("agent") and s.get("agent") != "claude"):
+        project = f"{project} ({s.get('agent_label') or s.get('agent')})"
     quiet = humanize(int(s.get("quiet_seconds", -1)))
     summary = (s.get("summary") or "").strip()
     state = s.get("state")
@@ -77,7 +93,14 @@ def _line(s: dict) -> str:
         # FR-006: we could not interpret the records. Do not dress this up.
         return f"{project} — I can't tell what state it's in; its records didn't parse."
 
-    return f"{head}. {summary}" if summary else f"{head}."
+    line = f"{head}. {summary}" if summary else f"{head}."
+    return line + _progress(s)
+
+
+def _unreadable(payload: dict) -> str:
+    """Agents whose files cannot be read: never silently "no sessions" (FR-026)."""
+    missing = [a for a in payload.get("agents") or [] if not a.get("readable")]
+    return " ".join(f"I can't read {a.get('label') or a.get('agent')} sessions: {a.get('reason')}." for a in missing)
 
 
 def compose_rollup(payload: dict) -> str:
@@ -87,12 +110,16 @@ def compose_rollup(payload: dict) -> str:
     observability = payload.get("observability")
     staleness = int(payload.get("staleness_seconds", -1))
 
+    label = len({s.get("agent") for s in sessions}) > 1
+    unreadable = _unreadable(payload)
     if observable:
         if not sessions:
-            # Safe to say ONLY because we looked and the registry is current.
-            return "No coding sessions are running."
+            # Safe to say ONLY because we looked and the registry is current,
+            # and only for the agents we could read.
+            return f"No coding sessions are running. {unreadable}".strip() if unreadable else "No coding sessions are running."
         head = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}:"
-        return "\n".join([head, *(f"  • {_line(s)}" for s in sessions)])
+        body = "\n".join([head, *(f"  • {_line(s, label=label)}" for s in sessions)])
+        return f"{body}\n{unreadable}" if unreadable else body
 
     # --- not observable: the caveat LEADS, always ---
     if observability == "never-observed" or staleness < 0:
@@ -104,7 +131,7 @@ def compose_rollup(payload: dict) -> str:
         # THE false negative this whole mechanism exists to prevent. Note what is
         # absent: any claim about whether sessions are running.
         return caveat + " I have no last-known state to fall back on either."
-    body = "\n".join(f"  • {_line(s)}" for s in sessions)
+    body = "\n".join(f"  • {_line(s, label=label)}" for s in sessions)
     return f"{caveat}\nAs of then, {len(sessions)} session{'s' if len(sessions) != 1 else ''}:\n{body}"
 
 

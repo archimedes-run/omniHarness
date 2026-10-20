@@ -1,0 +1,25 @@
+[
+  {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_coding_sessions"
+  },
+  {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_session_status"
+  }
+]

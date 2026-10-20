@@ -71,10 +71,15 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
             started_at=stamp,
             last_activity_at=stamp,
             resolved_at=now,
+            agent=ref.agent,
+            todos=ref.todos,
+            files_changed=list(ref.files_changed),
         )
 
     first = min(dated, key=lambda r: r.at)
     last = max(dated, key=lambda r: r.at)
+    # A Codex subagent's records are folded in as raw_type "sidechain": they
+    # advance the clock (via `last`) but never decide the parent's state.
     assistant = [r for r in dated if r.raw_type == "assistant"]
     last_assistant = max(assistant, key=lambda r: r.at) if assistant else None
     last_text = next((r.text for r in sorted(dated, key=lambda r: r.at, reverse=True) if r.text), "")
@@ -98,6 +103,9 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
         last_message=last_text,
         sticky=True,
         resolved_at=now,
+        agent=ref.agent,
+        todos=ref.todos,
+        files_changed=list(ref.files_changed),
     )
     # Recent activity, newest last, bounded. Only classified records become
     # events — an unclassified record is not silently promoted to PROGRESS

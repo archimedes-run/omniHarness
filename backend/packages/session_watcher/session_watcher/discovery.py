@@ -40,6 +40,9 @@ class Discovery:
 
     adapter: SessionAdapter
     config: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    #: Further agents, each an adapter over its own root (Feature 005: Codex).
+    #: Their sessions join the same sweep, so they appear in the same replies.
+    more_adapters: list[SessionAdapter] = field(default_factory=list)
     started_at: datetime | None = None
     last_reset_at: datetime | None = None
     _sticky: set[str] = field(default_factory=set)
@@ -73,7 +76,7 @@ class Discovery:
             # session seen active once keeps its exemption from the recency
             # window for the life of the process, and the set never shrinks.
             self.reset_retention(now)
-        refs = self.adapter.discover(self.config.window, now=now)
+        refs = [ref for adapter in (self.adapter, *self.more_adapters) for ref in adapter.discover(self.config.window, now=now)]
 
         cutoff = now - self.config.window
         kept: list[SessionRef] = []
