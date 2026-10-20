@@ -11,7 +11,7 @@ import pytest
 def test_startup_opens_the_history_under_the_data_dir(gateway) -> None:
     client, home = gateway
     settings = client.get("/api/run-history/settings").json()
-    assert settings == {"retention_days": 30, "runs": 0, "location": str((home / "run-history").resolve())}
+    assert settings == {"retention_days": 30, "runs": 0, "location": str((home / "run-history").resolve()), "used_bytes": 0, "cap_bytes": 512 * 1024 * 1024, "warning": None}
     assert (home / "run-history" / "runs.sqlite3").exists()
 
 
@@ -65,3 +65,14 @@ async def test_the_purge_job_purges_on_its_schedule(tmp_path) -> None:
             break
     task.cancel()
     assert history.count() == 0, "the scheduled purge never ran"
+
+
+def test_settings_show_the_cap_warning(gateway) -> None:
+    client, _ = gateway
+    history = client.app.state.run_history
+    history.total_max_bytes = 1_000
+    history.record(kind="automation", source_id="r", body={"note": "a" * 2_000}, status="completed")
+
+    settings = client.get("/api/run-history/settings").json()
+    assert settings["cap_bytes"] == 1_000
+    assert "recorded without its content" in settings["warning"]

@@ -3,9 +3,13 @@
 GATED: a run can carry mail and calendar content, so these are the guarantees,
 each tested (tests/run_history):
 
-  * FULL CONTENT. No truncation (the run_events table cuts trace content at
-    10 KB). A body above INLINE_MAX bytes is written to its own file under
-    `blobs/`, atomically, and the row names it.
+  * FULL CONTENT, WITHIN CAPS. Not cut at 10 KB as the run_events table cuts
+    trace content. A body above INLINE_MAX bytes is written to its own file
+    under `blobs/`, atomically, and the row names it. One run is capped at
+    RUN_MAX_BYTES: past it the longest strings are cut, each cut says so, and
+    the body carries `cut`. The whole history is capped at TOTAL_MAX_BYTES:
+    past it a run is recorded without its content, and `warning()` (shown in
+    Settings) says so; it warns from WARN_FRACTION of the cap.
   * SECRETS REDACTED BEFORE STORING. Every string in the run, at any depth, is
     first cleared of every secret VALUE the process loaded (exact match, also
     base64 and URL-encoded; see default_redactor), then goes
@@ -30,6 +34,7 @@ engine records from its worker thread; the routers read from the event loop.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import tempfile
@@ -41,11 +46,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 #: Bodies larger than this (bytes of JSON) go to a blob file, not the row.
 INLINE_MAX = 64 * 1024
 DEFAULT_RETENTION_DAYS = 30
 #: What a string is stored as when it could not be redacted.
 WITHHELD = "[Withheld: could not be redacted]"
+#: One run's stored body is cut to this (bytes of JSON): the longest strings
+#: are shortened first, each saying how much was cut, and the body says so.
+RUN_MAX_BYTES = 2 * 1024 * 1024
+#: The whole history's cap. Past it a run is recorded WITHOUT its content, and
+#: the settings say so; at WARN_FRACTION of it the settings warn.
+TOTAL_MAX_BYTES = 512 * 1024 * 1024
+WARN_FRACTION = 0.9
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -114,6 +128,53 @@ def redact_tree(value: Any, redact: Callable[[str], tuple[str, bool]]) -> Any:
     return redact(str(value))[0]
 
 
+def _dumps(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
+
+
+def _strings(tree: Any, path: tuple = ()) -> list[tuple[tuple, str]]:
+    if isinstance(tree, str):
+        return [(path, tree)]
+    if isinstance(tree, dict):
+        return [x for k, v in tree.items() for x in _strings(v, (*path, k))]
+    if isinstance(tree, list):
+        return [x for i, v in enumerate(tree) for x in _strings(v, (*path, i))]
+    return []
+
+
+def _set(tree: Any, path: tuple, value: Any) -> None:
+    for key in path[:-1]:
+        tree = tree[key]
+    tree[path[-1]] = value
+
+
+def cap_body(body: Any, limit: int) -> tuple[Any, dict | None]:
+    """`body` cut to at most `limit` bytes of JSON, longest strings first, each
+    cut saying how much it removed. Returns (body, cut) where `cut` is None when
+    nothing was cut. A body that cannot be brought under the cap is replaced by
+    a note saying so, never stored over the cap."""
+    original = len(_dumps(body))
+    if original <= limit:
+        return body, None
+    for _ in range(64):
+        size = len(_dumps(body))
+        if size <= limit:
+            break
+        strings = sorted(_strings(body), key=lambda x: len(x[1]), reverse=True)
+        if not strings or len(strings[0][1]) <= 256:
+            break
+        path, text = strings[0]
+        keep = max(128, len(text) - (size - limit) - 256)
+        if keep >= len(text):
+            keep = len(text) // 2
+        _set(body, path, f"{text[:keep]} … [cut: {len(text) - keep} characters not stored; this run was over the per-run cap]")
+    cut = {"original_bytes": original, "cap_bytes": limit}
+    if len(_dumps(body)) > limit or not isinstance(body, dict):
+        return {"not_stored": f"This run's content ({original} bytes) could not be cut under the per-run cap ({limit} bytes)."}, cut
+    body["cut"] = cut
+    return body, cut
+
+
 @dataclass(frozen=True)
 class RunSummary:
     id: str
@@ -131,7 +192,17 @@ class RunSummary:
 class RunHistory:
     """The store. `root` is a directory it owns."""
 
-    def __init__(self, root: Path, *, redact: Callable[[str], tuple[str, bool]] | None = None, now: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        redact: Callable[[str], tuple[str, bool]] | None = None,
+        now: Callable[[], datetime] | None = None,
+        run_max_bytes: int = RUN_MAX_BYTES,
+        total_max_bytes: int = TOTAL_MAX_BYTES,
+    ) -> None:
+        self.run_max_bytes = run_max_bytes
+        self.total_max_bytes = total_max_bytes
         self.root = Path(root)
         self.blobs = self.root / "blobs"
         # Owner-only: the directory 0700, the database 0600, set on every open
@@ -188,8 +259,14 @@ class RunHistory:
         run_id = uuid.uuid4().hex
         clean = redact_tree(body, self._redact)
         clean_error = self._redact(error)[0] if error else None
-        data = json.dumps(clean, ensure_ascii=False, sort_keys=True)
-        encoded = data.encode()
+        clean, _cut = cap_body(clean, self.run_max_bytes)
+        encoded = _dumps(clean)
+        if self.used_bytes() + len(encoded) > self.total_max_bytes:
+            logger.warning("run history: full (%d byte cap); run %s of %s recorded without its content", self.total_max_bytes, run_id, source_id)
+            self._bump("not_stored_runs")
+            clean = {"not_stored": f"The run history is full ({self.total_max_bytes // (1024 * 1024)} MB). This run's content was not stored. Delete the history or shorten the retention to make room."}
+            encoded = _dumps(clean)
+        data = encoded.decode()
         blob_name = None
         if len(encoded) > INLINE_MAX:
             blob_name = f"{run_id}.json"
@@ -220,6 +297,8 @@ class RunHistory:
         with self._lock, self._connect() as c:
             rows = c.execute("SELECT id, blob FROM runs WHERE started_at < ?", (cutoff,)).fetchall()
             c.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
+            if rows:
+                c.execute("DELETE FROM settings WHERE key = 'not_stored_runs'")
         for row in rows:
             if row["blob"]:
                 (self.blobs / row["blob"]).unlink(missing_ok=True)
@@ -230,6 +309,7 @@ class RunHistory:
         with self._lock, self._connect() as c:
             n = c.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
             c.execute("DELETE FROM runs")
+            c.execute("DELETE FROM settings WHERE key = 'not_stored_runs'")
         for f in self.blobs.iterdir():
             if f.is_file():
                 f.unlink(missing_ok=True)
@@ -266,6 +346,30 @@ class RunHistory:
         out.pop("blob")
         out["body"] = json.loads(raw) if raw else None
         return out
+
+    def used_bytes(self) -> int:
+        with self._connect() as c:
+            return int(c.execute("SELECT COALESCE(SUM(size), 0) FROM runs").fetchone()[0])
+
+    def _bump(self, key: str) -> None:
+        with self._connect() as c:
+            c.execute("INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", (key,))
+
+    def not_stored_runs(self) -> int:
+        with self._connect() as c:
+            row = c.execute("SELECT value FROM settings WHERE key = 'not_stored_runs'").fetchone()
+        return int(row["value"]) if row else 0
+
+    def warning(self) -> str | None:
+        """What the settings show about the cap, or None while there is room."""
+        used, cap, refused = self.used_bytes(), self.total_max_bytes, self.not_stored_runs()
+        mb = cap // (1024 * 1024)
+        if refused:
+            runs = "1 run was recorded without its content" if refused == 1 else f"{refused} runs were recorded without their content"
+            return f"The run history is full ({mb} MB). {runs}. Delete the history or shorten the retention to make room."
+        if used >= WARN_FRACTION * cap:
+            return f"The run history is at {round(100 * used / cap)}% of its {mb} MB cap. When it is full, new runs are recorded without their content."
+        return None
 
     def count(self) -> int:
         with self._connect() as c:

@@ -161,3 +161,39 @@ def test_a_purged_run_leaves_no_bytes_in_the_database(tmp_path) -> None:
 
     assert store.purge() == 1
     assert marker[:40].encode() not in store.db.read_bytes(), "the purged run's content is still in the file"
+
+
+def test_the_gateway_keeps_the_turn_id_the_injector_sends() -> None:
+    from app.gateway.services import normalize_input
+
+    (msg,) = normalize_input({"messages": [{"role": "human", "content": "hi", "id": "trigger-turn-x"}]})["messages"]
+    assert msg.id == "trigger-turn-x"
+
+
+def test_one_run_is_capped_and_says_where_it_was_cut(tmp_path) -> None:
+    store = RunHistory(tmp_path, run_max_bytes=20_000)
+    huge = "x" * 50_000
+    run_id = store.record(kind="automation", source_id="r", body={"messages": [{"type": "tool", "content": huge}], "reply": "short reply"}, status="completed")
+
+    (row,) = store.list()
+    body = store.get(run_id)["body"]
+    assert row.size <= 20_000, "the run was stored over its cap"
+    assert body["cut"]["original_bytes"] > 50_000 and body["cut"]["cap_bytes"] == 20_000
+    assert "characters not stored" in body["messages"][0]["content"]
+    assert body["reply"] == "short reply", "a short string was cut before the long one"
+
+
+def test_past_the_total_cap_runs_are_recorded_without_content_and_it_warns(tmp_path) -> None:
+    store = RunHistory(tmp_path, total_max_bytes=10_000)
+    assert store.warning() is None
+    store.record(kind="automation", source_id="r", body={"note": "a" * 9_300}, status="completed")
+    assert "%" in (store.warning() or ""), "no warning near the cap"
+
+    late = store.record(kind="automation", source_id="r", body={"note": "LATE-CONTENT " * 100}, status="completed")
+    assert "not stored" in store.get(late)["body"]["not_stored"]
+    assert b"LATE-CONTENT" not in on_disk(tmp_path)
+    assert store.used_bytes() <= 10_000 + 500
+    assert "1 run was recorded without its content" in (store.warning() or "")
+
+    store.delete_all()
+    assert store.warning() is None

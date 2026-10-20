@@ -25,6 +25,10 @@ class HistorySettings(RetentionSettings):
     runs: int
     #: Where it lives, so the person can see it is on this machine.
     location: str
+    used_bytes: int = 0
+    cap_bytes: int = 0
+    #: Shown in Settings when the history is near or past its cap.
+    warning: str | None = None
 
 
 class RunSummaryView(BaseModel):
@@ -55,11 +59,15 @@ def _history(request: Request):
     return history
 
 
+def _settings(h) -> HistorySettings:
+    return HistorySettings(retention_days=h.retention_days(), runs=h.count(), location=str(h.root), used_bytes=h.used_bytes(), cap_bytes=h.total_max_bytes, warning=h.warning())
+
+
 @router.get("/settings", response_model=HistorySettings)
 @require_permission("threads", "read")
 async def get_settings(request: Request) -> HistorySettings:
     h = _history(request)
-    return HistorySettings(retention_days=h.retention_days(), runs=h.count(), location=str(h.root))
+    return _settings(h)
 
 
 @router.put("/settings", response_model=HistorySettings)
@@ -68,7 +76,7 @@ async def put_settings(body: RetentionSettings, request: Request) -> HistorySett
     h = _history(request)
     h.set_retention_days(body.retention_days)
     h.purge()  # a shorter retention applies now, not at the next hourly run
-    return HistorySettings(retention_days=h.retention_days(), runs=h.count(), location=str(h.root))
+    return _settings(h)
 
 
 @router.delete("/runs", response_model=Deleted)
