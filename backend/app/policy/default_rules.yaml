@@ -10,9 +10,19 @@
 #
 # THREE THINGS TO KNOW BEFORE EDITING:
 #
-# 1. A tool matching NO rule here is Tier 3. That is a decision, not a
-#    fallback (FR-009): a newly connected tool source is dangerous until you
-#    say otherwise, including tools that did not exist when this was written.
+# 1. A tool matching NO rule here is REFUSED: not offered to the assistant,
+#    not run, and listed in the gateway log and on its source in the tool
+#    sources view as "No policy rule" (007). It used to be Tier 3 by default,
+#    and that default hid rules that matched nothing: the Calendar MCP names
+#    its tools `create-event`, the rule said `create_event`, and Calendar
+#    writes sat at Tier 3 for months with nobody told. To use a new tool,
+#    name it here.
+#
+#    Names are compared ignoring case and treating `-` and `_` as the same
+#    (omniharness/tools/names.py, the one place that normalises), so
+#    `googlecalendar_create_event` matches the server's
+#    `googlecalendar_create-event`. The MCP server prefix (`<server>_`) is
+#    part of the name: rules name `filesystem_read_file`, not `read_file`.
 #
 # 2. An exception may only RAISE a tier, never lower it (FR-037). Trying to
 #    lower one FAILS THE LOAD, naming this file and line — deliberately, so you
@@ -124,6 +134,28 @@ policy:
       tier: 3
     - pattern: "mcp_build"
       tier: 3
+    # Delegates to an external coding agent (ACP) or the openclaude CLI:
+    # spawning, so Tier 3 for the same reason as `task`.
+    - pattern: "invoke_acp_agent"
+      tier: 3
+    - pattern: "openclaude_coder"
+      tier: 3
+
+    # Named 007, at the tier they already had through the no-rule default, so
+    # naming them changed nothing. Each is a candidate to decide individually.
+    #
+    # Shell in the sandbox: anything a command can do, including network.
+    - pattern: "bash"
+      tier: 3
+    # Creates or edits a skill: changes what the assistant does in every later
+    # conversation, not only this one.
+    - pattern: "skill_manage"
+      tier: 3
+    # Create / update a custom agent's definition (SOUL.md, config).
+    - pattern: "setup_agent"
+      tier: 3
+    - pattern: "update_agent"
+      tier: 3
 
     # ---------------------------------------------------------------------
     # Filesystem — reads are silent, writes are disclosed, deletion is not
@@ -174,10 +206,58 @@ policy:
     - pattern: "gmail_delete_draft"
       tier: 2
 
+    # The names the Gmail MCP server (@gongrzhe/server-gmail-autoauth-mcp
+    # 1.1.11) ACTUALLY exposes, read from its package 2026-10-20. The draft
+    # rules above name tools it does not have; its draft tool is draft_email.
+    # Reads (read_email, search_emails, list_email_labels, list_filters,
+    # get_filter) are covered by the globs above.
+    - pattern: "gmail_draft_email"
+      tier: 2
+    # `gmail_get*` above makes this Tier 1, but it CREATES a label when none
+    # exists. Highest tier wins, so this raises it to a disclosed write.
+    - pattern: "gmail_get_or_create_label"
+      tier: 2
+    # Kept at Tier 3, the tier they had through the no-rule default. Label and
+    # archive changes are reversible and could be Tier 2; filters act on future
+    # mail by themselves (including forwarding), and deletion is permanent.
+    - pattern: "gmail_modify_email"
+      tier: 3
+    - pattern: "gmail_batch_modify_emails"
+      tier: 3
+    - pattern: "gmail_delete_email"
+      tier: 3
+    - pattern: "gmail_batch_delete_emails"
+      tier: 3
+    - pattern: "gmail_create_label"
+      tier: 3
+    - pattern: "gmail_update_label"
+      tier: 3
+    - pattern: "gmail_delete_label"
+      tier: 3
+    - pattern: "gmail_create_filter"
+      tier: 3
+    - pattern: "gmail_create_filter_from_template"
+      tier: 3
+    - pattern: "gmail_delete_filter"
+      tier: 3
+    # Writes the attachment to local disk.
+    - pattern: "gmail_download_attachment"
+      tier: 3
+    # send_email has NO rule, on purpose: it is denied from the surface
+    # (FR-012), and if that deny were ever removed, a tool with no rule is
+    # refused rather than defaulted.
+
     # ---------------------------------------------------------------------
-    # Calendar (FR-015).
+    # Calendar (FR-015). The Google Calendar MCP server
+    # (@cocal/google-calendar-mcp 2.7.0) names its tools with HYPHENS:
+    # list-calendars, list-events, search-events, get-event, list-colors,
+    # get-freebusy, get-current-time, create-event, create-events,
+    # update-event, delete-event, respond-to-event, manage-accounts (read from
+    # its package, 2026-10-20). Matching ignores the difference.
     # ---------------------------------------------------------------------
     - pattern: "googlecalendar_list*"
+      tier: 1
+    - pattern: "googlecalendar_search*"
       tier: 1
     - pattern: "googlecalendar_get*"
       tier: 1
@@ -192,8 +272,23 @@ policy:
       exceptions:
         # Inviting other people is outbound — it reaches someone else's inbox,
         # which the assistant cannot undo.
+        #
+        # THE SERVER'S ARGUMENT IS `sendUpdates` (camelCase), not
+        # `send_updates`. Argument names are NOT normalised, so the exception
+        # below on `send_updates` never fired for this server: once the
+        # tool-name fix let `create-event` reach this rule, an invite-sending
+        # create would have been Tier 2. Both spellings are listed.
+        - when: {sendUpdates: [all, externalOnly]}
+          tier: 3
         - when: {send_updates: [all, externalOnly]}
           tier: 3
+    # Several events in one call, each with its own `sendUpdates` that an
+    # exception cannot see (they are nested). Tier 3.
+    - pattern: "googlecalendar_create_events"
+      tier: 3
+    # Adds or removes the Google accounts the server acts as.
+    - pattern: "googlecalendar_manage_accounts"
+      tier: 3
     - pattern: "googlecalendar_delete_event"
       tier: 3
     - pattern: "googlecalendar_update_event"
@@ -206,8 +301,8 @@ policy:
     # ---------------------------------------------------------------------
     # GitHub — reads are silent. Same reasoning as the outbound reads above,
     # plus the destination is one the user already authorised with a token.
-    # Writes are NOT covered here: they are unclassified on purpose, so they
-    # remain Tier 3 by the FR-009 default until each is decided individually.
+    # Writes are decided individually further down (no write may rely on a
+    # default: an unnamed tool is refused).
     # ---------------------------------------------------------------------
     - pattern: "github_get_file_contents"
       tier: 1
@@ -384,6 +479,28 @@ policy:
       exceptions:
         - unless: {sql: read_only_sql}
           tier: 3
+
+    # ---------------------------------------------------------------------
+    # github-issue-connector: a server built with mcp_build and connected on
+    # this installation (extensions/extensions_config.json). Its tool names
+    # were listed from the running server on 2026-10-20. The names read as
+    # reads, but a name is not a measurement, so they stay at Tier 3 — the tier
+    # they had through the no-rule default — until each is decided.
+    # ---------------------------------------------------------------------
+    - pattern: "github-issue-connector_status"
+      tier: 3
+    - pattern: "github-issue-connector_get_rate_limit"
+      tier: 3
+    - pattern: "github-issue-connector_list_user_repos"
+      tier: 3
+    - pattern: "github-issue-connector_list_org_repos"
+      tier: 3
+    - pattern: "github-issue-connector_list_repo_issues"
+      tier: 3
+    - pattern: "github-issue-connector_get_issue"
+      tier: 3
+    - pattern: "github-issue-connector_search_issues"
+      tier: 3
 
   confirmation:
     # 4 hours. THIS IS A STARTING GUESS, NOT A MEASURED VALUE — long enough to
