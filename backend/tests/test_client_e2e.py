@@ -32,9 +32,12 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
 # Markers
 # ---------------------------------------------------------------------------
 
+# Opt-in only (Article XIV): these call a real provider, so they run when asked
+# for with OMNI_E2E_LLM=1, never because a key happens to be in the environment
+# or in .env (conftest sets a placeholder key for config loading).
 requires_llm = pytest.mark.skipif(
-    os.getenv("CI", "").lower() in ("true", "1") or not os.getenv("OPENAI_API_KEY"),
-    reason="Requires LLM API key — skipped in CI or when OPENAI_API_KEY is unset",
+    os.getenv("OMNI_E2E_LLM", "") != "1" or not os.getenv("OPENAI_API_KEY"),
+    reason="Live-model test — set OMNI_E2E_LLM=1 and a real OPENAI_API_KEY (and E2E_MODEL_ID) to run",
 )
 
 
@@ -51,7 +54,7 @@ def _make_e2e_config() -> AppConfig:
 
     - ``E2E_MODEL_NAME``  (default: ``gpt-4o``)
     - ``E2E_MODEL_USE``   (default: ``langchain_openai:ChatOpenAI``)
-    - ``E2E_MODEL_ID``    (default: ``ep-20251211175242-llcmh``)
+    - ``E2E_MODEL_ID``    (default: ``gpt-4o-mini``)
     - ``E2E_BASE_URL``    (default: ``https://api.openai.com/v1``)
     - ``OPENAI_API_KEY``  (required for LLM tests)
 
@@ -67,7 +70,7 @@ def _make_e2e_config() -> AppConfig:
                     "name": os.getenv("E2E_MODEL_NAME", "gpt-4o"),
                     "display_name": "E2E Test Model",
                     "use": os.getenv("E2E_MODEL_USE", "langchain_openai:ChatOpenAI"),
-                    "model": os.getenv("E2E_MODEL_ID", "ep-20251211175242-llcmh"),
+                    "model": os.getenv("E2E_MODEL_ID", "gpt-4o-mini"),
                     "base_url": os.getenv("E2E_BASE_URL", "https://api.openai.com/v1"),
                     "api_key": os.getenv("OPENAI_API_KEY", ""),
                     "max_tokens": 512,

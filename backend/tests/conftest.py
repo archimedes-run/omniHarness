@@ -5,12 +5,22 @@ issues when unit-testing lightweight config/registry code in isolation.
 """
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+# Article XIV: the suite runs against the tracked config.example.yaml, never a
+# developer's gitignored config.yaml. A fresh clone has no config.yaml, and a
+# developer's one makes the suite's result depend on their local settings.
+# An explicit OMNI_HARNESS_CONFIG_PATH still wins. Tests never call a model
+# provider, but the example interpolates $OPENAI_API_KEY eagerly, so a fresh
+# clone needs a placeholder for config loading to succeed.
+os.environ.setdefault("OMNI_HARNESS_CONFIG_PATH", str(Path(__file__).resolve().parents[2] / "config.example.yaml"))
+os.environ.setdefault("OPENAI_API_KEY", "placeholder-not-a-real-key")
 
 # Make 'app' and 'omniharness' importable from any working directory
 sys.path.insert(0, str(Path(__file__).parent.parent))
