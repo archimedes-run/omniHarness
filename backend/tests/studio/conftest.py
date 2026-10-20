@@ -77,3 +77,22 @@ def allow_scans(monkeypatch):
         return ScanResult("allow", "test")
 
     monkeypatch.setattr(skills_router, "scan_skill_content", allow)
+
+
+@pytest.fixture
+def fake_model(monkeypatch):
+    """Replace the model factory the drafts router uses. `replies` is the list
+    of texts it answers with, in order; `calls` records each model asked for."""
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    import app.gateway.routers.drafts as drafts
+
+    state = SimpleNamespace(replies=[], calls=[])
+
+    def factory(name=None, thinking_enabled=False, app_config=None, **kwargs):
+        state.calls.append(name)
+        return GenericFakeChatModel(messages=iter([AIMessage(content=state.replies.pop(0))]))
+
+    monkeypatch.setattr(drafts, "create_chat_model", factory)
+    return state
