@@ -376,12 +376,16 @@ class TestMemoryFilePath:
 
 
 def _make_test_app(tmp_path: Path):
-    """Create a FastAPI app with the agents router, patching paths to tmp_path."""
-    from fastapi import FastAPI
+    """Create a FastAPI app with the agents router, patching paths to tmp_path.
+
+    The routes now carry permission checks (security baseline), so the app
+    stamps an authenticated user the way AuthMiddleware does in production.
+    """
+    from _router_auth_helpers import make_authed_test_app
 
     from app.gateway.routers.agents import router
 
-    app = FastAPI()
+    app = make_authed_test_app()
     app.include_router(router)
     return app
 

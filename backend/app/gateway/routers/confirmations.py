@@ -67,6 +67,8 @@ class PendingActionResponse(BaseModel):
     #: The full path is `delegation_chain`.
     origin_via: str = ""
     confirmable_by_typing: bool = True
+    #: Whose run stated it (security baseline); the list is filtered by it.
+    owner_id: str | None = None
 
 
 class PendingListResponse(BaseModel):
@@ -191,6 +193,7 @@ def _view(action, threshold: int) -> PendingActionResponse:
         origin_label=action.origin_label(),
         origin_via=action.origin_via,
         confirmable_by_typing=action.confirmable_by_typing,
+        owner_id=action.owner_id,
     )
 
 
@@ -220,15 +223,23 @@ async def list_pending(request: Request) -> PendingListResponse:
     The store is a directory on shared state, so this sees actions created by
     any worker rather than only the one answering.
     """
+    from app.gateway.ownership import filter_accessible
+
     _, middleware, _flow = _policy(request)
-    return read_pending(middleware, datetime.now(UTC))
+    result = read_pending(middleware, datetime.now(UTC))
+    # Ownership: only the caller's own plans (and, for the owner, the system's).
+    result.actions = await filter_accessible(request, result.actions, lambda view: view.owner_id)
+    return result
 
 
 async def _resolve(request: Request, action_id: str, *, confirm: bool, body: ResolveRequest) -> ResolveResponse:
     from app.gateway.authz import get_auth_context
+    from app.gateway.ownership import require_access
 
     _, middleware, flow = _policy(request)
     action = middleware.pending.get(action_id)
+    if action is not None:
+        await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
     ctx = get_auth_context(request)
     user_id = _user_id(ctx)
 
@@ -253,12 +264,15 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
     it, through this trusted channel. Only tools in EDITABLE_TOOLS.
     """
     from app.gateway.authz import get_auth_context
+    from app.gateway.ownership import require_access
     from app.policy.confirm_flow import take_claim
     from app.policy.models import Outcome, PendingAction, Tier, default_expiry
 
     _, middleware, flow = _policy(request)
     now = datetime.now(UTC)
     action = middleware.pending.get(action_id)
+    if action is not None:
+        await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
     if action is None or action.outcome is not None or action.is_expired(now):
         return ResolveResponse(outcome="already_resolved", action_id=action_id, message="That plan is no longer open, so it cannot be edited.")
     if action.tool_name not in EDITABLE_TOOLS:
@@ -280,6 +294,7 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
         thread_id=action.thread_id,
         requester=action.requester,
         delegation_chain=action.delegation_chain,
+        owner_id=action.owner_id,
     )
     edited.plan_text = middleware._plan_text_for(edited)
     middleware.pending.save(edited)

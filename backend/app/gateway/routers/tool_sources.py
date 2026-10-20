@@ -20,7 +20,11 @@ router = APIRouter(prefix="/api", tags=["tool-sources"])
 @router.get("/tool-sources", response_model=ToolSourcesView)
 @require_permission("threads", "read")
 async def tool_sources(request: Request, thread_id: str | None = Query(default=None)) -> ToolSourcesView:
+    from app.gateway.ownership import require_thread_access
     from omniharness.mcp import cache
+
+    if thread_id:
+        await require_thread_access(request, thread_id)
 
     # Load once if nothing has yet, so "never loaded" does not stand in for a
     # state. The same initialisation an agent's first turn performs.
