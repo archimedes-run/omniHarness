@@ -284,6 +284,15 @@ class PolicyMiddleware(AgentMiddleware):
             # immediately met with "I did not recognise that".
             return None, None
 
+        if self._is_invited(request):
+            # AN INVITED AGENT HAS NO USER. Its first message is the
+            # instructions its inviter wrote (omniharness.agents.invitation), so
+            # reading it as a verdict let "Wipe the backup" answer whatever was
+            # pending in the chat: a restated plan replaced the subagent's whole
+            # run (found 2026-10-20, test_delegated_confirmation.py). Only the
+            # user, in the lead's chat or on the card, answers a confirmation.
+            return None, None
+
         flow = ConfirmationFlow(store=self.pending, middleware=self, now=self.now)
         result = flow.from_message(
             messages[-1],
@@ -304,6 +313,14 @@ class PolicyMiddleware(AgentMiddleware):
             return None, note
 
         logger.info("policy: confirmation resolved as %s (%s)", result.outcome, result.action_id)
+        if result.outcome == confirm_flow.EXECUTED and result.action_id:
+            action = self.pending.get(result.action_id)
+            if action is not None and action.surface:
+                # Posted in the thread, attributed to the agent that proposed
+                # it, with the result; an invited agent's says it stopped.
+                from .surface_run import report_message
+
+                return report_message(action, result.detail.get("result")), None
         return AIMessage(content=result.message), None
 
     @staticmethod
@@ -318,13 +335,43 @@ class PolicyMiddleware(AgentMiddleware):
         state = getattr(request, "state", None)
 
         def run(tool_name: str, arguments: dict) -> Any:
+            from omniharness.agents.tool_surface import LEAD
+
+            from .surface_run import confirming_action, invoke, run_on_surface
+
+            action = confirming_action()
+            if action is not None and action.surface:
+                # A call a SUBAGENT proposed runs with the subagent's tools,
+                # rebuilt, never with the lead's live list: the subagent's own
+                # tool is not on it (LookupError, AUDIT-2026-10 addendum). A
+                # lead call takes its tool from the live list when it is on it,
+                # which is the same surface, still assembled. Either way the
+                # call runs with the PROPOSER's runtime (the live one has no run
+                # config, which `task` reads).
+                live = registry.get(tool_name) if action.surface.get("kind") == LEAD else None
+                return run_on_surface(action, tool_name, arguments, state=state, live_tool=live, selection=selection)
             tool = registry.get(tool_name)
             if tool is None:
                 # Loud, not silent. A confirmation that cannot execute must say
                 # so; the failure this whole phase closes was a quiet one.
                 raise LookupError(f"tool {tool_name!r} is not available on this worker, so the confirmation cannot be completed")
-            return tool.invoke(_with_injected(tool, arguments, runtime, state))
+            return invoke(tool, arguments, runtime=runtime, state=state, call_id=f"confirmed-{action.id if action else tool_name}")
 
+        # The chat's CURRENT selection, loaded by the gateway at this run's start.
+        context = getattr(runtime, "context", None) or {}
+        raw = context.get("selected_sources") if isinstance(context, dict) else None
+        selection = list(raw) if isinstance(raw, (list, tuple, set)) else None
+
+        def unavailable(action: Any) -> str | None:
+            from omniharness.agents.tool_surface import LEAD
+
+            from .surface_run import unavailable_reason
+
+            if (not action.surface or action.surface.get("kind") == LEAD) and action.tool_name in registry:
+                return None  # on the lead's live list, assembled from the chat's selection now
+            return unavailable_reason(action, selection)
+
+        run.unavailable = unavailable  # type: ignore[attr-defined]
         return run
 
     @staticmethod
@@ -382,10 +429,17 @@ class PolicyMiddleware(AgentMiddleware):
             origin_source=origin_source,
             origin_via=origin_via,
             owner_id=self._owner_id(request),
+            surface=self._surface(request),
         )
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
+        if self._is_invited(request):
+            from omniharness.agents.invitation import STOPPED_AT_KEY
+
+            context = getattr(getattr(request, "runtime", None), "context", None)
+            if isinstance(context, dict):
+                context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
         return self._as_tool_result(request, action.plan_text)
 
     @staticmethod
@@ -492,6 +546,20 @@ class PolicyMiddleware(AgentMiddleware):
         origin, source, via = self._origin(request)
         return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request))
 
+    def _is_invited(self, request) -> bool:
+        from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+
+        context = self._runtime_context(request) or {}
+        return INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
+
+    @staticmethod
+    def _surface(request) -> dict:
+        """How the proposing run's tool list was built (plan.md §2.0)."""
+        from omniharness.agents.tool_surface import surface_of
+
+        context = getattr(getattr(request, "runtime", None), "context", None) or {}
+        return surface_of(context)
+
     @staticmethod
     def _thread_id(request) -> str | None:
         context = getattr(getattr(request, "runtime", None), "context", None) or {}
@@ -561,7 +629,9 @@ class PolicyMiddleware(AgentMiddleware):
         # is later asked to do, so the origin does not upgrade here.
         from omniharness.agents.invitation import inviting_turn
 
-        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)):
+        from .surface_run import confirming
+
+        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
         self.pending.resolve(action, Outcome.EXECUTED)
         if self.audit is not None:

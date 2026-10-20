@@ -355,6 +355,27 @@ def _mirror_runtime_visible_keys(config: dict[str, Any]) -> None:
             context.setdefault(key, configurable[key])
 
 
+#: Runtime-context keys only the server may set (see start_run).
+SERVER_OWNED_CONTEXT_KEYS: frozenset[str] = frozenset(
+    {
+        "tool_surface",
+        "invited_origin",
+        "invited_origin_source",
+        "invited_via",
+        "invited_agent",
+        "delegation_chain",
+        "called_agent",
+    }
+)
+
+
+def strip_server_owned_context(config: dict[str, Any]) -> None:
+    for container in (config.get("configurable"), config.get("context")):
+        if isinstance(container, dict):
+            for key in SERVER_OWNED_CONTEXT_KEYS:
+                container.pop(key, None)
+
+
 def resolve_agent_factory(assistant_id: str | None):
     """Resolve the agent factory callable from config.
 
@@ -656,6 +677,12 @@ async def start_run(
     config_configurable = config.setdefault("configurable", {})
     config_configurable["thread_id"] = thread_id
     config_configurable.setdefault("checkpoint_ns", "")
+    # SERVER-OWNED RUN CONTEXT. Who invited an agent, its delegation chain and
+    # inherited origin, and the tool surface a confirmation will rebuild are
+    # written by the server (the subagent executor, the policy layer), never
+    # taken from a client: a run body's `config.context` is honoured wholesale
+    # by build_run_config, so these are dropped from it here (plan.md §2.0).
+    strip_server_owned_context(config)
 
     # Feature 006: skills removed from this conversation (the chat bar's ×).
     # Always the server's stored value (the client's was dropped above).

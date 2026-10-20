@@ -22,6 +22,7 @@ depends on which route the user happens to take is not a defence.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -32,6 +33,8 @@ from typing import TYPE_CHECKING, Any
 from .confirm import Verdict, recognise, restate
 from .models import Outcome, PendingAction
 from .pending import PendingStore
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: middleware imports this module
     from .middleware import PolicyMiddleware
@@ -51,6 +54,11 @@ FAILED = "failed"
 #: the agent read, or a trigger, suggested it, so only the card's button counts.
 #: Not claimed, not resolved: the action stays open for the button.
 CARD_ONLY = "card_only"
+#: The proposing run's tool is not available in this chat NOW: its source was
+#: removed from the chat, or is disconnected (plan.md §2.0). Not claimed, not
+#: resolved: the action stays open, so restoring the source and confirming
+#: again works.
+TOOL_UNAVAILABLE = "tool_unavailable"
 
 #: Internal, and deliberately NOT one of the seven. It means "this turn said
 #: nothing about any pending action", which is what almost every turn is. It
@@ -196,6 +204,14 @@ class ConfirmationFlow:
                     expired_meanwhile=expired,
                 )
 
+        # RE-CHECKED AT CONFIRMATION, before the claim: never run a tool the
+        # user has since removed from the chat. A runner that can tell says
+        # so through `unavailable` (surface_run.unavailable_reason).
+        check = getattr(run_tool, "unavailable", None)
+        reason = check(action) if callable(check) else None
+        if reason:
+            return FlowResult(TOOL_UNAVAILABLE, action.id, reason, detail={"reason": reason}, expired_meanwhile=expired)
+
         claimed = take_claim(self.store, action.id, self._claimant())
         if claimed is None:
             return FlowResult(ALREADY_RESOLVED, action.id, "another route confirmed that first", expired_meanwhile=expired)
@@ -214,6 +230,7 @@ class ConfirmationFlow:
             # only by expiry, and silent until then. Found by running a real
             # gateway: a tool raised on a missing injected argument and the
             # action sat claimed with outcome None.
+            logger.exception("policy: confirmed action %s (%s) did not complete", claimed.id, claimed.tool_name)
             self.store.resolve(claimed, Outcome.FAILED, f"authorised, but the tool did not complete: {exc}")
             return FlowResult(
                 FAILED,

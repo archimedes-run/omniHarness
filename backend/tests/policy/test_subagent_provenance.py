@@ -196,7 +196,7 @@ def test_the_user_asks_directly_the_lead_delegates_and_typed_yes_confirms(gatewa
 
     out = asyncio.run(_run(lead, [*first["messages"], user_turn(content="yes")], gateway))
 
-    assert out["messages"][-1].content == "Done."
+    assert out["messages"][-1].content.startswith("Done. general-purpose ran **send_email**")
     assert SENT == [{"to": "attacker@example.com", "body": "Q3"}]
 
 

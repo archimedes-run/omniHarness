@@ -188,6 +188,11 @@ def _submit_to_isolated_loop_in_context(
     )
 
 
+def subagent_checkpoint_key(thread_id: str, task_id: str) -> str:
+    """Where one delegation's own checkpoints live: never the chat's key."""
+    return f"{thread_id}/subagent/{task_id}"
+
+
 def _filter_tools(
     all_tools: list[BaseTool],
     allowed: list[str] | None,
@@ -232,6 +237,7 @@ class SubagentExecutor:
         thread_id: str | None = None,
         trace_id: str | None = None,
         checkpointer: Any | None = None,
+        tool_surface: dict[str, Any] | None = None,
         user_id: str | None = None,
     ):
         """Initialize the executor.
@@ -258,6 +264,12 @@ class SubagentExecutor:
         self.config = config
         self.user_id = user_id
         self.app_config = app_config
+        #: How this subagent's tool list was assembled
+        #: (omniharness.agents.tool_surface). Carried in its runtime context, so
+        #: a Tier 3 call it proposes is confirmed against THIS list, rebuilt,
+        #: and not against the lead's.
+        self.tool_surface = tool_surface
+        self.user_id = user_id
         self.checkpointer = checkpointer
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
@@ -328,8 +340,8 @@ class SubagentExecutor:
             checkpointer=checkpointer,
         )
 
-    async def _load_skills(self) -> list[Skill]:
-        """Load enabled skill metadata based on config.skills."""
+    def _load_skills_sync(self) -> list[Skill]:
+        """Load enabled skill metadata based on config.skills (blocking)."""
         if self.config.skills is not None and len(self.config.skills) == 0:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=[] — skipping skill loading")
             return []
@@ -338,9 +350,8 @@ class SubagentExecutor:
             from omniharness.skills.storage import get_or_new_skill_storage
 
             storage_kwargs = {"app_config": self.app_config} if self.app_config is not None else {}
-            storage = await asyncio.to_thread(get_or_new_skill_storage, **storage_kwargs)
-            # Use asyncio.to_thread to avoid blocking the event loop (LangGraph ASGI requirement)
-            all_skills = await asyncio.to_thread(storage.load_skills, enabled_only=True)
+            storage = get_or_new_skill_storage(**storage_kwargs)
+            all_skills = storage.load_skills(enabled_only=True)
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} loaded {len(all_skills)} enabled skills from disk")
         except Exception:
             logger.exception(f"[trace={self.trace_id}] Failed to load skills for subagent {self.config.name}")
@@ -355,6 +366,17 @@ class SubagentExecutor:
             allowed = set(self.config.skills)
             return [s for s in all_skills if s.name in allowed]
         return all_skills
+
+    async def _load_skills(self) -> list[Skill]:
+        """Load enabled skill metadata based on config.skills."""
+        # Use asyncio.to_thread to avoid blocking the event loop (LangGraph ASGI requirement)
+        return await asyncio.to_thread(self._load_skills_sync)
+
+    def effective_tools(self) -> list[BaseTool]:
+        """The tools this subagent runs with: the config's allow/deny filter, then
+        its skills' allowed-tools. The same steps `_build_initial_state` takes,
+        callable without running the agent (a confirmation rebuilds them)."""
+        return self._apply_skill_allowed_tools(self._load_skills_sync())
 
     def _apply_skill_allowed_tools(self, skills: list[Skill]) -> list[BaseTool]:
         return filter_tools_by_skill_allowed_tools(self._base_tools, skills)
@@ -466,8 +488,17 @@ class SubagentExecutor:
 
             context: dict[str, Any] = invited_agent_context(self.inviting_turn, self.config.name)
             if self.thread_id:
-                run_config["configurable"] = {"thread_id": self.thread_id}
+                # THE CHECKPOINT KEY IS THIS DELEGATION'S, NOT THE CHAT'S. It was
+                # the lead's thread id, so with the process checkpointer a second
+                # delegation in a chat started from the first one's messages
+                # (measured, plan.md §2.0). The runtime context keeps the chat's
+                # thread id: sandbox, thread data and the policy layer read that.
+                run_config["configurable"] = {"thread_id": subagent_checkpoint_key(self.thread_id, result.task_id)}
                 context["thread_id"] = self.thread_id
+            if self.tool_surface is not None:
+                from omniharness.agents.tool_surface import TOOL_SURFACE_KEY
+
+                context[TOOL_SURFACE_KEY] = self.tool_surface
             if self.user_id:
                 context["user_id"] = self.user_id
             if self.app_config is not None:
@@ -597,6 +628,14 @@ class SubagentExecutor:
                 else:
                     logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no messages in final state")
                     result.result = "No response generated"
+
+            # A subagent that stopped at a Tier 3 call says so in its result:
+            # its task is not done, and its inviter must not report it as done.
+            from omniharness.agents.invitation import STOPPED_AT_KEY, stopped_notice
+
+            notice = stopped_notice(self.config.name, context.get(STOPPED_AT_KEY))
+            if notice:
+                result.result = f"{result.result or ''}\n\n{notice}".strip()
 
             result.status = SubagentStatus.COMPLETED
             result.completed_at = datetime.now()

@@ -192,6 +192,12 @@ class PendingAction:
     #: (or the owner, for the system's own runs) may see, confirm, decline or
     #: edit it: app.gateway.ownership.can_access. None = predates owners.
     owner_id: str | None = None
+    #: How the proposing run's tool list was assembled
+    #: (omniharness.agents.tool_surface). A confirmation rebuilds THAT list,
+    #: from chat or from the card, so a subagent's own tool and a delegation
+    #: (`task`) can be run. Empty for actions recorded before it existed,
+    #: which keep the old behaviour.
+    surface: dict[str, Any] = field(default_factory=dict)
 
     @property
     def confirmable_by_typing(self) -> bool:

@@ -48,6 +48,10 @@ INVITED_VIA_KEY = "invited_via"
 #: its own, not `agent_name`, which selects a custom agent's config elsewhere.
 INVITED_AGENT_KEY = "invited_agent"
 DELEGATION_CHAIN_KEY = "delegation_chain"
+#: Filled by the policy layer while an invited agent runs: each Tier 3 call it
+#: stopped at, as {"id", "tool"}. Its inviter reads it after the run, so the
+#: invited agent never ends with its task silently half done.
+STOPPED_AT_KEY = "stopped_at"
 
 #: No inviting turn was marked: can't-tell, which fails toward card-only.
 UNKNOWN = "unknown"
@@ -98,3 +102,11 @@ def invited_agent_context(inviting: TurnOrigin | None, invited_name: str) -> dic
         INVITED_AGENT_KEY: invited_name,
         DELEGATION_CHAIN_KEY: [*chain, invited_name],
     }
+
+
+def stopped_notice(agent: str, stopped: list[dict] | None) -> str:
+    """The line an invited agent's result ends with when it stopped to ask."""
+    if not stopped:
+        return ""
+    asks = ", ".join(f"`{item.get('id')}` ({item.get('tool')})" for item in stopped)
+    return f"[{agent} stopped and is waiting for the user to confirm {asks}. It has NOT finished its task; nothing it asked about has run.]"
