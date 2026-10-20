@@ -133,4 +133,5 @@ def test_the_router_does_not_take_its_own_claim():
     source = (router_module.__file__ and open(router_module.__file__).read()) or ""
     assert ".claim(" not in source, "the router takes its own claim; one confirmation could execute twice"
     assert "recognise(" not in source, "the router recognises its own verdict instead of using the flow"
-    assert "flow.explicit(" in source, "the router no longer calls the shared flow"
+    # Called through the confirmation pool: `_off_the_request_pool(flow.explicit, ...)`.
+    assert "flow.explicit" in source, "the router no longer calls the shared flow"
