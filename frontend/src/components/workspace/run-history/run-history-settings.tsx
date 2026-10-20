@@ -40,7 +40,7 @@ export function RunHistorySettings() {
       aria-labelledby="run-history-heading"
       data-testid="run-history-settings"
     >
-      <h2 id="run-history-heading" className="text-sm font-semibold">
+      <h2 id="run-history-heading" className="text-[15px] font-semibold">
         Run history
       </h2>
       <p className="text-muted-foreground text-sm">
