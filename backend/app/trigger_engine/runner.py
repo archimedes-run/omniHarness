@@ -12,6 +12,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -123,10 +124,14 @@ class RuleRunner:
             if reset is not None:
                 reset()
             try:
-                firing.thread_id = self.threads.thread_for(rule.id)
-                if self.default_tools:
-                    self.injector.configure_tools(firing.thread_id, list(self.default_tools))
-                raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
+                # Held across resolving the thread AND running the turn: a
+                # delete of the automations' threads on any worker waits for
+                # it (or refuses), and never lands mid-firing.
+                with self._firing_lock():
+                    firing.thread_id = self.threads.thread_for(rule.id)
+                    if self.default_tools:
+                        self.injector.configure_tools(firing.thread_id, list(self.default_tools))
+                    raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
                 if not raw.strip() and rule.type is not TriggerType.WATCHER:
                     # A watcher alert still says something without a reply (its
                     # header names the session); anything else would arrive as
@@ -150,6 +155,10 @@ class RuleRunner:
             self._route(rule, firing, now)
             fired.append(firing)
         return fired
+
+    def _firing_lock(self):
+        lock = getattr(self.threads, "firing_lock", None)
+        return lock() if lock is not None else nullcontext()
 
     def _record(self, rule: Rule, firing: Firing, started: datetime, reply: str, *, error: str | None) -> None:
         if self.record_run is None:

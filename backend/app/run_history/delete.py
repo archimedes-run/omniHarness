@@ -18,7 +18,10 @@ deletes every stored run. Kept: the automations themselves, their delivery log
 (held for quiet hours).
 
 SAFETY. It refuses (ThreadsBusy) while any of those threads has a run in
-progress, rather than deleting under it. While the trigger engine runs, the
+progress, rather than deleting under it, and while a firing holds the rule
+map's cross-process firing lock (a firing in ANY worker). The map itself is a
+file the engine re-reads before each firing, so a forgotten thread is never
+reused by a worker holding an old copy. While the trigger engine runs, the
 whole deletion runs on the engine's own worker, so no firing can start, or
 write to a thread, between the check and the delete. A thread that cannot be
 deleted is reported by id, never reported as deleted.
@@ -38,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 #: How long one thread's deletion may take before it is reported as failed.
 STEP_TIMEOUT = 60.0
+#: How long to wait for a firing in progress (any worker) before refusing.
+LOCK_WAIT = 5.0
 
 
 class ThreadsBusy(RuntimeError):
@@ -136,6 +141,14 @@ async def delete_history_and_threads(app) -> DeleteResult:
         return asyncio.run_coroutine_threadsafe(coro, main).result(timeout=STEP_TIMEOUT)
 
     def critical() -> DeleteResult:
+        # The engine holds this lock for each firing, in whichever worker runs
+        # it. Not had within LOCK_WAIT: a firing is in progress; refuse.
+        with rule_map.firing_lock(timeout=LOCK_WAIT) as held:
+            if not held:
+                raise ThreadsBusy(["(a firing in another worker)"])
+            return _delete_locked()
+
+    def _delete_locked() -> DeleteResult:
         by_rule = {rule: rule_map.thread_of(rule) for rule in rule_map.known_rules()}
         thread_ids = {t for t in by_rule.values() if t} | history.thread_ids(kind=AUTOMATION)
         busy = run(_busy(app, thread_ids))

@@ -8,8 +8,11 @@ someone reads the conversation and finds it has no past.
 
 from __future__ import annotations
 
+import fcntl
 import logging
+import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +33,33 @@ class RuleThreadMap:
     _store: JsonStore | None = None
 
     def __post_init__(self) -> None:
-        self._store = JsonStore(path=self.path)
+        # The file is authoritative (cache=False): the engine re-reads the map
+        # before each firing, so a thread another worker deleted (and forgot)
+        # is never reused from a stale in-memory copy.
+        self._store = JsonStore(path=self.path, cache=False)
+
+    @contextmanager
+    def firing_lock(self, *, timeout: float | None = None):
+        """Exclusive, across processes, on this map's threads. The engine holds
+        it for each firing (resolve the thread, run the turn); deleting the
+        automations' threads holds it for the whole delete. Yields True when
+        held; with `timeout`, yields False if it could not be had in time."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path.parent / "threads.firing.lock", "a") as fh:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | (fcntl.LOCK_NB if deadline is not None else 0))
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        yield False
+                        return
+                    time.sleep(0.05)
+            try:
+                yield True
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
     def thread_for(self, rule_id: str) -> str:
         """Return this rule's thread, creating it on first firing."""
