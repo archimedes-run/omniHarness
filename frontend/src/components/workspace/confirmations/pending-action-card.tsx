@@ -60,6 +60,7 @@ export function PendingActionCard({
       "threshold_not_met",
       "tool_unavailable",
       "thread_busy",
+      "confirm_busy",
     ].includes(result.outcome);
   const continueAgent =
     result?.outcome === "executed" &&

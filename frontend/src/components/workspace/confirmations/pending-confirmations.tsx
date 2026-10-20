@@ -98,15 +98,29 @@ export function PendingConfirmations({
       )}
 
       {awaiting.map((item) => (
-        <p
+        <div
           key={item.id}
           className="border-border text-muted-foreground rounded-md border px-3 py-2 text-sm"
           data-testid="awaiting-post"
+          data-post-state={item.post_state ?? "waiting"}
         >
-          Result waiting to post ·{" "}
-          <span className="text-foreground">{item.tool_name}</span>, run for{" "}
-          {item.requester}. It appears in the chat as soon as the chat is free.
-        </p>
+          <p>
+            {item.post_state === "failed"
+              ? "Result could not be posted to the chat"
+              : item.post_state === "dropped"
+                ? "Chat deleted; result kept here"
+                : "Result waiting to post"}{" "}
+            · <span className="text-foreground">{item.tool_name}</span>, run for{" "}
+            {item.requester}.
+            {(item.post_state ?? "waiting") === "waiting" &&
+              " It appears in the chat as soon as the chat is free."}
+          </p>
+          {item.result && (
+            <p className="text-foreground mt-1 whitespace-pre-wrap">
+              {item.result}
+            </p>
+          )}
+        </div>
       ))}
 
       {pending?.readable && shown.length === 0 && awaiting.length === 0 && (
