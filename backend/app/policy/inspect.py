@@ -124,8 +124,10 @@ def recent_tier3(entries: list[dict], *, limit: int = 50) -> list[Tier3Execution
                 tool=e.get("tool", ""),
                 plan_as_stated=e.get("plan_as_stated", ""),
                 targets=list(e.get("targets") or []),
-                authorised_by=e.get("authorised_by"),
-                outcome=e.get("outcome"),
+                # A grant use (Feature 006) ran with nobody confirming: say which
+                # standing grant authorised it, not "nobody".
+                authorised_by=(f"{e.get('agent')}'s standing grant ({', '.join(e.get('classes') or [])})" if e.get("kind") == "grant-use" else e.get("authorised_by")),
+                outcome=("executed" if e.get("kind") == "grant-use" else e.get("outcome")),
             )
         )
     return out

@@ -63,6 +63,33 @@ class PolicyAuditLog:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
         return entry
 
+    def record_grant_use(
+        self, *, agent: str, user_id: str, tool: str, classes: list[str], targets: list[str], thread_id: str | None, rule_id: str | None, origin: str, origin_source: str, count_in_run: int, now: datetime | None = None
+    ) -> dict:
+        """A Tier 3 call that ran WITHOUT a confirmation because a standing
+        grant covered it (Feature 006). The other half of Article VIII: nobody
+        was in the loop, so the record is all a reviewer has, and it names the
+        grant, the run (thread and rule) and what caused the call."""
+        entry = {
+            "kind": "grant-use",
+            "at": (now or datetime.now()).isoformat(),
+            "actor": self.actor,
+            "agent": agent,
+            "user_id": user_id,
+            "tool": tool,
+            "classes": list(classes),
+            "targets": list(targets),
+            "thread_id": thread_id,
+            "rule_id": rule_id,
+            "origin": origin,
+            "origin_source": origin_source,
+            "count_in_run": count_in_run,
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        return entry
+
     def entries(self) -> list[dict]:
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
