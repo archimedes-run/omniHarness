@@ -38,6 +38,7 @@ from app.gateway.routers import (
     skills,
     suggestions,
     thread_runs,
+    thread_skills,
     thread_tools,
     threads,
     tool_sources,
@@ -502,6 +503,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Per-conversation tools (catalog + per-thread selection + count/cap)
     app.include_router(thread_tools.router)
+    app.include_router(thread_skills.router)
 
     # Per-user preferences (appearance) are mounted at /api/preferences
     app.include_router(preferences.router)
