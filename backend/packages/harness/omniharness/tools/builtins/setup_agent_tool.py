@@ -50,7 +50,9 @@ def setup_agent(
             target = config_versions.LEAD_AGENT
         # Through the versioned store; materialising stages both files, so a
         # failure leaves nothing half-written and records no version.
-        config_versions.write_agent(user_id, target, snapshot, who=f"user:{user_id}", source="chat")
+        # Recorded as the agent's doing: the model called this tool, in a chat
+        # the user started (source "chat").
+        config_versions.write_agent(user_id, target, snapshot, who=f"agent:{target}", source="chat")
 
         logger.info(f"[agent_creator] Created agent '{agent_name}'")
         return Command(
