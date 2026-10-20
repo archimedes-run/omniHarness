@@ -15,10 +15,12 @@ each tested (tests/run_history):
     completed for is stored as WITHHELD, never as it was: the store fails
     closed. Nothing unredacted reaches the database or a blob file.
   * RETENTION. Runs older than the retention (30 days by default, changeable)
-    are purged, rows and blob files both, by `purge()`; the gateway runs it at
+    are purged, rows and blob files both, by `purge()`, with SQLite's
+    secure_delete on, so a purged row's bytes are zeroed in the file rather
+    than left in a free page; the gateway runs it at
     startup and every hour (lifespan.py).
-  * LOCAL ONLY. A SQLite file and a directory under the gateway's data dir.
-    Nothing here syncs anywhere.
+  * LOCAL ONLY. A SQLite file and a directory under the gateway's data dir,
+    the directory 0700 and the database 0600. Nothing here syncs anywhere.
   * DELETABLE. `delete_all()` removes every run and every blob file.
 
 Thread-safe: one connection per call, and SQLite's own locking. The trigger
@@ -132,8 +134,14 @@ class RunHistory:
     def __init__(self, root: Path, *, redact: Callable[[str], tuple[str, bool]] | None = None, now: Callable[[], datetime] | None = None) -> None:
         self.root = Path(root)
         self.blobs = self.root / "blobs"
+        # Owner-only: the directory 0700, the database 0600, set on every open
+        # so a store created before this rule (or under a loose umask) is fixed.
         self.blobs.mkdir(parents=True, exist_ok=True)
+        for d in (self.root, self.blobs):
+            os.chmod(d, 0o700)
         self.db = self.root / "runs.sqlite3"
+        os.close(os.open(self.db, os.O_CREAT | os.O_RDWR, 0o600))
+        os.chmod(self.db, 0o600)
         self._redact = redact or default_redactor()
         self._now = now or (lambda: datetime.now(UTC))
         self._lock = threading.Lock()
@@ -143,6 +151,9 @@ class RunHistory:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db, timeout=10)
         conn.row_factory = sqlite3.Row
+        # A deleted or purged run is overwritten with zeros, not left in a free
+        # page where a copy of the file would still carry it. Per connection.
+        conn.execute("PRAGMA secure_delete = ON")
         return conn
 
     # -- settings ---------------------------------------------------------

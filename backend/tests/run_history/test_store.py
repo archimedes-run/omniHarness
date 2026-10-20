@@ -128,3 +128,36 @@ def test_new_credential_shapes_are_redacted(tmp_path, secret) -> None:
     value = secret.split(" ")[-1]
     assert value.encode() not in on_disk(tmp_path)
     assert "[redacted]" in store.get(run_id)["body"]["tool"]
+
+
+def test_the_store_is_owner_only(tmp_path) -> None:
+    import os
+    import stat
+
+    root = tmp_path / "history"
+    root.mkdir(mode=0o755)
+    # A store created before this rule, world-readable.
+    (root / "runs.sqlite3").touch(mode=0o644)
+    os.chmod(root / "runs.sqlite3", 0o644)
+    store = RunHistory(root)
+    store.record(kind="automation", source_id="r", body={"x": "y" * (INLINE_MAX + 10)}, status="completed")
+
+    def mode(p: Path) -> int:
+        return stat.S_IMODE(os.stat(p).st_mode)
+
+    assert mode(root) == 0o700 and mode(root / "blobs") == 0o700, "the directory is readable by others"
+    assert mode(store.db) == 0o600, "the database is readable by others"
+    for blob in (root / "blobs").iterdir():
+        assert mode(blob) == 0o600
+
+
+def test_a_purged_run_leaves_no_bytes_in_the_database(tmp_path) -> None:
+    """secure_delete: the purged row is zeroed, not left in a free page."""
+    store = RunHistory(tmp_path)
+    marker = "PURGE-ME-" + "q" * 2000
+    store.record(kind="automation", source_id="old", body={"note": marker}, status="completed", started_at=datetime.now(UTC) - timedelta(days=90))
+    store.record(kind="automation", source_id="new", body={"note": "kept"}, status="completed")
+    assert marker.encode() in store.db.read_bytes()
+
+    assert store.purge() == 1
+    assert marker[:40].encode() not in store.db.read_bytes(), "the purged run's content is still in the file"
