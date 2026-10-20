@@ -142,9 +142,20 @@ const UPCOMING = {
       at: ahead(80 * HOUR),
       schedule: "0 17 * * 5",
       timezone: null,
+      held_until: ahead(90 * HOUR),
     },
   ],
-  calendar: "not-set-up",
+  calendar: {
+    state: "ok",
+    detail: null,
+    events: [
+      {
+        title: "DarcyIQ sync with Mike Flores",
+        start: ahead(20 * HOUR),
+        all_day: false,
+      },
+    ],
+  },
 };
 
 const TODAY = {
@@ -156,6 +167,18 @@ const TODAY = {
       by: "you",
       project_id: "p1",
       thread_id: null,
+      known: "observed",
+      url: null,
+    },
+    {
+      at: ago(HOUR / 2),
+      source: "github",
+      text: "PR #41 merged in archimedes-run/omniHarness: sidebar",
+      by: null,
+      project_id: null,
+      thread_id: null,
+      known: "reported",
+      url: "https://github.com/archimedes-run/omniHarness/pull/41",
     },
     {
       at: ago(2 * HOUR),
@@ -164,9 +187,11 @@ const TODAY = {
       by: null,
       project_id: null,
       thread_id: "t-m",
+      known: "observed",
+      url: null,
     },
   ],
-  sources: { ledger: "ok", automations: "ok" },
+  sources: { ledger: "ok", automations: "ok", sessions: "ok", github: "ok" },
 };
 
 interface Options {
@@ -174,6 +199,7 @@ interface Options {
   broken?: boolean;
   displayName?: string | null;
   promptDismissed?: boolean;
+  calendarDown?: boolean;
 }
 
 /** Stubs Home's API. Returns the server-side state Home writes to. */
@@ -230,7 +256,25 @@ async function serve(page: Page, opts: Options = {}) {
   await page.route("**/api/home/upcoming", (route) =>
     opts.broken
       ? fail(route)
-      : json(route, opts.empty ? { ...UPCOMING, runs: [] } : UPCOMING),
+      : json(
+          route,
+          opts.empty
+            ? {
+                ...UPCOMING,
+                runs: [],
+                calendar: { state: "not-set-up", detail: null, events: [] },
+              }
+            : opts.calendarDown
+              ? {
+                  ...UPCOMING,
+                  calendar: {
+                    state: "unavailable",
+                    detail: "Google Calendar did not answer",
+                    events: [],
+                  },
+                }
+              : UPCOMING,
+        ),
   );
   await page.route(/\/api\/home\/today/, (route) =>
     opts.broken
@@ -356,15 +400,28 @@ test("the board's blocks render from real data", async ({ page }) => {
 
   const upcoming = page.getByTestId("home-upcoming");
   await expect(upcoming.getByTestId("home-upcoming-run")).toHaveCount(2);
-  await expect(upcoming.getByTestId("home-upcoming-run").first()).toContainText(
-    "Morning briefing",
+  await expect(upcoming.getByTestId("home-upcoming-event")).toContainText(
+    "DarcyIQ sync with Mike Flores",
+  );
+  // Soonest first: the briefing (14 h), the meeting (20 h), the review.
+  await expect(
+    upcoming.locator('[data-testid^="home-upcoming-"]').first(),
+  ).toContainText("Morning briefing");
+  await expect(upcoming.getByTestId("home-upcoming-run").nth(1)).toContainText(
+    "(quiet hours)",
   );
   await expect(upcoming.getByTestId("home-upcoming-calendar")).toHaveText(
-    /Calendar\s*Not set up/,
+    "Calendar · Google Calendar, next 7 days",
   );
 
   const moved = page.getByTestId("home-moved");
-  await expect(moved.getByTestId("home-moved-item")).toHaveCount(2);
+  await expect(moved.getByTestId("home-moved-item")).toHaveCount(3);
+  // How each line is known, in words.
+  await expect(moved.getByTestId("known")).toHaveText([
+    " · observed",
+    " · reported",
+    " · observed",
+  ]);
   await expect(moved).toContainText("Task done in OmniHarness: Ship Home");
 
   // The chat bar is at the bottom, 816 px at most.
@@ -374,6 +431,23 @@ test("the board's blocks render from real data", async ({ page }) => {
   expect(box.width).toBeLessThanOrEqual(816);
   expect(box.y + box.height).toBeGreaterThan(900 - 80);
   await expect(page.getByTestId("name-prompt")).toHaveCount(0);
+});
+
+test("a calendar that cannot be read is can't-tell; one not connected is not set up", async ({
+  page,
+}) => {
+  await serve(page, { calendarDown: true });
+  await page.goto("/workspace/home");
+  await expect(
+    page.getByTestId("home-upcoming-calendar-unreadable"),
+  ).toContainText("did not answer");
+  await expect(page.getByTestId("home-upcoming-event")).toHaveCount(0);
+  await page.unrouteAll();
+  await serve(page, { empty: true });
+  await page.goto("/workspace/home");
+  await expect(page.getByTestId("home-upcoming-calendar")).toHaveText(
+    "Calendar · Not set up",
+  );
 });
 
 test("empty is said plainly, and is not can't-tell", async ({ page }) => {
@@ -521,9 +595,12 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page.getByTestId("home-session")).toHaveCount(3);
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/home-live-${scheme}.png` });
+    await page
+      .getByTestId("home-scroll")
+      .evaluate((el) => el.scrollTo(0, el.scrollHeight));
+    await page.waitForTimeout(300);
     await page.screenshot({
-      path: `${SHOTS}/home-live-${scheme}-full.png`,
-      fullPage: true,
+      path: `${SHOTS}/home-live-${scheme}-scrolled.png`,
     });
   });
 }

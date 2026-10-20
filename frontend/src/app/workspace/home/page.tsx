@@ -29,8 +29,8 @@ const HomeChatBar = dynamic(
  *  - a greeting, the date and how many things need you;
  *  - Waiting on you: approvals (Decline / Confirm inline) and coding sessions
  *    that look blocked on you;
- *  - While you were away: missed alerts, dismissable (kept on the server);
  *  - Projects, Coding sessions, Upcoming and What moved today;
+ *  - While you were away: missed alerts, dismissable (kept on the server);
  *  - the chat bar, at the bottom: sending starts a new chat (the board marks
  *    Home as "New chat").
  * Every block keeps "empty" apart from "can't tell". /workspace/inbox
@@ -48,13 +48,13 @@ export default function HomePage() {
           <Greeting sessions={sessions} now={now} />
           <NamePrompt />
           <WaitingOnYou sessions={sessions} now={now} />
-          <AwayAlerts />
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(320px,100%),1fr))] gap-5">
             <ProjectsCard />
             <SessionsCard sessions={sessions} now={now} />
             <UpcomingCard now={now} />
             <MovedCard now={now} />
           </div>
+          <AwayAlerts />
         </div>
       </div>
       <div

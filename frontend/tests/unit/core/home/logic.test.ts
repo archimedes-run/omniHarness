@@ -4,11 +4,13 @@ import {
   ago,
   alertKey,
   dateLine,
+  dayLabel,
   dueLabel,
   greeting,
   knownBy,
   needsYou,
   sessionStatus,
+  sortTime,
   startOfDay,
   taskProgress,
   whenLabel,
@@ -76,6 +78,15 @@ describe("times", () => {
     );
     expect(whenLabel(at(17, 0, 23).toISOString(), now)).toBe("Fri 5:00 PM");
     expect(whenLabel(at(17, 0, 30).toISOString(), now)).toBe("Oct 30 5:00 PM");
+  });
+
+  it("names an all-day calendar date as a day, and sorts it at its midnight", () => {
+    const now = at(10);
+    expect(dayLabel("2026-10-19", now)).toBe("Today");
+    expect(dayLabel("2026-10-20", now)).toBe("Tomorrow");
+    expect(dayLabel("2026-10-23", now)).toBe("Fri");
+    expect(dayLabel("2026-10-30", now)).toBe("Oct 30");
+    expect(sortTime("2026-10-20", true)).toBe(at(0, 0, 20).getTime());
   });
 
   it("reads a due date as that local day", () => {

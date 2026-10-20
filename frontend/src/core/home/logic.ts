@@ -146,3 +146,27 @@ export function knownBy(epistemic: SessionRow["epistemic"]): string {
       ? "Inferred"
       : "Can't tell";
 }
+
+/** An all-day calendar date ("2026-10-23") as a day: "Today", "Tomorrow",
+ * "Fri", or "Oct 30" beyond a week. */
+export function dayLabel(date: string, now: Date): string {
+  const [y, m, d] = date.split("-").map(Number);
+  if (!y || !m || !d) return date;
+  const local = new Date(y, m - 1, d);
+  const days = Math.round(
+    (local.getTime() - startOfDay(now).getTime()) / 86_400_000,
+  );
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  if (days > 1 && days < 7)
+    return local.toLocaleDateString("en-US", { weekday: "short" });
+  return local.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** The instant an upcoming entry sorts by (an all-day date at its local
+ * midnight). */
+export function sortTime(start: string, allDay: boolean): number {
+  if (!allDay) return new Date(start).getTime();
+  const [y, m, d] = start.split("-").map(Number);
+  return new Date(y ?? 0, (m ?? 1) - 1, d ?? 1).getTime();
+}
