@@ -169,21 +169,21 @@ class McpSecretsVault:
             result = await session.execute(stmt)
             return [{"key_name": row[0], "key_hint": row[1]} for row in result.fetchall()]
 
-    async def reveal(self, *, server_id: str, owner_id: str) -> dict[str, str]:
-        """Decrypt all secrets for the owner and return {key_name: plaintext}.
+    async def reveal(self, *, server_id: str, owner_id: str, key_name: str) -> str | None:
+        """Decrypt one stored secret for its owner; ``None`` when it is not stored.
 
-        This is the only public decrypt path. It is guarded at the router level
-        by ownership verification + write permission (same as PUT /secrets).
-        The caller MUST NOT log or forward this mapping to agent/model context.
+        The only public decrypt path. The router gates it on server ownership,
+        a re-entered password and an audit log line (key name only). The
+        caller MUST NOT log or forward the value to agent/model context.
         """
         stmt = select(McpSecretRow).where(
             McpSecretRow.server_id == server_id,
             McpSecretRow.owner_id == owner_id,
+            McpSecretRow.key_name == key_name,
         )
         async with self._sf() as session:
-            result = await session.execute(stmt)
-            rows = result.scalars().all()
-        return {row.key_name: self._fernet.decrypt(row.ciphertext).decode() for row in rows}
+            row = (await session.execute(stmt)).scalar_one_or_none()
+        return None if row is None else self._fernet.decrypt(row.ciphertext).decode()
 
     # ------------------------------------------------------------------
     # Internal decrypt — only called by MCPServerManager for sandbox injection
