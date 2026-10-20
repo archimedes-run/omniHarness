@@ -163,7 +163,7 @@ async def get_tools_catalog(request: Request) -> CatalogResponse:
 
 
 @router.get("/threads/{thread_id}/tools", response_model=SelectionResponse)
-@require_permission("threads", "read")
+@require_permission("threads", "read", owner_check=True)
 async def get_thread_tools(thread_id: str, request: Request) -> SelectionResponse:
     from omniharness.persistence.thread_tool_selection.sql import PINNED_SOURCES
 
@@ -174,7 +174,7 @@ async def get_thread_tools(thread_id: str, request: Request) -> SelectionRespons
 
 
 @router.put("/threads/{thread_id}/tools", response_model=SelectionResponse)
-@require_permission("threads", "write")
+@require_permission("threads", "write", owner_check=True)
 async def put_thread_tools(thread_id: str, body: SelectionUpdateRequest, request: Request) -> SelectionResponse:
     from omniharness.persistence.thread_tool_selection.sql import PINNED_SOURCES
 
@@ -191,7 +191,7 @@ async def put_thread_tools(thread_id: str, body: SelectionUpdateRequest, request
 
 
 @router.get("/threads/{thread_id}/tools/count", response_model=CountResponse)
-@require_permission("threads", "read")
+@require_permission("threads", "read", owner_check=True)
 async def get_thread_tools_count(thread_id: str, request: Request) -> CountResponse:
     from omniharness.config import get_app_config
     from omniharness.tools.tools import ToolCapExceededError, get_available_tools, resolve_model_tool_cap

@@ -381,6 +381,7 @@ class PolicyMiddleware(AgentMiddleware):
             origin=origin,
             origin_source=origin_source,
             origin_via=origin_via,
+            owner_id=self._owner_id(request),
         )
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
@@ -492,6 +493,14 @@ class PolicyMiddleware(AgentMiddleware):
     def _thread_id(request) -> str | None:
         context = getattr(getattr(request, "runtime", None), "context", None) or {}
         return context.get("thread_id")
+
+    @staticmethod
+    def _owner_id(request) -> str | None:
+        """Whose run this is. ``user_id`` in run context is set by the server
+        (services.apply_server_owned_context), never by a request body."""
+        context = getattr(getattr(request, "runtime", None), "context", None) or {}
+        owner = context.get("user_id")
+        return str(owner) if owner else None
 
     @staticmethod
     def _requester(request) -> str:

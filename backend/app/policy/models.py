@@ -184,6 +184,10 @@ class PendingAction:
     #: For an invited agent (a subagent): the agent whose turn the content or
     #: automation reached it through. Empty when the cause was direct.
     origin_via: str = ""
+    #: The user whose run stated this plan (security baseline). Only that user
+    #: (or the owner, for the system's own runs) may see, confirm, decline or
+    #: edit it: app.gateway.ownership.can_access. None = predates owners.
+    owner_id: str | None = None
 
     @property
     def confirmable_by_typing(self) -> bool:

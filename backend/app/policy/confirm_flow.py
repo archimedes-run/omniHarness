@@ -103,7 +103,11 @@ class ConfirmationFlow:
         """
         now = self.now()
         expired = self._expire(now)
-        pending = self.store.open_actions(now)
+        # Ownership: a typed reply only ever answers the speaker's OWN plans.
+        # The run's user_id is server-set; a plan from another account's run is
+        # invisible here, exactly as it is on the card (confirmations router).
+        speaker = (runtime_context or {}).get("user_id")
+        pending = [a for a in self.store.open_actions(now) if a.owner_id is None or speaker is None or str(a.owner_id) == str(speaker)]
         if not pending:
             return FlowResult(NO_VERDICT, expired_meanwhile=expired)
 

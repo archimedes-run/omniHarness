@@ -38,7 +38,7 @@ class SkillExclusionUpdateRequest(BaseModel):
 
 
 @router.get("/threads/{thread_id}/skills", response_model=SkillExclusionResponse)
-@require_permission("threads", "read")
+@require_permission("threads", "read", owner_check=True)
 async def get_thread_skills(thread_id: str, request: Request) -> SkillExclusionResponse:
     user_id = _get_user_id(request)
     repo = get_thread_skill_exclusion_repo(request)
@@ -46,7 +46,7 @@ async def get_thread_skills(thread_id: str, request: Request) -> SkillExclusionR
 
 
 @router.put("/threads/{thread_id}/skills", response_model=SkillExclusionResponse)
-@require_permission("threads", "write")
+@require_permission("threads", "write", owner_check=True)
 async def put_thread_skills(thread_id: str, body: SkillExclusionUpdateRequest, request: Request) -> SkillExclusionResponse:
     from omniharness.persistence.thread_skill_exclusion.sql import ThreadOwnedElsewhere
 

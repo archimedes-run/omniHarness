@@ -38,6 +38,13 @@ def policy(tmp_path, monkeypatch):
         return lambda name, args: ran.append(name) or "ran"
 
     monkeypatch.setattr(confirmations, "_runner", _runner)
+
+    # The stub user is the owner account (security baseline: plans with no
+    # recorded owner, as these are, are the owner's to answer).
+    async def _is_owner(user):
+        return True
+
+    monkeypatch.setattr("app.gateway.ownership.is_owner", _is_owner)
     middleware = registration.build(app_config)
     app = make_authed_test_app()
     app.include_router(confirmations.router)
