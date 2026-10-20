@@ -369,6 +369,34 @@ def strip_server_owned_context(config: dict[str, Any]) -> None:
                 container.pop(key, None)
 
 
+async def _call_in_mentioned_member(request: Request, thread_id: str, graph_input: dict, config: dict[str, Any]) -> None:
+    from app.gateway.routers.thread_participants import stored_participants
+    from omniharness.agents.called_agents import CALLED_AGENT_KEY, mentioned_member
+
+    messages = graph_input.get("messages") if isinstance(graph_input, dict) else None
+    if not messages:
+        return
+    last = messages[-1]
+    if not isinstance(last, HumanMessage):
+        return
+    content = last.content
+    text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+    if "@" not in text:
+        return
+    try:
+        thread_store = getattr(request.app.state, "thread_store", None)
+        user_id = await get_current_user(request)
+        members = await stored_participants(thread_store, thread_id, user_id) if thread_store is not None else []
+    except Exception:
+        logger.warning("Failed to read the members of %s; nobody is called in", sanitize_log_param(thread_id))
+        return
+    called = mentioned_member(text, members)
+    if called:
+        ctx_dict = config.setdefault("context", {})
+        if isinstance(ctx_dict, dict):
+            ctx_dict[CALLED_AGENT_KEY] = called
+
+
 def resolve_agent_factory(assistant_id: str | None):
     """Resolve the agent factory callable from config.
 
@@ -664,6 +692,11 @@ async def start_run(
     # taken from a client: a run body's `config.context` is honoured wholesale
     # by build_run_config, so these are dropped from it here (plan.md §2.0).
     strip_server_owned_context(config)
+
+    # Feature 006: "@agent" in the USER's own turn calls a member of the chat
+    # in. Read from this request's input only (Article III): a mention inside a
+    # tool result or an agent's reply is never in it.
+    await _call_in_mentioned_member(request, thread_id, graph_input, config)
 
     # Feature 006: skills removed from this conversation (the chat bar's ×).
     # Always the server's stored value (the client's was dropped above).

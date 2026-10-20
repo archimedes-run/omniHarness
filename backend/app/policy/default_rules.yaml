@@ -132,6 +132,12 @@ policy:
     # Spawns work. Article II names spawning as Tier 3 explicitly.
     - pattern: "task"
       tier: 3
+    # An agent the USER called in with "@". Never chosen by a model: the tool
+    # is bound only for a turn whose own text mentions a member of the chat,
+    # and the lead hands that turn over deterministically. The called agent's
+    # own calls are gated like any subagent's, from the user's provenance.
+    - pattern: "call_agent"
+      tier: 1
     - pattern: "mcp_build"
       tier: 3
     # Delegates to an external coding agent (ACP) or the openclaude CLI:
