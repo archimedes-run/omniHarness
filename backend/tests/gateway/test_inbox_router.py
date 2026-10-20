@@ -70,7 +70,8 @@ def test_old_history_drops_out_but_a_held_firing_never_does(client) -> None:
 
 def test_a_disabled_engine_has_no_alerts(client) -> None:
     client.app.state.config.trigger_engine.enabled = False
-    assert _alerts(client) == {"alerts": [], "waiting_count": 0}
+    body = _alerts(client)
+    assert (body["alerts"], body["waiting_count"]) == ([], 0)
 
 
 def test_the_gateway_serves_the_route() -> None:
