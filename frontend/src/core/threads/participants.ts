@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
+import { PENDING_CONFIRMATIONS_KEY } from "@/core/confirmations/hooks";
 
 export interface Participant {
   name: string;
@@ -18,6 +19,8 @@ export interface Participant {
 export interface ParticipantsResponse {
   thread_id: string;
   participants: Participant[];
+  /** Pending actions of a removed agent, refused (never run) by the removal. */
+  refused_actions?: string[];
 }
 
 const url = (threadId: string, agent?: string) =>
@@ -81,7 +84,15 @@ export function useRemoveAgent(threadId: string) {
   return useMutation({
     mutationFn: async (agent: string) =>
       read(await fetch(url(threadId, agent), { method: "DELETE" })),
-    onSuccess: (data) =>
-      queryClient.setQueryData(participantsKey(threadId), data),
+    onSuccess: (data) => {
+      queryClient.setQueryData(participantsKey(threadId), data);
+      // The removed agent's pending actions were refused: its cards go now,
+      // not at the next poll.
+      if (data.refused_actions?.length) {
+        void queryClient.invalidateQueries({
+          queryKey: PENDING_CONFIRMATIONS_KEY,
+        });
+      }
+    },
   });
 }
