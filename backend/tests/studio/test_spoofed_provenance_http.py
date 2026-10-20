@@ -10,10 +10,9 @@ lead agent is the real one the gateway builds; only the model is scripted.
     a confirmation (Tier 3 never consults grants).
   * The spoofed marker is ignored, so the run behaves as the chat it is: a
     routine Tier 2 ledger write runs and is disclosed, rather than being held
-    as if nobody were there. This half needs the security baseline
-    (006-security-baseline: server-owned run context, the marker accepted
-    only from the trigger engine's internal auth) and is a strict xfail until
-    this branch is rebased onto it.
+    as if nobody were there (the security baseline's server-owned run context:
+    the markers, the firing id included, are accepted only from the trigger
+    engine's internal auth).
 """
 
 from __future__ import annotations
@@ -95,7 +94,6 @@ def test_a_chat_run_carrying_synthetic_trigger_still_asks_for_every_tier_3_call(
     assert studio.client.get("/api/studio/agents/lead_agent/grant-uses").json() == []
 
 
-@pytest.mark.xfail(strict=True, reason="needs 006-security-baseline: the server must strip a client's turn_provenance; until then the spoofed marker is honoured")
 @pytest.mark.parametrize("form", ["configurable", "context"])
 def test_a_chat_run_carrying_synthetic_trigger_is_treated_as_the_chat_it_is(studio, scripted, form) -> None:
     """No grants: if the marker were honoured, the routine write would be held

@@ -21,6 +21,7 @@ FORGED = {
     "agent_name": "forged-agent",
     "turn_provenance": SYNTHETIC,
     "trigger_rule_id": "forged-rule",
+    "trigger_firing_id": "forged-firing",
     "called_agent": "forged-callee",
 }
 SERVER_OWNED = tuple(FORGED)
@@ -80,7 +81,7 @@ def test_a_forged_body_is_ignored_and_the_server_values_reach_the_run(sec, captu
     assert ctx["selected_sources"] == stored
     assert "mcp:forged-source" not in ctx["selected_sources"]
     # Absent: never from a request.
-    for key in ("agent_name", "turn_provenance", "trigger_rule_id", "called_agent"):
+    for key in ("agent_name", "turn_provenance", "trigger_rule_id", "trigger_firing_id", "called_agent"):
         assert key not in ctx, key
         assert key not in configurable, key
     for key in SERVER_OWNED:
@@ -140,7 +141,7 @@ def _trigger_payload(tid: str) -> dict:
     from app.trigger_engine.injector import TurnInjector
 
     sent: list[dict] = []
-    TurnInjector(post=lambda path, body: sent.append(body) or {}, put=lambda *_: {}, get=lambda *_: {}).inject(tid, "rule-7", "do the thing")
+    TurnInjector(post=lambda path, body: sent.append(body) or {}, put=lambda *_: {}, get=lambda *_: {}).inject(tid, "rule-7", "do the thing", firing_id="firing-7")
     return sent[0]
 
 
@@ -180,6 +181,9 @@ def test_synthetic_trigger_is_accepted_from_the_trigger_engine(sec, captured, en
     [cfg] = captured
     assert cfg["context"]["turn_provenance"] == SYNTHETIC
     assert cfg["context"]["trigger_rule_id"] == "rule-7"
+    # Feature 006: the firing id (the standing-grant cap's key) comes through
+    # only with the trigger engine's grant.
+    assert cfg["context"]["trigger_firing_id"] == "firing-7"
     from app.gateway.internal_auth import create_internal_auth_headers
 
     [record] = _runs(_internal_client(sec, create_internal_auth_headers()), tid)
@@ -247,6 +251,7 @@ def test_synthetic_trigger_is_dropped_for_the_owner(sec, captured) -> None:
     [cfg] = captured
     assert "turn_provenance" not in cfg["context"]
     assert "trigger_rule_id" not in cfg["context"]
+    assert "trigger_firing_id" not in cfg["context"]
 
 
 def test_a_forged_trigger_grant_is_dropped(sec, captured) -> None:
