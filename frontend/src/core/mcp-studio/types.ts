@@ -7,6 +7,7 @@ export type BuildState =
   | "tests_failed"
   | "awaiting_approval"
   | "turning_on"
+  | "turn_on_failed"
   | "enabled"
   | "off"
   | "stalled";

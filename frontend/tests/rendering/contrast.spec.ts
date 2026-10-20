@@ -331,6 +331,24 @@ const SERVER = (id: string, status: string) => ({
   files: null,
   created_at: now(),
   updated_at: now(),
+  // Feature 006 (MCP Suite > Build): each build state, so its colours are audited.
+  ...({
+    deployed: { state: "enabled", state_label: "Enabled" },
+    failed: {
+      state: "tests_failed",
+      state_label: "Tests failed",
+      state_reason: "The server started, but no tools were found.",
+    },
+    stopped: {
+      state: "awaiting_approval",
+      state_label: "Waiting for your approval",
+      steps: [
+        { status: "done", text: "Tests passed in sandbox: 2 of 2" },
+        { status: "failed", text: "Tests in sandbox: 1 of 2 passed" },
+        { status: "waiting", text: "First real run needs your approval" },
+      ],
+    },
+  }[status] ?? {}),
 });
 const TOOLKIT = (slug: string, status: string) => ({
   slug,
@@ -522,6 +540,7 @@ const PAGES = [
   "/workspace/projects",
   "/workspace/projects/p1",
   "/workspace/connections?tab=suite",
+  "/workspace/connections?tab=build&server=notes",
   "/workspace/settings/memory",
   "/workspace/settings/memory?tab=facts",
   "/workspace/mcp/new",
