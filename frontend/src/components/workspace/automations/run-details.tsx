@@ -37,6 +37,8 @@ const SOURCE: Record<string, string> = {
   trigger_with_untrusted_event:
     "Sent by the automation, with event text in it. Untrusted: the event's words were written by whoever sent it",
   user_concurrent: "Written by you while the automation was running",
+  untrusted_injected_or_unverified:
+    "Added during the run, not verified as yours (it may be a summary or a reminder the assistant's tools inserted). Untrusted",
   user: "Written by you",
   assistant: "Written by the assistant",
   system: "System instructions",
@@ -157,6 +159,14 @@ export function RunDetails({ runId }: { runId: string }) {
               label={`Result: ${m.name ?? "tool"}`}
               source={SOURCE[m.provenance ?? "untrusted_tool_output"]}
               mono
+            >
+              {text(m.content)}
+            </Part>
+          ) : m.type === "human" || m.role === "human" ? (
+            <Part
+              key={i}
+              label="Message during the run"
+              source={SOURCE[m.provenance ?? "unknown"] ?? SOURCE.unknown}
             >
               {text(m.content)}
             </Part>
