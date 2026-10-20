@@ -88,6 +88,9 @@ def wipe_backup(name: str) -> str:
     return f"wiped {name}"
 
 
+#: Off only for the ungated fixture: `task` then runs with the provider's own
+#: tool-call id, which is where a reused id used to collide.
+POLICY = {"enabled": True}
 BACKUP_SOURCE = "custom:backup"
 SOURCE_STATE = {"disconnected": False}
 LEAD_SCRIPT: list[AIMessage] = []
@@ -103,7 +106,7 @@ def gateway(tmp_path, monkeypatch):
     config = yaml.safe_load(EXAMPLE.read_text())
     config["database"] = {"backend": "sqlite", "sqlite_dir": str(tmp_path / "data")}
     # The SHIPPED rules: `task` is Tier 3 (Article II names spawning).
-    config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy")}
+    config["policy"] = {"enabled": POLICY["enabled"], "state_dir": str(tmp_path / "policy")}
     config["trigger_engine"] = {"enabled": False}
     config.setdefault("memory", {})["enabled"] = False
     config.setdefault("title", {})["enabled"] = False
@@ -646,3 +649,40 @@ def test_a_result_ready_while_a_run_started_is_queued_and_lands_after_it(gateway
     assert f"confirmation-{wipe['id']}" in ids, "the confirmed result was lost"
     assert any(m.get("content") == "the late reply" for m in messages), "the run's own reply was lost"
     assert RAN == [("wipe_backup", {"name": "nightly"})]
+
+
+# ---------------------------------------------------------------------------
+# A delegation's checkpoint key is its own even when the provider reuses the
+# tool-call id (review of PR #58: the key was the call id alone)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ungated(monkeypatch):
+    monkeypatch.setitem(POLICY, "enabled", False)
+
+
+def test_a_reused_call_id_never_resumes_another_delegation(ungated, gateway) -> None:
+    thread_id = _thread(gateway)
+    for prompt in ("FIRST-TASK", "SECOND-TASK"):
+        SUB_SCRIPT[:] = [AIMessage(content=f"done {prompt}")]
+        # The SAME call id both times, as providers that number calls per turn send.
+        _say(gateway, thread_id, "delegate", [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "call_0", "args": {**DELEGATE["args"], "prompt": prompt}}]), AIMessage(content="done")])
+
+    first, second = SUBAGENT_RUNS
+    assert any("FIRST-TASK" in m for m in first)
+    assert any("SECOND-TASK" in m for m in second)
+    assert not any("FIRST-TASK" in m or "done FIRST-TASK" in m for m in second), "the second delegation started from the first one's checkpoint"
+
+
+def test_the_checkpoint_key_differs_for_the_same_call_id(monkeypatch) -> None:
+    """The executor's own key is unique too, whatever id its caller passes
+    (the @-call path passes its own)."""
+    # tests/conftest.py replaces the module with a MagicMock for the session.
+    monkeypatch.delitem(sys.modules, "omniharness.subagents.executor")
+    executor_module = importlib.import_module("omniharness.subagents.executor")
+    first = executor_module.subagent_checkpoint_key("thread-1", "call_0")
+    second = executor_module.subagent_checkpoint_key("thread-1", "call_0")
+
+    assert first != second
+    assert first.startswith("thread-1/subagent/call_0/")

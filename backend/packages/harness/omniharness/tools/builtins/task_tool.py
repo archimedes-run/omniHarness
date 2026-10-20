@@ -230,9 +230,12 @@ async def task_tool(
         executor_kwargs["app_config"] = resolved_app_config
     executor = SubagentExecutor(**executor_kwargs)
 
-    # Start background execution (always async to prevent blocking)
-    # Use tool_call_id as task_id for better traceability
-    task_id = executor.execute_async(prompt, task_id=tool_call_id)
+    # Start background execution (always async to prevent blocking).
+    # Progress events carry the tool call's id (the chat matches its subtask
+    # card by it); the background registry gets a unique id, because providers
+    # reuse call ids and two delegations must never share an entry.
+    task_id = tool_call_id
+    background_id = executor.execute_async(prompt, task_id=f"{tool_call_id}-{uuid.uuid4().hex[:8]}")
 
     # Poll for task completion in backend (removes need for LLM to poll)
     poll_count = 0
@@ -249,12 +252,12 @@ async def task_tool(
 
     try:
         while True:
-            result = get_background_task_result(task_id)
+            result = get_background_task_result(background_id)
 
             if result is None:
                 logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
                 writer({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"})
-                cleanup_background_task(task_id)
+                cleanup_background_task(background_id)
                 return f"Error: Task {task_id} disappeared from background tasks"
 
             # Log status changes for debugging
@@ -285,22 +288,22 @@ async def task_tool(
             if result.status == SubagentStatus.COMPLETED:
                 writer({"type": "task_completed", "task_id": task_id, "result": result.result})
                 logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
-                cleanup_background_task(task_id)
+                cleanup_background_task(background_id)
                 return f"Task Succeeded. Result: {result.result}"
             elif result.status == SubagentStatus.FAILED:
                 writer({"type": "task_failed", "task_id": task_id, "error": result.error})
                 logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
-                cleanup_background_task(task_id)
+                cleanup_background_task(background_id)
                 return f"Task failed. Error: {result.error}"
             elif result.status == SubagentStatus.CANCELLED:
                 writer({"type": "task_cancelled", "task_id": task_id, "error": result.error})
                 logger.info(f"[trace={trace_id}] Task {task_id} cancelled: {result.error}")
-                cleanup_background_task(task_id)
+                cleanup_background_task(background_id)
                 return "Task cancelled by user."
             elif result.status == SubagentStatus.TIMED_OUT:
                 writer({"type": "task_timed_out", "task_id": task_id, "error": result.error})
                 logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
-                cleanup_background_task(task_id)
+                cleanup_background_task(background_id)
                 return f"Task timed out. Error: {result.error}"
 
             # Still running, wait before next poll
@@ -323,19 +326,19 @@ async def task_tool(
         # Without this, the thread (running in ThreadPoolExecutor with its
         # own event loop via asyncio.run) would continue executing even
         # after the parent task is cancelled.
-        request_cancel_background_task(task_id)
+        request_cancel_background_task(background_id)
 
         async def cleanup_when_done() -> None:
             max_cleanup_polls = max_poll_count
             cleanup_poll_count = 0
 
             while True:
-                result = get_background_task_result(task_id)
+                result = get_background_task_result(background_id)
                 if result is None:
                     return
 
                 if result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.CANCELLED, SubagentStatus.TIMED_OUT} or getattr(result, "completed_at", None) is not None:
-                    cleanup_background_task(task_id)
+                    cleanup_background_task(background_id)
                     return
 
                 if cleanup_poll_count > max_cleanup_polls:
