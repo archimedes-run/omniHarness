@@ -11,7 +11,7 @@ import {
   useUpdateAgent,
   type Agent,
 } from "@/core/agents";
-import { skillSlug, useAgentRuns } from "@/core/studio";
+import { draft, skillSlug, useAgentRuns } from "@/core/studio";
 import { cn } from "@/lib/utils";
 
 import {
@@ -234,6 +234,10 @@ function AgentEditor({
     | { kind: "saved" }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
+  const [draftNote, setDraftNote] = useState<{
+    text: string;
+    bad: boolean;
+  } | null>(null);
   const create = useCreateAgent();
   const { runs } = useAgentRuns(
     mode === "new" ? null : (agent?.name ?? LEAD_AGENT_ID),
@@ -249,6 +253,37 @@ function AgentEditor({
     setForm((f) => ({ ...f, ...next }));
     setStatus({ kind: "idle" });
   };
+
+  /** Fill the large fields from one sentence, for review. Saves nothing. */
+  async function onDraft(sentence: string) {
+    try {
+      const result = await draft("agent", {
+        sentence,
+        agent_name: mode === "agent" ? id : null,
+      });
+      const d = result.agent!;
+      patch({
+        display_name: form.display_name.trim()
+          ? form.display_name
+          : d.display_name,
+        description: form.description.trim() ? form.description : d.description,
+        soul: d.instructions,
+        tool_groups: d.tool_groups.length ? d.tool_groups : form.tool_groups,
+        skills: d.skills.length ? d.skills : form.skills,
+      });
+      setDraftNote({
+        text:
+          c.draftReady(result.model) +
+          (result.dropped.length ? ` ${c.draftDropped(result.dropped)}` : ""),
+        bad: false,
+      });
+    } catch (e) {
+      setDraftNote({
+        text: c.draftFailed(e instanceof Error ? e.message : String(e)),
+        bad: true,
+      });
+    }
+  }
 
   async function save() {
     if (isLead) return;
@@ -410,8 +445,19 @@ function AgentEditor({
         isLead={isLead}
         agentId={mode === "new" ? null : id}
       />
-      <InstructionsTab form={form} patch={patch} isLead={isLead} />
-      <ToolsTab form={form} patch={patch} isLead={isLead} />
+      <InstructionsTab
+        form={form}
+        patch={patch}
+        isLead={isLead}
+        onDraft={onDraft}
+        draftNote={draftNote}
+      />
+      <ToolsTab
+        form={form}
+        patch={patch}
+        isLead={isLead}
+        draftNote={draftNote}
+      />
       <AutonomyTab isLead={isLead} />
       <ScheduleTab isLead={isLead} agentId={mode === "new" ? null : id} />
     </StudioTabs>

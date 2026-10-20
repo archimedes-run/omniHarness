@@ -63,6 +63,8 @@ const enUS = {
       `Drafted by ${model}. Review the Instructions and Tools and skills tabs, then Save. Nothing is saved yet.`,
     draftFailed: (why: string) => `Could not draft: ${why}`,
     draftNeedsSentence: "Type a sentence first.",
+    draftDropped: (names: string[]) =>
+      `Left out because they don't exist here: ${names.join(", ")}.`,
     suggested: "Suggested by the draft",
     toolGroups: "Tool groups",
     allToolGroups: "All tool groups (no limit)",
@@ -148,6 +150,11 @@ const enUS = {
       "This sentence decides when the skill loads. Name the situations, not the steps.",
     draft: "Draft",
     drafting: "Drafting…",
+    draftReady: (model: string) =>
+      `Drafted by ${model}. Review it, then Save skill. Nothing is saved yet.`,
+    draftFailed: (why: string) => `Could not draft: ${why}`,
+    draftNeedsSentence: "Type a sentence first.",
+    draftWhenNeeds: "Give it a name or instructions first.",
     sentenceLabel: "Describe the skill in one sentence",
     sentencePlaceholder:
       "Describe it in one sentence and let it draft the instructions",
@@ -251,6 +258,8 @@ const zhCN: StudioCopy = {
       `由 ${model} 起草。请检查“指令”和“工具和技能”，然后保存。尚未保存任何内容。`,
     draftFailed: (why) => `无法起草：${why}`,
     draftNeedsSentence: "请先输入一句话。",
+    draftDropped: (names) =>
+      `以下项目在这里不存在，已略去：${names.join("、")}。`,
     suggested: "草稿建议",
     toolGroups: "工具组",
     allToolGroups: "所有工具组（不限制）",
@@ -327,6 +336,11 @@ const zhCN: StudioCopy = {
     whenHelp: "这句话决定技能何时加载。写明使用场景，而不是步骤。",
     draft: "起草",
     drafting: "起草中…",
+    draftReady: (model) =>
+      `由 ${model} 起草。请检查后保存技能。尚未保存任何内容。`,
+    draftFailed: (why) => `无法起草：${why}`,
+    draftNeedsSentence: "请先输入一句话。",
+    draftWhenNeeds: "请先填写名称或指令。",
     sentenceLabel: "用一句话描述这个技能",
     sentencePlaceholder: "用一句话描述，让它起草指令",
     formatting: "格式",

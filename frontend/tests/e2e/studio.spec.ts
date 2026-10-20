@@ -113,3 +113,67 @@ test("a new skill is created under its slug", async ({ page }) => {
     name: "cite-every-source",
   });
 });
+
+test("Draft fills the fields from one sentence for review, and only Save writes", async ({
+  page,
+}) => {
+  const seen = await stubStudio(page);
+  await page.goto("/workspace/chats?panel=agents", {
+    waitUntil: "networkidle",
+  });
+  await page.getByTestId("studio-new").click();
+  await page
+    .getByLabel("Describe the agent in one sentence")
+    .fill("Every morning, tell me what is waiting");
+  await page
+    .getByTestId("agent-draft-bar")
+    .getByRole("button", { name: "Draft" })
+    .click();
+  await expect(page.getByTestId("draft-note")).toContainText(
+    "Drafted by default.",
+  );
+  await expect(page.getByTestId("draft-note")).toContainText(
+    "Nothing is saved yet.",
+  );
+  await expect(page.getByTestId("draft-note")).toContainText("teleport");
+  await expect(page.getByTestId("agent-instructions")).toHaveValue(
+    "You are my morning brief.\n1. What is waiting.",
+  );
+  await expect(page.getByLabel("Agent name")).toHaveValue("Morning brief");
+  expect(seen.drafts).toEqual([
+    {
+      kind: "agent",
+      sentence: "Every morning, tell me what is waiting",
+      agent_name: null,
+    },
+  ]);
+  expect(seen.agentWrites, "a draft saved something").toEqual([]);
+
+  await page.getByTestId("studio-save").click();
+  await expect.poll(() => seen.agentWrites.length).toBe(1);
+  expect(seen.agentWrites[0]!.body).toMatchObject({
+    name: "morning-brief",
+    soul: "You are my morning brief.\n1. What is waiting.",
+    tool_groups: ["web"],
+    skills: ["cite-every-claim"],
+  });
+});
+
+test("a skill's when-sentence is drafted for review, not saved", async ({
+  page,
+}) => {
+  const seen = await stubStudio(page);
+  await page.goto("/workspace/chats?panel=skills&item=project-status-format", {
+    waitUntil: "networkidle",
+  });
+  await page.getByTestId("skill-when-draft").click();
+  await expect(page.getByTestId("skill-when")).toHaveValue(
+    "Use when someone asks where things stand.",
+  );
+  expect(seen.skillWrites).toEqual([]);
+  await page.getByTestId("studio-save").click();
+  await expect.poll(() => seen.skillWrites.length).toBe(1);
+  expect((seen.skillWrites[0]!.body as { content: string }).content).toContain(
+    "description: Use when someone asks where things stand.",
+  );
+});

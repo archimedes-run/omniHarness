@@ -1,9 +1,14 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import { SparkleIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useStudioCopy } from "@/components/workspace/agents/studio/copy";
+import {
+  DraftBar,
+  DraftNote,
+} from "@/components/workspace/agents/studio/draft-bar";
 import {
   RailItem,
   RailNew,
@@ -25,6 +30,7 @@ import {
   addSkillFile,
   composeSkillMd,
   createCustomSkill,
+  draft,
   parseSkillMd,
   saveCustomSkill,
   skillSlug,
@@ -188,6 +194,54 @@ function SkillEditor({
   };
 
   const slug = isNew ? skillSlug(title) : (skill?.name ?? "");
+  const [drafting, setDrafting] = useState(false);
+  const [draftNote, setDraftNote] = useState<{
+    text: string;
+    bad: boolean;
+  } | null>(null);
+
+  /** Draft for review; nothing is saved until Save skill. */
+  async function runDraft(
+    sentence: string,
+    apply: (d: { description: string; body: string }) => void,
+  ) {
+    try {
+      const result = await draft("skill", {
+        sentence,
+        name: isNew ? title : skill?.name,
+        body: doc.body || null,
+      });
+      apply(result.skill!);
+      setDraftNote({ text: c.draftReady(result.model), bad: false });
+    } catch (e) {
+      setDraftNote({
+        text: c.draftFailed(e instanceof Error ? e.message : String(e)),
+        bad: true,
+      });
+    }
+  }
+
+  async function draftWhen() {
+    const name = isNew ? title.trim() : skillTitle(skill?.name ?? "");
+    if (!name && !doc.body.trim()) {
+      setDraftNote({ text: c.draftWhenNeeds, bad: false });
+      return;
+    }
+    setDrafting(true);
+    await runDraft(`When should the skill "${name}" be used?`, (d) =>
+      patch({ description: d.description || doc.description }),
+    );
+    setDrafting(false);
+  }
+
+  async function draftBody(sentence: string) {
+    await runDraft(sentence, (d) =>
+      patch({
+        body: d.body || doc.body,
+        description: doc.description.trim() ? doc.description : d.description,
+      }),
+    );
+  }
 
   async function save() {
     if (readOnly) return;
@@ -308,6 +362,18 @@ function SkillEditor({
             <label htmlFor="skill-when" className="text-[13px]">
               {c.when}
             </label>
+            {readOnly ? null : (
+              <button
+                type="button"
+                className="border-border-strong text-foreground hover:bg-accent focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[13px] outline-none focus-visible:ring-2 disabled:opacity-50 md:min-h-0"
+                onClick={() => void draftWhen()}
+                disabled={drafting}
+                data-testid="skill-when-draft"
+              >
+                <SparkleIcon className="text-primary size-3.5" aria-hidden />
+                {drafting ? c.drafting : c.draft}
+              </button>
+            )}
           </div>
           <textarea
             id="skill-when"
@@ -319,17 +385,30 @@ function SkillEditor({
             data-testid="skill-when"
           />
           <span className="text-muted-foreground text-xs">{c.whenHelp}</span>
+          <DraftNote note={draftNote} />
         </div>
       </TabPanel>
       <TabPanel
         value="instructions"
         className="flex flex-col gap-2.5 outline-none"
       >
+        {readOnly ? null : (
+          <DraftBar
+            label={c.sentenceLabel}
+            placeholder={c.sentencePlaceholder}
+            draftLabel={c.draft}
+            draftingLabel={c.drafting}
+            needsSentence={c.draftNeedsSentence}
+            onDraft={draftBody}
+            testId="skill-draft-bar"
+          />
+        )}
         <InstructionsEditor
           body={doc.body}
           readOnly={readOnly}
           onChange={(body) => patch({ body })}
         />
+        <DraftNote note={draftNote} />
       </TabPanel>
       <TabPanel value="files" className="flex flex-col gap-3 outline-none">
         <FilesTab name={isCustom ? skill.name : null} readOnly={readOnly} />

@@ -16,6 +16,7 @@ import { useSkills } from "@/core/skills/hooks";
 import { useAgentRuns, useStudioOptions } from "@/core/studio";
 
 import { useStudioCopy } from "./copy";
+import { DraftBar, DraftNote } from "./draft-bar";
 import { nextRunText, RecentRuns, ScheduleList } from "./runs";
 import {
   TabPanel,
@@ -146,7 +147,16 @@ export function OverviewTab({ form, patch, isLead, agentId }: OverviewProps) {
   );
 }
 
-export function InstructionsTab({ form, patch, isLead }: TabProps) {
+export function InstructionsTab({
+  form,
+  patch,
+  isLead,
+  onDraft,
+  draftNote,
+}: TabProps & {
+  onDraft: (sentence: string) => Promise<void>;
+  draftNote: { text: string; bad: boolean } | null;
+}) {
   const c = useStudioCopy().agents;
   if (isLead) {
     return (
@@ -160,6 +170,16 @@ export function InstructionsTab({ form, patch, isLead }: TabProps) {
       value="instructions"
       className="flex flex-col gap-2.5 outline-none"
     >
+      <DraftBar
+        label={c.sentenceLabel}
+        placeholder={c.sentencePlaceholder}
+        draftLabel={c.draft}
+        draftingLabel={c.drafting}
+        needsSentence={c.draftNeedsSentence}
+        emphasis
+        onDraft={onDraft}
+        testId="agent-draft-bar"
+      />
       <label className="block">
         <span className="sr-only">{c.instructionsLabel}</span>
         <textarea
@@ -170,7 +190,11 @@ export function InstructionsTab({ form, patch, isLead }: TabProps) {
           className="bg-card border-border-strong text-foreground focus-visible:ring-ring box-border w-full resize-y rounded-xl border px-3.5 py-3 text-sm leading-[1.6] outline-none focus-visible:ring-2"
         />
       </label>
-      <p className="text-muted-foreground text-xs">{c.editFreely}</p>
+      {draftNote ? (
+        <DraftNote note={draftNote} />
+      ) : (
+        <p className="text-muted-foreground text-xs">{c.editFreely}</p>
+      )}
     </TabPanel>
   );
 }
@@ -245,7 +269,12 @@ function Chips({
   );
 }
 
-export function ToolsTab({ form, patch, isLead }: TabProps) {
+export function ToolsTab({
+  form,
+  patch,
+  isLead,
+  draftNote,
+}: TabProps & { draftNote: { text: string; bad: boolean } | null }) {
   const c = useStudioCopy().agents;
   const { options } = useStudioOptions();
   const { skills } = useSkills();
@@ -278,6 +307,7 @@ export function ToolsTab({ form, patch, isLead }: TabProps) {
         onChange={(next) => patch({ skills: next })}
         testId="agent-skills"
       />
+      <DraftNote note={draftNote && !draftNote.bad ? draftNote : null} />
     </TabPanel>
   );
 }
