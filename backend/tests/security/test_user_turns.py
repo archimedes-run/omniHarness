@@ -148,3 +148,13 @@ def test_a_typed_yes_counts_only_from_a_tagged_user_turn(sec, run_agent) -> None
     assert store.get(plan.id).outcome is None, "an unvouched channel message confirmed a plan"
     say("yes", vouched)
     assert store.get(plan.id).outcome is not None
+
+
+def test_only_an_explicit_allowlist_vouches_for_a_channel_sender() -> None:
+    from app.channels.message_bus import MessageBus
+    from app.channels.telegram import TelegramChannel
+
+    open_bot = TelegramChannel(bus=MessageBus(), config={"bot_token": "x"})
+    assert not open_bot.sender_is_the_owner("123"), "an empty allowlist lets anyone talk, never as the user"
+    locked = TelegramChannel(bus=MessageBus(), config={"bot_token": "x", "allowed_users": [123]})
+    assert locked.sender_is_the_owner("123") and not locked.sender_is_the_owner("456")

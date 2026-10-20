@@ -41,7 +41,7 @@ class TelegramChannel(Channel):
                 self._allowed_users.add(int(uid))
             except (ValueError, TypeError):
                 pass
-        # chat_id -> last sent message_id for threaded replies (below)
+        # chat_id -> last sent message_id for threaded replies
         self._last_bot_message: dict[str, int] = {}
 
     def sender_is_the_owner(self, user_id: str | None) -> bool:
