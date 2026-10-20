@@ -466,6 +466,11 @@ test("theme commands change the theme (and tolerate no server preference)", asyn
   });
   await page.goto("/workspace/chats");
   const run = async (name: string) => {
+    // As a person would: the previous command's palette has finished
+    // closing before the next one opens. Opening a dialog while another is
+    // still animating out can leave the new one not clickable.
+    await expect(palette(page)).toHaveCount(0);
+    await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(0);
     await page.keyboard.press("Control+k");
     await page.getByRole("combobox").fill(name);
     await page.getByRole("option", { name }).click();
@@ -488,6 +493,11 @@ test("palette commands navigate and open panels", async ({ page }) => {
   await serve(page);
   await page.goto("/workspace/chats");
   const run = async (name: string) => {
+    // As a person would: the previous command's palette has finished
+    // closing before the next one opens. Opening a dialog while another is
+    // still animating out can leave the new one not clickable.
+    await expect(palette(page)).toHaveCount(0);
+    await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(0);
     await page.keyboard.press("Control+k");
     await page.getByRole("combobox").fill(name);
     await page.getByRole("option", { name }).click();

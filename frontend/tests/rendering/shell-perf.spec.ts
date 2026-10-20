@@ -58,35 +58,56 @@ const OPEN = `async ([id, text]) => {
   return { sheet, code, content };
 }`;
 
+const median = (xs: number[]) =>
+  [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+
 test("a capsule panel opens in under 150 ms, cold and warm", async ({
-  page,
+  browser,
 }) => {
-  await stub(page);
-  await page.goto("/workspace/chats", { waitUntil: "networkidle" });
-
-  const cold = await page.evaluate<{
-    sheet: number;
-    code: number;
-    content: number;
-  }>(`(${OPEN})(["agents", "perf-agent"])`);
-  record("panel open, cold (sheet)", cold.sheet);
-  record("panel open, cold (code loaded)", cold.code);
-  record("panel open, cold (content)", cold.content);
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("panel-sheet")).toHaveCount(0);
-
-  const warm = await page.evaluate<{
-    sheet: number;
-    code: number;
-    content: number;
-  }>(`(${OPEN})(["agents", "perf-agent"])`);
-  record("panel open, warm (sheet)", warm.sheet);
-  record("panel open, warm (content)", warm.content);
-
-  expect(cold.sheet).toBeLessThan(150);
-  expect(cold.content).toBeLessThan(150);
-  expect(warm.sheet).toBeLessThan(150);
-  expect(warm.content).toBeLessThan(150);
+  // Three trials, each in a fresh context (an empty cache, so "cold" really
+  // is cold), and the budget is held by the median: one sample stalled by a
+  // busy CI runner does not decide it, a real regression still does.
+  const cold: { sheet: number; code: number; content: number }[] = [];
+  const warm: { sheet: number; code: number; content: number }[] = [];
+  for (let trial = 0; trial < 3; trial++) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await stub(page);
+    await page.goto("/workspace/chats", { waitUntil: "networkidle" });
+    cold.push(
+      await page.evaluate<{ sheet: number; code: number; content: number }>(
+        `(${OPEN})(["agents", "perf-agent"])`,
+      ),
+    );
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("panel-sheet")).toHaveCount(0);
+    warm.push(
+      await page.evaluate<{ sheet: number; code: number; content: number }>(
+        `(${OPEN})(["agents", "perf-agent"])`,
+      ),
+    );
+    await context.close();
+  }
+  for (const [label, xs] of [
+    ["cold", cold],
+    ["warm", warm],
+  ] as const) {
+    record(
+      `panel open, ${label} (sheet), median of 3`,
+      median(xs.map((x) => x.sheet)),
+    );
+    record(
+      `panel open, ${label} (content), median of 3`,
+      median(xs.map((x) => x.content)),
+    );
+    console.log(
+      `[perf] ${label} samples (content): ${xs.map((x) => x.content.toFixed(1)).join(", ")} ms`,
+    );
+  }
+  expect(median(cold.map((x) => x.sheet))).toBeLessThan(150);
+  expect(median(cold.map((x) => x.content))).toBeLessThan(150);
+  expect(median(warm.map((x) => x.sheet))).toBeLessThan(150);
+  expect(median(warm.map((x) => x.content))).toBeLessThan(150);
 });
 
 for (const path of ["/workspace/chats", "/workspace/home"]) {
