@@ -39,6 +39,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from omniharness.config import config_versions
+
 from .classify import classify
 from .config import RuleSet
 from .models import PolicyDecision, Tier
@@ -46,7 +48,7 @@ from .models import PolicyDecision, Tier
 #: The most granted ACTIONS one scheduled run may take (user decision
 #: 2026-10-20). A ledger_apply with N changes is N actions. The 21st waits.
 GRANT_CAP_PER_RUN = 20
-AUTONOMY_KEY = "autonomy"
+AUTONOMY_KEY = config_versions.AUTONOMY_KEY
 
 
 @dataclass(frozen=True)
@@ -131,7 +133,6 @@ def covering_classes(decision: PolicyDecision, arguments: dict[str, Any], grante
 def granted_classes(user_id: str, agent: str) -> list[str]:
     """The agent's grants as of its CURRENT version: read on every call, so a
     revocation applies from the next one."""
-    from omniharness.config import config_versions
 
     try:
         snapshot = config_versions.current_agent_snapshot(user_id, agent)
