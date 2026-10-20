@@ -54,6 +54,12 @@ export function RunHistorySettings() {
           <AlertDescription>{error.message}</AlertDescription>
         </Alert>
       )}
+      {settings?.warning && (
+        <Alert data-testid="run-history-warning">
+          <AlertTitle>The run history is filling up</AlertTitle>
+          <AlertDescription>{settings.warning}</AlertDescription>
+        </Alert>
+      )}
       {settings && (
         <>
           <p className="text-sm" data-testid="run-count">
@@ -107,11 +113,44 @@ export function RunHistorySettings() {
               <DialogHeader>
                 <DialogTitle>Delete the run history?</DialogTitle>
                 <DialogDescription>
-                  Every stored automation run is deleted from this machine. The
-                  automations themselves, and their delivery log, are kept. This
-                  cannot be undone.
+                  This deletes, from this machine, every stored automation run
+                  and every automation&apos;s conversation thread. It cannot be
+                  undone.
                 </DialogDescription>
               </DialogHeader>
+              <div className="flex flex-col gap-2 text-sm">
+                <p className="font-medium">Deleted</p>
+                <ul
+                  className="text-muted-foreground list-disc pl-5"
+                  data-testid="deletes"
+                >
+                  <li>
+                    Every stored run: prompts, tool calls, tool results and
+                    answers.
+                  </li>
+                  <li>
+                    Each automation&apos;s conversation thread: its messages,
+                    its files, and its run traces, including anything you wrote
+                    in that thread yourself. The next run starts a new thread.
+                  </li>
+                </ul>
+                <p className="font-medium">Kept</p>
+                <ul
+                  className="text-muted-foreground list-disc pl-5"
+                  data-testid="keeps"
+                >
+                  <li>The automations themselves.</li>
+                  <li>
+                    Their delivery log: when each ran and whether it was
+                    delivered, without content.
+                  </li>
+                  <li>
+                    Messages still waiting to be delivered (held for quiet
+                    hours).
+                  </li>
+                  <li>Your other chats.</li>
+                </ul>
+              </div>
               {remove.error != null && (
                 <p className="text-destructive text-sm" role="alert">
                   {remove.error.message}
@@ -130,7 +169,7 @@ export function RunHistorySettings() {
                     })
                   }
                 >
-                  Delete all runs
+                  Delete runs and threads
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -138,8 +177,23 @@ export function RunHistorySettings() {
           {remove.data && (
             <p className="text-muted-foreground text-sm" data-testid="deleted">
               Deleted {remove.data.deleted}{" "}
-              {remove.data.deleted === 1 ? "run" : "runs"}.
+              {remove.data.deleted === 1 ? "run" : "runs"} and{" "}
+              {remove.data.threads_deleted ?? 0} automation{" "}
+              {(remove.data.threads_deleted ?? 0) === 1 ? "thread" : "threads"}.
             </p>
+          )}
+          {(remove.data?.threads_failed?.length ?? 0) > 0 && (
+            <Alert variant="destructive" data-testid="threads-failed">
+              <AlertTitle>Some threads were not deleted</AlertTitle>
+              <AlertDescription>
+                {remove.data?.threads_failed?.length === 1
+                  ? "1 automation thread could not be deleted and still holds its content:"
+                  : `${remove.data?.threads_failed?.length} automation threads could not be deleted and still hold their content:`}{" "}
+                <span className="font-mono text-xs">
+                  {remove.data?.threads_failed?.join(", ")}
+                </span>
+              </AlertDescription>
+            </Alert>
           )}
         </>
       )}

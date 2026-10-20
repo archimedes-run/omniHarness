@@ -6,6 +6,18 @@ export interface HistorySettings {
   retention_days: number;
   runs: number;
   location: string;
+  used_bytes?: number;
+  cap_bytes?: number;
+  /** Set when the history is near or past its size cap. */
+  warning?: string | null;
+}
+
+/** What "Delete run history" deleted. */
+export interface Deleted {
+  deleted: number;
+  threads_deleted?: number;
+  /** Automation threads that could NOT be deleted: their content remains. */
+  threads_failed?: string[];
 }
 
 export interface RunSummary {
@@ -52,6 +64,6 @@ export const saveRetention = (retention_days: number) =>
     body: JSON.stringify({ retention_days }),
   });
 export const deleteAllRuns = () =>
-  call<{ deleted: number }>("/runs?confirm=delete-all", { method: "DELETE" });
+  call<Deleted>("/runs?confirm=delete-all", { method: "DELETE" });
 export const loadRun = (id: string) =>
   call<RunDetail>(`/runs/${encodeURIComponent(id)}`);

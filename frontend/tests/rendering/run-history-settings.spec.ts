@@ -6,7 +6,10 @@ import { expect, test, type Page } from "@playwright/test";
  * behaviour (redaction, purge, confirm=delete-all) is pytest's, through
  * create_app() (tests/run_history).
  */
-async function serve(page: Page) {
+async function serve(
+  page: Page,
+  opts: { warning?: string; failed?: string[] } = {},
+) {
   const calls: { method: string; url: string; body: unknown }[] = [];
   let runs = 12;
   const json = (body: unknown) => ({
@@ -24,7 +27,13 @@ async function serve(page: Page) {
     if (req.method() === "DELETE") {
       const deleted = runs;
       runs = 0;
-      return route.fulfill(json({ deleted }));
+      return route.fulfill(
+        json({
+          deleted,
+          threads_deleted: 2,
+          threads_failed: opts.failed ?? [],
+        }),
+      );
     }
     const days =
       req.method() === "PUT"
@@ -35,6 +44,7 @@ async function serve(page: Page) {
         retention_days: days,
         runs,
         location: "/app/backend/.omni-harness/run-history",
+        warning: opts.warning ?? null,
       }),
     );
   });
@@ -82,9 +92,48 @@ test("confirming deletes every run, naming the confirmation", async ({
 }) => {
   const calls = await serve(page);
   await page.getByRole("button", { name: "Delete run history" }).click();
-  await page.getByRole("button", { name: "Delete all runs" }).click();
-  await expect(page.getByTestId("deleted")).toHaveText("Deleted 12 runs.");
+  await page.getByRole("button", { name: "Delete runs and threads" }).click();
+  await expect(page.getByTestId("deleted")).toHaveText(
+    "Deleted 12 runs and 2 automation threads.",
+  );
   const del = calls.find((c) => c.method === "DELETE")!;
   expect(del.url).toContain("/api/run-history/runs?confirm=delete-all");
   await expect(page.getByTestId("run-count")).toContainText("0 runs");
+});
+
+test("the dialog says exactly what is deleted and what is kept", async ({
+  page,
+}) => {
+  await serve(page);
+  await page.getByRole("button", { name: "Delete run history" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete the run history?" });
+  await expect(dialog.getByTestId("deletes")).toContainText(
+    "Each automation's conversation thread",
+  );
+  await expect(dialog.getByTestId("deletes")).toContainText(
+    "including anything you wrote in that thread yourself",
+  );
+  await expect(dialog.getByTestId("keeps")).toContainText(
+    "Messages still waiting to be delivered",
+  );
+  await expect(dialog.getByTestId("keeps")).toContainText("Your other chats.");
+});
+
+test("a thread that could not be deleted is named", async ({ page }) => {
+  await serve(page, { failed: ["thread-abc"] });
+  await page.getByRole("button", { name: "Delete run history" }).click();
+  await page.getByRole("button", { name: "Delete runs and threads" }).click();
+  await expect(page.getByTestId("threads-failed")).toContainText(
+    "1 automation thread could not be deleted and still holds its content",
+  );
+  await expect(page.getByTestId("threads-failed")).toContainText("thread-abc");
+});
+
+test("the size cap warning is shown", async ({ page }) => {
+  await serve(page, {
+    warning: "The run history is at 93% of its 512 MB cap.",
+  });
+  await expect(page.getByTestId("run-history-warning")).toContainText(
+    "93% of its 512 MB cap",
+  );
 });

@@ -22,7 +22,9 @@ test("the run history is deleted only after confirming", async ({ page }) => {
         return route.fulfill(json({ detail: "needs confirm" }, 422));
       const deleted = state.runs;
       state.runs = 0;
-      return route.fulfill(json({ deleted }));
+      return route.fulfill(
+        json({ deleted, threads_deleted: 1, threads_failed: [] }),
+      );
     }
     if (req.method() === "PUT")
       state.retention = (
@@ -50,7 +52,9 @@ test("the run history is deleted only after confirming", async ({ page }) => {
 
   await page.getByRole("button", { name: "Delete run history" }).click();
   expect(state.runs).toBe(5);
-  await page.getByRole("button", { name: "Delete all runs" }).click();
-  await expect(page.getByTestId("deleted")).toHaveText("Deleted 5 runs.");
+  await page.getByRole("button", { name: "Delete runs and threads" }).click();
+  await expect(page.getByTestId("deleted")).toHaveText(
+    "Deleted 5 runs and 1 automation thread.",
+  );
   expect(state.runs).toBe(0);
 });
