@@ -589,6 +589,12 @@ async def start_run(
     channel = channel_of(request)
     if channel:
         config["context"]["channel"] = channel
+    # The thread is the one this request was authorised for, never a value from
+    # the body. A request carrying only config.context used to leave no
+    # configurable at all, and the run died with KeyError 'thread_id'.
+    config_configurable = config.setdefault("configurable", {})
+    config_configurable["thread_id"] = thread_id
+    config_configurable.setdefault("checkpoint_ns", "")
 
     # Feature 006: skills removed from this conversation (the chat bar's ×).
     # Always the server's stored value (the client's was dropped above).
