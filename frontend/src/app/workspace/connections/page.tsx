@@ -1,138 +1,103 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ConnectionRow } from "@/components/workspace/connections/connection-row";
-import { McpSuite } from "@/components/workspace/mcp/mcp-suite";
-import { useMCPConfig } from "@/core/mcp/hooks";
-import { useToolSources } from "@/core/tool-sources/hooks";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { ConnectedView } from "@/components/workspace/connections/connected-view";
+import {
+  PageColumn,
+  PageHeader,
+  UnderlineTab,
+  UnderlineTabsList,
+} from "@/components/workspace/page-kit";
+
+// Each heavy view loads only when it is opened.
+const BuildView = dynamic(() =>
+  import("@/components/workspace/connections/build-view").then(
+    (m) => m.BuildView,
+  ),
+);
+const AppCatalog = dynamic(() =>
+  import("@/components/workspace/mcp/mcp-suite").then((m) => m.AppCatalog),
+);
 
 /**
- * Connections (Phase 2.6: a sidebar item again, after Automations). Two tabs:
+ * MCP Suite (Feature 006, boards "Connections" and "MCP-Suite"): the sidebar's
+ * MCP Suite item. Two tabs, in the URL so a link opens either:
  *
- *  - Connected: every app (Composio connector) and MCP server with its status
- *    (Live / Off / Unreachable / Not configured) and connect, disconnect or
- *    turn on/off. Feature 004's honesty holds: "cannot tell" is never "none".
- *  - MCP Suite: building and registering MCP servers.
- *
- * The tab is in the URL (?tab=suite) so a link can open either.
+ *  - Connected: counts, failing sources with their real error, apps with
+ *    their logos, MCP servers.
+ *  - Build (?tab=build; the old ?tab=suite opens it too): describe a tool, an
+ *    agent builds and tests it in a sandbox, you approve its first run.
  */
-export default function ConnectionsPage() {
+export default function McpSuitePage() {
   const router = useRouter();
-  const tab = useSearchParams().get("tab") === "suite" ? "suite" : "connected";
-  const { view, isLoading, error } = useToolSources();
-  const { config } = useMCPConfig();
-  const configured = new Set(Object.keys(config?.mcp_servers ?? {}));
-  const local = view?.sources.filter((s) => s.kind === "local") ?? [];
-  const connectors = view?.sources.filter((s) => s.kind === "connector") ?? [];
+  const params = useSearchParams();
+  const raw = params.get("tab");
+  const tab = raw === "build" || raw === "suite" ? "build" : "connected";
+  const [browsing, setBrowsing] = useState(false);
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 p-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Connections</h1>
-        <p className="text-muted-foreground text-sm">
-          The apps and servers the agent&apos;s tools come from, and whether
-          each is working.
-        </p>
-      </header>
+    <PageColumn>
+      <PageHeader
+        title="MCP Suite"
+        description="Where your agents' tools come from, and whether each one works right now."
+        actions={
+          tab === "connected" ? (
+            <Button
+              className="rounded-lg font-semibold"
+              onClick={() => setBrowsing(true)}
+            >
+              Browse apps
+            </Button>
+          ) : undefined
+        }
+      />
 
       <Tabs
         value={tab}
         onValueChange={(value) =>
           router.replace(
-            value === "suite"
-              ? "/workspace/connections?tab=suite"
+            value === "build"
+              ? "/workspace/connections?tab=build"
               : "/workspace/connections",
           )
         }
+        className="gap-[22px]"
       >
-        <TabsList>
-          <TabsTrigger value="connected">
-            Connected
-            {view && view.failing > 0 && (
-              <span
-                className="bg-destructive ml-1.5 inline-block size-1.5 rounded-full"
-                aria-label={`${view.failing} failing`}
-              />
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="suite">MCP Suite</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="connected" className="space-y-8 pt-4">
-          {isLoading && (
-            <p className="text-muted-foreground text-sm">Loading…</p>
-          )}
-          {error != null && (
-            <Alert variant="destructive" data-testid="unreadable">
-              <AlertTitle>
-                I cannot tell which tool sources are working
-              </AlertTitle>
-              <AlertDescription>{String(error)}</AlertDescription>
-            </Alert>
-          )}
-          {view && view.failing > 0 && (
-            <Alert variant="destructive" data-testid="failing">
-              <AlertTitle>
-                {view.failing} tool source{view.failing === 1 ? " is" : "s are"}{" "}
-                failing
-              </AlertTitle>
-              <AlertDescription>
-                Agents do not have the tools of a source that failed to load.
-                The reason is shown on it below.
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {view && (
-            <section className="space-y-2" aria-labelledby="connector-heading">
-              <h2 id="connector-heading" className="text-sm font-semibold">
-                Apps
-              </h2>
-              {view.connectors_available ? (
-                <ul className="space-y-2">
-                  {connectors.map((source) => (
-                    <ConnectionRow key={source.id} source={source} configured />
-                  ))}
-                </ul>
-              ) : (
-                <p
-                  className="text-muted-foreground text-sm"
-                  data-testid="no-connectors"
-                >
-                  Apps are not available: Composio is not configured on this
-                  gateway, so none can be connected here.
-                </p>
-              )}
-            </section>
-          )}
-
-          {view && (
-            <section className="space-y-2" aria-labelledby="local-heading">
-              <h2 id="local-heading" className="text-sm font-semibold">
-                MCP servers
-              </h2>
-              <ul className="space-y-2">
-                {local.map((source) => (
-                  <ConnectionRow
-                    key={source.id}
-                    source={source}
-                    configured={configured.has(
-                      source.id.slice(source.id.indexOf(":") + 1),
-                    )}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
+        <UnderlineTabsList aria-label="MCP Suite views">
+          <UnderlineTab value="connected">Connected</UnderlineTab>
+          <UnderlineTab value="build">Build</UnderlineTab>
+        </UnderlineTabsList>
+        <TabsContent value="connected">
+          <ConnectedView />
         </TabsContent>
-
-        <TabsContent value="suite" className="pt-4">
-          <McpSuite />
+        <TabsContent value="build">
+          <BuildView selected={params.get("server")} />
         </TabsContent>
       </Tabs>
-    </div>
+
+      <Dialog open={browsing} onOpenChange={setBrowsing}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Browse apps</DialogTitle>
+            <DialogDescription>
+              Connect an account once; a chat then chooses whether to use it.
+            </DialogDescription>
+          </DialogHeader>
+          {browsing && <AppCatalog />}
+        </DialogContent>
+      </Dialog>
+    </PageColumn>
   );
 }

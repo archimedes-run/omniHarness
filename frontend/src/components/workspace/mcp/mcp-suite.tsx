@@ -455,7 +455,7 @@ const CONNECTION_CATEGORIES = [
   "Project Mgmt",
 ];
 
-function ConnectionsTab() {
+export function AppCatalog() {
   const [toolkits, setToolkits] = useState<ComposioToolkit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -757,7 +757,7 @@ export function McpSuite() {
 
       {/* Tab content */}
       <div className="bg-muted/40 flex-1 overflow-y-auto p-6">
-        {tab === "mine" ? <MyMcpsTab /> : <ConnectionsTab />}
+        {tab === "mine" ? <MyMcpsTab /> : <AppCatalog />}
       </div>
     </div>
   );

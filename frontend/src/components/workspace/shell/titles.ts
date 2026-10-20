@@ -7,7 +7,7 @@ const TITLES: [RegExp, string][] = [
   [/^\/workspace\/chats\/?$/, "Chats"],
   [/^\/workspace\/home/, "Home"],
   [/^\/workspace\/sessions/, "Coding sessions"],
-  [/^\/workspace\/connections/, "Connections"],
+  [/^\/workspace\/connections/, "MCP Suite"],
   [/^\/workspace\/(mcp|tool-sources)/, "MCP Suite"],
   [/^\/workspace\/settings/, "Settings"],
   [/^\/workspace\/projects/, "Projects"],
