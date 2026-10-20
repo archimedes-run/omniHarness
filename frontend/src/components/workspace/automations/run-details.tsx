@@ -100,6 +100,7 @@ export function RunDetails({ runId }: { runId: string }) {
     );
   const steps = (body.messages ?? []).slice(1);
   const redactionFailed = JSON.stringify(body).includes(WITHHELD_MARK);
+  const merged = JSON.stringify(body).includes('"merged_for_redaction":true');
   return (
     <div
       className="bg-card border-border flex w-full flex-col gap-3 rounded-lg border p-3 text-sm"
@@ -108,6 +109,12 @@ export function RunDetails({ runId }: { runId: string }) {
       {body.cut && (
         <Notice testId="run-note-cut" title="Shortened">
           {`This run was ${mb(body.cut.original_bytes)}, over the ${mb(body.cut.cap_bytes)} kept per run. Its longest parts were cut, and each cut says how much it removed.`}
+        </Notice>
+      )}
+      {merged && (
+        <Notice testId="run-note-merged" title="Parts joined">
+          A secret was split across parts of a message, so its parts were joined
+          to redact it; the joined text is shown in the first part.
         </Notice>
       )}
       {redactionFailed && (

@@ -836,3 +836,29 @@ test("a prompt carrying event text says it is untrusted", async ({ page }) => {
     "with event text in it. Untrusted",
   );
 });
+
+test("parts joined for redaction say so", async ({ page }) => {
+  await serve(page, `${AUTOMATIONS}/hushed`);
+  await runBody(page, {
+    prompt: "p",
+    turn_found: true,
+    messages: [
+      { type: "human", content: "p", provenance: "trigger" },
+      {
+        type: "tool",
+        name: "web_fetch",
+        provenance: "untrusted_tool_output",
+        content: [
+          { type: "text", text: "key [redacted]", merged_for_redaction: true },
+          { type: "text", text: "", merged_for_redaction: true },
+        ],
+      },
+    ],
+    reply: "r",
+  });
+  const run = page.getByTestId("run").nth(0);
+  await run.getByRole("button", { name: "Details" }).click();
+  await expect(run.getByTestId("run-note-merged")).toContainText(
+    "its parts were joined to redact it",
+  );
+});
