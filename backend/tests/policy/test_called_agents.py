@@ -336,3 +336,64 @@ def test_call_agent_runs_only_the_agent_the_turn_called(gateway, monkeypatch) ->
 
     assert CALLED == [], "an agent the user did not call was run"
     assert "was not called into this turn by the user" in messages[-1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# An agent taken out of the chat, or deleted, cannot have its call run
+# (review of PR #58)
+# ---------------------------------------------------------------------------
+
+
+def _member_proposes_wipe(gateway) -> tuple[str, dict]:
+    thread_id = _thread(gateway)
+    _call_in(gateway, thread_id, "release-manager")
+    SUB_SCRIPT[:] = [AIMessage(content="", tool_calls=[{"name": "wipe_backup", "args": {"name": "nightly"}, "id": "w1"}]), AIMessage(content="I asked to wipe it.")]
+    _say(gateway, thread_id, "@release-manager wipe the nightly backup")
+    [action] = [a for a in gateway.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "wipe_backup"]
+    return thread_id, action
+
+
+def test_removing_a_member_refuses_its_pending_actions(gateway) -> None:
+    thread_id, action = _member_proposes_wipe(gateway)
+
+    removed = gateway.client.delete(f"/api/threads/{thread_id}/participants/release-manager")
+
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["refused_actions"] == [action["id"]]
+    assert [a for a in gateway.client.get("/api/confirmations").json()["actions"] if a["id"] == action["id"]] == [], "the removed agent's card is still pending"
+    body = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={}).json()
+    assert body["outcome"] == "already_resolved", body
+    assert "taken out of this chat" in body["message"] and "Nothing has run" in body["message"]
+    assert RAN == []
+
+
+def test_a_deleted_agents_action_is_refused_with_a_reason_not_a_500(gateway) -> None:
+    thread_id, action = _member_proposes_wipe(gateway)
+    assert gateway.client.delete("/api/agents/release-manager").status_code in (200, 204)
+
+    resp = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["outcome"] == "tool_unavailable", body
+    assert "no longer exists" in body["message"] and "Nothing has run" in body["message"]
+    assert RAN == []
+    # Typing yes in the chat is refused the same way, not a failed run.
+    messages = _say(gateway, thread_id, "yes")
+    assert "no longer exists" in messages[-1]["content"]
+    assert RAN == []
+
+
+def test_continue_is_refused_for_an_agent_taken_out_of_the_chat(gateway) -> None:
+    thread_id, action = _member_proposes_wipe(gateway)
+    assert gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={}).json()["outcome"] == "executed"
+    gateway.client.delete(f"/api/threads/{thread_id}/participants/release-manager")
+    CALLED.clear()
+
+    resp = gateway.client.post(
+        f"/api/threads/{thread_id}/runs/wait",
+        json={"assistant_id": "lead_agent", "input": {"messages": [{"role": "user", "content": "Continue release-manager."}]}, "context": {"continue_action": action["id"]}},
+    )
+
+    assert resp.status_code == 409 and "no longer in this chat" in resp.text, resp.text
+    assert CALLED == []

@@ -452,6 +452,13 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
         raise _continue_refused("that action has not run")
     if not action.delegation_key or action.requester == "lead_agent":
         raise _continue_refused("it was not proposed by an agent that stopped in a delegation")
+    if action.surface.get("called_agent"):
+        from app.gateway.routers.thread_participants import stored_participants
+
+        thread_store = getattr(request.app.state, "thread_store", None)
+        members = await stored_participants(thread_store, thread_id, await get_current_user(request)) if thread_store is not None else []
+        if action.requester not in members:
+            raise _continue_refused(f"{action.requester} is no longer in this chat")
     ctx_dict = config.setdefault("context", {})
     if not isinstance(ctx_dict, dict):
         return
