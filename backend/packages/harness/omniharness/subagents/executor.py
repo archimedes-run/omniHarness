@@ -189,8 +189,15 @@ def _submit_to_isolated_loop_in_context(
 
 
 def subagent_checkpoint_key(thread_id: str, task_id: str) -> str:
-    """Where one delegation's own checkpoints live: never the chat's key."""
-    return f"{thread_id}/subagent/{task_id}"
+    """Where one delegation's own checkpoints live: never the chat's key, and
+    never another delegation's.
+
+    The random suffix is the point. `task_id` is the provider's tool-call id,
+    and providers reuse call ids (a fresh "call_0" every turn, in some), so a
+    key made from it alone let a later delegation in the same chat start from
+    an earlier one's messages (review of PR #58).
+    """
+    return f"{thread_id}/subagent/{task_id}/{uuid.uuid4().hex[:12]}"
 
 
 def _filter_tools(
@@ -239,6 +246,7 @@ class SubagentExecutor:
         checkpointer: Any | None = None,
         tool_surface: dict[str, Any] | None = None,
         user_id: str | None = None,
+        checkpoint_key: str | None = None,
     ):
         """Initialize the executor.
 
@@ -270,6 +278,9 @@ class SubagentExecutor:
         #: and not against the lead's.
         self.tool_surface = tool_surface
         self.user_id = user_id
+        #: This delegation's own checkpoint key. None for a new delegation (a
+        #: fresh, random one is made when it runs); set to RESUME one.
+        self.checkpoint_key = checkpoint_key
         self.checkpointer = checkpointer
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
@@ -493,7 +504,7 @@ class SubagentExecutor:
                 # delegation in a chat started from the first one's messages
                 # (measured, plan.md §2.0). The runtime context keeps the chat's
                 # thread id: sandbox, thread data and the policy layer read that.
-                run_config["configurable"] = {"thread_id": subagent_checkpoint_key(self.thread_id, result.task_id)}
+                run_config["configurable"] = {"thread_id": self.checkpoint_key or subagent_checkpoint_key(self.thread_id, result.task_id)}
                 context["thread_id"] = self.thread_id
             if self.tool_surface is not None:
                 from omniharness.agents.tool_surface import TOOL_SURFACE_KEY
