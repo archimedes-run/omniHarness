@@ -11,6 +11,7 @@ import {
   Fragment,
   forwardRef,
   useEffect,
+  useId,
   useImperativeHandle,
   useRef,
   useState,
@@ -19,6 +20,11 @@ import {
 } from "react";
 
 import { BrandLogo } from "@/components/brand";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { cn } from "@/lib/utils";
 
 import { AgentAvatar } from "./agent-avatar";
@@ -26,6 +32,7 @@ import {
   INTEGRATIONS_SHOWN,
   chipKey,
   collapse,
+  fileFacts,
   isUnhealthy,
   isUnknown,
 } from "./chips";
@@ -67,24 +74,134 @@ interface Item {
   /** Shown instead of × on a chip that cannot be removed. */
   locked?: string;
   padLeft: string;
+  /** A file chip's preview, shown on hover or focus. */
+  preview?: ReactNode;
 }
 
 function RemoveButton({
   label,
   onClick,
+  describedBy,
 }: {
   label: string;
   onClick: () => void;
+  describedBy?: string;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-describedby={describedBy}
       onClick={onClick}
       className="text-muted-foreground hover:bg-border-strong hover:text-foreground focus-visible:ring-ring inline-flex size-[26px] shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2"
     >
       <XIcon className="size-4" aria-hidden />
     </button>
+  );
+}
+
+/**
+ * One chip. A file chip previews its file on hover or keyboard focus (focus
+ * on the chip or its ×): a thumbnail for an image, otherwise its name, type
+ * and size. The preview describes the chip and its × while it is open.
+ */
+function Chip({
+  item,
+  index,
+  onKeyDown,
+}: {
+  item: Item;
+  index: number;
+  onKeyDown: (e: KeyboardEvent<HTMLElement>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const previewId = useId();
+  const describedBy = item.preview && open ? previewId : undefined;
+  const chip = (
+    <li
+      data-testid={item.testId}
+      aria-describedby={describedBy}
+      data-chip-index={index}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      className={cn(
+        CHIP,
+        item.padLeft,
+        item.onRemove ? "pr-1" : "pr-3",
+        item.tone === "warn" && "border-warning border-dashed",
+      )}
+      title={item.locked}
+    >
+      {item.leading}
+      <span className="max-w-48 truncate">{item.label}</span>
+      {item.note}
+      {item.onRemove && item.removeLabel ? (
+        <RemoveButton
+          label={item.removeLabel}
+          onClick={item.onRemove}
+          describedBy={describedBy}
+        />
+      ) : item.locked ? (
+        <>
+          <LockIcon
+            className="text-muted-foreground size-3.5 shrink-0"
+            aria-hidden
+          />
+          <span className="sr-only">. {item.locked}</span>
+        </>
+      ) : null}
+    </li>
+  );
+  if (!item.preview) return chip;
+  return (
+    <HoverCard
+      open={open}
+      onOpenChange={setOpen}
+      openDelay={150}
+      closeDelay={100}
+    >
+      <HoverCardTrigger asChild>{chip}</HoverCardTrigger>
+      <HoverCardContent
+        id={previewId}
+        role="tooltip"
+        side="top"
+        align="start"
+        className="bg-popover text-popover-foreground border-border-strong w-auto max-w-72 rounded-lg p-2"
+        data-testid="file-preview"
+      >
+        {item.preview}
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+function FilePreview({
+  name,
+  isImage,
+  url,
+  facts,
+}: {
+  name: string;
+  isImage: boolean;
+  url?: string;
+  facts: { type: string; size: string };
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      {isImage && url && (
+        <img
+          src={url}
+          alt={`Preview of ${name}`}
+          className="border-border max-h-60 max-w-64 rounded-md border object-contain"
+        />
+      )}
+      <div className="min-w-0 px-1 text-xs">
+        <p className="text-foreground truncate font-medium">{name}</p>
+        <p className="text-muted-foreground">
+          {facts.type} · {facts.size}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -116,6 +233,8 @@ export const ContextChips = forwardRef<
       filename?: string;
       mediaType?: string;
       url?: string;
+      /** The picked file, when known: its size is shown in the preview. */
+      file?: File;
     }[];
     onRemoveFile: (id: string) => void;
     pickerOpen: boolean;
@@ -215,6 +334,18 @@ export const ContextChips = forwardRef<
         removeLabel: `Remove file ${f.filename?.trim() ? f.filename : "attachment"}`,
         onRemove: () => p.onRemoveFile(f.id),
         padLeft: "pl-2.5",
+        preview: (
+          <FilePreview
+            name={name}
+            isImage={isImage}
+            url={f.url}
+            facts={fileFacts({
+              filename: f.filename,
+              mediaType: f.mediaType,
+              size: f.file?.size,
+            })}
+          />
+        ),
       };
     }),
   ];
@@ -277,34 +408,11 @@ export const ContextChips = forwardRef<
     >
       {items.map((item, index) => (
         <Fragment key={item.key}>
-          <li
-            data-testid={item.testId}
-            data-chip-index={index}
-            tabIndex={-1}
+          <Chip
+            item={item}
+            index={index}
             onKeyDown={(e) => onKeyDown(e, index)}
-            className={cn(
-              CHIP,
-              item.padLeft,
-              item.onRemove ? "pr-1" : "pr-3",
-              item.tone === "warn" && "border-warning border-dashed",
-            )}
-            title={item.locked}
-          >
-            {item.leading}
-            <span className="max-w-48 truncate">{item.label}</span>
-            {item.note}
-            {item.onRemove && item.removeLabel ? (
-              <RemoveButton label={item.removeLabel} onClick={item.onRemove} />
-            ) : item.locked ? (
-              <>
-                <LockIcon
-                  className="text-muted-foreground size-3.5 shrink-0"
-                  aria-hidden
-                />
-                <span className="sr-only">. {item.locked}</span>
-              </>
-            ) : null}
-          </li>
+          />
           {moreIntegrations && index === lastOf("chip-integration") && (
             <li>
               <button

@@ -1,23 +1,35 @@
 "use client";
 
+import * as SwitchPrimitive from "@radix-ui/react-switch";
+import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNowStrict } from "date-fns";
-import { LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
+import { CodeXmlIcon, LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import { BrandLogo } from "@/components/brand";
+import { BrandLogo, resolveBrand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Agent } from "@/core/agents/types";
 import type { Project } from "@/core/ledger/types";
+import { connectComposioToolkit } from "@/core/mcp/connect";
 import { cn } from "@/lib/utils";
 
 import { AgentAvatar } from "./agent-avatar";
 import type { PickerTab } from "./commands";
 import {
+  connectWords,
+  pickerSide,
   rowAction,
   statusLine,
+  type ConnectPhase,
   type IntegrationRow,
   type StatusWord,
 } from "./logic";
@@ -54,7 +66,10 @@ const STATUS_CLASS: Record<StatusWord, string> = {
 };
 
 export interface PickerProps {
-  /** Above the bar in a chat; below it on the centred new-chat layout. */
+  /**
+   * Ignored: kept so older callers still compile. The picker measures the
+   * room and opens below the bar only when it fits there, otherwise above.
+   */
   placement?: "top" | "bottom";
   /** A new chat (nothing sent yet): no project link yet, "@" starts a chat. */
   isNewChat: boolean;
@@ -104,6 +119,31 @@ export interface PickerProps {
 export function ContextPicker(props: PickerProps) {
   const { tab, onTabChange, onClose } = props;
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const [side, setSide] = useState<"top" | "bottom">("bottom");
+
+  // Measure before paint, and again when the panel's height or the window
+  // changes (another tab, a resize).
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const anchor = panel?.offsetParent;
+    if (!panel || !anchor) return;
+    const place = () =>
+      setSide(
+        pickerSide(
+          anchor.getBoundingClientRect(),
+          panel.getBoundingClientRect().height,
+          window.innerHeight,
+        ),
+      );
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, []);
 
   useEffect(() => {
     const panel = panelRef.current;
@@ -152,10 +192,11 @@ export function ContextPicker(props: PickerProps) {
       role="dialog"
       aria-label="Add context"
       data-testid="context-picker"
+      data-side={side}
       onKeyDown={onKeyDown}
       className={cn(
-        "bg-popover text-popover-foreground border-border-strong absolute inset-x-0 z-50 flex max-h-[62vh] flex-col overflow-hidden rounded-xl border shadow-xl",
-        props.placement === "bottom" ? "top-full mt-2.5" : "bottom-full mb-2.5",
+        "bg-card text-card-foreground border-input absolute inset-x-0 z-50 flex max-h-[62vh] flex-col overflow-hidden rounded-xl border text-sm shadow-xl",
+        side === "bottom" ? "top-full mt-2.5" : "bottom-full mb-2.5",
       )}
     >
       <Tabs
@@ -172,7 +213,7 @@ export function ContextPicker(props: PickerProps) {
               <TabsTrigger
                 key={t.id}
                 value={t.id}
-                className="data-[state=active]:bg-primary-subtle data-[state=active]:text-foreground text-foreground-2 min-h-9 rounded-md px-3 py-1.5 font-normal data-[state=active]:font-medium data-[state=active]:shadow-none max-sm:min-h-11"
+                className="data-[state=active]:bg-primary-subtle dark:data-[state=active]:bg-primary-subtle data-[state=active]:text-foreground text-foreground-2 dark:text-foreground-2 min-h-9 flex-none rounded-md border-0 px-3 py-1.5 font-normal data-[state=active]:font-medium data-[state=active]:shadow-none max-sm:min-h-11"
               >
                 {t.label}
               </TabsTrigger>
@@ -402,6 +443,114 @@ function AgentsTab({
   );
 }
 
+/**
+ * Chat-Picker.dc.html's switch: 36 x 20, the accent track with a dark thumb
+ * when on, a raised track with a strong border and a muted thumb when off.
+ */
+function PickerSwitch(
+  props: React.ComponentProps<typeof SwitchPrimitive.Root>,
+) {
+  return (
+    <SwitchPrimitive.Root
+      className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-surface-raised data-[state=unchecked]:border-border-strong focus-visible:ring-ring inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent px-px transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
+      {...props}
+    >
+      <SwitchPrimitive.Thumb className="data-[state=checked]:bg-primary-foreground data-[state=unchecked]:bg-muted-foreground pointer-events-none block size-4 rounded-full transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0" />
+    </SwitchPrimitive.Root>
+  );
+}
+
+/**
+ * A row's logo: the brand's own mark in a 28 px tile (radius 7). A local MCP
+ * server with no brand gets the board's code tile, named after the server.
+ */
+function SourceLogo({ row }: { row: IntegrationRow }) {
+  const branded = resolveBrand(row.logoSource) ?? resolveBrand(row.name);
+  if (row.kind === "local" && !branded) {
+    return (
+      <span
+        role="img"
+        aria-label={`${row.name}, a local MCP server`}
+        className="bg-surface-raised text-foreground-2 inline-flex size-7 shrink-0 items-center justify-center rounded-[7px]"
+        data-brand="local-server"
+      >
+        <CodeXmlIcon className="size-4" aria-hidden />
+      </span>
+    );
+  }
+  return (
+    <BrandLogo
+      source={row.logoSource}
+      name={row.name}
+      size={28}
+      className="rounded-[7px]"
+    />
+  );
+}
+
+/**
+ * "Connect" on an app that is not connected: the same Composio sign-in pop-up
+ * as MCP Suite (connectComposioToolkit), right here in the picker. Once it
+ * completes, the live view is refetched and the row reads "Connected" with a
+ * switch for this chat.
+ */
+function useInlineConnect() {
+  const queryClient = useQueryClient();
+  const [attempts, setAttempts] = useState<
+    Record<string, { phase: ConnectPhase; detail?: string }>
+  >({});
+  const aborts = useRef(new Map<string, AbortController>());
+
+  const set = (id: string, phase: ConnectPhase, detail?: string) =>
+    setAttempts((prev) => ({ ...prev, [id]: { phase, detail } }));
+
+  const connect = useCallback(
+    (row: IntegrationRow) => {
+      const toolkit = row.id.slice(row.id.indexOf(":") + 1);
+      const abort = new AbortController();
+      aborts.current.set(row.id, abort);
+      set(row.id, "opening");
+      connectComposioToolkit(toolkit, () => set(row.id, "waiting"), {
+        signal: abort.signal,
+      })
+        .then((outcome) => {
+          if (outcome === "connected" || outcome === "already-connected") {
+            set(row.id, "connected");
+            void queryClient.invalidateQueries({ queryKey: ["toolSources"] });
+            void queryClient.invalidateQueries({ queryKey: ["tools"] });
+          } else {
+            set(row.id, outcome);
+          }
+        })
+        .catch((err: unknown) =>
+          set(
+            row.id,
+            "failed",
+            err instanceof Error ? err.message : String(err),
+          ),
+        )
+        .finally(() => aborts.current.delete(row.id));
+    },
+    [queryClient],
+  );
+
+  const cancel = useCallback((id: string) => {
+    aborts.current.get(id)?.abort();
+  }, []);
+
+  return { attempts, connect, cancel };
+}
+
+const CONNECT_TONE = {
+  muted: "text-muted-foreground",
+  warn: "text-warning",
+  bad: "text-destructive",
+} as const;
+
+// Chat-Picker.dc.html: the row's action is a 13 px underlined link.
+const LINK_BUTTON =
+  "text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-[13px] underline underline-offset-2 disabled:opacity-60 focus-visible:ring-ring rounded-sm outline-none focus-visible:ring-2";
+
 function IntegrationsTab({
   integrations,
   integrationsLoading,
@@ -413,6 +562,7 @@ function IntegrationsTab({
   onToggleIntegration,
 }: PickerProps) {
   const { query, setQuery, filtered } = useFilter(integrations, rowText);
+  const { attempts, connect, cancel } = useInlineConnect();
   return (
     <>
       <SearchBox
@@ -447,11 +597,28 @@ function IntegrationsTab({
       ) : null}
       {integrationsLoading && <Empty>Loading…</Empty>}
       <ul className="flex flex-col px-1.5 pb-1.5" aria-label="Integrations">
-        {filtered.map((row) => {
+        {filtered.map((shown) => {
+          const attempt = attempts[shown.id];
+          // Sign-in just completed: Connected (reported by Composio) until
+          // the refetched live view says the same or more.
+          const row: IntegrationRow =
+            attempt?.phase === "connected" && shown.status === "Not connected"
+              ? { ...shown, status: "Connected" }
+              : shown;
           const action = rowAction(row.status, row.kind);
+          const inline =
+            action.kind === "link" &&
+            action.label === "Connect" &&
+            row.kind === "connector";
+          const busy =
+            attempt?.phase === "opening" || attempt?.phase === "waiting";
+          const words =
+            inline && attempt
+              ? connectWords(attempt.phase, attempt.detail)
+              : null;
           return (
             <Row key={row.id}>
-              <BrandLogo source={row.logoSource} name={row.name} size={28} />
+              <SourceLogo row={row} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{row.name}</span>
                 {row.status === "Unreachable" && row.error && (
@@ -460,6 +627,27 @@ function IntegrationsTab({
                     title={row.error}
                   >
                     {row.error}
+                    {words && (
+                      <span
+                        className={cn(
+                          "block text-xs",
+                          CONNECT_TONE[words.tone],
+                        )}
+                        role={words.tone === "muted" ? "status" : "alert"}
+                        data-testid="connect-message"
+                      >
+                        {words.text}
+                      </span>
+                    )}
+                  </span>
+                )}
+                {words && (
+                  <span
+                    className={cn("block text-xs", CONNECT_TONE[words.tone])}
+                    role={words.tone === "muted" ? "status" : "alert"}
+                    data-testid="connect-message"
+                  >
+                    {words.text}
                   </span>
                 )}
               </span>
@@ -469,11 +657,26 @@ function IntegrationsTab({
               >
                 {statusLine(row, ago)}
               </span>
-              {action.kind === "link" && !(row.selected && !row.pinned) ? (
-                <Link
-                  href={MCP_SUITE_HREF}
-                  className="text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-sm underline-offset-2 hover:underline"
+              {inline && attempt?.phase === "waiting" ? (
+                <button
+                  type="button"
+                  className={LINK_BUTTON}
+                  onClick={() => cancel(row.id)}
                 >
+                  Cancel
+                  <span className="sr-only"> signing in to {row.name}</span>
+                </button>
+              ) : inline && !(row.selected && !row.pinned) ? (
+                <button
+                  type="button"
+                  className={LINK_BUTTON}
+                  disabled={busy}
+                  onClick={() => connect(row)}
+                >
+                  Connect<span className="sr-only"> {row.name}</span>
+                </button>
+              ) : action.kind === "link" && !(row.selected && !row.pinned) ? (
+                <Link href={MCP_SUITE_HREF} className={LINK_BUTTON}>
                   {action.label}
                   <span className="sr-only"> {row.name} in MCP Suite</span>
                 </Link>
@@ -483,7 +686,7 @@ function IntegrationsTab({
                 </span>
               ) : (
                 <span className="flex min-w-14 items-center justify-end">
-                  <Switch
+                  <PickerSwitch
                     checked={row.selected}
                     disabled={!row.selected && overCap}
                     aria-label={`Use ${row.name} in this chat${action.kind === "switch" && action.unverified ? " (not verified working)" : ""}`}
@@ -546,7 +749,7 @@ function SkillsTab({
               )}
             </span>
             {onToggleSkill && !chatSkillsError && (
-              <Switch
+              <PickerSwitch
                 checked={!removed.has(s.name)}
                 aria-label={`Use skill ${s.name} in this chat`}
                 onCheckedChange={(on) => onToggleSkill(s.name, on)}

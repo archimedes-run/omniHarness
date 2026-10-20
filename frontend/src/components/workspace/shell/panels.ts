@@ -1,8 +1,8 @@
 import {
-  BotIcon,
-  ListChecksIcon,
   type LucideIcon,
   SparklesIcon,
+  SquareCheckIcon,
+  UsersIcon,
   ZapIcon,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -45,10 +45,10 @@ export function preloadPanel(id: PanelId) {
 }
 
 export const PANEL_ICONS: Record<PanelId, LucideIcon> = {
-  agents: BotIcon,
+  agents: UsersIcon,
   skills: SparklesIcon,
   automations: ZapIcon,
-  tasks: ListChecksIcon,
+  tasks: SquareCheckIcon,
 };
 
 export function panelLabel(t: Translations, id: PanelId): string {

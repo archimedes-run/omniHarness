@@ -4,6 +4,8 @@ import {
   backspaceToChips,
   chipKey,
   collapse,
+  fileFacts,
+  formatBytes,
   insertMention,
   isUnhealthy,
   withSkill,
@@ -209,5 +211,29 @@ describe("the model's provider logo", () => {
     expect(modelProvider("claude-sonnet-5-5")).toBe("anthropic");
     expect(modelProvider("deepseek-chat")).toBeNull();
     expect(modelProvider(undefined)).toBeNull();
+  });
+});
+
+describe("file chip preview facts", () => {
+  it("formats sizes and says when there is none", () => {
+    expect(formatBytes(1)).toBe("1 byte");
+    expect(formatBytes(67)).toBe("67 bytes");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(20 * 1024 * 1024)).toBe("20 MB");
+    expect(formatBytes(undefined)).toBe("Size unknown");
+  });
+  it("says the type from the media type, else the extension, else unknown", () => {
+    expect(fileFacts({ filename: "a.txt", mediaType: "text/plain" }).type).toBe(
+      "text/plain",
+    );
+    expect(fileFacts({ filename: "plan.md", mediaType: "" }).type).toBe(
+      "MD file",
+    );
+    expect(fileFacts({ filename: "README" }).type).toBe("Type unknown");
+    expect(
+      fileFacts({ filename: "x.bin", mediaType: "application/octet-stream" })
+        .type,
+    ).toBe("BIN file");
+    expect(fileFacts({}).name).toBe("Attachment");
   });
 });
