@@ -255,3 +255,14 @@ export function statusLine(
   if (row.toolCount != null) return `Live · ${row.toolCount} tools`;
   return "Live";
 }
+
+/**
+ * The brand behind a model id, for the model control's logo. Null when it
+ * cannot be told: no logo then, rather than a guessed one.
+ */
+export function modelProvider(model: string | undefined): string | null {
+  const m = (model ?? "").toLowerCase().replace(/^[\w-]+\//, "");
+  if (/claude|anthropic/.test(m)) return "anthropic";
+  if (/^(gpt|o\d|chatgpt|codex|openai)/.test(m)) return "openai";
+  return null;
+}
