@@ -72,7 +72,13 @@ function gateway(page: Page) {
   });
   void page.route("**/api/mcp-studio/servers/srv-1/enable", async (route) => {
     calls.push("enable");
-    const body = route.request().postDataJSON() as { code_sha256?: string };
+    const body = route.request().postDataJSON() as {
+      code_sha256?: string;
+      view_token?: string;
+    };
+    if (body.view_token !== "view-1") {
+      return route.fulfill(json({ detail: "Open the code first" }, 409));
+    }
     if (server?.state !== "awaiting_approval") {
       return route.fulfill(json({ detail: "not yet" }, 409));
     }
@@ -93,6 +99,23 @@ function gateway(page: Page) {
       ],
     };
     return route.fulfill(json(server));
+  });
+  void page.route("**/api/mcp-studio/servers/srv-1/approval", (route) => {
+    calls.push("approval");
+    return route.fulfill(
+      json({
+        server_id: "srv-1",
+        name: server?.name,
+        code_sha256: server?.code_sha256,
+        source_code: "from mcp.server.fastmcp import FastMCP\n",
+        egress_hosts: [],
+        tools: [{ name: "whoami", description: "", proposed_tier: 3 }],
+        secret_names: ["TOKEN"],
+        view_token: "view-1",
+        expires_in_seconds: 900,
+        approved_version_on: false,
+      }),
+    );
   });
   void page.route("**/api/mcp-studio/servers", (route) =>
     route.fulfill(
@@ -166,6 +189,6 @@ test("describe -> build in the sandbox -> approval required before it is enabled
 
   await page.getByRole("button", { name: "Approve and turn on" }).click();
   await expect(detail.getByTestId("build-state")).toHaveText("Enabled");
-  expect(gw.calls).toEqual(["build", "enable"]);
+  expect(gw.calls).toEqual(["build", "approval", "enable"]);
   await expect(detail).toContainText("On: agents can use its tools");
 });

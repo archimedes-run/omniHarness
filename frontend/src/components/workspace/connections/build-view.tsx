@@ -14,6 +14,7 @@ import {
 } from "@/components/workspace/page-kit";
 import {
   approveAndEnable,
+  getApprovalPacket,
   discardBuilt,
   startBuild,
 } from "@/core/mcp-studio/api";
@@ -387,7 +388,14 @@ function Detail({ server }: { server: BuiltServer }) {
             className="rounded-lg font-semibold"
             disabled={busy}
             onClick={() =>
-              void act(() => approveAndEnable(server.id, server.code_sha256!))
+              void act(async () => {
+                const packet = await getApprovalPacket(server.id);
+                return approveAndEnable(
+                  server.id,
+                  packet.code_sha256,
+                  packet.view_token,
+                );
+              })
             }
           >
             {busy ? "Turning on…" : "Approve and turn on"}

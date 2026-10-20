@@ -57,3 +57,18 @@ export interface StartBuildResponse {
   /** The names a secret in the description was stored under. Never values. */
   secret_placeholders: string[];
 }
+
+/** GET /api/mcp-studio/servers/{id}/approval (#59). */
+export interface ApprovalPacket {
+  server_id: string;
+  name: string;
+  code_sha256: string;
+  source_code: string;
+  egress_hosts: string[];
+  tools: { name: string; description: string; proposed_tier: number }[];
+  secret_names: string[];
+  view_token: string;
+  expires_in_seconds: number;
+  /** An approved version is still running while this new code waits. */
+  approved_version_on: boolean;
+}

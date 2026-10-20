@@ -13,6 +13,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 from ledger.conftest import gateway  # noqa: F401  (the fixture, re-exported)
+from mcp_build_helpers import built  # noqa: F401  (the fixture, re-exported)
 
 EXAMPLE = Path(__file__).resolve().parents[3] / "config.example.yaml"
 

@@ -1,7 +1,12 @@
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
-import type { BuiltServer, BuiltServerList, StartBuildResponse } from "./types";
+import type {
+  ApprovalPacket,
+  BuiltServer,
+  BuiltServerList,
+  StartBuildResponse,
+} from "./types";
 
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -37,18 +42,29 @@ export async function startBuild(
   );
 }
 
-/** Approve the code you were shown (named by its hash) and turn it on.
- * The gateway refuses if the stored code is no longer that code. */
+/** What the approval screen shows: the full code, its hash, the outbound
+ * hosts and the tools, plus the single-use token that proves it was shown. */
+export async function getApprovalPacket(id: string): Promise<ApprovalPacket> {
+  return json(await fetch(`${base()}/servers/${id}/approval`));
+}
+
+/** Approve the code you were shown (named by its hash, proven by the view
+ * token) and turn it on. The gateway refuses if the code changed since. */
 export async function approveAndEnable(
   id: string,
   codeSha256: string,
+  viewToken: string,
   toolTiers: Record<string, 1 | 2 | 3> = {},
 ): Promise<BuiltServer> {
   return json(
     await fetch(`${base()}/servers/${id}/enable`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code_sha256: codeSha256, tool_tiers: toolTiers }),
+      body: JSON.stringify({
+        code_sha256: codeSha256,
+        view_token: viewToken,
+        tool_tiers: toolTiers,
+      }),
     }),
   );
 }

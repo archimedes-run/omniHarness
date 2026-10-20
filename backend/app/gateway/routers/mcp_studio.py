@@ -363,9 +363,66 @@ async def start_build(body: StartBuildRequest, request: Request) -> StartBuildRe
 # ---------------------------------------------------------------------------
 
 
+class ApprovalTool(BaseModel):
+    name: str
+    description: str
+    #: Every built tool starts at Tier 3 ("asks every time") until the user sets it.
+    proposed_tier: int = 3
+
+
+class ApprovalPacket(BaseModel):
+    """Everything the approval screen shows, and the token that proves it was shown."""
+
+    server_id: str
+    name: str
+    code_sha256: str
+    source_code: str
+    egress_hosts: list[str]
+    tools: list[ApprovalTool]
+    secret_names: list[str]
+    view_token: str
+    expires_in_seconds: int
+    approved_version_on: bool
+
+
+@router.get("/servers/{server_id}/approval", response_model=ApprovalPacket)
+@require_permission("threads", "write")
+async def get_approval_packet(server_id: str, request: Request) -> ApprovalPacket:
+    """The code (in full), its hash, the hosts it will be allowed to reach, its
+    tools and the secret names it will get, plus a single-use view token.
+    ``/enable`` needs that token: the code must have been shown first (#59)."""
+    _check_flag(request)
+    user_id = _get_user_id(request)
+    manager = get_mcp_server_manager(request)
+    server = await get_mcp_server_repo(request).get(server_id, user_id=user_id)
+    if server is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    source = server.get("source_code")
+    sha = server.get("code_sha256")
+    if not source or not sha:
+        raise HTTPException(status_code=409, detail="There is no code to review yet.")
+    record = await manager.get_status(server_id=server_id, user_id=user_id)
+    tools = server.get("tools_discovered") or record.tools_discovered or []
+    token, ttl = manager.view_tokens.issue(server_id=server_id, user_id=user_id, code_sha256=sha)
+    return ApprovalPacket(
+        server_id=server_id,
+        name=server["name"],
+        code_sha256=sha,
+        source_code=source,
+        egress_hosts=list(server.get("egress_hosts") or []),
+        tools=[ApprovalTool(name=t.get("name", "?"), description=(t.get("description") or "")[:300]) for t in tools],
+        secret_names=list(server.get("detected_secrets") or []),
+        view_token=token,
+        expires_in_seconds=int(ttl),
+        approved_version_on=bool(server.get("approved_code_sha256") and server.get("container_id") and not server.get("approved")),
+    )
+
+
 class EnableRequest(BaseModel):
     #: The hash of the code the user was shown. Approval is for that code only.
     code_sha256: str = Field(..., min_length=64, max_length=64)
+    #: From GET /approval: proves this user was shown this code (single use).
+    view_token: str = ""
     #: Tier per tool (1, 2 or 3). A tool not named here starts at Tier 3.
     tool_tiers: dict[str, int] = Field(default_factory=dict)
 
@@ -383,6 +440,11 @@ async def enable_mcp_server(server_id: str, body: EnableRequest, request: Reques
     _check_flag(request)
     user_id = _get_user_id(request)
     manager = get_mcp_server_manager(request)
+    if await get_mcp_server_repo(request).get(server_id, user_id=user_id) is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    refused = manager.view_tokens.consume(body.view_token, server_id=server_id, user_id=user_id, code_sha256=body.code_sha256)
+    if refused:
+        raise HTTPException(status_code=409, detail=refused)
     try:
         await manager.begin_approval(server_id=server_id, user_id=user_id, code_sha256_seen=body.code_sha256, tool_tiers=body.tool_tiers)
     except PermissionError as exc:

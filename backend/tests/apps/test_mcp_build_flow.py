@@ -93,8 +93,9 @@ def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(
     sid = _start(client)["server_id"]
 
     # Approval before the tests pass is refused, and so is turning it on directly.
+    assert client.get(f"/api/mcp-studio/servers/{sid}/approval").status_code == 409  # no code to show yet
     refused = client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": "0" * 64})
-    assert refused.status_code == 400 and "No source code" in refused.text, refused.text
+    assert refused.status_code == 409 and "Open the code first" in refused.text, refused.text
     assert client.post(f"/api/mcp-studio/servers/{sid}/deploy").status_code == 403
 
     # The agent submits its code (what its mcp_build tool does): a real sandbox run.
@@ -130,7 +131,8 @@ def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(
 
     manager._runner = FakeDockerRunner()
     if True:
-        resp = client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": server["code_sha256"]})
+        packet = client.get(f"/api/mcp-studio/servers/{sid}/approval").json()
+        resp = client.post(f"/api/mcp-studio/servers/{sid}/enable", json={"code_sha256": server["code_sha256"], "view_token": packet["view_token"]})
         assert resp.status_code == 200, resp.text
         for _ in range(100):
             if _server(client, sid)["state"] == "enabled":

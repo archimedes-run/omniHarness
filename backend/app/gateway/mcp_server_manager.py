@@ -46,6 +46,7 @@ from app.gateway.mcp_build_flow import placeholder, scrub
 from app.gateway.mcp_docker import CliDockerRunner, DockerRunner
 from app.gateway.mcp_egress import build_egress_rules
 from app.gateway.mcp_secrets import McpSecretsVault
+from app.gateway.mcp_view_tokens import ViewTokens
 from omniharness.persistence.mcp_server.approval import code_sha256
 from omniharness.persistence.mcp_server.sql import McpServerRepository
 from omniharness.skills.code_scanner import scan_python_code, scan_python_code_static
@@ -256,6 +257,8 @@ class MCPServerManager:
         self._repo = repo
         self._vault = vault
         self._runner: DockerRunner = runner or CliDockerRunner()
+        #: Approval-screen views, so "the code was viewed" is observed (#59).
+        self.view_tokens = ViewTokens()
         # Per-server lock held while the stored code changes and while a deploy
         # makes its final check before `docker run`: new code can't slip in
         # between "this is the approved code" and starting it (#59, T15).
