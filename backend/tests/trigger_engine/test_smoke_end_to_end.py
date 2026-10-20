@@ -200,3 +200,16 @@ async def test_a_retried_firing_carries_the_same_firing_id(tmp_path) -> None:
     ids = [body["config"]["configurable"]["trigger_firing_id"] for _, body in gw.runs]
     assert len(ids) == 2 and ids[0] == ids[1]
     assert len(dest.delivered) == 1
+
+
+async def test_the_runs_footer_reaches_the_delivered_message(tmp_path) -> None:
+    """Feature 006: what a firing did on its own (and the link to undo it all)
+    is appended to the message the destination receives, keyed by the same
+    firing id the grant cap uses."""
+    loop, gw, dest, _ = _build(tmp_path, [{"id": "blocked", "type": "watcher", "match": {"event": "waiting-on-user"}, "prompt": "{project}", "destination": "quiet"}])
+    seen: list[str] = []
+    loop.runner.run_footer = lambda firing_id: seen.append(firing_id) or "Done on its own in this run: 1 change. Review or undo them all: http://web/workspace/runs/x"
+    await loop.cycle()
+    [delivered] = dest.delivered
+    assert "Review or undo them all" in str(delivered)
+    assert seen == [gw.runs[0][1]["config"]["configurable"]["trigger_firing_id"]]

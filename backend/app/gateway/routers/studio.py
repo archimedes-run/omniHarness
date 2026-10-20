@@ -165,6 +165,9 @@ async def put_autonomy(name: str, request: AutonomyUpdate, config: AppConfig = D
 
 class GrantUse(BaseModel):
     at: str
+    firing_id: str | None = None
+    write_id: str | None = None
+    source_label: str | None = None
     tool: str
     classes: list[str]
     targets: list[str]
@@ -189,3 +192,83 @@ async def grant_uses(name: str, config: AppConfig = Depends(get_config)) -> list
     mine = [e for e in entries if e.get("kind") == "grant-use" and e.get("agent") == agent and e.get("user_id") == user_id]
     mine.sort(key=lambda e: e.get("at", ""), reverse=True)
     return [GrantUse(**{k: e.get(k) for k in GrantUse.model_fields}) for e in mine[:50]]
+
+
+# -- a scheduled run's summary: what it did on its own, and Undo all --------
+
+
+class RunWrite(BaseModel):
+    at: str
+    tool: str
+    classes: list[str]
+    targets: list[str]
+    source_label: str = Field("", description='What the write came from, in words: "from: email “…”", "from: page “…”" (redacted; never the body)')
+    write_id: str | None
+    undone: bool
+
+
+class RunSummary(BaseModel):
+    firing_id: str
+    rule_id: str | None
+    agent: str
+    writes: list[RunWrite]
+    all_undone: bool
+
+
+def _run_entries(request: Request, config: AppConfig, firing_id: str, user_id: str) -> list[dict]:
+    from pathlib import Path
+
+    from app.policy.audit import PolicyAuditLog
+
+    entries = PolicyAuditLog(path=Path(config.policy.state_dir) / "audit.jsonl", actor="default").entries()
+    return [e for e in entries if e.get("kind") == "grant-use" and e.get("firing_id") == firing_id and e.get("user_id") == user_id]
+
+
+def _run_summary(request: Request, config: AppConfig, firing_id: str) -> RunSummary:
+    from omniharness.runtime.user_context import get_effective_user_id
+
+    user_id = get_effective_user_id()
+    mine = _run_entries(request, config, firing_id, user_id)
+    if not mine:
+        raise HTTPException(status_code=404, detail="No run with that id did anything on its own")
+    service = getattr(request.app.state, "ledger_service", None)
+    writes = []
+    for e in sorted(mine, key=lambda e: e.get("at", "")):
+        write_id = e.get("write_id")
+        undone = bool(service is not None and write_id and service.write_undone(user_id=user_id, write_id=write_id))
+        writes.append(RunWrite(at=e.get("at", ""), tool=e.get("tool", ""), classes=e.get("classes") or [], targets=e.get("targets") or [], source_label=e.get("source_label") or "", write_id=write_id, undone=undone))
+    return RunSummary(firing_id=firing_id, rule_id=mine[0].get("rule_id"), agent=mine[0].get("agent") or "", writes=writes, all_undone=all(w.undone for w in writes))
+
+
+@router.get("/runs/{firing_id}", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=RunSummary, summary="What a scheduled run did on its own, each with what it came from")
+async def run_summary(firing_id: str, request: Request, config: AppConfig = Depends(get_config)) -> RunSummary:
+    import asyncio
+
+    return await asyncio.to_thread(_run_summary, request, config, firing_id)
+
+
+@router.post("/runs/{firing_id}/undo", dependencies=[Depends(permission_dependency("threads", "write"))], response_model=RunSummary, summary="Undo everything a scheduled run did on its own, all or nothing")
+async def undo_run(firing_id: str, request: Request, config: AppConfig = Depends(get_config)) -> RunSummary:
+    """Reverts every granted write of this run in one transaction; refused
+    (409, nothing changed) if any was edited since or was already undone."""
+    import asyncio
+
+    from app.ledger.service import LedgerError
+
+    summary = await asyncio.to_thread(_run_summary, request, config, firing_id)
+    service = getattr(request.app.state, "ledger_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="the project ledger needs a database")
+    pending = [w.write_id for w in summary.writes if w.write_id and not w.undone]
+    if not pending:
+        raise HTTPException(status_code=409, detail="everything this run did is already undone")
+    from omniharness.runtime.user_context import get_effective_user_id
+
+    user_id = get_effective_user_id()
+    try:
+        await asyncio.to_thread(service.undo_writes, user_id=user_id, write_ids=pending)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LedgerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await asyncio.to_thread(_run_summary, request, config, firing_id)

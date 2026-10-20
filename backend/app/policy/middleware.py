@@ -101,7 +101,7 @@ class PolicyMiddleware(AgentMiddleware):
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = handler(request)
             if grant:
-                self._record_grant_use(request, decision, grant)
+                self._record_grant_use(request, decision, grant, call.get("write_id"))
             else:
                 self.ledger.record(
                     tool_name=decision.tool_name,
@@ -135,7 +135,7 @@ class PolicyMiddleware(AgentMiddleware):
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
             if grant:
-                self._record_grant_use(request, decision, grant)
+                self._record_grant_use(request, decision, grant, call.get("write_id"))
                 return result
             # PASS THE TARGETS WHEN THEY WERE GENUINELY RESOLVED, and not
             # otherwise. `covered()` requires the reply to name every target,
@@ -238,8 +238,8 @@ class PolicyMiddleware(AgentMiddleware):
         if grant and not call.get("committed"):
             self.grant_runs.release(grant.run_key, grant.actions)
 
-    def _record_grant_use(self, request, decision, grant: GrantedCall) -> None:
-        from .lineage import initiation_origin
+    def _record_grant_use(self, request, decision, grant: GrantedCall, write_id: str | None = None) -> None:
+        from .lineage import initiation_origin, source_label
 
         context = self._runtime_context(request) or {}
         arguments = self._arguments(request)
@@ -261,6 +261,9 @@ class PolicyMiddleware(AgentMiddleware):
                 origin=origin,
                 origin_source=source,
                 count_in_run=grant.total,
+                firing_id=grant.run_key,
+                write_id=write_id,
+                source_label=source_label(state.get("messages") if isinstance(state, dict) else None),
                 now=self.now(),
             )
         # Disclosed in the run's reply like a Tier 2 write: the person reading

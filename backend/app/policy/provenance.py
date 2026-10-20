@@ -81,7 +81,7 @@ def executed_as(how: str, write_id: str | None = None) -> Iterator[dict]:
     state: {"committed": True} once the tool's write is durable (see
     mark_committed), which is how the grant cap knows not to give back a
     reservation for a write that happened."""
-    state: dict = {"committed": False}
+    state: dict = {"committed": False, "write_id": write_id}
     token = _executed_as.set((how, write_id, state))
     try:
         yield state

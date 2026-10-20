@@ -28,6 +28,7 @@ if the user had spoken, and that is exactly what this prevents.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from omniharness.agents.turns import USER_TURN_MARKER, mark_user_turn  # noqa: F401 (re-exported)
@@ -183,3 +184,91 @@ def _tool_name_of(items: list[Any], result: Any) -> str:
             if call.get("id") == call_id and call.get("name"):
                 return str(call["name"])
     return "a tool result"
+
+
+# -- where a granted write came from, for the run summary --------------------
+
+_SUBJECT = re.compile(r"^\s*subject\s*:\s*(.+)$", re.I | re.M)
+_HTML_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_TITLE_LINE = re.compile(r"^\s*title\s*:\s*(.+)$", re.I | re.M)
+_HEADING = re.compile(r"^\s*#\s+(.+)$", re.M)
+_LABEL_LIMIT = 80
+
+
+def _family(tool_name: str) -> str:
+    name = tool_name.lower()
+    if "mail" in name:
+        return "email"
+    if any(word in name for word in ("fetch", "web", "browse", "crawl", "page", "search")):
+        return "page"
+    if "file" in name:
+        return "file"
+    return f"tool {tool_name}"
+
+
+def _call_args(items: list[Any], result: Any) -> dict:
+    call_id = result.get("tool_call_id") if isinstance(result, dict) else getattr(result, "tool_call_id", None)
+    for message in items:
+        calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+        for call in calls or []:
+            if call.get("id") == call_id:
+                return call.get("args") or {}
+    return {}
+
+
+def _descriptor(family: str, text: str, args: dict) -> str | None:
+    """A short name for the content: an email's subject, a page's title (or
+    its host). Never the body."""
+    if family == "email":
+        match = _SUBJECT.search(text)
+        return match.group(1) if match else None
+    if family == "page":
+        for pattern in (_HTML_TITLE, _TITLE_LINE, _HEADING):
+            match = pattern.search(text)
+            if match:
+                return match.group(1)
+        url = str(args.get("url") or "")
+        if url:
+            from urllib.parse import urlparse
+
+            return urlparse(url).netloc or None
+        return None
+    if family == "file":
+        path = str(args.get("path") or args.get("file_path") or "")
+        return path.rsplit("/", 1)[-1] or None
+    return None
+
+
+def source_label(messages: list[Any] | None) -> str:
+    """What a write in a scheduled run came from, for its run summary:
+    "from: email “<subject>”", "from: page “<title>”", or "from: the
+    schedule's own prompt" when no untrusted content entered the turn. The
+    nearest untrusted tool result before the call is named (one classifier:
+    tool_result_is_trusted); its descriptor is cut short and redacted for the
+    widest channel (Telegram), "Withheld" if redaction fails. Never the body."""
+    from session_watcher.redaction import Channel, RedactionError, redact
+
+    items = list(messages or [])
+    for index in range(len(items) - 1, -1, -1):
+        message = items[index]
+        if is_tool_result(message):
+            name = _tool_name_of(items, message)
+            if tool_result_is_trusted(name):
+                continue
+            family = _family(name)
+            content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+            text = content if isinstance(content, str) else " ".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in (content or []))
+            descriptor = _descriptor(family, text, _call_args(items, message))
+            if not descriptor:
+                what = {"email": "subject", "page": "title", "file": "name"}.get(family, "name")
+                return f"from: {family} ({what} not found)"
+            short = " ".join(descriptor.split())
+            short = short[:_LABEL_LIMIT] + ("…" if len(short) > _LABEL_LIMIT else "")
+            try:
+                short = redact(short, Channel.REMOTE)
+            except RedactionError:
+                short = "Withheld"
+            return f"from: {family} “{short}”"
+        if is_user_turn(message) or (_message_type(message) in USER_ORIGINS):
+            break
+    return "from: the schedule's own prompt"

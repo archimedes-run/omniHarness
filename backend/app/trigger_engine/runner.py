@@ -53,6 +53,11 @@ class RuleRunner:
     audit: AuditLog
     config: EngineConfig
     default_tools: tuple[str, ...] = ()
+    #: Feature 006: a line for the delivered message naming what this firing
+    #: did on its own under standing grants (each with its source) and a link
+    #: to its run summary, where "Undo all for this run" is. Takes the firing
+    #: id; "" when it did nothing. Never an action in the channel itself.
+    run_footer: Callable[[str], str] | None = None
     #: When present, firings accumulate here instead of delivering immediately,
     #: so several rules firing together arrive as one message (FR-015).
     window: CoalesceWindow | None = None
@@ -124,6 +129,9 @@ class RuleRunner:
                     # "(the assistant returned nothing)", which is not a message.
                     raise EmptyReply("the run completed with no reply")
                 firing.body = compose_proactive(rule, event, raw, late=False)
+                footer = self.run_footer(key) if self.run_footer is not None else ""
+                if footer:
+                    firing.body = f"{firing.body}\n\n{footer}"
                 firing.reply = with_late_note(event, firing.body)
             except Exception as exc:  # noqa: BLE001 — one firing, not the rule
                 if self._give_up(rule, firing, key, exc, now):
