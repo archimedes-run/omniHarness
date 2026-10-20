@@ -1,10 +1,10 @@
 # 007 policy tool names: effective tier changes
 
-Computed, not estimated: every tool below was classified by the OLD rules with the OLD matching (`origin/main` `backend/app/policy/default_rules.yaml`, raw `fnmatchcase`, no rule = Tier 3) and by the NEW rules with the NEW matching (`omniharness.tools.names.canonical_tool_name` on both sides, no rule = refused), for every argument scenario any exception in either file names.
+Computed, not estimated: every tool below was classified by the OLD rules with the OLD matching (`2ce8310` = main before 007 (#61), `backend/app/policy/default_rules.yaml`, raw `fnmatchcase`, no rule = Tier 3) and by the NEW rules with the NEW matching (`omniharness.tools.names.canonical_tool_name` on both sides, no rule = refused), for every argument scenario any exception in either file names.
 
 Tool list (1101 tools): every tool the shipped MCP servers expose (`backend/tests/policy/real_tool_names.py`, read from each server's package), every built-in, and every action the installed composio-core 0.7.21 SDK lists for the four Composio toolkits connected on the live stack (GMAIL, GITHUB, GOOGLECALENDAR, GOOGLEDRIVE). Composio actions newer than that list have no rule and are refused.
 
-612 tools keep the tier they had through the old no-rule default (Tier 3), now by an explicit rule; they are not listed.
+620 tools keep the tier they had through the old no-rule default (Tier 3), now by an explicit rule; they are not listed.
 
 ## Every change except the GitHub connector reads
 
@@ -34,11 +34,11 @@ Tool list (1101 tools): every tool the shipped MCP servers expose (`backend/test
 | `connector-gmail_GMAIL_SEND_EMAIL` | any | T3 (no rule: default) | REFUSED (no rule) | stricter: REFUSED (email is read-and-draft only, FR-012) |
 | `gmail_send_email` | any | T3 (no rule: default) | REFUSED (no rule) | stricter: REFUSED |
 
-## GitHub connector reads: T3 (no rule: default) -> T1, **LESS STRICT** (374 actions)
+## GitHub connector reads: T3 (no rule: default) -> T1, **LESS STRICT** (366 actions)
 
-Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FIND, and the name contains none of SECRET, KEY, TOKEN, CREDENTIAL, WEBHOOK, ADMIN, PERMISSION. The 66 reads whose names do contain one stay Tier 3 (unchanged, now by an explicit rule), as do all 512 other GitHub actions.
+Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FIND, and the name contains none of SECRET, KEY, TOKEN, CREDENTIAL, WEBHOOK, ADMIN, PERMISSION, VARIABLE (the list lives in `backend/tests/policy/github_connector_policy.py`, which generates these rules). The 74 reads whose names do contain one stay Tier 3 (unchanged, now by an explicit rule), as do all 512 other GitHub actions.
 
-<details><summary>All 374 actions</summary>
+<details><summary>All 366 actions</summary>
 
 - `GITHUB_FIND_CONFLICTING_PACKAGES_FOR_DOCKER_MIGRATION`
 - `GITHUB_GET_ACCESS_RESTRICTIONS`
@@ -64,7 +64,6 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_GET_AN_ASSIGNMENT`
 - `GITHUB_GET_AN_AUTOLINK_REFERENCE_OF_A_REPOSITORY`
 - `GITHUB_GET_AN_ENVIRONMENT`
-- `GITHUB_GET_AN_ENVIRONMENT_VARIABLE`
 - `GITHUB_GET_AN_IMPORT_STATUS`
 - `GITHUB_GET_AN_ISSUE`
 - `GITHUB_GET_AN_ISSUE_COMMENT`
@@ -75,7 +74,6 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_GET_AN_ORGANIZATION_REPOSITORY_RULESET`
 - `GITHUB_GET_AN_ORGANIZATION_ROLE`
 - `GITHUB_GET_AN_ORGANIZATION_RULE_SUITE`
-- `GITHUB_GET_AN_ORGANIZATION_VARIABLE`
 - `GITHUB_GET_APPS_WITH_ACCESS_TO_THE_PROTECTED_BRANCH`
 - `GITHUB_GET_ASSIGNMENT_GRADES`
 - `GITHUB_GET_A_BLOB`
@@ -135,7 +133,6 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_GET_A_REPOSITORY_RULE_SUITE`
 - `GITHUB_GET_A_REPOSITORY_SECURITY_ADVISORY`
 - `GITHUB_GET_A_REPOSITORY_SUBSCRIPTION`
-- `GITHUB_GET_A_REPOSITORY_VARIABLE`
 - `GITHUB_GET_A_REVIEW_COMMENT_FOR_A_PULL_REQUEST`
 - `GITHUB_GET_A_REVIEW_FOR_A_PULL_REQUEST`
 - `GITHUB_GET_A_SELF_HOSTED_RUNNER_FOR_AN_ORGANIZATION`
@@ -255,7 +252,6 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_LIST_EMAIL_ADDRESSES_FOR_THE_AUTHENTICATED_USER`
 - `GITHUB_LIST_ENVIRONMENTS`
 - `GITHUB_LIST_ENVIRONMENT_CUSTOM_DEPLOYMENT_RULES`
-- `GITHUB_LIST_ENVIRONMENT_VARIABLES`
 - `GITHUB_LIST_EVENTS_FOR_THE_AUTHENTICATED_USER`
 - `GITHUB_LIST_EVENTS_RECEIVED_BY_THE_AUTHENTICATED_USER`
 - `GITHUB_LIST_FAILED_ORGANIZATION_INVITATIONS`
@@ -300,7 +296,6 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_LIST_ORGANIZATION_PROJECTS`
 - `GITHUB_LIST_ORGANIZATION_REPOSITORIES`
 - `GITHUB_LIST_ORGANIZATION_RULE_SUITES`
-- `GITHUB_LIST_ORGANIZATION_VARIABLES`
 - `GITHUB_LIST_ORG_REPOS_WITHGITHUB_ACTIONS_ENABLED`
 - `GITHUB_LIST_OUTSIDE_COLLABORATORS_FOR_AN_ORGANIZATION`
 - `GITHUB_LIST_OWNED_PACKAGE_VERSIONS`
@@ -356,14 +351,12 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_LIST_REPOSITORY_ISSUES`
 - `GITHUB_LIST_REPOSITORY_LANGUAGES`
 - `GITHUB_LIST_REPOSITORY_NOTIFICATIONS_FOR_THE_AUTHENTICATED_USER`
-- `GITHUB_LIST_REPOSITORY_ORGANIZATION_VARIABLES`
 - `GITHUB_LIST_REPOSITORY_PROJECTS`
 - `GITHUB_LIST_REPOSITORY_RULE_SUITES`
 - `GITHUB_LIST_REPOSITORY_SECURITY_ADVISORIES`
 - `GITHUB_LIST_REPOSITORY_SECURITY_ADVISORIES_FOR_AN_ORGANIZATION`
 - `GITHUB_LIST_REPOSITORY_TAGS`
 - `GITHUB_LIST_REPOSITORY_TEAMS`
-- `GITHUB_LIST_REPOSITORY_VARIABLES`
 - `GITHUB_LIST_REPOSITORY_WORKFLOWS`
 - `GITHUB_LIST_REPOS_WITH_GHACTIONS_CACHE_USAGE`
 - `GITHUB_LIST_REPO_DEV_CONTAINER_CONFIGS_FOR_USER`
@@ -373,7 +366,6 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 - `GITHUB_LIST_RUNNER_APPLICATIONS_FOR_AN_ORGANIZATION`
 - `GITHUB_LIST_RUNNER_APPLICATIONS_FOR_A_REPOSITORY`
 - `GITHUB_LIST_SECURITY_MANAGER_TEAMS`
-- `GITHUB_LIST_SELECTED_REPOSITORIES_FOR_AN_ORGANIZATION_VARIABLE`
 - `GITHUB_LIST_SELF_HOSTED_RUNNERS_FOR_AN_ORGANIZATION`
 - `GITHUB_LIST_SELF_HOSTED_RUNNERS_FOR_A_REPOSITORY`
 - `GITHUB_LIST_SOCIAL_ACCOUNTS_FOR_A_USER`
@@ -417,3 +409,17 @@ Tool name `connector-github_<ACTION>`. First word GET, LIST, SEARCH, FETCH or FI
 
 </details>
 
+## Follow-up delta: VARIABLE added to the sensitive words (vs the merged 007, `95ab37b`)
+
+Actions variables are plaintext and often hold configuration values. Already included in the tables above; this is what the follow-up alone changed:
+
+| Tool | Merged 007 | Now |
+|---|---|---|
+| `connector-github_GITHUB_GET_AN_ENVIRONMENT_VARIABLE` | T1 | T3 |
+| `connector-github_GITHUB_GET_AN_ORGANIZATION_VARIABLE` | T1 | T3 |
+| `connector-github_GITHUB_GET_A_REPOSITORY_VARIABLE` | T1 | T3 |
+| `connector-github_GITHUB_LIST_ENVIRONMENT_VARIABLES` | T1 | T3 |
+| `connector-github_GITHUB_LIST_ORGANIZATION_VARIABLES` | T1 | T3 |
+| `connector-github_GITHUB_LIST_REPOSITORY_ORGANIZATION_VARIABLES` | T1 | T3 |
+| `connector-github_GITHUB_LIST_REPOSITORY_VARIABLES` | T1 | T3 |
+| `connector-github_GITHUB_LIST_SELECTED_REPOSITORIES_FOR_AN_ORGANIZATION_VARIABLE` | T1 | T3 |
