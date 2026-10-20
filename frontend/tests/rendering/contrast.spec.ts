@@ -672,3 +672,30 @@ test("POSITIVE CONTROL: the probe finds low contrast when it is there", async ({
   const found = await page.evaluate(lowContrastText);
   expect(found.map((f) => f.text)).toEqual(["pale grey on white"]);
 });
+
+test("POSITIVE CONTROL: the probe judges opacity and alpha as painted", async ({
+  page,
+}) => {
+  await page.setContent(
+    `<body style="background:#fff;margin:0;font:16px sans-serif">
+       <p style="color:#111;opacity:0.3">dark text at opacity 0.3</p>
+       <div style="opacity:0.5"><div style="opacity:0.6"><p style="color:#111">dark text in nested 0.5 and 0.6 groups</p></div></div>
+       <p style="color:color-mix(in oklab, #111 30%, transparent)">dark text mixed to 30%</p>
+       <p style="color:rgb(17 17 17 / 0.3)">dark text at alpha 0.3</p>
+       <div style="background:#000;opacity:0.3"><p style="color:#fff;margin:0">white on a black card at opacity 0.3</p></div>
+       <div style="background:rgb(0 0 0 / 0.5)"><p style="color:rgb(255 255 255 / 0.5);margin:0">half-white on a half-black panel</p></div>
+       <p style="color:#111;opacity:0.9">dark text at opacity 0.9</p>
+       <div style="background:#000;opacity:0.9"><p style="color:#fff;margin:0">white on a black card at opacity 0.9</p></div>
+       <button disabled style="color:#111;opacity:0.3">disabled button</button>
+     </body>`,
+  );
+  const found = await page.evaluate(lowContrastText);
+  expect(found.map((f) => f.text)).toEqual([
+    "dark text at opacity 0.3",
+    "dark text in nested 0.5 and 0.6 groups",
+    "dark text mixed to 30%",
+    "dark text at alpha 0.3",
+    "white on a black card at opacity 0.3",
+    "half-white on a half-black panel",
+  ]);
+});
