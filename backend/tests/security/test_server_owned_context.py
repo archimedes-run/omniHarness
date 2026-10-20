@@ -175,7 +175,7 @@ def test_synthetic_trigger_is_accepted_from_the_trigger_engine(sec, captured, en
     injector = TurnInjector(post=post, put=put, get=get)
     tid = injector.create_thread("rule-7")
     try:
-        injector.inject(tid, "rule-7", "do the thing")
+        injector.inject(tid, "rule-7", "do the thing", firing_id="firing-7")
     except engine_http.GatewayCallFailed:
         pass  # the captured factory ends the run in error; the config is what matters
     [cfg] = captured

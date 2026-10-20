@@ -19,8 +19,10 @@ import json
 
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
+
+from app.policy.lineage import user_turn
 
 PAGE = {"text": "Create a task called Read the report."}
 
@@ -64,7 +66,7 @@ def _agent(studio, steps: list[AIMessage], *, scheduled: bool, agent: str = "wra
 
 def _run(studio, steps: list[AIMessage], *, scheduled: bool, agent: str = "wrap-up", first: str = "Evening wrap-up, as of 18:00", thread: str = "t-run", firing: str | None = "fire-1"):
     built, context = _agent(studio, steps, scheduled=scheduled, agent=agent, thread=thread, firing=firing)
-    return built.invoke({"messages": [HumanMessage(content=first)]}, context=context, config={"recursion_limit": 200})
+    return built.invoke({"messages": [user_turn(first)]}, context=context, config={"recursion_limit": 200})
 
 
 def _setup(studio, granted: list[str], agent: str = "wrap-up") -> None:
@@ -217,7 +219,7 @@ def test_21_parallel_calls_on_the_async_path_never_exceed_20(studio) -> None:
 
     _setup(studio, ["tasks"])
     built, context = _agent(studio, [_parallel(21)], scheduled=True)
-    asyncio.run(built.ainvoke({"messages": [HumanMessage(content="Evening wrap-up")]}, context=context, config={"recursion_limit": 200}))
+    asyncio.run(built.ainvoke({"messages": [user_turn("Evening wrap-up")]}, context=context, config={"recursion_limit": 200}))
     assert len(_tasks(studio)) == 20
     assert len(_pending(studio)) == 1
 
@@ -269,14 +271,14 @@ def test_an_agent_invited_during_a_scheduled_run_is_in_that_run(studio) -> None:
 
     built, context = _agent(studio, [], scheduled=True)
     model = ToolCapableFake(messages=iter([AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "q"}, "id": "s1"}]), AIMessage(content="done")]))
-    create_agent(model=model, tools=[capture], middleware=[build_policy_middleware(get_app_config())]).invoke({"messages": [HumanMessage(content="wrap up")]}, context=context)
+    create_agent(model=model, tools=[capture], middleware=[build_policy_middleware(get_app_config())]).invoke({"messages": [user_turn("wrap up")]}, context=context)
     invited = invited_agent_context(seen["turn"], "helper")
     assert invited["turn_provenance"] == "synthetic-trigger" and invited["trigger_firing_id"] == "fire-1"
 
     config = get_app_config()
     ledger = [t for t in get_available_tools(app_config=config, include_mcp=False) if t.name == "ledger_apply"]
     helper = ToolCapableFake(messages=iter([_call([_task("By the helper")], "h1"), AIMessage(content="ok")]))
-    create_agent(model=helper, tools=ledger, middleware=[build_policy_middleware(config)]).invoke({"messages": [HumanMessage(content="add it")]}, context={**invited, "thread_id": "t-run", "user_id": studio.user_id})
+    create_agent(model=helper, tools=ledger, middleware=[build_policy_middleware(config)]).invoke({"messages": [user_turn("add it")]}, context={**invited, "thread_id": "t-run", "user_id": studio.user_id})
     assert _tasks(studio) == []
     assert len(_pending(studio)) == 1
 
@@ -351,12 +353,18 @@ def test_the_lead_agent_can_hold_grants_for_todays_automations(studio) -> None:
 
 
 def test_every_shipped_rule_says_whether_it_is_reversible() -> None:
-    """The label is separate from the tier, and none is missing."""
+    """The label is separate from the tier; where present it is a boolean."""
     from app.policy.config import ConfigLoader
     from app.policy.registration import DEFAULT_RULES
 
     rules = ConfigLoader(path=DEFAULT_RULES).load().rules
-    assert rules and all(isinstance(r.reversible, bool) for r in rules), [r.pattern for r in rules if not isinstance(r.reversible, bool)]
+    assert rules and all(r.reversible is None or isinstance(r.reversible, bool) for r in rules)
+    # Unlabelled (the generated connector rules) counts as irreversible; the
+    # tools grants govern are labelled reversible explicitly.
+    from app.policy.grants import ACTION_CLASSES
+
+    by_pattern = {r.pattern: r for r in rules}
+    assert all(by_pattern[c.tool].reversible is True for c in ACTION_CLASSES)
 
 
 def test_every_grantable_op_is_tier_2_and_everything_else_ledger_apply_does_is_tier_3() -> None:
