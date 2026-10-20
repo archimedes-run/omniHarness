@@ -6,6 +6,7 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarRail,
+  SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar";
 
@@ -26,6 +27,7 @@ export function WorkspaceSidebar({
         </SidebarHeader>
         <SidebarContent>
           <WorkspaceNavChatList />
+          <SidebarSeparator className="mx-3" />
           {isSidebarOpen && <RecentChatList />}
         </SidebarContent>
         <SidebarFooter>

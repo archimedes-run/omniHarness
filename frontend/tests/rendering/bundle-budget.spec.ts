@@ -28,7 +28,7 @@ const HEAVY: Record<string, RegExp> = {
 // and About render markdown on purpose, so they are listed separately below.
 const NON_CHAT = [
   "/workspace/chats",
-  "/workspace/inbox",
+  "/workspace/home",
   "/workspace/automations",
   "/workspace/agents",
   "/workspace/sessions",
@@ -90,5 +90,63 @@ test("an empty chat page ships no code editor, highlighter or math renderer", as
     expect(heavy, `${library} shipped with an empty chat page`).not.toContain(
       library,
     );
+  }
+});
+
+/**
+ * Feature 006: the capsule's panels are dynamic imports. A page that is not
+ * the panel's own ships none of its code until the user reaches for it.
+ * Markers are literals only that panel's component contains.
+ */
+const PANEL_MARKERS: Record<string, RegExp> = {
+  agents: /Custom agents are turned off/,
+  skills: /mode=skill/,
+  automations: /What I do without being asked/,
+  tasks: /What you are working toward/,
+};
+
+for (const route of [
+  "/workspace/chats",
+  "/workspace/connections",
+  "/workspace/settings/safety",
+]) {
+  test(`${route} ships no capsule panel until one is opened`, async ({
+    page,
+  }) => {
+    const scripts = await scriptsOf(page, route);
+    expect(scripts.length, "no scripts captured").toBeGreaterThan(5);
+    const shipped = Object.entries(PANEL_MARKERS)
+      .filter(([, re]) => scripts.some((s) => re.test(s)))
+      .map(([name]) => name);
+    expect(shipped).toEqual([]);
+  });
+}
+
+test("POSITIVE CONTROL: opening a panel loads its code (the markers are real)", async ({
+  page,
+}) => {
+  const bodies: Promise<string>[] = [];
+  page.on("response", (r) => {
+    if (r.request().resourceType() === "script") {
+      bodies.push(r.text().catch(() => ""));
+    }
+  });
+  await page.goto("/workspace/chats", { waitUntil: "networkidle" });
+  for (const id of Object.keys(PANEL_MARKERS)) {
+    await page.locator(`[data-capsule="${id}"]`).click();
+    await expect(page.getByTestId("panel-sheet")).toHaveAttribute(
+      "data-panel",
+      id,
+    );
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("panel-sheet")).toHaveCount(0);
+  }
+  await page.waitForTimeout(500);
+  const scripts = await Promise.all(bodies);
+  for (const [id, re] of Object.entries(PANEL_MARKERS)) {
+    expect(
+      scripts.some((s) => re.test(s)),
+      `${id} panel code never loaded`,
+    ).toBe(true);
   }
 });

@@ -122,6 +122,55 @@ export interface Translations {
     connections: string;
     projects: string;
     settings: string;
+    mcpSuite: string;
+    home: string;
+    more: string;
+    moreLabel: string;
+    memory: string;
+    safety: string;
+    activityLog: string;
+    appearance: string;
+    about: string;
+    waiting: (count: number) => string;
+    cannotTellWaiting: string;
+    failingSources: (count: number) => string;
+  };
+
+  // App shell (Feature 006): the capsule, its panels, the command palette
+  shell: {
+    tools: string;
+    agents: string;
+    skills: string;
+    automations: string;
+    tasks: string;
+    searchEverything: string;
+    close: string;
+    loadingPanel: string;
+    panelFailed: string;
+    paletteTitle: string;
+    paletteDescription: string;
+    palettePlaceholder: string;
+    noResults: string;
+    groupActions: string;
+    groupPanels: string;
+    groupChats: string;
+    groupProjects: string;
+    groupTasks: string;
+    groupAgents: string;
+    groupSkills: string;
+    groupAutomations: string;
+    searching: string;
+    cannotSearch: (source: string, reason: string) => string;
+    newChat: string;
+    newAgent: string;
+    connectSlack: string;
+    darkTheme: string;
+    lightTheme: string;
+    systemTheme: string;
+    openSettings: string;
+    openPanel: (name: string) => string;
+    keyboardShortcuts: string;
+    openSidebar: string;
   };
 
   // Agents

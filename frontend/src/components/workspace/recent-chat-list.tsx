@@ -178,7 +178,11 @@ export function RecentChatList() {
                     key={thread.thread_id}
                     className="group/side-menu-item"
                   >
-                    <SidebarMenuButton isActive={isActive} asChild>
+                    <SidebarMenuButton
+                      isActive={isActive}
+                      className="max-md:h-11"
+                      asChild
+                    >
                       <div>
                         <Link
                           className="block w-full whitespace-nowrap text-inherit group-hover/side-menu-item:overflow-hidden"

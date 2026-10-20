@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /**
  * The Inbox (Phase 2.5; Feature 004's Surface 1 moved here with its content),
+ * now the interim Home (Feature 006): /workspace/inbox redirects there,
  * asserted against what a user can actually press.
  *
  * The unit tests cover the countdown and threshold LOGIC. They cannot tell you
@@ -70,7 +71,7 @@ async function serve(
       }),
     });
   });
-  await page.goto("/workspace/inbox");
+  await page.goto("/workspace/home");
   return () => resolveCalls;
 }
 
@@ -260,18 +261,30 @@ test("alerts say whether they are waiting, missed or delivered, and link to thei
   await expect(
     page.getByTestId("alerts-waiting").getByTestId("alert"),
   ).toHaveCount(2);
-  await expect(
-    page.getByTestId("alerts-recent").getByTestId("alert"),
-  ).toHaveCount(1);
+  // Feature 006: Home shows only what is waiting or missed; the delivered
+  // one is history, in the Activity log.
+  await expect(page.getByTestId("alerts-recent")).toHaveCount(0);
   await expect(
     page.locator('[data-testid="alert"][data-state="not-delivered"]'),
   ).toContainText("held past 2h");
   await expect(
     page.locator('[data-testid="alert"][data-state="waiting"] a'),
   ).toHaveAttribute("href", "/workspace/chats/t-blocked");
+
+  await page.route("**/api/triggers/firings", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ firings: [] }),
+    }),
+  );
+  await page.goto("/workspace/settings/activity");
+  const history = page.getByTestId("alerts-recent").getByTestId("alert");
+  await expect(history).toHaveCount(1);
+  await expect(history).toHaveAttribute("data-state", "delivered");
 });
 
-test("the Inbox badge counts confirmations plus waiting alerts", async ({
+test("the waiting badge counts confirmations plus waiting alerts", async ({
   page,
 }) => {
   await serve(page, { actions: [action()], readable: true, error: "" }, ALERTS);
@@ -299,4 +312,19 @@ test("nothing waiting shows no badge at all", async ({ page }) => {
 
   await expect(page.getByTestId("empty")).toBeVisible();
   await expect(page.getByTestId("inbox-badge")).toHaveCount(0);
+});
+
+test("/workspace/inbox (and the old /workspace/confirmations) land on Home", async ({
+  page,
+}) => {
+  await serve(page, { actions: [action()], readable: true, error: "" });
+  for (const old of ["/workspace/inbox", "/workspace/confirmations"]) {
+    await page.goto(old);
+    await expect(page).toHaveURL(/\/workspace\/home$/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Home");
+    await expect(
+      page.getByRole("heading", { name: "Waiting on you" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("pending-action")).toBeVisible();
+  }
 });
