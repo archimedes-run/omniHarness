@@ -139,3 +139,19 @@ def test_a_next_run_inside_quiet_hours_says_when_it_will_be_delivered(make_gatew
     due, deliver = datetime.fromisoformat(brief["next_run_at"]), datetime.fromisoformat(brief["deliver_at"])
     assert (due.hour, due.minute) == (5, 30) and (deliver.hour, deliver.minute) == (7, 0)
     assert brief["timezone"] == "America/New_York"
+
+
+def test_each_run_links_to_its_full_content_in_the_run_history(make_gateway) -> None:
+    audit = [
+        {"actor": "default", "at": "2026-10-20T12:46:00+00:00", "rule_id": "morning-brief", "event_type": "cron", "event_id": "2026-10-20T08:45:00-04:00", "thread_id": "t", "outcome": "delivered", "reason": "", "batch_id": None},
+        {"actor": "default", "at": "2026-10-19T12:46:00+00:00", "rule_id": "morning-brief", "event_type": "cron", "event_id": "2026-10-19T08:45:00-04:00", "thread_id": "t", "outcome": "delivered", "reason": "", "batch_id": None},
+    ]
+    gw = make_gateway(audit=audit)
+    history = gw.client.app.state.run_history
+    run_id = history.record(kind="automation", source_id="morning-brief", event_id="2026-10-20T08:45:00-04:00", body={"prompt": "Brief me", "reply": "Here it is"}, status="completed")
+
+    runs = gw.client.get("/api/triggers/rules/morning-brief/runs").json()["runs"]
+
+    assert [(r["run_id"], r["content"]) for r in runs] == [(run_id, "stored"), (None, "not-stored")]
+    detail = gw.client.get(f"/api/run-history/runs/{run_id}").json()
+    assert detail["body"] == {"prompt": "Brief me", "reply": "Here it is"}

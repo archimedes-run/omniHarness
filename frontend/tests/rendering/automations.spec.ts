@@ -120,6 +120,8 @@ const RUNS = {
       delivered_with: [],
       batch_not_recorded: false,
       thread_id: "th-1",
+      run_id: "r0",
+      content: "stored",
     },
     {
       event_id: "2026-10-16T08:45:00-04:00",
@@ -132,6 +134,8 @@ const RUNS = {
       delivered_with: [],
       batch_not_recorded: false,
       thread_id: "th-1",
+      run_id: null,
+      content: "not-stored",
     },
     {
       event_id: "2026-10-15T08:45:00-04:00",
@@ -225,6 +229,40 @@ async function serve(page: Page, path: string, rules: unknown = RULES) {
   );
   await page.route("**/api/triggers/firings", (route) =>
     route.fulfill(json(FIRINGS)),
+  );
+  await page.route("**/api/run-history/runs/r0", (route) =>
+    route.fulfill(
+      json({
+        id: "r0",
+        kind: "automation",
+        source_id: "hushed",
+        event_id: "e",
+        thread_id: "th-1",
+        started_at: "2026-10-20T12:45:00Z",
+        finished_at: "2026-10-20T12:46:00Z",
+        status: "completed",
+        error: null,
+        size: 10,
+        body: {
+          prompt: "Brief me as of 8:45.",
+          messages: [
+            { type: "human", content: "Brief me as of 8:45." },
+            {
+              type: "ai",
+              content: "",
+              tool_calls: [{ name: "gmail_fetch", args: { q: "is:unread" } }],
+            },
+            {
+              type: "tool",
+              name: "gmail_fetch",
+              content: "2 unread. Token [REDACTED:github-token].",
+            },
+            { type: "ai", content: "Two unread mails." },
+          ],
+          reply: "Two unread mails.",
+        },
+      }),
+    ),
   );
   await page.route("**/api/triggers/rules/*/runs", (route) =>
     route.fulfill(
@@ -574,4 +612,27 @@ test("a template becomes a new rule through the same create route", async ({
   expect((writes[0]!.body as { rule: { id: string } }).rule.id).toBe(
     "weekly-review",
   );
+});
+
+test("Details opens a stored run's full content; an unstored one says so", async ({
+  page,
+}) => {
+  await serve(page, `${AUTOMATIONS}/hushed`);
+
+  const first = page.getByTestId("run").nth(0);
+  await first.getByRole("button", { name: "Details" }).click();
+  const details = first.getByTestId("run-details");
+  await expect(details).toContainText("Asked");
+  await expect(details).toContainText("Brief me as of 8:45.");
+  await expect(details).toContainText("Tool call: gmail_fetch");
+  await expect(details).toContainText("is:unread");
+  await expect(details).toContainText("Result: gmail_fetch");
+  await expect(details).toContainText("[REDACTED:github-token]");
+  await expect(details).toContainText("Two unread mails.");
+  await expect(
+    page.getByTestId("run").nth(1).getByTestId("not-stored"),
+  ).toContainText("not stored");
+  await expect(
+    page.getByTestId("run").nth(1).getByRole("button", { name: "Details" }),
+  ).toHaveCount(0);
 });

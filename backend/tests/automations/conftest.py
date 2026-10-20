@@ -56,6 +56,7 @@ def make_gateway(tmp_path, monkeypatch):
         extensions.write_text('{"mcpServers": {}, "skills": {}}')
         monkeypatch.setenv("OMNI_HARNESS_CONFIG_PATH", str(path))
         monkeypatch.setenv("OMNI_HARNESS_EXTENSIONS_CONFIG_PATH", str(extensions))
+        monkeypatch.setenv("OMNI_HARNESS_HOME", str(tmp_path / "home"))
         monkeypatch.chdir(tmp_path)
         reset_app_config()
         reset_extensions_config()

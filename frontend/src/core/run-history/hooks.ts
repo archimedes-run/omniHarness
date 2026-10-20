@@ -25,3 +25,13 @@ function useHistoryWrite<T, R>(fn: (input: T) => Promise<R>) {
 export const useSaveRetention = () => useHistoryWrite(api.saveRetention);
 export const useDeleteRunHistory = () =>
   useHistoryWrite((_: void) => api.deleteAllRuns());
+
+/** One stored run with its full content, fetched when it is opened. */
+export function useRun(id: string | null) {
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["runHistory", "run", id],
+    queryFn: () => api.loadRun(id!),
+    enabled: !!id,
+  });
+  return { run: data, error, isLoading };
+}
