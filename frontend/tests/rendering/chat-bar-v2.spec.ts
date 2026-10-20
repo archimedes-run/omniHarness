@@ -277,3 +277,24 @@ test("the model control shows its provider's logo when it can be told", async ({
   const model = page.getByRole("button", { name: /^Model: gpt-5/ });
   await expect(model.getByRole("img", { name: "OpenAI logo" })).toBeVisible();
 });
+
+test("one hidden chip reads in the singular", async ({ page }) => {
+  await stub(page, {
+    skills: ["changelog", "cite", "chart"],
+    extraSources: EIGHT_PLUS.extraSources.slice(0, 3),
+    selection: [
+      "local:filesystem",
+      "connector:GOOGLECALENDAR",
+      "local:alpha",
+      "local:bravo",
+      "local:charlie",
+    ],
+  });
+  await page.goto(`/workspace/chats/${THREAD}`);
+  await expect(
+    page.getByRole("button", { name: "Show 1 more skill" }),
+  ).toHaveText("+1 skill");
+  await expect(
+    page.getByRole("button", { name: "Show 1 more integration" }),
+  ).toHaveText("+1 integration");
+});

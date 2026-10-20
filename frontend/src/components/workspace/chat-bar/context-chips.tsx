@@ -54,6 +54,8 @@ const CHIP =
 const PILL_BUTTON =
   "border-border-strong text-foreground-2 hover:text-foreground hover:bg-surface-raised focus-visible:ring-ring inline-flex h-[34px] items-center rounded-[17px] border px-3 text-sm outline-none focus-visible:ring-2 disabled:opacity-50";
 
+const plural = (n: number, word: string) => (n === 1 ? word : `${word}s`);
+
 interface Item {
   key: string;
   testId: string;
@@ -333,12 +335,14 @@ export const ContextChips = forwardRef<
                 aria-label={
                   integrationsOpen
                     ? "Show fewer integrations"
-                    : `Show ${ints.hidden} more integrations`
+                    : `Show ${ints.hidden} more ${plural(ints.hidden, "integration")}`
                 }
                 data-testid="more-integrations"
                 onClick={() => setIntegrationsOpen((o) => !o)}
               >
-                {integrationsOpen ? "Fewer" : `+${ints.hidden} integrations`}
+                {integrationsOpen
+                  ? "Fewer"
+                  : `+${ints.hidden} ${plural(ints.hidden, "integration")}`}
               </button>
             </li>
           )}
@@ -351,12 +355,14 @@ export const ContextChips = forwardRef<
                 aria-label={
                   skillsOpen
                     ? "Show fewer skills"
-                    : `Show ${skills.hidden} more skills`
+                    : `Show ${skills.hidden} more ${plural(skills.hidden, "skill")}`
                 }
                 data-testid="more-skills"
                 onClick={() => setSkillsOpen((o) => !o)}
               >
-                {skillsOpen ? "Fewer" : `+${skills.hidden} skills`}
+                {skillsOpen
+                  ? "Fewer"
+                  : `+${skills.hidden} ${plural(skills.hidden, "skill")}`}
               </button>
             </li>
           )}
