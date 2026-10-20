@@ -20,6 +20,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.trigger_engine.scheduler import DEFAULT_TIMEZONE
+
 Activity = Literal["never-evaluated", "evaluated-never-fired", "fired"]
 Recorded = Literal["recorded", "never", "not-recorded"]
 #: When the rule next runs, as far as the server can say (Feature 006):
@@ -40,10 +42,9 @@ HeldBecause = Literal["mid-conversation", "quiet-hours", "other"]
 #: only waited for the window was delivered on time.
 COALESCING_REASON = "awaiting the coalescing window"
 
-#: The user's zone, for a rule that names none. The engine still fires such a
-#: rule's cron in UTC (scheduler.next_due with no zone); only how its times are
-#: shown changes.
-USER_TIMEZONE = "America/New_York"
+#: The zone a rule that names none runs in: the engine's own default
+#: (scheduler.DEFAULT_TIMEZONE), so what is shown is when it fires.
+USER_TIMEZONE = DEFAULT_TIMEZONE
 
 
 class RuleView(BaseModel):

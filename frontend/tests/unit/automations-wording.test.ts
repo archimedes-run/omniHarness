@@ -47,6 +47,17 @@ describe("schedule wording", () => {
     ).toBe("When a session waits on you");
   });
 
+  it("names the engine's default zone for a rule that names none", () => {
+    expect(
+      headline({
+        type: "cron",
+        match: { schedule: "0 9 * * *" },
+        destination: "auto",
+        timezone: NY,
+      }),
+    ).toMatch(/^Every day at 9:00 AM · America\/New_York · /);
+  });
+
   it("shows a schedule it cannot simplify as cron, never rewritten", () => {
     expect(shortSchedule(cron("*/15 * * * *"))).toBe("Cron */15 * * * *");
   });

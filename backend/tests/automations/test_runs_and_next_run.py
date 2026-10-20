@@ -158,7 +158,7 @@ def test_an_urgent_run_or_one_outside_quiet_hours_is_delivered_when_due() -> Non
         assert out["deliver_at"] == out["next_run_at"] and "held_for_quiet_hours" not in out
 
 
-def test_a_rule_without_a_zone_fires_in_utc_and_is_shown_in_the_users_zone() -> None:
+def test_a_rule_without_a_zone_runs_in_the_users_zone() -> None:
     cfg = parse({"rules": [{"id": "z", "type": "cron", "match": {"schedule": "0 9 * * *"}, "prompt": "p"}]})
     view = describe_rules(rules=list(cfg.rules), evaluated={}, audit=[], engine_enabled=True, quiet_hours=cfg.quiet_hours, now=NOW)
-    assert view.rules[0].next_run_at == "2026-10-21T09:00:00+00:00" and view.rules[0].timezone == "America/New_York"
+    assert view.rules[0].next_run_at == "2026-10-21T09:00:00-04:00" and view.rules[0].timezone == "America/New_York"

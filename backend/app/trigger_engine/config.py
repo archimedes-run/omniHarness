@@ -254,4 +254,11 @@ class ConfigLoader:
             return self.config
         self._config, self._mtime, self.last_error = cfg, mtime, None
         logger.info("rule config loaded: %d rule(s)", len(cfg.rules))
+        from .scheduler import DEFAULT_TIMEZONE
+
+        for rule in cfg.rules:
+            if rule.type is TriggerType.CRON and not rule.match.get("timezone"):
+                # The migration note, where an operator reads it: this rule's
+                # schedule moved zones in Feature 006 (scheduler.DEFAULT_TIMEZONE).
+                logger.info('rule %s names no timezone: it runs in %s (before Feature 006 it ran in UTC; add "timezone": "UTC" to keep that)', rule.id, DEFAULT_TIMEZONE)
         return cfg

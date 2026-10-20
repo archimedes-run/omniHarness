@@ -71,7 +71,8 @@ export function toCron({ time, days }: SimpleSchedule): string {
 
 export function describeSchedule(expr: string, timezone?: string): string {
   const simple = fromCron(expr);
-  const zone = timezone ? ` (${timezone})` : " (UTC)";
+  // A rule naming no zone runs in the engine's default (scheduler.py).
+  const zone = ` (${timezone ?? "America/New_York"})`;
   if (!simple) return `Cron "${expr}"${zone}`;
   const d = simple.days.join();
   const when =

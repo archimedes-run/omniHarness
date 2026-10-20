@@ -286,7 +286,7 @@ export function RuleForm({
               <Input
                 list="tz-list"
                 value={timezone}
-                placeholder="UTC"
+                placeholder="America/New_York"
                 onChange={(e) => setMatch({ timezone: e.target.value })}
                 className="w-60"
                 aria-label="Time zone"

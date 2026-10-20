@@ -87,7 +87,7 @@ export function destinationPhrase(destination: string): string {
 
 /** The header line: "Weekdays at 8:45 AM · America/New_York · to Telegram". */
 export function headline(
-  rule: Pick<RuleView, "type" | "match" | "destination">,
+  rule: Pick<RuleView, "type" | "match" | "destination" | "timezone">,
 ): string {
   const parts: string[] = [];
   if (rule.type === "cron") {
@@ -98,7 +98,7 @@ export function headline(
         ? `${daysPhrase(simple.days)} at ${clock(simple.time)}`
         : `Cron ${expr}`,
     );
-    parts.push(matchText(rule.match.timezone) || "UTC");
+    parts.push(ruleZone(rule));
   } else {
     parts.push(shortSchedule(rule));
   }
