@@ -43,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { MarkdownLite } from "./markdown-lite";
+import { SkillTest } from "./skill-test";
 
 type Selection = { kind: "skill"; name: string } | { kind: "new" };
 export type SkillTab = "details" | "instructions" | "files" | "test";
@@ -432,7 +433,10 @@ function SkillEditor({
         <FilesTab name={isCustom ? skill.name : null} readOnly={readOnly} />
       </TabPanel>
       <TabPanel value="test" className="flex flex-col gap-2.5 outline-none">
-        <p className="text-muted-foreground m-0">{c.testIntro}</p>
+        <SkillTest
+          name={isNew ? null : skill.name}
+          dirty={JSON.stringify(doc) !== JSON.stringify(initial)}
+        />
       </TabPanel>
     </StudioTabs>
   );

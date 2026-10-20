@@ -5,6 +5,7 @@ import type {
   AgentRuns,
   AutonomyView,
   GrantUse,
+  SkillTestResult,
   CustomSkill,
   DraftResponse,
   SkillFiles,
@@ -133,3 +134,11 @@ export const saveAutonomy = (
 
 export const loadGrantUses = (name: string) =>
   call<GrantUse[]>(`/api/studio/agents/${encodeURIComponent(name)}/grant-uses`);
+
+/** Ask the model a few times whether this message makes it load the skill.
+ * Each try is a model call; run only when the user presses Test. */
+export const testSkill = (name: string, message: string, tries = 3) =>
+  call<SkillTestResult>(`/api/skills/${encodeURIComponent(name)}/test`, {
+    method: "POST",
+    body: JSON.stringify({ message, tries }),
+  });
