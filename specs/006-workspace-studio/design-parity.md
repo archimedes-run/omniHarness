@@ -39,7 +39,9 @@
 
 ### Precedence (which board wins)
 
-1. **Later user decisions** win over every board:
+1. **Later user decisions** win over every board. These three are the user's own decision
+   (2026-10-20: "remove the skill chips from the chat window … shrink the chat box by 15% and that
+   box must always be on the bottom"; confirmed on review of this audit):
    - The chat bar is **816 px** wide (`max-w-[816px]`).
    - The chat bar is **always at the bottom** of the page, on a new chat too.
    - **Skills are not chips on the bar.** Skills are set in the picker's Skills tab.
@@ -171,10 +173,10 @@ I confirmed each element against `shell/capsule.tsx`, `input-box.tsx`, `chat-bar
 | Mode / Effort / Model | 36 px high, radius 10, `#24272D`, 1 px `#2E3138`, muted label + value + ▾; the model has a 20 px logo | `PILL`: `h-9 rounded-[10px] bg-surface-raised border-border`, label `text-muted-foreground`, BrandLogo 20 | **Matches** | — | — |
 | Send | 40 px, **radius 12**, `#8FA8FF`, 18 px arrow | `size-10 rounded-xl` = **14 px**; 16 px arrow | Use `rounded-[12px]` and a `size-[18px]` icon | B | S |
 | Starters | 34 px pills, radius 17, 1 px `#2E3138`, `#C9CCD2` 14 px, padding 0 14; copy "Plan my week · What's blocked? · Review a coding session · New automation" | `h-[34px] rounded-[17px] border-border text-foreground-2 px-3.5`; same four labels | **Matches** (position: see exceptions) | — | — |
-| Picker placement on a new chat | (Not on this board) | `placement={isWelcomeMode ? "bottom" : "top"}`. Now that the bar is always at the bottom, a picker that opens downward on a new chat may fall off screen. | Check this, and open upward everywhere | B | S |
+| Picker placement on a new chat | (Not on this board) | `placement={isWelcomeMode ? "bottom" : "top"}`. Now that the bar is always at the bottom, a picker that opens downward on a new chat may fall off screen. | The picker flips upward when there is no room below (measured, not fixed). Rendering test at 1440×900 and 1280×720 that it stays fully on screen, new chat and thread | B | S |
 
-**Agreed exceptions.** These differ from the board because the user decided so later. They are not
-gaps:
+**Agreed exceptions.** These differ from the board because the user decided so (2026-10-20, see
+Precedence). They are not gaps:
 1. The bar is **816 px**, not the board's 960 px column.
 2. The bar is **at the bottom** on a new chat too. The board centres it vertically. So the heading
    sits in the empty space above (`min-h-[32vh]`), and the **starters sit above the bar** (the
@@ -414,35 +416,43 @@ No new layouts. Each page below takes on the Graphite look from parts the boards
 Until each of these exists, render **"Not set up"** (the feature has nothing configured) or
 **"Can't tell yet"** (it exists but can't be read). Never show a number or a sample value.
 
-1. **Home: Upcoming.** There is no read endpoint for upcoming calendar events. The calendar is only
-   a trigger source inside the engine.
-2. **Home: What moved today.** There is no single "moved" feed. It has to be merged from firings,
-   ledger changes and session finishes. PR merges aren't recorded at all unless a session or the
-   GitHub connector reports them.
+1. **Home: Upcoming.** *Changed after review:* this has a source. Google Calendar is connected, so
+   Home reads the next 7 days of events **read-only** through the existing connection (no writes),
+   plus the next runs of enabled scheduled automations from the 002 trigger engine. Not connected →
+   "Not set up"; unreachable → "Can't tell". Phase A.
+2. **Home: What moved today.** *Changed after review:* built from three real sources: the 005 Ledger
+   (today's changes), the watcher's session events (finished / blocked today) and GitHub (merged PRs
+   and failing checks, read-only through the existing connection). Each line is labelled observed or
+   reported. A source that can't be read says so. Phase A.
 3. **Display name** ("Good evening, Rishabh", the sidebar footer, the new-chat heading). Today the
    fallback is the account id. Without a set name, use "Good evening" with no name.
 4. **Waiting row: "Asked: "…"".** The session's exact question is inferred from its last message.
    Label it "inferred", or show the excerpt.
 5. **Agent Studio:**
    - status ("Active");
-   - "Next run";
-   - "Recent runs";
+   - "Next run" and "Recent runs": *changed after review*, these have a source. The 002 trigger
+     engine stores schedules and delivery history; the next run is computed from the schedule in the
+     user's timezone (America/New_York unless the rule names its own), respecting quiet hours;
    - "On its own it may" (autonomy grants);
-   - Schedule;
+   - Schedule (from the trigger engine's rules, as above);
    - "Send the result to Telegram" / "Show it on Home".
 
    None of these exist yet. Grants and drafts are in Phase C's backend scope.
 6. **Skill Studio:**
-   - "Files" (no endpoint to list or upload skill files);
-   - "Test" (no "would this skill load" check);
-   - "Used by" (only derivable when agents declare their skills).
+   - "Files": stays **"Not set up"** unless Phase C adds a listing. Why: skills live as folders on
+     disk (`skills/public`, `skills/custom`); the gateway exposes no endpoint that lists or uploads a
+     skill's files, so the UI has no source today;
+   - "Test": Phase C builds it (button-only, same model as the runtime, "loaded N of M");
+   - "Used by": derivable from agents that declare a skill whitelist; an agent with no whitelist uses
+     every enabled skill, so "used by" reads "every agent without a skill list" rather than a guess.
 7. **Tasks:**
    - owner chips and "Reported by Codex: 5 of 7 steps" (need task↔session links; the todos are in
      the sessions view);
    - "Break down" (needs an agent call);
    - due dates (only where tasks carry one).
 8. **Automations:**
-   - **Next run** (no field on `RuleView`);
+   - **Next run**: *changed after review*, computed from the rule's schedule in the user's timezone
+     (America/New_York unless the rule names its own), respecting quiet hours. Phase D;
    - the hold reason in history ("You were mid-conversation"), unless the firing records it;
    - agent-run failure detail ("model timeout").
 9. **MCP Suite > Connected:**
@@ -452,3 +462,19 @@ Until each of these exists, render **"Not set up"** (the feature has nothing con
    - transport labels ("Local · SSE"), unless read from config.
 10. **MCP Suite > Build:** "Tests passed in sandbox: 5 of 5" counts. Show them only if the build
     status reports them; otherwise "Tests passed" / "Can't tell yet".
+
+---
+
+## Changes after review (2026-10-20)
+
+- The chat-bar exceptions (816 px, always at the bottom, no skill chips) are recorded as the user's
+  own decision.
+- "Not set up" was narrowed. Upcoming (Google Calendar, read-only, next 7 days, + automation next
+  runs), What moved today (Ledger + watcher + GitHub, observed/reported), agent schedules and recent
+  runs, and automation next runs all have real sources now and are assigned to Phases A, C and D.
+  Only skill Files remain "Not set up", for the reason given above.
+- The "+" picker flips upward when there is no room below, with a rendering test at 1440×900 and
+  1280×720.
+- Merge gates: the Phase B subagent-confirmation backend, Phase C autonomy grants and any agent/skill
+  config writes, and Phase E MCP Build / sandbox / first-run approval merge only after the user has
+  reviewed their stop reports. UI-only work merges on green CI.
