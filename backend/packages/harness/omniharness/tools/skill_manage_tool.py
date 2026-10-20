@@ -64,7 +64,11 @@ async def _scan_or_raise(content: str, *, executable: bool, location: str) -> di
 def _versioned(storage: SkillStorage, name: str, changes: dict[str, str | None] | None, record: dict[str, Any]) -> None:
     """Every skill write is a version in the one store (config_versions): the
     agent's change is a proposal it applied, undoable from Skill Studio."""
-    config_versions.write_skill(name, changes, who="agent", source="proposal", extra=record, storage=storage)
+    from omniharness.runtime.user_context import get_effective_user_id
+
+    # The skill belongs to the account whose run made it (the first owner
+    # recorded counts; later writes do not change it).
+    config_versions.write_skill(name, changes, who="agent", source="proposal", extra=record, storage=storage, owner_id=get_effective_user_id())
 
 
 async def _to_thread(func, /, *args, **kwargs):

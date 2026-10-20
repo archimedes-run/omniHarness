@@ -358,7 +358,23 @@ def skill_history(name: str, storage=None) -> list[Version]:
     return _versions(_skill_storage(storage).get_skill_history_file(name))
 
 
-def write_skill(name: str, changes: dict[str, str | None] | None, *, who: str, source: str, base_version: int | None = None, replace_all: bool = False, extra: dict[str, Any] | None = None, storage=None) -> Version:
+def skill_owner(name: str, storage=None) -> str | None:
+    """The account a custom skill belongs to: the owner_id its history first
+    recorded (or the user of a "user:<id>" first write). None for a skill from
+    before owners were stored, which only the owner account may reach
+    (app.gateway.ownership)."""
+    for record in _read_lines(_skill_storage(storage).get_skill_history_file(name)):
+        if isinstance(record.get("owner_id"), str) and record["owner_id"]:
+            return record["owner_id"]
+        who = str(record.get("who") or "")
+        if who.startswith("user:") and len(who) > 5:
+            return who[5:]
+    return None
+
+
+def write_skill(
+    name: str, changes: dict[str, str | None] | None, *, who: str, source: str, base_version: int | None = None, replace_all: bool = False, extra: dict[str, Any] | None = None, storage=None, owner_id: str | None = None
+) -> Version:
     """Apply `changes` ({path: text, or None to remove}) to a custom skill as a
     new version; `changes` None deletes the skill. `replace_all` makes the
     files exactly `changes` (undo). `extra` keeps the older history fields
@@ -398,11 +414,14 @@ def write_skill(name: str, changes: dict[str, str | None] | None, *, who: str, s
         changed = _changed((before or {}).get("files") if before else None, after["files"] if after else None)
         _materialise_skill(name, after, storage)
         record = {**(extra or {}), "version": current + 1, "at": now, "ts": now, "who": who, "source": source, "changed": changed, "snapshot": after}
+        if owner_id:
+            # Who the skill belongs to (the first one recorded counts).
+            record["owner_id"] = owner_id
         _append(history, record)
         return Version(version=current + 1, at=now, who=who, source=source, changed=changed, snapshot=after)
 
 
-def record_installed(name: str, *, who: str, storage=None) -> Version | None:
+def record_installed(name: str, *, who: str, storage=None, owner_id: str | None = None) -> Version | None:
     """A skill unpacked from an archive by the installer (which has its own
     path checks): its files are recorded as the next version, so it appears in
     history and can be undone. None when it is not a custom skill on disk."""
@@ -417,7 +436,7 @@ def record_installed(name: str, *, who: str, storage=None) -> Version | None:
         before = versions[-1].snapshot if versions else None
         now = datetime.now(UTC).isoformat()
         version = Version(version=(versions[-1].version if versions else 0) + 1, at=now, who=who, source="manual", changed=["installed", *_changed((before or {}).get("files") if before else None, on_disk["files"])], snapshot=on_disk)
-        _append(history, {"version": version.version, "at": now, "ts": now, "who": who, "source": "manual", "action": "install", "changed": version.changed, "snapshot": on_disk})
+        _append(history, {"version": version.version, "at": now, "ts": now, "who": who, "source": "manual", "action": "install", "changed": version.changed, "snapshot": on_disk, **({"owner_id": owner_id} if owner_id else {})})
         return version
 
 

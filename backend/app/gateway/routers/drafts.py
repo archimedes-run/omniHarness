@@ -24,6 +24,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.gateway.authz import permission_dependency
 from app.gateway.deps import get_config
 from omniharness.agents.lead_agent.agent import _resolve_model_name
 from omniharness.config.app_config import AppConfig
@@ -129,7 +130,7 @@ async def _ask(model_name: str, system: str, sentence: str, config: AppConfig) -
     return str(content or "")
 
 
-@router.post("/{kind}", response_model=DraftResponse, summary="Draft an agent or skill from one sentence (never saves)")
+@router.post("/{kind}", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=DraftResponse, summary="Draft an agent or skill from one sentence (never saves)")
 async def draft(kind: DraftKind, request: DraftRequest, config: AppConfig = Depends(get_config)) -> DraftResponse:
     if kind == "agent":
         from omniharness.skills.storage import get_or_new_skill_storage
