@@ -67,16 +67,41 @@ def test_every_connected_toolkit_action_has_an_explicit_rule(shipped, tool):
     assert not decision.refused and decision.deciding_rule is not None, f"{tool} has no rule: it would be refused"
 
 
-def test_github_tiers_follow_the_verb(shipped):
+#: A GitHub read whose name contains one of these is about ACCESS, not
+#: content, and asks first (decided 2026-10-20). Whole name, any case.
+GITHUB_SENSITIVE = ("SECRET", "KEY", "TOKEN", "CREDENTIAL", "WEBHOOK", "ADMIN", "PERMISSION")
+
+
+def _expected_github_tier(action: str) -> int:
+    if action.split("_")[1] not in GITHUB_READ_VERBS:
+        return 3
+    return 3 if any(word in action.upper() for word in GITHUB_SENSITIVE) else 1
+
+
+@pytest.mark.parametrize("action", ACTIONS["GITHUB"])
+def test_github_tier_follows_the_verb_and_sensitive_reads_ask(shipped, action):
     from app.policy.classify import classify
 
-    wrong = []
-    for action in ACTIONS["GITHUB"]:
-        expected = 1 if action.split("_")[1] in GITHUB_READ_VERBS else 3
-        decision = classify(_tool("GITHUB", action), {}, shipped)
-        if int(decision.tier) != expected or decision.deciding_rule.pattern != _tool("GITHUB", action):
-            wrong.append((action, int(decision.tier), expected))
-    assert wrong == [], wrong[:10]
+    decision = classify(_tool("GITHUB", action), {}, shipped)
+    assert decision.deciding_rule is not None and decision.deciding_rule.pattern == _tool("GITHUB", action)
+    assert int(decision.tier) == _expected_github_tier(action)
+
+
+def test_the_sensitive_words_catch_what_they_should():
+    assert _expected_github_tier("GITHUB_GET_A_REPOSITORY_SECRET") == 3
+    assert _expected_github_tier("GITHUB_LIST_DEPLOY_KEYS") == 3
+    assert _expected_github_tier("GITHUB_LIST_REPO_ACCESS_BY_TOKEN") == 3
+    assert _expected_github_tier("GITHUB_LIST_REPOSITORY_WEBHOOKS") == 3
+    assert _expected_github_tier("GITHUB_LIST_COMMITS") == 1
+    assert sum(1 for a in ACTIONS["GITHUB"] if _expected_github_tier(a) == 1) > 300
+
+
+def test_drive_download_is_disclosed_not_silent(shipped):
+    """No local evidence says it returns content without writing a file."""
+    from app.policy.classify import classify
+    from app.policy.models import Tier
+
+    assert classify("connector-googledrive_GOOGLEDRIVE_DOWNLOAD_FILE", {}, shipped).tier is Tier.TIER_2
 
 
 @pytest.mark.parametrize(
