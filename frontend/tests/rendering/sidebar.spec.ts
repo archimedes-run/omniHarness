@@ -165,13 +165,40 @@ test("nothing waiting shows no badge on New chat", async ({ page }) => {
   await expect(page.getByTestId("inbox-badge")).toHaveCount(0);
 });
 
-test("the footer shows the signed-in user", async ({ page }) => {
+test("the footer shows the user's display name and its initials", async ({
+  page,
+}) => {
+  await page.route("**/api/preferences", (route) =>
+    route.fulfill(
+      json({
+        appearance: "light",
+        appearance_chosen: false,
+        display_name: "Rishabh Sharma",
+        display_name_effective: "Rishabh Sharma",
+      }),
+    ),
+  );
+  await serve(page);
+  await expect(page.getByTestId("sidebar-user-name")).toHaveText(
+    "Rishabh Sharma",
+  );
+  await expect(
+    page.getByTestId("sidebar-user").locator('[data-slot="avatar-fallback"]'),
+  ).toHaveText("RS");
+});
+
+test("with no preferences to read, the footer falls back to the email's name", async ({
+  page,
+}) => {
+  await page.route("**/api/preferences", (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  );
   await serve(page);
   // OMNI_HARNESS_AUTH_DISABLED serves e2e@test.local.
   await expect(page.getByTestId("sidebar-user-name")).toHaveText("e2e");
   await expect(
     page.getByTestId("sidebar-user").locator('[data-slot="avatar-fallback"]'),
-  ).toHaveText("E");
+  ).toHaveText("E2");
 });
 
 test("More holds Settings, Memory, Safety, Activity log, Appearance and About", async ({

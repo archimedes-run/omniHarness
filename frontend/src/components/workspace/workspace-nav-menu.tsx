@@ -25,23 +25,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSidebar } from "@/components/ui/sidebar";
+import { avatarInitials } from "@/core/agents";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
 import { usePolicyRules } from "@/core/policy/hooks";
+import { usePreferences } from "@/core/preferences";
 import { cn } from "@/lib/utils";
 
 import { GithubIcon } from "./github-icon";
 
-/** The name shown for the signed-in user: their display name when the
- * account has one (optional; older gateways do not send it), else the part
- * of the email before "@". */
-function displayNameOf(
-  user: { email?: string; display_name?: string | null } | null,
-): string {
-  const chosen = user?.display_name?.trim();
-  if (chosen) return chosen;
-  const email = user?.email ?? "";
-  return email.split("@")[0] ?? email;
+/** The email's part before "@": the gateway's own fallback for a display
+ * name, used here while preferences load or when they cannot be read. */
+function emailPrefix(email: string | undefined): string {
+  return (email ?? "").split("@")[0] ?? "";
 }
 
 /**
@@ -58,7 +54,10 @@ export function WorkspaceNavMenu() {
   const { open: isSidebarOpen } = useSidebar();
   const { t } = useI18n();
   const { user } = useAuth();
-  const name = displayNameOf(user);
+  // The display name the user chose, or the gateway's fallback for it
+  // (display_name_effective).
+  const { displayName } = usePreferences();
+  const name = displayName ?? emailPrefix(user?.email);
 
   useEffect(() => {
     setMounted(true);
@@ -138,7 +137,7 @@ export function WorkspaceNavMenu() {
         <>
           <Avatar className="size-7">
             <AvatarFallback className="bg-primary-subtle text-foreground text-[13px] font-semibold">
-              {(name[0] ?? "?").toUpperCase()}
+              {avatarInitials(name)}
             </AvatarFallback>
           </Avatar>
           <span
