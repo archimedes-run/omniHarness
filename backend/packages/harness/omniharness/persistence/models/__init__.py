@@ -22,6 +22,7 @@ from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
 from omniharness.persistence.thread_meta.model import ThreadMetaRow
+from omniharness.persistence.thread_skill_exclusion.model import ThreadSkillExclusionRow
 from omniharness.persistence.thread_tool_selection.model import ThreadToolSelectionRow
 from omniharness.persistence.tool_source_health.model import ToolSourceHealthRow
 from omniharness.persistence.user.model import UserRow
@@ -46,6 +47,7 @@ __all__ = [
     "RunEventRow",
     "RunRow",
     "ThreadMetaRow",
+    "ThreadSkillExclusionRow",
     "ThreadToolSelectionRow",
     "ToolSourceHealthRow",
     "UserPreferenceRow",
