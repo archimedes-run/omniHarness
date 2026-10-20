@@ -70,6 +70,8 @@ def test_t014_a_page_caused_ledger_proposal_is_labelled_and_cannot_be_confirmed_
 
 
 def test_t014_the_button_confirms_a_page_caused_ledger_proposal(gateway) -> None:
+    # The chat exists, as every chat a real run proposes in does.
+    assert gateway.client.post("/api/threads", json={"thread_id": "t"}).status_code == 200
     _page_proposes(gateway)
     [action] = pending(gateway)
 

@@ -842,16 +842,17 @@ def _report_count(gateway, thread_id: str, action_id: str) -> int:
 def test_a_waiting_post_survives_a_restart_and_lands_exactly_once(gateway, monkeypatch) -> None:
     from omniharness.runtime.runs.manager import RunManager
 
-    real_drain = RunManager.drain_deferred
+    real_drain = RunManager._drain
     crashed = {"before_drain": True}
 
     async def drain(self, thread_id, *, finished_run_id):
         # The gateway "stops" after the run's last checkpoint and before its
-        # in-memory queue is drained: only the durable record is left.
+        # in-memory queue is drained (by the worker or the task's done
+        # callback): only the durable record is left.
         if not crashed["before_drain"]:
             await real_drain(self, thread_id, finished_run_id=finished_run_id)
 
-    monkeypatch.setattr(RunManager, "drain_deferred", drain)
+    monkeypatch.setattr(RunManager, "_drain", drain)
     thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
     wipe_entered, wipe_release = threading.Event(), threading.Event()
     HOLD["wipe"] = (wipe_entered, wipe_release)
@@ -895,3 +896,198 @@ def test_a_post_recorded_as_waiting_but_already_written_is_not_added_twice(gatew
 
     assert _report_count(gateway, thread_id, wipe["id"]) == 1
     assert _awaiting(gateway) == []
+
+
+# ---------------------------------------------------------------------------
+# Second review of PR #58: the queue drains after the run's task ends; the
+# waiting record is written with EXECUTED; a post never stays waiting forever;
+# /edit goes through the confirm path; argument names are redacted; the
+# confirm pool never queues
+# ---------------------------------------------------------------------------
+
+
+def _confirm_while_a_run_starts(gateway, thread_id: str, action_id: str) -> tuple[dict, str, threading.Event]:
+    """Confirm (held in the tool), start a held run, release the tool: the post is queued."""
+    wipe_entered, wipe_release = threading.Event(), threading.Event()
+    HOLD["wipe"] = (wipe_entered, wipe_release)
+    box: dict = {}
+    confirming = threading.Thread(target=lambda: box.update(resp=gateway.client.post(f"/api/confirmations/{action_id}/confirm", json={})))
+    confirming.start()
+    assert wipe_entered.wait(30)
+    run_id, release = _start_held_run(gateway, thread_id, "the late reply")
+    wipe_release.set()
+    confirming.join(30)
+    return box["resp"].json(), run_id, release
+
+
+def _eventually(check, seconds: float = 10.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(0.1)
+    return check()
+
+
+def _stored(action_id: str):
+    from app.policy.pending import PendingStore
+    from omniharness.config import get_app_config
+
+    return PendingStore(directory=Path(get_app_config().policy.state_dir) / "pending").get(action_id)
+
+
+def test_a_post_queued_after_the_workers_drain_still_lands_when_the_run_ends(gateway, monkeypatch) -> None:
+    """The worker drains in its `finally` while its task still runs; a post
+    queued after that drain must land once the task is done, not wait for the
+    next run or a restart."""
+    from omniharness.runtime.runs.manager import RunManager
+
+    async def workers_drain_missed_it(self, thread_id, *, finished_run_id):
+        return None
+
+    monkeypatch.setattr(RunManager, "drain_deferred", workers_drain_missed_it)
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    body, run_id, release = _confirm_while_a_run_starts(gateway, thread_id, wipe["id"])
+    assert body["detail"]["post_queued"] is True
+    release.set()
+    _join(gateway, thread_id, run_id)
+    HOLD.clear()
+
+    assert _eventually(lambda: _report_count(gateway, thread_id, wipe["id"]) == 1), "the queued result never landed after the run's task ended"
+
+
+def test_the_waiting_record_is_written_with_executed(gateway, monkeypatch) -> None:
+    """The gateway stops right after the call ran, before any post was tried:
+    the record already says the result is owed to the chat."""
+    import app.gateway.routers.confirmations as confirmations
+
+    async def crash(**_kwargs):
+        raise RuntimeError("the gateway stopped here")
+
+    real_post = confirmations.post_result
+    monkeypatch.setattr(confirmations, "post_result", crash)
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    with pytest.raises(RuntimeError):
+        gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={})
+
+    stored = _stored(wipe["id"])
+    assert str(stored.outcome) == "executed"
+    assert stored.post_state == "waiting", "EXECUTED was recorded without the result being owed to the chat"
+    assert "wiped nightly" in stored.post_content
+    monkeypatch.setattr(confirmations, "post_result", real_post)
+    gateway.restart()
+    assert _report_count(gateway, thread_id, wipe["id"]) == 1
+
+
+def test_a_waiting_post_whose_chat_was_deleted_is_dropped_and_kept_on_the_card(gateway, monkeypatch) -> None:
+    from omniharness.runtime.runs.manager import RunManager
+
+    async def crashed_before_drain(self, thread_id, *, finished_run_id):
+        return None
+
+    monkeypatch.setattr(RunManager, "_drain", crashed_before_drain)
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    body, run_id, release = _confirm_while_a_run_starts(gateway, thread_id, wipe["id"])
+    assert body["detail"]["post_queued"] is True
+    release.set()
+    _join(gateway, thread_id, run_id)
+    HOLD.clear()
+    assert gateway.client.delete(f"/api/threads/{thread_id}").status_code == 200
+
+    gateway.restart()
+
+    assert _stored(wipe["id"]).post_state == "dropped", "a post into a deleted chat stayed waiting"
+    [listed] = [a for a in gateway.client.get("/api/confirmations").json()["awaiting_post"] if a["id"] == wipe["id"]]
+    assert listed["post_state"] == "dropped" and "wiped nightly" in listed["result"], "the result was not kept for the card"
+
+
+def test_a_post_that_keeps_failing_is_retried_then_given_up_visibly(gateway, monkeypatch) -> None:
+    import app.gateway.routers.confirmations as confirmations
+
+    tries: list[str] = []
+
+    async def always_errors(checkpointer, thread_id, message):
+        tries.append(thread_id)
+        return confirmations.ERROR
+
+    monkeypatch.setattr(confirmations, "_append_to_checkpoint", always_errors)
+    monkeypatch.setattr(confirmations, "POST_RETRY_DELAYS", (0.05, 0.05))
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+
+    body = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+
+    assert body["detail"]["post_state"] == "retrying", body
+    assert _eventually(lambda: _stored(wipe["id"]).post_state == "failed"), f"never gave up (state {_stored(wipe['id']).post_state}, {len(tries)} tries)"
+    assert len(tries) == 3, "one try and two retries, then it stops"
+    [listed] = [a for a in gateway.client.get("/api/confirmations").json()["awaiting_post"] if a["id"] == wipe["id"]]
+    assert listed["post_state"] == "failed" and "wiped nightly" in listed["result"]
+
+
+def test_an_edit_goes_through_the_confirm_path(gateway, monkeypatch) -> None:
+    import app.gateway.routers.confirmations as confirmations
+
+    monkeypatch.setattr(confirmations, "EDITABLE_TOOLS", frozenset({"wipe_backup"}))
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+
+    # Busy: refused BEFORE the original is superseded.
+    run_id, release = _start_held_run(gateway, thread_id, "the late reply")
+    busy = gateway.client.post(f"/api/confirmations/{wipe['id']}/edit", json={"arguments": {"name": "weekly"}}).json()
+    assert busy["outcome"] == "thread_busy", busy
+    assert _stored(wipe["id"]).outcome is None, "a refused edit superseded the original"
+    release.set()
+    _join(gateway, thread_id, run_id)
+    HOLD.clear()
+
+    body = gateway.client.post(f"/api/confirmations/{wipe['id']}/edit", json={"arguments": {"name": "weekly"}}).json()
+
+    assert body["outcome"] == "executed", body
+    assert RAN == [("wipe_backup", {"name": "weekly"})]
+    assert body["detail"]["posted_to_thread"] is True, "the edited call's result was not posted into the chat"
+    assert _stored(body["action_id"]).delegation_key == _stored(wipe["id"]).delegation_key != "", "the edit lost the delegation Continue re-enters"
+
+
+def test_argument_names_are_redacted_too() -> None:
+    import app.gateway.routers.confirmations as confirmations
+
+    token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    shown = confirmations._arguments_for_display({token: "x", "name": "nightly"})
+
+    assert token not in "".join(shown), shown
+    assert shown["name"] == "nightly"
+
+
+def test_a_confirmation_beyond_the_users_limit_is_refused_at_once(gateway, monkeypatch) -> None:
+    import dataclasses
+    import uuid
+
+    import app.gateway.routers.confirmations as confirmations
+    from app.policy.pending import PendingStore
+    from omniharness.config import get_app_config
+
+    monkeypatch.setattr(confirmations, "CONFIRMS_PER_USER", 1)
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    store = PendingStore(directory=Path(get_app_config().policy.state_dir) / "pending")
+    other = dataclasses.replace(store.get(wipe["id"]), id=uuid.uuid4().hex[:12])
+    other.claimed_by = None
+    store.save(other)
+    entered, release = threading.Event(), threading.Event()
+    HOLD["wipe"] = (entered, release)
+    box: dict = {}
+    first = threading.Thread(target=lambda: box.update(first=gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={})))
+    first.start()
+    assert entered.wait(30)
+    second: dict = {}
+    t = threading.Thread(target=lambda: second.update(resp=gateway.client.post(f"/api/confirmations/{other.id}/confirm", json={})))
+    t.start()
+    t.join(5)
+    hung = t.is_alive()
+    release.set()
+    first.join(30)
+    t.join(30)
+    HOLD.clear()
+
+    assert not hung, "a confirmation over the limit waited instead of being refused"
+    assert second["resp"].json()["outcome"] == "confirm_busy", second["resp"].json()
+    assert store.get(other.id).outcome is None, "a refused confirmation resolved its card"

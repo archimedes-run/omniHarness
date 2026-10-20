@@ -61,6 +61,7 @@ def _to_dict(action: PendingAction) -> dict:
         "result_excerpt": action.result_excerpt,
         "post_state": action.post_state,
         "post_content": action.post_content,
+        "post_attempts": action.post_attempts,
     }
 
 
@@ -88,6 +89,7 @@ def _from_dict(raw: dict) -> PendingAction:
         result_excerpt=raw.get("result_excerpt") or "",
         post_state=raw.get("post_state") or "",
         post_content=raw.get("post_content") or "",
+        post_attempts=int(raw.get("post_attempts") or 0),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
@@ -161,16 +163,16 @@ class PendingStore:
                 out.append(action)
         return out
 
-    def awaiting_post(self) -> list[PendingAction]:
-        """Confirmed actions whose result is not yet in their thread."""
+    def awaiting_post(self, *, states: tuple[str, ...] = ("waiting",)) -> list[PendingAction]:
+        """Confirmed actions whose result is not (or could not be) in their thread."""
         out = []
         for path in sorted(self.directory.glob("*.json")):
             action = self.get(path.stem)
-            if action and action.post_state == "waiting":
+            if action and action.post_state in states:
                 out.append(action)
         return out
 
-    def set_post_state(self, action_id: str, state: str, content: str | None = None) -> None:
+    def set_post_state(self, action_id: str, state: str, content: str | None = None, *, attempts: int | None = None) -> None:
         """Record the post's progress on the stored action (re-read first, so
         the resolution saved meanwhile is never overwritten)."""
         action = self.get(action_id)
@@ -179,7 +181,21 @@ class PendingStore:
         action.post_state = state
         if content is not None:
             action.post_content = content
+        if attempts is not None:
+            action.post_attempts = attempts
         self.save(action)
+
+    def take_continue(self, action_id: str) -> bool:
+        """ONE "Continue <agent>" per executed action: True for exactly one
+        caller (an atomic file link, as for the claim), False for every replay."""
+        source = self._path(action_id)
+        if not source.exists():
+            return False
+        try:
+            os.link(source, self.directory / f"{action_id}.continued")
+        except FileExistsError:
+            return False
+        return True
 
     def claim(self, action_id: str, claimant: str) -> PendingAction | None:
         """Take exclusive ownership. Returns the claimed action for exactly one

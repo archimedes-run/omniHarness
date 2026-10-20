@@ -214,6 +214,9 @@ class PendingAction:
     #: The report's text for a waiting post, as the thread will show it
     #: (already redacted by surface_run.result_report).
     post_content: str = ""
+    #: Failed attempts to post it (transient errors). At POST_ATTEMPTS_CAP the
+    #: post is given up as "failed", shown on the card, never retried forever.
+    post_attempts: int = 0
 
     @property
     def confirmable_by_typing(self) -> bool:

@@ -26,8 +26,9 @@ import contextvars
 import functools
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -80,7 +81,9 @@ class PendingActionResponse(BaseModel):
 
 
 class AwaitingPost(BaseModel):
-    """A confirmed action whose result has run but is not yet in its chat."""
+    """A confirmed action whose result is not in its chat: "waiting" (it will
+    be), "failed" (retries ran out) or "dropped" (the chat was deleted). The
+    last two carry the result, so the card keeps it."""
 
     id: str
     thread_id: str | None = None
@@ -88,6 +91,10 @@ class AwaitingPost(BaseModel):
     requester: str
     #: Whose action it is; the list is filtered by it, as `actions` is.
     owner_id: str | None = None
+    post_state: str = "waiting"
+    #: The result as the chat would have shown it (already redacted), for a
+    #: post that failed or whose chat is gone; empty while it is waiting.
+    result: str = ""
 
 
 class PendingListResponse(BaseModel):
@@ -138,7 +145,49 @@ class ResolveResponse(BaseModel):
 #: one. A confirmed `task` runs its subagent to the end before the route
 #: returns, minutes perhaps, and the default pool also serves every
 #: `asyncio.to_thread` in the gateway; a few confirmations must not starve it.
-_CONFIRM_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="confirmed-action")
+CONFIRM_WORKERS = 8
+#: Confirmed calls one user may have running at once.
+CONFIRMS_PER_USER = 4
+_CONFIRM_POOL = ThreadPoolExecutor(max_workers=CONFIRM_WORKERS, thread_name_prefix="confirmed-action")
+
+
+class _ConfirmSlots:
+    """Admission to _CONFIRM_POOL: NEVER a queue.
+
+    A slot is taken before a confirmed call is claimed and handed to the pool,
+    and there are never more slots than workers, so a confirmation either
+    starts at once or is refused at once with a reason ("confirm_busy",
+    nothing has run, the card stays). Four long confirmations used to fill the
+    pool and every later request, declines included, waited behind them
+    (review of PR #58). Declines never come here at all.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_user: dict[str, int] = {}
+
+    def take(self, user: str) -> bool:
+        with self._lock:
+            if sum(self._by_user.values()) >= CONFIRM_WORKERS or self._by_user.get(user, 0) >= CONFIRMS_PER_USER:
+                return False
+            self._by_user[user] = self._by_user.get(user, 0) + 1
+            return True
+
+    def give_back(self, user: str) -> None:
+        with self._lock:
+            left = self._by_user.get(user, 0) - 1
+            if left > 0:
+                self._by_user[user] = left
+            else:
+                self._by_user.pop(user, None)
+
+
+_SLOTS = _ConfirmSlots()
+
+#: Refused before the claim: too many confirmed calls are running. Nothing ran.
+CONFIRM_BUSY = "confirm_busy"
+#: Refused, and the card resolved: the chat it belongs to was deleted.
+CHAT_DELETED = "chat_deleted"
 
 
 async def _off_the_request_pool(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
@@ -251,15 +300,26 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
         return unavailable_reason(action, current, snapshot=snapshot)
 
     run.unavailable = unavailable  # type: ignore[attr-defined]
+    # The card's route posts a confirmed result into its chat afterwards, so
+    # the flow records it "waiting" in the same write as EXECUTED.
+    run.posts_result = True  # type: ignore[attr-defined]
     return run
 
 
-async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any) -> bool:
+WRITTEN, GONE, ERROR = "written", "gone", "error"
+
+#: Transient post failures retried with backoff (seconds), then given up as
+#: "failed" (shown on the card). A module value so tests can shorten it.
+POST_RETRY_DELAYS: tuple[float, ...] = (1.0, 4.0, 15.0, 60.0)
+
+
+async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any) -> str:
     """Append one message to a thread's latest checkpoint, then READ IT BACK.
 
-    True only when the message is in the thread's latest checkpoint afterwards:
-    "posted" is never claimed from the write call alone. IDEMPOTENT by the
-    message's id: a post retried (after a restart) is never added twice.
+    "written" only when the message is in the thread's latest checkpoint
+    afterwards; "gone" when the thread has no checkpoint (deleted): permanent;
+    "error" for anything else: transient, retried. IDEMPOTENT by the message's
+    id: a post retried (after a restart) is never added twice.
     """
     from omniharness.utils.time import now_iso
 
@@ -272,9 +332,9 @@ async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any)
     try:
         current = await checkpointer.aget_tuple(config)
         if current is None:
-            return False
+            return GONE
         if has_it(current):
-            return True
+            return WRITTEN
         checkpoint: dict[str, Any] = dict(getattr(current, "checkpoint", {}) or {})
         metadata: dict[str, Any] = dict(getattr(current, "metadata", {}) or {})
         values: dict[str, Any] = dict(checkpoint.get("channel_values", {}))
@@ -282,14 +342,19 @@ async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any)
         checkpoint["channel_values"] = values
         metadata.update({"updated_at": now_iso(), "source": "update", "step": metadata.get("step", 0) + 1})
         await checkpointer.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, checkpoint, metadata, {})
-        return has_it(await checkpointer.aget_tuple(config))
-    except Exception:  # noqa: BLE001 — reported to the caller, which says so
+        return WRITTEN if has_it(await checkpointer.aget_tuple(config)) else ERROR
+    except Exception:  # noqa: BLE001 — classified and reported to the caller
         logger.warning("could not post the confirmed result to thread %s", thread_id, exc_info=True)
-        return False
+        return ERROR
 
 
 async def post_result(*, checkpointer: Any, run_manager: Any, store: Any, action: Any, message: Any) -> str:
-    """Post a confirmed result into its thread: "written", "queued" or "failed".
+    """Post a confirmed result into its thread.
+
+    Returns "written", "queued" (a run holds the chat; written when it ends),
+    "dropped" (the chat is gone: permanent, the result stays on the card),
+    "retrying" (a transient failure; retried with backoff) or "failed" (the
+    retries ran out; shown on the card).
 
     How a call confirmed from its CARD reaches the conversation: the card's
     route has no run to answer in, so the result is written into the thread,
@@ -301,20 +366,60 @@ async def post_result(*, checkpointer: Any, run_manager: Any, store: Any, action
     the chat (review of PR #58). The run manager writes it now if the thread is
     idle, with no run able to start meanwhile, or queues it until the run ends.
 
-    DURABLE: the action records "waiting" (with the report's text) BEFORE the
-    write, and "posted" once it is read back. A post still waiting when the
-    gateway stops is written at the next startup (drain_waiting_posts), so a
-    confirmed result is never silently left out of the chat.
+    DURABLE: the action is recorded "waiting" (with the report's text) in the
+    same write as EXECUTED (PolicyMiddleware.execute_confirmed), and "posted"
+    once it is read back. A post still waiting when the gateway stops is
+    written at the next startup (drain_waiting_posts). Never "waiting" forever:
+    a deleted chat drops it, and transient failures stop at a cap.
     """
-    store.set_post_state(action.id, "waiting", str(message.content))
+    stored = store.get(action.id)
+    if stored is None or stored.post_state != "waiting":
+        store.set_post_state(action.id, "waiting", str(message.content))
+    seen: dict[str, str] = {}
 
     async def write() -> bool:
-        written = await _append_to_checkpoint(checkpointer, action.thread_id, message)
-        if written:
+        outcome = await _append_to_checkpoint(checkpointer, action.thread_id, message)
+        seen["outcome"] = outcome
+        if outcome == WRITTEN:
             store.set_post_state(action.id, "posted")
-        return written
+        elif outcome == GONE:
+            store.set_post_state(action.id, "dropped")
+        return outcome != ERROR
 
-    return await run_manager.write_when_idle(action.thread_id, write)
+    state = await run_manager.write_when_idle(action.thread_id, write)
+    if state == "queued":
+        return "queued"
+    outcome = seen.get("outcome", ERROR)
+    if outcome == WRITTEN:
+        return "written"
+    if outcome == GONE:
+        return "dropped"
+    return _schedule_retry(checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+
+
+def _schedule_retry(*, checkpointer: Any, run_manager: Any, store: Any, action: Any, message: Any) -> str:
+    """Count a transient failure; retry with backoff, or give up at the cap."""
+    current = store.get(action.id)
+    attempts = (current.post_attempts if current else 0) + 1
+    if attempts > len(POST_RETRY_DELAYS):
+        store.set_post_state(action.id, "failed", attempts=attempts)
+        logger.warning("gave up posting the confirmed result %s after %d attempts", action.id, attempts - 1)
+        return "failed"
+    store.set_post_state(action.id, "waiting", attempts=attempts)
+    delay = POST_RETRY_DELAYS[attempts - 1]
+
+    async def again() -> None:
+        await asyncio.sleep(delay)
+        await post_result(checkpointer=checkpointer, run_manager=run_manager, store=store, action=action, message=message)
+
+    task = asyncio.get_running_loop().create_task(again())
+    _RETRIES.add(task)
+    task.add_done_callback(_RETRIES.discard)
+    return "retrying"
+
+
+#: Retry tasks in flight (held so they are not garbage collected).
+_RETRIES: set[asyncio.Task] = set()
 
 
 async def drain_waiting_posts(app: Any) -> int:
@@ -325,6 +430,7 @@ async def drain_waiting_posts(app: Any) -> int:
     thread (the gateway stopped after the write, before recording it) is only
     marked posted, never added twice. Returns how many were posted.
     """
+    from app.gateway.ownership import owner_user_id
     from app.policy.registration import build
     from app.policy.surface_run import report_message
     from omniharness.config import get_app_config
@@ -340,8 +446,15 @@ async def drain_waiting_posts(app: Any) -> int:
         if not action.thread_id:
             continue
         # OWNERSHIP: a result is only ever written into a thread its action's
-        # owner owns (the record could have been edited on disk).
-        if thread_store is not None and action.owner_id and not await thread_store.check_access(action.thread_id, str(action.owner_id), require_existing=True):
+        # owner owns (the record could have been edited on disk). A record
+        # with no owner predates owners: it is the owner account's, and is
+        # posted only into a thread that account owns.
+        if thread_store is not None and await thread_store.get(action.thread_id, user_id=None) is None:
+            # The chat was deleted: permanent. The result stays on the card.
+            middleware.pending.set_post_state(action.id, "dropped")
+            continue
+        owner = str(action.owner_id) if action.owner_id else await owner_user_id()
+        if thread_store is not None and (owner is None or not await thread_store.check_access(action.thread_id, owner, require_existing=True)):
             logger.warning("a waiting result %s names a thread its owner does not own; not posted", action.id)
             continue
         message = report_message(action, None, content=action.post_content)
@@ -349,7 +462,7 @@ async def drain_waiting_posts(app: Any) -> int:
         if outcome == "written":
             posted += 1
         else:
-            logger.warning("a confirmed result for thread %s is still waiting to post (%s)", action.thread_id, outcome)
+            logger.warning("a confirmed result for thread %s was not posted at startup (%s)", action.thread_id, outcome)
     return posted
 
 
@@ -358,7 +471,9 @@ def _arguments_for_display(arguments: dict[str, Any]) -> dict[str, str]:
     for key, value in (arguments or {}).items():
         text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
         safe, withheld = for_display(text)
-        shown[str(key)] = "Withheld" if withheld else safe
+        # The NAME is text the model wrote too; it passes the redactor as well.
+        name, name_withheld = for_display(str(key))
+        shown["Withheld" if name_withheld else name] = "Withheld" if withheld else safe
     return shown
 
 
@@ -393,6 +508,10 @@ def _view(action, threshold: int) -> PendingActionResponse:
     )
 
 
+#: How long a result that could not be posted stays listed (after its card's expiry).
+_KEEP_UNPOSTED = timedelta(days=1)
+
+
 def read_pending(middleware, now: datetime) -> PendingListResponse:
     """The read, separated from the route so it can be tested directly.
 
@@ -404,14 +523,25 @@ def read_pending(middleware, now: datetime) -> PendingListResponse:
     try:
         rules = middleware.loader.load()
         actions = middleware.pending.open_actions(now)
-        waiting = middleware.pending.awaiting_post()
+        waiting = [a for a in middleware.pending.awaiting_post(states=("waiting", "failed", "dropped")) if a.post_state == "waiting" or now < a.expires_at + _KEEP_UNPOSTED]
     except Exception as exc:  # noqa: BLE001 — FR-008: say we cannot tell
         logger.exception("the pending set could not be read")
         return PendingListResponse(actions=[], readable=False, error=str(exc))
 
     return PendingListResponse(
         actions=[_view(a, rules.threshold_targets) for a in actions],
-        awaiting_post=[AwaitingPost(id=a.id, thread_id=a.thread_id, tool_name=a.tool_name, requester=a.requester, owner_id=a.owner_id) for a in waiting],
+        awaiting_post=[
+            AwaitingPost(
+                id=a.id,
+                thread_id=a.thread_id,
+                tool_name=a.tool_name,
+                requester=a.requester,
+                owner_id=a.owner_id,
+                post_state=a.post_state,
+                result="" if a.post_state == "waiting" else a.post_content,
+            )
+            for a in waiting
+        ],
         readable=True,
     )
 
@@ -434,7 +564,33 @@ async def list_pending(request: Request) -> PendingListResponse:
     return result
 
 
-async def _resolve(request: Request, action_id: str, *, confirm: bool, body: ResolveRequest) -> ResolveResponse:
+def _declines_run_nothing(tool_name: str, arguments: dict) -> Any:
+    raise RuntimeError("a decline runs nothing")
+
+
+async def _chat_gone(request: Request, action: Any) -> str | None:
+    """Why this card's chat can no longer receive it, or None.
+
+    RE-CHECKED AT CONFIRMATION (condition 3). A card whose chat was deleted
+    still ran its call and then sat "waiting to post" into nothing (review of
+    PR #58). The chat must exist (its row or its checkpoint) and be the
+    caller's.
+    """
+    from app.gateway.deps import get_checkpointer, get_thread_store
+    from app.gateway.ownership import require_thread_access
+
+    if not action.thread_id:
+        return None
+    row = await get_thread_store(request).get(action.thread_id, user_id=None)
+    if row is None:
+        checkpoint = await get_checkpointer(request).aget_tuple({"configurable": {"thread_id": action.thread_id, "checkpoint_ns": ""}})
+        if checkpoint is None:
+            return "The chat this was proposed in has been deleted, so it was not run. Nothing has run."
+    await require_thread_access(request, action.thread_id)
+    return None
+
+
+async def _resolve(request: Request, action_id: str, *, confirm: bool, body: ResolveRequest, via: str = "button") -> ResolveResponse:
     from app.gateway.authz import get_auth_context
     from app.gateway.ownership import require_access, require_person
 
@@ -443,10 +599,29 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     action = middleware.pending.get(action_id)
     if action is not None:
         await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
+
+    if not confirm:
+        # DECLINES NEVER WAIT: no tool surface is built and no pool is used.
+        # A decline is a claim and a file write; it takes the claim like a
+        # confirmation, so one that arrives while the call runs says so.
+        result = flow.explicit(action_id, confirm=False, run_tool=_declines_run_nothing, answered={"via": via, "thread_id": None, "user_id": _user_id(get_auth_context(request)), "message_id": None})
+        return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=for_display(result.message)[0], detail=_response_detail(result.detail))
+
     ctx = get_auth_context(request)
     user_id = _user_id(ctx)
 
-    posts = confirm and action is not None and bool(action.thread_id) and bool(action.surface)
+    if action is not None and action.outcome is None:
+        gone = await _chat_gone(request, action)
+        if gone:
+            from app.policy.confirm_flow import take_claim
+            from app.policy.models import Outcome
+
+            claimed = take_claim(middleware.pending, action_id, "chat-deleted")
+            if claimed is not None:
+                middleware.pending.resolve(claimed, Outcome.DECLINED, gone)
+            return ResolveResponse(outcome=CHAT_DELETED, action_id=action_id, message=gone)
+
+    posts = action is not None and bool(action.thread_id) and bool(action.surface)
     if posts and action is not None and action.outcome is None and await _thread_running(request, action.thread_id or ""):
         # Its result is written into the chat, and the chat is mid-reply: the
         # run would overwrite it. Refused before the claim, so the card stays
@@ -457,37 +632,50 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
             message="This chat is still replying. Nothing has run. Confirm again when the reply has finished.",
         )
 
-    run_tool = await _runner(request, action.thread_id if action else None, user_id)
+    if not _SLOTS.take(user_id):
+        return ResolveResponse(
+            outcome=CONFIRM_BUSY,
+            action_id=action_id,
+            message=f"{CONFIRMS_PER_USER} confirmed actions are already running, so this one has not started. Nothing has run. Confirm again when one finishes.",
+        )
+    try:
+        run_tool = await _runner(request, action.thread_id if action else None, user_id)
+        # No targets passed: the flow re-checks them itself (FR-029).
+        # OFF THE EVENT LOOP AND OFF THE DEFAULT POOL: a confirmed delegation
+        # runs its subagent to the end before the flow returns. A slot was
+        # taken above, so the pool always has a free worker: this never queues.
+        answered = {"via": via, "thread_id": None, "user_id": user_id, "message_id": None}
+        result = await _off_the_request_pool(flow.explicit, action_id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
+    finally:
+        _SLOTS.give_back(user_id)
 
-    # No targets passed: the flow re-checks them itself (FR-029). This route
-    # used to pass the action's own recorded targets, so the check compared the
-    # record with itself and drift could never be detected here.
-    # OFF THE EVENT LOOP: a confirmed delegation runs its subagent to the end
-    # before the flow returns, and that must not stall every other request.
-    answered = {"via": "button", "thread_id": None, "user_id": user_id, "message_id": None}
-    result = await _off_the_request_pool(flow.explicit, action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
     detail = _response_detail(result.detail)
     message = for_display(result.message)[0]
     if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
+        from app.gateway.deps import get_checkpointer, get_run_manager
         from app.policy.surface_run import report_message
 
-        # The report redacts the raw result itself (surface_run.observed_result).
-        report = report_message(action, result.detail.get("result"))
+        # The report as recorded with EXECUTED (already redacted).
+        stored = middleware.pending.get(action_id)
+        report = report_message(action, result.detail.get("result"), content=stored.post_content if stored and stored.post_content else None)
         message = str(report.content)
         detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
         # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
-        # written and read back; "queued" when a run started on the chat while
-        # this one ran, so it lands when that run ends.
-        from app.gateway.deps import get_checkpointer, get_run_manager
-
+        # written and read back; every other state says what happened.
         posted = await post_result(checkpointer=get_checkpointer(request), run_manager=get_run_manager(request), store=middleware.pending, action=action, message=report)
         detail["posted_to_thread"] = posted == "written"
         detail["post_queued"] = posted == "queued"
-        if posted == "queued":
-            message += "\n\nThe chat was replying, so this will appear in it when that reply finishes."
-        elif posted == "failed":
-            message += "\n\nThis could not be added to the chat; it is shown here only."
+        detail["post_state"] = posted
+        message += _POST_NOTES.get(posted, "")
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=message, detail=detail)
+
+
+_POST_NOTES = {
+    "queued": "\n\nThe chat was replying, so this will appear in it when that reply finishes.",
+    "retrying": "\n\nThis could not be added to the chat yet; it will be tried again.",
+    "failed": "\n\nThis could not be added to the chat; it is shown here only.",
+    "dropped": "\n\nThe chat has been deleted, so this is shown here only.",
+}
 
 
 @router.post("/{action_id}/edit", response_model=ResolveResponse)
@@ -498,16 +686,16 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
     The original is claimed and resolved SUPERSEDED, never run. The edit
     becomes a NEW pending action whose plan and targets are stated from the
     edited arguments by the same functions chat uses, and it is confirmed in
-    the same step: the person who wrote the edit is the person confirming
-    it, through this trusted channel. Only tools in EDITABLE_TOOLS.
+    the same step, THROUGH THE SAME PATH AS CONFIRM (_resolve): busy and
+    deleted-chat refusals, the slot, and posting the result into the chat.
+    Only tools in EDITABLE_TOOLS.
     """
-    from app.gateway.authz import get_auth_context
     from app.gateway.ownership import require_access, require_person
     from app.policy.confirm_flow import take_claim
     from app.policy.models import Outcome, PendingAction, Tier, default_expiry
 
     require_person(request)
-    _, middleware, flow = _policy(request)
+    _, middleware, _flow = _policy(request)
     now = datetime.now(UTC)
     action = middleware.pending.get(action_id)
     if action is not None:
@@ -516,6 +704,9 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
         return ResolveResponse(outcome="already_resolved", action_id=action_id, message="That plan is no longer open, so it cannot be edited.")
     if action.tool_name not in EDITABLE_TOOLS:
         raise HTTPException(status_code=422, detail=f"{action.tool_name} plans cannot be edited here")
+    if action.thread_id and action.surface and await _thread_running(request, action.thread_id):
+        # Checked BEFORE the original is superseded, so a refused edit leaves it as it was.
+        return ResolveResponse(outcome=THREAD_BUSY, action_id=action_id, message="This chat is still replying. Nothing has run and the plan is unchanged. Try again when the reply has finished.")
     claimed = take_claim(middleware.pending, action_id, "edit")
     if claimed is None:
         return ResolveResponse(outcome="already_resolved", action_id=action_id, message="Another route resolved that plan first.")
@@ -537,20 +728,18 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
         origin=action.origin,
         origin_source=action.origin_source,
         origin_via=action.origin_via,
-        # The SERVER's record of who proposed it and with what tools, carried
-        # over; the edit changes the arguments, never the proposer.
+        # The SERVER's record of who proposed it, with what tools and in which
+        # delegation, carried over; the edit changes the arguments only.
         surface=dict(action.surface),
+        delegation_key=action.delegation_key,
     )
     edited.plan_text = middleware._plan_text_for(edited)
     middleware.pending.save(edited)
     middleware.pending.resolve(claimed, Outcome.SUPERSEDED, f"replaced by your edit ({edited.id}); the original was NOT run")
 
-    ctx = get_auth_context(request)
-    user_id = _user_id(ctx)
-    run_tool = await _runner(request, edited.thread_id, user_id)
-    answered = {"via": "edit", "thread_id": None, "user_id": user_id, "message_id": None}
-    result = await _off_the_request_pool(flow.explicit, edited.id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
-    return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=for_display(result.message)[0], detail={**_response_detail(result.detail), "replaced": action_id})
+    response = await _resolve(request, edited.id, confirm=True, body=ResolveRequest(typed_count=body.typed_count), via="edit")
+    response.detail = {**response.detail, "replaced": action_id}
+    return response
 
 
 @router.post("/{action_id}/confirm", response_model=ResolveResponse)

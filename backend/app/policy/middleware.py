@@ -668,11 +668,17 @@ class PolicyMiddleware(AgentMiddleware):
 
         with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
-        if action.delegation_key:
-            # What "Continue <agent>" hands the agent as observed context.
-            from .surface_run import observed_result
+        from .surface_run import observed_result, result_report
 
-            action.result_excerpt = observed_result(result)
+        # What "Continue <agent>" hands the agent as observed context.
+        action.result_excerpt = observed_result(result)
+        if getattr(run_tool, "posts_result", False) and action.thread_id and action.surface:
+            # THE SAME WRITE AS EXECUTED. A card's result is posted into its
+            # chat afterwards; recording "waiting" only then left a crash
+            # window in which the call had run and nothing said its result
+            # was still owed to the chat (review of PR #58).
+            action.post_state = "waiting"
+            action.post_content = result_report(action, result)
         self.pending.resolve(action, Outcome.EXECUTED)
         if self.audit is not None:
             self.audit.record_tier3(action=action, actor=self.actor, now=self.now())
