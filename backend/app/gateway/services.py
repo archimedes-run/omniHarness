@@ -459,6 +459,10 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
     ctx_dict = config.setdefault("context", {})
     if not isinstance(ctx_dict, dict):
         return
+    # ONE-SHOT, atomically: a replayed Continue would hand the agent "the user
+    # confirmed, continue" again for the same action (review of PR #58).
+    if not middleware.pending.take_continue(action.id):
+        raise _continue_refused("it was already continued once for this confirmation")
     ctx_dict[CALLED_AGENT_KEY] = action.requester
     ctx_dict[RESUME_ACTION_KEY] = {
         "id": action.id,
@@ -639,7 +643,7 @@ async def launch_agent_run_detached(
             interrupt_after=interrupt_after,
         )
     )
-    record.task = task
+    run_mgr.attach_task(record, task)
     return record
 
 

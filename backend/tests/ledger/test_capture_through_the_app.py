@@ -38,6 +38,10 @@ def propose(gateway, changes=CHANGES, said: str = "I'm launching the beta by Dec
     assert middleware is not None, "startup did not install the policy layer"
     model = ToolCapableFake(messages=iter([AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": changes}, "id": "c1"}]), AIMessage(content="I've proposed it.")]))
     agent = create_agent(model=model, tools=tools, middleware=[middleware])
+    # The chat exists, as every chat a real run proposes in does: a card whose
+    # chat does not exist (deleted) is refused at confirmation.
+    created = gateway.client.post("/api/threads", json={"thread_id": "thread-1"})
+    assert created.status_code in (200, 409), created.text
     agent.invoke({"messages": [HumanMessage(content=said)]}, config={"configurable": {"thread_id": "thread-1"}}, context={"thread_id": "thread-1", "user_id": gateway.user_id})
 
 
