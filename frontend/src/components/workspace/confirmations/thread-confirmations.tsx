@@ -23,7 +23,7 @@ export function useThreadConfirmations(
   messages: Message[],
   enabled: boolean,
   running = false,
-  onContinue?: (agent: string) => void,
+  onContinue?: (agent: string, actionId: string) => void,
 ) {
   const { pending } = usePendingConfirmations();
   // A run that just finished may have stated a plan: read the pending set

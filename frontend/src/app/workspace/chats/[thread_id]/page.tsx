@@ -134,13 +134,15 @@ export default function ChatPage() {
     thread.messages,
     !isNewThread,
     thread.isLoading,
-    // "Continue <agent>" on a confirmed card: an ordinary user turn, so the
-    // agent carries on only because the user asked it to.
-    (agent) =>
-      handleSubmit({
-        text: `${agent === "lead_agent" ? "" : `@${agent} `}continue from where you stopped.`,
-        files: [],
-      }),
+    // "Continue <agent>" on a confirmed card: the user's own turn, so the
+    // agent carries on only because the user asked it to. The server re-enters
+    // that agent's own delegation from the action id (and nothing else).
+    (agent, actionId) =>
+      void sendMessage(
+        threadId,
+        { text: `Continue ${agent}.`, files: [] },
+        { continue_action: actionId },
+      ),
   );
 
   const messageListPaddingBottom = showFollowups

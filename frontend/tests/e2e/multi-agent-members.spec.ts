@@ -108,7 +108,7 @@ function action(id: string) {
   };
 }
 
-test("a confirmed card offers Continue <agent>, which sends the user's own turn to it", async ({
+test("a confirmed card offers Continue <agent>, which sends the user's own turn naming the action", async ({
   page,
 }) => {
   await setUp(page, ["researcher"]);
@@ -147,7 +147,9 @@ test("a confirmed card offers Continue <agent>, which sends the user's own turn 
   await proceed.click();
 
   await expect.poll(() => sent.length).toBe(1);
-  expect(sent[0]).toContain("@researcher continue from where you stopped.");
+  expect(sent[0]).toContain("Continue researcher.");
+  // The server re-enters the agent's own delegation from this id alone.
+  expect(sent[0]).toContain('"continue_action":"abcdef123456"');
 });
 
 test("a card refused because its tool left the chat says why and keeps its buttons", async ({

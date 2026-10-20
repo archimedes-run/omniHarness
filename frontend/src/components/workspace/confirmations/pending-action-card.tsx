@@ -40,7 +40,7 @@ export function PendingActionCard({
   result?: ResolveResult;
   /** "Continue <agent>": the agent stopped at this call and has not carried
    *  on. Continuing is the user's own turn, never automatic (plan.md §2.0). */
-  onContinue?: (agent: string) => void;
+  onContinue?: (agent: string, actionId: string) => void;
 }) {
   const [typed, setTyped] = useState("");
   // A ledger plan (Feature 005) reads as the changes it makes, and can be
@@ -222,7 +222,7 @@ export function PendingActionCard({
             <Button
               data-testid="continue-agent"
               variant="outline"
-              onClick={() => onContinue(continueAgent)}
+              onClick={() => onContinue(continueAgent, action.id)}
             >
               Continue {continueAgent}
             </Button>
