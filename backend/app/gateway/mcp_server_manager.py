@@ -20,9 +20,11 @@ Security invariants (enforced at the top of every mutating method)
    ``_current_user`` from a ContextVar. Managers may run in background tasks
    where the ContextVar is not set.
 
-4. Agent-generated code NEVER runs in the gateway process. ``_run_server_sandbox_test``
-   launches it as a subprocess with a clean, constrained environment (only the owner's
-   decrypted secrets + PYTHONPATH/HOME/PATH; no gateway env vars leak in).
+4. Agent-generated code NEVER runs in the gateway, not even as a subprocess
+   (#59). ``_run_server_sandbox_test`` runs it in a container: no network,
+   read-only root, non-root, all capabilities dropped, memory/pids/CPU limits,
+   no host mounts, and placeholder keys only, handed over as a 0400 file on a
+   tmpfs (never in its environment).
 """
 
 from __future__ import annotations
@@ -32,20 +34,22 @@ import dataclasses
 import io
 import json
 import logging
+import os
 import re
+import secrets
 import socket
-import sys
 import tarfile
-import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from app.gateway.mcp_build_flow import placeholder, scrub
+from app.gateway.mcp_container_files import deliver, render_secrets, secret_name_problem
 from app.gateway.mcp_docker import CliDockerRunner, DockerRunner
 from app.gateway.mcp_egress import build_egress_rules
 from app.gateway.mcp_names import name_collision, slugify, tool_name_collision, wire_key
+from app.gateway.mcp_runtime_image import RuntimeImages
 from app.gateway.mcp_secrets import McpSecretsVault
 from app.gateway.mcp_view_tokens import ViewTokens
 from omniharness.persistence.mcp_server.approval import code_sha256
@@ -70,6 +74,14 @@ _AUTH_ERROR_RE = re.compile(
 
 # Patterns indicating the tool requires arguments we didn't supply in the automated test.
 # These are expected for tools that mandate owner/repo/id-style inputs.
+# A tool that needed the network: in the sandbox there is none (#59), so this
+# is expected, not a defect. Still callable.
+_OFFLINE_RE = re.compile(
+    r"(ConnectError|ConnectTimeout|Temporary failure in name resolution|Name or service not known|"
+    r"nodename nor servname|Network is unreachable|No address associated|getaddrinfo failed|Errno -[23])",
+    re.IGNORECASE,
+)
+
 _MISSING_ARGS_RE = re.compile(
     r"(Field required|validation error|missing.*required|required.*missing|"
     r"InputValidationError|argument.*required|required.*argument)",
@@ -83,10 +95,13 @@ def _classify_output(text: str) -> str:
     ``"pass"``  — no recognisable error pattern (tool actually returned a useful result)
     ``"auth"``  — 401/403/auth failure (callable; placeholder credentials used in tests)
     ``"args"``  — missing required arguments (callable; no default args supplied in tests)
+    ``"offline"`` — it needed the network; the sandbox has none (callable)
     ``"error"`` — other error
     """
     if not text:
         return "pass"
+    if _OFFLINE_RE.search(text):
+        return "offline"
     if _AUTH_ERROR_RE.search(text):
         return "auth"
     if _MISSING_ARGS_RE.search(text):
@@ -132,6 +147,8 @@ EXPOSE 8080
 CMD ["python", "server.py"]
 """
 _DEPLOY_PORT_BASE = 18100
+#: The non-root user every built server runs as (no passwd entry needed).
+_SANDBOX_UID = 10001
 
 # Ordered deploy steps emitted as live timeline data to the frontend.
 _DEPLOY_STEP_DEFS: list[tuple[str, str]] = [
@@ -265,10 +282,21 @@ class MCPServerManager:
     Created once in the app lifespan and stored on ``app.state``.
     """
 
-    def __init__(self, repo: McpServerRepository, vault: McpSecretsVault, runner: DockerRunner | None = None) -> None:
+    def __init__(
+        self,
+        repo: McpServerRepository,
+        vault: McpSecretsVault,
+        runner: DockerRunner | None = None,
+        images: RuntimeImages | None = None,
+    ) -> None:
         self._repo = repo
         self._vault = vault
         self._runner: DockerRunner = runner or CliDockerRunner()
+        if images is None:
+            from omniharness.config.paths import get_paths
+
+            images = RuntimeImages(self._runner, state_dir=get_paths().base_dir / "mcp_runtime")
+        self._images = images
         #: Approval-screen views, so "the code was viewed" is observed (#59).
         self.view_tokens = ViewTokens()
         # Per-server lock held while the stored code changes and while a deploy
@@ -427,104 +455,139 @@ class MCPServerManager:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        site_packages = str(Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
-        base_env: dict[str, str] = {
-            "PYTHONPATH": site_packages,
-            "HOME": str(Path.home()),
-            "PATH": "/usr/bin:/bin",
-        }
-
         tools_discovered: list[dict] = []
         test_results: list[dict] = []
 
-        with tempfile.TemporaryDirectory(prefix="omni_mcp_test_") as tmpdir:
-            server_file = Path(tmpdir) / "server.py"
-            server_file.write_text(source_code)
+        image_id = await self._images.code_image_id(source_code, code_sha256(source_code) or "")
 
-            # ── Phase 1: Discovery — no secrets, validates clean startup ─────
-            discovery_params = StdioServerParameters(
-                command=sys.executable,
-                args=[str(server_file)],
-                env=base_env,
-            )
-            try:
-                async with asyncio.timeout(30):
-                    async with stdio_client(discovery_params) as (read, write):
-                        async with ClientSession(read, write) as session:
-                            await session.initialize()
-                            tools_resp = await session.list_tools()
-                            for t in tools_resp.tools:
-                                tools_discovered.append(
-                                    {
-                                        "name": t.name,
-                                        "description": (t.description or "")[:300],
-                                    }
-                                )
-            except TimeoutError:
-                raise RuntimeError("MCP server discovery timed out (30s)")
-            # Other startup/connection exceptions propagate to caller
+        # ── Phase 1: Discovery — no keys at all, validates clean startup ──
+        try:
+            async with asyncio.timeout(30):
+                async with self._sandbox(server_id, image_id, StdioServerParameters, stdio_client, files={}) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        tools_resp = await session.list_tools()
+                        for t in tools_resp.tools:
+                            tools_discovered.append({"name": t.name, "description": (t.description or "")[:300]})
+        except TimeoutError:
+            raise RuntimeError("MCP server discovery timed out (30s)")
+        # Other startup/connection exceptions propagate to caller
 
-            if not tools_discovered:
-                return [], []
+        if not tools_discovered:
+            return [], []
 
-            # ── Phase 2: Test-calls — PLACEHOLDER secrets (Feature 006) ─────
-            # The sandbox is away from your data: tests never get the real
-            # credentials. Each key the code reads is set to its placeholder, so
-            # a tool that needs it answers with an auth error ("auth" badge,
-            # still callable) instead of making a real call. The first real
-            # run is the one the user approves (deploy). Tools that require
-            # arguments get validation errors with empty {} ("args" badge).
-            names = set(self._vault.scan_for_required_keys(source_code))
-            try:
-                names |= {k["key_name"] for k in await self._vault.list_key_info(server_id=server_id, owner_id=user_id)}
-            except Exception:
-                pass  # names only; the code's own reads are already covered
-            placeholder_env = {name: placeholder(name) for name in names}
+        # ── Phase 2: Test-calls — PLACEHOLDER keys (Feature 006) ─────
+        # The sandbox is away from your data: tests never get the real
+        # credentials. Each key the code reads is set to its placeholder, so
+        # a tool that needs it answers with an auth error ("auth" badge,
+        # still callable) instead of making a real call; there is no network
+        # either ("offline" badge). Tools that require arguments get
+        # validation errors with empty {} ("args" badge).
+        names = set(self._vault.scan_for_required_keys(source_code))
+        try:
+            names |= {k["key_name"] for k in await self._vault.list_key_info(server_id=server_id, owner_id=user_id)}
+        except Exception:
+            pass  # names only; the code's own reads are already covered
+        # Reserved names (HOME, PATH, proxy settings...) are not keys to hand over.
+        placeholders = {name: placeholder(name) for name in names if secret_name_problem(name) is None}
+        files = {"secrets": render_secrets(placeholders)} if placeholders else {}
 
-            test_params = StdioServerParameters(
-                command=sys.executable,
-                args=[str(server_file)],
-                env={**base_env, **placeholder_env},
-            )
-            try:
-                async with asyncio.timeout(30):
-                    async with stdio_client(test_params) as (read, write):
-                        async with ClientSession(read, write) as session:
-                            await session.initialize()
-                            for t in tools_discovered:
-                                try:
-                                    result = await asyncio.wait_for(
-                                        session.call_tool(t["name"], {}),
-                                        timeout=10,
-                                    )
-                                    output = ""
-                                    if result.content:
-                                        item = result.content[0]
-                                        output = str(getattr(item, "text", None) or item)[:200]
-                                    # Classify result even on the success path — the tool may have
-                                    # returned an error payload (auth failure, missing args) rather
-                                    # than raising a Python exception. We label these so the UI can
-                                    # show the right badge instead of a misleading green "pass".
-                                    output_type = _classify_output(output)
-                                    entry: dict = {"tool": t["name"], "ok": True, "output_type": output_type}
-                                    if output:
-                                        entry["output"] = output
-                                    test_results.append(entry)
-                                except Exception as exc:
-                                    exc_msg = str(exc)[:200]
-                                    is_auth = self._is_auth_error(exc_msg)
-                                    output_type = "auth" if is_auth else _classify_output(exc_msg)
-                                    entry = {"tool": t["name"], "ok": is_auth, "output_type": output_type}
-                                    if is_auth:
-                                        entry["output"] = exc_msg
-                                    else:
-                                        entry["error"] = exc_msg
-                                    test_results.append(entry)
-            except Exception as exc:
-                # Test-call phase failure never blocks 'verified' — tools were already discovered.
-                logger.warning("MCP test-call phase failed for %s: %s", server_id, exc)
+        try:
+            async with asyncio.timeout(30):
+                async with self._sandbox(server_id, image_id, StdioServerParameters, stdio_client, files=files) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        for t in tools_discovered:
+                            try:
+                                result = await asyncio.wait_for(session.call_tool(t["name"], {}), timeout=10)
+                                output = ""
+                                if result.content:
+                                    item = result.content[0]
+                                    output = str(getattr(item, "text", None) or item)[:200]
+                                # Classify result even on the success path — the tool may have
+                                # returned an error payload (auth failure, missing args) rather
+                                # than raising a Python exception.
+                                output_type = _classify_output(output)
+                                entry: dict = {"tool": t["name"], "ok": True, "output_type": output_type}
+                                if output:
+                                    entry["output"] = output
+                                test_results.append(entry)
+                            except Exception as exc:
+                                exc_msg = str(exc)[:200]
+                                output_type = _classify_output(exc_msg)
+                                callable_anyway = output_type in ("auth", "offline")
+                                entry = {"tool": t["name"], "ok": callable_anyway, "output_type": output_type}
+                                entry["output" if callable_anyway else "error"] = exc_msg
+                                test_results.append(entry)
+        except Exception as exc:
+            # Test-call phase failure never blocks 'verified' — tools were already discovered.
+            logger.warning("MCP test-call phase failed for %s: %s", server_id, exc)
 
         return tools_discovered, test_results
+
+    def _sandbox_args(self, name: str, server_id: str, image_id: str) -> list[str]:
+        """``docker run`` for the sandbox test (#59): the exact flags."""
+        return [
+            "run", "--rm", "-i",
+            "--name", name,
+            "--label", f"omni.mcp.server={server_id}",
+            "--label", "omni.mcp.role=test",
+            *[a for k, v in self._images.labels for a in ("--label", f"{k}={v}")],
+            "--network", "none",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m",
+            "--tmpfs", f"/run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid={_SANDBOX_UID},gid={_SANDBOX_UID}",
+            "--user", f"{_SANDBOX_UID}:{_SANDBOX_UID}",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--memory", "256m", "--memory-swap", "256m",
+            "--pids-limit", "64",
+            "--cpus", "0.5",
+            "--ulimit", "nofile=256:256",
+            "--stop-timeout", "2",
+            "-e", "HOME=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "MCP_TRANSPORT=stdio",
+            image_id,
+            "python", "-I", "-B", "/opt/omni/launch.py",
+        ]  # fmt: skip
+
+    def _sandbox(self, server_id: str, image_id: str, params_cls, client, *, files: dict[str, bytes]):
+        """An MCP stdio session with the code running in its sandbox container.
+        The files (placeholders only) are handed over once the container is up."""
+        manager = self
+        name = f"{self._images.prefix}test-{server_id[:12]}-{secrets.token_hex(3)}"
+        # The environment here is the docker CLI's (it needs HOME for its
+        # context, and any DOCKER_* settings), never the container's: the
+        # container gets only the -e flags in _sandbox_args.
+        from mcp.client.stdio import get_default_environment
+
+        cli_env = {**get_default_environment(), **{k: v for k, v in os.environ.items() if k.startswith("DOCKER_")}}
+        params = params_cls(command="docker", args=self._sandbox_args(name, server_id, image_id), env=cli_env)
+
+        class _Session:
+            async def __aenter__(self):
+                self._cm = client(params)
+                streams = await self._cm.__aenter__()
+                await manager._wait_running(name)
+                await deliver(manager._runner, name, str(_SANDBOX_UID), files)
+                return streams
+
+            async def __aexit__(self, *exc):
+                try:
+                    return await self._cm.__aexit__(*exc)
+                finally:
+                    await manager._runner.run(["docker", "rm", "-f", name], timeout=15.0)
+
+        return _Session()
+
+    async def _wait_running(self, name: str, timeout: float = 20.0) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            rc, out, _ = await self._runner.run(["docker", "container", "inspect", "-f", "{{.State.Running}}", name], timeout=10.0)
+            if rc == 0 and out.strip() == "true":
+                return
+            if asyncio.get_running_loop().time() > deadline:
+                raise RuntimeError("the sandbox container did not start")
+            await asyncio.sleep(0.1)
 
     async def submit_source_and_test(self, *, server_id: str, user_id: str, source_code: str) -> MCPBuildRecord:
         """Save source_code then run the full test pipeline.

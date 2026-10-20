@@ -10,9 +10,10 @@ from __future__ import annotations
 from omniharness.tools.builtins.mcp_build_tool import mcp_build_tool
 
 
-def test_the_description_does_not_claim_isolation_it_does_not_have() -> None:
+def test_the_description_says_what_the_sandbox_really_is() -> None:
+    # True since the sandbox test runs in a container (test_mcp_sandbox_escape).
     text = mcp_build_tool.description
     assert "isolated subprocess" not in text
     assert "verifies required secrets are stored" not in text
-    assert "NOT isolated" in text
+    assert "locked container (no network, no access to your files" in text
     assert "placeholder keys" in text

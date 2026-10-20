@@ -66,3 +66,44 @@ def builder_gateway(tmp_path, monkeypatch):
     set_mcp_build_controller(None)
     reset_app_config()
     reset_extensions_config()
+
+
+# ---------------------------------------------------------------------------
+# Docker (#59): throwaway, labelled, no mounts, removed, and listed.
+# ---------------------------------------------------------------------------
+
+_LEDGER = None
+
+
+@pytest.fixture(scope="session")
+def docker_ledger():
+    from docker_ledger import LedgerRunner, docker_available
+
+    global _LEDGER
+    if not docker_available():
+        pytest.skip("Docker is not available here: the container tests did not run (skipped, not passed)")
+    _LEDGER = LedgerRunner()
+    yield _LEDGER
+    leftovers = _LEDGER.cleanup()
+    _LEDGER.report()
+    assert not leftovers, f"Docker resources were left behind (now removed): {leftovers}"
+    assert not _LEDGER.mount_problems, f"a test container had mounts: {_LEDGER.mount_problems}"
+
+
+@pytest.fixture(scope="session")
+def runtime_images(docker_ledger, tmp_path_factory):
+    from docker_ledger import LABEL, PREFIX
+
+    from app.gateway.mcp_runtime_image import RuntimeImages
+
+    return RuntimeImages(docker_ledger, state_dir=tmp_path_factory.mktemp("mcp-runtime"), prefix=PREFIX, labels=(LABEL,))
+
+
+def pytest_terminal_summary(terminalreporter):
+    if _LEDGER is None:
+        return
+    rows = _LEDGER.report()
+    terminalreporter.section("Docker resources created by the MCP build tests (#59)")
+    for r in rows:
+        terminalreporter.write_line(f"{r['kind']:9} {r['name']:70} mounts={r['mounts']} created={r['created']} removed={r['removed']}")
+    terminalreporter.write_line(f"{len(rows)} resource(s); leftovers removed and failed; mount problems: {len(_LEDGER.mount_problems)}")

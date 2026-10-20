@@ -22,11 +22,19 @@ class DockerRunner(Protocol):
         """Run ``docker <args...>``; returns (returncode, stdout, stderr)."""
         ...
 
+    async def run_bytes(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, bytes, str]:
+        """As ``run``, with stdout as bytes (a tar on stdout)."""
+        ...
+
 
 class CliDockerRunner:
     """``DockerRunner`` over the ``docker`` CLI."""
 
     async def run(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, str, str]:
+        rc, out, err = await self.run_bytes(args, stdin=stdin, timeout=timeout)
+        return rc, out.decode(errors="replace"), err
+
+    async def run_bytes(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, bytes, str]:
         if not args or args[0] != "docker":
             raise ValueError("DockerRunner only runs the docker CLI")
         env = None
@@ -48,4 +56,4 @@ class CliDockerRunner:
             proc.kill()
             await proc.wait()
             raise
-        return proc.returncode or 0, (out or b"").decode(errors="replace"), (err or b"").decode(errors="replace")
+        return proc.returncode or 0, out or b"", (err or b"").decode(errors="replace")

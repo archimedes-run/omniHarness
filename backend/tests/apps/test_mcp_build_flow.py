@@ -87,9 +87,13 @@ def test_a_secret_in_the_description_never_reaches_the_model(builder_gateway, pr
     assert server["state_label"] == "Drafting"
 
 
-def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(builder_gateway, prompts) -> None:
+@pytest.mark.docker
+def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(builder_gateway, prompts, docker_ledger, runtime_images) -> None:
     client, app = builder_gateway.client, builder_gateway.app
     manager = app.state.mcp_server_manager
+    # The real sandbox: a throwaway container (#59), test images, recorded.
+    manager._runner = docker_ledger
+    manager._images = runtime_images
     sid = _start(client)["server_id"]
 
     # Approval before the tests pass is refused, and so is turning it on directly.
@@ -101,7 +105,7 @@ def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(
     # The agent submits its code (what its mcp_build tool does): a real sandbox run.
     allow = AsyncMock(return_value=type("R", (), {"decision": "allow", "reason": "ok"})())
     with patch("app.gateway.mcp_server_manager.scan_python_code", allow):
-        record = asyncio.run(manager.submit_source_and_test(server_id=sid, user_id=builder_gateway.user_id, source_code=SERVER))
+        record = client.portal.call(lambda: manager.submit_source_and_test(server_id=sid, user_id=builder_gateway.user_id, source_code=SERVER))
     assert record.phase == "verified", record
     # The sandbox never had the real key: the tool saw the placeholder. (The
     # reversed copy is what output scrubbing cannot catch, so it shows what

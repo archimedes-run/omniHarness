@@ -628,6 +628,17 @@ async def write_mcp_secrets(
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
 
+    # #59: a stored key becomes a line of the server's secrets file. A name
+    # that would change how the server or its proxy runs (HTTPS_PROXY, LD_*,
+    # MCP_*...) or a value with a line break (a second, injected line) is
+    # refused here, and again when it is handed over.
+    from app.gateway.mcp_container_files import secret_name_problem, secret_value_problem
+
+    for key_name, plaintext_value in body.secrets.items():
+        problem = secret_name_problem(key_name) or secret_value_problem(key_name, plaintext_value)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+
     vault = get_mcp_secrets_vault(request)
     stored: list[str] = []
     hints: dict[str, str | None] = {}

@@ -39,6 +39,10 @@ class FakeDockerRunner:
             return 0, "c0ffee" * 10 + "\n", ""
         return 0, "", ""
 
+    async def run_bytes(self, args: list[str], *, stdin: bytes | None = None, timeout: float = 120.0) -> tuple[int, bytes, str]:
+        rc, out, err = await self.run(args, stdin=stdin, timeout=timeout)
+        return rc, out.encode(), err
+
     def verbs(self) -> list[str]:
         return [c.args[1] for c in self.calls if len(c.args) > 1]
 

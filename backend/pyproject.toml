@@ -51,6 +51,8 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "no_auto_user: disable the conftest autouse contextvar fixture for this test",
+    "docker: runs throwaway, labelled containers on the local Docker (skipped, and reported, where there is none)",
+    "internet: needs outbound internet (skipped, and reported, when offline)",
 ]
 
 [tool.uv]
