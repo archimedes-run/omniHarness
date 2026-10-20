@@ -82,7 +82,7 @@ def test_apply_prompt_template_includes_custom_mounts(monkeypatch):
     monkeypatch.setattr(prompt_module, "get_deferred_tools_prompt_section", lambda **kwargs: "")
     monkeypatch.setattr(prompt_module, "_build_acp_section", lambda **kwargs: "")
     monkeypatch.setattr(prompt_module, "_get_memory_context", lambda agent_name=None, **kwargs: "")
-    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None: "")
+    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None, **kwargs: "")
 
     prompt = prompt_module.apply_prompt_template()
 
@@ -100,7 +100,7 @@ def test_apply_prompt_template_includes_relative_path_guidance(monkeypatch):
     monkeypatch.setattr(prompt_module, "get_deferred_tools_prompt_section", lambda **kwargs: "")
     monkeypatch.setattr(prompt_module, "_build_acp_section", lambda **kwargs: "")
     monkeypatch.setattr(prompt_module, "_get_memory_context", lambda agent_name=None, **kwargs: "")
-    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None: "")
+    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None, **kwargs: "")
 
     prompt = prompt_module.apply_prompt_template()
 
@@ -128,7 +128,7 @@ def test_apply_prompt_template_threads_explicit_app_config_without_global_config
     monkeypatch.setattr("omniharness.config.get_app_config", fail_get_app_config)
     monkeypatch.setattr("omniharness.config.memory_config.get_memory_config", fail_get_memory_config)
     monkeypatch.setattr(prompt_module, "get_or_new_skill_storage", lambda app_config=None: SimpleNamespace(load_skills=lambda enabled_only=True: []))
-    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None: "")
+    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None, **kwargs: "")
 
     prompt = prompt_module.apply_prompt_template(app_config=explicit_config)
 
@@ -167,7 +167,7 @@ def test_apply_prompt_template_threads_explicit_app_config_to_subagents_without_
     monkeypatch.setattr("omniharness.config.get_app_config", fail_get_app_config)
     monkeypatch.setattr("omniharness.config.subagents_config.get_subagents_app_config", fail_get_subagents_app_config)
     monkeypatch.setattr(prompt_module, "get_or_new_skill_storage", lambda app_config=None: SimpleNamespace(load_skills=lambda enabled_only=True: []))
-    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None: "")
+    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None, **kwargs: "")
 
     prompt = prompt_module.apply_prompt_template(subagent_enabled=True, app_config=explicit_config)
 
