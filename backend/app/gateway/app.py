@@ -11,6 +11,7 @@ from app.gateway.auth_middleware import AuthMiddleware
 from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CSRFMiddleware
 from app.gateway.deps import langgraph_runtime
+from app.gateway.log_files import install_log_file
 from app.gateway.logging_filters import install_preview_token_log_filter
 from app.gateway.preview_sessions import PreviewSessionManager
 from app.gateway.routers import (
@@ -61,6 +62,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 install_preview_token_log_filter()
+# GATEWAY_LOG_FILE: append-only daily files, 30 days kept (app.gateway.log_files).
+install_log_file()
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +110,12 @@ async def _ensure_admin_user(app: FastAPI) -> None:
     if sf is None:
         return
 
-    # Security baseline: say which account is the owner (by id only).
+    # Security baseline: hand-disabled accounts move to disabled_at first, so
+    # the owner is never resolved to one; then say who the owner is (id only).
     try:
-        from app.gateway.ownership import log_owner_at_startup
+        from app.gateway.ownership import log_owner_at_startup, migrate_prefix_disabled_accounts
 
+        await migrate_prefix_disabled_accounts()
         await log_owner_at_startup()
     except Exception:
         logger.exception("Could not resolve the owner account at startup (non-fatal)")
@@ -274,8 +279,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         error_msg = f"Failed to load configuration during gateway startup: {e}"
         logger.exception(error_msg)
         raise RuntimeError(error_msg) from e
-    config = get_gateway_config()
-    logger.info(f"Starting API Gateway on {config.host}:{config.port}")
+    from app.gateway.config import actual_bind
+
+    bind = actual_bind()
+    if bind is None:
+        logger.info("Starting API Gateway (bind address not set by a uvicorn command line in this process)")
+    else:
+        logger.info("Starting API Gateway; uvicorn binds %s:%s%s", bind[0], bind[1], "" if bind[0] in ("127.0.0.1", "::1", "localhost") else " (NOT loopback: reachable beyond this machine unless a container network isolates it)")
 
     # Initialize LangGraph runtime components (StreamBridge, RunManager, checkpointer, store)
     async with langgraph_runtime(app):
@@ -515,6 +525,17 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
                 allow_methods=["*"],
                 allow_headers=["*"],
             )
+
+    # Real client IP (security baseline): X-Forwarded-For/-Proto are honoured
+    # ONLY when the TCP peer is a trusted proxy (GATEWAY_TRUSTED_PROXIES: the
+    # nginx container's fixed address, or 127.0.0.1 for the host nginx). From
+    # any other peer they are ignored. Outermost, so the access log, the rate
+    # limiter and every route see the same client address.
+    trusted_proxies = [p.strip() for p in os.environ.get("GATEWAY_TRUSTED_PROXIES", "").split(",") if p.strip()]
+    if trusted_proxies:
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
 
     # Include routers
     # Models API is mounted at /api/models
