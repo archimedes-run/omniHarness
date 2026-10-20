@@ -149,7 +149,7 @@ class CodexAdapter(SessionAdapter):
             return None
 
         if rtype == "session_meta":
-            return self._session_meta(state, payload, at)
+            return self._session_meta(state, payload, at, path, lineno)
         if state.session_id is None:
             return None  # nothing before the header can be attributed
 
@@ -185,7 +185,7 @@ class CodexAdapter(SessionAdapter):
         # counting an unknown key as drift (FR-024).
         return ParsedRecord(**base, kind=None, raw_type=key)
 
-    def _session_meta(self, state: _CodexFile, meta: dict, at: datetime) -> ParsedRecord | None:
+    def _session_meta(self, state: _CodexFile, meta: dict, at: datetime, path: Path, lineno: int) -> ParsedRecord | None:
         sid = meta.get("id")
         if not isinstance(sid, str) or not sid:
             return None
@@ -202,7 +202,7 @@ class CodexAdapter(SessionAdapter):
         state.parent = _parent_of(meta) if state.subagent else None
         if state.subagent and state.parent is None:
             # A subagent that names no parent: the link shape moved (FR-023).
-            self._source.stats.unknown_types["session_meta:subagent-without-parent"] += 1
+            self._source.note_diagnostic("session_meta:subagent-without-parent", path, lineno)
         return ParsedRecord(session_id=sid, at=at, kind=EventKind.STARTED, project=state.project, raw_type="session_meta")
 
     @staticmethod
@@ -355,7 +355,8 @@ class CodexAdapter(SessionAdapter):
             parsed = self.parse(raw, path, state.lineno)
             if state.unparsed_plans > unparsed:
                 # A code-mode plan we could not read: the shape moved.
-                self._source.note_skip(SkipReason.UNKNOWN_TYPE, path, state.lineno, raw_type="exec:update_plan-unreadable")
+                # Not a skip: the record itself still parses.
+                self._source.note_diagnostic("exec:update_plan-unreadable", path, state.lineno)
             if parsed is None:
                 reason = SkipReason.NO_SESSION_ID if state.session_id is None else SkipReason.NO_TIMESTAMP
                 self._source.note_skip(reason, path, state.lineno, raw_type=raw.get("type") if isinstance(raw.get("type"), str) else None)

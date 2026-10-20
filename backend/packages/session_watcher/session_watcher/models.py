@@ -97,6 +97,11 @@ class Session:
     todos: list[tuple[str, str]] | None = None
     #: Paths its successful tool results changed, newest last.
     files_changed: list[str] = field(default_factory=list)
+    #: The earlier session this one continues (observed: the agent recorded
+    #: the link). That session is folded into this one, not listed apart.
+    continued_from: str | None = None
+    #: The later session this one was continued in, when that one is not seen.
+    continued_in: str | None = None
 
     def __post_init__(self) -> None:
         if not self.session_id:

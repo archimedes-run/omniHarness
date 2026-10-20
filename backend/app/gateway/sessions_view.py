@@ -52,6 +52,12 @@ class SessionRow(BaseModel):
     todos: list[TodoItem] | None = None
     #: How many files its successful tool results changed.
     files_changed: int = 0
+    #: The earlier session this one continues, folded into this row. Observed:
+    #: the agent recorded the link (Claude Code's `continued-in` record).
+    continued_from: str | None = None
+    #: The later session this one was continued in, when the watcher cannot
+    #: see that one. Recorded, but the continuation itself is not in view.
+    continued_in: str | None = None
 
 
 class AgentHealth(BaseModel):
@@ -94,6 +100,11 @@ def _display(row: dict) -> tuple[str, Epistemic]:
     if state in ("working", "failed"):
         return state, "observed"
     return "unknown", "unknown"
+
+
+def _id(value: object) -> str | None:
+    """A session id, or None: never an empty string standing in for "none"."""
+    return value if isinstance(value, str) and value else None
 
 
 def _agent(a: dict) -> AgentHealth:
@@ -145,6 +156,8 @@ def describe_sessions(payload: dict | None, failure: Exception | None = None) ->
                 agent_label=str(s.get("agent_label") or "Claude Code"),
                 todos=todos,
                 files_changed=len(s.get("files_changed") or []),
+                continued_from=_id(s.get("continued_from")),
+                continued_in=_id(s.get("continued_in")),
             )
         )
     return SessionsView(

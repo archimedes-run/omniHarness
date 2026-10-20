@@ -56,6 +56,17 @@ class PendingActionResponse(BaseModel):
     #: confirmed (Feature 005: ledger_apply). Absent for every other tool, and
     #: absent when they failed redaction.
     arguments: dict[str, Any] | None = None
+    #: What caused the proposal (FR-006): "user", "content", "automation" or
+    #: "unknown". Anything but "user" can only be confirmed here, by button.
+    origin: str = "user"
+    #: For "content": the tool(s) whose output suggested it.
+    origin_source: str = ""
+    #: The sentence the card shows, e.g. "Suggested by content from web_fetch".
+    origin_label: str = ""
+    #: For a subagent's request: the agent the content reached it through.
+    #: The full path is `delegation_chain`.
+    origin_via: str = ""
+    confirmable_by_typing: bool = True
 
 
 class PendingListResponse(BaseModel):
@@ -175,6 +186,11 @@ def _view(action, threshold: int) -> PendingActionResponse:
         requires_typed_count=len(action.targets) > threshold,
         withheld=plan_withheld or targets_withheld,
         arguments=arguments,
+        origin=action.origin,
+        origin_source=action.origin_source,
+        origin_label=action.origin_label(),
+        origin_via=action.origin_via,
+        confirmable_by_typing=action.confirmable_by_typing,
     )
 
 

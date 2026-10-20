@@ -89,7 +89,7 @@ def test_superseding_unblocks_the_next_confirmation(policy) -> None:
     policy.rules.write_text(RULES_TIER_1)
     _list(policy.app)
     policy.rules.write_text(RULES_TIER_3 + '    - pattern: "calendar_decline"\n      tier: 3\n')
-    request = SimpleNamespace(tool_call={"name": "calendar_decline", "args": {"meetings": ["Standup"]}, "id": "tc3"}, runtime=None, state={"messages": []})
+    request = SimpleNamespace(tool_call={"name": "calendar_decline", "args": {"meetings": ["Standup"]}, "id": "tc3"}, runtime=None, state={"messages": [HumanMessage(content="decline my standup")]})
     policy.middleware.wrap_tool_call(request, lambda r: pytest.fail("ran at statement"))
 
     flow = ConfirmationFlow(store=policy.middleware.pending, middleware=policy.middleware, now=policy.middleware.now)

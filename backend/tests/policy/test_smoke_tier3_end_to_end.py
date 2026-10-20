@@ -77,7 +77,7 @@ def test_one_tier3_action_from_statement_to_audit(system):
     )
 
     assert not executed, "nothing may run before confirmation"
-    assert "Standup 9am" in plan and "Review 2pm" in plan, "the plan must name the specific items"
+    assert "Standup 9am" in plan.content and "Review 2pm" in plan.content, "the plan must name the specific items"
 
     # 2. WAIT — it is durable and findable by any worker.
     pending = PendingStore(directory=system.store.directory).open_actions(NOW)

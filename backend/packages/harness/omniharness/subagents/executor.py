@@ -267,6 +267,13 @@ class SubagentExecutor:
         self.thread_id = thread_id
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
+        # Where the delegating turn came from, captured where the delegation
+        # happens (inside the parent's gated tool call). The task the parent
+        # wrote is NOT the user speaking: the subagent starts with its
+        # inviter's provenance, which only ever degrades (agents/invitation.py).
+        from omniharness.agents.invitation import current_inviting_turn
+
+        self.inviting_turn = current_inviting_turn()
 
         self._base_tools = _filter_tools(
             tools,
@@ -445,7 +452,9 @@ class SubagentExecutor:
             run_config: RunnableConfig = {
                 "recursion_limit": self.config.max_turns,
             }
-            context: dict[str, Any] = {}
+            from omniharness.agents.invitation import invited_agent_context
+
+            context: dict[str, Any] = invited_agent_context(self.inviting_turn, self.config.name)
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id

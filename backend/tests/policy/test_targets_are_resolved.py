@@ -113,3 +113,22 @@ def test_the_plan_claims_no_source_when_it_could_not_resolve_one(middleware):
 
     assert "(from `" not in text
     assert "exactly these 1 item(s):" in text
+
+
+def test_the_fallback_target_survives_the_stores_key_order(tmp_path):
+    """The store writes arguments with sorted keys. The fallback line used the
+    call's own key order, so {to, body} re-resolved as {body, to} at
+    confirmation and every such action was reported drifted and never ran."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.policy.models import PendingAction, Tier
+    from app.policy.pending import PendingStore, targets_still_match
+    from app.policy.targets import resolve_targets
+
+    args = {"to": "a@example.com", "body": "hi"}
+    store = PendingStore(directory=tmp_path)
+    saved = store.save(PendingAction(plan_text="p", tool_name="send_email", arguments=args, targets=resolve_targets("send_email", args), tier_at_statement=Tier.TIER_3, expires_at=datetime.now(UTC) + timedelta(hours=1)))
+    back = store.get(saved.id)
+
+    assert list(back.arguments) == ["body", "to"], "the store no longer sorts keys; this test no longer guards anything"
+    assert targets_still_match(back, resolve_targets(back.tool_name, back.arguments))

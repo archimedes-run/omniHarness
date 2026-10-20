@@ -71,7 +71,14 @@ def resolve_targets(tool_name: str, arguments: dict[str, Any] | None) -> list[st
 
 
 def describe_unresolved(tool_name: str, arguments: dict[str, Any], candidate_count: int) -> str:
-    """The fallback line, which admits what it does not know."""
+    """The fallback line, which admits what it does not know.
+
+    KEYS IN SORTED ORDER. The pending store writes arguments with sorted keys,
+    so a call stated as {to, body} came back as {body, to}, the FR-029 re-check
+    compared two different reprs of the same call, and every such action was
+    reported "the items changed" and never ran (found 2026-10-19).
+    """
+    arguments = {key: arguments[key] for key in sorted(arguments)}
     if candidate_count > 1:
         return f"{tool_name} — could not tell which arguments are the items it acts on, so this covers the whole call: {arguments}"
     return f"{tool_name}({arguments})"

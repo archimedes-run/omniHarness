@@ -74,6 +74,8 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
             agent=ref.agent,
             todos=ref.todos,
             files_changed=list(ref.files_changed),
+            continued_from=ref.continued_from,
+            continued_in=ref.continued_in,
         )
 
     first = min(dated, key=lambda r: r.at)
@@ -106,6 +108,8 @@ def resolve(ref: SessionRef, *, now: datetime, config: StateConfig | None = None
         agent=ref.agent,
         todos=ref.todos,
         files_changed=list(ref.files_changed),
+        continued_from=ref.continued_from,
+        continued_in=ref.continued_in,
     )
     # Recent activity, newest last, bounded. Only classified records become
     # events — an unclassified record is not silently promoted to PROGRESS

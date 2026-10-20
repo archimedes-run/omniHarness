@@ -16,6 +16,7 @@ import {
   canDecline,
   formatRemaining,
   isExpired,
+  originLabel,
   requiresTypedCount,
 } from "@/core/confirmations/logic";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
@@ -60,6 +61,7 @@ export function PendingActionCard({
 
   const expired = isExpired(action, now);
   const needsCount = requiresTypedCount(action);
+  const suggestedBy = originLabel(action);
 
   return (
     <Card
@@ -88,6 +90,22 @@ export function PendingActionCard({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* FR-006: content the assistant read may suggest an action, never
+            confirm it. Said plainly, and only this card's button counts. */}
+        {suggestedBy && (
+          <p
+            className="border-border text-muted-foreground rounded-md border px-3 py-2 text-sm"
+            data-testid="origin-label"
+          >
+            <span className="text-foreground font-medium">{suggestedBy}</span>,
+            not by you. Only the Confirm button here can approve it.
+            {action.delegation_chain.length > 0 && (
+              <span className="mt-1 block" data-testid="origin-chain">
+                via {action.delegation_chain.join(" → ")}
+              </span>
+            )}
+          </p>
+        )}
         {/* The plan EXACTLY as it was stated. Not a summary: confirming a
             description authorises whatever it later turns out to mean. */}
         {action.withheld ? (

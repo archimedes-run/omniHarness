@@ -158,6 +158,54 @@ class PendingAction:
     claimed_by: str | None = None
     outcome: Outcome | None = None
     outcome_reason: str = ""
+    #: What caused the proposal (lineage.initiation_origin). Only "user" may be
+    #: confirmed by a typed reply in chat; content the agent read, a trigger's
+    #: turn, or a cause nobody could tell may only be confirmed with the
+    #: card's button (FR-006, applied globally).
+    origin: str = "user"
+    #: For origin "content": the tool(s) whose output suggested it.
+    origin_source: str = ""
+    #: For an invited agent (a subagent): the agent whose turn the content or
+    #: automation reached it through. Empty when the cause was direct.
+    origin_via: str = ""
+
+    @property
+    def confirmable_by_typing(self) -> bool:
+        return self.origin == "user"
+
+    def _cause(self) -> str:
+        """'content from web_fetch' / 'an automation'; '' when it cannot be said."""
+        if self.origin == "content":
+            return f"content from {self.origin_source or 'a tool result'}"
+        if self.origin == "automation":
+            return "an automation"
+        return ""
+
+    def origin_label(self) -> str:
+        """The sentence the card and the plan show; empty for the user's own request."""
+        if self.origin == "user":
+            return ""
+        cause = self._cause()
+        if not cause:
+            return "I could not tell what suggested this"
+        return f"Suggested via {self.origin_via} from {cause}" if self.origin_via else f"Suggested by {cause}"
+
+    def origin_reason(self) -> str:
+        """Why a typed confirmation does not count, as a clause."""
+        cause = self._cause()
+        if not cause:
+            return "proposed without a request I could trace to you"
+        return f"suggested via {self.origin_via} from {cause}, not by you" if self.origin_via else f"suggested by {cause}, not by you"
+
+    def origin_note(self) -> str:
+        """The plan's sentence about its cause; empty for the user's own request."""
+        if self.origin == "user":
+            return ""
+        reason = self.origin_reason()
+        return f"{reason[:1].upper()}{reason[1:]}."
+
+    def card_only_refusal(self) -> str:
+        return f"That action was {self.origin_reason()}, so it can only be confirmed with the Confirm button on its card. Nothing has happened."
 
     def is_expired(self, now: datetime) -> bool:
         return now >= self.expires_at

@@ -82,8 +82,8 @@ def test_a_tier_3_rule_from_the_file_stops_the_call(middleware):
     result = middleware.wrap_tool_call(_request("notes_delete", {"note": "quarterly plan"}), lambda r: ran.append(r) or "deleted")
 
     assert not ran, "a Tier 3 rule loaded from disk did NOT stop the call — the file and the enforcement have diverged"
-    assert "confirm" in result.lower()
-    assert "quarterly plan" in result, "the stated plan must name the specific target from the resolved arguments"
+    assert "confirm" in result.content.lower()
+    assert "quarterly plan" in result.content, "the stated plan must name the specific target from the resolved arguments"
 
 
 def test_a_tier_2_rule_from_the_file_runs_and_is_recorded(middleware):

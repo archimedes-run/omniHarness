@@ -51,3 +51,17 @@ export function canConfirm(
 export function canDecline(action: PendingAction, now: Date): boolean {
   return !isExpired(action, now);
 }
+
+/** FR-006: what suggested an action the user did not ask for, or null when it
+ *  was their own request. The backend sends the sentence; the fallback covers
+ *  a response that names the origin without it. */
+export function originLabel(action: PendingAction): string | null {
+  if (!action.origin || action.origin === "user") return null;
+  if (action.origin_label) return action.origin_label;
+  if (action.origin === "automation") return "Suggested by an automation";
+  if (action.origin === "content") {
+    const source = action.origin_source?.trim();
+    return `Suggested by content from ${source && source.length > 0 ? source : "a tool result"}`;
+  }
+  return "I could not tell what suggested this";
+}
