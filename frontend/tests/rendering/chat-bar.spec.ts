@@ -123,15 +123,18 @@ test("integrations: status in words, the two-stage connector status, links to MC
     "Not connected",
   );
 
-  // Unreachable and not-connected rows have no switch: a link to MCP Suite.
-  for (const [name, label] of [
-    ["dead-server", "Check"],
-    ["Slack", "Connect"],
-  ] as const) {
+  // Unreachable and not-connected rows have no switch. An unreachable server
+  // links to MCP Suite; an app that is not connected signs in right here.
+  for (const name of ["dead-server", "Slack"]) {
     await expect(row(name).getByRole("switch")).toHaveCount(0);
-    const link = row(name).getByRole("link", { name: new RegExp(label) });
-    await expect(link).toHaveAttribute("href", "/workspace/connections");
   }
+  await expect(
+    row("dead-server").getByRole("link", { name: /Check/ }),
+  ).toHaveAttribute("href", "/workspace/connections");
+  await expect(row("Slack").getByRole("link")).toHaveCount(0);
+  await expect(
+    row("Slack").getByRole("button", { name: "Connect Slack" }),
+  ).toBeVisible();
   await expect(picker.getByTestId("tool-count")).toHaveText(
     "7 / 40 tools for this model",
   );

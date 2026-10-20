@@ -4,6 +4,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { getComposioConnectionStatus } from "@/core/mcp/api";
+import { CONNECTED_MESSAGE, FAILED_MESSAGE } from "@/core/mcp/connect";
+
+/** The window that opened sign-in learns how it ended, in words it reads. */
+function tellOpener(type: string, toolkit: string) {
+  window.opener?.postMessage({ type, toolkit }, window.location.origin);
+}
 
 export default function ComposioCallbackPage() {
   const params = useSearchParams();
@@ -19,6 +25,13 @@ export default function ComposioCallbackPage() {
       setState("failed");
       return;
     }
+    // Composio sends the person back with status=failed or an error when
+    // sign-in was refused or went wrong.
+    if (params.get("status") === "failed" || params.get("error")) {
+      setState("failed");
+      tellOpener(FAILED_MESSAGE, toolkit);
+      return;
+    }
     let attempts = 0;
     const timer = setInterval(() => {
       attempts++;
@@ -31,10 +44,7 @@ export default function ComposioCallbackPage() {
             clearInterval(timer);
             setTimeout(() => {
               if (window.opener) {
-                window.opener.postMessage(
-                  { type: "composio_connected", toolkit },
-                  "*",
-                );
+                tellOpener(CONNECTED_MESSAGE, toolkit);
                 window.close();
               } else {
                 router.push("/workspace/connections");
@@ -44,6 +54,7 @@ export default function ComposioCallbackPage() {
           }
           if (status.status === "failed") {
             setState("failed");
+            tellOpener(FAILED_MESSAGE, toolkit);
             clearInterval(timer);
             return;
           }
@@ -52,12 +63,13 @@ export default function ComposioCallbackPage() {
         }
         if (attempts >= 15) {
           setState("failed");
+          tellOpener(FAILED_MESSAGE, toolkit);
           clearInterval(timer);
         }
       })();
     }, 2000);
     return () => clearInterval(timer);
-  }, [toolkit, router]);
+  }, [toolkit, router, params]);
 
   if (state === "polling") {
     return (

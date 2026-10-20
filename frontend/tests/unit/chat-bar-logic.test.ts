@@ -6,6 +6,7 @@ import {
 } from "@/components/workspace/chat-bar/commands";
 import {
   agentSkills,
+  connectWords,
   effortForMode,
   findTrigger,
   getResolvedMode,
@@ -304,5 +305,24 @@ describe("two-stage status: Connected, then Live · last worked", () => {
       status: "Live",
       lastWorkedAt: "2026-10-19T09:00:00Z",
     });
+  });
+});
+
+describe("connectWords: an inline Connect says how it ended, in words", () => {
+  it("says blocked, cancelled, failed and timed-out apart", () => {
+    expect(connectWords("blocked")?.text).toMatch(/blocked the sign-in pop-up/);
+    expect(connectWords("cancelled")?.text).toBe(
+      "Sign-in cancelled. Nothing was connected.",
+    );
+    expect(connectWords("failed")?.text).toBe(
+      "Sign-in failed. Nothing was connected.",
+    );
+    expect(connectWords("failed", "Unknown toolkit")?.text).toBe(
+      "Sign-in failed: Unknown toolkit",
+    );
+    expect(connectWords("timed-out")?.text).toMatch(/did not finish/);
+  });
+  it("leaves Connected to the row's own status word", () => {
+    expect(connectWords("connected")).toBeNull();
   });
 });

@@ -1,9 +1,10 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNowStrict } from "date-fns";
 import { LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BrandLogo } from "@/components/brand";
 import { Button } from "@/components/ui/button";
@@ -11,13 +12,16 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Agent } from "@/core/agents/types";
 import type { Project } from "@/core/ledger/types";
+import { connectComposioToolkit } from "@/core/mcp/connect";
 import { cn } from "@/lib/utils";
 
 import { AgentAvatar } from "./agent-avatar";
 import type { PickerTab } from "./commands";
 import {
+  connectWords,
   rowAction,
   statusLine,
+  type ConnectPhase,
   type IntegrationRow,
   type StatusWord,
 } from "./logic";
@@ -402,6 +406,68 @@ function AgentsTab({
   );
 }
 
+/**
+ * "Connect" on an app that is not connected: the same Composio sign-in pop-up
+ * as MCP Suite (connectComposioToolkit), right here in the picker. Once it
+ * completes, the live view is refetched and the row reads "Connected" with a
+ * switch for this chat.
+ */
+function useInlineConnect() {
+  const queryClient = useQueryClient();
+  const [attempts, setAttempts] = useState<
+    Record<string, { phase: ConnectPhase; detail?: string }>
+  >({});
+  const aborts = useRef(new Map<string, AbortController>());
+
+  const set = (id: string, phase: ConnectPhase, detail?: string) =>
+    setAttempts((prev) => ({ ...prev, [id]: { phase, detail } }));
+
+  const connect = useCallback(
+    (row: IntegrationRow) => {
+      const toolkit = row.id.slice(row.id.indexOf(":") + 1);
+      const abort = new AbortController();
+      aborts.current.set(row.id, abort);
+      set(row.id, "opening");
+      connectComposioToolkit(toolkit, () => set(row.id, "waiting"), {
+        signal: abort.signal,
+      })
+        .then((outcome) => {
+          if (outcome === "connected" || outcome === "already-connected") {
+            set(row.id, "connected");
+            void queryClient.invalidateQueries({ queryKey: ["toolSources"] });
+            void queryClient.invalidateQueries({ queryKey: ["tools"] });
+          } else {
+            set(row.id, outcome);
+          }
+        })
+        .catch((err: unknown) =>
+          set(
+            row.id,
+            "failed",
+            err instanceof Error ? err.message : String(err),
+          ),
+        )
+        .finally(() => aborts.current.delete(row.id));
+    },
+    [queryClient],
+  );
+
+  const cancel = useCallback((id: string) => {
+    aborts.current.get(id)?.abort();
+  }, []);
+
+  return { attempts, connect, cancel };
+}
+
+const CONNECT_TONE = {
+  muted: "text-muted-foreground",
+  warn: "text-warning",
+  bad: "text-destructive",
+} as const;
+
+const LINK_BUTTON =
+  "text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-sm underline-offset-2 hover:underline disabled:opacity-60 focus-visible:ring-ring rounded-sm outline-none focus-visible:ring-2";
+
 function IntegrationsTab({
   integrations,
   integrationsLoading,
@@ -413,6 +479,7 @@ function IntegrationsTab({
   onToggleIntegration,
 }: PickerProps) {
   const { query, setQuery, filtered } = useFilter(integrations, rowText);
+  const { attempts, connect, cancel } = useInlineConnect();
   return (
     <>
       <SearchBox
@@ -447,8 +514,25 @@ function IntegrationsTab({
       ) : null}
       {integrationsLoading && <Empty>Loading…</Empty>}
       <ul className="flex flex-col px-1.5 pb-1.5" aria-label="Integrations">
-        {filtered.map((row) => {
+        {filtered.map((shown) => {
+          const attempt = attempts[shown.id];
+          // Sign-in just completed: Connected (reported by Composio) until
+          // the refetched live view says the same or more.
+          const row: IntegrationRow =
+            attempt?.phase === "connected" && shown.status === "Not connected"
+              ? { ...shown, status: "Connected" }
+              : shown;
           const action = rowAction(row.status, row.kind);
+          const inline =
+            action.kind === "link" &&
+            action.label === "Connect" &&
+            row.kind === "connector";
+          const busy =
+            attempt?.phase === "opening" || attempt?.phase === "waiting";
+          const words =
+            inline && attempt
+              ? connectWords(attempt.phase, attempt.detail)
+              : null;
           return (
             <Row key={row.id}>
               <BrandLogo source={row.logoSource} name={row.name} size={28} />
@@ -460,6 +544,27 @@ function IntegrationsTab({
                     title={row.error}
                   >
                     {row.error}
+                    {words && (
+                      <span
+                        className={cn(
+                          "block text-xs",
+                          CONNECT_TONE[words.tone],
+                        )}
+                        role={words.tone === "muted" ? "status" : "alert"}
+                        data-testid="connect-message"
+                      >
+                        {words.text}
+                      </span>
+                    )}
+                  </span>
+                )}
+                {words && (
+                  <span
+                    className={cn("block text-xs", CONNECT_TONE[words.tone])}
+                    role={words.tone === "muted" ? "status" : "alert"}
+                    data-testid="connect-message"
+                  >
+                    {words.text}
                   </span>
                 )}
               </span>
@@ -469,7 +574,25 @@ function IntegrationsTab({
               >
                 {statusLine(row, ago)}
               </span>
-              {action.kind === "link" && !(row.selected && !row.pinned) ? (
+              {inline && attempt?.phase === "waiting" ? (
+                <button
+                  type="button"
+                  className={LINK_BUTTON}
+                  onClick={() => cancel(row.id)}
+                >
+                  Cancel
+                  <span className="sr-only"> signing in to {row.name}</span>
+                </button>
+              ) : inline && !(row.selected && !row.pinned) ? (
+                <button
+                  type="button"
+                  className={LINK_BUTTON}
+                  disabled={busy}
+                  onClick={() => connect(row)}
+                >
+                  Connect<span className="sr-only"> {row.name}</span>
+                </button>
+              ) : action.kind === "link" && !(row.selected && !row.pinned) ? (
                 <Link
                   href={MCP_SUITE_HREF}
                   className="text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-sm underline-offset-2 hover:underline"

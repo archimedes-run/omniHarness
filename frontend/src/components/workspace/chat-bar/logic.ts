@@ -266,3 +266,56 @@ export function modelProvider(model: string | undefined): string | null {
   if (/^(gpt|o\d|chatgpt|codex|openai)/.test(m)) return "openai";
   return null;
 }
+
+// ---- connecting an app from the picker -------------------------------------
+
+/** Where an inline "Connect" (Composio sign-in popup) stands for one row. */
+export type ConnectPhase =
+  | "opening"
+  | "waiting"
+  | "connected"
+  | "blocked"
+  | "cancelled"
+  | "failed"
+  | "timed-out";
+
+/**
+ * What the row says about a connect attempt, in words. Null when the row's
+ * own status already says it (connected). "timed-out" cannot tell a closed
+ * window from a slow one, so it says both.
+ */
+export function connectWords(
+  phase: ConnectPhase,
+  detail?: string | null,
+): { text: string; tone: "muted" | "bad" | "warn" } | null {
+  switch (phase) {
+    case "opening":
+      return { text: "Opening sign-in…", tone: "muted" };
+    case "waiting":
+      return { text: "Waiting for sign-in in the pop-up…", tone: "muted" };
+    case "connected":
+      return null;
+    case "blocked":
+      return {
+        text: "The browser blocked the sign-in pop-up. Allow pop-ups for this site, then Connect again.",
+        tone: "bad",
+      };
+    case "cancelled":
+      return {
+        text: "Sign-in cancelled. Nothing was connected.",
+        tone: "warn",
+      };
+    case "failed":
+      return {
+        text: detail
+          ? `Sign-in failed: ${detail}`
+          : "Sign-in failed. Nothing was connected.",
+        tone: "bad",
+      };
+    case "timed-out":
+      return {
+        text: "Sign-in did not finish. If the pop-up was closed, Connect again.",
+        tone: "warn",
+      };
+  }
+}
