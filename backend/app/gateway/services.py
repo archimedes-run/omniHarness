@@ -403,6 +403,22 @@ async def start_run(
     except Exception:
         logger.warning("Failed to load thread tool selection for %s (non-fatal)", sanitize_log_param(thread_id))
 
+    # Feature 006: skills removed from this conversation (the chat bar's ×).
+    # Always the server's stored value: anything a client put in the run body's
+    # context or configurable is dropped first, so it can never set this.
+    for container in (config.get("configurable"), config.get("context")):
+        if isinstance(container, dict):
+            container.pop("excluded_skills", None)
+    try:
+        exclusion_repo = getattr(request.app.state, "thread_skill_exclusion_repo", None)
+        if exclusion_repo is not None:
+            excluded_skills = await exclusion_repo.get_excluded(thread_id=thread_id, user_id=user_id)
+            ctx_dict = config.setdefault("context", {})
+            if excluded_skills and isinstance(ctx_dict, dict):
+                ctx_dict["excluded_skills"] = excluded_skills
+    except Exception:
+        logger.warning("Failed to load thread skill exclusion for %s (non-fatal)", sanitize_log_param(thread_id))
+
     try:
         record = await launch_agent_run_detached(
             bridge=bridge,
