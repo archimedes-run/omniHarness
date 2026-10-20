@@ -7,7 +7,8 @@ import {
   loadPending,
 } from "./api";
 
-const KEY = ["pendingConfirmations"];
+export const PENDING_CONFIRMATIONS_KEY = ["pendingConfirmations"];
+const KEY = PENDING_CONFIRMATIONS_KEY;
 
 export function usePendingConfirmations() {
   const { data, isLoading, error } = useQuery({

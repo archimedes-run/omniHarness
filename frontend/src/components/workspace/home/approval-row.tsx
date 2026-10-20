@@ -17,6 +17,12 @@ import {
 } from "@/core/confirmations/logic";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
 
+import {
+  ArgumentsSummary,
+  LongText,
+  PlanText,
+} from "../confirmations/plan-text";
+
 /**
  * One Tier 3 approval as a Home row (Main board): Decline and Confirm inline.
  *
@@ -71,16 +77,21 @@ export function ApprovalRow({
         {action.withheld ? (
           <WithheldNotice text={action.plan_text} />
         ) : (
-          <p className="text-foreground text-sm whitespace-pre-wrap">
-            {action.plan_text}
-          </p>
+          // Formatted, never HTML; long lines cut with "Show all".
+          <PlanText text={action.plan_text} />
         )}
         {action.targets.length > 0 && (
-          <p className="text-muted-foreground text-xs" data-testid="targets">
+          <p
+            className="text-muted-foreground text-xs break-words"
+            data-testid="targets"
+          >
             Authorises {action.targets.length} item
             {action.targets.length === 1 ? "" : "s"}:{" "}
-            {action.targets.join(", ")}
+            <LongText text={action.targets.join(", ")} />
           </p>
+        )}
+        {!ledger && action.arguments_display && (
+          <ArgumentsSummary args={action.arguments_display} />
         )}
         {suggestedBy && (
           <p className="text-foreground-2 text-xs" data-testid="origin-label">

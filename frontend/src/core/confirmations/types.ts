@@ -31,6 +31,10 @@ export interface PendingAction {
   /** The call's arguments, only for tools whose plan can be edited before
    *  confirming (ledger_apply). Absent otherwise. */
   arguments?: Record<string, unknown> | null;
+  /** Every call's arguments for display, each value as text that passed
+   *  redaction (a value that failed reads "Withheld"). Absent from a gateway
+   *  that does not send it: the card then shows the targets as stated. */
+  arguments_display?: Record<string, string> | null;
   /** What caused the proposal. Anything but "user" (content the assistant
    *  read, an automation, or a cause nobody could tell) can only be confirmed
    *  with this card's button. Optional: an older backend omits them. */

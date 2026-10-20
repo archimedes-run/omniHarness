@@ -18,13 +18,17 @@ interface AssistantClarificationGroup extends GenericMessageGroup<"assistant:cla
 
 interface AssistantSubagentGroup extends GenericMessageGroup<"assistant:subagent"> {}
 
+/** The lead handing a turn to an agent the user called in (`call_agent`). */
+interface AssistantHandoffGroup extends GenericMessageGroup<"assistant:handoff"> {}
+
 export type MessageGroup =
   | HumanMessageGroup
   | AssistantProcessingGroup
   | AssistantMessageGroup
   | AssistantPresentFilesGroup
   | AssistantClarificationGroup
-  | AssistantSubagentGroup;
+  | AssistantSubagentGroup
+  | AssistantHandoffGroup;
 
 export function getMessageGroups(messages: Message[]): MessageGroup[] {
   if (messages.length === 0) {
@@ -87,6 +91,16 @@ export function getMessageGroups(messages: Message[]): MessageGroup[] {
     }
 
     if (message.type === "ai") {
+      if (isHandoff(message)) {
+        // Its tool result (the called agent's answer) joins this group and is
+        // not shown twice: the answer is posted as the agent's own message.
+        groups.push({
+          id: message.id,
+          type: "assistant:handoff",
+          messages: [message],
+        });
+        continue;
+      }
       if (hasPresentFiles(message)) {
         groups.push({
           id: message.id,
@@ -350,6 +364,11 @@ export function extractPresentFilesFromMessage(message: Message) {
     }
   }
   return files;
+}
+
+export function isHandoff(message: AIMessage) {
+  const calls = message.tool_calls ?? [];
+  return calls.length > 0 && calls.every((call) => call.name === "call_agent");
 }
 
 export function hasSubagent(message: AIMessage) {
