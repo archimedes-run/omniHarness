@@ -55,9 +55,12 @@ export function PendingActionCard({
     result != null &&
     // A refusal that can still be fixed keeps the buttons: "the source was
     // removed from the chat" is answered by adding it back and confirming.
-    !["unrecognised", "threshold_not_met", "tool_unavailable"].includes(
-      result.outcome,
-    );
+    ![
+      "unrecognised",
+      "threshold_not_met",
+      "tool_unavailable",
+      "thread_busy",
+    ].includes(result.outcome);
   const continueAgent =
     result?.outcome === "executed" &&
     typeof result.detail?.continue_agent === "string"

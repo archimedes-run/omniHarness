@@ -11,6 +11,13 @@ export type ResolveOutcome =
   | "unrecognised"
   | "threshold_not_met"
   | "failed"
+  /** The tool is not available in this chat now (its source was removed or
+   *  is disconnected, or the agent that asked was removed or deleted).
+   *  Nothing ran; the card stays. */
+  | "tool_unavailable"
+  /** The chat is mid-reply, and this result is posted into it. Nothing ran;
+   *  confirm again when the reply has finished. */
+  | "thread_busy"
   /** A typed "yes" in chat for an action the user did not cause: only the
    *  card's button can confirm it. Never returned by the card's own route. */
   | "card_only";
