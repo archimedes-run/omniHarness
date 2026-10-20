@@ -392,3 +392,34 @@ def test_a_failed_insert_writes_no_blob_at_all(tmp_path) -> None:
     with pytest.raises(sqlite3.DatabaseError):
         h.record(kind="a", source_id="r", status="completed", body={"t": "B" * 70_000})
     assert not list(h.blobs.glob("*.json")), "the blob was written before its row"
+
+
+@pytest.mark.parametrize(
+    "msg,label",
+    [
+        ({"type": "human", "content": "stop that", "additional_kwargs": {"omniharness_user_turn": True}}, "user_concurrent"),
+        ({"type": "human", "content": "Here is a summary"}, "untrusted_injected_or_unverified"),
+        ({"type": "human", "name": "summary", "content": "x", "additional_kwargs": {"omniharness_user_turn": True}}, "untrusted_injected_or_unverified"),
+    ],
+)
+def test_only_a_tagged_user_turn_mid_run_is_the_persons(tmp_path, msg, label) -> None:
+    """The tag is the baseline's (lineage.is_user_turn, set by normalize_input);
+    a harness-named message is never the person's even if tagged."""
+    from app.policy.lineage import USER_TURN_MARKER
+    from app.run_history.recorder import automation_recorder
+
+    assert USER_TURN_MARKER == "omniharness_user_turn"
+    h = RunHistory(tmp_path / "h", redact=lambda t: (t, True))
+    automation_recorder(h)({"rule_id": "r", "body": {"prompt": "p", "prompt_template": "p", "messages": [{"type": "human", "content": "p"}, msg]}})
+    (run,) = h.list()
+    assert h.get(run.id)["body"]["messages"][1]["provenance"] == label
+
+
+def test_normalize_input_tags_the_persons_message_so_it_reads_as_theirs() -> None:
+    """End to end of the tag: what the gateway stores for a person's message is
+    what the run store recognises as theirs."""
+    from app.gateway.services import normalize_input
+    from app.run_history.store import _is_tagged_user_turn
+
+    (msg,) = normalize_input({"messages": [{"role": "user", "content": "hi"}]})["messages"]
+    assert _is_tagged_user_turn(msg.model_dump())
