@@ -141,8 +141,13 @@ test("New chat counts what is waiting on you, and links to Home", async ({
   page,
 }) => {
   await serve(page, { pending: 1, alertsWaiting: 2 });
+  // Main board: New chat is Home (the dashboard with the chat bar under it).
   const newChat = page.locator(
-    '[data-sidebar="menu-item"]:has(a[href="/workspace/chats/new"])',
+    '[data-sidebar="menu-item"]:has(a[href="/workspace/home"])',
+  );
+  await expect(newChat.getByRole("link", { name: "New chat" })).toHaveAttribute(
+    "href",
+    "/workspace/home",
   );
   const badge = newChat.getByTestId("inbox-badge");
   await expect(badge).toHaveText("3");

@@ -41,11 +41,16 @@ export function WorkspaceNavChatList() {
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
-            isActive={pathname === "/workspace/chats/new"}
+            // The Main board marks Home as "New chat": Home is where a new
+            // chat starts (its chat bar), with what needs you above it.
+            isActive={
+              pathname === "/workspace/home" ||
+              pathname === "/workspace/chats/new"
+            }
             className={ROW}
             asChild
           >
-            <Link className="text-inherit" href="/workspace/chats/new">
+            <Link className="text-inherit" href="/workspace/home">
               <MessageSquarePlus />
               <span>{t.sidebar.newChat}</span>
             </Link>
