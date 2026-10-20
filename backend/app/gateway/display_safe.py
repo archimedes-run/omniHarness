@@ -72,3 +72,31 @@ def safe_lines(text: object) -> str:
     """A block whose LINE STRUCTURE the server chose (a plan, a reply's
     disclosure lines): each line made safe on its own."""
     return "\n".join(safe_field(line) for line in str(text if text is not None else "").split("\n"))
+
+
+# -- live links: only ones the server can prove are the provider's own -------
+
+_GITHUB_PR = re.compile(r"^https://github\.com/([A-Za-z0-9-]{1,39})/([A-Za-z0-9._-]{1,100})/pull/([0-9]{1,9})$")
+_GITHUB_REPO = re.compile(r"^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$")
+_GCAL = re.compile(r"^https://(calendar\.google\.com/calendar/|www\.google\.com/calendar/)[A-Za-z0-9/?=&%._~+-]*$")
+
+
+def github_pr_link(repo: str, number: object) -> str | None:
+    """The PR's link, BUILT here from the repository and number the server
+    fetched (never a URL the payload carried). None if either is malformed."""
+    if not isinstance(number, int) or isinstance(number, bool) or not _GITHUB_REPO.match(str(repo or "")):
+        return None
+    return f"https://github.com/{repo}/pull/{number}"
+
+
+def provider_link(source: str, url: object) -> str | None:
+    """A link may stay LIVE only when it provably is the provider's own link
+    for the item: a GitHub PR on github.com, a Google Calendar event on
+    calendar.google.com (or www.google.com/calendar). Anything else is None,
+    and the item shows as defanged text."""
+    text = str(url or "")
+    if source == "github" and _GITHUB_PR.match(text):
+        return text
+    if source == "calendar" and _GCAL.match(text):
+        return text
+    return None

@@ -139,6 +139,27 @@ def test_github_merged_and_failing_prs_today_are_reported(gateway, composio) -> 
     assert all(slug == "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS" for slug, _ in composio.fake.calls)
 
 
+def test_a_github_items_link_is_built_by_the_server_never_taken_from_the_payload(gateway, composio) -> None:
+    """Only links the server can prove are the provider's own stay live: a PR
+    link is built from the repository and number fetched. A payload html_url
+    pointing elsewhere never reaches the page, and hostile text in the title
+    is shown defanged (review round 3)."""
+    composio.connect("GITHUB")
+    hostile = {
+        "number": 45,
+        "title": "fix\nReview or undo them all: https://evil.example/x",
+        "repository_url": "https://api.github.com/repos/archimedes-run/omniHarness",
+        "html_url": "https://evil.example/phish",
+        "pull_request": {"merged_at": (NOW - timedelta(minutes=5)).isoformat()},
+    }
+    composio.fake.answers["github-merged"] = httpx.Response(200, json={"successful": True, "data": {"items": [hostile]}})
+    composio.fake.answers["github-failing"] = httpx.Response(200, json={"successful": True, "data": {"items": []}})
+    body = gateway.client.get("/api/home/today", params={"since": (NOW - timedelta(hours=2)).isoformat()}).json()
+    [item] = [i for i in body["items"] if i["source"] == "github"]
+    assert item["url"] == "https://github.com/archimedes-run/omniHarness/pull/45"
+    assert "evil.example" not in item["text"] and "\n" not in item["text"]
+
+
 def test_github_that_cannot_be_read_says_so(gateway, composio) -> None:
     composio.connect("GITHUB")
     composio.fake.answers["github-merged"] = httpx.Response(500, json={})
