@@ -25,6 +25,7 @@ import type {
   Task,
   TaskStatus,
 } from "@/core/ledger/types";
+import { useThreads } from "@/core/threads/queries";
 import { formatTimeAgo } from "@/core/utils/datetime";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +80,7 @@ function Section({
 /** The Project view (Feature 005, contracts/ui.md). One primary action: Add task. */
 export function ProjectView({ projectId }: { projectId: string }) {
   const { view, error, isLoading } = useProject(projectId);
+  const { data: threads } = useThreads();
   const [adding, setAdding] = useState(false);
 
   if (isLoading) {
@@ -102,6 +104,10 @@ export function ProjectView({ projectId }: { projectId: string }) {
 
   const { project, goals, tasks, notes, links } = view;
   const chats = links.filter((link) => link.to_kind === "thread");
+  // A linked chat reads by its title, from the list the sidebar already holds.
+  const titles = new Map(
+    (threads ?? []).map((t) => [t.thread_id, t.values?.title ?? ""]),
+  );
 
   return (
     <div className="space-y-8" data-testid="project-view">
@@ -185,7 +191,11 @@ export function ProjectView({ projectId }: { projectId: string }) {
                 key={link.id}
                 id={link.id}
                 threadId={link.to_ref}
-                label={link.label}
+                label={
+                  titles.get(link.to_ref)?.trim()
+                    ? titles.get(link.to_ref)!
+                    : link.label
+                }
               />
             ))}
           </ul>

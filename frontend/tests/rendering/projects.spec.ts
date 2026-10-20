@@ -442,3 +442,25 @@ test("once confirmed, the card shows the result and nothing left to press", asyn
   await expect(card.getByTestId("confirm")).toHaveCount(0);
   await expect(card.getByTestId("edit")).toHaveCount(0);
 });
+
+test("a linked chat reads by its title when the chat list knows it", async ({
+  page,
+}) => {
+  await serve(page);
+  await page.route("**/api/langgraph/threads/search", (route) =>
+    route.fulfill(
+      json([
+        {
+          thread_id: "thread-1",
+          updated_at: iso(0),
+          values: { title: "Beta planning" },
+          metadata: {},
+        },
+      ]),
+    ),
+  );
+  await page.goto("/workspace/projects/p1");
+  await expect(page.getByTestId("linked-chats").getByRole("link")).toHaveText(
+    "Beta planning",
+  );
+});
