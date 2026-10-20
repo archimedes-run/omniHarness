@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   LedgerPlanEditor,
@@ -14,7 +12,7 @@ import { WithheldNotice } from "@/components/workspace/withheld-notice";
 import {
   canConfirm,
   canDecline,
-  formatRemaining,
+  formatExpiresIn,
   isExpired,
   originLabel,
   requiresTypedCount,
@@ -63,33 +61,42 @@ export function PendingActionCard({
   const needsCount = requiresTypedCount(action);
   const suggestedBy = originLabel(action);
 
+  // Who asked, and how the request reached the user (FR-033): the board's
+  // "via lead_agent → researcher".
+  const delegated =
+    action.requester !== "lead_agent" || action.delegation_chain.length > 1;
+
   return (
-    <Card
+    // Chat.dc.html: a section bordered in the warning colour, its title in
+    // that colour, the clock on the right, Decline and Confirm bottom right.
+    <section
+      aria-label="Approval needed"
+      className="border-warning bg-card flex flex-col gap-3 rounded-xl border px-4 py-3.5"
       data-testid="pending-action"
       data-action-id={action.id}
       data-expired={expired}
     >
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div className="space-y-1">
-          <p className="font-medium">
-            {ledger ? "Add to your projects" : action.tool_name}
-          </p>
-          <p className="text-muted-foreground text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-warning text-[13px] font-semibold">
+          Needs your approval ·{" "}
+          {ledger ? "Add to your projects" : action.tool_name}
+        </span>
+        <span className="text-muted-foreground text-xs" data-testid="remaining">
+          {formatExpiresIn(action.expires_at, now)}
+        </span>
+      </div>
+      {delegated && (
+        <p className="text-muted-foreground text-xs" data-testid="provenance">
+          Asked by{" "}
+          <span className="text-foreground-2 font-medium">
             {action.requester}
-            {action.delegation_chain.length > 0 && (
-              <span> — via {action.delegation_chain.join(" → ")}</span>
-            )}
-          </p>
-        </div>
-        <Badge
-          variant={expired ? "outline" : "secondary"}
-          data-testid="remaining"
-        >
-          {formatRemaining(action.expires_at, now)}
-        </Badge>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
+          </span>
+          {action.delegation_chain.length > 0 && (
+            <span> · via {action.delegation_chain.join(" → ")}</span>
+          )}
+        </p>
+      )}
+      <div className="flex flex-col gap-4">
         {/* FR-006: content the assistant read may suggest an action, never
             confirm it. Said plainly, and only this card's button counts. */}
         {suggestedBy && (
@@ -117,9 +124,9 @@ export function PendingActionCard({
             Nothing is saved until you confirm.
           </p>
         ) : (
-          <pre className="text-foreground bg-muted overflow-x-auto rounded-md p-3 text-sm whitespace-pre-wrap">
+          <p className="text-foreground text-sm whitespace-pre-wrap">
             {action.plan_text}
-          </pre>
+          </p>
         )}
 
         {draft && !settled ? (
@@ -167,7 +174,7 @@ export function PendingActionCard({
         {result && <ResolveMessage result={result} />}
 
         {settled ? null : draft ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               data-testid="save-and-confirm"
               disabled={busy || draft.length === 0 || expired}
@@ -185,16 +192,7 @@ export function PendingActionCard({
             </Button>
           </div>
         ) : (
-          <div className="flex gap-2">
-            <Button
-              data-testid="confirm"
-              disabled={busy || !canConfirm(action, typed, now)}
-              onClick={() =>
-                onResolve(true, needsCount ? Number(typed) : undefined)
-              }
-            >
-              Confirm
-            </Button>
+          <div className="flex flex-wrap justify-end gap-2">
             {/* FR-003: as available and as deterministic as confirming. Never
               gated by the threshold — proof of reading is required to ACT, not
               to refuse, and a harder decline pushes a hesitant user toward the
@@ -206,6 +204,15 @@ export function PendingActionCard({
               onClick={() => onResolve(false)}
             >
               Decline
+            </Button>
+            <Button
+              data-testid="confirm"
+              disabled={busy || !canConfirm(action, typed, now)}
+              onClick={() =>
+                onResolve(true, needsCount ? Number(typed) : undefined)
+              }
+            >
+              Confirm
             </Button>
             {ledger && onEdit && (
               <Button
@@ -225,8 +232,8 @@ export function PendingActionCard({
             )}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 

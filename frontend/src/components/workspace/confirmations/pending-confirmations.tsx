@@ -27,9 +27,15 @@ import { PendingActionCard } from "./pending-action-card";
 export function PendingConfirmations({
   threadId,
   quietWhenEmpty = false,
+  only,
+  exclude,
 }: {
   threadId?: string;
   quietWhenEmpty?: boolean;
+  /** Only these actions: the cards raised at one point of a chat. */
+  only?: string[];
+  /** All but these: the cards not raised at a point the chat shows. */
+  exclude?: string[];
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
@@ -38,7 +44,10 @@ export function PendingConfirmations({
     Record<string, { result: ResolveResult; action: PendingAction }>
   >({});
   const actions = (pending?.actions ?? []).filter(
-    (a) => threadId == null || a.thread_id === threadId,
+    (a) =>
+      (threadId == null || a.thread_id === threadId) &&
+      (only?.includes(a.id) ?? true) &&
+      !exclude?.includes(a.id),
   );
   // An action resolved here stays on screen with its result until it drops
   // out of the pending set on the next read.

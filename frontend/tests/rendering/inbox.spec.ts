@@ -137,7 +137,7 @@ test("an expired action's controls are inoperable, not merely ignored", async ({
     error: "",
   });
 
-  await expect(page.getByTestId("remaining")).toHaveText("expired");
+  await expect(page.getByTestId("remaining")).toHaveText("Expired");
   await expect(page.getByTestId("confirm")).toBeDisabled();
   await expect(page.getByTestId("decline")).toBeDisabled();
 });
@@ -155,7 +155,7 @@ test("an action expiring while displayed becomes expired without a reload", asyn
   });
 
   await expect(page.getByTestId("confirm")).toBeEnabled();
-  await expect(page.getByTestId("remaining")).toHaveText("expired", {
+  await expect(page.getByTestId("remaining")).toHaveText("Expired", {
     timeout: 10_000,
   });
   await expect(page.getByTestId("confirm")).toBeDisabled();

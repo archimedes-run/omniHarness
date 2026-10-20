@@ -26,6 +26,13 @@ export function formatRemaining(expiresAt: string, now: Date): string {
   return `${Math.floor(ms / 1000)}s left`;
 }
 
+/** The card's clock, in the board's words: "Expires in 3h 58m", or "Expired". */
+export function formatExpiresIn(expiresAt: string, now: Date): string {
+  const left = formatRemaining(expiresAt, now);
+  if (left === "expired") return "Expired";
+  return `Expires in ${left.replace(/ left$/, "")}`;
+}
+
 /** FR-009. Above the threshold a click is not enough; the user supplies the
  *  target count, which they can only produce by having read what they are
  *  approving. */

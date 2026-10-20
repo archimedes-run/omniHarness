@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { AgentWelcome } from "@/components/workspace/agent-welcome";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import { ChatBox, useThreadChat } from "@/components/workspace/chats";
-import { PendingConfirmations } from "@/components/workspace/confirmations/pending-confirmations";
+import { useThreadConfirmations } from "@/components/workspace/confirmations/thread-confirmations";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
 import { PromoteTodos } from "@/components/workspace/ledger/promote-todos";
@@ -99,6 +99,15 @@ export default function AgentChatPage() {
   const handleStop = useCallback(async () => {
     await thread.stop();
   }, [thread]);
+  // A Tier 3 action this thread stated, approved where it was proposed: each
+  // card inline at the point it was raised (the same component and route as
+  // Home).
+  const confirmations = useThreadConfirmations(
+    threadId,
+    thread.messages,
+    !isNewThread,
+    thread.isLoading,
+  );
 
   const messageListPaddingBottom = showFollowups
     ? MESSAGE_LIST_DEFAULT_PADDING_BOTTOM +
@@ -172,13 +181,8 @@ export default function AgentChatPage() {
                 hasMoreHistory={hasMoreHistory}
                 loadMoreHistory={loadMoreHistory}
                 isHistoryLoading={isHistoryLoading}
-                footer={
-                  // A Tier 3 action this thread stated, approved where it was
-                  // proposed: the same component and route as the Inbox.
-                  !isNewThread && (
-                    <PendingConfirmations threadId={threadId} quietWhenEmpty />
-                  )
-                }
+                footer={confirmations.footer}
+                afterGroup={confirmations.afterGroup}
                 tokenUsageInlineMode={tokenUsageInlineMode}
               />
             </div>
