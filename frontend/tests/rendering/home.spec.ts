@@ -605,3 +605,89 @@ for (const scheme of ["light", "dark"] as const) {
     });
   });
 }
+
+/**
+ * The painted glyph inside a BrandLogo tile, in CSS px: every visible <img> or
+ * <svg> in the tile is redrawn onto a canvas the tile's size (so whatever the
+ * tile clips is clipped here too) and the box of its opaque pixels is taken.
+ * This measures the ink, not the svg box, so a file with built-in clear space
+ * reads as the small mark it really is.
+ */
+async function inkBox(tile: ReturnType<Page["locator"]>) {
+  return tile.evaluate(async (el) => {
+    const r = el.getBoundingClientRect();
+    const S = 4;
+    const c = document.createElement("canvas");
+    c.width = Math.round(r.width * S);
+    c.height = Math.round(r.height * S);
+    const ctx = c.getContext("2d")!;
+    ctx.scale(S, S);
+    for (const node of el.querySelectorAll("img, svg")) {
+      if (getComputedStyle(node).display === "none") continue;
+      const nr = node.getBoundingClientRect();
+      let src: string;
+      if (node instanceof HTMLImageElement) src = node.currentSrc || node.src;
+      else {
+        const clone = node.cloneNode(true) as SVGElement;
+        clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+        src =
+          "data:image/svg+xml;charset=utf-8," +
+          encodeURIComponent(new XMLSerializer().serializeToString(clone));
+      }
+      const im = new Image();
+      im.src = src;
+      await im.decode();
+      ctx.drawImage(im, nr.left - r.left, nr.top - r.top, nr.width, nr.height);
+    }
+    const { data, width, height } = ctx.getImageData(0, 0, c.width, c.height);
+    let x0 = width,
+      y0 = height,
+      x1 = -1,
+      y1 = -1;
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++)
+        if (data[(y * width + x) * 4 + 3]! > 64) {
+          x0 = Math.min(x0, x);
+          x1 = Math.max(x1, x);
+          y0 = Math.min(y0, y);
+          y1 = Math.max(y1, y);
+        }
+    return {
+      tile: r.width,
+      w: x1 < 0 ? 0 : (x1 - x0 + 1) / S,
+      h: y1 < 0 ? 0 : (y1 - y0 + 1) / S,
+    };
+  });
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: the Claude Code and Codex marks are drawn the same size`, async ({
+    page,
+  }) => {
+    await inTheme(page, scheme);
+    await serve(page);
+    await page.goto("/workspace/home", { waitUntil: "networkidle" });
+    const sessions = page.getByTestId("home-sessions");
+    const claude = sessions
+      .getByRole("img", { name: "Anthropic logo" })
+      .first();
+    const codex = sessions.getByRole("img", { name: "OpenAI logo" }).first();
+    await expect(claude).toBeVisible();
+    await expect(codex).toBeVisible();
+    if (SHOTS) {
+      mkdirSync(SHOTS, { recursive: true });
+      await sessions.screenshot({
+        path: `${SHOTS}/home-sessions-logos-${scheme}.png`,
+      });
+    }
+    const a = await inkBox(claude);
+    const o = await inkBox(codex);
+    const big = (b: { w: number; h: number }) => Math.max(b.w, b.h);
+    const msg = `Anthropic ${a.w}x${a.h}, OpenAI ${o.w}x${o.h} in a ${a.tile}px tile`;
+    // Anthropic keeps its size: its mark fills about 70% of the tile's width.
+    expect(a.w / a.tile, msg).toBeGreaterThan(0.6);
+    expect(a.w / a.tile, msg).toBeLessThan(0.8);
+    // OpenAI's mark spans the same extent, within 10%.
+    expect(Math.abs(big(o) - big(a)) / big(a), msg).toBeLessThan(0.1);
+  });
+}
