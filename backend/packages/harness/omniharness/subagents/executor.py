@@ -281,6 +281,9 @@ class SubagentExecutor:
         #: This delegation's own checkpoint key. None for a new delegation (a
         #: fresh, random one is made when it runs); set to RESUME one.
         self.checkpoint_key = checkpoint_key
+        #: Re-entering an existing delegation: its checkpoint holds its history,
+        #: and the run's input is only what is new.
+        self.resuming = checkpoint_key is not None
         self.checkpointer = checkpointer
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
@@ -435,7 +438,8 @@ class SubagentExecutor:
         # Load skills as conversation items (Codex pattern)
         skills = await self._load_skills()
         filtered_tools = self._apply_skill_allowed_tools(skills)
-        skill_messages = await self._load_skill_messages(skills)
+        # A resumed delegation already has its skill messages in its history.
+        skill_messages = [] if self.resuming else await self._load_skill_messages(skills)
 
         messages: list[Any] = []
         # Skill content injected as developer/system messages before the task
@@ -504,8 +508,13 @@ class SubagentExecutor:
                 # delegation in a chat started from the first one's messages
                 # (measured, plan.md §2.0). The runtime context keeps the chat's
                 # thread id: sandbox, thread data and the policy layer read that.
-                run_config["configurable"] = {"thread_id": self.checkpoint_key or subagent_checkpoint_key(self.thread_id, result.task_id)}
+                if self.checkpoint_key is None:
+                    self.checkpoint_key = subagent_checkpoint_key(self.thread_id, result.task_id)
+                run_config["configurable"] = {"thread_id": self.checkpoint_key}
                 context["thread_id"] = self.thread_id
+                from omniharness.agents.invitation import DELEGATION_KEY
+
+                context[DELEGATION_KEY] = self.checkpoint_key
             if self.tool_surface is not None:
                 from omniharness.agents.tool_surface import TOOL_SURFACE_KEY
 

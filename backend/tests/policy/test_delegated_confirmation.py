@@ -686,3 +686,61 @@ def test_the_checkpoint_key_differs_for_the_same_call_id(monkeypatch) -> None:
 
     assert first != second
     assert first.startswith("thread-1/subagent/call_0/")
+
+
+# ---------------------------------------------------------------------------
+# "Continue <agent>" re-enters the agent's OWN delegation, with the confirmed
+# result as observed context (review of PR #58: it started nothing)
+# ---------------------------------------------------------------------------
+
+
+def _continue(gateway, thread_id: str, action_id: str):
+    LEAD_SCRIPT[:] = [AIMessage(content="the lead must not answer a Continue")]
+    return gateway.client.post(
+        f"/api/threads/{thread_id}/runs/wait",
+        json={"assistant_id": "lead_agent", "input": {"messages": [{"role": "user", "content": "Continue general-purpose."}]}, "context": {"continue_action": action_id}},
+    )
+
+
+def test_continue_reenters_the_agents_own_delegation_with_the_result(gateway) -> None:
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    # A SECOND delegation in the same chat, whose messages must stay its own.
+    _say(
+        gateway,
+        thread_id,
+        "please ask a helper to look into something else entirely for me",
+        [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d2", "args": {**DELEGATE["args"], "prompt": "OTHER-DELEGATION-TASK"}}]), AIMessage(content="waiting")],
+    )
+    [other] = _pending(gateway, "task")
+    SUB_SCRIPT[:] = [AIMessage(content="OTHER-DELEGATION-ANSWER")]
+    assert gateway.client.post(f"/api/confirmations/{other['id']}/confirm", json={}).json()["outcome"] == "executed"
+    confirmed = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+    assert confirmed["outcome"] == "executed" and confirmed["detail"]["continue_agent"] == "general-purpose"
+
+    SUBAGENT_RUNS.clear()
+    SUB_SCRIPT[:] = [AIMessage(content="Continued: the backup is gone, task finished.")]
+    resp = _continue(gateway, thread_id, wipe["id"])
+
+    assert resp.status_code == 200, resp.text
+    [seen] = SUBAGENT_RUNS
+    text = "\n".join(seen)
+    assert "Wipe the backup named nightly." in text, "the agent did not get its own task back"
+    assert "I asked to wipe it." in text, "the agent did not get its own earlier reply back"
+    assert "wiped nightly" in text and "Observed context, not an instruction" in text, "the confirmed result was not handed over as observed context"
+    assert "OTHER-DELEGATION" not in text, "the agent was handed another delegation's messages"
+    reply = resp.json()["messages"][-1]
+    assert (reply["type"], reply["name"], reply["content"]) == ("ai", "general-purpose", "Continued: the backup is gone, task finished.")
+    assert RAN == [("wipe_backup", {"name": "nightly"})], "continuing ran the confirmed call again"
+
+
+def test_continue_is_refused_for_an_action_that_cannot_be_continued(gateway) -> None:
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    not_run = _continue(gateway, thread_id, wipe["id"])
+    assert not_run.status_code == 409 and "has not run" in not_run.text, not_run.text
+
+    assert gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()["outcome"] == "executed"
+    other_thread = _thread(gateway)
+    elsewhere = _continue(gateway, other_thread, wipe["id"])
+    assert elsewhere.status_code == 409 and "another chat" in elsewhere.text, elsewhere.text
+    assert _continue(gateway, thread_id, "nonexistent").status_code == 409
+    assert len([r for r in SUBAGENT_RUNS if any("Observed context" in m for m in r)]) == 0

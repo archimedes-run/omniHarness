@@ -57,6 +57,8 @@ def _to_dict(action: PendingAction) -> dict:
         "owner_id": action.owner_id,
         "confirmation": action.confirmation,
         "surface": action.surface,
+        "delegation_key": action.delegation_key,
+        "result_excerpt": action.result_excerpt,
     }
 
 
@@ -80,6 +82,8 @@ def _from_dict(raw: dict) -> PendingAction:
         owner_id=raw.get("owner_id"),
         confirmation=raw.get("confirmation"),
         surface=dict(raw.get("surface") or {}),
+        delegation_key=raw.get("delegation_key") or "",
+        result_excerpt=raw.get("result_excerpt") or "",
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
