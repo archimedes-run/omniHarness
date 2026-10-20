@@ -38,7 +38,9 @@ router = APIRouter(prefix="/api/threads", tags=["threads"])
 # owner identity through the API surface. Defense-in-depth — the
 # row-level invariant is still ``threads_meta.user_id`` populated from
 # the auth contextvar; this list closes the metadata-blob echo gap.
-_SERVER_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"owner_id", "user_id"})
+#: ``turn_provenance`` marks a scheduled run; only the trigger engine's run
+#: request may carry it (services.start_run), never a thread's metadata.
+_SERVER_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"owner_id", "user_id", "turn_provenance", "called_agent", "selected_sources"})
 
 
 def _strip_reserved_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:

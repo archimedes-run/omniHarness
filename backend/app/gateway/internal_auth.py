@@ -24,6 +24,8 @@ one process both mints and validates.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -64,7 +66,35 @@ def create_internal_auth_headers() -> dict[str, str]:
 
 def is_valid_internal_auth_token(token: str | None) -> bool:
     """Return True when *token* matches this server's internal token."""
-    return bool(token) and secrets.compare_digest(token, _INTERNAL_AUTH_TOKEN)
+    return isinstance(token, str) and bool(token) and secrets.compare_digest(token, _INTERNAL_AUTH_TOKEN)
+
+
+#: The trigger engine's own credential, on top of the internal token. Only a
+#: request carrying both may mark a turn "synthetic-trigger" (a scheduled run).
+#: The channels share the internal token but not this, so a Telegram message
+#: can never claim to be a scheduled run.
+TRIGGER_ENGINE_HEADER_NAME = "X-OmniHarness-Trigger-Engine"
+
+
+def _trigger_engine_token() -> str:
+    # Derived from the internal token, so every worker agrees with no extra
+    # configuration (the reason the internal token comes from the environment).
+    return hmac.new(_INTERNAL_AUTH_TOKEN.encode(), b"omniharness/trigger-engine/v1", hashlib.sha256).hexdigest()
+
+
+def create_trigger_engine_auth_headers() -> dict[str, str]:
+    """Headers for the trigger engine's calls into the gateway."""
+    return {**create_internal_auth_headers(), TRIGGER_ENGINE_HEADER_NAME: _trigger_engine_token()}
+
+
+def is_trigger_engine_request(request) -> bool:
+    """True only when the request carries BOTH the internal token and the
+    trigger engine's credential."""
+    headers = getattr(request, "headers", None) or {}
+    if not is_valid_internal_auth_token(headers.get(INTERNAL_AUTH_HEADER_NAME)):
+        return False
+    token = headers.get(TRIGGER_ENGINE_HEADER_NAME)
+    return isinstance(token, str) and bool(token) and secrets.compare_digest(token, _trigger_engine_token())
 
 
 def get_internal_user():

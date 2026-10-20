@@ -264,15 +264,20 @@ def test_merge_run_context_overrides_propagates_to_runtime_context():
     ``setup_agent`` tool read ``runtime.context`` with ``agent_name=None`` and
     silently wrote SOUL.md to the global base_dir.
     """
-    from app.gateway.services import build_run_config, merge_run_context_overrides
+    from app.gateway.services import apply_server_owned_context, build_run_config, merge_run_context_overrides
 
     config = build_run_config("thread-1", None, None)
     merge_run_context_overrides(config, {"agent_name": "my-agent", "is_bootstrap": True, "thread_id": "ignored"})
 
-    assert config["configurable"]["agent_name"] == "my-agent"
+    # agent_name is server-owned (security baseline): the client merge never
+    # forwards it; start_run writes the server's validated value into both
+    # containers through apply_server_owned_context.
+    assert "agent_name" not in config["configurable"]
     assert config["configurable"]["is_bootstrap"] is True
-    assert config["context"]["agent_name"] == "my-agent"
     assert config["context"]["is_bootstrap"] is True
+    apply_server_owned_context(config, {}, user_id="u1", selected_sources=None, agent_name="my-agent", synthetic_rule_id=None)
+    assert config["configurable"]["agent_name"] == "my-agent"
+    assert config["context"]["agent_name"] == "my-agent"
     # Non-whitelisted keys are not forwarded.
     assert "thread_id" not in config["context"]
 
