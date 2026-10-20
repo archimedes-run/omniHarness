@@ -114,3 +114,13 @@ export interface GrantUse {
   origin_source: string;
   count_in_run: number;
 }
+
+/** Mirrors SkillTestResponse in app/gateway/routers/skills.py. */
+export interface SkillTestResult {
+  skill: string;
+  model: string;
+  listed: boolean;
+  tries: { loaded: boolean; other_skills: string[]; error: string | null }[];
+  loaded: number;
+  total: number;
+}

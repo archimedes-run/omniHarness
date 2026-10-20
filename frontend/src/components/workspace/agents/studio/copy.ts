@@ -226,6 +226,11 @@ const enUS = {
     errors: (n: number) => (n === 1 ? "1 try failed" : `${n} tries failed`),
     byModel: (model: string) => `Observed with ${model}`,
     testNeedsSave: "Save the skill first: a test uses the saved description.",
+    testUnsaved:
+      "Tests use the saved description; save your changes to test them.",
+    notListed:
+      "Never loads: a run does not list this skill (it is turned off, or the agent does not load it).",
+    otherSkills: (names: string[]) => `also opened ${names.join(", ")}`,
     testFailed: (why: string) => `Could not test: ${why}`,
     cancel: "Cancel",
     save: "Save skill",
@@ -446,6 +451,9 @@ const zhCN: StudioCopy = {
     errors: (n) => `${n} 次尝试失败`,
     byModel: (model) => `使用 ${model} 观察`,
     testNeedsSave: "请先保存技能：测试使用已保存的描述。",
+    testUnsaved: "测试使用已保存的描述；请先保存修改再测试。",
+    notListed: "不会加载：运行时不会列出这个技能（已关闭，或智能体不加载它）。",
+    otherSkills: (names) => `还打开了 ${names.join("、")}`,
     testFailed: (why) => `无法测试：${why}`,
     cancel: "取消",
     save: "保存技能",

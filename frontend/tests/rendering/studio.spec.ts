@@ -207,6 +207,19 @@ for (const scheme of ["dark", "light"] as const) {
     await shot(page, `skill-studio-files-live-${scheme}`);
 
     await page.getByTestId("studio-tab-test").click();
+    for (const msg of [
+      "Write a tweet about our launch",
+      "Where are we on HackMIT judging?",
+    ]) {
+      await page.getByTestId("skill-test-input").fill(msg);
+      await page.getByTestId("skill-test-run").click();
+      await expect(page.getByTestId("skill-test-row").first()).toContainText(
+        msg,
+      );
+    }
+    await expect(page.getByTestId("skill-test-outcome").first()).toHaveText(
+      "Loaded 2 of 3",
+    );
     await noLowContrast(page, "test");
     await shot(page, `skill-studio-test-live-${scheme}`);
   });

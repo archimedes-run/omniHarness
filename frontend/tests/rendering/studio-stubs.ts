@@ -361,6 +361,29 @@ export async function stubStudio(
         : [],
     );
   });
+  await page.route("**/api/skills/*/test", (route) => {
+    const body = route.request().postDataJSON() as { message: string };
+    seen.tests.push(body);
+    const tweet = /tweet/i.test(body.message);
+    return json(route, {
+      skill: "project-status-format",
+      model: "default",
+      listed: true,
+      tries: tweet
+        ? [
+            { loaded: false, other_skills: [], error: null },
+            { loaded: false, other_skills: [], error: null },
+            { loaded: false, other_skills: [], error: "TimeoutError: slow" },
+          ]
+        : [
+            { loaded: true, other_skills: [], error: null },
+            { loaded: true, other_skills: ["cite-every-claim"], error: null },
+            { loaded: false, other_skills: [], error: null },
+          ],
+      loaded: tweet ? 0 : 2,
+      total: 3,
+    });
+  });
   await page.route("**/api/studio/options", (route) =>
     json(route, {
       tool_groups: ["web", "file:read", "file:write", "bash"],

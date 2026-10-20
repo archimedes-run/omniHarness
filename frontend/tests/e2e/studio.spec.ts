@@ -266,3 +266,24 @@ test("an agent edit and a grant saved together chain their versions", async ({
   // The agent edit made version 4; the grant is based on it, not on 3.
   expect(seen.autonomyPuts[0]).toMatchObject({ base_version: 4 });
 });
+
+test("Skill Test runs only when Test is pressed and reports what it observed", async ({
+  page,
+}) => {
+  const seen = await stubStudio(page);
+  await page.goto("/workspace/chats?panel=skills&item=project-status-format", {
+    waitUntil: "networkidle",
+  });
+  await page.getByTestId("studio-tab-test").click();
+  await page.getByTestId("skill-test-input").fill("Wrap up my day");
+  await page.waitForTimeout(500);
+  expect(seen.tests, "a test ran without the button").toEqual([]);
+  await page.getByTestId("skill-test-run").click();
+  await expect.poll(() => seen.tests.length).toBe(1);
+  expect(seen.tests[0]).toEqual({ message: "Wrap up my day", tries: 3 });
+  const row = page.getByTestId("skill-test-row").first();
+  await expect(row).toContainText("“Wrap up my day”");
+  await expect(row).toContainText("Loaded 2 of 3");
+  await expect(row).toContainText("Observed with default");
+  await expect(row).toContainText("also opened cite-every-claim");
+});
