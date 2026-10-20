@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help config config-upgrade check install setup doctor dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
+.PHONY: help config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -49,6 +49,10 @@ help:
 ## Setup & Diagnosis
 setup:
 	@$(BACKEND_UV_RUN) python ../scripts/setup_wizard.py
+
+# Names (never values) of .env keys that no container receives.
+env-check:
+	@cd backend && PYTHONPATH=. uv run --quiet python -m app.gateway.secret_usage ../.env
 
 doctor:
 	@$(BACKEND_UV_RUN) python ../scripts/doctor.py
