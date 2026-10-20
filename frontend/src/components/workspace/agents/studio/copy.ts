@@ -106,6 +106,15 @@ const enUS = {
     autonomyIntro:
       "In chat, anything irreversible waits for you. On a schedule nobody is there to ask, so choose what it may do on its own.",
     mayDoLegend: "May do on its own (reversible)",
+    saveAgentFirst:
+      "Save the agent first, then choose what it may do on its own.",
+    grantWhy: (why: string) => `Not available: ${why}`,
+    because: (origin: string, source: string) =>
+      origin === "automation"
+        ? "because of its schedule"
+        : origin === "content"
+          ? `suggested by content from ${source || "a tool result"}`
+          : "cause not recorded",
     draftsAlways:
       "Draft messages (never send): always allowed, because a draft never leaves without you.",
     capNote: (cap: number) =>
@@ -328,6 +337,14 @@ const zhCN: StudioCopy = {
     autonomyIntro:
       "在聊天中，任何不可撤销的操作都会等你确认。按日程运行时没有人可以询问，所以请选择它可以自行执行的操作。",
     mayDoLegend: "可自行执行（可撤销）",
+    saveAgentFirst: "请先保存智能体，再选择它可以自行执行的操作。",
+    grantWhy: (why) => `不可用：${why}`,
+    because: (origin, source) =>
+      origin === "automation"
+        ? "因日程触发"
+        : origin === "content"
+          ? `由 ${source || "工具结果"} 中的内容提出`
+          : "未记录原因",
     draftsAlways:
       "起草消息（从不发送）：始终允许，因为草稿不会在你不知情时发出。",
     capNote: (cap) => `每次运行最多 ${cap} 次。超过后，运行会在首页等待你。`,

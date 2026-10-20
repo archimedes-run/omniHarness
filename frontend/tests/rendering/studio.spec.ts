@@ -106,6 +106,12 @@ for (const scheme of ["dark", "light"] as const) {
     await expect(page.getByTestId("recent-run").nth(1)).toContainText(
       "Held · evening-wrap · quiet hours 22:00-07:30",
     );
+    await expect(page.getByTestId("overview-on-its-own")).toContainText(
+      "Create and update tasks, Add notes and decisions",
+    );
+    await expect(page.getByTestId("grant-use")).toContainText(
+      "suggested by content from web_fetch",
+    );
     const radius = await page
       .getByTestId("overview-uses")
       .evaluate((el) => getComputedStyle(el).borderRadius);

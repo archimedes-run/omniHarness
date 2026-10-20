@@ -12,7 +12,13 @@ import {
   useUpdateAgent,
   type Agent,
 } from "@/core/agents";
-import { draft, skillSlug, useAgentRuns } from "@/core/studio";
+import {
+  draft,
+  saveAutonomy,
+  skillSlug,
+  useAgentRuns,
+  useAutonomy,
+} from "@/core/studio";
 import { cn } from "@/lib/utils";
 
 import {
@@ -20,9 +26,9 @@ import {
   OverviewTab,
   ScheduleTab,
   ToolsTab,
-  AutonomyTab,
   type AgentForm,
 } from "./agent-tabs";
+import { AutonomyTab } from "./autonomy";
 import { useStudioCopy } from "./copy";
 import { hasActiveSchedule } from "./runs";
 import {
@@ -254,6 +260,21 @@ function AgentEditor({
   const id = isLead ? LEAD_AGENT_ID : (agent?.name ?? "new");
   const slug = mode === "new" ? skillSlug(form.display_name) : id;
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  const { autonomy, error: autonomyError } = useAutonomy(
+    mode === "new" ? null : id,
+  );
+  const savedGrants = (autonomy?.classes ?? [])
+    .filter((cls) => cls.granted)
+    .map((cls) => cls.id);
+  // null: untouched, so the saved grants show.
+  const [granted, setGranted] = useState<string[] | null>(null);
+  const effectiveGrants = granted ?? savedGrants;
+  const grantsDirty =
+    granted !== null &&
+    [...granted].sort().join() !== [...savedGrants].sort().join();
+  const grantLabels = (autonomy?.classes ?? [])
+    .filter((cls) => effectiveGrants.includes(cls.id))
+    .map((cls) => cls.label);
 
   const patch = (next: Partial<AgentForm>) => {
     setForm((f) => ({ ...f, ...next }));
@@ -293,7 +314,6 @@ function AgentEditor({
   }
 
   async function save() {
-    if (isLead) return;
     if (mode === "new" && !slug) {
       setStatus({ kind: "error", message: c.needName });
       return;
@@ -316,8 +336,14 @@ function AgentEditor({
         });
         setStatus({ kind: "saved" });
         onCreated(created.name);
-      } else {
-        await update.mutateAsync({
+        return;
+      }
+      // Each write names the version it was made from; the store refuses a
+      // stale one. An agent edit makes a new version, so the grants that
+      // follow it are based on that one.
+      let version = autonomy?.version ?? agent?.version ?? 0;
+      if (!isLead && dirty) {
+        const saved = await update.mutateAsync({
           name: id,
           request: {
             ...fields,
@@ -325,9 +351,16 @@ function AgentEditor({
             source: fromDraft ? "draft" : "manual",
           },
         });
+        version = saved.version ?? version;
         setFromDraft(false);
-        setStatus({ kind: "saved" });
       }
+      if (grantsDirty) {
+        await saveAutonomy(id, effectiveGrants, version);
+        setGranted(null);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["studio"] });
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      setStatus({ kind: "saved" });
     } catch (e) {
       setStatus({
         kind: "error",
@@ -414,7 +447,7 @@ function AgentEditor({
         <p className="text-muted-foreground mr-auto text-sm" role="status">
           {c.saved}
         </p>
-      ) : dirty && !isLead ? (
+      ) : (dirty && !isLead) || grantsDirty ? (
         <p className="text-muted-foreground mr-auto text-sm">{c.unsaved}</p>
       ) : null}
       {mode === "new" ? (
@@ -437,7 +470,7 @@ function AgentEditor({
           {c.testRun}
         </Link>
       )}
-      {isLead ? null : (
+      {
         <button
           type="button"
           className={solidButton}
@@ -447,7 +480,7 @@ function AgentEditor({
         >
           {status.kind === "saving" ? c.saving : c.save}
         </button>
-      )}
+      }
     </>
   );
 
@@ -473,6 +506,7 @@ function AgentEditor({
         patch={patch}
         isLead={isLead}
         agentId={mode === "new" ? null : id}
+        grantLabels={autonomy ? grantLabels : null}
       />
       <InstructionsTab
         form={form}
@@ -487,7 +521,16 @@ function AgentEditor({
         isLead={isLead}
         draftNote={draftNote}
       />
-      <AutonomyTab isLead={isLead} />
+      <AutonomyTab
+        agentId={mode === "new" ? null : id}
+        autonomy={autonomy}
+        error={autonomyError}
+        granted={effectiveGrants}
+        onChange={(next) => {
+          setGranted(next);
+          setStatus({ kind: "idle" });
+        }}
+      />
       <ScheduleTab isLead={isLead} agentId={mode === "new" ? null : id} />
     </StudioTabs>
   );
