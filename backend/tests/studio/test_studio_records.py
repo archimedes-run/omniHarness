@@ -25,7 +25,7 @@ def test_an_agent_keeps_its_display_name_and_projects(studio) -> None:
     assert resp.status_code == 201, resp.text
     assert (resp.json()["display_name"], resp.json()["projects"]) == ("Evening wrap-up", ["p1"])
 
-    resp = c.put("/api/agents/evening-wrap-up", json={"projects": ["p1", "p2"]})
+    resp = c.put("/api/agents/evening-wrap-up", json={"projects": ["p1", "p2"], "base_version": 1})
     assert resp.status_code == 200, resp.text
     agent = c.get("/api/agents/evening-wrap-up").json()
     assert (agent["display_name"], agent["projects"]) == ("Evening wrap-up", ["p1", "p2"]), "an update of one field dropped another"

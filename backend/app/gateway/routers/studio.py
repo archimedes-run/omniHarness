@@ -86,7 +86,11 @@ def _agent_or_404(name: str, user_id: str) -> str:
     from omniharness.config import config_versions
 
     name = name.strip().lower() if name != config_versions.LEAD_AGENT else name
-    if name != config_versions.LEAD_AGENT and config_versions.current_agent_snapshot(user_id, name) is None:
+    try:
+        exists = name == config_versions.LEAD_AGENT or config_versions.current_agent_snapshot(user_id, name) is not None
+    except ValueError as e:  # a malformed name never reaches the filesystem
+        raise HTTPException(status_code=422, detail=str(e))
+    if not exists:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     return name
 
