@@ -70,6 +70,10 @@ class PendingActionResponse(BaseModel):
     confirmable_by_typing: bool = True
     #: Whose run stated it (security baseline); the list is filtered by it.
     owner_id: str | None = None
+    #: Every call's arguments, for the card to show one row each, each value
+    #: as text that passed redaction ("Withheld" where it did not). Display
+    #: only: a confirmation runs the STORED arguments, never these.
+    arguments_display: dict[str, str] | None = None
 
 
 class PendingListResponse(BaseModel):
@@ -220,6 +224,15 @@ async def post_to_thread(request: Request, thread_id: str, message: Any) -> bool
         return False
 
 
+def _arguments_for_display(arguments: dict[str, Any]) -> dict[str, str]:
+    shown: dict[str, str] = {}
+    for key, value in (arguments or {}).items():
+        text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+        safe, withheld = for_display(text)
+        shown[str(key)] = "Withheld" if withheld else safe
+    return shown
+
+
 def _view(action, threshold: int) -> PendingActionResponse:
     # The plan names what it acts on, often in the words of an email or a page.
     plan_text, plan_withheld = for_display(action.plan_text)
@@ -247,6 +260,7 @@ def _view(action, threshold: int) -> PendingActionResponse:
         origin_via=action.origin_via,
         confirmable_by_typing=action.confirmable_by_typing,
         owner_id=action.owner_id,
+        arguments_display=_arguments_for_display(action.arguments),
     )
 
 
