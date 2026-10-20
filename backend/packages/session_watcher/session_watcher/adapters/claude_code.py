@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -18,7 +19,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from ..events import classify
 from ..record_source import RecordSource, SkipReason
-from .base import ParsedRecord, SessionAdapter, SessionRef
+from ..todos import ConfirmedActivity
+from .base import ParsedRecord, SessionAdapter, SessionRef, ToolCall, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,67 @@ def _leaf(cwd: str) -> str:
     return PurePosixPath(cwd).name or cwd
 
 
+#: Tools whose input names a file they change (Feature 005, research R5).
+FILE_TOOLS = {"Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
+#: TaskCreate's text receipt, when the structured result is absent (about half
+#: the time on a real corpus).
+_CREATED = re.compile(r"Task #(\w+) created successfully")
+
+
+def _todo_of(name: str, args: dict) -> tuple | None:
+    """The todo change a tool call asks for, titles and statuses only (FR-030).
+
+    Descriptions and activeForm are dropped here, at the point of reading.
+    """
+    if name == "TodoWrite":
+        items = args.get("todos")
+        if isinstance(items, list):
+            return ("replace", [(i.get("content") or i.get("subject") or "", i.get("status")) for i in items if isinstance(i, dict)])
+    elif name == "TaskCreate":
+        subject = args.get("subject")
+        if isinstance(subject, str) and subject:
+            return ("create", subject)
+    elif name == "TaskUpdate":
+        task_id, status = args.get("taskId"), args.get("status")
+        if task_id is not None and isinstance(status, str):
+            return ("update", str(task_id), status)
+    return None
+
+
+def _tools_of(record: dict, message: object) -> tuple[tuple[ToolCall, ...], tuple[ToolResult, ...]]:
+    """Tool calls (assistant) and results (user) carried by one record."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return (), ()
+    calls, results = [], []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+            name = str(block.get("name") or "")
+            args = block.get("input") if isinstance(block.get("input"), dict) else {}
+            path = args.get(FILE_TOOLS[name]) if name in FILE_TOOLS else None
+            calls.append(ToolCall(call_id=block["id"], tool=name, todo=_todo_of(name, args), files=(path,) if isinstance(path, str) and path else ()))
+        elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+            ok = not block.get("is_error")
+            structured = record.get("toolUseResult")
+            created = None
+            if isinstance(structured, dict):
+                if structured.get("success") is False:
+                    ok = False
+                task = structured.get("task")
+                if isinstance(task, dict) and task.get("id") is not None:
+                    created = str(task["id"])
+            if created is None:
+                text = block.get("content")
+                if isinstance(text, list):
+                    text = " ".join(b.get("text", "") for b in text if isinstance(b, dict))
+                match = _CREATED.search(text) if isinstance(text, str) else None
+                created = match.group(1) if match else None
+            results.append(ToolResult(call_id=block["tool_use_id"], ok=ok, created_id=created))
+    return tuple(calls), tuple(results)
+
+
 def _parse_ts(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -104,6 +167,7 @@ class _SessionAccum:
     first: ParsedRecord | None = None
     tail: deque[ParsedRecord] = field(default_factory=lambda: deque(maxlen=TAIL_RECORDS))
     unclassified: dict[str, int] = field(default_factory=dict)
+    activity: ConfirmedActivity = field(default_factory=ConfirmedActivity)
 
     def add(self, record: ParsedRecord) -> None:
         if self.first is None:
@@ -125,6 +189,7 @@ class _FileState:
 
 class ClaudeCodeAdapter(SessionAdapter):
     name = "claude-code"
+    agent = "claude"
 
     def __init__(self, source: RecordSource) -> None:
         self._source = source
@@ -154,6 +219,7 @@ class ClaudeCodeAdapter(SessionAdapter):
             project = _leaf(cwd)
             if isinstance(branch, str) and branch:
                 project = f"{project}@{branch}"
+        calls, results = _tools_of(record, message)
         return ParsedRecord(
             session_id=sid,
             at=at,
@@ -163,6 +229,8 @@ class ClaudeCodeAdapter(SessionAdapter):
             is_sidechain=bool(record.get("isSidechain")),
             raw_type=raw_type,
             stop_reason=stop_reason if isinstance(stop_reason, str) else None,
+            calls=calls,
+            results=results,
         )
 
     def discover(self, window: timedelta, *, now: datetime | None = None) -> list[SessionRef]:
@@ -207,13 +275,21 @@ class ClaudeCodeAdapter(SessionAdapter):
                 ref = refs.get(sid)
                 records = acc.records()
                 if ref is None:
-                    ref = SessionRef(session_id=sid, project=acc.project or path.parent.name, path=path)
+                    ref = SessionRef(session_id=sid, project=acc.project or path.parent.name, path=path, agent=self.agent)
                     refs[sid] = ref
                 elif records and records[0] is acc.first:
                     # STARTED belongs to the session's first record across all
                     # its files, not to its first record in each file (FR-007).
                     records[0] = replace(acc.first, kind=classify(acc.first.raw_type, stop_reason=acc.first.stop_reason))
                 ref.records.extend(records)
+                # The session's own list comes from its main file, never from a
+                # subagent's (subagents/*.jsonl shares the session id).
+                todos = acc.activity.visible_todos()
+                if todos is not None and "subagents" not in path.parts:
+                    ref.todos = todos
+                for changed in acc.activity.files:
+                    if changed not in ref.files_changed:
+                        ref.files_changed.append(changed)
                 for raw_type, n in acc.unclassified.items():
                     ref.unclassified_types[raw_type] = ref.unclassified_types.get(raw_type, 0) + n
         return list(refs.values())
@@ -248,6 +324,11 @@ class ClaudeCodeAdapter(SessionAdapter):
                 continue
 
             acc = state.sessions.get(parsed.session_id)
+            if acc is not None and not acc.project and parsed.project:
+                # The first record may carry no cwd (a headless `claude -p`
+                # run starts with one); name the session from the first that
+                # does, not from the directory slug.
+                acc.project = parsed.project
             if acc is None:
                 acc = _SessionAccum(project=parsed.project)
                 state.sessions[parsed.session_id] = acc
@@ -262,6 +343,13 @@ class ClaudeCodeAdapter(SessionAdapter):
             # not become sessions of their own — a subagent is not a
             # session the user started (research R2).
             acc.add(parsed)
+            # Todo and file changes, applied only on a confirmed result
+            # (Feature 005 FR-031). A subagent's todo list is its own, not
+            # the session's, so sidechain calls contribute files only.
+            for call in parsed.calls:
+                acc.activity.call(replace(call, todo=None) if parsed.is_sidechain else call)
+            for result in parsed.results:
+                acc.activity.result(result)
 
     @staticmethod
     def _why_skipped(raw: dict) -> tuple[SkipReason, str | None]:

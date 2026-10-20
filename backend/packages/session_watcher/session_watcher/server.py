@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from .adapters.claude_code import ClaudeCodeAdapter
+from .adapters.codex import CodexAdapter
 from .discovery import Discovery, DiscoveryConfig
 from .record_source import RecordSource
 from .redaction import Channel, redact_or_suppress
@@ -40,12 +42,29 @@ logger = logging.getLogger(__name__)
 DEFAULT_PORT = 18101
 
 
-class WatcherService:
-    """Holds the registry and refreshes it. No MCP knowledge lives here."""
+#: Spoken and displayed names, by agent.
+AGENT_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+#: Todo items and changed files carried per session in a reply.
+MAX_TODOS = 50
+MAX_FILES = 50
 
-    def __init__(self, root: Path, *, channel: Channel = Channel.REMOTE) -> None:
+
+class WatcherService:
+    """Holds the registry and refreshes it. No MCP knowledge lives here.
+
+    One RecordSource per agent root (Feature 005): Claude Code always, Codex
+    when a root is configured. An agent whose root is configured but cannot be
+    read is reported as such in every reply, never as "no sessions" (FR-026).
+    """
+
+    def __init__(self, root: Path, *, codex_root: Path | None = None, channel: Channel = Channel.REMOTE) -> None:
         self.source = RecordSource(root=root)
-        self.discovery = Discovery(ClaudeCodeAdapter(self.source), DiscoveryConfig())
+        self.sources: dict[str, RecordSource] = {"claude": self.source}
+        more = []
+        if codex_root is not None:
+            self.sources["codex"] = RecordSource(root=codex_root)
+            more.append(CodexAdapter(self.sources["codex"]))
+        self.discovery = Discovery(ClaudeCodeAdapter(self.source), DiscoveryConfig(), more_adapters=more)
         self.registry = SessionRegistry()
         self.summarizer = MechanicalSummarizer()
         self.state_config = StateConfig()
@@ -70,6 +89,30 @@ class WatcherService:
         for sid in self.discovery.sticky_ids - set(self.registry.sessions):
             self.discovery.release(sid)
 
+    def agents(self) -> list[dict]:
+        """Per-agent health: readable, and how much drift its reader has seen."""
+        out = []
+        for agent, source in self.sources.items():
+            if source.root is None:
+                continue  # not configured (tests that pre-fill the registry)
+            # An agent home that exists without a sessions folder has never
+            # recorded a session: that is "none", not "can't tell".
+            folder = source.root if source.root.is_dir() else source.root.parent
+            readable = folder.is_dir() and os.access(folder, os.R_OK)
+            out.append(
+                {
+                    "agent": agent,
+                    "label": AGENT_LABELS.get(agent, agent),
+                    "readable": readable,
+                    "reason": None if readable else f"{source.root} is not mounted or not readable",
+                    # Unknown record types plus malformed lines: the signal
+                    # that the agent's format moved (FR-024).
+                    "drift": source.stats.drift_signals,
+                    "unknown_types": dict(source.stats.unknown_types),
+                }
+            )
+        return out
+
     def _envelope(self, now: datetime) -> dict:
         obs = self.registry.observability(now)
         return {
@@ -77,6 +120,21 @@ class WatcherService:
             "observability": obs.value,
             "as_of": self.registry.last_heartbeat_at.isoformat() if self.registry.last_heartbeat_at else None,
             "staleness_seconds": self.registry.staleness_seconds(now),
+            "agents": self.agents(),
+        }
+
+    def _safe(self, text: str) -> str:
+        """Agent-written text (todo titles, paths) is redacted, or Withheld."""
+        safe, ok = redact_or_suppress(text, self.channel)
+        return safe if ok else "Withheld"
+
+    def _activity(self, s) -> dict:
+        todos = None if s.todos is None else [{"title": self._safe(t), "status": st} for t, st in s.todos[:MAX_TODOS]]
+        return {
+            "agent": s.agent,
+            "agent_label": AGENT_LABELS.get(s.agent, s.agent),
+            "todos": todos,
+            "files_changed": [self._safe(f) for f in s.files_changed[-MAX_FILES:]],
         }
 
     def _summarize(self, text: str) -> tuple[str, str, bool]:
@@ -104,6 +162,7 @@ class WatcherService:
                     "summary": text,
                     "summary_provenance": prov,
                     "relay_suppressed": not ok,
+                    **self._activity(s),
                 }
             )
         out["sessions"] = rows
@@ -149,6 +208,7 @@ class WatcherService:
                 "summary_provenance": prov,
                 "relay_suppressed": not ok,
                 "recent_events": events,
+                **self._activity(s),
             },
         )
         return out
@@ -230,6 +290,7 @@ def build_app(service: WatcherService) -> Starlette:
                 "ok": True,
                 "observability": service.registry.observability(now).value,
                 "sessions": len(service.registry.sessions),
+                "agents": service.agents(),
             }
         )
 
@@ -271,17 +332,32 @@ def start_background_refresh(service: WatcherService, config: WatchConfig | None
     fw = FileWatcher(service.source.root, reconciler.note_change)
     mode = fw.start()
     logger.info("watching %s (%s)", service.source.root, mode)
+    # Further roots (Codex) get their own watcher; the reconciliation sweep
+    # covers them either way, so a root that cannot be watched only delays.
+    for agent, source in service.sources.items():
+        if source is service.source or source.root is None or not source.root.is_dir():
+            continue
+        extra = FileWatcher(source.root, reconciler.note_change)
+        logger.info("watching %s for %s (%s)", source.root, agent, extra.start())
     return stop, fw, mode
+
+
+def build_service(root: Path, codex_root: Path | None) -> WatcherService:
+    """The service exactly as `main` builds it: the production composition root."""
+    return WatcherService(root=root, codex_root=codex_root)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Read-only coding-session watcher (MCP over SSE)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--root", type=Path, default=Path.home() / ".claude" / "projects")
+    # Codex is watched only when a root is given (compose passes the read-only
+    # mount). Configured but unreadable is reported, never read as "none".
+    ap.add_argument("--codex-root", type=Path, default=None)
     ap.add_argument("--log-level", default="info")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level.upper())
-    service = WatcherService(root=args.root)
+    service = build_service(args.root, args.codex_root)
     service.refresh()
     start_background_refresh(service)
     # 0.0.0.0 so a containerized backend can reach us via host.docker.internal.

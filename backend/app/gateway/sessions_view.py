@@ -24,6 +24,12 @@ Epistemic = Literal["observed", "inferred", "unknown"]
 OBSERVE_ONLY_REASON = "Sessions are observed, never controlled: the watcher reads session logs and cannot approve, stop or reply to a session (Feature 001 FR-015, Article IV)."
 
 
+class TodoItem(BaseModel):
+    title: str
+    #: pending | in_progress | completed
+    status: str
+
+
 class SessionRow(BaseModel):
     session_id: str
     project: str
@@ -38,6 +44,24 @@ class SessionRow(BaseModel):
     relay_suppressed: bool = False
     #: The summary failed redaction and is not shown (FR-031, SC-015).
     withheld: bool = False
+    #: Which coding agent (Feature 005 FR-020): "claude" or "codex".
+    agent: str = "claude"
+    agent_label: str = "Claude Code"
+    #: The agent's own todo list as of its last CONFIRMED update (FR-031);
+    #: None when it has never made one. Titles redacted, or Withheld.
+    todos: list[TodoItem] | None = None
+    #: How many files its successful tool results changed.
+    files_changed: int = 0
+
+
+class AgentHealth(BaseModel):
+    """Per-agent: can its files be read, and how much format drift was seen."""
+
+    agent: str
+    label: str
+    readable: bool
+    reason: str | None = None
+    drift: int = 0
 
 
 class SessionsView(BaseModel):
@@ -54,6 +78,9 @@ class SessionsView(BaseModel):
     #: Set when the watcher did not answer in time and `sessions` is its LAST
     #: answer, this many seconds old. `reachable` is False alongside it.
     last_known_age_seconds: int | None = None
+    #: One per configured agent. An unreadable one is "can't tell" for that
+    #: agent, never "no sessions" (Feature 005 FR-026).
+    agents: list[AgentHealth] = []
     observe_only: bool = True
     observe_only_reason: str = OBSERVE_ONLY_REASON
 
@@ -67,6 +94,16 @@ def _display(row: dict) -> tuple[str, Epistemic]:
     if state in ("working", "failed"):
         return state, "observed"
     return "unknown", "unknown"
+
+
+def _agent(a: dict) -> AgentHealth:
+    return AgentHealth(
+        agent=str(a.get("agent")),
+        label=str(a.get("label") or a.get("agent")),
+        readable=bool(a.get("readable")),
+        reason=a.get("reason"),
+        drift=int(a.get("drift") or 0),
+    )
 
 
 def describe_sessions(payload: dict | None, failure: Exception | None = None) -> SessionsView:
@@ -88,6 +125,10 @@ def describe_sessions(payload: dict | None, failure: Exception | None = None) ->
         display, epistemic = _display(s)
         summary, summary_withheld = for_display(s.get("summary") or "")
         project, project_withheld = for_display(str(s.get("project", "")))
+        todos = None
+        if isinstance(s.get("todos"), list):
+            # Agent-written titles: redacted again here (FR-019, FR-031 of 004).
+            todos = [TodoItem(title=for_display(str(t.get("title", "")))[0], status=str(t.get("status", "pending"))) for t in s["todos"] if isinstance(t, dict)]
         rows.append(
             SessionRow(
                 session_id=str(s.get("session_id", "")),
@@ -100,6 +141,10 @@ def describe_sessions(payload: dict | None, failure: Exception | None = None) ->
                 summary_provenance=s.get("summary_provenance") or "",
                 relay_suppressed=bool(s.get("relay_suppressed")),
                 withheld=summary_withheld or project_withheld,
+                agent=str(s.get("agent") or "claude"),
+                agent_label=str(s.get("agent_label") or "Claude Code"),
+                todos=todos,
+                files_changed=len(s.get("files_changed") or []),
             )
         )
     return SessionsView(
@@ -108,4 +153,9 @@ def describe_sessions(payload: dict | None, failure: Exception | None = None) ->
         staleness_seconds=payload.get("staleness_seconds"),
         as_of=payload.get("as_of"),
         sessions=rows,
+        agents=[
+            AgentHealth(agent=str(a.get("agent")), label=str(a.get("label") or a.get("agent")), readable=bool(a.get("readable")), reason=a.get("reason"), drift=int(a.get("drift") or 0))
+            for a in payload.get("agents") or []
+            if isinstance(a, dict)
+        ],
     )

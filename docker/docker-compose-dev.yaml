@@ -113,7 +113,7 @@ services:
     # developer's host .venv — the gateway service guards against exactly this
     # with a named `gateway-venv` volume, and this service had no such guard
     # because it did not need the mount in the first place.
-    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects"
+    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects --codex-root /root/.codex/sessions"
     ports:
       - "18101:18101"
     volumes:
@@ -122,6 +122,16 @@ services:
       - type: bind
         source: ${HOME:?HOME must be set}/.claude
         target: /root/.claude
+        read_only: true
+        bind:
+          create_host_path: true
+      # Codex sessions (Feature 005), READ-ONLY for the same reason. Honours
+      # CODEX_HOME like Codex does. On a machine that has never run Codex the
+      # folder is created empty, which reads as "no Codex sessions"; a folder
+      # that exists but cannot be read is reported as "can't read".
+      - type: bind
+        source: ${CODEX_HOME:-${HOME:?HOME must be set}/.codex}
+        target: /root/.codex
         read_only: true
         bind:
           create_host_path: true

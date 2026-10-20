@@ -90,6 +90,13 @@ class Session:
     #: self-contradictory, e.g. "hasn't moved in less than a minute; may have
     #: stalled". Coherence by construction rather than by discipline.
     resolved_at: datetime | None = None
+    #: Which coding agent: "claude" or "codex" (Feature 005 FR-020).
+    agent: str = "claude"
+    #: The agent's own todo list as of its last CONFIRMED update, titles and
+    #: statuses only; None when it has never made one (FR-030, FR-031).
+    todos: list[tuple[str, str]] | None = None
+    #: Paths its successful tool results changed, newest last.
+    files_changed: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.session_id:

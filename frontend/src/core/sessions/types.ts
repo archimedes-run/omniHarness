@@ -20,6 +20,27 @@ export interface SessionRow {
   relay_suppressed: boolean;
   /** Failed redaction: the text fields carry a sentence saying so (FR-031). */
   withheld: boolean;
+  /** Which coding agent (Feature 005). Absent from an older watcher. */
+  agent?: "claude" | "codex" | string;
+  agent_label?: string;
+  /** The agent's own todo list as of its last CONFIRMED update; null when it
+   * has never made one (FR-031). */
+  todos?: TodoItem[] | null;
+  files_changed?: number;
+}
+
+export interface TodoItem {
+  title: string;
+  status: "pending" | "in_progress" | "completed" | string;
+}
+
+/** One configured agent: can its files be read (FR-026). */
+export interface AgentHealth {
+  agent: string;
+  label: string;
+  readable: boolean;
+  reason: string | null;
+  drift: number;
 }
 
 export interface SessionsView {
@@ -36,6 +57,8 @@ export interface SessionsView {
   /** Set when the watcher did not answer in time and `sessions` is its last
    * answer, this many seconds old. `reachable` is false alongside it. */
   last_known_age_seconds?: number | null;
+  /** One per configured agent; an unreadable one is "can't tell". */
+  agents?: AgentHealth[];
   observe_only: boolean;
   observe_only_reason: string;
 }

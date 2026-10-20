@@ -92,7 +92,6 @@ omniharness.sandbox.sandbox_provider:set_sandbox_provider  # sandbox provider se
 omniharness.sandbox.sandbox_provider:shutdown_sandbox_provider  # sandbox provider set/reset/shutdown hook for embedders and tests
 omniharness.skills.storage.skill_storage:SkillStorage.install_skill_from_archive  # reached from the embedded Python client (OmniHarnessClient.install_skill), public API
 omniharness.skills.tool_policy:NamedTool  # used as a PEP 695 type-parameter bound (filter_tools_by_skill_allowed_tools[ToolT: NamedTool]), which the gate does not see
-session_watcher.record_source:RecordStats.drift_signals  # UNWIRED, wire in Feature 005: drift (unknown record types) surfaced for Claude and Codex alike (specs/005-project-ledger/plan-inputs.md)
 session_watcher.registry:SessionRegistry.is_empty  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
 session_watcher.registry:SessionRegistry.is_observable  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
 session_watcher.reply:observe_only_notice  # UNWIRED, wire in Feature 005: FR-015 wording when the user tries to answer a watched (Claude or Codex) session (specs/005-project-ledger/plan-inputs.md)

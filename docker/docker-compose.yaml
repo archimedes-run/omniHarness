@@ -61,7 +61,7 @@ services:
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
         UV_EXTRAS: ${UV_EXTRAS:-}
     container_name: omni-harness-session-watcher
-    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects"
+    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects --codex-root /root/.codex/sessions"
     ports:
       - "18101:18101"
     volumes:
@@ -69,6 +69,13 @@ services:
       - type: bind
         source: ${HOME:?HOME must be set}/.claude
         target: /root/.claude
+        read_only: true
+        bind:
+          create_host_path: true
+      # Codex sessions (Feature 005), read-only. See docker-compose-dev.yaml.
+      - type: bind
+        source: ${CODEX_HOME:-${HOME:?HOME must be set}/.codex}
+        target: /root/.codex
         read_only: true
         bind:
           create_host_path: true

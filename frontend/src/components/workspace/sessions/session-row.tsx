@@ -1,9 +1,14 @@
-import { CircleCheckIcon, CircleHelpIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CircleDotIcon,
+  CircleHelpIcon,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { WithheldNotice } from "@/components/workspace/withheld-notice";
 import { STATE_LABEL } from "@/core/sessions/logic";
-import type { SessionRow as Row } from "@/core/sessions/types";
+import type { SessionRow as Row, TodoItem } from "@/core/sessions/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -26,7 +31,19 @@ export function SessionRow({ session }: { session: Row }) {
       data-epistemic={session.epistemic}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-foreground font-medium">{session.project}</span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="text-foreground truncate font-medium">
+            {session.project}
+          </span>
+          {session.agent_label && (
+            <span
+              className="text-muted-foreground shrink-0 text-xs"
+              data-testid="agent"
+            >
+              {session.agent_label}
+            </span>
+          )}
+        </span>
         <span className="flex items-center gap-1">
           <Icon
             className="text-muted-foreground size-4"
@@ -54,9 +71,71 @@ export function SessionRow({ session }: { session: Row }) {
           Summary withheld: it could not be checked for credentials.
         </p>
       )}
+      {session.todos && session.todos.length > 0 && (
+        <Plan todos={session.todos} />
+      )}
       <p className="text-muted-foreground text-xs">
         Observe only · {session.session_id.slice(0, 8)}
+        {session.files_changed
+          ? ` · ${session.files_changed} file${session.files_changed === 1 ? "" : "s"} changed`
+          : ""}
       </p>
     </li>
+  );
+}
+
+const TODO_ICON = {
+  completed: CircleCheckIcon,
+  in_progress: CircleDotIcon,
+} as Record<string, typeof CircleCheckIcon>;
+
+/**
+ * The agent's own task list (Feature 005 FR-030), as of its last CONFIRMED
+ * update: a change whose tool call failed or never answered is not shown.
+ * Collapsed to its progress; the items open on demand.
+ */
+function Plan({ todos }: { todos: TodoItem[] }) {
+  const done = todos.filter((t) => t.status === "completed").length;
+  const current = todos.find((t) => t.status === "in_progress");
+  return (
+    <details className="group" data-testid="plan">
+      <summary className="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-2 text-xs">
+        <span
+          className="bg-muted h-1 w-16 overflow-hidden rounded-full"
+          aria-hidden
+        >
+          <span
+            className="bg-foreground/60 block h-full"
+            style={{ width: `${(done / todos.length) * 100}%` }}
+          />
+        </span>
+        <span data-testid="plan-progress">
+          {`Tasks ${done} of ${todos.length}`}
+        </span>
+        {current && (
+          <span className="text-foreground truncate">· {current.title}</span>
+        )}
+      </summary>
+      <ul className="mt-2 space-y-1">
+        {todos.map((todo, index) => {
+          const Icon = TODO_ICON[todo.status] ?? CircleDashedIcon;
+          return (
+            <li
+              key={index}
+              className={cn(
+                "flex items-center gap-2 text-sm",
+                todo.status === "completed"
+                  ? "text-muted-foreground line-through"
+                  : "text-foreground",
+              )}
+              data-status={todo.status}
+            >
+              <Icon className="text-muted-foreground size-3.5 shrink-0" />
+              <span className="truncate">{todo.title}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
   );
 }

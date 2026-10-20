@@ -234,6 +234,16 @@ def test_durations_are_coarse_not_falsely_precise(secs, expected) -> None:
 
 
 def test_service_rollup_composes_without_error(tmp_path) -> None:
+    (tmp_path / "empty").mkdir()
     svc = WatcherService(root=tmp_path / "empty")
     svc.refresh(now=NOW)
     assert compose_rollup(svc.list_sessions(now=NOW)) == "No coding sessions are running."
+
+
+def test_an_unreadable_root_is_not_reported_as_no_sessions(tmp_path) -> None:
+    """Feature 005 FR-026: a root that is missing (an unmounted volume) is
+    'can't read', never 'no sessions'."""
+    svc = WatcherService(root=tmp_path / "missing" / "projects")
+    svc.refresh(now=NOW)
+    reply = compose_rollup(svc.list_sessions(now=NOW))
+    assert "I can't read Claude Code sessions" in reply
