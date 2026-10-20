@@ -184,6 +184,10 @@ class PendingAction:
     #: (or the owner, for the system's own runs) may see, confirm, decline or
     #: edit it: app.gateway.ownership.can_access. None = predates owners.
     owner_id: str | None = None
+    #: The scheduled run's markers (turn_provenance, trigger_rule_id,
+    #: trigger_firing_id) when it was stated in one, as (key, value) pairs:
+    #: an agent a confirmed `task` invites is then still in that run.
+    run_markers: tuple[tuple[str, str], ...] = ()
 
     @property
     def confirmable_by_typing(self) -> bool:

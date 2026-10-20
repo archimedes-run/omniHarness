@@ -16,7 +16,7 @@ class GatewayLedgerController:
         return self.service.read_text(user_id=user_id, project=project, today=date.today())
 
     def apply(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> str:
-        from app.policy.provenance import CONFIRMED, GRANTED, current_execution, current_write_id
+        from app.policy.provenance import CONFIRMED, GRANTED, current_execution, current_write_id, mark_committed
 
         # Who made it, truthfully: a confirmed plan, a Tier 2 write the reply
         # disclosed, or a write under a standing grant in a scheduled run.
@@ -30,5 +30,6 @@ class GatewayLedgerController:
         except LedgerError as exc:
             # Nothing was written: apply validates and writes in one transaction.
             return f"Nothing was changed: {exc}."
+        mark_committed()  # the transaction committed: this write happened
         text = " ".join(done)
         return f"{text} [undo {write_id}]" if write_id else text
