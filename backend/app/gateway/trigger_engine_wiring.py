@@ -23,6 +23,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from app.gateway.watcher_client import WatcherClient
 from app.trigger_engine.audit import AuditLog
@@ -261,12 +262,19 @@ def _run_footer(config: AppConfig):
             return "This run may have changed your projects on its own; I could not read what it did. Check Agent Studio."
         if not entries:
             return ""
+        from app.gateway.display_safe import safe_field
+
+        # Every content line is ONE line (safe_field strips line breaks and
+        # bidi controls and defangs links) and starts with "- ", inside
+        # quotes, so content can neither start a line of its own nor look like
+        # the link line. The link is the only live one, built here, last, on
+        # its own fixed line.
         lines = ["Done on its own in this run (standing grants):"]
         for entry in entries:
-            what = "; ".join(entry.get("targets") or []) or entry.get("tool", "")
-            source = entry.get("source_label") or ""
-            lines.append(f"- {what}" + (f" ({source})" if source else ""))
-        lines.append(f"Review or undo them all: {_web_base_url()}/workspace/runs/{firing_id}")
+            what = safe_field("; ".join(entry.get("targets") or []) or entry.get("tool", ""))
+            source = safe_field(entry.get("source_label") or "")
+            lines.append(f"- “{what}”" + (f" ({source})" if source else ""))
+        lines.append(f"Review or undo them all: {_web_base_url()}/workspace/runs/{quote(firing_id, safe='')}")
         return "\n".join(lines)
 
     return footer

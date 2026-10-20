@@ -219,12 +219,26 @@ class PolicyMiddleware(AgentMiddleware):
         # not taint this one. But a write the user declined in this chat stays
         # declined: the same write (same op, target and text, normalised) can
         # never run later as if the user had asked for it.
-        wanted = change_signatures(self._arguments(request))
+        resolve = self._project_resolver(request)
+        wanted = change_signatures(self._arguments(request), resolve)
         for declined in self.pending.declined_in_thread(self._thread_id(request), self._owner_id(request)):
-            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments):
+            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments, resolve):
                 logger.info("policy: %s matches a write declined earlier (%s); it waits on its card", decision.tool_name, declined.id)
                 return "This is a suggestion: you declined this earlier in this chat, so I did not do it. It runs only if you confirm it here."
         return None
+
+    def _project_resolver(self, request):
+        """Names a project by its id, through the ledger's own lookup, so a
+        project named by name and by id is one project. None outside the
+        gateway (no ledger)."""
+        from omniharness.runtime.ledger.controller import get_ledger_controller
+
+        controller = get_ledger_controller()
+        lookup = getattr(controller, "project_id", None)
+        if lookup is None:
+            return None
+        user_id = self._user_id(self._runtime_context(request) or {})
+        return lambda ref: lookup(user_id=user_id, project=str(ref))
 
     @contextmanager
     def _reserved(self, grant, call: dict):

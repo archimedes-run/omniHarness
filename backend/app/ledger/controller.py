@@ -12,6 +12,14 @@ from .service import LedgerError, LedgerService
 class GatewayLedgerController:
     service: LedgerService
 
+    def project_id(self, *, user_id: str, project: str) -> str | None:
+        """The id of the user's project this name or id refers to, or None."""
+        try:
+            with self.service.repo.transaction() as s:
+                return self.service._project(s, user_id, project, {})["id"]
+        except LedgerError:
+            return None
+
     def read(self, *, user_id: str, project: str | None) -> str:
         return self.service.read_text(user_id=user_id, project=project, today=date.today())
 
@@ -30,7 +38,15 @@ class GatewayLedgerController:
             done = self.service.apply(user_id=user_id, changes=changes, thread_id=thread_id, actor=actor, pending_action_id=write_id)
         except LedgerError as exc:
             # Nothing was written: apply validates and writes in one transaction.
+            if how == CONFIRMED:
+                # Confirmed on its card: the user approved it and it did not
+                # happen. That is a FAILURE the card must show, not a result
+                # string that reads as "executed" (review round 3).
+                raise RuntimeError(f"Nothing was changed: {exc}.") from exc
             return f"Nothing was changed: {exc}."
         mark_committed()  # the transaction committed: this write happened
-        text = " ".join(done)
+        from app.gateway.display_safe import safe_field
+
+        # What the chat shows on the ledger step: each line made safe.
+        text = " ".join(safe_field(line) for line in done)
         return f"{text} [undo {write_id}]" if write_id else text
