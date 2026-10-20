@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from _router_auth_helpers import make_authed_test_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -37,7 +38,7 @@ def _make_skill(name: str, *, enabled: bool) -> Skill:
 
 
 def _make_test_app(config) -> FastAPI:
-    app = FastAPI()
+    app = make_authed_test_app()
     app.state.config = config
     app.include_router(skills_router.router)
     return app

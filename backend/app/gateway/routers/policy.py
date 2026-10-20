@@ -57,10 +57,15 @@ async def policy_explain(request: Request, tool: str = Query(..., min_length=1),
 @router.get("/audit", response_model=list[Tier3Execution])
 @require_permission("threads", "read")
 async def policy_audit(request: Request) -> list[Tier3Execution]:
+    from app.gateway.ownership import filter_accessible
     from app.policy.audit import PolicyAuditLog
 
     policy = _policy_config()
-    return [_redacted(row) for row in recent_tier3(PolicyAuditLog(path=Path(policy.state_dir) / "audit.jsonl", actor="default").entries())]
+    entries = PolicyAuditLog(path=Path(policy.state_dir) / "audit.jsonl", actor="default").entries()
+    # Ownership: only the caller's own Tier 3 history. Entries written before
+    # owners were recorded carry only the actor.
+    mine = await filter_accessible(request, entries, lambda e: e.get("owner_id") or e.get("actor") or None)
+    return [_redacted(row) for row in recent_tier3(mine)]
 
 
 def _redacted(row: Tier3Execution) -> Tier3Execution:
