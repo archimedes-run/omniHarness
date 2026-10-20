@@ -10,7 +10,7 @@ export default defineConfig({
   timeout: 30_000,
 
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: "http://127.0.0.1:3000",
     trace: "on-first-retry",
   },
 
@@ -22,8 +22,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: "pnpm build && pnpm start",
-    url: "http://localhost:3000",
+    command: "pnpm build && pnpm exec next start -H 127.0.0.1 -p 3000",
+    url: "http://127.0.0.1:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     env: {

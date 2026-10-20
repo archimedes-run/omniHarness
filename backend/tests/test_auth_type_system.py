@@ -598,18 +598,18 @@ def test_api_login_success_no_token_in_body():
     assert "access_token" in resp.cookies
 
 
-def test_api_register_duplicate_returns_structured_400():
-    """Register with duplicate email → 400 with {code: 'email_already_exists'}."""
+def test_api_register_once_an_account_exists_returns_structured_403():
+    """Registration is closed once the owner exists (security baseline):
+    a second register, same email or not, is 403 {code: 'registration_closed'}."""
     _setup_config()
     client = _get_auth_client()
     email = "dup-contract-test@test.com"
-    # First register
     client.post("/api/v1/auth/register", json={"email": email, "password": "Tr0ub4dor3a"})
-    # Duplicate
-    resp = client.post("/api/v1/auth/register", json={"email": email, "password": "AnotherStr0ngPwd!"})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["detail"]["code"] == "email_already_exists"
+    for other in (email, "someone-else@test.com"):
+        resp = client.post("/api/v1/auth/register", json={"email": other, "password": "AnotherStr0ngPwd!"})
+        assert resp.status_code == 403
+        body = resp.json()
+        assert body["detail"]["code"] == "registration_closed"
 
 
 # ── Cookie security: HTTP vs HTTPS ────────────────────────────────────

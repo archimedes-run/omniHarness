@@ -158,13 +158,30 @@ test("a delete the gateway refuses is said in words, and the server stays", asyn
   await page.route("**/api/**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
   );
-  await page.route("**/api/mcp-studio/servers?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ servers: [SERVER], total: 1 }),
-    }),
-  );
+  // The Build board (#59) lists servers at /servers and discards one with
+  // "Discard" then "Discard <name>".
+  for (const glob of [
+    "**/api/mcp-studio/servers?**",
+    "**/api/mcp-studio/servers",
+  ]) {
+    await page.route(glob, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          servers: [
+            {
+              ...SERVER,
+              state: "awaiting_approval",
+              state_label: "Waiting for your approval",
+              steps: [],
+            },
+          ],
+          total: 1,
+        }),
+      }),
+    );
+  }
   await page.route("**/api/mcp-studio/servers/weather", (route) =>
     route.request().method() === "DELETE"
       ? route.fulfill({
@@ -184,13 +201,15 @@ test("a delete the gateway refuses is said in words, and the server stays", asyn
   await page.goto("/workspace/connections?tab=build", {
     waitUntil: "networkidle",
   });
-  await page.getByTitle("Delete").first().click();
-  await page.getByTitle("Confirm delete").click();
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  await page.getByRole("button", { name: "Discard weather-server" }).click();
   // (Next's route announcer is also role=alert.)
   await expect(
     page.getByRole("alert").filter({ hasText: "Not deleted" }),
   ).toContainText(
     "Not deleted: The server was not deleted: docker rm omni-mcp-weather failed: permission denied",
   );
-  await expect(page.getByText("weather-server")).toBeVisible();
+  await expect(page.getByTestId("built-detail")).toContainText(
+    "weather-server",
+  );
 });

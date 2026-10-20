@@ -144,11 +144,14 @@ def test_resolve_docker_bind_host_defaults_loopback_for_localhost(monkeypatch):
     assert _resolve_docker_bind_host() == "127.0.0.1"
 
 
-def test_resolve_docker_bind_host_keeps_dood_compatibility(monkeypatch):
+def test_resolve_docker_bind_host_is_loopback_even_for_dood(monkeypatch):
+    """Security baseline: never every interface by default. Docker Desktop
+    reaches loopback publishes via host.docker.internal; Linux operators set
+    OMNI_HARNESS_SANDBOX_BIND_HOST."""
     monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
     monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "host.docker.internal")
 
-    assert _resolve_docker_bind_host() == "0.0.0.0"
+    assert _resolve_docker_bind_host() == "127.0.0.1"
 
 
 def test_resolve_docker_bind_host_uses_ipv6_loopback_for_ipv6_sandbox_host(monkeypatch):
@@ -189,7 +192,7 @@ def test_start_container_binds_local_docker_port_to_loopback_by_default(monkeypa
     assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"
 
 
-def test_start_container_keeps_broad_bind_for_dood_sandbox_host(monkeypatch):
+def test_start_container_binds_loopback_for_dood_sandbox_host(monkeypatch):
     backend = LocalContainerBackend(
         image="sandbox:latest",
         base_port=8080,
@@ -202,7 +205,7 @@ def test_start_container_keeps_broad_bind_for_dood_sandbox_host(monkeypatch):
 
     captured_cmd = _capture_start_container_command(monkeypatch, backend)
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "0.0.0.0:18080:8080"
+    assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"
 
 
 def test_start_container_binds_ipv6_sandbox_host_to_ipv6_loopback(monkeypatch):
@@ -221,7 +224,9 @@ def test_start_container_binds_ipv6_sandbox_host_to_ipv6_loopback(monkeypatch):
     assert captured_cmd[captured_cmd.index("-p") + 1] == "[::1]:18080:8080"
 
 
-def test_start_container_keeps_apple_container_port_format(monkeypatch):
+def test_start_container_binds_apple_container_to_loopback(monkeypatch):
+    """apple/container's -p takes [host-ip:]host-port:container-port and binds
+    0.0.0.0 when the address is omitted, so the address is always given."""
     backend = LocalContainerBackend(
         image="sandbox:latest",
         base_port=8080,
@@ -229,8 +234,53 @@ def test_start_container_keeps_apple_container_port_format(monkeypatch):
         config_mounts=[],
         environment={},
     )
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_BIND_HOST", "127.0.0.1")
+    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "host.docker.internal")
 
     captured_cmd = _capture_start_container_command(monkeypatch, backend, runtime="container")
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "18080:8080"
+    assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"
+
+
+def _backend_with_inspect(monkeypatch, inspect_stdout: str | None):
+    import subprocess as _sp
+
+    from omniharness.community.aio_sandbox import local_backend as lb
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[1] == "inspect":
+            if inspect_stdout is None:
+                raise _sp.CalledProcessError(1, cmd, stderr="no such command")
+            return _sp.CompletedProcess(cmd, 0, stdout=inspect_stdout, stderr="")
+        return _sp.CompletedProcess(cmd, 0, stdout="cid\n", stderr="")
+
+    monkeypatch.setattr(lb.subprocess, "run", fake_run)
+    backend = LocalContainerBackend(image="img", base_port=18080, container_prefix="sandbox", config_mounts=[], environment={})
+    backend._runtime = "container"
+    return backend, calls
+
+
+def test_apple_container_publish_must_be_verified_loopback(monkeypatch):
+    import json
+
+    import pytest
+
+    ok, _ = _backend_with_inspect(monkeypatch, json.dumps([{"configuration": {"publishedPorts": [{"hostAddress": "127.0.0.1", "hostPort": 18080}]}}]))
+    ok._verify_loopback_publish("cid")  # verified: no refusal
+
+    for stdout in (json.dumps([{"configuration": {"publishedPorts": [{"hostAddress": "0.0.0.0"}]}}]), json.dumps([{}]), None, "not json"):
+        backend, calls = _backend_with_inspect(monkeypatch, stdout)
+        with pytest.raises(RuntimeError, match="Refusing the Apple container sandbox"):
+            backend._verify_loopback_publish("cid")
+        assert ["container", "stop", "cid"] in calls, "the unverified container is stopped"
+
+
+def test_docker_needs_no_inspect(monkeypatch):
+    backend, calls = _backend_with_inspect(monkeypatch, None)
+    backend._runtime = "docker"
+    calls.clear()
+    backend._verify_loopback_publish("cid")
+    assert calls == []

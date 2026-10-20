@@ -16,6 +16,7 @@ Security invariants
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -33,40 +34,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_KEY_FILE = "/run/secrets/mcp_vault_key"
+
+
+class VaultKeyError(RuntimeError):
+    pass
+
+
+def vault_key_path(config: McpBuilderConfig) -> Path:
+    return Path(config.vault_key_file or os.environ.get("OMNI_HARNESS_MCP_VAULT_KEY_FILE") or DEFAULT_KEY_FILE)
+
+
+def _forbidden_roots() -> list[Path]:
+    roots = [Path(__file__).resolve().parents[3]]  # the repository
+    home = os.environ.get("OMNI_HARNESS_HOME")
+    if home:
+        roots.append(Path(home).resolve())
+    return roots
+
+
 def make_vault_key(config: McpBuilderConfig) -> bytes:
-    """Return the Fernet key bytes to use for this process.
+    """The Fernet key, from a 0600 file outside every mount generated code or
+    agent sandboxes see (#59). Refuses to start, saying why, when:
 
-    Raises ``RuntimeError`` if ``vault_key`` is absent and ``dev_mode`` is
-    False (non-dev mode must have an explicit key — fail loud, not silent).
+    * ``config.yaml`` still has ``mcp_builder.vault_key``;
+    * the key file is missing, or readable by anyone but its owner;
+    * the key file sits under the repository or OMNI_HARNESS_HOME.
 
-    If ``vault_key`` is absent but ``dev_mode`` is True, logs a prominent
-    warning and generates an ephemeral key. Encrypted secrets stored with an
-    ephemeral key are lost on process restart.
+    There is no ephemeral or in-repo fallback any more.
     """
     if config.vault_key:
-        return config.vault_key.encode()
-
-    if not config.dev_mode:
-        raise RuntimeError(
-            'mcp_builder.vault_key is required when dev_mode is False. Generate a key with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" and set it in config.yaml under mcp_builder.vault_key.'
-        )
-
-    keyfile = Path(".omni-harness/dev_vault.key")
-    if keyfile.exists():
-        try:
-            key = keyfile.read_bytes().strip()
-            logger.info("MCP secrets vault: loaded dev key from %s", keyfile)
-            return key
-        except Exception as exc:
-            logger.warning("MCP secrets vault: failed to read %s (%s) — generating a new key", keyfile, exc)
-
-    key = Fernet.generate_key()
-    try:
-        keyfile.parent.mkdir(parents=True, exist_ok=True)
-        keyfile.write_bytes(key)
-        logger.warning("MCP secrets vault: persisted new dev Fernet key to %s (dev_mode=True). Set mcp_builder.vault_key in config.yaml for production.", keyfile)
-    except Exception as exc:
-        logger.warning("MCP secrets vault: could not persist key to %s (%s) — using ephemeral key; secrets will be lost on restart.", keyfile, exc)
+        raise VaultKeyError("mcp_builder.vault_key is set in config.yaml: the vault key may not live there any more. Run `make vault-key-migrate`, which moves it to a 0600 file and rotates it.")
+    path = vault_key_path(config)
+    if not path.exists():
+        raise VaultKeyError(f"no vault key file at {path}: create one with `make vault-key` (or set mcp_builder.vault_key_file).")
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        raise VaultKeyError(f"the vault key file {path} is mode {mode:o}; it must be readable by its owner only (0600 or 0400).")
+    resolved = path.resolve()
+    for root in _forbidden_roots():
+        if resolved == root or root in resolved.parents:
+            raise VaultKeyError(f"the vault key file {path} is under {root}; keep it outside the project and OMNI_HARNESS_HOME.")
+    key = path.read_bytes().strip()
+    Fernet(key)  # a malformed key fails here, loudly
     return key
 
 

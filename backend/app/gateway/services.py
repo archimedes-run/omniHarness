@@ -75,24 +75,48 @@ def normalize_stream_modes(raw: list[str] | str | None) -> list[str]:
     return raw if raw else ["values"]
 
 
-def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
-    """Convert LangGraph Platform input format to LangChain state dict."""
+def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True) -> dict[str, Any]:
+    """Convert LangGraph Platform input format to LangChain state dict.
+
+    The person's own human message(s) are tagged as the user's turn
+    (lineage.USER_TURN_MARKER), here and nowhere else. Every message is
+    rebuilt from role and content only, so a marker a client put in
+    ``additional_kwargs`` never survives, and a message with any other role is
+    never the user's turn.
+    """
+    from app.policy.lineage import user_turn as tagged
+
     if raw_input is None:
         return {}
+    if not isinstance(raw_input, Mapping):
+        raise ValueError("input must be an object")
+    unknown = sorted(k for k in raw_input if k != "messages")
+    if unknown:
+        # Only messages are input. Any other key would be written straight into
+        # graph state, past every check here.
+        logger.info("normalize_input: dropped input keys %s", unknown)
     messages = raw_input.get("messages")
-    if messages and isinstance(messages, list):
+    if messages is None:
+        return {}
+    if not isinstance(messages, list):
+        # A single object used to pass through untouched, keeping any client
+        # kwargs, a forged user-turn marker included.
+        raise ValueError("input.messages must be a list")
+    raw_input = {"messages": messages}
+    if messages:
         converted = []
         for msg in messages:
             if isinstance(msg, dict):
                 role = msg.get("role", msg.get("type", "user"))
                 content = msg.get("content", "")
-                if role in ("user", "human"):
-                    converted.append(HumanMessage(content=content))
+                if role in ("user", "human") and user_turn:
+                    converted.append(tagged(content))
                 else:
                     # TODO: handle other message types (system, ai, tool)
                     converted.append(HumanMessage(content=content))
             else:
-                converted.append(msg)
+                # Not from JSON: never trusted as a user turn.
+                converted.append(HumanMessage(content=getattr(msg, "content", str(msg))))
         return {**raw_input, "messages": converted}
     return raw_input
 
@@ -127,6 +151,152 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 )
 
 
+#: Run-context keys ONLY THE SERVER SETS (security baseline, item b).
+#:
+#: Whatever a client sends under these names — in ``body.context``,
+#: ``config.configurable``, ``config.context``, ``config.metadata`` or
+#: ``body.metadata`` — is dropped by :func:`apply_server_owned_context`, which
+#: then writes the server's own value (assigned, never ``setdefault``):
+#:
+#: - ``user_id``: the authenticated caller (AuthMiddleware's decision);
+#: - ``selected_sources``: this thread's stored tool selection;
+#: - ``agent_name``: the agent the caller selected (``assistant_id``, or the
+#:   chat UI's ``context.agent_name``), normalised and validated. It only ever
+#:   resolves inside the caller's own agents directory, because ``user_id`` is
+#:   server-set;
+#: - ``turn_provenance`` / ``trigger_rule_id``: only when the caller presents
+#:   a single-use grant the trigger engine issued for that exact request
+#:   (internal_auth.is_trigger_engine_request);
+#: - ``called_agent``: never from a request (set inside delegation only);
+#: - ``excluded_skills``: this thread's stored exclusions;
+#: - ``channel``: the IM channel, from the channel manager's header with the
+#:   internal token only (internal_auth.channel_of).
+SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
+    {
+        "user_id",
+        "selected_sources",
+        "agent_name",
+        "turn_provenance",
+        "trigger_rule_id",
+        "called_agent",
+        "excluded_skills",
+        "channel",
+    }
+)
+
+#: Keys a client may pass through ``body.context``: the whitelist minus every
+#: server-owned key.
+_CLIENT_CONTEXT_KEYS: frozenset[str] = _CONTEXT_CONFIGURABLE_KEYS - SERVER_OWNED_RUN_KEYS
+
+#: Metadata keys a client may never set on a run or a thread.
+_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id", "invited_agent", "delegation_chain", "sandbox_id", "run_id"}
+
+#: ALLOWLISTS (security baseline, review round): what a client may put in each
+#: run-config container. Everything else is dropped before the server writes
+#: its own keys, so a key the runtime later reads as identity or authority
+#: (invited_agent, delegation_chain, sandbox_id, ...) can never arrive from a
+#: request, including keys nobody has thought of yet.
+_CLIENT_CONFIGURABLE_KEYS: frozenset[str] = _CLIENT_CONTEXT_KEYS | {"thread_id", "checkpoint_ns", "checkpoint_id"}
+#: Run metadata a client may set (descriptive only). Everything else, e.g.
+#: callbacks, __pregel_*, continue_action, is dropped.
+_CLIENT_METADATA_KEYS: frozenset[str] = frozenset({"title", "source"})
+_CLIENT_TOP_LEVEL_CONFIG_KEYS: frozenset[str] = frozenset({"recursion_limit", "tags", "run_name", "max_concurrency", "metadata", "configurable", "context"})
+
+
+def _client_requested_agent(body: Any) -> str | None:
+    """Which agent the caller asked for, before validation.
+
+    ``assistant_id`` is the LangGraph field for it; the chat UI sends
+    ``assistant_id="lead_agent"`` with ``context.agent_name`` instead, and the
+    IM channels did the same. Both are a CHOICE the caller is entitled to make;
+    the value that reaches the run is the server's normalised one.
+    """
+    assistant_id = getattr(body, "assistant_id", None)
+    if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
+        return assistant_id
+    # The chat UI's selector. Only here: a name placed in config.configurable,
+    # config.context or metadata is stripped, never read as a choice.
+    body_context = getattr(body, "context", None)
+    value = body_context.get("agent_name") if isinstance(body_context, Mapping) else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _normalise_agent_name(raw: str) -> str:
+    normalized = raw.strip().lower().replace("_", "-")
+    if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
+        raise ValueError(f"Invalid agent name {raw!r}: must contain only letters, digits, and hyphens after normalization.")
+    return normalized
+
+
+def _client_provenance(body: Any) -> tuple[str | None, str | None]:
+    """The (turn_provenance, trigger_rule_id) a request claims, wherever it put them."""
+    cfg = getattr(body, "config", None) or {}
+    containers = [cfg.get("configurable"), cfg.get("context"), cfg.get("metadata"), getattr(body, "metadata", None), getattr(body, "context", None)]
+    provenance = rule = None
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        provenance = provenance or container.get("turn_provenance")
+        rule = rule or container.get("trigger_rule_id")
+    return (provenance if isinstance(provenance, str) else None, rule if isinstance(rule, str) else None)
+
+
+def apply_server_owned_context(
+    config: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    user_id: str | None,
+    selected_sources: list[str] | None,
+    agent_name: str | None,
+    synthetic_rule_id: str | None,
+) -> None:
+    """Drop every client-supplied server-owned key, then write the server's.
+
+    ``config`` is the run config and ``metadata`` the run's metadata (stored on
+    the run record, where ``injector.is_synthetic`` reads provenance). Both are
+    edited in place. ``synthetic_rule_id`` is not None only for a request the
+    trigger engine made (the caller checks the credential).
+    """
+    from app.policy.provenance import PROVENANCE_KEY, RULE_KEY, SYNTHETIC
+
+    for key in [k for k in config if k not in _CLIENT_TOP_LEVEL_CONFIG_KEYS]:
+        config.pop(key)
+    for name, allowed in (("configurable", _CLIENT_CONFIGURABLE_KEYS), ("context", _CLIENT_CONTEXT_KEYS)):
+        container = config.get(name)
+        if isinstance(container, dict):
+            for key in [k for k in container if k not in allowed]:
+                container.pop(key)
+        elif container is not None:
+            config.pop(name)
+    if config.get("metadata") is not None and not isinstance(config.get("metadata"), dict):
+        config.pop("metadata")
+    for container in (config.get("metadata"), metadata):
+        if isinstance(container, dict):
+            for key in [k for k in container if k not in _CLIENT_METADATA_KEYS]:
+                container.pop(key)
+
+    context = config.get("context")
+    if not isinstance(context, dict):
+        context = {}
+        config["context"] = context
+    configurable = config.get("configurable") if isinstance(config.get("configurable"), dict) else None
+
+    if user_id:
+        context["user_id"] = user_id
+    if selected_sources is not None:
+        context["selected_sources"] = list(selected_sources)
+    if agent_name:
+        context["agent_name"] = agent_name
+        if configurable is not None:
+            configurable["agent_name"] = agent_name
+    if synthetic_rule_id is not None:
+        marks = {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: synthetic_rule_id}
+        context.update(marks)
+        if configurable is not None:
+            configurable.update(marks)
+        metadata.update(marks)
+
+
 def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, Any] | None) -> None:
     """Merge whitelisted keys from ``body.context`` into both ``config['configurable']``
     and ``config['context']`` so they are visible to legacy configurable readers and
@@ -136,7 +306,7 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
         return
     configurable = config.setdefault("configurable", {})
     runtime_context = config.setdefault("context", {})
-    for key in _CONTEXT_CONFIGURABLE_KEYS:
+    for key in _CLIENT_CONTEXT_KEYS:
         if key in context:
             if isinstance(configurable, dict):
                 configurable.setdefault(key, context[key])
@@ -370,45 +540,106 @@ async def start_run(
 
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
-    graph_input = normalize_input(body.input)
-    config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
+    # Ownership (item c): every path that starts a run on a thread checks it,
+    # including the stateless /api/runs routes, which name the thread in the
+    # body rather than the path and so never met the route decorator.
+    from app.gateway.internal_auth import is_trigger_engine_request
+    from app.gateway.ownership import require_thread_access
+
+    await require_thread_access(request, thread_id)
+
+    # The agent the caller chose, normalised; the run receives the server's value.
+    requested_agent = _client_requested_agent(body)
+    try:
+        agent_name = _normalise_agent_name(requested_agent) if requested_agent else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # A channel message is the user's own turn only when the channel's explicit
+    # allowlist vouched for the sender; otherwise it is relayed content.
+    from app.gateway.internal_auth import channel_header_present, channel_of, channel_sender_is_owner, trigger_grant_presented  # noqa: F401
+
+    # Who is speaking? A person's own session: the user. The internal
+    # principal (channels, the trigger engine, anything holding the token) is
+    # the user ONLY for a channel message whose sender the channel's allowlist
+    # vouched for, proven by a single-use channel-owner grant. A bare
+    # internal-token call is never the user's turn.
+    from app.gateway.ownership import is_internal
+
+    caller = getattr(request.state, "user", None)
+    if is_internal(caller):
+        relayed = not await channel_sender_is_owner(request)
+    else:
+        relayed = channel_header_present(request)
+
+    # Scheduled-run provenance, decided BEFORE the input is read: only a grant
+    # the trigger engine issued for exactly this request marks a turn synthetic.
+    # A claim WITH a grant that fails (expired, replayed, mismatched) is refused
+    # outright; it must never fall back to an ordinary, user-tagged turn.
+    from app.policy.provenance import SYNTHETIC
+
+    synthetic_rule_id: str | None = None
+    claimed, rule_id = _client_provenance(body)
+    if claimed == SYNTHETIC and trigger_grant_presented(request):
+        if not await is_trigger_engine_request(request):
+            raise HTTPException(status_code=403, detail="scheduled-run grant refused (expired, already used, or not for this request)")
+        synthetic_rule_id = rule_id or ""
+
+    # A scheduled turn's "human" message is a rule's prompt, never the person.
+    try:
+        graph_input = normalize_input(body.input, user_turn=not relayed and synthetic_rule_id is None)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Merge OmniHarness-specific context overrides into both ``configurable`` and ``context``.
     # The ``context`` field is a custom extension for the langgraph-compat layer
     # that carries agent configuration (model_name, thinking_enabled, etc.).
-    # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
+    # Only client-settable keys are forwarded; server-owned ones never are.
     merge_run_context_overrides(config, getattr(body, "context", None))
 
-    # Thread the authenticated user_id explicitly into the runtime context so
-    # middlewares and tools running in background worker threads can read it
-    # from runtime.context["user_id"] without relying on the get_effective_user_id()
-    # contextvar, which may not be set in those threads.
+    # The authenticated user, as AuthMiddleware decided (cookie or internal).
     user_id = await get_current_user(request)
-    if user_id:
-        ctx_dict = config.setdefault("context", {})
-        if isinstance(ctx_dict, dict):
-            ctx_dict.setdefault("user_id", user_id)
 
-    # Per-conversation tools: load this thread's stored selection (namespaced
-    # source ids, pinned enforced by the repo) and thread it into the runtime
-    # context so _make_lead_agent assembles from it. Best-effort — a thread with
-    # no stored selection falls back to pinned defaults inside the repo.
+    # Per-conversation tools: this thread's stored selection (namespaced source
+    # ids, pinned enforced by the repo). A thread with no stored selection gets
+    # pinned defaults inside the repo. If it cannot be read the key is absent
+    # (the agent's default surface), never the client's value.
+    selected_sources: list[str] | None = None
     try:
         selection_repo = getattr(request.app.state, "thread_tool_selection_repo", None)
         if selection_repo is not None:
-            selected_sources = await selection_repo.get_sources(thread_id=thread_id)
-            ctx_dict = config.setdefault("context", {})
-            if isinstance(ctx_dict, dict):
-                ctx_dict.setdefault("selected_sources", selected_sources)
+            selected_sources = list(await selection_repo.get_sources(thread_id=thread_id))
     except Exception:
         logger.warning("Failed to load thread tool selection for %s (non-fatal)", sanitize_log_param(thread_id))
 
+    # Scheduled-run provenance: only the trigger engine's own credential may
+    # mark a turn synthetic. Anyone else's claim is dropped.
+
+    run_metadata = dict(body.metadata or {})
+    apply_server_owned_context(
+        config,
+        run_metadata,
+        user_id=user_id,
+        selected_sources=selected_sources,
+        agent_name=agent_name,
+        synthetic_rule_id=synthetic_rule_id,
+    )
+    channel = channel_of(request)
+    if channel:
+        config["context"]["channel"] = channel
+    # The thread is the one this request was authorised for, never a value from
+    # the body. A request carrying only config.context used to leave no
+    # configurable at all, and the run died with KeyError 'thread_id'.
+    config_configurable = config.setdefault("configurable", {})
+    config_configurable["thread_id"] = thread_id
+    config_configurable.setdefault("checkpoint_ns", "")
+
     # Feature 006: skills removed from this conversation (the chat bar's ×).
-    # Always the server's stored value: anything a client put in the run body's
-    # context or configurable is dropped first, so it can never set this.
-    for container in (config.get("configurable"), config.get("context")):
-        if isinstance(container, dict):
-            container.pop("excluded_skills", None)
+    # Always the server's stored value (the client's was dropped above).
     try:
         exclusion_repo = getattr(request.app.state, "thread_skill_exclusion_repo", None)
         if exclusion_repo is not None:
@@ -418,6 +649,8 @@ async def start_run(
                 ctx_dict["excluded_skills"] = excluded_skills
     except Exception:
         logger.warning("Failed to load thread skill exclusion for %s (non-fatal)", sanitize_log_param(thread_id))
+
+    _mirror_runtime_visible_keys(config)
 
     try:
         record = await launch_agent_run_detached(
@@ -429,7 +662,7 @@ async def start_run(
             run_config=config,
             assistant_id=body.assistant_id,
             user_id=user_id,
-            metadata=body.metadata or {},
+            metadata=run_metadata,
             multitask_strategy=body.multitask_strategy,
             on_disconnect=disconnect,
             stream_modes=body.stream_mode,

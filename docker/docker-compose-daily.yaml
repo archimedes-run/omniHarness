@@ -20,7 +20,7 @@ services:
         # NEXT_PUBLIC_* values are compiled into the bundle, so they are build
         # arguments here, read from the root .env.
         NEXT_PUBLIC_FEATURE_WORKFLOWS: ${NEXT_PUBLIC_FEATURE_WORKFLOWS:-}
-    command: sh -c "cd /app/frontend && pnpm start > /app/logs/frontend.log 2>&1"
+    command: sh -c "cd /app/frontend && pnpm start >> /app/logs/frontend.log 2>&1"
     # No source mounts: the build is baked into the image.
     volumes: !override
       - ../logs:/app/logs

@@ -37,6 +37,12 @@ class OpenClawChannel(Channel):
     def __init__(self, bus: MessageBus, config: dict[str, Any]) -> None:
         super().__init__("openclaw", bus, config)
         self._bearer_token: str = config.get("bearer_token", "")
+        if not self._bearer_token:
+            logger.warning("[openclaw] channels.openclaw.bearer_token is empty: the webhook is CLOSED and every request is refused.")
+        # Senders (OpenClaw agentIds) allowed to talk to the agent. EMPTY = NOBODY,
+        # like every chat channel (base.Channel._allows_sender).
+        self._allowed_users: set[str] = {str(a) for a in (config.get("allowed_users") or [])}
+        self._warn_if_closed(self._allowed_users)
         self._openclaw_url: str = config.get("openclaw_url", "").rstrip("/")
 
     async def start(self) -> None:
@@ -95,12 +101,15 @@ class OpenClawChannel(Channel):
     def verify_bearer_token(self, token: str) -> bool:
         """Return True if *token* matches the configured bearer token.
 
-        When no token is configured every request is accepted (dev/trusted
-        network mode).
+        No token configured means NO request is accepted (security baseline:
+        the webhook route is public, and "accept everything" let anyone start
+        agent runs). Compared in constant time.
         """
-        if not self._bearer_token:
-            return True
-        return token == self._bearer_token
+        import secrets
+
+        if not self._bearer_token or not isinstance(token, str) or not token:
+            return False
+        return secrets.compare_digest(token, self._bearer_token)
 
     async def handle_webhook(self, payload: dict[str, Any]) -> None:
         """Route an inbound OpenClaw webhook payload to the agent dispatcher.
@@ -115,11 +124,16 @@ class OpenClawChannel(Channel):
 
         agent_id = str(payload.get("agentId", ""))
         to = str(payload.get("to", ""))
+        if not self._allows_sender(self._allowed_users, agent_id):
+            return
 
         # Prefer the explicit ``to`` field for the chat identifier so that
         # different OpenClaw agents can each have isolated OmniHarness threads.
         chat_id = to or agent_id or "openclaw"
-        user_id = agent_id or "openclaw"
+        # The sender id is NAMESPACED and never an account: the run's user is
+        # always set by the server, and an OpenClaw agent is never the owner
+        # (sender_is_the_owner stays False: its turns are relayed content).
+        user_id = f"openclaw:{agent_id}"
 
         inbound = InboundMessage(
             channel_name=self.name,

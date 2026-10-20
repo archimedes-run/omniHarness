@@ -1,5 +1,4 @@
 import builtins
-from types import SimpleNamespace
 
 import omniharness.sandbox.local.local_sandbox as local_sandbox
 from omniharness.sandbox.local.local_sandbox import LocalSandbox
@@ -34,131 +33,15 @@ def test_write_file_uses_utf8_on_windows_locale(tmp_path, monkeypatch):
     assert path.read_text(encoding="utf-8") == text
 
 
-def test_get_shell_prefers_posix_shell_from_path_before_windows_fallback(monkeypatch):
-    monkeypatch.setattr(local_sandbox.os, "name", "nt")
-    monkeypatch.setattr(LocalSandbox, "_find_first_available_shell", lambda candidates: r"C:\Program Files\Git\bin\sh.exe" if candidates == ("/bin/zsh", "/bin/bash", "/bin/sh", "sh") else None)
+def test_execute_command_runs_nothing_on_the_host(monkeypatch):
+    """Host command execution was removed: execute_command refuses, and no
+    process is ever spawned (security baseline)."""
+    import subprocess
 
-    assert LocalSandbox._get_shell() == r"C:\Program Files\Git\bin\sh.exe"
+    def boom(*args, **kwargs):
+        raise AssertionError("a host process was spawned")
 
-
-def test_get_shell_uses_powershell_fallback_on_windows(monkeypatch):
-    calls: list[tuple[str, ...]] = []
-
-    def fake_find(candidates: tuple[str, ...]) -> str | None:
-        calls.append(candidates)
-        if candidates == ("/bin/zsh", "/bin/bash", "/bin/sh", "sh"):
-            return None
-        return r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-
-    monkeypatch.setattr(local_sandbox.os, "name", "nt")
-    monkeypatch.setattr(local_sandbox.os, "environ", {"SystemRoot": r"C:\Windows"})
-    monkeypatch.setattr(LocalSandbox, "_find_first_available_shell", fake_find)
-
-    assert LocalSandbox._get_shell() == r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-    assert calls[1] == (
-        "pwsh",
-        "pwsh.exe",
-        "powershell",
-        "powershell.exe",
-        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-        "cmd.exe",
-    )
-
-
-def test_get_shell_uses_cmd_as_last_windows_fallback(monkeypatch):
-    def fake_find(candidates: tuple[str, ...]) -> str | None:
-        if candidates == ("/bin/zsh", "/bin/bash", "/bin/sh", "sh"):
-            return None
-        return r"C:\Windows\System32\cmd.exe"
-
-    monkeypatch.setattr(local_sandbox.os, "name", "nt")
-    monkeypatch.setattr(local_sandbox.os, "environ", {"SystemRoot": r"C:\Windows"})
-    monkeypatch.setattr(LocalSandbox, "_find_first_available_shell", fake_find)
-
-    assert LocalSandbox._get_shell() == r"C:\Windows\System32\cmd.exe"
-
-
-def test_execute_command_uses_powershell_command_mode_on_windows(monkeypatch):
-    calls: list[tuple[object, dict]] = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args[0], kwargs))
-        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
-
-    monkeypatch.setattr(local_sandbox.os, "name", "nt")
-    monkeypatch.setattr(LocalSandbox, "_get_shell", staticmethod(lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"))
-    monkeypatch.setattr(local_sandbox.subprocess, "run", fake_run)
-
-    output = LocalSandbox("t").execute_command("Write-Output hello")
-
-    assert output == "ok"
-    assert calls == [
-        (
-            [
-                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                "-NoProfile",
-                "-Command",
-                "Write-Output hello",
-            ],
-            {
-                "shell": False,
-                "capture_output": True,
-                "text": True,
-                "timeout": 600,
-            },
-        )
-    ]
-
-
-def test_execute_command_uses_posix_shell_command_mode_on_windows(monkeypatch):
-    calls: list[tuple[object, dict]] = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args[0], kwargs))
-        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
-
-    monkeypatch.setattr(local_sandbox.os, "name", "nt")
-    monkeypatch.setattr(LocalSandbox, "_get_shell", staticmethod(lambda: r"C:\Program Files\Git\bin\sh.exe"))
-    monkeypatch.setattr(local_sandbox.subprocess, "run", fake_run)
-
-    output = LocalSandbox("t").execute_command("echo hello")
-
-    assert output == "ok"
-    assert calls == [
-        (
-            [r"C:\Program Files\Git\bin\sh.exe", "-c", "echo hello"],
-            {
-                "shell": False,
-                "capture_output": True,
-                "text": True,
-                "timeout": 600,
-            },
-        )
-    ]
-
-
-def test_execute_command_uses_cmd_command_mode_on_windows(monkeypatch):
-    calls: list[tuple[object, dict]] = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args[0], kwargs))
-        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
-
-    monkeypatch.setattr(local_sandbox.os, "name", "nt")
-    monkeypatch.setattr(LocalSandbox, "_get_shell", staticmethod(lambda: r"C:\Windows\System32\cmd.exe"))
-    monkeypatch.setattr(local_sandbox.subprocess, "run", fake_run)
-
-    output = LocalSandbox("t").execute_command("echo hello")
-
-    assert output == "ok"
-    assert calls == [
-        (
-            [r"C:\Windows\System32\cmd.exe", "/c", "echo hello"],
-            {
-                "shell": False,
-                "capture_output": True,
-                "text": True,
-                "timeout": 600,
-            },
-        )
-    ]
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    out = local_sandbox.LocalSandbox("t").execute_command("echo hello")
+    assert out == local_sandbox.HOST_EXECUTION_REMOVED

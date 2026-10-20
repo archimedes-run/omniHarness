@@ -8,6 +8,7 @@ export function buildStateTone(state: BuildState | undefined): StatusTone {
     case "awaiting_approval":
       return "warn";
     case "tests_failed":
+    case "turn_on_failed":
     case "stalled":
       return "bad";
     default:

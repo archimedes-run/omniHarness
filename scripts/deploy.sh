@@ -44,6 +44,11 @@ cd "$REPO_ROOT"
 
 DOCKER_DIR="$REPO_ROOT/docker"
 COMPOSE_CMD=(docker compose -p omni-harness -f "$DOCKER_DIR/docker-compose.yaml")
+# The gateway receives only its allowlisted keys (no env_file); compose reads
+# their values from the repo .env.
+if [ -f "$REPO_ROOT/.env" ]; then
+    COMPOSE_CMD=(docker compose --env-file "$REPO_ROOT/.env" -p omni-harness -f "$DOCKER_DIR/docker-compose.yaml")
+fi
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 

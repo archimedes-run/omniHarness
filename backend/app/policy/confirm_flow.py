@@ -103,7 +103,15 @@ class ConfirmationFlow:
         """
         now = self.now()
         expired = self._expire(now)
-        pending = self.store.open_actions(now)
+        # Ownership: a typed reply only ever answers the speaker's OWN plans.
+        # The run's user_id is server-set; a plan from another account's run is
+        # invisible here, exactly as it is on the card (confirmations router).
+        # A typed reply answers only plans stated in THIS conversation, by THIS
+        # speaker's own run, and only on a person's turn: never a scheduled
+        # (synthetic) turn, whose "human" message is a rule's prompt. Without
+        # the thread scope, "yes" typed in any chat (or any Telegram message)
+        # answered whichever plan was pending anywhere.
+        pending = answerable_by_typed_reply(self.store.open_actions(now), runtime_context)
         if not pending:
             return FlowResult(NO_VERDICT, expired_meanwhile=expired)
 
@@ -141,9 +149,17 @@ class ConfirmationFlow:
             )
         if verdict.verdict is Verdict.CONFIRM and not action.confirmable_by_typing:
             return FlowResult(CARD_ONLY, action.id, action.card_only_refusal(), detail={"origin": action.origin, "origin_source": action.origin_source}, expired_meanwhile=expired)
-        return self._apply(action, verdict.verdict, supplied, run_tool, expired)
+        ctx = runtime_context or {}
+        channel = ctx.get("channel")
+        answered = {
+            "via": f"channel:{channel}" if channel else "typed_reply",
+            "thread_id": ctx.get("thread_id"),
+            "user_id": ctx.get("user_id"),
+            "message_id": getattr(message, "id", None) or (message.get("id") if isinstance(message, dict) else None),
+        }
+        return self._apply(action, verdict.verdict, supplied, run_tool, expired, answered)
 
-    def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None) -> FlowResult:
+    def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None, answered: dict | None = None) -> FlowResult:
         """The UI route (Phase 3). Same claim, same execution, same outcomes."""
         now = self.now()
         expired = self._expire(now)
@@ -155,12 +171,14 @@ class ConfirmationFlow:
         if action.is_expired(now):
             return FlowResult(EXPIRED, action_id, "that action expired before it was confirmed", expired_meanwhile=expired)
         verdict = Verdict.CONFIRM if confirm else Verdict.DECLINE
-        return self._apply(action, verdict, supplied_count, run_tool, expired)
+        return self._apply(action, verdict, supplied_count, run_tool, expired, answered or {"via": "button"})
 
     # ---- the shared middle ----------------------------------------------
 
-    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...]) -> FlowResult:
+    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...], answered: dict | None = None) -> FlowResult:
+        answered = {"via": None, "thread_id": None, "user_id": None, "message_id": None, **(answered or {})}
         if verdict is Verdict.DECLINE:
+            action.confirmation = answered
             self.store.resolve(action, Outcome.DECLINED, "declined by the user")
             return FlowResult(DECLINED, action.id, "Understood — I have not done it.", expired_meanwhile=expired)
 
@@ -181,6 +199,10 @@ class ConfirmationFlow:
         claimed = take_claim(self.store, action.id, self._claimant())
         if claimed is None:
             return FlowResult(ALREADY_RESOLVED, action.id, "another route confirmed that first", expired_meanwhile=expired)
+        # Recorded on the claim before anything runs, so the audit entry the
+        # execution writes says who confirmed, where, and by what.
+        claimed.confirmation = answered
+        self.store.save(claimed)
 
         before = list(claimed.targets)
         try:
@@ -277,3 +299,59 @@ class _Restated:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._original, name)
+
+
+def _same_owner(owner_id: str | None, speaker: str | None) -> bool:
+    """May this speaker answer this plan by typing?
+
+    Only the plan's own owner. A plan with no recorded owner (written before
+    owners were stored) is NOT answerable from a chat whose speaker is known:
+    it can still be answered on the card, where the owner check applies. The
+    one remaining case, neither side identified, is a run with no user at all,
+    which production never makes (services.apply_server_owned_context).
+    """
+    if owner_id is None or speaker is None:
+        return owner_id is None and speaker is None
+    return str(owner_id) == str(speaker)
+
+
+def _same_key(recorded: str | None, current: str | None) -> bool:
+    """Same thread. Both unknown matches only in a harness with no thread at
+    all; production runs always carry thread_id (the worker sets it)."""
+    if recorded is None or current is None:
+        return recorded is None and current is None
+    return str(recorded) == str(current)
+
+
+#: Server-set markers of a turn that is not a person answering: a resumed or
+#: called agent (Feature 006 #58 sets these). Such a turn is never a verdict.
+_NOT_A_PERSONS_TURN_KEYS = ("continue_action", "called_agent")
+
+
+def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dict | None) -> list[PendingAction]:
+    """THE gate for typed confirmations: which plans may this turn answer?
+
+    - only a person's own turn: never a scheduled (synthetic) turn, never a
+      turn carrying a server-set continue_action / called_agent, never an
+      invited agent's (subagent's) turn;
+    - only plans stated in THIS thread;
+    - only plans owned by THIS speaker (an owner-less legacy plan is
+      answerable on the owner-checked card only).
+    Whether a plan's ORIGIN allows typing at all (content- or automation-
+    caused plans are card-only) is decided after recognition, from the plan.
+    Several plans left after this gate and no id named: nothing is approved and
+    each is restated (recognise / FR-035).
+    """
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+
+    from .provenance import is_synthetic_turn
+
+    ctx = runtime_context or {}
+    if is_synthetic_turn(ctx) or any(ctx.get(k) for k in _NOT_A_PERSONS_TURN_KEYS):
+        return []
+    # An invited agent (subagent) has no person of its own: its "user" message
+    # is its inviter's instruction. Nothing typed there confirms anything.
+    if INVITED_ORIGIN_KEY in ctx or ctx.get(DELEGATION_CHAIN_KEY):
+        return []
+    speaker, thread = ctx.get("user_id"), ctx.get("thread_id")
+    return [a for a in actions if _same_owner(a.owner_id, speaker) and _same_key(a.thread_id, thread)]

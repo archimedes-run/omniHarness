@@ -219,9 +219,14 @@ def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
                 exc,
             )
             mcp_servers = []
-        agent_env: dict[str, str] | None = None
+        # Never the gateway's full environment (security baseline): a scrubbed
+        # base (no tokens, keys, credentialed URLs; HOME an empty temp dir),
+        # plus exactly the keys this agent's config names.
+        from omniharness.utils.safe_env import scrubbed_environment
+
+        agent_env: dict[str, str] = scrubbed_environment()
         if agent_config.env:
-            agent_env = {k: (os.environ.get(v[1:], "") if v.startswith("$") else v) for k, v in agent_config.env.items()}
+            agent_env.update({k: (os.environ.get(v[1:], "") if v.startswith("$") else v) for k, v in agent_config.env.items()})
 
         try:
             from acp import spawn_agent_process

@@ -73,6 +73,7 @@ async def get_mcp_tools() -> list[BaseTool]:
     # reflected when initializing MCP tools.
     extensions_config = ExtensionsConfig.from_file()
     servers_config = build_servers_config(extensions_config)
+    _drop_unapproved_built(extensions_config, servers_config)
 
     if not servers_config:
         logger.info("No enabled MCP servers configured")
@@ -91,6 +92,11 @@ async def get_mcp_tools() -> list[BaseTool]:
                 existing_headers = dict(servers_config[server_name].get("headers", {}))
                 existing_headers["Authorization"] = auth_header
                 servers_config[server_name]["headers"] = existing_headers
+
+        # Feature 006 #59: built servers' endpoint tokens, from the vault, in memory only.
+        from omniharness.mcp.built_auth import inject_built_tokens
+
+        await inject_built_tokens(extensions_config, servers_config)
 
         tool_interceptors = []
         oauth_interceptor = build_oauth_tool_interceptor(extensions_config)
@@ -130,6 +136,7 @@ async def get_mcp_tools() -> list[BaseTool]:
                 # that is absent cannot be reached by a bug in the permission
                 # path at all.
                 server_tools = _apply_tool_surface(extensions_config, server_name, server_tools)
+                server_tools = _only_approved_built_tools(extensions_config, server_name, server_tools)
                 logger.info(f"Loaded {len(server_tools)} tool(s) from '{server_name}'")
                 tools.extend(server_tools)
                 load_report.record_loaded(server_name, len(server_tools), [t.name for t in server_tools])
@@ -150,6 +157,48 @@ async def get_mcp_tools() -> list[BaseTool]:
     except Exception as e:
         logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
         return []
+
+
+def _drop_unapproved_built(extensions_config: ExtensionsConfig, servers_config: dict) -> None:
+    """The ``built__`` prefix is reserved for servers the MCP builder turned on
+    (Feature 006, #59). An entry under it that does not carry the builder's
+    record (its server id and the approved code hash) is not loaded, and the
+    refusal is reported as a failing source, not skipped silently."""
+    from omniharness.tools.names import canonical_tool_name
+
+    for name in list(servers_config):
+        if not canonical_tool_name(name).startswith("built__"):
+            continue
+        entry = extensions_config.mcp_servers.get(name)
+        extra = (getattr(entry, "model_extra", None) or {}) if entry is not None else {}
+        built = extra.get("built") if isinstance(extra.get("built"), dict) else {}
+        if extra.get("server_id") and built.get("code_sha256"):
+            continue
+        servers_config.pop(name, None)
+        load_report.record_failed(name, PermissionError("built/ is reserved for servers the MCP builder approved; this entry has no approval record"))
+
+
+def _only_approved_built_tools(extensions_config: ExtensionsConfig, server_name: str, server_tools: list) -> list:
+    """A built server offers only the tools its approval names (#59 review,
+    #72): a tool that appears at run time (e.g. only with a real key) was never
+    seen on the approval screen, so it is not offered at all."""
+    from omniharness.tools.names import canonical_tool_name
+
+    if not canonical_tool_name(server_name).startswith("built__"):
+        return server_tools
+    entry = extensions_config.mcp_servers.get(server_name)
+    extra = (getattr(entry, "model_extra", None) or {}) if entry is not None else {}
+    approved = {canonical_tool_name(t) for t in ((extra.get("built") or {}).get("tool_tiers") or {})}
+    prefix = canonical_tool_name(server_name) + "_"
+    kept = []
+    for tool in server_tools:
+        name = canonical_tool_name(tool.name)
+        bare = name[len(prefix) :] if name.startswith(prefix) else name
+        if bare in approved:
+            kept.append(tool)
+        else:
+            logger.warning("Built server '%s': tool '%s' was not on its approval and is not offered", server_name, tool.name)
+    return kept
 
 
 def _apply_tool_surface(extensions_config: ExtensionsConfig, server_name: str, server_tools: list) -> list:

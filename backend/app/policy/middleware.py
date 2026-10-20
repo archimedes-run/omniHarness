@@ -377,6 +377,7 @@ class PolicyMiddleware(AgentMiddleware):
             origin=origin,
             origin_source=origin_source,
             origin_via=origin_via,
+            owner_id=self._owner_id(request),
         )
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
@@ -467,7 +468,10 @@ class PolicyMiddleware(AgentMiddleware):
         messages = state.get("messages") if isinstance(state, dict) else None
         own, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
         invited = INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
-        if not invited or own != "user":
+        if own == "invitation" and not invited:
+            # An invitation message outside an invited context: can't tell.
+            return "unknown", "", ""
+        if not invited or own not in ("user", "invitation"):
             return own, source, ""
         inherited = context.get(INVITED_ORIGIN_KEY) or "unknown"
         if inherited == "user":
@@ -488,6 +492,14 @@ class PolicyMiddleware(AgentMiddleware):
     def _thread_id(request) -> str | None:
         context = getattr(getattr(request, "runtime", None), "context", None) or {}
         return context.get("thread_id")
+
+    @staticmethod
+    def _owner_id(request) -> str | None:
+        """Whose run this is. ``user_id`` in run context is set by the server
+        (services.apply_server_owned_context), never by a request body."""
+        context = getattr(getattr(request, "runtime", None), "context", None) or {}
+        owner = context.get("user_id")
+        return str(owner) if owner else None
 
     @staticmethod
     def _requester(request) -> str:

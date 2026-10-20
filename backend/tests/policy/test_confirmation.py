@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.policy.confirm import Verdict, recognise, restate
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.models import PendingAction, Tier
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
@@ -28,7 +29,7 @@ def _action(action_id=ID_A) -> PendingAction:
 
 @pytest.mark.parametrize("text", ["yes", "Yes", "y", "confirm", "approved", "go ahead", "do it", "proceed"])
 def test_recognised_confirmations(text):
-    assert recognise(HumanMessage(content=text), [_action()]).verdict is Verdict.CONFIRM
+    assert recognise(user_turn(content=text), [_action()]).verdict is Verdict.CONFIRM
 
 
 @pytest.mark.parametrize("text", ["no", "No", "n", "decline", "cancel", "stop", "do not"])
@@ -36,7 +37,7 @@ def test_recognised_declines_are_as_mechanical_as_confirmations(text):
     """FR-036. If yes is structural and no is interpreted, an intended refusal
     reads as ambiguity and gets re-asked — which teaches people to type whatever
     makes the prompt stop."""
-    assert recognise(HumanMessage(content=text), [_action()]).verdict is Verdict.DECLINE
+    assert recognise(user_turn(content=text), [_action()]).verdict is Verdict.DECLINE
 
 
 @pytest.mark.parametrize(
@@ -57,7 +58,7 @@ def test_anything_else_is_unrecognised(text):
     "yes but only the first one" stay here because neither is unambiguous
     standing alone."""
     """Not interpreted, not guessed — re-asked."""
-    assert recognise(HumanMessage(content=text), [_action()]).verdict is Verdict.UNRECOGNISED
+    assert recognise(user_turn(content=text), [_action()]).verdict is Verdict.UNRECOGNISED
 
 
 # ---------------------------------------------------------------------------
@@ -90,28 +91,28 @@ def test_a_page_saying_the_user_approved_does_not_confirm():
 
 
 def test_two_pending_actions_and_a_bare_yes_satisfies_neither():
-    result = recognise(HumanMessage(content="yes"), [_action(ID_A), _action(ID_B)])
+    result = recognise(user_turn(content="yes"), [_action(ID_A), _action(ID_B)])
 
     assert result.verdict is Verdict.UNRECOGNISED
     assert "names none of them" in result.reason
 
 
 def test_naming_the_action_disambiguates():
-    result = recognise(HumanMessage(content=f"yes {ID_B}"), [_action(ID_A), _action(ID_B)])
+    result = recognise(user_turn(content=f"yes {ID_B}"), [_action(ID_A), _action(ID_B)])
 
     assert result.verdict is Verdict.CONFIRM
     assert result.action_id == ID_B
 
 
 def test_a_bare_yes_works_when_only_one_is_pending():
-    result = recognise(HumanMessage(content="yes"), [_action(ID_A)])
+    result = recognise(user_turn(content="yes"), [_action(ID_A)])
 
     assert result.verdict is Verdict.CONFIRM
     assert result.action_id == ID_A
 
 
 def test_nothing_pending_means_nothing_to_confirm():
-    assert recognise(HumanMessage(content="yes"), []).verdict is Verdict.UNRECOGNISED
+    assert recognise(user_turn(content="yes"), []).verdict is Verdict.UNRECOGNISED
 
 
 # ---------------------------------------------------------------------------

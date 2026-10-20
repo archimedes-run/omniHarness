@@ -10,11 +10,22 @@ Through the real app; docker is a recorder (no daemon is touched).
 from __future__ import annotations
 
 CONTAINER = "omni-mcp-{}"
-ENTRY = "github-issue-connector"
+ENTRY = "built__github-issue-connector"  # #59: built servers live under built/
 
 
 def _container(server_id: str) -> str:
     return CONTAINER.format(server_id[:12])
+
+
+def _teardown(server_id: str) -> list[list[str]]:
+    """#59: a built server is two containers (server, egress sidecar) and two networks."""
+    i = server_id[:12]
+    return [
+        ["docker", "rm", "-f", f"omni-mcp-{i}"],
+        ["docker", "rm", "-f", f"omni-mcp-egress-{i}"],
+        ["docker", "network", "rm", f"omni-mcp-net-{i}"],
+        ["docker", "network", "rm", f"omni-mcp-pub-{i}"],
+    ]
 
 
 def _deployed_and_connected(studio) -> str:
@@ -33,8 +44,7 @@ def test_stop_stops_and_removes_the_container_and_its_config_entry(studio):
     resp = studio.client.post(f"/api/mcp-studio/servers/{server_id}/stop")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "stopped"
-    name = _container(server_id)
-    assert studio.docker.calls == [["docker", "stop", name], ["docker", "rm", name]]
+    assert studio.docker.calls == _teardown(server_id)
     assert ENTRY not in studio.config_servers()
     assert "hand-written" in studio.config_servers(), "an entry the studio did not write was removed"
 
@@ -43,8 +53,7 @@ def test_undeploy_takes_the_same_path(studio):
     server_id = _deployed_and_connected(studio)
     resp = studio.client.post(f"/api/mcp-studio/servers/{server_id}/undeploy")
     assert resp.status_code == 200, resp.text
-    name = _container(server_id)
-    assert studio.docker.calls == [["docker", "stop", name], ["docker", "rm", name]]
+    assert studio.docker.calls == _teardown(server_id)
     assert ENTRY not in studio.config_servers()
 
 
@@ -53,9 +62,8 @@ def test_delete_removes_container_secrets_config_entry_and_record(studio):
     assert studio.secret_rows(server_id) == ["GITHUB_TOKEN"]
     resp = studio.client.delete(f"/api/mcp-studio/servers/{server_id}")
     assert resp.status_code == 204, resp.text
-    name = _container(server_id)
-    assert ["docker", "stop", name] in studio.docker.calls
-    assert ["docker", "rm", name] in studio.docker.calls
+    for call in _teardown(server_id):
+        assert call in studio.docker.calls
     assert studio.secret_rows(server_id) == []
     assert ENTRY not in studio.config_servers()
     assert studio.client.get(f"/api/mcp-studio/servers/{server_id}").status_code == 404

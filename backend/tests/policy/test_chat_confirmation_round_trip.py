@@ -19,8 +19,10 @@ import pytest
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool as make_tool
+
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 SEEN: list[str] = []
@@ -72,7 +74,7 @@ def test_positive_control_the_seam_runs_and_can_see_the_tools(build_flow):
     first subagent probe in this project produced a wrong finding."""
     system = build_flow()
     agent = _agent(system, extra=[Watcher()])
-    agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
 
     assert SEEN, "wrap_model_call was never invoked; nothing below means anything"
     assert "calendar_decline" in SEEN[0], "the seam ran but could not see the tool it must execute"
@@ -82,10 +84,10 @@ def test_a_confirmation_in_chat_executes_the_action(build_flow):
     """T006. The round trip, end to end, through the agent."""
     system = build_flow()
     agent = _agent(system)
-    first = agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    first = agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
     assert RAN == [], "executed without confirmation"
 
-    out = agent.invoke({"messages": [*first["messages"], HumanMessage(content="yes")]})
+    out = agent.invoke({"messages": [*first["messages"], user_turn(content="yes")]})
 
     assert RAN == [{"meetings": ["Standup", "Review"]}]
     assert any("Done." in getattr(m, "content", "") for m in out["messages"])
@@ -96,9 +98,9 @@ def test_a_phrase_outside_the_closed_set_leaves_the_action_open(build_flow):
     """T008. Without this the suite would pass by accepting everything."""
     system = build_flow()
     agent = _agent(system)
-    first = agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    first = agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
 
-    agent.invoke({"messages": [*first["messages"], HumanMessage(content="maybe later on tuesday")]})
+    agent.invoke({"messages": [*first["messages"], user_turn(content="maybe later on tuesday")]})
 
     assert RAN == []
     assert len(system.store.open_actions(NOW)) == 1, "an unrecognised reply resolved the action"
@@ -109,7 +111,7 @@ def test_the_proposal_turn_is_not_read_as_an_answer_to_itself(build_flow):
     verdict on the next loop, or every proposal answers itself."""
     system = build_flow()
     agent = _agent(system)
-    out = agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    out = agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
 
     assert RAN == []
     assert not any("did not recognise" in getattr(m, "content", "") for m in out["messages"])
@@ -124,12 +126,12 @@ def test_the_chat_route_rechecks_targets_before_executing(build_flow):
 
     system = build_flow()
     agent = _agent(system)
-    first = agent.invoke({"messages": [HumanMessage(content="decline my morning meetings")]})
+    first = agent.invoke({"messages": [user_turn(content="decline my morning meetings")]})
     [action] = system.store.open_actions(NOW)
     action.arguments = {"meetings": ["Standup"]}
     system.store.save(action)
 
-    agent.invoke({"messages": [*first["messages"], HumanMessage(content="yes")]})
+    agent.invoke({"messages": [*first["messages"], user_turn(content="yes")]})
 
     assert RAN == [], "executed against targets other than the ones confirmed"
     assert system.store.get(action.id).outcome is Outcome.TARGETS_DRIFTED

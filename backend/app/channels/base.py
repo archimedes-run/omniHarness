@@ -35,6 +35,33 @@ class Channel(ABC):
         self.config = config
         self._running = False
 
+    def _allows_sender(self, allowed: set, sender: Any) -> bool:
+        """THE allowlist rule for every chat channel (security baseline).
+
+        An EMPTY allowlist means NOBODY, not everyone. A sender who is not on
+        it starts no run, triggers no tool and gets NO reply at all (silence,
+        so a stranger cannot even learn the bot is live). Logged with the
+        sender id only, never the message text.
+        """
+        if allowed and sender in allowed:
+            return True
+        logger.info("[%s] ignored a message from sender %s: not on channels.%s.allowed_users", self.name, sender, self.name)
+        return False
+
+    def _warn_if_closed(self, allowed: set) -> None:
+        if not allowed:
+            logger.warning("[%s] channels.%s.allowed_users is empty: the channel is CLOSED and every sender is ignored. Add your own user id there to use it.", self.name, self.name)
+
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        """Is this sender the person who owns the install? (security baseline)
+
+        Only then is their message the user's own turn (lineage.is_user_turn):
+        able to originate a Tier 3 plan as "user" or confirm one by typing.
+        A channel with no explicit allowlist cannot tell, so: False. Channels
+        with an allowlist (Telegram, Slack) override this.
+        """
+        return False
+
     @property
     def is_running(self) -> bool:
         return self._running

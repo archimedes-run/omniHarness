@@ -92,6 +92,7 @@ def test_token_version_mismatch_raises_401():
         assert "revoked" in str(exc.value.detail).lower()
 
 
+@patch("app.gateway.ownership.account_admitted", AsyncMock(return_value=True))
 def test_valid_token_returns_user_id():
     user = _user(token_version=0)
     token = create_access_token(str(user.id), token_version=0)
@@ -100,6 +101,7 @@ def test_valid_token_returns_user_id():
     assert result == str(user.id)
 
 
+@patch("app.gateway.ownership.account_admitted", AsyncMock(return_value=True))
 def test_valid_token_matching_version():
     user = _user(token_version=5)
     token = create_access_token(str(user.id), token_version=5)
@@ -121,6 +123,7 @@ def test_provider_exception_propagates():
             asyncio.run(authenticate(_req({"access_token": token})))
 
 
+@patch("app.gateway.ownership.account_admitted", AsyncMock(return_value=True))
 def test_jwt_missing_ver_defaults_to_zero():
     """JWT without 'ver' claim → decoded as ver=0, matches user with token_version=0."""
     import jwt as pyjwt
@@ -309,4 +312,14 @@ def test_csrf_delete_requires_token():
     """DELETE also requires CSRF."""
     with pytest.raises(Auth.exceptions.HTTPException) as exc:
         asyncio.run(authenticate(_req(method="DELETE", cookies={"access_token": "jwt"})))
+    assert exc.value.status_code == 403
+
+
+def test_valid_token_for_a_second_account_is_refused():
+    """Security baseline: a valid session for anyone but the owner is a 403."""
+    user = _user(token_version=0)
+    token = create_access_token(str(user.id), token_version=0)
+    with patch("app.gateway.langgraph_auth.get_local_provider", return_value=_mock_provider(user)), patch("app.gateway.ownership.account_admitted", AsyncMock(return_value=False)):
+        with pytest.raises(Auth.exceptions.HTTPException) as exc:
+            asyncio.run(authenticate(_req({"access_token": token})))
     assert exc.value.status_code == 403

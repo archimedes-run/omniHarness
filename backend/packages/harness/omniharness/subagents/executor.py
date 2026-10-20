@@ -232,6 +232,7 @@ class SubagentExecutor:
         thread_id: str | None = None,
         trace_id: str | None = None,
         checkpointer: Any | None = None,
+        user_id: str | None = None,
     ):
         """Initialize the executor.
 
@@ -246,12 +247,16 @@ class SubagentExecutor:
             thread_data: Thread data from parent agent.
             thread_id: Thread ID for sandbox operations.
             trace_id: Trace ID from parent for distributed tracing.
+            user_id: The inviting run's user (server-set). The invitee runs as
+                the same person, so a plan it states is that person's to
+                answer (security baseline: PendingAction.owner_id).
             checkpointer: Persistence for suspend/resume. When None,
                 ``_create_agent`` resolves the process checkpointer. Required
                 for any middleware that interrupts the run — without one the
                 subagent suspends and never resumes.
         """
         self.config = config
+        self.user_id = user_id
         self.app_config = app_config
         self.checkpointer = checkpointer
         self.parent_model = parent_model
@@ -403,7 +408,12 @@ class SubagentExecutor:
         # Skill content injected as developer/system messages before the task
         messages.extend(skill_messages)
         # Then the actual task
-        messages.append(HumanMessage(content=task))
+        # Written by the inviting agent's MODEL, never by the person: marked as
+        # an invitation (not a user turn), so lineage substitutes the inviter's
+        # recorded origin and a typed "yes" in it can never confirm anything.
+        from omniharness.agents.turns import mark_invitation
+
+        messages.append(mark_invitation(HumanMessage(content=task)))
 
         state: dict[str, Any] = {
             "messages": messages,
@@ -458,6 +468,8 @@ class SubagentExecutor:
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
+            if self.user_id:
+                context["user_id"] = self.user_id
             if self.app_config is not None:
                 context["app_config"] = self.app_config
 

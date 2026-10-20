@@ -18,7 +18,8 @@ class TelegramChannel(Channel):
 
     Configuration keys (in ``config.yaml`` under ``channels.telegram``):
         - ``bot_token``: Telegram Bot API token (from @BotFather).
-        - ``allowed_users``: (optional) List of allowed Telegram user IDs. Empty = allow all.
+        - ``allowed_users``: List of allowed Telegram user IDs. EMPTY = NOBODY:
+          every message is ignored, silently (security baseline).
     """
 
     def __init__(self, bus: MessageBus, config: dict[str, Any]) -> None:
@@ -33,8 +34,17 @@ class TelegramChannel(Channel):
                 self._allowed_users.add(int(uid))
             except (ValueError, TypeError):
                 pass
+        self._warn_if_closed(self._allowed_users)
         # chat_id -> last sent message_id for threaded replies
         self._last_bot_message: dict[str, int] = {}
+
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        """Only an EXPLICIT allowlist vouches for a sender ("empty = allow all"
+        lets anyone who finds the bot talk to it, but never as the user)."""
+        try:
+            return bool(self._allowed_users) and int(str(user_id)) in self._allowed_users
+        except (TypeError, ValueError):
+            return False
 
     async def start(self) -> None:
         if self._running:
@@ -225,9 +235,12 @@ class TelegramChannel(Channel):
                 logger.exception("Error during Telegram shutdown")
 
     def _check_user(self, user_id: int) -> bool:
-        if not self._allowed_users:
-            return True
-        return user_id in self._allowed_users
+        """Empty allowlist = nobody (base.Channel._allows_sender)."""
+        try:
+            sender = int(user_id)
+        except (TypeError, ValueError):
+            sender = user_id
+        return self._allows_sender(self._allowed_users, sender)
 
     async def _cmd_start(self, update, context) -> None:
         """Handle /start command."""

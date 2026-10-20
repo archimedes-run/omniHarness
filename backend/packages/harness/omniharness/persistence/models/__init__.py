@@ -19,6 +19,7 @@ from omniharness.persistence.feedback.model import FeedbackRow
 from omniharness.persistence.home_dismissals.model import HomeDismissalRow
 from omniharness.persistence.ledger.model import LedgerChangeRow, LedgerGoalRow, LedgerLinkRow, LedgerNoteRow, LedgerProjectRow, LedgerTaskRow
 from omniharness.persistence.mcp_secrets.model import McpSecretRow
+from omniharness.persistence.mcp_server.audit_model import McpBuildAuditRow
 from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
@@ -26,7 +27,7 @@ from omniharness.persistence.thread_meta.model import ThreadMetaRow
 from omniharness.persistence.thread_skill_exclusion.model import ThreadSkillExclusionRow
 from omniharness.persistence.thread_tool_selection.model import ThreadToolSelectionRow
 from omniharness.persistence.tool_source_health.model import ToolSourceHealthRow
-from omniharness.persistence.user.model import UserRow
+from omniharness.persistence.user.model import FirstAccountClaimRow, UserRow
 from omniharness.persistence.user_preferences.model import UserPreferenceRow
 from omniharness.persistence.workflow_artifact_links.model import WorkflowArtifactLinkRow
 from omniharness.persistence.workflow_runs.model import WorkflowRunRow
@@ -37,6 +38,7 @@ from omniharness.persistence.workflows.model import WorkflowRow
 __all__ = [
     "ComposioConnectionRow",
     "FeedbackRow",
+    "FirstAccountClaimRow",
     "HomeDismissalRow",
     "LedgerChangeRow",
     "LedgerGoalRow",
@@ -44,6 +46,7 @@ __all__ = [
     "LedgerNoteRow",
     "LedgerProjectRow",
     "LedgerTaskRow",
+    "McpBuildAuditRow",
     "McpSecretRow",
     "McpServerRow",
     "RunEventRow",

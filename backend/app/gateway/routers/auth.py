@@ -17,6 +17,7 @@ from app.gateway.auth.config import get_auth_config
 from app.gateway.auth.errors import AuthErrorCode, AuthErrorResponse
 from app.gateway.csrf_middleware import is_secure_request
 from app.gateway.deps import get_current_user_from_request, get_local_provider
+from app.gateway.ownership import REGISTRATION_CLOSED, account_admitted, create_first_account
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +285,14 @@ async def login_local(
 
     user = await get_local_provider().authenticate({"email": form_data.username, "password": form_data.password})
 
-    if user is None:
+    # Single-owner baseline: an account other than the owner's is refused with
+    # EXACTLY the wrong-password answer (status, body, rate-limit count), so the
+    # login form is not an oracle for which passwords are right. The real
+    # reason is logged here, by account id only.
+    refused = user is not None and not await account_admitted(user)
+    if refused:
+        logger.warning("Login refused for account %s: not the owner account (single-owner install).", user.id)
+    if user is None or refused:
         _record_login_failure(client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -303,17 +311,19 @@ async def login_local(
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(request: Request, response: Response, body: RegisterRequest):
-    """Register a new user account (always 'user' role).
+    """Register the owner account on a fresh install; closed afterwards.
 
-    Admin is auto-created on first boot. This endpoint creates regular users.
-    Auto-login by setting the session cookie.
+    OmniHarness is single-owner until multi-user is designed. Once any account
+    exists this answers 403 with a plain reason and creates nothing. On a fresh
+    install the account it creates IS the owner (admin role), exactly as
+    ``/initialize`` would. Auto-login by setting the session cookie.
     """
-    try:
-        user = await get_local_provider().create_user(email=body.email, password=body.password, system_role="user")
-    except ValueError:
+    # Atomic: concurrent first registrations create exactly one account.
+    user = await create_first_account(body.email, body.password, system_role="admin")
+    if user is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=AuthErrorResponse(code=AuthErrorCode.EMAIL_ALREADY_EXISTS, message="Email already registered").model_dump(),
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=AuthErrorResponse(code=AuthErrorCode.REGISTRATION_CLOSED, message=REGISTRATION_CLOSED).model_dump(),
         )
 
     token = create_access_token(str(user.id), token_version=user.token_version)
@@ -430,23 +440,16 @@ class InitializeAdminRequest(BaseModel):
 async def initialize_admin(request: Request, response: Response, body: InitializeAdminRequest):
     """Create the first admin account on initial system setup.
 
-    Only callable when no admin exists. Returns 409 Conflict if an admin
+    Only callable when NO account exists. Returns 409 Conflict if any account
     already exists.
 
     On success, the admin account is created with ``needs_setup=False`` and
     the session cookie is set.
     """
-    admin_count = await get_local_provider().count_admin_users()
-    if admin_count > 0:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=AuthErrorResponse(code=AuthErrorCode.SYSTEM_ALREADY_INITIALIZED, message="System already initialized").model_dump(),
-        )
-
-    try:
-        user = await get_local_provider().create_user(email=body.email, password=body.password, system_role="admin", needs_setup=False)
-    except ValueError:
-        # DB unique-constraint race: another concurrent request beat us.
+    # Security baseline: ANY existing account (not only an admin) means the
+    # install is initialised, and creation is atomic (create_first_account).
+    user = await create_first_account(body.email, body.password, system_role="admin")
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=AuthErrorResponse(code=AuthErrorCode.SYSTEM_ALREADY_INITIALIZED, message="System already initialized").model_dump(),

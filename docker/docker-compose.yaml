@@ -32,14 +32,24 @@ services:
       - "${BIND_ADDR:-127.0.0.1}:${PORT:-2026}:2026"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      # Access/error logs on the host: they survive container recreation.
+      - ${OMNI_HARNESS_LOG_DIR:-../logs}/nginx:/var/log/nginx
+      # Daily rotation, 30 days kept, gzip (USR1 reopen: no lines lost).
+      - ./nginx/rotate-logs.sh:/etc/nginx/rotate-logs.sh:ro
+      # The console captures the other containers append to, size-capped here.
+      - ${OMNI_HARNESS_LOG_DIR:-../logs}:/var/log/omni
     command: >
       sh -c "cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+      && (CAP_FILES='/var/log/omni/gateway.console.log /var/log/omni/frontend.log' sh /etc/nginx/rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &)
       && nginx -g 'daemon off;'"
     depends_on:
       - frontend
       - gateway
     networks:
-      - omni-harness
+      omni-harness:
+        # Fixed, so the gateway can trust X-Forwarded-For from THIS peer only
+        # (GATEWAY_TRUSTED_PROXIES on the gateway).
+        ipv4_address: ${OMNI_HARNESS_NGINX_IP:-172.30.226.10}
     restart: unless-stopped
 
   # ── Frontend: Next.js Production ───────────────────────────────────────────
@@ -126,6 +136,8 @@ services:
       - ${OMNI_HARNESS_HOME}:/app/backend/.omni-harness
       # DooD: AioSandboxProvider starts sandbox containers via host Docker daemon
       - ${OMNI_HARNESS_DOCKER_SOCKET}:/var/run/docker.sock
+      # Logs survive container recreation (daily files, 30 days kept).
+      - ${OMNI_HARNESS_LOG_DIR:-../logs}:/app/logs
       # CLI auth directories for auto-auth (Claude Code + Codex CLI)
       - type: bind
         source: ${HOME:?HOME must be set}/.claude
@@ -152,10 +164,57 @@ services:
       - OMNI_HARNESS_HOST_BASE_DIR=${OMNI_HARNESS_HOME}
       - OMNI_HARNESS_HOST_SKILLS_PATH=${OMNI_HARNESS_REPO_ROOT}/skills
       - OMNI_HARNESS_SANDBOX_HOST=host.docker.internal
-    env_file:
-      - ../.env
+      # Logs: daily append-only files, 30 days kept (app/gateway/log_files.py).
+      - GATEWAY_LOG_FILE=/app/logs/gateway.log
+      # Real client IP: forwarded headers are trusted from nginx's fixed address only.
+      - GATEWAY_TRUSTED_PROXIES=${OMNI_HARNESS_NGINX_IP:-172.30.226.10}
+      # So the gateway can WARN at startup when nginx is published off loopback.
+      - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
+      # Allowlisted keys from .env (secret_usage.GATEWAY_ENV_KEYS); NO env_file.
+      # Bare names: passed only when set (compose --env-file ../.env), never as "".
+      - ANTHROPIC_API_KEY
+      - ANTHROPIC_AUTH_TOKEN
+      - ANTHROPIC_BILLING_HEADER
+      - AUTH_JWT_SECRET
+      - AUTH_TRUSTED_PROXIES
+      - CLAUDE_CODE_CREDENTIALS_PATH
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - COMPOSIO_API_KEY
+      - COMPOSIO_CONNECTED_ACCOUNT_ID
+      - COMPOSIO_IMPORTANT_ONLY
+      - COMPOSIO_TOOLKIT
+      - COMPOSIO_USER_ID
+      - DEEPSEEK_API_KEY
+      - DISCORD_BOT_TOKEN
+      - EXA_API_KEY
+      - FIRECRAWL_API_KEY
+      - GATEWAY_ENABLE_DOCS
+      - GEMINI_API_KEY
+      - GITHUB_TOKEN
+      - GOOGLE_API_KEY
+      - INFOQUEST_API_KEY
+      - JINA_API_KEY
+      - LANGSMITH_API_KEY
+      - LANGSMITH_ENDPOINT
+      - LANGSMITH_PROJECT
+      - LANGSMITH_TRACING
+      - MOONSHOT_API_KEY
+      - OMNI_HARNESS_INTERNAL_AUTH_TOKEN
+      - OPENAI_API_KEY
+      - OPENCLAW_BEARER_TOKEN
+      - OPENROUTER_API_KEY
+      - SERPER_API_KEY
+      - SLACK_APP_TOKEN
+      - SLACK_BOT_TOKEN
+      - TAVILY_API_KEY
+      - TELEGRAM_BOT_TOKEN
+      - TZ
+      - VOLCENGINE_API_KEY
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # The MCP builder's vault key (#59), for the gateway only (see docker-compose-dev.yaml).
+    secrets:
+      - mcp_vault_key
     networks:
       - omni-harness
     restart: unless-stopped
@@ -179,8 +238,7 @@ services:
       - KUBECONFIG_PATH=/root/.kube/config
       - NODE_HOST=host.docker.internal
       - K8S_API_SERVER=https://host.docker.internal:26443
-    env_file:
-      - ../.env
+    # NO env_file: the provisioner reads only the K8S_* settings above.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -194,3 +252,11 @@ services:
 networks:
   omni-harness:
     driver: bridge
+    ipam:
+      config:
+        # Fixed so nginx can have a fixed address (the only trusted proxy).
+        - subnet: ${OMNI_HARNESS_SUBNET:-172.30.226.0/24}
+
+secrets:
+  mcp_vault_key:
+    file: ${OMNI_HARNESS_MCP_VAULT_KEY_FILE:-${HOME:?HOME must be set}/.omni-harness-secrets/mcp_vault.key}

@@ -3,6 +3,9 @@
 # for something that IS reached fails as stale. 'UNWIRED' entries are real orphans, listed in
 # ROADMAP-FOLLOWUPS for wire-or-delete; the rest are public API or framework-loaded by design.
 
+app.gateway.auth.local_provider:LocalAuthProvider.create_user  # auth repository interface; every HTTP account creation now goes through app.gateway.ownership.create_first_account (atomic, single owner), so this has no production caller, only tests and tooling
+app.gateway.auth.repositories.base:UserRepository.create_user  # auth repository interface; every HTTP account creation now goes through app.gateway.ownership.create_first_account (atomic, single owner), so this has no production caller, only tests and tooling
+app.gateway.auth.repositories.sqlite:SQLiteUserRepository.create_user  # auth repository interface; every HTTP account creation now goes through app.gateway.ownership.create_first_account (atomic, single owner), so this has no production caller, only tests and tooling
 app.gateway.auth.local_provider:LocalAuthProvider.count_users  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.local_provider:LocalAuthProvider.get_user_by_oauth  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.repositories.base:UserRepository.count_users  # auth repository interface for OAuth and user counting, not built yet; no production caller

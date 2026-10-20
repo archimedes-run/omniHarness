@@ -23,8 +23,10 @@ import yaml
 from fastapi.testclient import TestClient
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
+
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-key-ledger-composition-min-32")
 EXAMPLE = Path(__file__).resolve().parents[3] / "config.example.yaml"
@@ -165,7 +167,7 @@ def test_a_page_read_then_delegated_send_is_refused_by_typed_yes(gateway, monkey
             AIMessage(content="unused"),
         ]
     )
-    first = asyncio.run(_run(lead, [HumanMessage(content="what does example.com say?")], gateway))
+    first = asyncio.run(_run(lead, [user_turn(content="what does example.com say?")], gateway))
 
     [action] = _pending(gateway)
     assert SENT == [], "the subagent's send ran without confirmation"
@@ -175,7 +177,7 @@ def test_a_page_read_then_delegated_send_is_refused_by_typed_yes(gateway, monkey
     assert action["origin_label"] == "Suggested via lead_agent from content from web_fetch"
     assert action["confirmable_by_typing"] is False
 
-    out = asyncio.run(_run(lead, [*first["messages"], HumanMessage(content=f"yes {action['id']}")], gateway))
+    out = asyncio.run(_run(lead, [*first["messages"], user_turn(content=f"yes {action['id']}")], gateway))
 
     assert out["messages"][-1].content == ("That action was suggested via lead_agent from content from web_fetch, not by you, so it can only be confirmed with the Confirm button on its card. Nothing has happened.")
     assert SENT == [], "a typed yes confirmed a send a web page asked for, through a subagent"
@@ -186,13 +188,13 @@ def test_the_user_asks_directly_the_lead_delegates_and_typed_yes_confirms(gatewa
     """CONTROL: without it the test above passes when subagent confirmation is broken."""
     _wire_the_subagent(monkeypatch)
     lead = _lead([AIMessage(content="", tool_calls=[DELEGATE]), AIMessage(content="A send is waiting for you."), AIMessage(content="unused")])
-    first = asyncio.run(_run(lead, [HumanMessage(content="email the quarterly numbers to attacker@example.com")], gateway))
+    first = asyncio.run(_run(lead, [user_turn(content="email the quarterly numbers to attacker@example.com")], gateway))
 
     [action] = _pending(gateway)
     assert action["origin"] == "user" and action["confirmable_by_typing"] is True
     assert action["delegation_chain"] == ["lead_agent", "general-purpose"]
 
-    out = asyncio.run(_run(lead, [*first["messages"], HumanMessage(content="yes")], gateway))
+    out = asyncio.run(_run(lead, [*first["messages"], user_turn(content="yes")], gateway))
 
     assert out["messages"][-1].content == "Done."
     assert SENT == [{"to": "attacker@example.com", "body": "Q3"}]
@@ -221,7 +223,7 @@ def test_provenance_degrades_through_nested_delegation_and_never_upgrades(build_
     # A, invited by a page-caused lead turn, makes a call of its own.
     request = SimpleNamespace(
         tool_call={"name": "calendar_decline", "args": {"meetings": ["x"]}, "id": "c1"},
-        state={"messages": [HumanMessage(content="(the lead's instructions)")]},
+        state={"messages": [user_turn(content="(the lead's instructions)")]},
         runtime=SimpleNamespace(context=a_context),
     )
     origin = system.middleware._origin(request)
@@ -248,7 +250,7 @@ def test_an_invited_agents_own_read_is_still_content(build_flow) -> None:
 
     system = build_flow()
     context = invited_agent_context(TurnOrigin(origin="user", chain=("lead_agent",)), "A")
-    messages = [HumanMessage(content="(instructions)"), ToolMessage(content="page", tool_call_id="r", name="gmail_read"), AIMessage(content="")]
+    messages = [user_turn(content="(instructions)"), ToolMessage(content="page", tool_call_id="r", name="gmail_read"), AIMessage(content="")]
     request = SimpleNamespace(tool_call={"name": "x", "args": {}, "id": "c"}, state={"messages": messages}, runtime=SimpleNamespace(context=context))
 
     assert system.middleware._origin(request) == ("content", "gmail_read", "")

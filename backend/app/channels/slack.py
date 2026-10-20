@@ -39,7 +39,8 @@ class SlackChannel(Channel):
         - ``bot_token``: Slack Bot User OAuth Token (xoxb-...).
         - ``app_token``: Slack App-Level Token (xapp-...) for Socket Mode.
         - ``allowed_users``: (optional) List of allowed Slack user IDs, or a
-          single Slack user ID string as shorthand. Empty = allow all. Other
+          single Slack user ID string as shorthand. EMPTY = NOBODY (every
+          message ignored, silently). Other
           scalar values are treated as a single string with a warning.
     """
 
@@ -49,6 +50,11 @@ class SlackChannel(Channel):
         self._web_client = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._allowed_users = _normalize_allowed_users(config.get("allowed_users", []))
+        self._warn_if_closed(self._allowed_users)
+
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        """Only an EXPLICIT allowlist vouches for a sender as the user."""
+        return bool(self._allowed_users) and user_id in self._allowed_users
 
     async def start(self) -> None:
         if self._running:
@@ -228,9 +234,8 @@ class SlackChannel(Channel):
 
         user_id = event.get("user", "")
 
-        # Check allowed users
-        if self._allowed_users and user_id not in self._allowed_users:
-            logger.debug("Ignoring message from non-allowed user: %s", user_id)
+        # Empty allowlist = nobody (base.Channel._allows_sender).
+        if not self._allows_sender(self._allowed_users, user_id):
             return
 
         text = event.get("text", "").strip()

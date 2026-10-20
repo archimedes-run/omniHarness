@@ -109,6 +109,13 @@ def make_authed_test_app(
     repo.check_access = AsyncMock(return_value=owner_check_passes)
     app.state.thread_store = repo
 
+    # The stub user stands in for the owner account on install-wide routers
+    # (triggers, automations, inbox, sessions). The owner-only dependency itself
+    # is tested through the real app in tests/security.
+    from app.gateway.ownership import require_owner_account
+
+    app.dependency_overrides[require_owner_account] = lambda: None
+
     return app
 
 

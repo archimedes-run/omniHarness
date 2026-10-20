@@ -56,7 +56,8 @@ def test_list_servers_passes_query_params():
     app.include_router(mcp_studio.router)
 
     TestClient(app).get("/api/mcp-studio/servers?search=github&status=deployed&limit=10&offset=5")
-    repo.list_servers.assert_awaited_once_with(search="github", status="deployed", limit=10, offset=5)
+    kwargs = repo.list_servers.await_args.kwargs
+    assert {k: kwargs[k] for k in ("search", "status", "limit", "offset")} == {"search": "github", "status": "deployed", "limit": 10, "offset": 5}
 
 
 def test_list_servers_empty():
@@ -144,9 +145,9 @@ def test_unauthenticated_with_flag_off_still_returns_401_not_503(path: str):
 # The SQL-level proof lives in test_mcp_server_repo.py.
 
 
-def test_list_router_never_passes_user_id_to_repo():
-    # Verify the router calls list_servers without a user_id kwarg, which
-    # means the repo will use user_id=AUTO and read the contextvar.
+def test_list_router_scopes_to_the_authenticated_owner():
+    # #59 / C.0: every read is scoped to mcp_servers.owner_id explicitly, with
+    # the id of the authenticated user (server-owned; never from the body).
     app = make_authed_test_app()
     app.state.config = _FLAG_ON
     repo = AsyncMock()
@@ -154,15 +155,13 @@ def test_list_router_never_passes_user_id_to_repo():
     app.state.mcp_server_repo = repo
     app.include_router(mcp_studio.router)
 
-    TestClient(app).get("/api/mcp-studio/servers?search=x&status=deployed")
+    TestClient(app).get("/api/mcp-studio/servers?search=x&status=deployed&user_id=someone-else")
 
-    # If user_id were passed here, a rogue router could bypass owner isolation.
     call_kwargs = repo.list_servers.await_args.kwargs
-    assert "user_id" not in call_kwargs, "Router must not pass user_id — isolation is the repo's job via AUTO"
+    assert call_kwargs["user_id"] and call_kwargs["user_id"] != "someone-else"
 
 
-def test_get_router_never_passes_user_id_to_repo():
-    # Same invariant for the single-server endpoint.
+def test_get_router_scopes_to_the_authenticated_owner():
     app = make_authed_test_app()
     app.state.config = _FLAG_ON
     repo = AsyncMock()
@@ -170,10 +169,10 @@ def test_get_router_never_passes_user_id_to_repo():
     app.state.mcp_server_repo = repo
     app.include_router(mcp_studio.router)
 
-    TestClient(app).get("/api/mcp-studio/servers/srv-1")
+    TestClient(app).get("/api/mcp-studio/servers/srv-1?user_id=someone-else")
 
     call_kwargs = repo.get.await_args.kwargs
-    assert "user_id" not in call_kwargs, "Router must not pass user_id — isolation is the repo's job via AUTO"
+    assert call_kwargs["user_id"] and call_kwargs["user_id"] != "someone-else"
 
 
 def test_get_cross_user_returns_404():

@@ -24,9 +24,11 @@ def _get_user_id(runtime: ToolRuntime[ContextT, ThreadState]) -> str:
     "mcp_build",
     description=(
         "Submit source code for an MCP server and run the automated test pipeline. "
-        "The pipeline runs static security scans, verifies required secrets are stored, "
-        "starts the server in an isolated subprocess, connects the MCP client, "
-        "and discovers + test-calls each tool. "
+        "The pipeline runs static and model-based security scans, then runs the server in a locked "
+        "container (no network, no access to your files, read-only, not root), connects the MCP client, "
+        "and discovers + test-calls each tool with placeholder keys, never the real ones. "
+        "Tools that need the network report 'offline' in the test; that is expected. "
+        "Secrets are reported by name only; missing ones do not stop the test. "
         "Returns phase, tools_discovered, detected_secret_names, errors, and test_results. "
         "Call this after writing the complete server.py source code. "
         "Pass the server_id from the task and the full source_code string. "

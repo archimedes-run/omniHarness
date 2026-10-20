@@ -5,9 +5,10 @@ import re
 import shutil
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.gateway.authz import permission_dependency
 from omniharness.config.agents_api_config import get_agents_api_config
 from omniharness.config.agents_config import AgentConfig, list_custom_agents, load_agent_config, load_agent_soul
 from omniharness.config.paths import get_paths
@@ -105,6 +106,7 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
 
 @router.get(
     "/agents",
+    dependencies=[Depends(permission_dependency("threads", "read"))],
     response_model=AgentsListResponse,
     summary="List Custom Agents",
     description="List all custom agents available in the agents directory, including their soul content.",
@@ -128,6 +130,7 @@ async def list_agents() -> AgentsListResponse:
 
 @router.get(
     "/agents/check",
+    dependencies=[Depends(permission_dependency("threads", "read"))],
     summary="Check Agent Name",
     description="Validate an agent name and check if it is available (case-insensitive).",
 )
@@ -157,6 +160,7 @@ async def check_agent_name(name: str) -> dict:
 
 @router.get(
     "/agents/{name}",
+    dependencies=[Depends(permission_dependency("threads", "read"))],
     response_model=AgentResponse,
     summary="Get Custom Agent",
     description="Retrieve details and SOUL.md content for a specific custom agent.",
@@ -190,6 +194,7 @@ async def get_agent(name: str) -> AgentResponse:
 
 @router.post(
     "/agents",
+    dependencies=[Depends(permission_dependency("threads", "write"))],
     response_model=AgentResponse,
     status_code=201,
     summary="Create Custom Agent",
@@ -258,6 +263,7 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
 
 @router.put(
     "/agents/{name}",
+    dependencies=[Depends(permission_dependency("threads", "write"))],
     response_model=AgentResponse,
     summary="Update Custom Agent",
     description="Update an existing custom agent's config and/or SOUL.md.",
@@ -356,6 +362,7 @@ class UserProfileUpdateRequest(BaseModel):
 
 @router.get(
     "/user-profile",
+    dependencies=[Depends(permission_dependency("threads", "read"))],
     response_model=UserProfileResponse,
     summary="Get User Profile",
     description="Read the global USER.md file that is injected into all custom agents.",
@@ -381,6 +388,7 @@ async def get_user_profile() -> UserProfileResponse:
 
 @router.put(
     "/user-profile",
+    dependencies=[Depends(permission_dependency("threads", "write"))],
     response_model=UserProfileResponse,
     summary="Update User Profile",
     description="Write the global USER.md file that is injected into all custom agents.",
@@ -409,6 +417,7 @@ async def update_user_profile(request: UserProfileUpdateRequest) -> UserProfileR
 
 @router.delete(
     "/agents/{name}",
+    dependencies=[Depends(permission_dependency("threads", "delete"))],
     status_code=204,
     summary="Delete Custom Agent",
     description="Delete a custom agent and all its files (config, SOUL.md, memory).",

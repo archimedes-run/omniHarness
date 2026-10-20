@@ -2430,6 +2430,12 @@ function DeployView({
   const handleDeploy = async () => {
     setError(null);
     try {
+      // #59: approval is given on the Build board, for the code by its hash;
+      // this page only turns an already-approved server back on.
+      if (!server.approved) {
+        setError("Approve it on the Build board first: Connections > Build.");
+        return;
+      }
       const result = await apiDeploy(server.id);
       onBuildStatusChanged(result);
     } catch (err) {
@@ -2594,7 +2600,9 @@ function DeployView({
             disabled={!canDeploy}
             onClick={() => void handleDeploy()}
           >
-            Deploy to Docker
+            {server.approved
+              ? "Deploy to Docker"
+              : "Approve on the Build board"}
           </Button>
         ) : (
           <div className="flex flex-col gap-2">

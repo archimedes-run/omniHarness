@@ -100,7 +100,11 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
 
                 vault = McpSecretsVault(make_vault_key(mcp_builder_config), sf)
                 app.state.mcp_secrets_vault = vault
-                app.state.mcp_server_manager = MCPServerManager(app.state.mcp_server_repo, vault)
+                app.state.mcp_server_manager = MCPServerManager(app.state.mcp_server_repo, vault, reconcile_on_start=mcp_builder_config.reconcile_on_start)
+                # #59: the MCP loader asks the manager for a built server's endpoint token.
+                from omniharness.mcp.built_auth import set_built_token_provider
+
+                set_built_token_provider(app.state.mcp_server_manager.inbound_token)
             else:
                 app.state.mcp_secrets_vault = None
                 app.state.mcp_server_manager = None

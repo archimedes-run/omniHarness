@@ -3,13 +3,12 @@
 Covers:
 - Ownership check at the top of every mutating method
 - Cross-user access → PermissionError
-- Unapproved server cannot register
-- Approved server can register
+- Unapproved server cannot deploy (#59: approval is bound to the code hash)
 - test_server with blocked source code → failed phase
 - test_server with missing secrets → informational, not a blocker (A1 change)
 - stop() requires ownership
 - Secret values are scrubbed from test_results output (never stored or surfaced)
-- approve() is gated on phase=="verified"
+- begin_approval() is gated on phase=="verified" and on the code hash
 - Phase taxonomy: testing vs verified
 - egress_hosts forwarded to LLM scan (A2 change)
 - _is_auth_error: 401/403 treated as ok=True in test-calls
@@ -70,12 +69,11 @@ async def test_test_server_raises_for_wrong_owner() -> None:
 
 
 @pytest.mark.anyio
-async def test_register_raises_for_wrong_owner() -> None:
+async def test_begin_approval_raises_for_wrong_owner() -> None:
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
-    await repo.set_approved(row["id"], True, user_id="user_a")
+    row = await repo.create(name="srv", owner_id="user_a", source_code="x = 1\n")
     with pytest.raises(PermissionError):
-        await manager.register(server_id=row["id"], user_id="user_b")
+        await manager.begin_approval(server_id=row["id"], user_id="user_b", code_sha256_seen=row["code_sha256"])
     await engine.dispose()
 
 
@@ -89,26 +87,16 @@ async def test_stop_raises_for_wrong_owner() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unapproved server cannot register
+# An approval is pending until a deploy succeeds (#59)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_unapproved_server_cannot_register() -> None:
+async def test_unapproved_server_cannot_deploy() -> None:
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
+    row = await repo.create(name="srv", owner_id="user_a", source_code="x = 1\n")
     with pytest.raises(PermissionError, match="not been approved"):
-        await manager.register(server_id=row["id"], user_id="user_a")
-    await engine.dispose()
-
-
-@pytest.mark.anyio
-async def test_approved_server_can_register() -> None:
-    manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
-    await repo.set_approved(row["id"], True, user_id="user_a")
-    record = await manager.register(server_id=row["id"], user_id="user_a")
-    assert record.phase == "ready"
+        await manager.deploy(server_id=row["id"], user_id="user_a")
     await engine.dispose()
 
 
@@ -269,8 +257,9 @@ async def test_secret_value_scrubbed_from_test_results_output() -> None:
     # The real secret must not appear anywhere in the stored record
     record_str = str(record)
     assert "super-secret-value-xyz" not in record_str, "Real secret value must be scrubbed from test_results before storage"
-    # The scrubbed output must contain the REDACTED placeholder
-    assert any("[REDACTED]" in str(tr) for tr in record.test_results), "Scrubbed output should contain [REDACTED] marker"
+    # Feature 006: the value becomes its named placeholder, so the log still
+    # says WHICH secret was there without saying what it is.
+    assert any("{{secret:SECRET}}" in str(tr) for tr in record.test_results), "Scrubbed output should name the secret's placeholder"
     await engine.dispose()
 
 
@@ -319,44 +308,47 @@ async def test_phase_is_testing_when_no_tools_discovered() -> None:
 
 @pytest.mark.anyio
 async def test_approve_blocked_when_phase_is_not_verified() -> None:
-    """approve() must raise PermissionError when phase is not 'verified'."""
+    """begin_approval() refuses before the sandbox tests passed."""
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
-    # No test run → no in-memory record → phase is "unknown"
-    with pytest.raises(PermissionError, match="verified"):
-        await manager.approve(server_id=row["id"], user_id="user_a")
+    row = await repo.create(name="srv", owner_id="user_a", source_code="x = 1\n")
+    with pytest.raises(PermissionError, match="tests must pass"):
+        await manager.begin_approval(server_id=row["id"], user_id="user_a", code_sha256_seen=row["code_sha256"])
     await engine.dispose()
 
 
 @pytest.mark.anyio
 async def test_approve_blocked_when_phase_is_testing() -> None:
-    """approve() must raise when phase is 'testing' (sandbox ran but no tools found)."""
     from app.gateway.mcp_server_manager import MCPBuildRecord
 
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
-    # Inject a "testing" record directly
+    row = await repo.create(name="srv", owner_id="user_a", source_code="x = 1\n")
     manager._records[row["id"]] = MCPBuildRecord(server_id=row["id"], phase="testing", owner_id="user_a")
-    with pytest.raises(PermissionError, match="verified"):
-        await manager.approve(server_id=row["id"], user_id="user_a")
+    with pytest.raises(PermissionError, match="tests must pass"):
+        await manager.begin_approval(server_id=row["id"], user_id="user_a", code_sha256_seen=row["code_sha256"])
     await engine.dispose()
 
 
 @pytest.mark.anyio
-async def test_approve_succeeds_when_phase_is_verified() -> None:
-    """approve() succeeds and transitions to idle when phase is 'verified'."""
+async def test_approval_is_pending_not_approved_until_deploy() -> None:
+    """begin_approval() records a PENDING approval for the stored code's hash;
+    the server is not approved until a deploy commits it."""
     from app.gateway.mcp_server_manager import MCPBuildRecord
 
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
+    row = await repo.create(name="srv", owner_id="user_a", source_code="x = 1\n")
     manager._records[row["id"]] = MCPBuildRecord(server_id=row["id"], phase="verified", owner_id="user_a")
-    result = await manager.approve(server_id=row["id"], user_id="user_a")
-    assert result.phase == "idle"
-
-    # Verify the DB flag was set
+    # This code's own tests passed (#59 review H1: results are bound to the hash).
+    await repo.update_build_result(row["id"], phase="verified", tools_discovered=[], test_results=[], last_verified_at=None, user_id="user_a", tested_code_sha256=row["code_sha256"])
+    with pytest.raises(PermissionError, match="code changed"):
+        await manager.begin_approval(server_id=row["id"], user_id="user_a", code_sha256_seen="0" * 64)
+    pending = await manager.begin_approval(server_id=row["id"], user_id="user_a", code_sha256_seen=row["code_sha256"])
+    assert pending["code_sha256"] == row["code_sha256"]
     server = await repo.get(row["id"], user_id="user_a")
-    assert server is not None
-    assert server["approved"] is True
+    assert server["approved"] is False
+    assert server["pending_approval"]["code_sha256"] == row["code_sha256"]
+    assert await repo.commit_approval(row["id"], expected_sha256=row["code_sha256"], user_id="user_a")
+    server = await repo.get(row["id"], user_id="user_a")
+    assert server["approved"] is True and server["pending_approval"] is None
     await engine.dispose()
 
 
@@ -367,13 +359,13 @@ async def test_approve_succeeds_when_phase_is_verified() -> None:
 
 @pytest.mark.anyio
 async def test_egress_hosts_forwarded_to_llm_scan() -> None:
-    """egress_hosts declared on the server are forwarded to scan_python_code."""
+    """The hosts read from the code (not any declared list) are forwarded to scan_python_code."""
     manager, repo, _, engine = await _make_manager()
     row = await repo.create(
         name="srv",
         owner_id="user_a",
         source_code="import httpx\nfrom mcp.server.fastmcp import FastMCP\nmcp=FastMCP('t')\n@mcp.tool()\ndef fetch()->str:\n    return httpx.get('https://api.hunter.io').text\nif __name__=='__main__':mcp.run()",
-        egress_hosts=["api.hunter.io"],
+        egress_hosts=["ignored.example"],  # #59: hosts come from the code, never from here
     )
 
     captured: dict = {}

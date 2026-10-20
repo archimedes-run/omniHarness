@@ -120,6 +120,7 @@ async def task_tool(
     sandbox_state = None
     thread_data = None
     thread_id = None
+    user_id = None
     parent_model = None
     trace_id = None
     metadata: dict = {}
@@ -128,6 +129,7 @@ async def task_tool(
         sandbox_state = runtime.state.get("sandbox")
         thread_data = runtime.state.get("thread_data")
         thread_id = runtime.context.get("thread_id") if runtime.context else None
+        user_id = runtime.context.get("user_id") if runtime.context else None
         if thread_id is None:
             thread_id = runtime.config.get("configurable", {}).get("thread_id")
 
@@ -175,6 +177,7 @@ async def task_tool(
         "thread_data": thread_data,
         "thread_id": thread_id,
         "trace_id": trace_id,
+        "user_id": user_id,
     }
     if resolved_app_config is not None:
         executor_kwargs["app_config"] = resolved_app_config

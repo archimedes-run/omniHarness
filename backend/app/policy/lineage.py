@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from omniharness.agents.turns import USER_TURN_MARKER, mark_user_turn  # noqa: F401 (re-exported)
+
 #: Message types that are never eligible to confirm or initiate a Tier 3 action.
 #: `tool` is the whole of it today; the set exists so adding a source that
 #: introduces another is a one-line change in one place rather than a hunt.
@@ -60,14 +62,41 @@ def is_tool_result(message: Any) -> bool:
     return getattr(message, "tool_call_id", None) is not None
 
 
-def is_user_turn(message: Any) -> bool:
-    """True only for the user actually speaking.
+#: Set by the SERVER on the human message(s) of a request it received from the
+#: person (services.normalize_input), in ``additional_kwargs``. A client cannot
+#: set it: normalize_input rebuilds every message and never copies client kwargs.
+#: (USER_TURN_MARKER and mark_user_turn live in omniharness.agents.turns.)
 
-    Deliberately a whitelist. An unrecognised message type is NOT a user turn,
-    so a message shape nobody anticipated fails toward refusing rather than
-    toward accepting — the same direction as FR-009's unknown-tool default.
+
+def user_turn(content: Any, **kwargs: Any) -> Any:
+    """A HumanMessage the person sent, tagged as such (for the server and tests)."""
+    from langchain_core.messages import HumanMessage
+
+    return mark_user_turn(HumanMessage(content=content, **kwargs))
+
+
+def is_user_turn(message: Any) -> bool:
+    """THE one test of "the user said this" (lineage, typed confirmations, ...).
+
+    A HumanMessage is NOT enough: our own middlewares inject HumanMessages
+    mid-turn (the viewed image, todo reminders, the summary, browser-reported
+    preview errors) and workflow runs start from one. Each of those reset the
+    origin to "user", so content read earlier in the turn ran as if the user
+    had asked. Only a human message carrying the server's USER_TURN_MARKER is
+    the user. Everything else fails toward content / card-only.
     """
-    return _message_type(message) in USER_ORIGINS and not is_tool_result(message)
+    if _message_type(message) not in USER_ORIGINS or is_tool_result(message):
+        return False
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    return bool(isinstance(kwargs, dict) and kwargs.get(USER_TURN_MARKER) is True)
+
+
+def is_invitation(message: Any) -> bool:
+    """An invited agent's instruction message (omniharness.agents.turns)."""
+    from omniharness.agents.turns import INVITATION_MARKER
+
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    return bool(isinstance(kwargs, dict) and kwargs.get(INVITATION_MARKER) is True)
 
 
 def eligible_to_confirm(message: Any) -> bool:
@@ -80,6 +109,7 @@ ORIGIN_USER = "user"  # the user's own latest message
 ORIGIN_CONTENT = "content"  # something the agent READ: a page, an email, any tool output
 ORIGIN_AUTOMATION = "automation"  # a trigger's synthetic turn
 ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
+ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter's origin applies
 
 
 def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) -> tuple[str, str]:
@@ -107,6 +137,8 @@ def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) ->
             continue
         if is_tool_result(message):
             return ORIGIN_CONTENT, _content_source(items, index)
+        if is_invitation(message):
+            return ORIGIN_INVITATION, ""
         if is_user_turn(message):
             return ORIGIN_USER, ""
         return ORIGIN_UNKNOWN, ""

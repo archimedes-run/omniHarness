@@ -162,8 +162,8 @@ tools:
     use: omniharness.sandbox.tools:str_replace_tool
 
   # Bash execution tool
-  # Active only when using an isolated shell sandbox or when
-  # sandbox.allow_host_bash: true explicitly opts into host bash.
+  # Runs only in a container sandbox (AioSandboxProvider). Commands never run
+  # on the host; with the local provider this tool is not loaded.
   - name: bash
     group: bash
     use: omniharness.sandbox.tools:bash_tool
@@ -232,10 +232,9 @@ uploads:
 
 sandbox:
   use: omniharness.sandbox.local:LocalSandboxProvider
-  # Host bash execution is disabled by default because LocalSandboxProvider is
-  # not a secure isolation boundary for shell access. Enable only for fully
-  # trusted, single-user local workflows.
-  allow_host_bash: false
+  # Commands never run on the host (security baseline): the local provider
+  # serves files only. Use AioSandboxProvider to run bash. A config that still
+  # sets allow_host_bash is refused at startup.
   # Optional: Mount additional host directories into the sandbox.
   # Each mount maps a host path to a virtual container path accessible by the agent.
   # mounts:
@@ -617,12 +616,13 @@ run_events:
 #     enabled: false
 #     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
 #     app_token: $SLACK_APP_TOKEN     # xapp-... (Socket Mode)
-#     allowed_users: []               # empty = allow all; can also be a single Slack user ID string, e.g. U123456, but list form is recommended
+#     allowed_users: []               # YOUR Slack member id(s). EMPTY = NOBODY: every message is ignored, silently
 #
 #   telegram:
 #     enabled: false
 #     bot_token: $TELEGRAM_BOT_TOKEN
-#     allowed_users: []               # empty = allow all
+#     allowed_users: []               # YOUR numeric Telegram user id(s). EMPTY = NOBODY: every message is ignored, silently.
+#                                     # Find yours by messaging @userinfobot in Telegram; it replies with your id.
 #
 
 # ============================================================================

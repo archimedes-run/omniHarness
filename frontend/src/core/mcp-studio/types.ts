@@ -7,6 +7,7 @@ export type BuildState =
   | "tests_failed"
   | "awaiting_approval"
   | "turning_on"
+  | "turn_on_failed"
   | "enabled"
   | "off"
   | "stalled";
@@ -24,7 +25,12 @@ export interface BuiltServer {
   description: string | null;
   status: string;
   phase: string;
+  /** True only when the stored code is the approved code (derived, #59). */
   approved: boolean;
+  /** SHA-256 of the stored code; null before any code exists. */
+  code_sha256?: string | null;
+  /** SHA-256 of the version the user approved; null if none ever was. */
+  approved_code_sha256?: string | null;
   detected_secrets: string[];
   created_at: string;
   updated_at: string;
@@ -50,4 +56,28 @@ export interface StartBuildResponse {
   name: string;
   /** The names a secret in the description was stored under. Never values. */
   secret_placeholders: string[];
+}
+
+/** GET /api/mcp-studio/servers/{id}/approval (#59). */
+export interface ApprovalPacket {
+  server_id: string;
+  name: string;
+  code_sha256: string;
+  source_code: string;
+  egress_hosts: string[];
+  tools: { name: string; description: string; proposed_tier: number }[];
+  secret_names: string[];
+  view_token: string;
+  expires_in_seconds: number;
+  /** An approved version is still running while this new code waits. */
+  approved_version_on: boolean;
+}
+
+/** GET /api/mcp-studio/events: what the gateway did on its own (#59). */
+export interface BuildEvent {
+  at: string | null;
+  event: "retired" | "orphaned-secrets" | "turned-off";
+  server_id: string | null;
+  name: string | null;
+  details: Record<string, unknown>;
 }

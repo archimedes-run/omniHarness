@@ -595,6 +595,7 @@ async def test_start_run_threads_user_id_into_config():
         patch("app.gateway.services.get_run_context", return_value=MagicMock()),
         patch("app.gateway.services.get_current_user", new=AsyncMock(return_value="user-123")),
         patch("app.gateway.services.launch_agent_run_detached", new=fake_launch),
+        patch("app.gateway.ownership.require_thread_access", new=AsyncMock()),
     ):
         await start_run(body, "t1", mock_request)
 

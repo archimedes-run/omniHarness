@@ -165,8 +165,13 @@ def _resolve_docker_bind_host(sandbox_host: str | None = None, bind_host: str | 
         logger.debug("Docker sandbox bind: 127.0.0.1 (loopback default)")
         return "127.0.0.1"
 
-    logger.debug("Docker sandbox bind: 0.0.0.0 (non-loopback sandbox host compatibility)")
-    return "0.0.0.0"
+    # Security baseline: loopback even when the sandbox is reached via
+    # host.docker.internal. Docker Desktop (macOS/Windows) routes that name to
+    # loopback-published ports; on Linux, set OMNI_HARNESS_SANDBOX_BIND_HOST to
+    # the docker bridge address. Never every interface by default: the sandbox
+    # API runs arbitrary commands.
+    logger.debug("Docker sandbox bind: 127.0.0.1 (loopback; set OMNI_HARNESS_SANDBOX_BIND_HOST to override)")
+    return "127.0.0.1"
 
 
 class LocalContainerBackend(SandboxBackend):
@@ -269,6 +274,8 @@ class LocalContainerBackend(SandboxBackend):
             port = get_free_port(start_port=_next_start)
             try:
                 container_id = self._start_container(container_name, port, extra_mounts)
+                # Apple `container`: published only on a verified loopback address.
+                self._verify_loopback_publish(container_id)
                 break
             except RuntimeError as exc:
                 release_port(port)
@@ -507,10 +514,12 @@ class LocalContainerBackend(SandboxBackend):
         if self._runtime == "docker":
             cmd.extend(["--security-opt", "seccomp=unconfined"])
 
-        if self._runtime == "docker":
-            port_mapping = f"{_resolve_docker_bind_host()}:{port}:8080"
-        else:
-            port_mapping = f"{port}:8080"
+        # Both runtimes take ``[host-ip:]host-port:container-port``, and BOTH
+        # default to 0.0.0.0 when the address is left out (apple/container:
+        # Sources/Services/ContainerAPIService/Client/Parser.swift, the publish
+        # parser falls back to IPAddress("0.0.0.0")). So the address is always
+        # given: loopback unless OMNI_HARNESS_SANDBOX_BIND_HOST says otherwise.
+        port_mapping = f"{_resolve_docker_bind_host()}:{port}:8080"
 
         cmd.extend(
             [
@@ -563,6 +572,42 @@ class LocalContainerBackend(SandboxBackend):
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to start container using {self._runtime}: {e.stderr}")
             raise RuntimeError(f"Failed to start sandbox container: {e.stderr}")
+
+    def _verify_loopback_publish(self, container_id: str) -> None:
+        """Apple ``container``: refuse unless inspect PROVES a loopback publish.
+
+        Its -p takes ``[host-ip:]host-port:container-port`` and defaults to
+        0.0.0.0 (apple/container Parser.swift), and that CLI could not be
+        exercised here. So after start, ``container inspect`` must report every
+        published ``hostAddress`` as a loopback address; if it cannot be read
+        or is anything else, the container is stopped and the start refused.
+        Docker needs no check: its 127.0.0.1 publish is long established.
+        """
+        if self._runtime != "container":
+            return
+        import json
+
+        addresses: list[str] = []
+        try:
+            out = subprocess.run([self._runtime, "inspect", container_id], capture_output=True, text=True, check=True, timeout=30).stdout
+
+            def walk(node):
+                if isinstance(node, dict):
+                    if "hostAddress" in node:
+                        addresses.append(str(node["hostAddress"]))
+                    for value in node.values():
+                        walk(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        walk(value)
+
+            walk(json.loads(out))
+        except Exception as exc:  # noqa: BLE001
+            self._stop_container(container_id)
+            raise RuntimeError(f"Refusing the Apple container sandbox: could not verify its published address ({type(exc).__name__}). Use Docker, or check `container inspect`.") from exc
+        if not addresses or any(a.strip("[]") not in ("127.0.0.1", "::1") for a in addresses):
+            self._stop_container(container_id)
+            raise RuntimeError(f"Refusing the Apple container sandbox: it is published on {addresses or 'an unknown address'}, not loopback only.")
 
     def _stop_container(self, container_id: str) -> None:
         """Stop a container (--rm ensures automatic removal)."""

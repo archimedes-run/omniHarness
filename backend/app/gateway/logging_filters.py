@@ -43,3 +43,14 @@ def install_preview_token_log_filter() -> None:
         logger = logging.getLogger(logger_name)
         if not any(isinstance(existing, PreviewTokenRedactionFilter) for existing in logger.filters):
             logger.addFilter(redaction_filter)
+        # On the HANDLERS too: a logger's filters do not see records that a
+        # CHILD logger propagates up, but a handler's filters see every record
+        # it writes (security baseline review).
+        for handler in logger.handlers:
+            add_preview_token_filter(handler)
+
+
+def add_preview_token_filter(handler: logging.Handler) -> logging.Handler:
+    if not any(isinstance(existing, PreviewTokenRedactionFilter) for existing in handler.filters):
+        handler.addFilter(PreviewTokenRedactionFilter())
+    return handler

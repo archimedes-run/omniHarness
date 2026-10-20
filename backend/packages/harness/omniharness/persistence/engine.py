@@ -180,6 +180,11 @@ async def _run_additive_migrations(backend: str) -> None:
         ("mcp_secrets", "key_hint", "VARCHAR(8)", "NULL"),
         ("mcp_servers", "container_id", "VARCHAR(128)", "NULL"),
         ("mcp_servers", "container_port", "INTEGER", "NULL"),
+        # Feature 006 #59: approval bound to a code hash
+        ("mcp_servers", "approved_code_sha256", "VARCHAR(64)", "NULL"),
+        ("mcp_servers", "approval", "JSON", "NULL"),
+        ("mcp_servers", "pending_approval", "JSON", "NULL"),
+        ("mcp_servers", "verified_code_sha256", "VARCHAR(64)", "NULL"),
         # Phase 1 platform event discriminator (migration 0011)
         ("run_events", "source", "VARCHAR(32)", "NULL"),
         # Phase 1 Slice 1: additive workflow columns (migration 0012)
@@ -191,6 +196,9 @@ async def _run_additive_migrations(backend: str) -> None:
         ("workflows", "required_capability_ids", "JSON", "NULL"),
         # Phase 1 Slice 4a: workflow spec generator (migration 0013)
         ("workflow_versions", "spec_json", "JSON", "NULL"),
+        # Security baseline: reversible account disabling
+        ("users", "disabled_at", "TIMESTAMP", "NULL"),
+        ("users", "disabled_reason", "VARCHAR(256)", "NULL"),
     ]
 
     async with _engine.begin() as conn:

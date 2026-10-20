@@ -1,8 +1,5 @@
 import errno
-import ntpath
 import os
-import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -10,6 +7,10 @@ from typing import NamedTuple
 from omniharness.sandbox.local.list_dir import list_dir
 from omniharness.sandbox.sandbox import Sandbox
 from omniharness.sandbox.search import GrepMatch, find_glob_matches, find_grep_matches
+from omniharness.utils.safe_env import scrubbed_environment  # noqa: F401 (re-exported)
+
+#: What execute_command answers: nothing runs on the host any more.
+HOST_EXECUTION_REMOVED = "Error: running commands on the host was removed. Commands run only in a container sandbox: set sandbox.use to omniharness.community.aio_sandbox:AioSandboxProvider."
 
 
 @dataclass(frozen=True)
@@ -31,31 +32,6 @@ class LocalSandbox(Sandbox):
     def _shell_name(shell: str) -> str:
         """Return the executable name for a shell path or command."""
         return shell.replace("\\", "/").rsplit("/", 1)[-1].lower()
-
-    @staticmethod
-    def _is_powershell(shell: str) -> bool:
-        """Return whether the selected shell is a PowerShell executable."""
-        return LocalSandbox._shell_name(shell) in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
-
-    @staticmethod
-    def _is_cmd_shell(shell: str) -> bool:
-        """Return whether the selected shell is cmd.exe."""
-        return LocalSandbox._shell_name(shell) in {"cmd", "cmd.exe"}
-
-    @staticmethod
-    def _find_first_available_shell(candidates: tuple[str, ...]) -> str | None:
-        """Return the first executable shell path or command found from candidates."""
-        for shell in candidates:
-            if os.path.isabs(shell):
-                if os.path.isfile(shell) and os.access(shell, os.X_OK):
-                    return shell
-                continue
-
-            shell_from_path = shutil.which(shell)
-            if shell_from_path is not None:
-                return shell_from_path
-
-        return None
 
     def __init__(self, id: str, path_mappings: list[PathMapping] | None = None):
         """
@@ -271,70 +247,15 @@ class LocalSandbox(Sandbox):
 
         return pattern.sub(replace_match, content)
 
-    @staticmethod
-    def _get_shell() -> str:
-        """Detect available shell executable with fallback."""
-        shell = LocalSandbox._find_first_available_shell(("/bin/zsh", "/bin/bash", "/bin/sh", "sh"))
-        if shell is not None:
-            return shell
-
-        if os.name == "nt":
-            system_root = os.environ.get("SystemRoot", r"C:\Windows")
-            shell = LocalSandbox._find_first_available_shell(
-                (
-                    "pwsh",
-                    "pwsh.exe",
-                    "powershell",
-                    "powershell.exe",
-                    ntpath.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-                    "cmd.exe",
-                )
-            )
-            if shell is not None:
-                return shell
-
-            raise RuntimeError("No suitable shell executable found. Tried /bin/zsh, /bin/bash, /bin/sh, `sh` on PATH, then PowerShell and cmd.exe fallbacks for Windows.")
-
-        raise RuntimeError("No suitable shell executable found. Tried /bin/zsh, /bin/bash, /bin/sh, and `sh` on PATH.")
-
     def execute_command(self, command: str) -> str:
-        # Resolve container paths in command before execution
-        resolved_command = self._resolve_paths_in_command(command)
-        shell = self._get_shell()
+        """REMOVED (security baseline): agent commands never run on the host.
 
-        if os.name == "nt":
-            if self._is_powershell(shell):
-                args = [shell, "-NoProfile", "-Command", resolved_command]
-            elif self._is_cmd_shell(shell):
-                args = [shell, "/c", resolved_command]
-            else:
-                args = [shell, "-c", resolved_command]
-
-            result = subprocess.run(
-                args,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-        else:
-            args = [shell, "-c", resolved_command]
-            result = subprocess.run(
-                args,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-        output = result.stdout
-        if result.stderr:
-            output += f"\nStd Error:\n{result.stderr}" if output else result.stderr
-        if result.returncode != 0:
-            output += f"\nExit Code: {result.returncode}"
-
-        final_output = output if output else "(no output)"
-        # Reverse resolve local paths back to container paths in output
-        return self._reverse_resolve_paths_in_output(final_output)
+        Host bash ran agent-written commands as the gateway's own user, able to
+        read its environment (ps -E, /proc/<ppid>/environ) and every dotfile.
+        All command execution goes through a container sandbox
+        (AioSandboxProvider). This refuses, and runs nothing.
+        """
+        return HOST_EXECUTION_REMOVED
 
     def list_dir(self, path: str, max_depth=2) -> list[str]:
         resolved_path = self._resolve_path(path)

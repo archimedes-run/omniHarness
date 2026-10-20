@@ -454,13 +454,13 @@ channels:
   telegram:
     enabled: true
     bot_token: $TELEGRAM_BOT_TOKEN
-    allowed_users: []   # empty = allow all
+    allowed_users: []   # your numeric Telegram user id; EMPTY = NOBODY (silently ignored)
 
   slack:
     enabled: true
     bot_token: $SLACK_BOT_TOKEN    # xoxb-...
     app_token: $SLACK_APP_TOKEN    # xapp-... (Socket Mode)
-    allowed_users: []
+    allowed_users: []   # your Slack member id; EMPTY = NOBODY (silently ignored)
 ```
 
 **Keys in `.env`:**

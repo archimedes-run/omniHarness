@@ -462,7 +462,7 @@ def test_bash_tool_rejects_host_bash_when_local_sandbox_default(monkeypatch) -> 
         command="/bin/echo hello",
     )
 
-    assert "Host bash execution is disabled" in result
+    assert "Running commands on the host was removed" in result
 
 
 def test_bash_tool_blocks_relative_traversal_before_host_execution(monkeypatch) -> None:
