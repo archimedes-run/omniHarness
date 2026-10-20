@@ -135,5 +135,10 @@ def studio(tmp_path, monkeypatch):
 
         s.login(OWNER_EMAIL, OWNER_PASSWORD)
         yield s
+    # The lifespan registers a process-wide build controller and does not
+    # clear it on shutdown; later tests expect none.
+    from omniharness.runtime.mcp.controller import reset_mcp_build_controller
+
+    reset_mcp_build_controller()
     reset_app_config()
     reset_extensions_config()
