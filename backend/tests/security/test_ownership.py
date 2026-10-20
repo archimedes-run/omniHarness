@@ -32,7 +32,7 @@ def _state_plan(owner_id: str | None, thread_id: str | None = None):
 
     action = PendingAction(
         plan_text="Delete four calendar events",
-        tool_name="calendar_delete_events",
+        tool_name="gmail_delete_email",
         arguments={"ids": ["a", "b"]},
         targets=["a", "b"],
         tier_at_statement=Tier.TIER_3,
@@ -140,7 +140,7 @@ def test_a_plan_is_stamped_with_the_owner_of_the_run_that_stated_it(two) -> None
     sec, _, tid = two
     middleware = build(get_app_config())
     runtime = SimpleNamespace(context={"thread_id": tid, "user_id": sec.owner_id})
-    request = SimpleNamespace(tool_call={"name": "calendar_decline_everything", "args": {"meetings": ["m1"]}, "id": "tc1"}, runtime=runtime, state={"messages": []})
+    request = SimpleNamespace(tool_call={"name": "googlecalendar_decline_everything", "args": {"meetings": ["m1"]}, "id": "tc1"}, runtime=runtime, state={"messages": []})
     middleware.wrap_tool_call(request, lambda r: pytest.fail("a Tier 3 call executed at statement"))
     [action] = [a for a in middleware.pending.open_actions(middleware.now()) if a.thread_id == tid]
     assert action.owner_id == sec.owner_id
