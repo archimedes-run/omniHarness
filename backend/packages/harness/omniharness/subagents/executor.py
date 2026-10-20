@@ -5,9 +5,10 @@ import atexit
 import logging
 import threading
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from contextlib import asynccontextmanager
 from contextvars import Context, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -200,6 +201,32 @@ def subagent_checkpoint_key(thread_id: str, task_id: str) -> str:
     return f"{thread_id}/subagent/{task_id}/{uuid.uuid4().hex[:12]}"
 
 
+@asynccontextmanager
+async def _sqlite_run_checkpointer(path: str) -> AsyncIterator[Any]:
+    """One subagent run's connection to the app's SQLite checkpoint store.
+
+    The gateway holds its own connection to the same file, and several
+    subagents may run at once, so this one waits for a busy database (30 s)
+    instead of failing with "database is locked", and uses WAL so readers
+    never block the writer.
+    """
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from omniharness.runtime.store._sqlite_utils import ensure_sqlite_parent_dir
+
+    ensure_sqlite_parent_dir(path)
+    conn = await aiosqlite.connect(path, timeout=30)
+    try:
+        await conn.execute("PRAGMA journal_mode=WAL;")
+        await conn.execute("PRAGMA busy_timeout=30000;")
+        saver = AsyncSqliteSaver(conn)
+        await saver.setup()
+        yield saver
+    finally:
+        await conn.close()
+
+
 def _filter_tools(
     all_tools: list[BaseTool],
     allowed: list[str] | None,
@@ -338,6 +365,9 @@ class SubagentExecutor:
             app_config = None
         durable = app_config is not None and (getattr(app_config, "checkpointer", None) is not None or getattr(getattr(app_config, "database", None), "backend", "memory") != "memory")
         if durable:
+            database = getattr(app_config, "database", None)
+            if getattr(app_config, "checkpointer", None) is None and getattr(database, "backend", None) == "sqlite":
+                return _sqlite_run_checkpointer(database.checkpointer_sqlite_path)
             from omniharness.runtime.checkpointer.async_provider import make_checkpointer
 
             return make_checkpointer(app_config)
