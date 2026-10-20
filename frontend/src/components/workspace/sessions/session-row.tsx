@@ -74,6 +74,7 @@ export function SessionRow({ session }: { session: Row }) {
       {session.todos && session.todos.length > 0 && (
         <Plan todos={session.todos} />
       )}
+      <Continued session={session} />
       <p className="text-muted-foreground text-xs">
         Observe only · {session.session_id.slice(0, 8)}
         {session.files_changed
@@ -82,6 +83,32 @@ export function SessionRow({ session }: { session: Row }) {
       </p>
     </li>
   );
+}
+
+/**
+ * The recorded link between a session and its continuation. Observed: the
+ * earlier session's own record names the later one, so it is said plainly.
+ */
+function Continued({ session }: { session: Row }) {
+  if (session.continued_from) {
+    return (
+      <p className="text-muted-foreground text-xs" data-testid="continued">
+        Continued from an earlier session ·{" "}
+        <span className="font-mono">{session.continued_from.slice(0, 8)}</span>{" "}
+        · shown as one
+      </p>
+    );
+  }
+  if (session.continued_in) {
+    return (
+      <p className="text-muted-foreground text-xs" data-testid="continued">
+        Continued in another session ·{" "}
+        <span className="font-mono">{session.continued_in.slice(0, 8)}</span> ·
+        not in view
+      </p>
+    );
+  }
+  return null;
 }
 
 const TODO_ICON = {

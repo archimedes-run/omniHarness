@@ -102,6 +102,12 @@ class SessionRef:
     todos: list[tuple[str, str]] | None = None
     #: Paths changed by successful tool results, newest last.
     files_changed: list[str] = field(default_factory=list)
+    #: The earlier session this one continues, when the agent RECORDED the link
+    #: (Claude Code's `continued-in` record). The two are shown as one session.
+    continued_from: str | None = None
+    #: The later session this one was continued in, when that session is not
+    #: in view: the link is recorded, the continuation itself is not seen.
+    continued_in: str | None = None
 
 
 class SessionAdapter(ABC):

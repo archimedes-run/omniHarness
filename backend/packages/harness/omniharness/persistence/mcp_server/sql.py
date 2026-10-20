@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omniharness.persistence.mcp_server.model import McpServerRow
+from omniharness.persistence.timestamps import utc_iso
 from omniharness.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
 
 
@@ -35,8 +36,8 @@ class McpServerRepository:
             "last_verified_at": row.last_verified_at,
             "container_id": row.container_id,
             "container_port": row.container_port,
-            "created_at": row.created_at.isoformat() if isinstance(row.created_at, datetime) else row.created_at,
-            "updated_at": row.updated_at.isoformat() if isinstance(row.updated_at, datetime) else row.updated_at,
+            "created_at": utc_iso(row.created_at) if isinstance(row.created_at, datetime) else row.created_at,
+            "updated_at": utc_iso(row.updated_at) if isinstance(row.updated_at, datetime) else row.updated_at,
         }
 
     async def list_servers(

@@ -27,6 +27,12 @@ export interface SessionRow {
    * has never made one (FR-031). */
   todos?: TodoItem[] | null;
   files_changed?: number;
+  /** The earlier session this one continues, folded into this row. Observed:
+   * the agent recorded the link. Absent from an older watcher. */
+  continued_from?: string | null;
+  /** The later session this one was continued in, when the watcher cannot
+   * see that one. */
+  continued_in?: string | null;
 }
 
 export interface TodoItem {

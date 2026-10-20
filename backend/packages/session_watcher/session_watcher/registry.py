@@ -88,8 +88,12 @@ class SessionRegistry:
         different and wronger claim than "finished an hour ago".
         """
         incoming = {s.session_id: s for s in sessions}
+        # A session now folded into its continuation is not "ended": it is
+        # listed as part of that one, so its retained copy must not come back
+        # as a second row.
+        folded = {s.continued_from for s in sessions if s.continued_from}
         for sid, existing in list(self.sessions.items()):
-            if sid not in incoming and existing.is_terminal:
+            if sid not in incoming and sid not in folded and existing.is_terminal:
                 incoming[sid] = existing  # keep the terminal record
         self.sessions = incoming
         self.heartbeat(now)
@@ -98,8 +102,14 @@ class SessionRegistry:
         """Look up by session id, falling back to an exact project-name match."""
         if key in self.sessions:
             return self.sessions[key]
+        if (continued := self.continuation_of(key)) is not None:
+            return continued
         matches = self.match_project(key)
         return matches[0] if len(matches) == 1 else None
+
+    def continuation_of(self, session_id: str) -> Session | None:
+        """The session an earlier id was continued in and folded into, if any."""
+        return next((s for s in self.sessions.values() if s.continued_from == session_id), None)
 
     def match_project(self, key: str) -> list[Session]:
         """All sessions whose project matches. More than one means ask (FR-017)."""

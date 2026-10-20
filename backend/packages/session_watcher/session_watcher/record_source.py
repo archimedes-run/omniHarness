@@ -55,12 +55,21 @@ class RecordStats:
     records_skipped: int = 0
     candidates_considered: int = 0
     skips: Counter[str] = field(default_factory=Counter)
+    #: Record types never seen before, whether the record was skipped (no
+    #: timestamp) or parsed (it had one). Both mean the format moved.
     unknown_types: Counter[str] = field(default_factory=Counter)
+    #: Named shape changes inside a KNOWN type ("session_meta:subagent-without-
+    #: parent"): format drift too, but not a record type, so kept apart.
+    diagnostics: Counter[str] = field(default_factory=Counter)
+    #: Records with no type at all.
+    untyped: int = 0
 
     @property
     def drift_signals(self) -> int:
-        """Skips that actually suggest the format changed under us."""
-        return self.skips[SkipReason.MALFORMED] + self.skips[SkipReason.UNKNOWN_TYPE]
+        """Everything that suggests the format changed under us, counted once:
+        damaged lines, records with no type, unknown types (skipped or parsed)
+        and named shape changes. The same rule for every adapter."""
+        return self.skips[SkipReason.MALFORMED] + self.untyped + sum(self.unknown_types.values()) + sum(self.diagnostics.values())
 
     def reset(self) -> None:
         self.records_opened = 0
@@ -69,6 +78,8 @@ class RecordStats:
         self.candidates_considered = 0
         self.skips.clear()
         self.unknown_types.clear()
+        self.diagnostics.clear()
+        self.untyped = 0
 
 
 @dataclass
@@ -142,18 +153,33 @@ class RecordSource:
         self.stats.records_skipped += 1
         self.stats.skips[reason] += 1
         if reason is SkipReason.UNKNOWN_TYPE and raw_type:
-            self.stats.unknown_types[raw_type] += 1
-            # Louder than debug: a type we have never seen is the signal that the
-            # observed format moved. Everything else here is routine. Rate
-            # limited per type, so the signal stays readable.
-            self._unknown_since_log[raw_type] += 1
-            now = time.monotonic()
-            last = self._unknown_logged_at.get(raw_type)
-            if last is None or now - last >= UNKNOWN_TYPE_LOG_INTERVAL_S:
-                count = self._unknown_since_log.pop(raw_type)
-                self._unknown_logged_at[raw_type] = now
-                logger.info("unknown record type %r at %s:%d (%d occurrence(s) since last report)", raw_type, path, lineno, count)
-            else:
-                logger.debug("unknown record type %r at %s:%d", raw_type, path, lineno)
+            self.note_unknown(raw_type, path, lineno)
+        elif reason is SkipReason.UNKNOWN_TYPE:
+            self.stats.untyped += 1
+            logger.debug("record with no type at %s:%d", path, lineno)
         else:
             logger.debug("skipping %s:%d — %s", path, lineno, reason)
+
+    def note_unknown(self, raw_type: str, path: Path, lineno: int) -> None:
+        """A record type never seen before: drift, whether or not it parsed."""
+        self.stats.unknown_types[raw_type] += 1
+        self._log_drift("unknown record type", raw_type, path, lineno)
+
+    def note_diagnostic(self, key: str, path: Path, lineno: int) -> None:
+        """A named shape change inside a known type: drift, kept apart."""
+        self.stats.diagnostics[key] += 1
+        self._log_drift("unexpected record shape", key, path, lineno)
+
+    def _log_drift(self, what: str, key: str, path: Path, lineno: int) -> None:
+        # Louder than debug: drift is the signal that the observed format
+        # moved. Everything else here is routine. Rate limited per key, so
+        # the signal stays readable.
+        self._unknown_since_log[key] += 1
+        now = time.monotonic()
+        last = self._unknown_logged_at.get(key)
+        if last is None or now - last >= UNKNOWN_TYPE_LOG_INTERVAL_S:
+            count = self._unknown_since_log.pop(key)
+            self._unknown_logged_at[key] = now
+            logger.info("%s %r at %s:%d (%d occurrence(s) since last report)", what, key, path, lineno, count)
+        else:
+            logger.debug("%s %r at %s:%d", what, key, path, lineno)
