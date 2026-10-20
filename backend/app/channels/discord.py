@@ -20,7 +20,9 @@ class DiscordChannel(Channel):
 
     Configuration keys (in ``config.yaml`` under ``channels.discord``):
         - ``bot_token``: Discord Bot token.
-        - ``allowed_guilds``: (optional) List of allowed Discord guild IDs. Empty = allow all.
+        - ``allowed_guilds``: (optional) List of allowed Discord guild IDs. Empty = any guild.
+        - ``allowed_users``: List of allowed Discord user IDs. EMPTY = NOBODY:
+          every message is ignored, silently (security baseline).
     """
 
     def __init__(self, bus: MessageBus, config: dict[str, Any]) -> None:
@@ -33,11 +35,25 @@ class DiscordChannel(Channel):
             except (TypeError, ValueError):
                 continue
 
+        self._allowed_users: set[int] = set()
+        for user_id in config.get("allowed_users", []):
+            try:
+                self._allowed_users.add(int(user_id))
+            except (TypeError, ValueError):
+                continue
+        self._warn_if_closed(self._allowed_users)
+
         self._client = None
         self._thread: threading.Thread | None = None
         self._discord_loop: asyncio.AbstractEventLoop | None = None
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._discord_module = None
+
+    def sender_is_the_owner(self, user_id: str | None) -> bool:
+        try:
+            return bool(self._allowed_users) and int(str(user_id)) in self._allowed_users
+        except (TypeError, ValueError):
+            return False
 
     async def start(self) -> None:
         if self._running:
@@ -138,6 +154,9 @@ class DiscordChannel(Channel):
             return
 
         if self._client.user and message.author.id == self._client.user.id:
+            return
+
+        if not self._allows_sender(self._allowed_users, message.author.id):
             return
 
         guild = message.guild

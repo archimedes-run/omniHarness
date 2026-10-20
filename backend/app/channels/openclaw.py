@@ -37,6 +37,8 @@ class OpenClawChannel(Channel):
     def __init__(self, bus: MessageBus, config: dict[str, Any]) -> None:
         super().__init__("openclaw", bus, config)
         self._bearer_token: str = config.get("bearer_token", "")
+        if not self._bearer_token:
+            logger.warning("[openclaw] channels.openclaw.bearer_token is empty: the webhook is CLOSED and every request is refused.")
         self._openclaw_url: str = config.get("openclaw_url", "").rstrip("/")
 
     async def start(self) -> None:
@@ -95,12 +97,15 @@ class OpenClawChannel(Channel):
     def verify_bearer_token(self, token: str) -> bool:
         """Return True if *token* matches the configured bearer token.
 
-        When no token is configured every request is accepted (dev/trusted
-        network mode).
+        No token configured means NO request is accepted (security baseline:
+        the webhook route is public, and "accept everything" let anyone start
+        agent runs). Compared in constant time.
         """
-        if not self._bearer_token:
-            return True
-        return token == self._bearer_token
+        import secrets
+
+        if not self._bearer_token or not isinstance(token, str) or not token:
+            return False
+        return secrets.compare_digest(token, self._bearer_token)
 
     async def handle_webhook(self, payload: dict[str, Any]) -> None:
         """Route an inbound OpenClaw webhook payload to the agent dispatcher.
