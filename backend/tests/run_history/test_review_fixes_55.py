@@ -161,7 +161,7 @@ def test_retention_itself_deletes_an_orphaned_automation_thread(make_gateway, tm
         old = datetime.now(UTC) - timedelta(days=40)
         h = client.app.state.run_history
         h.record(kind="automation", source_id="deleted-rule", thread_id=gone, body={}, status="completed", started_at=old)
-        h.record(kind="automation", source_id="live-rule", thread_id=live, body={}, status="completed", started_at=old)
+        h.record(kind="automation", source_id="live-rule", thread_id=live, body={}, status="completed", started_at=datetime.now(UTC) - timedelta(days=5))
 
         assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
 
@@ -198,3 +198,71 @@ def test_purge_compares_times_for_rows_stored_with_an_offset(tmp_path) -> None:
     with sqlite3.connect(h.db) as c:
         c.execute("INSERT INTO runs (id, kind, source_id, started_at, status, size, body) VALUES ('x', 'a', 'r', ?, 'completed', 2, '{}')", (started,))
     assert h.purge() == 0
+
+
+@pytest.mark.asyncio
+async def test_retention_rotates_a_live_rules_thread_and_the_rule_still_fires(make_gateway, tmp_path) -> None:
+    """A live monthly rule's thread holds a 40-day-old firing: after the purge
+    its content is gone from the thread, and the rule's next firing runs in a
+    fresh thread."""
+    import asyncio
+    import sqlite3
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from app.gateway.trigger_engine_wiring import build_loop
+
+    state = tmp_path / "triggers"
+    with make_gateway(_tweak(state)) as (client, _):
+        old_thread = _thread(client)
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "threads.json").write_text(json.dumps({"monthly": old_thread}))
+        h = client.app.state.run_history
+        old = datetime.now(UTC) - timedelta(days=40)
+        h.record(kind="automation", source_id="monthly", thread_id=old_thread, body={}, status="completed", started_at=old)
+        with sqlite3.connect(h.db) as c:
+            c.execute("UPDATE automation_threads SET first_seen = ?", (old.isoformat(),))
+
+        assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
+        assert not _content(client, old_thread), "a live rule's thread still holds content past the retention"
+
+    created: list[str] = []
+
+    class GW:
+        def post(self, path, body):
+            if path == "/api/threads":
+                created.append("t-fresh")
+                return {"thread_id": "t-fresh"}
+            m = body["input"]["messages"][0]
+            return {"messages": [{"type": "human", "content": m["content"], "id": m["id"]}, {"type": "ai", "content": "fired"}]}
+
+        def put(self, path, body):
+            return {}
+
+        def get(self, path):
+            return {"status": "idle"}
+
+    rules = tmp_path / "rules.json"
+    rules.write_text(json.dumps({"quiet_hours": {"enabled": False}, "rules": [{"id": "monthly", "type": "cron", "match": {"schedule": "* * * * *"}, "prompt": "p", "destination": "quiet"}]}))
+    cfg = SimpleNamespace(trigger_engine=SimpleNamespace(rules_path=str(rules), state_dir=str(state), actor="default", tick_seconds=30.0))
+    gw = GW()
+    loop = build_loop(cfg, gateway_post=gw.post, gateway_put=gw.put, gateway_get=gw.get, fetch_sessions=lambda: {"observable": True, "sessions": []}, exchange_state=lambda t: {"status": "idle"}, remote=None)
+    await loop.cycle()
+    await asyncio.sleep(0)
+    assert created == ["t-fresh"] and loop.threads.thread_of("monthly") == "t-fresh", "the rule did not fire into a fresh thread"
+
+
+def test_a_purged_run_ages_its_live_thread_so_it_rotates(make_gateway, tmp_path) -> None:
+    """No hand-set ledger time: a live rule's only run is 40 days old; the purge
+    removes it and the thread, which held that content, is rotated out."""
+    from datetime import timedelta
+
+    state = tmp_path / "triggers"
+    with make_gateway(_tweak(state)) as (client, _):
+        tid = _thread(client)
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "threads.json").write_text(json.dumps({"monthly": tid}))
+        client.app.state.run_history.record(kind="automation", source_id="monthly", thread_id=tid, body={}, status="completed", started_at=datetime.now(UTC) - timedelta(days=40))
+        assert client.put("/api/run-history/settings", json={"retention_days": 30}).status_code == 200
+        assert not _content(client, tid)
+        assert json.loads((state / "threads.json").read_text()) == {}

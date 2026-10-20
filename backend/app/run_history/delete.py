@@ -22,8 +22,10 @@ history's own ledger (store.automation_threads), written when the engine
 creates a thread and whenever an automation run names one. A ledger row stays
 until its thread is really gone, so a failed delete is retried (next delete,
 and `sweep_threads` at startup and after every retention purge). The sweep
-also deletes threads no stored run names any more, once their rule is gone, so
-retention does not leave an automation's content behind in its thread.
+also deletes threads no stored run names any more, once their rule is gone, and
+ROTATES a live rule's thread once its oldest content is past the retention (the
+rule's next firing starts a new thread; the old one is deleted), so retention
+covers content wherever it is stored, not only the run history.
 
 SAFETY. It refuses (ThreadsBusy) while any of those threads has a run in
 progress, rather than deleting under it, and while a firing holds the rule
@@ -226,8 +228,17 @@ async def sweep_threads(app) -> DeleteResult | None:
         return None
 
     def work(rule_map, run) -> DeleteResult:
+        # RETENTION COVERS LIVE RULES' THREADS TOO. A live rule's thread whose
+        # oldest content is past the retention is ROTATED: the rule forgets it
+        # (its next firing starts a fresh thread) and the old thread is deleted
+        # with the others below. What the automation loses: its memory of
+        # firings before the rotation (at most once per retention window).
+        stale = history.threads_past_retention()
+        for rule in rule_map.known_rules():
+            if rule_map.thread_of(rule) in stale:
+                rule_map.forget(rule)
         mapped = {t for t in (rule_map.thread_of(r) for r in rule_map.known_rules()) if t}
-        todo = history.threads_to_sweep(mapped)
+        todo = sorted(set(history.threads_to_sweep(mapped)) | (stale - mapped))
         result = DeleteResult(runs=0)
         busy = set(run(_busy(app, set(todo))))
         _delete_ledgered(app, history, rule_map, run, [t for t in todo if t not in busy], result)

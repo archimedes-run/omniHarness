@@ -463,8 +463,14 @@ class RunHistory:
         with self._lock, self._connect() as c:
             # Compared as datetimes (UTC), not as strings: a row stamped with
             # another offset, or by an older version, still compares right.
-            rows = [r for r in c.execute("SELECT id, blob, started_at FROM runs").fetchall() if _parse(r["started_at"]) < cutoff]
+            rows = [r for r in c.execute("SELECT id, blob, started_at, thread_id FROM runs").fetchall() if _parse(r["started_at"]) < cutoff]
             c.executemany("DELETE FROM runs WHERE id = ?", [(r["id"],) for r in rows])
+            # The ledger keeps how old each thread's content is, after the runs
+            # that showed it are gone (threads_past_retention reads it).
+            c.executemany(
+                "UPDATE automation_threads SET first_seen = ? WHERE thread_id = ? AND first_seen > ?",
+                [(_parse(r["started_at"]).isoformat(), r["thread_id"], _parse(r["started_at"]).isoformat()) for r in rows if r["thread_id"]],
+            )
             if rows:
                 c.execute("DELETE FROM settings WHERE key = 'not_stored_runs'")
             for row in rows:
@@ -532,7 +538,7 @@ class RunHistory:
         with self._connect() as c:
             c.execute(
                 "INSERT INTO automation_threads (thread_id, rule_id, first_seen) VALUES (?, ?, ?) ON CONFLICT(thread_id) DO NOTHING",
-                (thread_id, rule_id, datetime.now(UTC).isoformat()),
+                (thread_id, rule_id, _utc(self._now()).isoformat()),
             )
 
     def ledger_threads(self) -> dict[str, dict]:
@@ -559,6 +565,20 @@ class RunHistory:
             pending = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE pending_delete = 1")}
             orphans = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE thread_id NOT IN (SELECT thread_id FROM runs WHERE thread_id IS NOT NULL)")}
         return sorted(pending | (orphans - mapped))
+
+    def threads_past_retention(self) -> set[str]:
+        """Ledger threads holding content older than the retention: the
+        thread's own start (when the ledger first saw it) or its oldest stored
+        run is past the window. A thread holds nothing older than its start."""
+        cutoff = _utc(self._now()) - timedelta(days=self.retention_days())
+        with self._connect() as c:
+            rows = c.execute("SELECT t.thread_id, t.first_seen, MIN(r.started_at) AS oldest_run FROM automation_threads t LEFT JOIN runs r ON r.thread_id = t.thread_id GROUP BY t.thread_id").fetchall()
+        out = set()
+        for r in rows:
+            times = [_parse(v) for v in (r["first_seen"], r["oldest_run"]) if v]
+            if times and min(times) < cutoff:
+                out.add(r["thread_id"])
+        return out
 
     def used_bytes(self) -> int:
         with self._connect() as c:
