@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Automations</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0C0D0F}
+a{color:#8FA8FF}a:hover{color:#B7C6FF}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 1040px; background: #0C0D0F; color: #ECEDEF; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.5; box-sizing: border-box; padding: 24px">
+  <div role="dialog" aria-labelledby="auto-title" style="max-width: 1180px; margin: 0 auto; background: #17181C; border: 1px solid #2E3138; border-radius: 18px; display: flex; flex-direction: column; overflow: hidden">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #2E3138">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C9CCD2" stroke-width="2" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9z"></path></svg>
+      <h1 id="auto-title" style="margin: 0; font-size: 15px; font-weight: 600; flex: 1">Automations</h1>
+      <button type="button" aria-label="Close" style="background: none; border: none; color: #9EA3AD; font-size: 18px; cursor: pointer; padding: 4px 8px">×</button>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; min-height: 900px">
+      <div style="flex: 1 1 250px; max-width: 280px; box-sizing: border-box; border-right: 1px solid #2E3138; padding: 14px 10px; display: flex; flex-direction: column; gap: 4px">
+        <button type="button" style="background: none; border: 1px dashed #4A4E57; color: #ECEDEF; border-radius: 10px; padding: 9px 12px; cursor: pointer; margin-bottom: 8px; text-align: left">+ New automation</button>
+        <a href="#" aria-current="page" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; background: #24272D; color: #ECEDEF; text-decoration: none">
+          <span style="flex: 1"><span style="display: block; font-weight: 500">Morning brief</span><span style="display: block; color: #9EA3AD; font-size: 12px">Weekdays 8:45 AM</span></span>
+          <span aria-label="On" style="width: 8px; height: 8px; border-radius: 4px; background: #6FD3A0"></span></a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none">
+          <span style="flex: 1"><span style="display: block">Blocked session alert</span><span style="display: block; color: #9EA3AD; font-size: 12px">When a session waits on you</span></span>
+          <span aria-label="On" style="width: 8px; height: 8px; border-radius: 4px; background: #6FD3A0"></span></a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none">
+          <span style="flex: 1"><span style="display: block">Evening wrap-up</span><span style="display: block; color: #9EA3AD; font-size: 12px">Agent · weekdays 6:00 PM</span></span>
+          <span aria-label="On" style="width: 8px; height: 8px; border-radius: 4px; background: #6FD3A0"></span></a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; color: #C9CCD2; text-decoration: none">
+          <span style="flex: 1"><span style="display: block">Weekly review</span><span style="display: block; color: #9EA3AD; font-size: 12px">Fridays 4:00 PM</span></span>
+          <span aria-label="Off" style="width: 8px; height: 8px; border-radius: 4px; border: 1px solid #9EA3AD"></span></a>
+        <div style="flex: 1"></div>
+        <div style="color: #9EA3AD; font-size: 12px; padding: 10px 12px; border-top: 1px solid #2E3138">Tip: in any chat, say “every weekday at 9, brief me” to create one.</div>
+      </div>
+
+      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+        <div style="padding: 20px 28px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+          <div style="flex: 1 1 260px">
+            <div style="font-size: 18px; font-weight: 600">Morning brief</div>
+            <div style="color: #9EA3AD; font-size: 13px">Weekdays at 8:45 AM · America/New_York · to Telegram</div>
+          </div>
+          <span style="font-size: 13px; color: #C9CCD2">On</span>
+          <button type="button" role="switch" aria-checked="true" aria-label="Morning brief is on" style="width: 40px; height: 22px; border-radius: 11px; border: none; background: #8FA8FF; position: relative; cursor: pointer"><span style="position: absolute; top: 2px; left: 20px; width: 18px; height: 18px; border-radius: 9px; background: #121316"></span></button>
+        </div>
+        <div role="tablist" aria-label="Automation views" style="display: flex; gap: 4px; padding: 16px 28px 0; border-bottom: 1px solid #2E3138">
+          <button type="button" role="tab" aria-selected="true" style="background: none; border: none; border-bottom: 2px solid #8FA8FF; color: #ECEDEF; padding: 8px 12px; font-weight: 500; cursor: pointer">History</button>
+          <button type="button" role="tab" aria-selected="false" style="background: none; border: none; border-bottom: 2px solid transparent; color: #9EA3AD; padding: 8px 12px; cursor: pointer">Edit</button>
+        </div>
+
+        <div role="tabpanel" aria-label="History" style="padding: 24px 28px; max-width: 760px; box-sizing: border-box; width: 100%; display: flex; flex-direction: column; gap: 16px">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px">
+            <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 12px 14px"><div style="color: #9EA3AD; font-size: 12px">Next run</div><div>Tomorrow 8:45 AM</div></div>
+            <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 12px 14px"><div style="color: #9EA3AD; font-size: 12px">Last checked</div><div>2 min ago</div></div>
+            <div style="background: #1C1E23; border: 1px solid #2E3138; border-radius: 12px; padding: 12px 14px"><div style="color: #9EA3AD; font-size: 12px">Quiet hours</div><div>10 PM to 7 AM</div></div>
+          </div>
+          <div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-top: 1px solid #2E3138">
+              <span style="width: 130px; color: #9EA3AD">Today 8:45 AM</span>
+              <span style="flex: 1 1 260px"><span style="color: #6FD3A0">Delivered</span> on Telegram</span>
+              <a href="#">Open thread</a>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-top: 1px solid #2E3138">
+              <span style="width: 130px; color: #9EA3AD">Fri 8:45 AM</span>
+              <span style="flex: 1 1 260px"><span style="color: #8FA8FF">Held, then delivered</span> at 9:02 AM. You were mid-conversation.</span>
+              <a href="#">Open thread</a>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-top: 1px solid #2E3138">
+              <span style="width: 130px; color: #9EA3AD">Thu 8:45 AM</span>
+              <span style="flex: 1 1 260px"><span style="color: #8FA8FF">Delivered with 1 other</span> (Blocked session alert), one message</span>
+              <a href="#">Open thread</a>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-top: 1px solid #2E3138">
+              <span style="width: 130px; color: #9EA3AD">Wed 8:45 AM</span>
+              <span style="flex: 1 1 260px"><span style="color: #FF8A80">Failed</span>: the agent run errored (model timeout). Not retried.</span>
+              <a href="#">Details</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
