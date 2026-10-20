@@ -319,3 +319,20 @@ export function connectWords(
       };
   }
 }
+
+/**
+ * Which side of the bar the "+" picker opens on: below only when it fits
+ * there, otherwise above; when it fits on neither, the side with more room.
+ */
+export function pickerSide(
+  anchor: { top: number; bottom: number },
+  panelHeight: number,
+  viewportHeight: number,
+  gap = 10,
+): "top" | "bottom" {
+  const below = viewportHeight - anchor.bottom - gap;
+  const above = anchor.top - gap;
+  if (panelHeight <= below) return "bottom";
+  if (panelHeight <= above) return "top";
+  return below > above ? "bottom" : "top";
+}

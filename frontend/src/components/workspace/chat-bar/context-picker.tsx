@@ -5,7 +5,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNowStrict } from "date-fns";
 import { CodeXmlIcon, LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { BrandLogo, resolveBrand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
@@ -19,6 +26,7 @@ import { AgentAvatar } from "./agent-avatar";
 import type { PickerTab } from "./commands";
 import {
   connectWords,
+  pickerSide,
   rowAction,
   statusLine,
   type ConnectPhase,
@@ -58,7 +66,10 @@ const STATUS_CLASS: Record<StatusWord, string> = {
 };
 
 export interface PickerProps {
-  /** Above the bar in a chat; below it on the centred new-chat layout. */
+  /**
+   * Ignored: kept so older callers still compile. The picker measures the
+   * room and opens below the bar only when it fits there, otherwise above.
+   */
   placement?: "top" | "bottom";
   /** A new chat (nothing sent yet): no project link yet, "@" starts a chat. */
   isNewChat: boolean;
@@ -108,6 +119,31 @@ export interface PickerProps {
 export function ContextPicker(props: PickerProps) {
   const { tab, onTabChange, onClose } = props;
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const [side, setSide] = useState<"top" | "bottom">("bottom");
+
+  // Measure before paint, and again when the panel's height or the window
+  // changes (another tab, a resize).
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const anchor = panel?.offsetParent;
+    if (!panel || !anchor) return;
+    const place = () =>
+      setSide(
+        pickerSide(
+          anchor.getBoundingClientRect(),
+          panel.getBoundingClientRect().height,
+          window.innerHeight,
+        ),
+      );
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, []);
 
   useEffect(() => {
     const panel = panelRef.current;
@@ -156,10 +192,11 @@ export function ContextPicker(props: PickerProps) {
       role="dialog"
       aria-label="Add context"
       data-testid="context-picker"
+      data-side={side}
       onKeyDown={onKeyDown}
       className={cn(
         "bg-card text-card-foreground border-input absolute inset-x-0 z-50 flex max-h-[62vh] flex-col overflow-hidden rounded-xl border text-sm shadow-xl",
-        props.placement === "bottom" ? "top-full mt-2.5" : "bottom-full mb-2.5",
+        side === "bottom" ? "top-full mt-2.5" : "bottom-full mb-2.5",
       )}
     >
       <Tabs

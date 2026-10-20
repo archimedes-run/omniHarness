@@ -667,7 +667,6 @@ export function InputBox({
         )}
         {pickerOpen && (
           <ContextPicker
-            placement={isWelcomeMode ? "bottom" : "top"}
             isNewChat={isNewChat}
             tab={pickerTab}
             onTabChange={setPickerTab}

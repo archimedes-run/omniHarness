@@ -136,3 +136,52 @@ for (const scheme of ["light", "dark"] as const) {
     ).toEqual([]);
   });
 }
+
+for (const [w, h] of [
+  [1440, 900],
+  [1280, 720],
+] as const) {
+  for (const [where, path] of [
+    ["a new chat", "/workspace/chats/new"],
+    ["a thread", `/workspace/chats/${THREAD}`],
+  ] as const) {
+    test(`${w}x${h}, ${where}: the picker opens where it fits and stays fully on screen`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: w, height: h });
+      await stub(page);
+      await page.goto(path, { waitUntil: "networkidle" });
+      const picker = await openPicker(page);
+      for (const tab of ["Projects", "Agents", "Integrations", "Skills"]) {
+        await picker.getByRole("tab", { name: tab }).click();
+        await page.waitForTimeout(100);
+        const r = await picker.evaluate((el) => {
+          const b = el.getBoundingClientRect();
+          return { top: b.top, bottom: b.bottom, left: b.left, right: b.right };
+        });
+        expect(r.top, `${tab}: top`).toBeGreaterThanOrEqual(0);
+        expect(r.left, `${tab}: left`).toBeGreaterThanOrEqual(0);
+        expect(r.right, `${tab}: right`).toBeLessThanOrEqual(w);
+        expect(r.bottom, `${tab}: bottom`).toBeLessThanOrEqual(h);
+      }
+    });
+  }
+}
+
+test("the Send button has a 12 px radius; the capsule shows people for Agents and a checked square for Tasks", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stub(page);
+  await page.goto(`/workspace/chats/${THREAD}`, { waitUntil: "networkidle" });
+  const send = page.getByRole("button", { name: "Send" });
+  expect(
+    await send.evaluate((e) => getComputedStyle(e).borderTopLeftRadius),
+  ).toBe("12px");
+  await expect(
+    page.locator('[data-capsule="agents"] svg.lucide-users'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-capsule="tasks"] svg.lucide-square-check'),
+  ).toHaveCount(1);
+});

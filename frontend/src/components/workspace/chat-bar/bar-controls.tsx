@@ -276,7 +276,7 @@ export function SendButton({
       aria-label={streaming ? "Stop" : submitted ? "Sending" : "Send"}
       data-testid="send-button"
       data-status={status}
-      className="bg-primary text-primary-foreground hover:bg-primary/90 size-10 rounded-xl max-sm:size-11"
+      className="bg-primary text-primary-foreground hover:bg-primary/90 size-10 rounded-[12px] max-sm:size-11"
     >
       {streaming ? (
         <SquareIcon className="size-3.5 fill-current" aria-hidden />

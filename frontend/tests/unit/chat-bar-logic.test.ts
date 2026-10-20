@@ -7,6 +7,7 @@ import {
 import {
   agentSkills,
   connectWords,
+  pickerSide,
   effortForMode,
   findTrigger,
   getResolvedMode,
@@ -324,5 +325,18 @@ describe("connectWords: an inline Connect says how it ended, in words", () => {
   });
   it("leaves Connected to the row's own status word", () => {
     expect(connectWords("connected")).toBeNull();
+  });
+});
+
+describe("pickerSide: below only when it fits, otherwise above", () => {
+  it("opens below when there is room", () => {
+    expect(pickerSide({ top: 100, bottom: 200 }, 300, 900)).toBe("bottom");
+  });
+  it("flips above when the bar is at the bottom", () => {
+    expect(pickerSide({ top: 700, bottom: 880 }, 400, 900)).toBe("top");
+  });
+  it("takes the roomier side when it fits on neither", () => {
+    expect(pickerSide({ top: 300, bottom: 400 }, 600, 720)).toBe("bottom");
+    expect(pickerSide({ top: 400, bottom: 500 }, 600, 720)).toBe("top");
   });
 });
