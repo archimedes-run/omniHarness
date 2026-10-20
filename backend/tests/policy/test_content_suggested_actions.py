@@ -151,7 +151,8 @@ def test_a_triggers_turn_is_card_only_and_says_an_automation(build_flow):
 
     assert action.origin == "automation"
     assert "Suggested by an automation, not by you." in action.plan_text
-    result = system.flow.from_message(HumanMessage(content="yes"), run_tool=system.run_tool)
+    # Replied in the same (thread-less) run the plan was stated in.
+    result = system.flow.from_message(HumanMessage(content="yes"), run_tool=system.run_tool, runtime_context={})
     assert result.outcome == cf.CARD_ONLY
     assert "suggested by an automation" in result.message
     assert system.ran == []

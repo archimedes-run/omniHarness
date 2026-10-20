@@ -248,7 +248,8 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # No targets passed: the flow re-checks them itself (FR-029). This route
     # used to pass the action's own recorded targets, so the check compared the
     # record with itself and drift could never be detected here.
-    result = flow.explicit(action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count)
+    answered = {"via": "button", "thread_id": None, "user_id": user_id, "message_id": None}
+    result = flow.explicit(action_id, confirm=confirm, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail=result.detail)
 
 
@@ -303,7 +304,8 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
     ctx = get_auth_context(request)
     user_id = _user_id(ctx)
     run_tool = await _runner(request, edited.thread_id, user_id)
-    result = flow.explicit(edited.id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count)
+    answered = {"via": "edit", "thread_id": None, "user_id": user_id, "message_id": None}
+    result = flow.explicit(edited.id, confirm=True, run_tool=run_tool, supplied_count=body.typed_count, answered=answered)
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail={**result.detail, "replaced": action_id})
 
 
