@@ -371,7 +371,9 @@ class ClaudeCodeAdapter(SessionAdapter):
             if parsed.kind is None and parsed.raw_type:
                 acc.unclassified[parsed.raw_type] = acc.unclassified.get(parsed.raw_type, 0) + 1
                 if parsed.raw_type not in KNOWN_TYPES:
-                    self._source.stats.unknown_types[parsed.raw_type] += 1
+                    # Parsed (it had a timestamp) but never seen: drift, the
+                    # same as an unknown type that was skipped.
+                    self._source.note_unknown(parsed.raw_type, path, lineno)
             # Sidechain records advance the parent's activity clock but do
             # not become sessions of their own — a subagent is not a
             # session the user started (research R2).

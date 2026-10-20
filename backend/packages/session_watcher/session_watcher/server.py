@@ -105,10 +105,12 @@ class WatcherService:
                     "label": AGENT_LABELS.get(agent, agent),
                     "readable": readable,
                     "reason": None if readable else f"{source.root} is not mounted or not readable",
-                    # Unknown record types plus malformed lines: the signal
+                    # Malformed lines, untyped records, unknown record types
+                    # (skipped or parsed) and named shape changes: the signal
                     # that the agent's format moved (FR-024).
                     "drift": source.stats.drift_signals,
                     "unknown_types": dict(source.stats.unknown_types),
+                    "diagnostics": dict(source.stats.diagnostics),
                 }
             )
         return out

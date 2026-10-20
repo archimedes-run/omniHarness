@@ -208,8 +208,8 @@ def test_a_truly_new_type_beside_them_is_still_drift(tmp_path) -> None:
     _, src = _discover(tmp_path)
     assert src.stats.unknown_types["a-type-from-next-year"] == 1
     assert src.stats.unknown_types["another-new-one"] == 1
-    # Only the timestamp-less one is a skip; `drift` counts skips (record_source).
-    assert src.stats.drift_signals == 1
+    # One parsed (it had a timestamp), one skipped: both are drift.
+    assert src.stats.drift_signals == 2
     assert set(src.stats.unknown_types) == {"a-type-from-next-year", "another-new-one"}
 
 
