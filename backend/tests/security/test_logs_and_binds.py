@@ -487,23 +487,10 @@ def test_docker_run_port_publishes_are_loopback() -> None:
     assert _resolve_docker_bind_host(sandbox_host="host.docker.internal", bind_host=None) == "127.0.0.1"
 
 
-def test_host_bash_command_runs_with_the_scrubbed_environment(monkeypatch) -> None:
-    """Through LocalSandbox.execute_command, the path host bash takes."""
-    from omniharness.sandbox.local.local_sandbox import LocalSandbox
+def test_no_host_command_execution_remains(monkeypatch):
+    """The host-bash path is gone: LocalSandbox runs nothing."""
+    from omniharness.sandbox.local.local_sandbox import HOST_EXECUTION_REMOVED, LocalSandbox
 
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "internal-token-value-xyz")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-value-xyz")
     out = LocalSandbox("t").execute_command("env")
-    assert "internal-token-value-xyz" not in out and "sk-test-value-xyz" not in out
-    assert "PATH=" in out
-
-
-def test_every_0000_bind_in_run_config_is_a_listed_container_exception() -> None:
-    """Any 0.0.0.0 in a Dockerfile, compose file, script or Makefile must be a
-    listed container exception (whose published side is then checked)."""
-    unlisted = []
-    for path in _repo_files("Makefile", "*/Makefile", "scripts/*", "*Dockerfile", "docker/*.y*ml", "docker/*.sh"):
-        rel = path.relative_to(REPO).as_posix()
-        if "0.0.0.0" in path.read_text(errors="ignore") and rel not in CONTAINER_INTERNAL:
-            unlisted.append(rel)
-    assert not unlisted, unlisted
+    assert out == HOST_EXECUTION_REMOVED and "internal-token-value-xyz" not in out

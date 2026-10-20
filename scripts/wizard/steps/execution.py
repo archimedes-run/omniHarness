@@ -13,7 +13,6 @@ CONTAINER_SANDBOX = "omniharness.community.aio_sandbox:AioSandboxProvider"
 @dataclass
 class ExecutionStepResult:
     sandbox_use: str
-    allow_host_bash: bool
     include_bash_tool: bool
     include_write_tools: bool
 
@@ -34,18 +33,17 @@ def run_execution_step(step_label: str = "Step 3/4") -> ExecutionStepResult:
         print_warning(
             "Local sandbox is convenient but not a secure shell isolation boundary."
         )
-        print_info("Keep host bash disabled unless this is a fully trusted local workflow.")
+        print_info("Commands never run on the host: bash needs the container sandbox.")
     else:
         print_info("Container sandbox isolates shell execution better than host-local mode.")
 
-    include_bash_tool = ask_yes_no("Enable bash command execution?", default=False)
+    include_bash_tool = sandbox_use == CONTAINER_SANDBOX and ask_yes_no("Enable bash command execution (in the container)?", default=False)
     include_write_tools = ask_yes_no(
         "Enable file write tools (write_file, str_replace)?", default=True
     )
 
     return ExecutionStepResult(
         sandbox_use=sandbox_use,
-        allow_host_bash=sandbox_use == LOCAL_SANDBOX and include_bash_tool,
         include_bash_tool=include_bash_tool,
         include_write_tools=include_write_tools,
     )

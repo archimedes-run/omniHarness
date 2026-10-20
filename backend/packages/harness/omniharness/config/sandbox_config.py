@@ -1,4 +1,9 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+#: Keys that once let agent commands run on the HOST. Host execution was
+#: removed (security baseline); a config that still names one is refused at
+#: startup, saying exactly what to delete.
+REMOVED_HOST_EXECUTION_KEYS = ("allow_host_bash", "allow_host_bash_unsafe", "host_bash", "allow_host_execution")
 
 
 class VolumeMountConfig(BaseModel):
@@ -14,8 +19,8 @@ class SandboxConfig(BaseModel):
 
     Common options:
         use: Class path of the sandbox provider (required)
-        allow_host_bash: Enable host-side bash execution for LocalSandboxProvider.
-            Dangerous and intended only for fully trusted local workflows.
+        (Host command execution was removed: commands run only in a container
+        sandbox. ``allow_host_bash`` is refused if present.)
 
     AioSandboxProvider specific options:
         image: Docker image to use (default: ghcr.io/archimedes-run/omni-harness-sandbox:latest)
@@ -30,10 +35,6 @@ class SandboxConfig(BaseModel):
     use: str = Field(
         ...,
         description="Class path of the sandbox provider (e.g. omniharness.sandbox.local:LocalSandboxProvider)",
-    )
-    allow_host_bash: bool = Field(
-        default=False,
-        description="Allow the bash tool to execute directly on the host when using LocalSandboxProvider. Dangerous; intended only for fully trusted local environments.",
     )
     image: str | None = Field(
         default=None,
@@ -81,3 +82,16 @@ class SandboxConfig(BaseModel):
     )
 
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_host_execution_keys(cls, data):
+        if isinstance(data, dict):
+            present = [k for k in REMOVED_HOST_EXECUTION_KEYS if k in data]
+            if present:
+                raise ValueError(
+                    f"sandbox.{present[0]} is no longer supported: running agent commands on the host was removed for security, "
+                    f"so this key does nothing safe. Delete the line 'sandbox.{present[0]}' from config.yaml. Commands now run only in a "
+                    "container sandbox (sandbox.use: omniharness.community.aio_sandbox:AioSandboxProvider)."
+                )
+        return data

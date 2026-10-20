@@ -112,7 +112,7 @@ def test_task_tool_rejects_bash_subagent_when_host_bash_disabled(monkeypatch):
         tool_call_id="tc-bash",
     )
 
-    assert result.startswith("Error: Bash subagent is disabled")
+    assert result.startswith("Error: The bash subagent needs a container sandbox")
 
 
 def test_task_tool_threads_runtime_app_config_to_subagent_dependencies(monkeypatch):

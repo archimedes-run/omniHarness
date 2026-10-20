@@ -168,7 +168,7 @@ class TestBuildMinimalConfig:
         assert "sandbox" in data
         assert "use" in data["sandbox"]
         assert data["sandbox"]["use"] == "omniharness.sandbox.local:LocalSandboxProvider"
-        assert data["sandbox"]["allow_host_bash"] is False
+        assert "allow_host_bash" not in data["sandbox"]  # host execution removed: never written
 
     def test_bash_tool_disabled_by_default(self):
         content = build_minimal_config(

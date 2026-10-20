@@ -82,7 +82,6 @@ def _make_e2e_config() -> AppConfig:
             ],
             "sandbox": {
                 "use": "omniharness.sandbox.local:LocalSandboxProvider",
-                "allow_host_bash": True,
             },
         }
     )
