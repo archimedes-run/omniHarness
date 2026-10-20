@@ -117,6 +117,17 @@ class ResolveResponse(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+#: Refused before the claim: the chat this action's result is posted into is
+#: running a reply now. Nothing ran; the card stays.
+THREAD_BUSY = "thread_busy"
+
+
+async def _thread_running(request: Request, thread_id: str) -> bool:
+    from app.gateway.deps import get_run_manager
+
+    return await get_run_manager(request).thread_busy(thread_id)
+
+
 def _policy(request: Request):
     """The store, the middleware and the flow, built from app config."""
     from app.policy.confirm_flow import ConfirmationFlow
@@ -194,13 +205,11 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
     return run
 
 
-async def post_to_thread(request: Request, thread_id: str, message: Any) -> bool:
-    """Append one message to a thread's latest checkpoint. False if it could not.
+async def _append_to_checkpoint(request: Request, thread_id: str, message: Any) -> bool:
+    """Append one message to a thread's latest checkpoint, then READ IT BACK.
 
-    How a call confirmed from its CARD reaches the conversation: the card's
-    route has no run to answer in, so the result is written into the thread,
-    attributed to the agent that proposed it (plan.md §2.0). The same shape
-    `POST /api/threads/{id}/state` writes.
+    True only when the message is in the thread's latest checkpoint afterwards:
+    "posted" is never claimed from the write call alone.
     """
     from app.gateway.deps import get_checkpointer
     from omniharness.utils.time import now_iso
@@ -218,10 +227,35 @@ async def post_to_thread(request: Request, thread_id: str, message: Any) -> bool
         checkpoint["channel_values"] = values
         metadata.update({"updated_at": now_iso(), "source": "update", "step": metadata.get("step", 0) + 1})
         await checkpointer.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, checkpoint, metadata, {})
-        return True
+        after = await checkpointer.aget_tuple(config)
+        stored = ((getattr(after, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or []
+        return any(getattr(m, "id", None) == message.id for m in stored)
     except Exception:  # noqa: BLE001 — reported to the caller, which says so
-        logger.exception("could not post the confirmed result to thread %s", thread_id)
+        logger.warning("could not post the confirmed result to thread %s", thread_id, exc_info=True)
         return False
+
+
+async def post_to_thread(request: Request, thread_id: str, message: Any) -> str:
+    """Post one message into a thread: "written", "queued" or "failed".
+
+    How a call confirmed from its CARD reaches the conversation: the card's
+    route has no run to answer in, so the result is written into the thread,
+    attributed to the agent that proposed it (plan.md §2.0).
+
+    THROUGH THE RUN MANAGER, NEVER AROUND IT. A run holds the thread's state in
+    memory and checkpoints it as it goes, so writing the checkpoint while one
+    runs was overwritten by the run's next step and the result vanished from
+    the chat (review of PR #58). The run manager writes it now if the thread is
+    idle, with no run able to start meanwhile, or queues it until the run ends.
+    """
+    from app.gateway.deps import get_run_manager
+
+    run_manager = get_run_manager(request)
+
+    async def write() -> bool:
+        return await _append_to_checkpoint(request, thread_id, message)
+
+    return await run_manager.write_when_idle(thread_id, write)
 
 
 def _arguments_for_display(arguments: dict[str, Any]) -> dict[str, str]:
@@ -311,6 +345,17 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     ctx = get_auth_context(request)
     user_id = _user_id(ctx)
 
+    posts = confirm and action is not None and bool(action.thread_id) and bool(action.surface)
+    if posts and action is not None and action.outcome is None and await _thread_running(request, action.thread_id or ""):
+        # Its result is written into the chat, and the chat is mid-reply: the
+        # run would overwrite it. Refused before the claim, so the card stays
+        # and nothing has run.
+        return ResolveResponse(
+            outcome=THREAD_BUSY,
+            action_id=action_id,
+            message="This chat is still replying. Nothing has run. Confirm again when the reply has finished.",
+        )
+
     run_tool = await _runner(request, action.thread_id if action else None, user_id)
 
     # No targets passed: the flow re-checks them itself (FR-029). This route
@@ -328,9 +373,16 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
         report = report_message(action, detail.get("result"))
         message = str(report.content)
         detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
-        # FAILING SOURCES ARE VISIBLE: when the thread could not be written,
-        # the card says so rather than implying the chat shows it.
-        detail["posted_to_thread"] = await post_to_thread(request, action.thread_id, report)
+        # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
+        # written and read back; "queued" when a run started on the chat while
+        # this one ran, so it lands when that run ends.
+        posted = await post_to_thread(request, action.thread_id, report)
+        detail["posted_to_thread"] = posted == "written"
+        detail["post_queued"] = posted == "queued"
+        if posted == "queued":
+            message += "\n\nThe chat was replying, so this will appear in it when that reply finishes."
+        elif posted == "failed":
+            message += "\n\nThis could not be added to the chat; it is shown here only."
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=message, detail=detail)
 
 

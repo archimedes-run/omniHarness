@@ -251,6 +251,8 @@ def report_message(action: PendingAction, result: Any) -> Any:
 
     invited = bool(action.requester and action.requester != "lead_agent")
     return AIMessage(
+        # One id per action: the card's post is verified by reading it back.
+        id=f"confirmation-{action.id}",
         content=result_report(action, result),
         name=action.requester if invited else None,
         additional_kwargs={

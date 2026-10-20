@@ -20,6 +20,7 @@ import asyncio
 import importlib
 import os
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,9 +60,30 @@ def web_fetch(url: str) -> str:
     return PAGE
 
 
+#: Hold points for concurrency tests: "lead" pauses the lead's model call,
+#: "wipe" pauses wipe_backup. Each is (entered, release) threading.Events.
+HOLD: dict[str, tuple[threading.Event, threading.Event]] = {}
+
+
+def _hold(name: str) -> None:
+    if name in HOLD:
+        entered, release = HOLD[name]
+        entered.set()
+        assert release.wait(30), f"{name} was never released"
+
+
+class HeldLeadFake(ToolCapableFake):
+    """The lead's model; pauses while HOLD["lead"] is set."""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        _hold("lead")
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
 @tool("wipe_backup")
 def wipe_backup(name: str) -> str:
     """Delete a backup. No rule names it, so Tier 3 (FR-009 default). Only a subagent has it."""
+    _hold("wipe")
     RAN.append(("wipe_backup", {"name": name}))
     return f"wiped {name}"
 
@@ -102,6 +124,7 @@ def gateway(tmp_path, monkeypatch):
     LEAD_SCRIPT.clear()
     SUB_SCRIPT.clear()
     SOURCE_STATE["disconnected"] = False
+    HOLD.clear()
     _wire(monkeypatch)
 
     holder = SimpleNamespace(client=None, stack=None)
@@ -153,7 +176,7 @@ def _wire(monkeypatch):
     monkeypatch.setattr(subagents_package, "SubagentExecutor", executor_module.SubagentExecutor, raising=False)
 
     def lead_model(**_):
-        return ToolCapableFake(messages=iter(list(LEAD_SCRIPT)))
+        return HeldLeadFake(messages=iter(list(LEAD_SCRIPT)))
 
     def sub_model(**_):
         return SeeingFake(messages=iter(list(SUB_SCRIPT)))
@@ -548,3 +571,78 @@ def test_the_card_gets_each_argument_for_display_redacted(gateway, monkeypatch) 
 
     view = confirmations._arguments_for_display({"name": "nightly", "token": "SECRET-1", "n": 3})
     assert view == {"name": "nightly", "token": "Withheld", "n": "3"}
+
+
+# ---------------------------------------------------------------------------
+# A card's result is never written over a running reply (review of PR #58:
+# the post went straight to the checkpoint, and the run's next step erased it)
+# ---------------------------------------------------------------------------
+
+
+def _start_held_run(gateway, thread_id: str, reply: str) -> tuple[str, threading.Event]:
+    """Start a real background run whose lead model call pauses until released."""
+    entered, release = threading.Event(), threading.Event()
+    HOLD["lead"] = (entered, release)
+    LEAD_SCRIPT[:] = [AIMessage(content=reply)]
+    resp = gateway.client.post(
+        f"/api/threads/{thread_id}/runs",
+        json={"assistant_id": "lead_agent", "input": {"messages": [{"role": "user", "content": "please tell me something else about the weather while you are at it today"}]}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert entered.wait(30), "the run never reached its model call"
+    return resp.json()["run_id"], release
+
+
+def _join(gateway, thread_id: str, run_id: str) -> None:
+    resp = gateway.client.get(f"/api/threads/{thread_id}/runs/{run_id}/join")
+    assert resp.status_code == 200, resp.text
+
+
+def test_a_card_confirm_while_the_chat_is_replying_is_refused_and_the_card_stays(gateway) -> None:
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    run_id, release = _start_held_run(gateway, thread_id, "the late reply")
+
+    body = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+
+    assert body["outcome"] == "thread_busy", body
+    assert "still replying" in body["message"] and "Nothing has run" in body["message"]
+    assert RAN == []
+    assert [a["id"] for a in _pending(gateway, "wipe_backup")] == [wipe["id"]], "the card must stay"
+
+    release.set()
+    _join(gateway, thread_id, run_id)
+    HOLD.clear()
+    after = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+    assert after["outcome"] == "executed", after
+    assert after["detail"]["posted_to_thread"] is True
+    assert RAN == [("wipe_backup", {"name": "nightly"})]
+
+
+def test_a_result_ready_while_a_run_started_is_queued_and_lands_after_it(gateway) -> None:
+    """Genuinely concurrent: the confirmed call is running when a chat run
+    starts; its result is queued, never written over the run, and lands when
+    the run ends, next to the run's own reply."""
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    wipe_entered, wipe_release = threading.Event(), threading.Event()
+    HOLD["wipe"] = (wipe_entered, wipe_release)
+    box: dict = {}
+    confirming = threading.Thread(target=lambda: box.update(resp=gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={})))
+    confirming.start()
+    assert wipe_entered.wait(30), "the confirmed call never started"
+
+    run_id, release = _start_held_run(gateway, thread_id, "the late reply")
+    wipe_release.set()
+    confirming.join(30)
+    body = box["resp"].json()
+
+    assert body["outcome"] == "executed", body
+    assert body["detail"]["posted_to_thread"] is False, "posted claimed while a run held the thread"
+    assert body["detail"]["post_queued"] is True
+
+    release.set()
+    _join(gateway, thread_id, run_id)
+    messages = _thread_messages(gateway, thread_id)
+    ids = [m.get("id") for m in messages]
+    assert f"confirmation-{wipe['id']}" in ids, "the confirmed result was lost"
+    assert any(m.get("content") == "the late reply" for m in messages), "the run's own reply was lost"
+    assert RAN == [("wipe_backup", {"name": "nightly"})]

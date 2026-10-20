@@ -407,6 +407,13 @@ async def run_agent(
                 except Exception:
                     logger.debug("Auto-start preview for thread %s failed (non-fatal)", thread_id, exc_info=True)
 
+        # Writes queued while this run held the thread (a result confirmed
+        # from its card), now that its last checkpoint is written.
+        try:
+            await run_manager.drain_deferred(thread_id, finished_run_id=run_id)
+        except Exception:
+            logger.warning("Failed to write queued thread updates for %s", thread_id, exc_info=True)
+
         await bridge.publish_end(run_id)
         asyncio.create_task(bridge.cleanup(run_id, delay=60))
 
