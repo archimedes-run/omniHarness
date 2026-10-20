@@ -9,6 +9,8 @@ export interface Agent {
   display_name?: string | null;
   /** Ledger project ids this agent works on. */
   projects?: string[] | null;
+  /** Current version in the versioned store; send back as base_version. */
+  version?: number;
 }
 
 export interface CreateAgentRequest {
@@ -20,6 +22,7 @@ export interface CreateAgentRequest {
   soul?: string;
   display_name?: string | null;
   projects?: string[] | null;
+  source?: "manual" | "draft";
 }
 
 export interface UpdateAgentRequest {
@@ -30,4 +33,7 @@ export interface UpdateAgentRequest {
   soul?: string | null;
   display_name?: string | null;
   projects?: string[] | null;
+  /** The version the edit was made from: a stale one is refused (409). */
+  base_version?: number | null;
+  source?: "manual" | "draft";
 }

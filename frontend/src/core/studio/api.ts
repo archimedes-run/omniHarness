@@ -7,6 +7,7 @@ import type {
   DraftResponse,
   SkillFiles,
   StudioOptions,
+  Versions,
 } from "./types";
 
 /** The gateway's reason, shown inline. */
@@ -43,16 +44,25 @@ export const loadStudioOptions = () =>
 export const loadCustomSkill = (name: string) =>
   call<CustomSkill>(`/api/skills/custom/${encodeURIComponent(name)}`);
 
-export const createCustomSkill = (name: string, content: string) =>
+export const createCustomSkill = (
+  name: string,
+  content: string,
+  source: "manual" | "draft" = "manual",
+) =>
   call<CustomSkill>("/api/skills/custom", {
     method: "POST",
-    body: JSON.stringify({ name, content }),
+    body: JSON.stringify({ name, content, source }),
   });
 
-export const saveCustomSkill = (name: string, content: string) =>
+export const saveCustomSkill = (
+  name: string,
+  content: string,
+  baseVersion: number,
+  source: "manual" | "draft" = "manual",
+) =>
   call<CustomSkill>(`/api/skills/custom/${encodeURIComponent(name)}`, {
     method: "PUT",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, base_version: baseVersion, source }),
   });
 
 export const loadSkillFiles = (name: string) =>
@@ -80,4 +90,24 @@ export const draft = (
   call<DraftResponse>(`/api/drafts/${kind}`, {
     method: "POST",
     body: JSON.stringify(body),
+  });
+
+const versionsPath = (kind: "agent" | "skill", name: string) =>
+  kind === "agent"
+    ? `/api/agents/${encodeURIComponent(name)}`
+    : `/api/skills/custom/${encodeURIComponent(name)}`;
+
+export const loadVersions = (kind: "agent" | "skill", name: string) =>
+  call<Versions>(`${versionsPath(kind, name)}/versions`);
+
+/** Restore `toVersion` as a new version; refused (409) when `baseVersion` is stale. */
+export const undoTo = (
+  kind: "agent" | "skill",
+  name: string,
+  toVersion: number,
+  baseVersion: number,
+) =>
+  call<Versions>(`${versionsPath(kind, name)}/undo`, {
+    method: "POST",
+    body: JSON.stringify({ to_version: toVersion, base_version: baseVersion }),
   });

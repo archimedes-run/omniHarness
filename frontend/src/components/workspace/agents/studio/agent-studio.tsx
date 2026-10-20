@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
@@ -33,6 +34,7 @@ import {
   solidButton,
 } from "./studio-frame";
 import { readItemParam, writeItemParam } from "./url-item";
+import { VersionHistory } from "./version-history";
 
 type Selection =
   | { kind: "lead" }
@@ -228,6 +230,10 @@ function AgentEditor({
   );
   const initial = useMemo(() => formFrom(agent), [agent]);
   const [form, setForm] = useState<AgentForm>(initial);
+  // A new version from the server (a save, a restore) becomes the form.
+  useEffect(() => setForm(initial), [initial]);
+  const [fromDraft, setFromDraft] = useState(false);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<
     | { kind: "idle" }
     | { kind: "saving" }
@@ -271,6 +277,7 @@ function AgentEditor({
         tool_groups: d.tool_groups.length ? d.tool_groups : form.tool_groups,
         skills: d.skills.length ? d.skills : form.skills,
       });
+      setFromDraft(true);
       setDraftNote({
         text:
           c.draftReady(result.model) +
@@ -302,11 +309,23 @@ function AgentEditor({
         projects: form.projects,
       };
       if (mode === "new") {
-        const created = await create.mutateAsync({ name: slug, ...fields });
+        const created = await create.mutateAsync({
+          name: slug,
+          ...fields,
+          source: fromDraft ? "draft" : "manual",
+        });
         setStatus({ kind: "saved" });
         onCreated(created.name);
       } else {
-        await update.mutateAsync({ name: id, request: fields });
+        await update.mutateAsync({
+          name: id,
+          request: {
+            ...fields,
+            base_version: agent?.version ?? 0,
+            source: fromDraft ? "draft" : "manual",
+          },
+        });
+        setFromDraft(false);
         setStatus({ kind: "saved" });
       }
     } catch (e) {
@@ -373,6 +392,16 @@ function AgentEditor({
 
   const footer = (
     <>
+      {mode === "new" ? null : (
+        <VersionHistory
+          kind="agent"
+          name={id}
+          onRestored={() => {
+            void queryClient.invalidateQueries({ queryKey: ["agents"] });
+            void queryClient.invalidateQueries({ queryKey: ["studio"] });
+          }}
+        />
+      )}
       {status.kind === "error" ? (
         <p
           className="text-destructive mr-auto text-sm"

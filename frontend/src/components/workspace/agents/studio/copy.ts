@@ -10,6 +10,34 @@ import { useI18n } from "@/core/i18n/hooks";
  * every page.
  */
 const enUS = {
+  history: {
+    button: "History",
+    title: "Versions",
+    current: "Current",
+    restore: "Restore",
+    restored: (v: number) => `Restored version ${v} as a new version.`,
+    failed: (why: string) => `Not restored: ${why}`,
+    none: "No versions yet.",
+    unreadable: (why: string) => `Can't tell: ${why}`,
+    who: (who: string) =>
+      who.startsWith("user:")
+        ? "You"
+        : who.startsWith("agent:")
+          ? `The agent (${who.slice(6)})`
+          : who === "agent"
+            ? "An agent"
+            : "Unknown",
+    source: {
+      manual: "edited",
+      draft: "saved from a draft",
+      proposal: "changed itself",
+      chat: "built in chat",
+      undo: "restored",
+      existing: "as it was before versions",
+    } as Record<string, string>,
+    deleted: "deleted",
+    stale: "Changed elsewhere since you opened it. Reload to see the change.",
+  },
   agents: {
     newAgent: "+ New agent",
     newAgentTitle: "New agent",
@@ -207,6 +235,34 @@ const enUS = {
 export type StudioCopy = typeof enUS;
 
 const zhCN: StudioCopy = {
+  history: {
+    button: "历史",
+    title: "版本",
+    current: "当前",
+    restore: "恢复",
+    restored: (v) => `已将版本 ${v} 恢复为新版本。`,
+    failed: (why) => `未恢复：${why}`,
+    none: "还没有版本。",
+    unreadable: (why) => `无法判断：${why}`,
+    who: (who) =>
+      who.startsWith("user:")
+        ? "你"
+        : who.startsWith("agent:")
+          ? `智能体（${who.slice(6)}）`
+          : who === "agent"
+            ? "某个智能体"
+            : "未知",
+    source: {
+      manual: "编辑",
+      draft: "从草稿保存",
+      proposal: "自行修改",
+      chat: "在聊天中创建",
+      undo: "恢复",
+      existing: "启用版本前的状态",
+    },
+    deleted: "已删除",
+    stale: "打开后已在别处修改。请重新加载查看。",
+  },
   agents: {
     newAgent: "+ 新建智能体",
     newAgentTitle: "新建智能体",
