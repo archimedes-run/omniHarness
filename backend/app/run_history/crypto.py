@@ -46,6 +46,7 @@ import os
 import sqlite3
 import stat
 import threading
+import time
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
@@ -174,7 +175,9 @@ class StoreKey:
         # deleted at each commit (no WAL holding old pages).
         conn.execute("PRAGMA secure_delete = ON")
         conn.execute("PRAGMA journal_mode = DELETE")
-        conn.execute("CREATE TABLE IF NOT EXISTS data_keys (key_id TEXT PRIMARY KEY, wrapped BLOB NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS data_keys (key_id TEXT PRIMARY KEY, wrapped BLOB NOT NULL, created REAL NOT NULL DEFAULT 0)")
+        if "created" not in {r[1] for r in conn.execute("PRAGMA table_info(data_keys)")}:
+            conn.execute("ALTER TABLE data_keys ADD COLUMN created REAL NOT NULL DEFAULT 0")
         return conn
 
     def key(self) -> bytes:
@@ -192,7 +195,7 @@ class StoreKey:
         with self._lock:
             wrapped = _seal(self._master(), dek, f"data-key|{key_id}")
             with self._db() as c:
-                c.execute("INSERT INTO data_keys (key_id, wrapped) VALUES (?, ?)", (key_id, wrapped))
+                c.execute("INSERT INTO data_keys (key_id, wrapped, created) VALUES (?, ?, ?)", (key_id, wrapped, time.time()))
         return dek
 
     def data_key(self, key_id: str) -> bytes:
@@ -213,9 +216,19 @@ class StoreKey:
         with self._lock, self._db() as c:
             c.executemany("DELETE FROM data_keys WHERE key_id = ?", ids)
 
-    def key_ids(self) -> set[str]:
+    def key_ids(self, *, older_than: float | None = None) -> set[str]:
+        """Every key id; with `older_than` (seconds), only keys created at
+        least that long ago."""
         with self._lock, self._db() as c:
-            return {r[0] for r in c.execute("SELECT key_id FROM data_keys")}
+            if older_than is None:
+                return {r[0] for r in c.execute("SELECT key_id FROM data_keys")}
+            return {r[0] for r in c.execute("SELECT key_id FROM data_keys WHERE created <= ?", (time.time() - older_than,))}
+
+    def has_recent_keys(self, within: float) -> bool:
+        """A key created in the last `within` seconds: a record may be in
+        flight on another worker (its key written, its row not yet committed)."""
+        with self._lock, self._db() as c:
+            return c.execute("SELECT 1 FROM data_keys WHERE created > ? LIMIT 1", (time.time() - within,)).fetchone() is not None
 
     def rotate(self) -> None:
         """Destroy every data key and replace the master key with a new one.

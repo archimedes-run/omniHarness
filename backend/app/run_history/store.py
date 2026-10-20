@@ -79,6 +79,10 @@ RUN_MAX_BYTES = 2 * 1024 * 1024
 #: the settings say so; at WARN_FRACTION of it the settings warn.
 TOTAL_MAX_BYTES = 512 * 1024 * 1024
 WARN_FRACTION = 0.9
+#: A data key younger than this is never treated as an orphan, and its
+#: presence blocks a purge's master-key rotation: a record on another worker
+#: may have written it and not yet committed its row.
+KEY_GRACE_SECONDS = 600
 #: An error message is cut to this many characters, an id to ID_MAX.
 ERROR_MAX = 4096
 ID_MAX = 256
@@ -534,13 +538,16 @@ class RunHistory:
             for f in self.blobs.glob("*.json"):
                 if f.name not in named:
                     _shred(f)
-            # Crypto-shred the expired runs: their data keys are destroyed, and
-            # so is any key no row names (a record that failed after its key).
+            # Crypto-shred the expired runs: their data keys are destroyed.
             live = {r[0] for r in c.execute("SELECT id FROM runs")}
             self.key.destroy([r["id"] for r in rows])
-            self.key.destroy(self.key.key_ids() - live)
-            if rows and not live:
-                # Nothing left that needs the master key: rotate it too.
+            # And keys no row names, but ONLY those older than KEY_GRACE: a
+            # record on another worker writes its key before its row commits,
+            # so a young key without a row may be a run being recorded now.
+            self.key.destroy(self.key.key_ids(older_than=KEY_GRACE_SECONDS) - live)
+            if rows and not live and not self.key.has_recent_keys(KEY_GRACE_SECONDS):
+                # Nothing left that needs the master key, and no record in
+                # flight anywhere: rotate it too.
                 self.key.rotate()
         self._flush_wal()
         return len(rows)

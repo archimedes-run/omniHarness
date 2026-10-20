@@ -193,13 +193,24 @@ def _message_key(message: Any) -> str:
 
 async def trim_thread(app, thread_id: str, cutoff) -> bool:
     """Retention for a thread a PERSON also wrote in: remove only content older
-    than `cutoff`, keep the conversation. Each message's age is the time of the
-    first checkpoint that holds it. When a person's message remains, every
-    checkpoint is deleted and ONE new checkpoint holding only the messages
-    inside the window (and the title) is written; run traces and run records
-    older than the cutoff go too. Returns True when the thread was kept
-    (trimmed); False when no person's message is inside the window, so the
-    caller deletes the whole thread."""
+    than `cutoff`, keep the conversation. Returns True when the thread is kept;
+    False when no person's message is inside the window, so the caller deletes
+    the whole thread.
+
+    A message's age is the time of the first checkpoint that holds it. The
+    trim REWRITES each existing checkpoint IN PLACE (same id, same time, same
+    parent), with the messages older than the cutoff removed. Nothing is
+    deleted and no new checkpoint is made, so:
+      * a checkpoint another worker commits meanwhile (a person's newest
+        message) is never touched or lost; it is trimmed by the next sweep;
+      * every message keeps its age, so the next trim still sees old content
+        as old (no extension of the retention);
+      * nothing is rewritten when nothing is older than the cutoff.
+    Before rewriting, the latest checkpoint is re-read; if it changed since the
+    thread was read, the trim stops (returns True: kept) and the next sweep
+    retries. Callers hold the cross-process firing lock (sweep_threads).
+    Limit, stated: pending writes stored beside checkpoints by some saver
+    backends are not rewritten."""
     from datetime import UTC, datetime
 
     cp = getattr(app.state, "checkpointer", None)
@@ -216,18 +227,25 @@ async def trim_thread(app, thread_id: str, cutoff) -> bool:
         for m in (t.checkpoint.get("channel_values") or {}).get("messages") or []:
             k = _message_key(m)
             first[k] = min(first.get(k, ts), ts)
+    old = {k for k, ts in first.items() if ts < cutoff}
     latest = tuples[0]
     messages = (latest.checkpoint.get("channel_values") or {}).get("messages") or []
-    recent = [m for m in messages if first.get(_message_key(m), cutoff) >= cutoff]
-    if not any(_is_person(m) for m in recent):
+    if not any(_is_person(m) for m in messages if _message_key(m) not in old):
         return False
-    checkpoint = dict(latest.checkpoint)
-    values = {"messages": recent}
-    if "title" in (latest.checkpoint.get("channel_values") or {}):
-        values["title"] = latest.checkpoint["channel_values"]["title"]
-    checkpoint["channel_values"] = values
-    await cp.adelete_thread(thread_id)
-    await cp.aput(cfg, checkpoint, dict(latest.metadata or {}), {})
+    if not old:
+        return True  # nothing past the retention: no rewrite at all
+    again = await cp.aget_tuple(cfg)
+    if again is None or again.checkpoint.get("id") != latest.checkpoint.get("id"):
+        return True  # written meanwhile: leave it, the next sweep retries
+    for t in tuples:
+        values = dict(t.checkpoint.get("channel_values") or {})
+        kept = [m for m in values.get("messages") or [] if _message_key(m) not in old]
+        if len(kept) == len(values.get("messages") or []):
+            continue
+        values["messages"] = kept
+        checkpoint = {**t.checkpoint, "channel_values": values}
+        parent = t.parent_config or {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        await cp.aput(parent, checkpoint, dict(t.metadata or {}), {})
     runs = getattr(app.state, "run_store", None)
     events = getattr(app.state, "run_event_store", None)
     if runs is not None:
@@ -301,6 +319,18 @@ async def delete_history_and_threads(app) -> DeleteResult:
         return result
 
     return await _locked(app, work)
+
+
+async def purge_locked(app) -> int | None:
+    """The retention purge under the cross-process firing lock, so it never
+    runs while a firing (and its record) is in flight on any worker. Skipped,
+    not waited for, while one is (returns None; the next purge retries). The
+    store's own key grace period (store.KEY_GRACE_SECONDS) also protects a
+    record that holds no lock."""
+    history = getattr(app.state, "run_history", None)
+    if history is None:
+        return None
+    return await _locked(app, lambda rule_map, run: history.purge(), refuse=False)
 
 
 async def sweep_threads(app) -> DeleteResult | None:

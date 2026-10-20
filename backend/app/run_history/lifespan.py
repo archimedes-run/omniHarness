@@ -54,10 +54,12 @@ async def purge_forever(history: RunHistory, interval: float = PURGE_INTERVAL_SE
     while True:
         await asyncio.sleep(interval)
         try:
-            await asyncio.to_thread(history.purge)
             if app is not None:
-                from app.run_history.delete import sweep_threads
+                from app.run_history.delete import purge_locked, sweep_threads
 
+                await purge_locked(app)
                 await sweep_threads(app)
+            else:
+                await asyncio.to_thread(history.purge)
         except Exception:
             logger.exception("run history: a scheduled purge failed")
