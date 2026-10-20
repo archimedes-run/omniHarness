@@ -55,8 +55,20 @@ export interface PendingAction {
   confirmable_by_typing?: boolean;
 }
 
+/** A confirmed action that ran, whose result is not yet in its chat (the
+ *  chat was replying, or the gateway restarted first). It is posted once the
+ *  chat is free. */
+export interface AwaitingPost {
+  id: string;
+  thread_id: string | null;
+  tool_name: string;
+  requester: string;
+}
+
 export interface PendingList {
   actions: PendingAction[];
+  /** Absent from an older gateway. */
+  awaiting_post?: AwaitingPost[];
   /** FR-008. `false` means we could not tell what is pending — a different
    *  fact from nothing being pending, and the surface must not render the
    *  same thing for both. */

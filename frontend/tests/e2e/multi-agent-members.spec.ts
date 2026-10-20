@@ -188,3 +188,62 @@ test("a card refused because its tool left the chat says why and keeps its butto
   await expect(card.getByTestId("confirm")).toBeVisible();
   await expect(card.getByTestId("continue-agent")).toHaveCount(0);
 });
+
+test("a result that ran while the chat was replying says it is waiting to post, and stays visible after a reload", async ({
+  page,
+}) => {
+  await setUp(page, ["researcher"]);
+  let ran = false;
+  await page.route("**/api/confirmations", (route) =>
+    route.fulfill({
+      json: ran
+        ? {
+            actions: [],
+            awaiting_post: [
+              {
+                id: "abcdef123456",
+                thread_id: THREAD,
+                tool_name: "wipe_backup",
+                requester: "researcher",
+              },
+            ],
+            readable: true,
+            error: "",
+          }
+        : { actions: [action("abcdef123456")], readable: true, error: "" },
+    }),
+  );
+  await page.route("**/api/confirmations/*/confirm", (route) => {
+    ran = true;
+    return route.fulfill({
+      json: {
+        outcome: "executed",
+        action_id: "abcdef123456",
+        message:
+          "Done. researcher ran wipe_backup after you confirmed it. The chat was replying, so this will appear in it when that reply finishes.",
+        detail: {
+          result: "wiped nightly",
+          continue_agent: "researcher",
+          posted_to_thread: false,
+          post_queued: true,
+        },
+      },
+    });
+  });
+  await page.goto(`/workspace/chats/${THREAD}`);
+  const card = page.getByTestId("pending-action");
+  await expect(card).toBeVisible({ timeout: 15_000 });
+
+  await card.getByTestId("confirm").click();
+  await expect(card.getByTestId("post-waiting")).toContainText(
+    "Result waiting to post",
+  );
+
+  // After a reload the card is gone (it ran); the waiting result is not.
+  await page.reload();
+  await expect(page.getByTestId("awaiting-post")).toContainText(
+    "Result waiting to post",
+    { timeout: 15_000 },
+  );
+  await expect(page.getByTestId("awaiting-post")).toContainText("wipe_backup");
+});

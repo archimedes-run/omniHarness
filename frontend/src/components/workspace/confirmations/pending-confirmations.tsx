@@ -61,7 +61,25 @@ export function PendingConfirmations({
       .filter((a) => !actions.some((p) => p.id === a.id)),
   ];
 
-  if (quietWhenEmpty && pending?.readable && shown.length === 0) return null;
+  // Results that ran and are not yet in their chat. Shown once, where the
+  // chat's unanchored cards go (never in an `only` group), and not for a card
+  // still on screen here, which says so itself.
+  const awaiting =
+    only == null
+      ? (pending?.awaiting_post ?? []).filter(
+          (a) =>
+            (threadId == null || a.thread_id === threadId) &&
+            !(a.id in resolved),
+        )
+      : [];
+
+  if (
+    quietWhenEmpty &&
+    pending?.readable &&
+    shown.length === 0 &&
+    awaiting.length === 0
+  )
+    return null;
 
   return (
     <div className="space-y-3" data-testid="pending-confirmations">
@@ -79,7 +97,19 @@ export function PendingConfirmations({
         </Alert>
       )}
 
-      {pending?.readable && shown.length === 0 && (
+      {awaiting.map((item) => (
+        <p
+          key={item.id}
+          className="border-border text-muted-foreground rounded-md border px-3 py-2 text-sm"
+          data-testid="awaiting-post"
+        >
+          Result waiting to post ·{" "}
+          <span className="text-foreground">{item.tool_name}</span>, run for{" "}
+          {item.requester}. It appears in the chat as soon as the chat is free.
+        </p>
+      ))}
+
+      {pending?.readable && shown.length === 0 && awaiting.length === 0 && (
         <p className="text-muted-foreground text-sm" data-testid="empty">
           Nothing is waiting for your confirmation.
         </p>

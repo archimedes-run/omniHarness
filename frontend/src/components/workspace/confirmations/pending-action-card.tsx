@@ -217,6 +217,15 @@ export function PendingActionCard({
         )}
 
         {result && <ResolveMessage result={result} />}
+        {result?.detail?.post_queued === true && (
+          <p
+            className="text-muted-foreground text-xs"
+            data-testid="post-waiting"
+          >
+            Result waiting to post: it appears in the chat when the current
+            reply finishes.
+          </p>
+        )}
         {continueAgent && onContinue && (
           <div className="flex justify-end">
             <Button
