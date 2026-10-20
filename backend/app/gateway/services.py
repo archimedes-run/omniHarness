@@ -459,10 +459,12 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
     ctx_dict = config.setdefault("context", {})
     if not isinstance(ctx_dict, dict):
         return
-    # ONE-SHOT, atomically: a replayed Continue would hand the agent "the user
-    # confirmed, continue" again for the same action (review of PR #58).
+    # ONE AT A TIME, ONE-SHOT ON SUCCESS: a replay would hand the agent "the
+    # user confirmed, continue" again. Held from here; spent only when the
+    # agent re-enters successfully (called_agents listener -> finish_continue);
+    # released if the run is refused, fails or crashes (review of PR #58).
     if not middleware.pending.take_continue(action.id):
-        raise _continue_refused("it was already continued once for this confirmation")
+        raise _continue_refused("it was already continued for this confirmation, or is being continued now")
     ctx_dict[CALLED_AGENT_KEY] = action.requester
     ctx_dict[RESUME_ACTION_KEY] = {
         "id": action.id,
@@ -475,7 +477,24 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
         "origin_via": action.origin_via,
         "delegation_chain": list(action.delegation_chain),
         "result_excerpt": action.result_excerpt,
+        "arguments": dict(action.arguments),
     }
+
+
+def _release_continue_if_held(config: dict[str, Any]) -> None:
+    """The run carrying a Continue was refused before it started: the
+    Continue did not happen, so it can be pressed again."""
+    from omniharness.agents.called_agents import RESUME_ACTION_KEY
+
+    resume = (config.get("context") or {}).get(RESUME_ACTION_KEY) if isinstance(config.get("context"), dict) else None
+    if not isinstance(resume, dict) or not resume.get("id"):
+        return
+    from app.policy.registration import build
+    from omniharness.config import get_app_config
+
+    middleware = build(get_app_config())
+    if middleware is not None:
+        middleware.pending.release_continue(str(resume["id"]))
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -816,8 +835,10 @@ async def start_run(
             interrupt_after=body.interrupt_after,
         )
     except ConflictError as exc:
+        _release_continue_if_held(config)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except UnsupportedStrategyError as exc:
+        _release_continue_if_held(config)
         raise HTTPException(status_code=501, detail=str(exc)) from exc
 
     # Title sync is handled by worker.py's finally block which reads the

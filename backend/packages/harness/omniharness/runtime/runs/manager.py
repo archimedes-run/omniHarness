@@ -7,6 +7,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 from omniharness.utils.time import now_iso as _now_iso
@@ -37,6 +38,11 @@ class RunRecord:
     abort_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     abort_action: str = "interrupt"
     error: str | None = None
+
+
+#: An active run row in the store not updated for this long belongs to a
+#: worker that died; it no longer holds its thread (write_when_idle).
+OTHER_WORKER_RUN_STALE_AFTER = timedelta(hours=1)
 
 
 class RunManager:
@@ -74,7 +80,38 @@ class RunManager:
         async with self._lock:
             return self._busy(thread_id)
 
-    async def write_when_idle(self, thread_id: str, write: Callable[[], Awaitable[bool]]) -> Literal["written", "queued", "failed"]:
+    async def _active_elsewhere(self, thread_id: str) -> bool:
+        """A run on this thread that ANOTHER worker recorded as active.
+
+        This manager only sees its own process's runs; the run store sees
+        every worker's. A row still "pending"/"running" but not updated for
+        OTHER_WORKER_RUN_STALE_AFTER is a crashed worker's, and not counted.
+        A store that cannot be read is can't-tell: treated as busy (the post
+        waits and is retried), never as idle.
+        """
+        if self._store is None:
+            return False
+        try:
+            rows = await self._store.list_by_thread(thread_id, user_id=None)
+        except Exception:
+            logger.warning("Could not read runs of thread %s from the run store; treating it as busy", thread_id, exc_info=True)
+            return True
+        now = datetime.now(UTC)
+        for row in rows or []:
+            if row.get("run_id") in self._runs or row.get("status") not in ("pending", "running"):
+                continue
+            updated = row.get("updated_at") or row.get("created_at")
+            try:
+                when = datetime.fromisoformat(str(updated).replace("Z", "+00:00")) if updated else None
+            except ValueError:
+                when = None
+            if when is not None and when.tzinfo is None:
+                when = when.replace(tzinfo=UTC)
+            if when is None or now - when < OTHER_WORKER_RUN_STALE_AFTER:
+                return True
+        return False
+
+    async def write_when_idle(self, thread_id: str, write: Callable[[], Awaitable[bool]]) -> Literal["written", "queued", "elsewhere", "failed"]:
         """Write to a thread's checkpoint WITHOUT racing a run on it.
 
         A run holds the thread's state in memory and checkpoints it as it goes,
@@ -91,6 +128,10 @@ class RunManager:
                 self._deferred.setdefault(thread_id, []).append(write)
                 logger.info("Thread %s is running; a write is queued until the run ends", thread_id)
                 return "queued"
+            if await self._active_elsewhere(thread_id):
+                # Another worker's run holds the thread: the caller waits and
+                # tries again (this process is not told when that run ends).
+                return "elsewhere"
             return "written" if await write() else "failed"
 
     async def drain_deferred(self, thread_id: str, *, finished_run_id: str) -> None:
