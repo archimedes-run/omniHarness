@@ -376,16 +376,54 @@ def test_nginx_sets_forwarded_headers_itself_in_every_proxied_location() -> None
 
 # ── every dev/test/run config in the repo binds loopback ─────────────────
 
-#: 0.0.0.0 that stays, each with its reason: it is INSIDE a container, whose
-#: port is reached over the compose network and published on the host only
-#: through the loopback mappings checked above.
+#: 0.0.0.0 that stays, each with its reason, AND the published side that makes
+#: it safe: every compose service running that image or command, each of which
+#: must publish nothing or only on loopback
+#: (test_each_container_exception_is_unpublished_or_loopback).
+_C, _D, _Y = "docker/docker-compose.yaml", "docker/docker-compose-dev.yaml", "docker/docker-compose-daily.yaml"
 CONTAINER_INTERNAL = {
-    "backend/Dockerfile": "gateway inside its container; nginx reaches gateway:8001, no host publish",
-    "docker/docker-compose.yaml": "gateway command inside its container (same)",
-    "docker/docker-compose-dev.yaml": "gateway command inside its container (same)",
-    "docker/provisioner/Dockerfile": "provisioner inside its container; nginx reaches provisioner:8002",
-    "frontend/Dockerfile": "NEXT_HOST=0.0.0.0 inside the frontend container; nginx reaches frontend:3000",
+    "backend/Dockerfile": ("gateway (and session-watcher) inside their containers", [(_C, "gateway"), (_D, "gateway"), (_C, "session-watcher"), (_D, "session-watcher")]),
+    _C: ("the gateway command inside its container; nginx reaches gateway:8001", [(_C, "gateway")]),
+    _D: ("the gateway command inside its container; nginx reaches gateway:8001", [(_D, "gateway")]),
+    "docker/provisioner/Dockerfile": ("the provisioner inside its container; nginx reaches provisioner:8002", [(_C, "provisioner"), (_D, "provisioner")]),
+    "frontend/Dockerfile": ("NEXT_HOST=0.0.0.0 inside the frontend container; nginx reaches frontend:3000", [(_C, "frontend"), (_D, "frontend"), (_Y, "frontend")]),
 }
+
+
+def _compose(rel: str) -> dict:
+    return yaml.load((REPO / rel).read_text(), Loader=_ComposeLoader) or {}  # noqa: S506 - a SafeLoader subclass
+
+
+def _built_from(rel_dockerfile: str) -> set[tuple[str, str]]:
+    """Every (compose file, service) whose build uses this Dockerfile."""
+    found = set()
+    for compose in (_C, _D, _Y):
+        for name, svc in (_compose(compose).get("services") or {}).items():
+            build = (svc or {}).get("build")
+            if isinstance(build, dict) and build.get("dockerfile"):
+                path = ((REPO / "docker" / build.get("context", ".")) / build["dockerfile"]).resolve()
+                if path == (REPO / rel_dockerfile).resolve():
+                    found.add((compose, name))
+    return found
+
+
+@pytest.mark.parametrize("exception", sorted(CONTAINER_INTERNAL))
+def test_each_container_exception_is_unpublished_or_loopback(exception) -> None:
+    """The 0.0.0.0 inside the container is safe ONLY because its host side
+    publishes nothing, or only on loopback. Checked per exception."""
+    _, services = CONTAINER_INTERNAL[exception]
+    if exception.endswith("Dockerfile"):
+        missing = _built_from(exception) - set(services)
+        assert not missing, f"{exception} is also built into {missing}: list them so their published side is checked"
+    assert services
+    for compose, name in services:
+        svc = (_compose(compose).get("services") or {}).get(name)
+        assert svc is not None, (compose, name)
+        for port in svc.get("ports") or []:
+            if isinstance(port, dict):
+                assert port.get("host_ip") in ("127.0.0.1", "::1"), (compose, name, port)
+            else:
+                assert _resolve_defaults(str(port)).startswith(_LOOPBACK), (compose, name, port)
 
 
 def _repo_files(*patterns: str) -> list[Path]:
@@ -422,15 +460,15 @@ def test_uvicorn_on_the_host_binds_loopback() -> None:
         for host in re.findall(r"uvicorn[^\n\"]*?--host[ =](\S+)", path.read_text()):
             if host == "0.0.0.0":
                 assert rel in CONTAINER_INTERNAL, f"{rel}: uvicorn --host 0.0.0.0 on the host"
+                # ...and only because its published side is checked:
+                test_each_container_exception_is_unpublished_or_loopback(rel)
             else:
                 assert host == "127.0.0.1", (rel, host)
 
 
 def test_docker_run_port_publishes_are_loopback() -> None:
-    """Every `-p` the code builds for `docker run` names 127.0.0.1 (or the
-    loopback-defaulting resolver). The Apple `container` runtime line is the
-    one listed exception."""
-    exceptions = {("packages/harness/omniharness/community/aio_sandbox/local_backend.py", 'f"{port}:8080"'): "Apple container runtime: its -p takes no host address here; NOT verified loopback (reported)"}
+    """Every `-p` the code builds for `docker run` / Apple `container run`
+    names 127.0.0.1 (or the loopback-defaulting resolver). No exceptions."""
     found = 0
     for path in _repo_files("*.py", "*.sh"):
         rel = path.relative_to(REPO).as_posix()
@@ -439,8 +477,6 @@ def test_docker_run_port_publishes_are_loopback() -> None:
         text = path.read_text(errors="ignore")
         for mapping in re.findall(r'"-p",\s*(?:#[^\n]*\n\s*)*(f?"[^"]+")', text) + re.findall(r'port_mapping = (f"[^"]+")', text):
             found += 1
-            if (rel.removeprefix("backend/"), mapping) in exceptions:
-                continue
             assert mapping.startswith(('f"127.0.0.1:', '"127.0.0.1:', 'f"{_resolve_docker_bind_host()}:')), (rel, mapping)
         for mapping in re.findall(r"docker run[^\n]*\s-p\s+(\S+)", text):
             found += 1
@@ -460,3 +496,14 @@ def test_host_bash_command_runs_with_the_scrubbed_environment(monkeypatch) -> No
     out = LocalSandbox("t").execute_command("env")
     assert "internal-token-value-xyz" not in out and "sk-test-value-xyz" not in out
     assert "PATH=" in out
+
+
+def test_every_0000_bind_in_run_config_is_a_listed_container_exception() -> None:
+    """Any 0.0.0.0 in a Dockerfile, compose file, script or Makefile must be a
+    listed container exception (whose published side is then checked)."""
+    unlisted = []
+    for path in _repo_files("Makefile", "*/Makefile", "scripts/*", "*Dockerfile", "docker/*.y*ml", "docker/*.sh"):
+        rel = path.relative_to(REPO).as_posix()
+        if "0.0.0.0" in path.read_text(errors="ignore") and rel not in CONTAINER_INTERNAL:
+            unlisted.append(rel)
+    assert not unlisted, unlisted

@@ -224,7 +224,9 @@ def test_start_container_binds_ipv6_sandbox_host_to_ipv6_loopback(monkeypatch):
     assert captured_cmd[captured_cmd.index("-p") + 1] == "[::1]:18080:8080"
 
 
-def test_start_container_keeps_apple_container_port_format(monkeypatch):
+def test_start_container_binds_apple_container_to_loopback(monkeypatch):
+    """apple/container's -p takes [host-ip:]host-port:container-port and binds
+    0.0.0.0 when the address is omitted, so the address is always given."""
     backend = LocalContainerBackend(
         image="sandbox:latest",
         base_port=8080,
@@ -232,8 +234,9 @@ def test_start_container_keeps_apple_container_port_format(monkeypatch):
         config_mounts=[],
         environment={},
     )
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_BIND_HOST", "127.0.0.1")
+    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "host.docker.internal")
 
     captured_cmd = _capture_start_container_command(monkeypatch, backend, runtime="container")
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "18080:8080"
+    assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"

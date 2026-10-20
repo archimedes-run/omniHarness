@@ -512,10 +512,12 @@ class LocalContainerBackend(SandboxBackend):
         if self._runtime == "docker":
             cmd.extend(["--security-opt", "seccomp=unconfined"])
 
-        if self._runtime == "docker":
-            port_mapping = f"{_resolve_docker_bind_host()}:{port}:8080"
-        else:
-            port_mapping = f"{port}:8080"
+        # Both runtimes take ``[host-ip:]host-port:container-port``, and BOTH
+        # default to 0.0.0.0 when the address is left out (apple/container:
+        # Sources/Services/ContainerAPIService/Client/Parser.swift, the publish
+        # parser falls back to IPAddress("0.0.0.0")). So the address is always
+        # given: loopback unless OMNI_HARNESS_SANDBOX_BIND_HOST says otherwise.
+        port_mapping = f"{_resolve_docker_bind_host()}:{port}:8080"
 
         cmd.extend(
             [
