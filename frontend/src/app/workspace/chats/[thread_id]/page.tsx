@@ -47,6 +47,9 @@ export default function ChatPage() {
   const [localSettings, setLocalSettings] = useLocalSettings();
   const { tokenUsageEnabled } = useModels();
   const mountedRef = useRef(false);
+  // The agent picked with "@" before the first message (Feature 006). It
+  // goes with the run as the chat's agent, and the URL becomes that agent's.
+  const [chosenAgent, setChosenAgent] = useState<string | null>(null);
   useSpecificChatMode();
 
   useEffect(() => {
@@ -59,6 +62,7 @@ export default function ChatPage() {
   // is harmless during the submit transition.
   useEffect(() => {
     setIsWelcomeMode(isNewThread);
+    if (isNewThread) setChosenAgent(null);
   }, [isNewThread]);
 
   const { showNotification } = useNotification();
@@ -72,7 +76,9 @@ export default function ChatPage() {
     loadMoreHistory,
   } = useThreadStream({
     threadId: isNewThread ? undefined : threadId,
-    context: settings.context,
+    context: chosenAgent
+      ? { ...settings.context, agent_name: chosenAgent }
+      : settings.context,
     isMock,
     // onSend only animates the UI; do NOT flip `isNewThread` here — the
     // LangGraph SDK eagerly fetches /history the moment it receives a
@@ -84,7 +90,13 @@ export default function ChatPage() {
       setThreadId(createdThreadId);
       setIsNewThread(false);
       // ! Important: Never use next.js router for navigation in this case, otherwise it will cause the thread to re-mount and lose all states. Use native history API instead.
-      history.replaceState(null, "", `/workspace/chats/${createdThreadId}`);
+      history.replaceState(
+        null,
+        "",
+        chosenAgent
+          ? `/workspace/agents/${encodeURIComponent(chosenAgent)}/chats/${createdThreadId}`
+          : `/workspace/chats/${createdThreadId}`,
+      );
     },
     onFinish: (state) => {
       if (document.hidden || !document.hasFocus()) {
@@ -176,16 +188,17 @@ export default function ChatPage() {
                 tokenUsageInlineMode={tokenUsageInlineMode}
               />
             </div>
-            <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
-              <div
-                className={cn(
-                  "relative w-full",
-                  isWelcomeMode && "-translate-y-[calc(50vh-96px)]",
-                  isWelcomeMode
-                    ? "max-w-(--container-width-sm)"
-                    : "max-w-(--container-width-md)",
-                )}
-              >
+            <div
+              className={cn(
+                "absolute right-0 left-0 z-30 flex justify-center",
+                // Chat-Bar-v2.dc.html: the new chat centres the heading, the
+                // bar and the starters; a thread keeps the bar at the bottom.
+                isWelcomeMode
+                  ? "top-0 bottom-0 items-center px-8 pb-20"
+                  : "bottom-0 px-4",
+              )}
+            >
+              <div className="relative w-full max-w-[960px]">
                 <div className="absolute -top-4 right-0 left-0 z-0">
                   <div className="absolute right-0 bottom-0 left-0">
                     <TodoList
@@ -207,7 +220,10 @@ export default function ChatPage() {
                 </div>
                 {mountedRef.current ? (
                   <InputBox
-                    className={cn("bg-background/5 w-full -translate-y-4")}
+                    className={cn(
+                      "bg-background/5 w-full",
+                      !isWelcomeMode && "-translate-y-4",
+                    )}
                     isWelcomeMode={isWelcomeMode}
                     threadId={threadId}
                     autoFocus={isWelcomeMode}
@@ -219,6 +235,8 @@ export default function ChatPage() {
                           : "ready"
                     }
                     context={settings.context}
+                    chosenAgent={chosenAgent}
+                    onChooseAgent={setChosenAgent}
                     disabled={
                       env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
                       isUploading

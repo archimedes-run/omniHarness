@@ -10,7 +10,12 @@ import {
   useProjects,
   useThreadProjects,
 } from "@/core/ledger/hooks";
-import { loadSkills } from "@/core/skills/api";
+import {
+  getThreadSkills,
+  loadSkills,
+  putThreadSkills,
+  type ThreadSkills,
+} from "@/core/skills/api";
 import { useToolSources } from "@/core/tool-sources/hooks";
 import {
   getThreadSelection,
@@ -21,6 +26,7 @@ import {
 } from "@/core/tools/api";
 import { listUploadedFiles } from "@/core/uploads/api";
 
+import { withSkill } from "./chips";
 import { integrationRows, type IntegrationRow } from "./logic";
 
 /**
@@ -174,4 +180,48 @@ export function useChatUploads(threadId: string, enabled: boolean) {
     enabled: enabled && !!threadId,
   });
   return data?.files ?? [];
+}
+
+/**
+ * The skills removed from this chat, kept by the gateway per thread (like the
+ * tool selection) and applied to every run of it. A chip's × and the picker's
+ * switch both write through `setUsed`, so they cannot disagree.
+ */
+export function useThreadSkills(threadId: string) {
+  const queryClient = useQueryClient();
+  const key = useMemo(() => ["skills", "thread", threadId], [threadId]);
+  const query = useQuery({
+    queryKey: key,
+    queryFn: () => getThreadSkills(threadId),
+    enabled: !!threadId,
+  });
+  const save = useMutation({
+    mutationFn: (excluded: string[]) => putThreadSkills(threadId, excluded),
+    onMutate: async (excluded) => {
+      await queryClient.cancelQueries({ queryKey: key, exact: true });
+      const previous = queryClient.getQueryData<ThreadSkills>(key);
+      queryClient.setQueryData<ThreadSkills>(key, {
+        thread_id: threadId,
+        excluded,
+      });
+      return { previous };
+    },
+    onError: (_e, _v, ctx) => {
+      queryClient.setQueryData(key, ctx?.previous);
+    },
+    onSuccess: (saved) => queryClient.setQueryData(key, saved),
+  });
+  const excluded = useMemo(() => query.data?.excluded ?? [], [query.data]);
+  const setUsed = useCallback(
+    (name: string, on: boolean) => save.mutate(withSkill(excluded, name, on)),
+    [excluded, save],
+  );
+  return {
+    excluded,
+    loading: query.isLoading,
+    /** Which skills this chat removed could not be read: removal is off. */
+    error: query.error ?? null,
+    saveError: save.error,
+    setUsed,
+  };
 }

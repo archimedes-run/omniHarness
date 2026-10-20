@@ -19,6 +19,7 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
 import { PromptInputSubmit } from "@/components/ai-elements/prompt-input";
+import { BrandLogo } from "@/components/brand";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,10 +34,12 @@ import { cn } from "@/lib/utils";
 
 import { ModeHoverGuide } from "../mode-hover-guide";
 
-import type { InputMode, ReasoningEffort } from "./logic";
+import { modelProvider, type InputMode, type ReasoningEffort } from "./logic";
 
+// Chat-Bar-v2.dc.html: 36 px, a muted label and a bright value.
 export const PILL =
-  "bg-surface-raised text-foreground-2 hover:text-foreground focus-visible:ring-ring inline-flex min-h-8 items-center gap-1 rounded-md px-2.5 py-1.5 text-xs focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 max-sm:min-h-11";
+  "bg-surface-raised border-border text-foreground hover:border-border-strong focus-visible:ring-ring inline-flex h-9 items-center gap-1.5 rounded-[10px] border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 max-sm:h-11";
+const LABEL = "text-muted-foreground";
 
 function useModeLabels() {
   const { t } = useI18n();
@@ -72,8 +75,12 @@ export function ModeMenu({
             className={PILL}
             aria-label={`Mode: ${labels[mode][0]}`}
           >
+            <span className={LABEL}>Mode</span>
             {labels[mode][0]}
-            <ChevronDownIcon className="size-3" aria-hidden />
+            <ChevronDownIcon
+              className="text-muted-foreground size-3.5"
+              aria-hidden
+            />
           </button>
         </DropdownMenuTrigger>
       </ModeHoverGuide>
@@ -147,8 +154,12 @@ export function EffortMenu({
           aria-label={`${t.inputBox.reasoningEffort}: ${labels[current][0]}`}
           data-testid="effort-trigger"
         >
-          Effort: {labels[current][0]}
-          <ChevronDownIcon className="size-3" aria-hidden />
+          <span className={LABEL}>Effort</span>
+          {labels[current][0]}
+          <ChevronDownIcon
+            className="text-muted-foreground size-3.5"
+            aria-hidden
+          />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-70">
@@ -198,18 +209,23 @@ export function ModelMenu({
   onSelect: (name: string) => void;
 }) {
   const { t } = useI18n();
+  const provider = modelProvider(selected?.model);
   return (
     <ModelSelector open={open} onOpenChange={onOpenChange}>
       <ModelSelectorTrigger asChild>
         <button
           type="button"
-          className={PILL}
+          className={cn(PILL, provider && "pl-2")}
           aria-label={`Model: ${selected?.display_name ?? "none available"}`}
         >
-          <ModelSelectorName className="max-w-40 truncate text-xs">
+          {provider && <BrandLogo source={provider} size={20} />}
+          <ModelSelectorName className="max-w-48 truncate text-sm">
             {selected?.display_name ?? "No model"}
           </ModelSelectorName>
-          <ChevronDownIcon className="size-3" aria-hidden />
+          <ChevronDownIcon
+            className="text-muted-foreground size-3.5"
+            aria-hidden
+          />
         </button>
       </ModelSelectorTrigger>
       <ModelSelectorContent>
@@ -260,7 +276,7 @@ export function SendButton({
       aria-label={streaming ? "Stop" : submitted ? "Sending" : "Send"}
       data-testid="send-button"
       data-status={status}
-      className="bg-primary text-primary-foreground hover:bg-primary/90 size-9 rounded-lg max-sm:size-11"
+      className="bg-primary text-primary-foreground hover:bg-primary/90 size-10 rounded-xl max-sm:size-11"
     >
       {streaming ? (
         <SquareIcon className="size-3.5 fill-current" aria-hidden />

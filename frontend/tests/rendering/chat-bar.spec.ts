@@ -1,4 +1,6 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+
+import { THREAD, bar, chip, message, openPicker, stub } from "./chat-bar-stubs";
 
 /**
  * Feature 006 chat bar, on the production build, with every API stubbed.
@@ -7,258 +9,36 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * visible, so the toggle is asserted on the request that leaves the browser
  * (PUT /api/threads/{id}/tools), not on the switch's own state.
  */
-const THREAD = "11111111-2222-3333-4444-555555555555";
-const AGO = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
-type Model = {
-  name: string;
-  supports_thinking?: boolean;
-  supports_reasoning_effort?: boolean;
-};
-
-const MODELS: Model[] = [
-  { name: "sonnet", supports_thinking: true, supports_reasoning_effort: true },
-];
-
-const CATALOG = {
-  categories: ["Productivity"],
-  items: [
-    ["local:filesystem", "filesystem", null, true],
-    ["local:dead-server", "dead-server", null, false],
-    ["local:fresh", "fresh", null, false],
-    ["connector:GMAIL", "Gmail", "GMAIL", false],
-    ["connector:GOOGLECALENDAR", "Google Calendar", "GOOGLECALENDAR", false],
-    ["connector:SLACK", "Slack", "SLACK", false],
-  ].map(([tool_id, name, toolkit, pinned]) => ({
-    tool_id,
-    name,
-    description: "",
-    source: (tool_id as string).startsWith("connector:")
-      ? "connector"
-      : "local",
-    origin: "builtin",
-    toolkit,
-    icon: null,
-    category: "Productivity",
-    connected: true,
-    pinned,
-  })),
-};
-
-const SOURCES = {
-  thread_id: THREAD,
-  failing: 1,
-  connectors_available: true,
-  sources: [
-    ["local:filesystem", "filesystem", "live", { tool_count: 4 }],
-    [
-      "local:dead-server",
-      "dead-server",
-      "unreachable",
-      { error: "ConnectError: All connection attempts failed" },
-    ],
-    ["local:fresh", "fresh", "not-loaded", {}],
-    ["connector:GMAIL", "Gmail", "authorised-not-selected", {}],
-    [
-      "connector:GOOGLECALENDAR",
-      "Google Calendar",
-      "authorised-selected",
-      { last_success_at: AGO },
-    ],
-    ["connector:SLACK", "Slack", "not-authorised", {}],
-  ].map(([id, name, state, extra]) => ({
-    id,
-    name,
-    kind: (id as string).startsWith("connector:") ? "connector" : "local",
-    state,
-    tool_count: null,
-    error: null,
-    selected: null,
-    ...(extra as object),
-  })),
-};
-
-const PROJECT = {
-  id: "p1",
-  name: "OmniHarness",
-  why: null,
-  status: "active",
-  context: null,
-  version: 1,
-  created_at: AGO,
-  updated_at: AGO,
-};
-
-interface Seen {
-  puts: string[][];
-  deletes: string[];
-  links: unknown[];
-}
-
-const json = (route: Route, body: unknown, status = 200) =>
-  route.fulfill({
-    status,
-    contentType: "application/json",
-    body: JSON.stringify(body),
-  });
-
-async function stub(
-  page: Page,
-  { models = MODELS, attached = true } = {},
-): Promise<Seen> {
-  const seen: Seen = { puts: [], deletes: [], links: [] };
-  let selection = ["local:filesystem", "connector:GOOGLECALENDAR"];
-  await page.route("**/api/langgraph/**", (route) => {
-    const url = route.request().url();
-    if (url.includes("/history")) return json(route, []);
-    if (url.includes("/runs")) return json(route, []);
-    if (url.includes("/threads/search")) return json(route, []);
-    return json(route, {
-      thread_id: THREAD,
-      values: { messages: [] },
-      metadata: {},
-    });
-  });
-  await page.route("**/api/models", (route) =>
-    json(route, {
-      models: models.map((m) => ({
-        id: m.name,
-        model: `provider/${m.name}`,
-        display_name: m.name === "sonnet" ? "Claude Sonnet" : m.name,
-        ...m,
-      })),
-      token_usage: { enabled: false },
-    }),
-  );
-  await page.route("**/api/tools/catalog", (route) => json(route, CATALOG));
-  await page.route("**/api/threads/*/tools/count", (route) =>
-    json(route, { count: 7, cap: 40, over_cap: false }),
-  );
-  await page.route("**/api/threads/*/tools", async (route) => {
-    if (route.request().method() === "PUT") {
-      const body = route.request().postDataJSON() as { sources: string[] };
-      seen.puts.push(body.sources);
-      selection = Array.from(new Set(["local:filesystem", ...body.sources]));
-    }
-    return json(route, {
-      thread_id: THREAD,
-      sources: selection,
-      pinned: ["local:filesystem"],
-    });
-  });
-  await page.route("**/api/tool-sources*", (route) => json(route, SOURCES));
-  await page.route("**/api/ledger/threads/*/projects", (route) =>
-    json(route, attached ? [{ link_id: "l1", project: PROJECT }] : []),
-  );
-  await page.route("**/api/ledger/projects", (route) =>
-    json(route, [
-      { ...PROJECT, open_tasks: 1, overdue: 0, done_tasks: 0 },
-      {
-        ...PROJECT,
-        id: "p2",
-        name: "Beta launch",
-        open_tasks: 0,
-        overdue: 0,
-        done_tasks: 0,
-      },
-    ]),
-  );
-  await page.route("**/api/ledger/links", (route) => {
-    seen.links.push(route.request().postDataJSON());
-    return json(route, { id: "l2" }, 201);
-  });
-  await page.route("**/api/ledger/links/*", (route) => {
-    seen.deletes.push(route.request().url());
-    return route.fulfill({ status: 204 });
-  });
-  await page.route("**/api/agents", (route) =>
-    json(route, {
-      agents: [
-        {
-          name: "researcher",
-          description: "Finds sources",
-          model: null,
-          tool_groups: null,
-          skills: null,
-        },
-        {
-          name: "release-manager",
-          description: "Ships slices",
-          model: null,
-          tool_groups: null,
-          skills: ["changelog"],
-        },
-      ],
-    }),
-  );
-  await page.route("**/api/skills", (route) =>
-    json(route, {
-      skills: [
-        {
-          name: "changelog",
-          description: "",
-          category: "",
-          license: "",
-          enabled: true,
-        },
-        {
-          name: "cite",
-          description: "",
-          category: "",
-          license: "",
-          enabled: true,
-        },
-        {
-          name: "off-skill",
-          description: "",
-          category: "",
-          license: "",
-          enabled: false,
-        },
-      ],
-    }),
-  );
-  await page.route("**/api/threads/*/uploads/list", (route) =>
-    json(route, { files: [], count: 0 }),
-  );
-  await page.route("**/api/threads/*/suggestions", (route) =>
-    json(route, { suggestions: [] }),
-  );
-  return seen;
-}
-
-const bar = (page: Page) => page.getByTestId("chat-bar");
-// The message box is a textbox, and a combobox while a dropdown is open.
-const message = (page: Page) => page.getByLabel("Message", { exact: true });
-
-async function openPicker(page: Page) {
-  await page.getByRole("button", { name: "Add context" }).click();
-  const picker = page.getByRole("dialog", { name: "Add context" });
-  await expect(picker).toBeVisible();
-  return picker;
-}
-
-test("chips show the project, the agent, the integrations, the skills; removing a project detaches it", async ({
+test("every piece of context is its own chip; removing a project detaches it", async ({
   page,
 }) => {
   const seen = await stub(page);
   await page.goto(`/workspace/chats/${THREAD}`);
   await expect(bar(page).getByTestId("chip-project")).toHaveText(/OmniHarness/);
-  await expect(bar(page).getByTestId("chip-agents")).toHaveAccessibleName(
-    "Agents in this chat: Lead agent",
-  );
-  const stack = bar(page).getByTestId("chip-integrations");
-  await expect(
-    stack.getByRole("img", { name: "Google Calendar logo" }),
-  ).toBeVisible();
-  await expect(stack.getByRole("img", { name: "filesystem" })).toBeVisible();
-  // Skills are read-only in Phase 1: named, never removable.
-  await expect(bar(page).getByTestId("chip-skills")).toHaveAccessibleName(
-    "Skills this chat's agent may use: changelog, cite",
+  // The chat's own agent stays: no ×, and it says why.
+  await expect(chip(page, "agent", "Lead agent")).toBeVisible();
+  await expect(chip(page, "agent", "Lead agent")).toContainText(
+    "A chat keeps the agent it started with",
   );
   await expect(
-    bar(page).getByTestId("chip-skills").getByRole("button"),
+    chip(page, "agent", "Lead agent").getByRole("button"),
   ).toHaveCount(0);
+  await expect(chip(page, "integration", "Google Calendar")).toBeVisible();
+  // A pinned integration is always on: no ×.
+  await expect(chip(page, "integration", "filesystem")).toContainText(
+    "Always on in every chat",
+  );
+  await expect(
+    chip(page, "integration", "filesystem").getByRole("button"),
+  ).toHaveCount(0);
+  await expect(bar(page).getByTestId("chip-skill")).toHaveText([
+    /changelog/,
+    /cite/,
+  ]);
+  await expect(
+    page.getByRole("button", { name: "Remove skill cite" }),
+  ).toBeVisible();
 
   await page
     .getByRole("button", { name: "Remove project OmniHarness" })
@@ -273,12 +53,12 @@ test("removing an integration chip deselects it for the thread; a pinned one can
   const seen = await stub(page);
   await page.goto(`/workspace/chats/${THREAD}`);
   await page
-    .getByRole("button", { name: "Turn off Google Calendar for this chat" })
+    .getByRole("button", { name: "Remove Google Calendar from this chat" })
     .click();
   await expect.poll(() => seen.puts.length).toBe(1);
   expect(seen.puts[0]).not.toContain("connector:GOOGLECALENDAR");
   await expect(
-    page.getByRole("button", { name: "Turn off filesystem for this chat" }),
+    page.getByRole("button", { name: "Remove filesystem from this chat" }),
   ).toHaveCount(0);
 });
 
@@ -376,14 +156,10 @@ test("the integration switch writes the thread's tool selection", async ({
   expect(seen.puts[0]).toEqual(
     expect.arrayContaining(["connector:GMAIL", "connector:GOOGLECALENDAR"]),
   );
-  await expect(
-    bar(page)
-      .getByTestId("chip-integrations")
-      .getByRole("img", { name: "Gmail logo" }),
-  ).toBeVisible();
+  await expect(chip(page, "integration", "Gmail")).toBeVisible();
 });
 
-test("@ in a new chat: arrows and Enter start the chat with that agent; Esc closes", async ({
+test("@ in a new chat: arrows and Enter pick the chat's agent in place; Esc closes", async ({
   page,
 }) => {
   await stub(page);
@@ -407,7 +183,9 @@ test("@ in a new chat: arrows and Enter start the chat with that agent; Esc clos
     "true",
   );
   await page.keyboard.press("Enter");
-  await page.waitForURL("**/workspace/agents/release-manager/chats/new");
+  await expect(chip(page, "agent", "release-manager")).toBeVisible();
+  await expect(page).toHaveURL(/\/workspace\/chats\/new$/);
+  await expect(message(page)).toHaveValue("@release-manager ");
 });
 
 test("@ in an existing chat lists agents but cannot call one in yet, and says why", async ({

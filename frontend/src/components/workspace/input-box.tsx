@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -38,6 +39,7 @@ import {
 import { useAgent } from "@/core/agents/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
+import { usePreferences } from "@/core/preferences/hooks";
 import type { AgentThreadContext } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
@@ -48,17 +50,18 @@ import {
   ModelMenu,
   SendButton,
 } from "./chat-bar/bar-controls";
+import { backspaceToChips, chatSkills, insertMention } from "./chat-bar/chips";
 import {
   matchCommands,
   type PickerTab,
   type SlashCommand,
 } from "./chat-bar/commands";
-import { ContextChips, type ChatAgent } from "./chat-bar/context-chips";
 import {
-  agentChatHref,
-  ContextPicker,
-  MULTI_AGENT_LATER,
-} from "./chat-bar/context-picker";
+  ContextChips,
+  type ChatAgent,
+  type ChipsHandle,
+} from "./chat-bar/context-chips";
+import { ContextPicker, MULTI_AGENT_LATER } from "./chat-bar/context-picker";
 import {
   effortForMode,
   findTrigger,
@@ -78,6 +81,7 @@ import {
   useChatUploads,
   useSkillChoices,
   useThreadIntegrations,
+  useThreadSkills,
 } from "./chat-bar/use-chat-bar-data";
 import { useFollowups } from "./chat-bar/use-followups";
 import { WelcomeSuggestions } from "./chat-bar/welcome-suggestions";
@@ -110,6 +114,8 @@ export function InputBox({
   isWelcomeMode,
   threadId,
   initialValue,
+  chosenAgent,
+  onChooseAgent,
   onContextChange,
   onFollowupsVisibilityChange,
   onSubmit,
@@ -129,6 +135,12 @@ export function InputBox({
   isWelcomeMode?: boolean;
   threadId: string;
   initialValue?: string;
+  /**
+   * The agent picked with "@" (or the picker) before the first message; the
+   * page starts the chat with it. Only the plain new-chat page offers this.
+   */
+  chosenAgent?: string | null;
+  onChooseAgent?: (name: string | null) => void;
   onContextChange?: (context: BarContext) => void;
   onFollowupsVisibilityChange?: (visible: boolean) => void;
   onSubmit?: (message: PromptInputMessage) => void;
@@ -143,7 +155,7 @@ export function InputBox({
   const { textInput, attachments } = usePromptInputController();
   const promptRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const plusRef = useRef<HTMLButtonElement | null>(null);
+  const chipsRef = useRef<ChipsHandle | null>(null);
   const menuId = useId();
 
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
@@ -237,8 +249,11 @@ export function InputBox({
     trigger?.kind === "@" || (pickerOpen && pickerTab === "agents");
   const { agents, error: agentsError } = useAgentChoices(wantAgents);
   const { skills: enabledSkills, error: skillsError } = useSkillChoices(true);
-  const threadAgentName = params?.agent_name;
+  const routeAgent = params?.agent_name;
+  // The chat's agent: its route's, else one picked before the first message.
+  const threadAgentName = routeAgent ?? chosenAgent ?? undefined;
   const { agent: threadAgentConfig } = useAgent(threadAgentName);
+  const threadSkills = useThreadSkills(threadId);
   const uploaded = useChatUploads(
     threadId,
     !isWelcomeMode && pickerOpen && pickerTab === "files",
@@ -247,9 +262,15 @@ export function InputBox({
   /** Nothing sent yet: "@" may still choose the agent the chat starts with. */
   const isNewChat = !!isWelcomeMode;
   const threadAgent = threadAgentName ?? LEAD_AGENT;
+  const canChooseAgent = isNewChat && !routeAgent && !!onChooseAgent;
   const chatAgents: ChatAgent[] = useMemo(
-    () => [{ name: threadAgent, role: "thread" }],
-    [threadAgent],
+    () => [
+      {
+        name: threadAgent,
+        role: !routeAgent && chosenAgent ? "chosen" : "thread",
+      },
+    ],
+    [chosenAgent, routeAgent, threadAgent],
   );
   // Read-only (Open Question 7): what this chat's agent may use.
   const agentSkillList = useMemo(() => {
@@ -259,17 +280,39 @@ export function InputBox({
     );
     return enabledSkills.filter((s) => names.includes(s.name));
   }, [enabledSkills, threadAgentConfig, threadAgentName]);
+  // What this chat uses: the agent's skills less the ones removed here.
+  const chatSkillNames = useMemo(
+    () =>
+      chatSkills(
+        agentSkillList.map((s) => s.name),
+        threadSkills.excluded,
+      ),
+    [agentSkillList, threadSkills.excluded],
+  );
 
+  // The caret goes where setText says as soon as the new text is committed,
+  // before the next key is handled: a frame later, a fast typist's next
+  // letter would already have landed at the end.
+  const pendingCaret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    const at = pendingCaret.current;
+    if (!el || at === null || el.value !== text) return;
+    pendingCaret.current = null;
+    el.focus();
+    el.setSelectionRange(at, at);
+  }, [text]);
   const setText = useCallback(
     (next: string, caret?: number) => {
+      pendingCaret.current = caret ?? next.length;
       textInput.setInput(next);
-      requestAnimationFrame(() => {
-        const el = textareaRef.current;
-        if (!el) return;
-        el.focus();
-        const at = caret ?? next.length;
-        el.setSelectionRange(at, at);
-      });
+      if (next === textareaRef.current?.value) {
+        // Unchanged text commits nothing: place the caret now.
+        const at = pendingCaret.current;
+        pendingCaret.current = null;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(at, at);
+      }
     },
     [textInput],
   );
@@ -280,7 +323,7 @@ export function InputBox({
   }, []);
   const closePicker = useCallback(() => {
     setPickerOpen(false);
-    plusRef.current?.focus();
+    chipsRef.current?.focusAdd();
   }, []);
 
   const attachProject = useCallback(
@@ -333,10 +376,10 @@ export function InputBox({
           hint:
             a.name === threadAgent
               ? "In this chat"
-              : isNewChat
+              : canChooseAgent
                 ? a.description || "Start the chat with this agent"
                 : MULTI_AGENT_LATER,
-          disabled: !isNewChat || a.name === threadAgent,
+          disabled: !canChooseAgent || a.name === threadAgent,
           leading: <AgentAvatar id={a.name} name={a.name} />,
         }))
       : commandMatches.map((c) => ({
@@ -369,11 +412,15 @@ export function InputBox({
       if (!trigger || !el) return;
       const caret = el.selectionStart ?? el.value.length;
       if (trigger.kind === "@") {
-        // Open Question 8: in a new chat, "@" starts the chat with that
-        // agent (its own chat route); in an existing chat it is disabled.
+        // Open Question 8: in a new chat, "@" picks the agent the chat
+        // starts with: a chip, the typed text kept on both sides of the
+        // mention and the caret right after it. In an existing chat it is
+        // disabled (multi-agent chat comes later).
         const agent = agentMatches[index];
-        if (!agent || !isNewChat || agent.name === threadAgent) return;
-        router.push(agentChatHref(agent.name));
+        if (!agent || !canChooseAgent || agent.name === threadAgent) return;
+        const next = insertMention(el.value, trigger, caret, agent.name);
+        setText(next.text, next.caret);
+        onChooseAgent?.(agent.name);
       } else {
         const cmd = commandMatches[index];
         if (!cmd) return;
@@ -384,10 +431,11 @@ export function InputBox({
     },
     [
       agentMatches,
+      canChooseAgent,
       commandMatches,
-      isNewChat,
-      router,
+      onChooseAgent,
       runCommand,
+      setText,
       threadAgent,
       trigger,
     ],
@@ -399,6 +447,19 @@ export function InputBox({
    */
   const onKeyDownCapture = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Backspace in an empty message goes to the chips (a second one, on
+      // the chip, removes it). It also keeps the old "remove the last
+      // attachment" shortcut from firing underneath.
+      if (
+        e.key === "Backspace" &&
+        !trigger &&
+        backspaceToChips(e.currentTarget.value, 1) &&
+        chipsRef.current?.focusLast()
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (!trigger) return;
       const count = menuItems.length;
       const own = () => {
@@ -544,9 +605,19 @@ export function InputBox({
 
   const menuOpen = !!trigger;
   const chipIntegrations = selectedIntegrations(integrations.rows);
+  const { displayName } = usePreferences();
+  // No name until it can be told: never a guessed one.
+  const heading = displayName
+    ? `What are we working on, ${displayName}?`
+    : "What are we working on?";
 
   return (
-    <div ref={promptRootRef} className="relative flex flex-col gap-4">
+    <div ref={promptRootRef} className="relative flex flex-col gap-5">
+      {isWelcomeMode && !extraHeader && (
+        <h1 className="text-center text-[30px] leading-tight font-semibold tracking-[-0.01em]">
+          {heading}
+        </h1>
+      )}
       {showFollowups && (
         <div className="flex items-center justify-center pb-2">
           <div className="flex items-center gap-2">
@@ -609,6 +680,11 @@ export function InputBox({
             agents={agents}
             agentsError={agentsError}
             threadAgent={threadAgent}
+            canChooseAgent={canChooseAgent}
+            onChooseAgent={(name) => {
+              onChooseAgent?.(name);
+              closePicker();
+            }}
             integrations={integrations.rows}
             integrationsLoading={integrations.loading}
             integrationsError={integrations.error}
@@ -619,6 +695,9 @@ export function InputBox({
             connectorsAvailable={integrations.connectorsAvailable}
             skills={agentSkillList}
             skillsError={skillsError}
+            excludedSkills={threadSkills.excluded}
+            chatSkillsError={threadSkills.error}
+            onToggleSkill={threadSkills.setUsed}
             files={attachments.files}
             uploaded={uploaded}
             onAttachFiles={() => attachments.openFileDialog()}
@@ -627,7 +706,7 @@ export function InputBox({
         )}
         <PromptInput
           className={cn(
-            "*:data-[slot='input-group']:bg-card *:data-[slot='input-group']:border-border-strong rounded-2xl transition-all duration-300 ease-out *:data-[slot='input-group']:rounded-2xl",
+            "*:data-[slot='input-group']:bg-card *:data-[slot='input-group']:border-border-strong rounded-[20px] transition-all duration-300 ease-out *:data-[slot='input-group']:gap-3 *:data-[slot='input-group']:rounded-[20px] *:data-[slot='input-group']:px-4 *:data-[slot='input-group']:pt-3.5 *:data-[slot='input-group']:pb-3 *:data-[slot='input-group']:shadow-lg",
             className,
           )}
           disabled={disabled}
@@ -643,9 +722,9 @@ export function InputBox({
               </div>
             </div>
           )}
-          <PromptInputHeader className="px-3.5 pt-3">
+          <PromptInputHeader className="p-0">
             <ContextChips
-              ref={plusRef}
+              ref={chipsRef}
               projects={chatProjects.attached.map((a) => ({
                 link_id: a.link_id,
                 name: a.project.name,
@@ -656,25 +735,29 @@ export function InputBox({
                 })
               }
               agents={chatAgents}
+              onRemoveAgent={() => onChooseAgent?.(null)}
               integrations={chipIntegrations}
               onRemoveIntegration={(id) => integrations.setSelected(id, false)}
-              skills={agentSkillList.map((s) => s.name)}
+              skills={chatSkillNames}
+              onRemoveSkill={
+                threadSkills.error
+                  ? undefined
+                  : (name) => threadSkills.setUsed(name, false)
+              }
               files={attachments.files}
               onRemoveFile={attachments.remove}
               pickerOpen={pickerOpen}
               onOpenPicker={() => (pickerOpen ? closePicker() : openPicker())}
+              onExit={() => textareaRef.current?.focus()}
               disabled={disabled}
             />
           </PromptInputHeader>
           <PromptInputTextarea
             ref={textareaRef}
-            className="min-h-12 px-3.5 text-[15px]"
+            // 16 px, two rows to start, growing to ten (24 px a row).
+            className="max-h-[248px] min-h-14 overflow-y-auto px-0.5 py-1 text-base leading-6 md:text-base"
             disabled={disabled}
-            placeholder={
-              isWelcomeMode
-                ? t.inputBox.placeholder
-                : "Ask anything · @ to bring in an agent · / for commands"
-            }
+            placeholder="Ask anything · @ to bring in an agent · / for commands"
             aria-label="Message"
             autoFocus={autoFocus}
             defaultValue={initialValue}
@@ -692,7 +775,7 @@ export function InputBox({
             onSelect={refreshTrigger}
             onBlur={() => setTrigger(null)}
           />
-          <PromptInputFooter className="flex flex-wrap gap-2 px-3.5 pb-3">
+          <PromptInputFooter className="flex flex-wrap gap-2 p-0">
             <PromptInputTools>
               <AttachButton disabled={disabled} />
             </PromptInputTools>
@@ -765,9 +848,9 @@ function AttachButton({ disabled }: { disabled?: boolean }) {
         aria-label="Attach file"
         disabled={disabled}
         onClick={() => attachments.openFileDialog()}
-        className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex size-9 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 max-sm:size-11"
+        className="text-foreground-2 hover:text-foreground hover:bg-surface-raised focus-visible:ring-ring inline-flex size-[38px] items-center justify-center rounded-[10px] focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 max-sm:size-11"
       >
-        <PaperclipIcon className="size-[18px]" aria-hidden />
+        <PaperclipIcon className="size-5" aria-hidden />
       </button>
     </Tooltip>
   );

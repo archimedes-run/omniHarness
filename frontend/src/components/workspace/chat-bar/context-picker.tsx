@@ -69,6 +69,9 @@ export interface PickerProps {
   agents: Agent[];
   agentsError?: unknown;
   threadAgent: string;
+  /** A new chat on the plain chat page: an agent is picked in place. */
+  canChooseAgent?: boolean;
+  onChooseAgent?: (name: string) => void;
   // Integrations
   integrations: IntegrationRow[];
   integrationsLoading: boolean;
@@ -81,6 +84,11 @@ export interface PickerProps {
   // Skills
   skills: { name: string; description: string }[];
   skillsError?: unknown;
+  /** Skills removed from this chat; the bar's chips show the rest. */
+  excludedSkills?: string[];
+  /** Which skills this chat removed could not be read: no switches then. */
+  chatSkillsError?: unknown;
+  onToggleSkill?: (name: string, on: boolean) => void;
   // Files
   files: { id: string; filename?: string }[];
   uploaded: { filename: string }[];
@@ -318,6 +326,8 @@ function AgentsTab({
   agentsError,
   isNewChat,
   threadAgent,
+  canChooseAgent,
+  onChooseAgent,
 }: PickerProps) {
   const { query, setQuery, filtered } = useFilter(agents, agentText);
   return (
@@ -345,6 +355,14 @@ function AgentsTab({
               <span className="text-muted-foreground text-xs">
                 In this chat
               </span>
+            ) : canChooseAgent && onChooseAgent ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onChooseAgent(a.name)}
+              >
+                Use<span className="sr-only"> {a.name} for this chat</span>
+              </Button>
             ) : isNewChat ? (
               <Button size="sm" variant="outline" asChild>
                 <Link href={agentChatHref(a.name)}>
@@ -451,7 +469,7 @@ function IntegrationsTab({
               >
                 {statusLine(row, ago)}
               </span>
-              {action.kind === "link" ? (
+              {action.kind === "link" && !(row.selected && !row.pinned) ? (
                 <Link
                   href={MCP_SUITE_HREF}
                   className="text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-sm underline-offset-2 hover:underline"
@@ -468,7 +486,7 @@ function IntegrationsTab({
                   <Switch
                     checked={row.selected}
                     disabled={!row.selected && overCap}
-                    aria-label={`Use ${row.name} in this chat${action.unverified ? " (not verified working)" : ""}`}
+                    aria-label={`Use ${row.name} in this chat${action.kind === "switch" && action.unverified ? " (not verified working)" : ""}`}
                     onCheckedChange={(on) => onToggleIntegration(row.id, on)}
                   />
                 </span>
@@ -492,15 +510,30 @@ function IntegrationsTab({
   );
 }
 
-function SkillsTab({ skills, skillsError, threadAgent }: PickerProps) {
+function SkillsTab({
+  skills,
+  skillsError,
+  threadAgent,
+  excludedSkills = [],
+  chatSkillsError,
+  onToggleSkill,
+}: PickerProps) {
   const { query, setQuery, filtered } = useFilter(skills, skillText);
+  const removed = new Set(excludedSkills);
   return (
     <>
       <SearchBox label="Search skills" value={query} onChange={setQuery} />
       <p className="text-muted-foreground px-4 pb-1 text-xs">
-        The skills {threadAgent} may use. They are set per agent, not per chat.
+        The skills {threadAgent} may use. Turning one off removes it from this
+        chat only.
       </p>
       {skillsError ? <Problem>Skills could not be loaded.</Problem> : null}
+      {chatSkillsError ? (
+        <Problem>
+          Which skills this chat removed could not be read, so they cannot be
+          changed here.
+        </Problem>
+      ) : null}
       <ul className="flex flex-col px-1.5 pb-1.5" aria-label="Skills">
         {filtered.map((s) => (
           <Row key={s.name}>
@@ -512,6 +545,13 @@ function SkillsTab({ skills, skillsError, threadAgent }: PickerProps) {
                 </span>
               )}
             </span>
+            {onToggleSkill && !chatSkillsError && (
+              <Switch
+                checked={!removed.has(s.name)}
+                aria-label={`Use skill ${s.name} in this chat`}
+                onCheckedChange={(on) => onToggleSkill(s.name, on)}
+              />
+            )}
           </Row>
         ))}
         {!skillsError && skills.length === 0 && (
