@@ -71,12 +71,14 @@ CONFIRMED = "confirmed"
 DISCLOSED = "disclosed"
 GRANTED = "granted"
 
-_executed_as: ContextVar[str] = ContextVar("policy_executed_as", default=CONFIRMED)
+_executed_as: ContextVar[tuple[str, str | None]] = ContextVar("policy_executed_as", default=(CONFIRMED, None))
 
 
 @contextmanager
-def executed_as(how: str) -> Iterator[None]:
-    token = _executed_as.set(how)
+def executed_as(how: str, write_id: str | None = None) -> Iterator[None]:
+    """`write_id` names a write made without a confirmation (Tier 2, or a
+    standing grant), so its Undo can find and revert it."""
+    token = _executed_as.set((how, write_id))
     try:
         yield
     finally:
@@ -85,4 +87,15 @@ def executed_as(how: str) -> Iterator[None]:
 
 def current_execution() -> str:
     """confirmed, disclosed (Tier 2) or granted (a standing grant)."""
-    return _executed_as.get()
+    return _executed_as.get()[0]
+
+
+def current_write_id() -> str | None:
+    """The write id of an unconfirmed write in progress, else None."""
+    return _executed_as.get()[1]
+
+
+def new_write_id() -> str:
+    import uuid
+
+    return f"w-{uuid.uuid4().hex[:16]}"

@@ -6,6 +6,8 @@
 
 **Status**: Draft
 
+**Version**: 1.1 (2026-10-20: Amendment 1 to FR-009, see below)
+
 **Input**: User description: OmniHarness becomes the source of truth for the user's personal projects.
 
 - **Entities**: Project, Goal, Task, Evidence, Note and Link.
@@ -209,6 +211,12 @@ In Settings, the user turns on "Report Claude Code prompts precisely". The page 
 
 - **FR-008**: *Initiation.* The assistant MUST NOT propose creating, changing or deleting ledger items, or automations, because of content it read (tool results, web pages, email, session logs). Only a user turn may cause a proposal. (Article XIII: separate from FR-009.)
 - **FR-009**: *Confirmation.* No ledger write proposed by the assistant MAY happen until the user confirms it through a trusted channel. Content inside a tool result MUST NOT satisfy a confirmation. (Article XIII: separate from FR-008.)
+  - **Amendment 1 (v1.1, 2026-10-20, user decision; referenced from 006 spec.md):** the routine, reversible ops (create a task, update a task including dropping it, add a note) are Tier 2 instead of confirmed first. Rationale: the user decided that asking before every routine task change costs more than it protects, provided each such write is disclosed and can be undone, and provided content can never cause one by itself.
+    - When the write follows from the USER's own message in this turn, it runs, the reply discloses it, and the disclosure carries an Undo that reverts the ledger write (`POST /api/ledger/writes/{write_id}/undo`; refused, changing nothing, if anything it touched was edited since).
+    - When it originates from content the agent read (a tool result, an email, a web page, a list cell, a stored run, a subagent's output), it is a SUGGESTION card that runs only when the user confirms it on the card; it never runs by itself and a typed reply does not confirm it. The provenance test is feature 003's (`app/policy/lineage.initiation_origin`, read by `PolicyMiddleware._origin`), not a second model.
+    - Everything else ledger_apply offers (a new project or goal, linking a chat) is unchanged: it is confirmed first.
+    - In a scheduled run, a routine write runs only under the agent's standing grant (006 FR-302).
+    - Tests: `backend/tests/studio/test_chat_ledger_writes.py`.
 - **FR-010**: Proposals MUST be shown as an in-chat card listing exactly what will be created or changed, editable before confirming. What is stored MUST equal what was confirmed.
 - **FR-011**: The user MUST be able to attach a thread to a project, and detach it, from the thread and from the Project view.
 - **FR-012**: The user MUST be able to promote items of a thread's agent todo list into project tasks. Each promoted task links to its thread and its todo item, and the thread's own list is not changed.

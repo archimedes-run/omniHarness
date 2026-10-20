@@ -148,6 +148,25 @@ class LedgerRepository:
         s.execute(delete(LedgerLinkRow).where(LedgerLinkRow.id == link_id))
         return True
 
+    def remove(self, s: Session, entity: str, entity_id: str, *, owner_id: str | None, actor: str, version: int | None, pending_action_id: str | None = None) -> bool:
+        """Delete a row (undoing its creation), recorded like any change.
+        `version`: refused (StaleWrite) when the row moved on since."""
+        row = s.get(_ROWS[entity], entity_id, with_for_update=True)
+        if row is None:
+            return False
+        before = to_dict(row)
+        if version is not None and getattr(row, "version", version) != version:
+            raise StaleWrite(before)
+        self._record(s, owner_id, entity, entity_id, actor, pending_action_id, before, None)
+        s.delete(row)
+        s.flush()
+        return True
+
+    def changes_caused_by(self, s: Session, owner_id: str | None, cause: str) -> list[dict]:
+        """The changes one write recorded (its `pending_action_id` cause), oldest first."""
+        rows = s.scalars(select(LedgerChangeRow).where(LedgerChangeRow.owner_id == owner_id, LedgerChangeRow.pending_action_id == cause).order_by(LedgerChangeRow.id))
+        return [to_dict(r) for r in rows]
+
     @staticmethod
     def _record(s: Session, owner_id, entity, entity_id, actor, pending_action_id, before, after) -> None:
         s.add(LedgerChangeRow(owner_id=owner_id, entity=entity, entity_id=entity_id, actor=actor, pending_action_id=pending_action_id, before=before, after=after))

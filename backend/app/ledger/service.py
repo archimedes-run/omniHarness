@@ -197,6 +197,48 @@ class LedgerService:
                     done.append(f"Attached this conversation to {project['name']}.")
         return done
 
+    # ---- undo: a write the assistant made without a confirmation -----------
+
+    #: Who may have made a write that Undo reverts: the assistant at Tier 2
+    #: (disclosed in its reply) or under a standing grant.
+    UNDOABLE_ACTORS = ("assistant_disclosed", "assistant_granted")
+
+    def undo_write(self, *, user_id: str, write_id: str) -> list[str]:
+        """Revert every change one assistant write made, newest first, in one
+        transaction. Refused, with nothing changed, when the write is not
+        this user's, was already undone, or anything it touched has changed
+        since (so Undo never overwrites a later edit)."""
+        from omniharness.persistence.ledger.sql import StaleWrite
+
+        if not isinstance(write_id, str) or not write_id.startswith("w-"):
+            raise LookupError(f"no write {write_id!r}")
+        done: list[str] = []
+        with self.repo.transaction() as s:
+            changes = self.repo.changes_caused_by(s, user_id, write_id)
+            if not changes or any(c["actor"] not in self.UNDOABLE_ACTORS for c in changes):
+                raise LookupError(f"no write {write_id!r}")
+            if self.repo.changes_caused_by(s, user_id, f"undo:{write_id}"):
+                raise LedgerError("this was already undone")
+            stamp = {"owner_id": user_id, "actor": "user", "pending_action_id": f"undo:{write_id}"}
+            try:
+                for change in reversed(changes):
+                    entity, before, after = change["entity"], change["before"], change["after"]
+                    version = (after or {}).get("version")
+                    if before is None:  # it was created: remove it
+                        if not self.repo.remove(s, entity, change["entity_id"], version=version, **stamp):
+                            raise LedgerError(f"the {entity} it created is already gone")
+                        done.append(f"Removed the {entity} “{after.get('title') or after.get('decided') or after.get('name') or entity}”.")
+                    elif after is not None:  # it was changed: put the fields back
+                        fields = {k: before[k] for k in after if k in before and before[k] != after[k] and k not in ("version", "updated_at", "created_at", "done_at")}
+                        if "due_date" in fields and isinstance(fields["due_date"], str):
+                            fields["due_date"] = date.fromisoformat(fields["due_date"])
+                        if self.repo.update(s, entity, change["entity_id"], version=version, **stamp, **fields) is None:
+                            raise LedgerError(f"the {entity} it changed is gone")
+                        done.append(f"Put back {after.get('short_id') or entity} as it was.")
+            except StaleWrite as exc:
+                raise LedgerError("something it changed has been edited since, so it was not undone; change it back by hand") from exc
+        return done
+
     def _project(self, s, user_id: str, ref: Any, refs: dict[str, str]) -> dict:
         from sqlalchemy import func, select
 
