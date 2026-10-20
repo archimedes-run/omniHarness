@@ -180,9 +180,12 @@ def restate(action: PendingAction) -> str:
         f"It affects exactly these {len(action.targets)} item(s):",
     ]
     lines += [f"  - {target}" for target in action.targets]
+    how = f'Reply "yes {action.id}" to go ahead, or "no {action.id}" to cancel.'
+    if not action.confirmable_by_typing:
+        how = f'It was {action.origin_reason()}, so only the Confirm button on its card can approve it. Reply "no {action.id}" to cancel.'
     lines += [
         "",
-        f'Reply "yes {action.id}" to go ahead, or "no {action.id}" to cancel.',
+        how,
         f"If neither arrives, it expires at {action.expires_at.isoformat(timespec='minutes')} and does not run.",
     ]
     return "\n".join(lines)

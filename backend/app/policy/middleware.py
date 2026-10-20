@@ -31,17 +31,12 @@ from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
 from .limits import describe_expiry
-from .lineage import eligible_to_initiate, is_user_turn
+from .lineage import initiation_origin
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
 from .targets import source_argument
 
 logger = logging.getLogger(__name__)
-
-
-#: Tools that write the user's own records (the Project Ledger, automations):
-#: a proposal must come straight from a user turn (Feature 005 FR-008).
-STRICT_INITIATION = frozenset({"ledger_apply"})
 
 
 def _now() -> datetime:
@@ -272,16 +267,15 @@ class PolicyMiddleware(AgentMiddleware):
     def _require_confirmation(self, request, decision):
         """Tier 3: state the plan, record it durably, and do not execute.
 
-        FR-006 first: if the last thing in state is a tool result, this Tier 3
-        action was proposed by content the agent READ rather than by the user or
-        the agent's own reasoning. A calendar description saying "delete
-        everything" must not even produce a confirmation prompt — asking the
-        user to approve an action an attacker chose is a weaker failure than
-        executing it, but it is still the attacker choosing.
+        FR-006, GLOBALLY: content the agent READ may SUGGEST an action but can
+        never confirm it or originate it silently. The proposal is still made
+        (refusing outright hid from the user what the content asked for), but
+        it is marked with what caused it, and an action not caused by the
+        user's own latest message can only be confirmed with the card's button.
         """
-        if not self._initiation_permitted(request) or not self._initiated_by_the_user(request, decision.tool_name):
-            logger.warning("policy: refusing to propose %s — initiated by tool-result content (FR-006)", decision.tool_name)
-            return "I read something that asked me to take an action. I have not done it and will not propose it — instructions arriving inside a tool result are data, not requests."
+        origin, origin_source = self._origin(request)
+        if origin != "user":
+            logger.warning("policy: %s was suggested by %s %s; it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source)
 
         tool_name = decision.tool_name
         arguments = self._arguments(request)
@@ -290,7 +284,7 @@ class PolicyMiddleware(AgentMiddleware):
         now = self.now()
 
         action = PendingAction(
-            plan_text=self._plan_text(tool_name, targets, self._requester(request), self._delegation_chain(request), arguments=arguments),
+            plan_text="",
             tool_name=tool_name,
             arguments=arguments,
             targets=targets,
@@ -299,19 +293,38 @@ class PolicyMiddleware(AgentMiddleware):
             thread_id=self._thread_id(request),
             requester=self._requester(request),
             delegation_chain=self._delegation_chain(request),
+            origin=origin,
+            origin_source=origin_source,
         )
-        # The plan text is rewritten now that the id exists, so the user is told
-        # how to name THIS action among several.
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
-        return action.plan_text
-
-    def _plan_text_for(self, action: PendingAction) -> str:
-        return self._plan_text(action.tool_name, action.targets, action.requester, action.delegation_chain, action.id, action.arguments)
+        return self._as_tool_result(request, action.plan_text)
 
     @staticmethod
-    def _plan_text(tool_name: str, targets: list[str], requester: str = "lead_agent", delegation_chain: tuple[str, ...] = (), action_id: str | None = None, arguments: dict | None = None) -> str:
+    def _as_tool_result(request, text: str) -> Any:
+        """The plan, as the TOOL RESULT of the call it answers.
+
+        A bare string returned from wrap_tool_call is not normalised by the
+        tool node: it reaches state as-is and `add_messages` coerces it to a
+        HumanMessage. So the policy's own plan text sat in the thread as a
+        USER TURN, and the next Tier 3 call after a page-caused proposal walked
+        back to it and read as the user's request (found 2026-10-19 while
+        applying FR-006 globally). A ToolMessage is what it is.
+        """
+        from langchain_core.messages import ToolMessage
+
+        call = getattr(request, "tool_call", None) or {}
+        call_id = call.get("id")
+        if not call_id:
+            return text  # no call to answer (a hand-built request); nothing to pair with
+        return ToolMessage(content=text, tool_call_id=call_id, name=call.get("name") or None)
+
+    def _plan_text_for(self, action: PendingAction) -> str:
+        return self._plan_text(action.tool_name, action.targets, action.requester, action.delegation_chain, action.id, action.arguments, origin_note=action.origin_note())
+
+    @staticmethod
+    def _plan_text(tool_name: str, targets: list[str], requester: str = "lead_agent", delegation_chain: tuple[str, ...] = (), action_id: str | None = None, arguments: dict | None = None, origin_note: str = "") -> str:
         """FR-021: name the SPECIFIC items, not the category.
 
         "Delete some meetings" cannot be confirmed meaningfully — the user would
@@ -334,58 +347,31 @@ class PolicyMiddleware(AgentMiddleware):
         lines.append(f"Before I do this, please confirm. I intend to use **{tool_name}** on exactly these {len(targets)} item(s){provenance}:")
         lines.append("")
         lines += [f"  - {target}" for target in targets]
-        if action_id:
-            # THE ID IS NOT DECORATION. `recognise` refuses an ambiguous
-            # confirmation when more than one action is pending — correctly,
-            # since guessing which was meant is the interpretation this design
-            # rejects. But the id was never shown, so a user with three pending
-            # actions was asked to name one they had never been told. They could
-            # not confirm anything. Observed 2026-09-23: "3 actions are pending
-            # and the reply names none of them", with no way forward.
+        if origin_note:
             lines.append("")
-            lines.append(f"Reply `yes {action_id}` to confirm this one, or `no {action_id}` to decline it.")
+            lines.append(origin_note)
+        if action_id:
+            # THE ID IS NOT DECORATION: with several pending, a reply has to
+            # name one (`recognise` refuses to guess). But the instruction is
+            # addressed to the USER and never spelled as "yes <id>": this text
+            # is the tool result the MODEL reads, and a model shown that phrase
+            # repeats it as its own message, which reads as the assistant
+            # confirming (seen live, 2026-10-19).
+            lines.append("")
+            lines.append(f"Action `{action_id}`.")
+            if origin_note:
+                lines.append("Waiting for you: confirm with the button on its card. A typed reply cannot confirm this one.")
+            else:
+                lines.append("Waiting for you: confirm on the card, or reply yes.")
         return "\n".join(lines)
 
-    @staticmethod
-    def _initiation_permitted(request) -> bool:
-        """FR-006. Distinct from FR-005's confirmation check — this one is
-        about causing the question to exist, not answering it."""
-        state = getattr(request, "state", None) or {}
-        messages = state.get("messages") if isinstance(state, dict) else None
-        if not messages:
-            return True
-        return eligible_to_initiate(messages[-1])
-
-    @staticmethod
-    def _initiated_by_the_user(request, tool_name: str) -> bool:
-        """Feature 005 FR-008, for tools that change the user's own records.
-
-        `_initiation_permitted` reads `messages[-1]`, which at dispatch is the
-        AI message making THIS call, never the tool result before it, so it
-        does not see a read that caused the call (reported, 2026-10-19; a
-        general fix would refuse every Tier 3 call made after any read).
-
-        For STRICT_INITIATION tools the rule is the spec's own: only a user
-        turn may cause the proposal. Walk back past the AI message(s) of this
-        step; the first other message must be a genuine user turn, not a tool
-        result and not a synthetic (trigger-injected) turn.
-        """
-        if tool_name not in STRICT_INITIATION:
-            return True
-        from langchain_core.messages import AIMessage
-
+    def _origin(self, request) -> tuple[str, str]:
+        """What caused this call: the user, content the agent read, or a trigger."""
         from .provenance import is_synthetic_turn
 
-        runtime = getattr(request, "runtime", None)
-        if is_synthetic_turn(dict(getattr(runtime, "context", None) or {}) if runtime is not None else None):
-            return False  # a trigger's injected turn is not the user asking
         state = getattr(request, "state", None) or {}
         messages = state.get("messages") if isinstance(state, dict) else None
-        for message in reversed(messages or []):
-            if isinstance(message, AIMessage):
-                continue
-            return is_user_turn(message)
-        return False
+        return initiation_origin(messages, synthetic=is_synthetic_turn(self._runtime_context(request)))
 
     @staticmethod
     def _thread_id(request) -> str | None:

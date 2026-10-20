@@ -47,6 +47,10 @@ TARGETS_DRIFTED = "targets_drifted"
 UNRECOGNISED = "unrecognised"
 THRESHOLD_NOT_MET = "threshold_not_met"
 FAILED = "failed"
+#: A typed "yes" for an action the user did not cause (FR-006, global): content
+#: the agent read, or a trigger, suggested it, so only the card's button counts.
+#: Not claimed, not resolved: the action stays open for the button.
+CARD_ONLY = "card_only"
 
 #: Internal, and deliberately NOT one of the seven. It means "this turn said
 #: nothing about any pending action", which is what almost every turn is. It
@@ -135,6 +139,8 @@ class ConfirmationFlow:
                 f"that action was already resolved ({action.outcome if action else 'unknown'})",
                 expired_meanwhile=expired,
             )
+        if verdict.verdict is Verdict.CONFIRM and not action.confirmable_by_typing:
+            return FlowResult(CARD_ONLY, action.id, action.card_only_refusal(), detail={"origin": action.origin, "origin_source": action.origin_source}, expired_meanwhile=expired)
         return self._apply(action, verdict.verdict, supplied, run_tool, expired)
 
     def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None) -> FlowResult:

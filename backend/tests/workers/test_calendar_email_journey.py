@@ -110,7 +110,8 @@ def test_inviting_other_people_does_require_confirmation(middleware):
     )
 
     assert not ran
-    assert "confirm" in result.lower()
+    # The plan comes back as the call's tool result (a ToolMessage).
+    assert "confirm" in result.content.lower()
 
 
 def test_the_shipped_rules_are_what_drive_this(middleware):

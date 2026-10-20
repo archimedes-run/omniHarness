@@ -80,14 +80,14 @@ def test_the_prompt_names_the_requester(middleware):
     for by name."""
     plan = middleware.wrap_tool_call(_request("calendar_delete", SUBAGENT, {"ids": ["Standup"]}), lambda r: "deleted")
 
-    assert "calendar-tidier" in plan
-    assert "subagent" in plan.lower()
+    assert "calendar-tidier" in plan.content
+    assert "subagent" in plan.content.lower()
 
 
 def test_the_prompt_names_the_delegation_chain(middleware):
     plan = middleware.wrap_tool_call(_request("calendar_delete", SUBAGENT, {"ids": ["Standup"]}), lambda r: "deleted")
 
-    assert "lead_agent -> calendar-tidier" in plan
+    assert "lead_agent -> calendar-tidier" in plan.content
 
 
 def test_the_lead_agents_own_prompt_does_not_mention_delegation(middleware):
@@ -95,8 +95,8 @@ def test_the_lead_agents_own_prompt_does_not_mention_delegation(middleware):
     the subagent tests would pass vacuously."""
     plan = middleware.wrap_tool_call(_request("calendar_delete", LEAD, {"ids": ["Standup"]}), lambda r: "deleted")
 
-    assert "subagent" not in plan.lower()
-    assert "->" not in plan
+    assert "subagent" not in plan.content.lower()
+    assert "->" not in plan.content
 
 
 def test_the_requester_is_recorded_on_the_pending_action(middleware):

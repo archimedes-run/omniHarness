@@ -158,6 +158,45 @@ class PendingAction:
     claimed_by: str | None = None
     outcome: Outcome | None = None
     outcome_reason: str = ""
+    #: What caused the proposal (lineage.initiation_origin). Only "user" may be
+    #: confirmed by a typed reply in chat; content the agent read, a trigger's
+    #: turn, or a cause nobody could tell may only be confirmed with the
+    #: card's button (FR-006, applied globally).
+    origin: str = "user"
+    #: For origin "content": the tool(s) whose output suggested it.
+    origin_source: str = ""
+
+    @property
+    def confirmable_by_typing(self) -> bool:
+        return self.origin == "user"
+
+    def origin_label(self) -> str:
+        """The sentence the card and the plan show; empty for the user's own request."""
+        if self.origin == "user":
+            return ""
+        if self.origin == "content":
+            return f"Suggested by content from {self.origin_source or 'a tool result'}"
+        if self.origin == "automation":
+            return "Suggested by an automation"
+        return "I could not tell what suggested this"
+
+    def origin_reason(self) -> str:
+        """Why a typed confirmation does not count, as a clause."""
+        if self.origin == "content":
+            return f"suggested by content from {self.origin_source or 'a tool result'}, not by you"
+        if self.origin == "automation":
+            return "suggested by an automation, not by you"
+        return "proposed without a request I could trace to you"
+
+    def origin_note(self) -> str:
+        """The plan's sentence about its cause; empty for the user's own request."""
+        if self.origin == "user":
+            return ""
+        reason = self.origin_reason()
+        return f"{reason[:1].upper()}{reason[1:]}."
+
+    def card_only_refusal(self) -> str:
+        return f"That action was {self.origin_reason()}, so it can only be confirmed with the Confirm button on its card. Nothing has happened."
 
     def is_expired(self, now: datetime) -> bool:
         return now >= self.expires_at
