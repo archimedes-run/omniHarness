@@ -397,3 +397,18 @@ def test_continue_is_refused_for_an_agent_taken_out_of_the_chat(gateway) -> None
 
     assert resp.status_code == 409 and "no longer in this chat" in resp.text, resp.text
     assert CALLED == []
+
+
+def test_a_short_at_mention_is_not_swallowed_as_an_answer_to_a_pending_card(gateway) -> None:
+    """ "@researcher look" is two words, the length of a reply; while a card is
+    pending it was read as an (unrecognised) answer and nobody was called."""
+    thread_id, action = _member_proposes_wipe(gateway)
+    _call_in(gateway, thread_id, "researcher")
+    CALLED.clear()
+    SUB_SCRIPT[:] = [AIMessage(content="Looked.")]
+
+    messages = _say(gateway, thread_id, "@researcher look")
+
+    assert CALLED, "the @-mention was swallowed as an answer to the pending card"
+    assert messages[-1]["name"] == "researcher"
+    assert [a["id"] for a in gateway.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "wipe_backup"] == [action["id"]]
