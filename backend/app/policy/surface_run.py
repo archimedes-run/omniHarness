@@ -288,15 +288,20 @@ def result_report(action: PendingAction, result: Any) -> str:
     return f"Done. I ran **{action.tool_name}** after you confirmed it.\n\nResult: {shown}"
 
 
-def report_message(action: PendingAction, result: Any) -> Any:
-    """The thread message for a confirmed call, attributed to its proposer."""
+def report_message(action: PendingAction, result: Any, *, content: str | None = None) -> Any:
+    """The thread message for a confirmed call, attributed to its proposer.
+
+    `content` is a report already made (a waiting post, rebuilt after a
+    restart); otherwise it is made from the result.
+    """
     from langchain_core.messages import AIMessage
 
     invited = bool(action.requester and action.requester != "lead_agent")
     return AIMessage(
-        # One id per action: the card's post is verified by reading it back.
+        # One id per action: the card's post is verified by reading it back,
+        # and a post retried after a restart is never added twice.
         id=f"confirmation-{action.id}",
-        content=result_report(action, result),
+        content=content if content is not None else result_report(action, result),
         name=action.requester if invited else None,
         additional_kwargs={
             "confirmation": {

@@ -206,6 +206,14 @@ class PendingAction:
     #: redacted; "Withheld" when it failed redaction). Set only for an invited
     #: agent's call, as the observed context "Continue <agent>" hands it.
     result_excerpt: str = ""
+    #: The confirmed result's post into the thread (card route only): "" none,
+    #: "waiting" (ran, not yet in the thread: the chat was replying, or the
+    #: gateway stopped first), "posted" (read back from the thread). DURABLE:
+    #: a waiting post is drained after the run ends and at gateway startup.
+    post_state: str = ""
+    #: The report's text for a waiting post, as the thread will show it
+    #: (already redacted by surface_run.result_report).
+    post_content: str = ""
 
     @property
     def confirmable_by_typing(self) -> bool:
