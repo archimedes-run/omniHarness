@@ -167,9 +167,11 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 #:   chat UI's ``context.agent_name``), normalised and validated. It only ever
 #:   resolves inside the caller's own agents directory, because ``user_id`` is
 #:   server-set;
-#: - ``turn_provenance`` / ``trigger_rule_id``: only when the caller presents
-#:   a single-use grant the trigger engine issued for that exact request
-#:   (internal_auth.is_trigger_engine_request);
+#: - ``turn_provenance`` / ``trigger_rule_id`` / ``trigger_firing_id``: only
+#:   when the caller presents a single-use grant the trigger engine issued for
+#:   that exact request (internal_auth.is_trigger_engine_request). The firing
+#:   id keys a scheduled run's standing-grant count (Feature 006), so a client
+#:   must not pick it;
 #: - ``called_agent``: never from a request (set inside delegation only);
 #: - ``excluded_skills``: this thread's stored exclusions;
 #: - ``channel``: the IM channel, from the channel manager's header with the
@@ -181,6 +183,7 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
         "agent_name",
         "turn_provenance",
         "trigger_rule_id",
+        "trigger_firing_id",
         "called_agent",
         "excluded_skills",
         "channel",
@@ -231,6 +234,15 @@ def _normalise_agent_name(raw: str) -> str:
     return normalized
 
 
+def _client_firing_id(body: Any) -> str | None:
+    """The trigger_firing_id a request claims (read only for the trigger engine)."""
+    cfg = getattr(body, "config", None) or {}
+    for container in (cfg.get("configurable"), cfg.get("context"), cfg.get("metadata"), getattr(body, "metadata", None), getattr(body, "context", None)):
+        if isinstance(container, Mapping) and isinstance(container.get("trigger_firing_id"), str) and container["trigger_firing_id"]:
+            return container["trigger_firing_id"]
+    return None
+
+
 def _client_provenance(body: Any) -> tuple[str | None, str | None]:
     """The (turn_provenance, trigger_rule_id) a request claims, wherever it put them."""
     cfg = getattr(body, "config", None) or {}
@@ -252,6 +264,7 @@ def apply_server_owned_context(
     selected_sources: list[str] | None,
     agent_name: str | None,
     synthetic_rule_id: str | None,
+    synthetic_firing_id: str | None = None,
 ) -> None:
     """Drop every client-supplied server-owned key, then write the server's.
 
@@ -260,7 +273,7 @@ def apply_server_owned_context(
     edited in place. ``synthetic_rule_id`` is not None only for a request the
     trigger engine made (the caller checks the credential).
     """
-    from app.policy.provenance import PROVENANCE_KEY, RULE_KEY, SYNTHETIC
+    from app.policy.provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY, SYNTHETIC
 
     for key in [k for k in config if k not in _CLIENT_TOP_LEVEL_CONFIG_KEYS]:
         config.pop(key)
@@ -294,6 +307,8 @@ def apply_server_owned_context(
             configurable["agent_name"] = agent_name
     if synthetic_rule_id is not None:
         marks = {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: synthetic_rule_id}
+        if synthetic_firing_id:
+            marks[FIRING_KEY] = synthetic_firing_id
         context.update(marks)
         if configurable is not None:
             configurable.update(marks)
@@ -582,11 +597,13 @@ async def start_run(
     from app.policy.provenance import SYNTHETIC
 
     synthetic_rule_id: str | None = None
+    synthetic_firing_id: str | None = None
     claimed, rule_id = _client_provenance(body)
     if claimed == SYNTHETIC and trigger_grant_presented(request):
         if not await is_trigger_engine_request(request):
             raise HTTPException(status_code=403, detail="scheduled-run grant refused (expired, already used, or not for this request)")
         synthetic_rule_id = rule_id or ""
+        synthetic_firing_id = _client_firing_id(body)
 
     # A scheduled turn's "human" message is a rule's prompt, never the person.
     try:
@@ -630,6 +647,7 @@ async def start_run(
         selected_sources=selected_sources,
         agent_name=agent_name,
         synthetic_rule_id=synthetic_rule_id,
+        synthetic_firing_id=synthetic_firing_id,
     )
     channel = channel_of(request)
     if channel:
