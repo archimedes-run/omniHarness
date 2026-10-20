@@ -267,7 +267,28 @@ It also provides the create-from-chat hook that 005 Slice 5 uses.
 - Panels in Phase 1 host existing screens. Their redesign is Phases 3 and 4.
 - 005 Slice 3 delivers Home's full content (projects, coding sessions, upcoming, what moved). Phase 1 only lays the ground.
 
-## Open Questions
+## Clarifications
+
+### Session 2026-10-20 (the user's answers to the open questions)
+
+1. **Integration status, two stages**: "Connected" until a tool call from that source has succeeded, then "Live · last worked <time>". A source never checked stays "Not checked yet".
+2. **Display name**: optional, set in Account. When unset it falls back to the part of the email before "@". The user is asked once, on their first Home visit.
+3. **"Reported" everywhere**: 005's UI wording changes from "claimed" to "reported". Internal enum names may stay.
+4. **Projects** are reached through the Tasks panel, the chat-bar Project chip, the Home block and ⌘K. A project view keeps its own linkable URL.
+5. **Reversible/irreversible label**: each tool carries one, separate from its tier. Standing grants only ever cover reversible actions, and a sabotage proves an irreversible tool cannot be granted.
+6. **Skill Test**:
+   - runs only on a button press;
+   - uses the same model the runtime would;
+   - makes a small number of tries;
+   - reports what it observed ("loaded 2 of 3") and names the model.
+7. **Removing a skill per chat**: yes, in Phase 3. Until then the Skills chip is read-only.
+8. **The Phase 1 "@" behaviour** is accepted.
+9. **Logos**: all eight existing app logos are replaced with official assets. A monogram is used only where a brand's terms forbid the use, and those brands are listed.
+10. **Inbox removal**: items waiting go to Home → "Waiting on you"; alerts missed while away go to a dismissable Home block, "While you were away"; delivery history goes to Settings → Activity log.
+
+The 33 resolutions in design-notes.md are accepted, including the solid-button and contrast fixes.
+
+## Open Questions (answered 2026-10-20, see Clarifications)
 
 1. **Connector status word.** For an authorised connector, the gateway knows only that Composio reports the connection ACTIVE. It has not seen a tool call succeed. The mockups say "Live", the word used for a local server that loaded. **Default: "Connected"** for connectors, and "Live" only for a source whose load was observed. Is that right, or should "Live" cover both?
 2. **Your name.** The greeting ("Good evening, Rishabh") and the footer avatar need a name, but accounts store only an email. **Default:** add an optional display name in Settings → Account, stored with the theme preference. Until it is set, the greeting has no name and the avatar shows the email's first letter.
