@@ -278,7 +278,7 @@ const SURFACES: {
   routes: Record<string, unknown>;
 }[] = [
   {
-    path: "/workspace/inbox",
+    path: "/workspace/home",
     row: '[data-testid="pending-action"]',
     routes: {
       "**/api/inbox/alerts": { alerts: [], waiting_count: 0 },

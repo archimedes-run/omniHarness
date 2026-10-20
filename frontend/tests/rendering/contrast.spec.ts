@@ -484,7 +484,7 @@ Object.assign(ROUTES, {
 const PAGES = [
   "/",
   "/workspace/chats/new",
-  "/workspace/inbox",
+  "/workspace/home",
   "/workspace/automations",
   "/workspace/automations/morning-briefing",
   "/workspace/agents",
@@ -520,7 +520,8 @@ const PAGES = [
 /** Workspace pages not audited, each with the reason. */
 const NOT_AUDITED: Record<string, string> = {
   "/workspace": "redirects to /workspace/chats/new",
-  "/workspace/confirmations": "redirects to /workspace/inbox",
+  "/workspace/confirmations": "redirects to /workspace/home",
+  "/workspace/inbox": "redirects to /workspace/home",
   "/workspace/mcp": "redirects to /workspace/connections",
   "/workspace/policy": "redirects to /workspace/settings/safety",
   "/workspace/settings": "redirects to a settings section",
@@ -573,11 +574,19 @@ async function stub(page: Page) {
 /** Every screenful of the page, each probed once it has rendered. */
 async function auditPage(page: Page): Promise<LowContrast[]> {
   const found = new Map<string, LowContrast>();
+  // Workspace pages scroll inside the shell (Feature 006), under the
+  // capsule; other pages scroll the window.
   const height = await page.evaluate(
-    () => document.documentElement.scrollHeight,
+    () =>
+      document.querySelector('[data-testid="workspace-scroll"]')
+        ?.scrollHeight ?? document.documentElement.scrollHeight,
   );
   for (let y = 0; y < height; y += 800) {
-    await page.evaluate((top) => window.scrollTo(0, top), y);
+    await page.evaluate((top) => {
+      const shell = document.querySelector('[data-testid="workspace-scroll"]');
+      if (shell) shell.scrollTop = top;
+      else window.scrollTo(0, top);
+    }, y);
     await page.waitForTimeout(400);
     for (const item of await page.evaluate(lowContrastText)) {
       found.set(`${item.text}|${item.cls}`, item);
