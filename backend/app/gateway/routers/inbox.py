@@ -10,12 +10,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.gateway.authz import require_permission
 from app.gateway.inbox_view import InboxAlerts, describe_alerts
+from app.gateway.ownership import require_owner_account
 
-router = APIRouter(prefix="/api/inbox", tags=["inbox"])
+# Install-wide records: the owner account only (security baseline).
+router = APIRouter(prefix="/api/inbox", tags=["inbox"], dependencies=[Depends(require_owner_account)])
 
 
 @router.get("/alerts", response_model=InboxAlerts)

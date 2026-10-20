@@ -110,6 +110,31 @@ class TestAgentConfig:
 # ===========================================================================
 
 
+@pytest.fixture(autouse=True)
+def _the_test_user_owns_legacy_agents():
+    """The legacy shared agents/ layout is the owner's (security baseline).
+    These tests act as the owner: the autouse test user."""
+    from omniharness.runtime.user_context import get_effective_user_id, set_legacy_data_owner
+
+    set_legacy_data_owner(get_effective_user_id())
+    yield
+    set_legacy_data_owner(None)
+
+
+def test_a_non_owner_never_falls_back_to_legacy_shared_agents(tmp_path):
+    from omniharness.runtime.user_context import set_legacy_data_owner
+
+    _write_agent(tmp_path, "shared-one", {"name": "shared-one"})
+    set_legacy_data_owner("the-owner")
+    with patch("omniharness.config.agents_config.get_paths", return_value=_make_paths(tmp_path)):
+        from omniharness.config.agents_config import list_custom_agents, load_agent_config
+
+        assert [a.name for a in list_custom_agents(user_id="someone-else")] == []
+        with pytest.raises(FileNotFoundError):
+            load_agent_config("shared-one", user_id="someone-else")
+        assert [a.name for a in list_custom_agents(user_id="the-owner")] == ["shared-one"]
+
+
 class TestLoadAgentConfig:
     def test_load_valid_config(self, tmp_path):
         config_dict = {"name": "code-reviewer", "description": "Code review agent", "model": "deepseek-v3"}

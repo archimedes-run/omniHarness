@@ -15,13 +15,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
+from app.gateway.ownership import require_owner_account
+
+# Install-wide records: the owner account only (security baseline).
 from app.gateway.triggers_view import FiringsView, RulesView, RunsView, describe_firings, describe_rules, describe_runs
 
-router = APIRouter(prefix="/api/triggers", tags=["triggers"])
+router = APIRouter(prefix="/api/triggers", tags=["triggers"], dependencies=[Depends(require_owner_account)])
 
 
 class EngineStatus(BaseModel):

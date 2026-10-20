@@ -46,6 +46,8 @@ class SQLiteUserRepository(UserRepository):
             oauth_id=row.oauth_id,
             needs_setup=row.needs_setup,
             token_version=row.token_version,
+            disabled_at=row.disabled_at,
+            disabled_reason=row.disabled_reason,
         )
 
     @staticmethod
@@ -60,6 +62,8 @@ class SQLiteUserRepository(UserRepository):
             oauth_id=user.oauth_id,
             needs_setup=user.needs_setup,
             token_version=user.token_version,
+            disabled_at=user.disabled_at,
+            disabled_reason=user.disabled_reason,
         )
 
     # ── CRUD ──────────────────────────────────────────────────────────
@@ -106,6 +110,8 @@ class SQLiteUserRepository(UserRepository):
             row.oauth_id = user.oauth_id
             row.needs_setup = user.needs_setup
             row.token_version = user.token_version
+            row.disabled_at = user.disabled_at
+            row.disabled_reason = user.disabled_reason
             await session.commit()
         return user
 

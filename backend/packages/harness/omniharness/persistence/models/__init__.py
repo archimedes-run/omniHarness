@@ -26,7 +26,7 @@ from omniharness.persistence.thread_meta.model import ThreadMetaRow
 from omniharness.persistence.thread_skill_exclusion.model import ThreadSkillExclusionRow
 from omniharness.persistence.thread_tool_selection.model import ThreadToolSelectionRow
 from omniharness.persistence.tool_source_health.model import ToolSourceHealthRow
-from omniharness.persistence.user.model import UserRow
+from omniharness.persistence.user.model import FirstAccountClaimRow, UserRow
 from omniharness.persistence.user_preferences.model import UserPreferenceRow
 from omniharness.persistence.workflow_artifact_links.model import WorkflowArtifactLinkRow
 from omniharness.persistence.workflow_runs.model import WorkflowRunRow
@@ -37,6 +37,7 @@ from omniharness.persistence.workflows.model import WorkflowRow
 __all__ = [
     "ComposioConnectionRow",
     "FeedbackRow",
+    "FirstAccountClaimRow",
     "HomeDismissalRow",
     "LedgerChangeRow",
     "LedgerGoalRow",

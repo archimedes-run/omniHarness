@@ -191,6 +191,9 @@ async def _run_additive_migrations(backend: str) -> None:
         ("workflows", "required_capability_ids", "JSON", "NULL"),
         # Phase 1 Slice 4a: workflow spec generator (migration 0013)
         ("workflow_versions", "spec_json", "JSON", "NULL"),
+        # Security baseline: reversible account disabling
+        ("users", "disabled_at", "TIMESTAMP", "NULL"),
+        ("users", "disabled_reason", "VARCHAR(256)", "NULL"),
     ]
 
     async with _engine.begin() as conn:

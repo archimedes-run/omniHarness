@@ -106,10 +106,12 @@ async def owner_user_id() -> str | None:
         return None
     explicit = os.environ.get(OWNER_ENV, "").strip()
     async with sf() as session:
+        # A disabled account is never the owner.
+        enabled = UserRow.disabled_at.is_(None)
         if explicit:
-            row = (await session.execute(select(UserRow.id).where(UserRow.id == explicit))).scalar_one_or_none()
+            row = (await session.execute(select(UserRow.id).where(UserRow.id == explicit, enabled))).scalar_one_or_none()
         else:
-            row = (await session.execute(select(UserRow.id).order_by(UserRow.created_at, UserRow.id).limit(1))).scalar_one_or_none()
+            row = (await session.execute(select(UserRow.id).where(enabled).order_by(UserRow.created_at, UserRow.id).limit(1))).scalar_one_or_none()
     return str(row) if row is not None else None
 
 
@@ -117,7 +119,11 @@ async def log_owner_at_startup() -> str | None:
     """Say, by id only, which account is the owner and why."""
     import os
 
+    from omniharness.runtime.user_context import set_legacy_data_owner
+
     owner = await owner_user_id()
+    # The legacy shared agents/ directory is the owner's (agents_config).
+    set_legacy_data_owner(owner)
     explicit = os.environ.get(OWNER_ENV, "").strip()
     if owner is None and explicit:
         logger.error("%s=%s matches no account: no account can sign in until it names an existing one.", OWNER_ENV, explicit)
@@ -142,6 +148,45 @@ async def any_account_exists() -> bool:
     return bool(count)
 
 
+async def create_first_account(email: str, password: str, *, system_role: str = "admin") -> Any | None:
+    """Create the install's FIRST account, atomically; None if one exists.
+
+    The account and the single ``first_account_claim`` row (id=1) are inserted
+    in ONE transaction. Concurrent first registrations, on any worker, race on
+    that primary key and exactly one commits; every loser rolls back with no
+    account. Callers check :func:`any_account_exists` first only to answer
+    quickly; this is what makes it true under concurrency.
+    """
+    from sqlalchemy.exc import IntegrityError, OperationalError
+
+    from app.gateway.auth.models import User
+    from app.gateway.auth.password import hash_password_async
+    from app.gateway.auth.repositories.sqlite import SQLiteUserRepository
+    from omniharness.persistence.engine import get_session_factory
+    from omniharness.persistence.user.model import FirstAccountClaimRow
+
+    sf = get_session_factory()
+    if sf is None:
+        raise RuntimeError("persistence is not initialised")
+    if await any_account_exists():
+        return None
+    user = User(email=email, password_hash=await hash_password_async(password), system_role=system_role, needs_setup=False)
+    async with sf() as session:
+        try:
+            session.add(FirstAccountClaimRow(id=1, user_id=str(user.id)))
+            await session.flush()  # the claim first: a loser fails here, before any account row
+            session.add(SQLiteUserRepository._user_to_row(user))
+            await session.commit()
+        except (IntegrityError, OperationalError):
+            await session.rollback()
+            return None
+    return user
+
+
+def is_disabled(user: Any) -> bool:
+    return getattr(user, "disabled_at", None) is not None
+
+
 def is_internal(user: Any) -> bool:
     return getattr(user, "system_role", None) == INTERNAL_ROLE
 
@@ -157,7 +202,11 @@ async def account_admitted(user: Any) -> bool:
     """May this authenticated principal use the app at all? (Item a.)"""
     if user is None:
         return False
-    if is_internal(user) or await is_owner(user):
+    if is_internal(user):
+        return True
+    if is_disabled(user):
+        return False
+    if await is_owner(user):
         return True
     return admits_additional_accounts()
 
@@ -204,6 +253,22 @@ async def filter_accessible[T](request: Request, records: Iterable[T], owner_of:
     return [r for r in records if await can_access(request, owner_of(r))]
 
 
+async def require_owner_account(request: Request) -> None:
+    """FastAPI dependency: the OWNER account (or the internal principal) only.
+
+    For install-wide records that belong to the owner as a whole rather than
+    row by row: trigger rules and their firings and runs, automations, the
+    inbox, the local Claude/Codex sessions on this machine. Use it as
+    ``APIRouter(..., dependencies=[Depends(require_owner_account)])``.
+    """
+    user = _request_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if is_internal(user) or await is_owner(user):
+        return
+    raise HTTPException(status_code=403, detail="Only the owner account can see this.")
+
+
 async def require_thread_access(request: Request, thread_id: str, *, require_existing: bool = False) -> None:
     """Raise 404 unless the caller owns ``thread_id`` (threads_meta.user_id).
 
@@ -219,6 +284,43 @@ async def require_thread_access(request: Request, thread_id: str, *, require_exi
     allowed = await thread_store.check_access(thread_id, caller, require_existing=require_existing)
     if not allowed:
         raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
+
+
+#: How the live install was hand-disabled before ``disabled_at`` existed: the
+#: password hash prefixed so that verification fails closed.
+LEGACY_DISABLED_PREFIX = "!disabled!"
+
+
+async def migrate_prefix_disabled_accounts() -> int:
+    """Startup migration: ``!disabled!<hash>`` becomes ``<hash>`` + ``disabled_at``.
+
+    The account stays disabled (now by the proper column, which every check
+    reads) and its real hash is restored, so ``accounts enable`` can bring it
+    back intact. Idempotent.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from omniharness.persistence.engine import get_session_factory
+    from omniharness.persistence.user.model import UserRow
+
+    sf = get_session_factory()
+    if sf is None:
+        return 0
+    changed = 0
+    async with sf() as session:
+        rows = (await session.execute(select(UserRow).where(UserRow.password_hash.like(f"{LEGACY_DISABLED_PREFIX}%")))).scalars().all()
+        for row in rows:
+            row.password_hash = row.password_hash[len(LEGACY_DISABLED_PREFIX) :]
+            if row.disabled_at is None:
+                row.disabled_at = datetime.now(UTC)
+                row.disabled_reason = "migrated from the '!disabled!' password-hash prefix"
+            row.token_version += 1
+            changed += 1
+            logger.info("Account %s: '!disabled!' prefix migrated to disabled_at (still disabled).", row.id)
+        await session.commit()
+    return changed
 
 
 async def assign_ownerless_rows_to_owner() -> dict[str, int]:
