@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   backspaceToChips,
-  chatSkills,
   chipKey,
   collapse,
   insertMention,
@@ -69,11 +68,10 @@ describe("removing a chip changes this chat's context", () => {
     ).toBe(false);
   });
 
-  it("a skill's × removes it from this chat; the picker's switch brings it back", () => {
+  it("the picker's skill switch removes one from this chat and brings it back", () => {
     const available = ["changelog", "cite", "chart"];
     const removed = withSkill([], "cite", false);
     expect(removed).toEqual(["cite"]);
-    expect(chatSkills(available, removed)).toEqual(["changelog", "chart"]);
     // The picker shows "on" for what is not removed: the same list.
     expect(available.map((s) => !removed.includes(s))).toEqual([
       true,
@@ -82,7 +80,6 @@ describe("removing a chip changes this chat's context", () => {
     ]);
     const back = withSkill(removed, "cite", true);
     expect(back).toEqual([]);
-    expect(chatSkills(available, back)).toEqual(available);
   });
 
   it("removing twice, or turning on what is on, changes nothing", () => {

@@ -4,8 +4,7 @@
  */
 import { mentionToken, type StatusWord, type Trigger } from "./logic";
 
-/** Skill chips shown before "+N skills"; integration chips before "+N". */
-export const SKILLS_SHOWN = 2;
+/** Integration chips shown before "+N integrations". */
 export const INTEGRATIONS_SHOWN = 4;
 
 /**
@@ -50,18 +49,9 @@ export function collapse<T>(
 
 // ---- skills ------------------------------------------------------------------
 
-/** The skills this chat uses: the agent's, less the ones removed here. */
-export function chatSkills(
-  available: readonly string[],
-  excluded: readonly string[],
-): string[] {
-  const out = new Set(excluded);
-  return available.filter((s) => !out.has(s));
-}
-
 /**
- * The chat's removed-skills list after a chip × (`on` false) or the picker's
- * switch (either way). The same function for both, so they cannot disagree.
+ * The chat's removed-skills list after the picker's switch: off adds the
+ * skill, on takes it out again.
  */
 export function withSkill(
   excluded: readonly string[],
