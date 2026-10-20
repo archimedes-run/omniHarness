@@ -54,7 +54,9 @@ def test_a_good_key_file_is_used(tmp_path) -> None:
 
 
 def test_the_gateway_refuses_to_start_with_host_bash_on(builder_gateway_factory) -> None:
-    with pytest.raises(RuntimeError, match="allow_host_bash is not supported"):
+    # Host bash is removed (security baseline): the key itself refuses startup,
+    # so the MCP builder (which relies on the agent having no host shell) never runs with it.
+    with pytest.raises(RuntimeError, match="allow_host_bash is no longer supported"):
         builder_gateway_factory(sandbox={"allow_host_bash": True})
 
 

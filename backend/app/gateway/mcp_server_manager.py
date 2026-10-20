@@ -183,6 +183,8 @@ class MCPBuildRecord:
     last_verified_at: str | None = None
     container_id: str | None = None
     container_port: int | None = None
+    # The hash of the code this record's results are for (#59 review, H1).
+    code_sha256: str | None = None
     # Live step list emitted during "deploying" phase so the frontend can render a timeline.
     # Each dict: {key, label, status: pending|running|done|failed, detail: str|None}
     deploy_steps: list[dict] = field(default_factory=list)
@@ -553,9 +555,10 @@ class MCPServerManager:
         the server starts and registers its tools regardless of whether keys are stored.
         required_key_names is still detected and returned for informational display.
 
-        Concurrent /test calls for the same server are serialised: the second caller
-        waits for the first to finish, then returns the cached record instead of
-        launching a duplicate sandbox process.
+        Concurrent /test calls for the same server are serialised. A caller
+        that waited returns the cached record ONLY if it is for the code stored
+        now; otherwise it tests the current code itself (#59 review, H1: a
+        record is never returned for another hash's code).
         """
         # Ownership gate before acquiring the per-server lock so a bad caller fails fast.
         await self._load_and_verify(server_id, user_id)
@@ -565,19 +568,18 @@ class MCPServerManager:
                 self._test_locks[server_id] = asyncio.Lock()
         per_server_lock = self._test_locks[server_id]
 
-        if per_server_lock.locked():
-            # Another test is already in flight — wait for it, then return cached result.
-            async with per_server_lock:
-                pass
-            async with self._lock:
-                cached = self._records.get(server_id)
-            if cached is not None:
-                return cached
-
+        waited = per_server_lock.locked()
         async with per_server_lock:
             server = await self._load_and_verify(server_id, user_id)
 
             source = server.get("source_code") or ""
+            current = code_sha256(source)
+            if waited:
+                async with self._lock:
+                    cached = self._records.get(server_id)
+                # The in-flight test we waited for tested exactly this code.
+                if cached is not None and current is not None and cached.code_sha256 == current and cached.phase in ("verified", "testing", "failed"):
+                    return cached
 
             # Stage 1: static scan (immediate, no LLM) — hard-blocks dangerous patterns.
             if source:
@@ -589,6 +591,7 @@ class MCPServerManager:
                         phase="failed",
                         owner_id=user_id,
                         error=static_result.reason,
+                        code_sha256=current,
                     )
                     async with self._lock:
                         self._records[server_id] = record
@@ -604,7 +607,6 @@ class MCPServerManager:
             # the same bytes that are hashed for approval. A client never sets
             # them. Persisted, so the approval screen shows what will be enforced.
             egress_hosts = self._extract_egress_hosts(source) if source else []
-            await self._repo.update_egress_hosts(server_id, egress_hosts, user_id=user_id)
 
             # Stage 3: LLM scan for intent-level threats. egress_hosts are passed so the
             # reviewer can distinguish a normal API connector (sending its key to its own
@@ -623,6 +625,7 @@ class MCPServerManager:
                         owner_id=user_id,
                         required_key_names=required_key_names,
                         error=scan_result.reason,
+                        code_sha256=current,
                     )
                     async with self._lock:
                         self._records[server_id] = record
@@ -670,6 +673,8 @@ class MCPServerManager:
                 test_results=test_results,
                 last_verified_at=verified_at,
                 user_id=user_id,
+                tested_code_sha256=current,
+                egress_hosts=egress_hosts,
             )
             await self._repo.update_detected_secrets(server_id, required_key_names, user_id=user_id)
 
@@ -681,6 +686,7 @@ class MCPServerManager:
                 tools_discovered=tools_discovered,
                 test_results=test_results,
                 last_verified_at=verified_at,
+                code_sha256=current,
             )
             async with self._lock:
                 self._records[server_id] = record
@@ -706,12 +712,14 @@ class MCPServerManager:
         current = code_sha256(server.get("source_code"))
         if current is None:
             raise ValueError("No source code — build the server first")
-        status = await self.get_status(server_id=server_id, user_id=user_id)
-        if status.phase != "verified" and server.get("status") != "verified":
-            raise PermissionError(f"MCP server {server_id!r} cannot be approved from phase {status.phase!r}: its sandbox tests must pass first")
         if code_sha256_seen != current:
             raise PermissionError("code changed: the code you approved is not the code stored now")
-        tools = {t.get("name") for t in (server.get("tools_discovered") or status.tools_discovered or [])}
+        # #59 review H1: the stored tools, hosts and verdict must be FOR this
+        # code. Code stored while another version was being tested was never
+        # scanned or tested, so it can't be approved on that version's results.
+        if server.get("verified_code_sha256") != current:
+            raise PermissionError(f"MCP server {server_id!r} cannot be approved: this code's sandbox tests must pass first")
+        tools = {t.get("name") for t in (server.get("tools_discovered") or [])}
         problem = await self.name_problem(server, [t for t in tools if t])
         if problem:
             raise PermissionError(f"name collision: {problem}")
@@ -721,7 +729,8 @@ class MCPServerManager:
                 raise ValueError(f"invalid tier for tool {name!r}")
         pending = {
             "code_sha256": current,
-            "egress_hosts": list(server.get("egress_hosts") or []),
+            # Read again from the approved bytes themselves, never from the row.
+            "egress_hosts": self._extract_egress_hosts(server.get("source_code") or ""),
             "tool_tiers": {name: tiers.get(name, 3) for name in sorted(t for t in tools if t)},
             "approved_by": user_id,
             "approved_at": datetime.now(UTC).isoformat(),
@@ -1045,7 +1054,13 @@ class MCPServerManager:
         subnet = await self._free_subnet()
         hosts = list(subnet.hosts())
         sidecar_ip, server_ip = str(hosts[1]), str(hosts[2])  # .2 and .3
-        rules = build_egress_rules(list(row.get("egress_hosts") or []))
+        # The allowlist is the one bound to the approved hash (pending or
+        # committed approval), never the row's current hosts (#59 review H1).
+        sha = code_sha256(row.get("source_code"))
+        bound = next((a for a in (row.get("pending_approval"), row.get("approval")) if a and a.get("code_sha256") == sha), None)
+        if bound is None:
+            raise PermissionError("no approval is bound to this code")
+        rules = build_egress_rules(list(bound.get("egress_hosts") or []))
         allow = allowlist_hosts(sorted({a["host"] for a in rules["allow"]}))
         token = secrets.token_hex(24)
         password = secrets.token_hex(16)

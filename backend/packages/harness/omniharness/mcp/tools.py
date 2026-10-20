@@ -136,6 +136,7 @@ async def get_mcp_tools() -> list[BaseTool]:
                 # that is absent cannot be reached by a bug in the permission
                 # path at all.
                 server_tools = _apply_tool_surface(extensions_config, server_name, server_tools)
+                server_tools = _only_approved_built_tools(extensions_config, server_name, server_tools)
                 logger.info(f"Loaded {len(server_tools)} tool(s) from '{server_name}'")
                 tools.extend(server_tools)
                 load_report.record_loaded(server_name, len(server_tools), [t.name for t in server_tools])
@@ -175,6 +176,29 @@ def _drop_unapproved_built(extensions_config: ExtensionsConfig, servers_config: 
             continue
         servers_config.pop(name, None)
         load_report.record_failed(name, PermissionError("built/ is reserved for servers the MCP builder approved; this entry has no approval record"))
+
+
+def _only_approved_built_tools(extensions_config: ExtensionsConfig, server_name: str, server_tools: list) -> list:
+    """A built server offers only the tools its approval names (#59 review,
+    #72): a tool that appears at run time (e.g. only with a real key) was never
+    seen on the approval screen, so it is not offered at all."""
+    from omniharness.tools.names import canonical_tool_name
+
+    if not canonical_tool_name(server_name).startswith("built__"):
+        return server_tools
+    entry = extensions_config.mcp_servers.get(server_name)
+    extra = (getattr(entry, "model_extra", None) or {}) if entry is not None else {}
+    approved = {canonical_tool_name(t) for t in ((extra.get("built") or {}).get("tool_tiers") or {})}
+    prefix = canonical_tool_name(server_name) + "_"
+    kept = []
+    for tool in server_tools:
+        name = canonical_tool_name(tool.name)
+        bare = name[len(prefix) :] if name.startswith(prefix) else name
+        if bare in approved:
+            kept.append(tool)
+        else:
+            logger.warning("Built server '%s': tool '%s' was not on its approval and is not offered", server_name, tool.name)
+    return kept
 
 
 def _apply_tool_surface(extensions_config: ExtensionsConfig, server_name: str, server_tools: list) -> list:

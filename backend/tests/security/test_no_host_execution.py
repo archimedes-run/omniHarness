@@ -20,7 +20,8 @@ BACKEND = Path(__file__).resolve().parents[2]
 #: running on the host. A new spawner anywhere in app/ or packages/ fails
 #: test_every_process_spawner_is_classified until it is added here.
 SPAWNERS = {
-    "app/gateway/mcp_server_manager.py": "container runtime only (docker build/run/rm for built MCP servers; published on 127.0.0.1)",
+    "app/gateway/mcp_server_manager.py": "container runtime only (follows `docker events` for built MCP servers' restarts, #59)",
+    "app/gateway/mcp_docker.py": "container runtime only (the one docker CLI runner for built MCP servers; refuses any command that could reach a registry; published on 127.0.0.1 only, #59)",
     "packages/harness/omniharness/community/aio_sandbox/local_backend.py": "container runtime only (the sandbox containers themselves)",
     "app/tools/openclaude.py": "EXTERNAL coding-agent CLI on the host (openclaude_coder, Tier 3): scrubbed env, only OPENAI_* passed (reported for a decision)",
     "packages/harness/omniharness/tools/builtins/invoke_acp_agent_tool.py": "EXTERNAL ACP agent CLIs on the host (invoke_acp_agent, Tier 3): scrubbed env + configured keys (reported for a decision)",

@@ -195,7 +195,8 @@ def _deploy(gw, manager, ledger, runtime_images, monkeypatch, *, hosts: list[str
     async def go():
         row = await repo.create(name="egress-probe", owner_id=gw.user_id, source_code=PROBE)
         sid = row["id"]
-        await repo.update_egress_hosts(sid, hosts, user_id=gw.user_id)
+        # What a passing sandbox test stores for this code (its hosts, its hash).
+        await repo.update_build_result(sid, phase="verified", tools_discovered=[], test_results=[], last_verified_at=None, user_id=gw.user_id, tested_code_sha256=sha, egress_hosts=hosts)
         await vault.store(server_id=sid, owner_id=gw.user_id, key_name="GITHUB_TOKEN", plaintext_value=STORED_SECRET)
         await repo.set_pending_approval(sid, {"code_sha256": sha, "egress_hosts": hosts, "tool_tiers": {}}, user_id=gw.user_id)
         from app.gateway.mcp_server_manager import MCPBuildRecord, _init_deploy_steps

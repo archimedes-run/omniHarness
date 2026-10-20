@@ -337,6 +337,8 @@ async def test_approval_is_pending_not_approved_until_deploy() -> None:
     manager, repo, _, engine = await _make_manager()
     row = await repo.create(name="srv", owner_id="user_a", source_code="x = 1\n")
     manager._records[row["id"]] = MCPBuildRecord(server_id=row["id"], phase="verified", owner_id="user_a")
+    # This code's own tests passed (#59 review H1: results are bound to the hash).
+    await repo.update_build_result(row["id"], phase="verified", tools_discovered=[], test_results=[], last_verified_at=None, user_id="user_a", tested_code_sha256=row["code_sha256"])
     with pytest.raises(PermissionError, match="code changed"):
         await manager.begin_approval(server_id=row["id"], user_id="user_a", code_sha256_seen="0" * 64)
     pending = await manager.begin_approval(server_id=row["id"], user_id="user_a", code_sha256_seen=row["code_sha256"])

@@ -733,3 +733,12 @@ Three sabotages turned their test red for a different reason than the targeted a
 - the first T7(a): a later assertion.
 
 These are said in the report as such.
+17. **Review H1 (fixed): test results are bound to the code they tested.**
+    - `verified_code_sha256` is stored with the tools, hosts and verdict. Only code whose hash equals it can be shown for approval, pending-approved or deployed.
+    - A test that waited on another one re-runs for the current code, and never returns another hash's record.
+    - The approval's hosts are read again from the approved bytes, and the deploy's allowlist is the one bound to the approval (pending or committed) for that hash, never the row's.
+    - The reviewer's attack is kept as `tests/mcp_studio/test_review_attacks_59.py`, rewritten to assert the safe behaviour. A statically blocked A is never approvable; a clean C is tested itself, with its own hosts.
+18. **Review #72 (fixed, it was small):**
+    - a built tool's tier needs exactly one parse of its name as one built server's APPROVED tool; an ambiguous or unapproved name is Tier 3;
+    - the loader offers only the tools on a built server's approval.
+19. **Not fixed, filed:** #73 (re-delivery trusts the container label, not its name or image) and #74 (concurrent /enable calls tear down each other's containers).

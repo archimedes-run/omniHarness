@@ -34,6 +34,10 @@ class McpServerRow(Base):
     # deploy succeeds and is cleared on failure. The legacy ``approved``
     # boolean above is no longer read.
     approved_code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The code the stored test results (tools, hosts, scan verdict) are FOR.
+    # Only code whose hash equals this passed the scans and the sandbox; no
+    # other code may be approved on those results (#59 review, H1).
+    verified_code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     approval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     pending_approval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # JSON list of hostname strings the server is allowed to reach.

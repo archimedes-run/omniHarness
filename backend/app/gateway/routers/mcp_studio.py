@@ -429,15 +429,18 @@ async def get_approval_packet(server_id: str, request: Request) -> ApprovalPacke
     sha = server.get("code_sha256")
     if not source or not sha:
         raise HTTPException(status_code=409, detail="There is no code to review yet.")
-    record = await manager.get_status(server_id=server_id, user_id=user_id)
-    tools = server.get("tools_discovered") or record.tools_discovered or []
+    # #59 review H1: only code whose own tests passed is shown for approval,
+    # with ITS tools, and hosts read again from the code itself.
+    if server.get("verified_code_sha256") != sha:
+        raise HTTPException(status_code=409, detail="This code has not passed its sandbox tests yet; it can't be approved.")
+    tools = server.get("tools_discovered") or []
     token, ttl = manager.view_tokens.issue(server_id=server_id, user_id=user_id, code_sha256=sha)
     return ApprovalPacket(
         server_id=server_id,
         name=server["name"],
         code_sha256=sha,
         source_code=source,
-        egress_hosts=list(server.get("egress_hosts") or []),
+        egress_hosts=manager._extract_egress_hosts(source),
         tools=[ApprovalTool(name=t.get("name", "?"), description=(t.get("description") or "")[:300]) for t in tools],
         secret_names=list(server.get("detected_secrets") or []),
         view_token=token,

@@ -98,13 +98,6 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
                 from app.gateway.mcp_secrets import McpSecretsVault, make_vault_key
                 from app.gateway.mcp_server_manager import MCPServerManager
 
-                # #59: host bash would give the agent (and anything that
-                # injects into it) the reach generated code is denied. Host
-                # bash is being removed (security baseline): the key is refused
-                # when on, and, once removed, wherever it is still written.
-                sandbox_cfg = getattr(config, "sandbox", None)
-                if getattr(sandbox_cfg, "allow_host_bash", False) or "allow_host_bash" in (getattr(sandbox_cfg, "model_extra", None) or {}):
-                    raise RuntimeError("sandbox.allow_host_bash is not supported with the MCP builder (host bash is removed): delete it from config.yaml.")
                 vault = McpSecretsVault(make_vault_key(mcp_builder_config), sf)
                 app.state.mcp_secrets_vault = vault
                 app.state.mcp_server_manager = MCPServerManager(app.state.mcp_server_repo, vault, reconcile_on_start=mcp_builder_config.reconcile_on_start)

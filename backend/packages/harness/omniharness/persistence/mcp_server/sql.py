@@ -38,6 +38,7 @@ class McpServerRepository:
             "status": row.status,
             "detected_secrets": row.detected_secrets or [],
             "approved_code_sha256": row.approved_code_sha256,
+            "verified_code_sha256": row.verified_code_sha256,
             "approval": row.approval,
             "pending_approval": row.pending_approval,
             "egress_hosts": row.egress_hosts or [],
@@ -137,6 +138,8 @@ class McpServerRepository:
             if row is None or row.owner_id != user_id:
                 return False
             row.status = status
+            if status in ("failed", "testing"):
+                row.verified_code_sha256 = None  # nothing passed
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return True
@@ -148,6 +151,7 @@ class McpServerRepository:
             if row is None or row.owner_id != user_id:
                 return False
             if row.source_code != source_code:
+                row.verified_code_sha256 = None  # new code is untested code
                 # New code is never approved code: an approval that was turning
                 # on is dropped, and the legacy flag is cleared. The record of
                 # the approved version stays, so the approved container can keep
@@ -179,12 +183,21 @@ class McpServerRepository:
         test_results: list,
         last_verified_at: str | None,
         user_id: str,
+        tested_code_sha256: str | None = None,
+        egress_hosts: list[str] | None = None,
     ) -> bool:
-        """Persist sandbox test results so they survive backend restarts."""
+        """Persist sandbox test results so they survive backend restarts.
+
+        The results, hosts and verdict are stored together with the hash of
+        the code they are for; ``verified_code_sha256`` is that hash only when
+        the code passed (phase "verified"), else None."""
         async with self._sf() as session:
             row = await session.get(McpServerRow, server_id)
             if row is None or row.owner_id != user_id:
                 return False
+            row.verified_code_sha256 = tested_code_sha256 if phase == "verified" else None
+            if egress_hosts is not None:
+                row.egress_hosts = list(egress_hosts)
             row.status = phase
             row.tools_discovered = tools_discovered
             row.test_results = test_results
@@ -220,17 +233,6 @@ class McpServerRepository:
             row.approval = dict(pending)
             row.approved_code_sha256 = expected_sha256
             row.pending_approval = None
-            row.updated_at = datetime.now(UTC)
-            await session.commit()
-        return True
-
-    async def update_egress_hosts(self, server_id: str, hosts: list[str], *, user_id: str) -> bool:
-        """Persist the outbound hosts read from the stored code (never from a client)."""
-        async with self._sf() as session:
-            row = await session.get(McpServerRow, server_id)
-            if row is None or row.owner_id != user_id:
-                return False
-            row.egress_hosts = list(hosts)
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return True
