@@ -37,10 +37,23 @@ _KNOWN: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS_ACCESS_KEY_ID"),
     (re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"), "GOOGLE_API_KEY"),
 ]
+#: Credentials inside a URL: ``scheme://user:password@host``. The password is
+#: lifted (any length: database passwords are often short); the user is kept.
+_URL_USERINFO = re.compile(r"\b[A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]+:([^\s@/]+)@([A-Za-z0-9.\-]+)")
+#: ``Bearer <token>`` / ``Basic <b64>`` (an Authorization header in prose).
+_AUTH_SCHEME = re.compile(r"(?i)\b(Bearer|Basic)\s+([A-Za-z0-9._~+/\-=]{6,})")
+#: A password after a password word, however short: ``password is hunter2``,
+#: ``pwd=letmein``. The WHOLE non-space run is taken, so ``Tr0ub4dor&3x`` is
+#: lifted whole instead of leaving ``&3x`` behind.
+_PASSWORDISH = re.compile(r"(?i)\b(password|passwd|pwd|passcode|pin)\b\s*(?:is\b|[:=])\s*[\"']?([^\s\"']{4,})")
+#: Words that follow "password is" in ordinary prose, not values.
+_NOT_A_VALUE = {"required", "needed", "missing", "empty", "wrong", "incorrect", "invalid", "unknown", "none", "null", "stored", "hidden", "secret", "correct", "expired", "optional", "below", "above", "here", "there"}
+#: Trailing punctuation that ends a sentence, not a value.
+_TRAILING = ".,;:)]}!?"
 #: ``NAME=value`` / ``NAME: value`` with an env-style name: stored under NAME.
 _NAMED = re.compile(r"\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PAT))\s*[:=]\s*[\"']?([^\s\"',;]{4,})")
 #: ``token: value``, ``password is value``, ``api key value`` in prose.
-_WORDED = re.compile(r"(?i)\b(api[\s_-]?key|access[\s_-]?token|token|password|passwd|secret)\b\s*(?:[:=]|is)?\s*[\"']?([A-Za-z0-9_\-./+]{8,})")
+_WORDED = re.compile(r"(?i)\b(api[\s_-]?key|access[\s_-]?token|token|password|passwd|secret)\b\s*(?:[:=]|is)?\s*[\"']?([^\s\"']{8,})")
 #: Anything else long and random: 24+ characters mixing letters and digits.
 _OPAQUE = re.compile(r"(?<![A-Za-z0-9_\-])(?=[A-Za-z0-9_\-]{24,})(?=[^\s]*[0-9][^\s]*[0-9])(?=[^\s]*[A-Za-z])[A-Za-z0-9_\-]{24,}(?![A-Za-z0-9_\-])")
 
@@ -88,13 +101,42 @@ def extract_secrets(text: str) -> Extracted:
         return "".join(fn(p) + (kept[i] if i < len(kept) else "") for i, p in enumerate(pieces))
 
     def worded(m: re.Match[str]) -> str:
-        value = m.group(2)
+        value = m.group(2).rstrip(_TRAILING)
         if not re.search(r"[0-9]", value) and len(value) < 16:
             return m.group(0)  # an ordinary word ("token is required"), not a key
         word = re.sub(r"[\s\-]+", "_", m.group(1)).upper()
-        return m.group(0).replace(value, lift(value, word if word != "PASSWD" else "PASSWORD"))
+        return m.group(0).replace(value, lift(value, word if word != "PASSWD" else "PASSWORD"), 1)
 
-    out = outside(text, lambda t: _NAMED.sub(lambda m: m.group(0).replace(m.group(2), lift(m.group(2), m.group(1))), t))
+    def host_name(host: str) -> str:
+        return re.sub(r"[^A-Z0-9]+", "_", host.upper()).strip("_") + "_PASSWORD"
+
+    def url_userinfo(m: re.Match[str]) -> str:
+        value = m.group(1)
+        start, end = m.span(1)
+        return m.group(0)[: start - m.start()] + lift(value, host_name(m.group(2))) + m.group(0)[end - m.start() :]
+
+    def auth_scheme(m: re.Match[str]) -> str:
+        value = m.group(2).rstrip(_TRAILING)
+        if not value or len(value) < 6:
+            return m.group(0)
+        if value.isalpha() and (value.islower() or value.istitle()) and len(value) < 16:
+            return m.group(0)  # "the Bearer scheme": a word, not a token
+        name = "BEARER_TOKEN" if m.group(1).lower() == "bearer" else "BASIC_AUTH"
+        return m.group(0).replace(value, lift(value, name), 1)
+
+    def passwordish(m: re.Match[str]) -> str:
+        value = m.group(2).rstrip(_TRAILING)
+        if len(value) < 4 or value.lower() in _NOT_A_VALUE:
+            return m.group(0)
+        word = m.group(1).upper()
+        name = "PIN" if word == "PIN" else "PASSWORD"
+        head = m.group(0)[: m.start(2) - m.start()]
+        return head + lift(value, name) + m.group(0)[m.start(2) - m.start() + len(value) :]
+
+    out = outside(text, lambda t: _URL_USERINFO.sub(url_userinfo, t))
+    out = outside(out, lambda t: _AUTH_SCHEME.sub(auth_scheme, t))
+    out = outside(out, lambda t: _PASSWORDISH.sub(passwordish, t))
+    out = outside(out, lambda t: _NAMED.sub(lambda m: m.group(0).replace(m.group(2), lift(m.group(2), m.group(1))), t))
     for pattern, wanted in _KNOWN:
         out = outside(out, lambda t, p=pattern, w=wanted: p.sub(lambda m: lift(m.group(0), w), t))
     out = outside(out, lambda t: _WORDED.sub(worded, t))
