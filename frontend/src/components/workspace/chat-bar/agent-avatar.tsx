@@ -6,10 +6,13 @@ export function AgentAvatar({
   id,
   name,
   size = 26,
+  initials,
 }: {
   id: string;
   name: string;
   size?: number;
+  /** Overrides the initials taken from the name (the lead agent is "L"). */
+  initials?: string;
 }) {
   return (
     <span
@@ -20,7 +23,7 @@ export function AgentAvatar({
       )}
       style={{ width: size, height: size, fontSize: Math.round(size * 0.38) }}
     >
-      {avatarInitials(name)}
+      {initials ?? avatarInitials(name)}
     </span>
   );
 }

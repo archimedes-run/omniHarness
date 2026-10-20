@@ -35,6 +35,7 @@ import {
 } from "@/core/api/feedback";
 import { resolveArtifactURL } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
+import { holdBackVerdictLines } from "@/core/messages/agents";
 import {
   extractContentFromMessage,
   extractReasoningContentFromMessage,
@@ -349,7 +350,11 @@ function MessageContent_({
     <AIElementMessageContent className={className}>
       {filesList}
       <MarkdownContent
-        content={contentToDisplay}
+        // A line that is (or is becoming) a verdict on an action is held back
+        // while the reply streams: the finished reply has it replaced by the
+        // policy layer, and showing the raw tokens first reads as the
+        // assistant confirming for the user.
+        content={holdBackVerdictLines(contentToDisplay ?? "", !!isLoading)}
         isLoading={isLoading}
         // Math (katex) comes from the lazily loaded math plugin when the
         // message has any (core/streamdown/lazy-plugins.ts).

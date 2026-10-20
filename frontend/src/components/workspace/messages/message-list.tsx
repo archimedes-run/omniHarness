@@ -1,7 +1,7 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import type { BaseStream } from "@langchain/langgraph-sdk/react";
 import { ChevronUpIcon, Loader2Icon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
   Conversation,
@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { normalizeArtifactEntries } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
+import { agentOf, handoffsOf, isMultiAgent } from "@/core/messages/agents";
 import {
   buildTokenDebugSteps,
   type TokenUsageInlineMode,
@@ -35,6 +36,7 @@ import { ArtifactFileList } from "../artifacts/artifact-file-list";
 import { CopyButton } from "../copy-button";
 import { StreamingIndicator } from "../streaming-indicator";
 
+import { AgentHeader, HandoffLine } from "./agent-header";
 import { MarkdownContent } from "./markdown-content";
 import { MessageGroup } from "./message-group";
 import { MessageListItem } from "./message-list-item";
@@ -45,7 +47,11 @@ import {
 import { MessageListSkeleton } from "./skeleton";
 import { SubtaskCard } from "./subtask-card";
 
-export const MESSAGE_LIST_DEFAULT_PADDING_BOTTOM = 160;
+/** Clear space under the last message, so it can scroll above the chat bar.
+ * The bar is about 200 px tall since it gained its context chips row (it
+ * floats over the thread); 160 left the bottom of the last item, such as an
+ * approval card's buttons, under it with no way to scroll it into view. */
+export const MESSAGE_LIST_DEFAULT_PADDING_BOTTOM = 232;
 export const MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM = 80;
 
 const LOAD_MORE_HISTORY_THROTTLE_MS = 1200;
@@ -165,6 +171,7 @@ export function MessageList({
   loadMoreHistory,
   isHistoryLoading,
   footer,
+  afterGroup,
 }: {
   className?: string;
   threadId: string;
@@ -177,11 +184,15 @@ export function MessageList({
   /** Rendered after the last message, inside the conversation: where a
    * pending approval for this thread appears (Phase 2.5). */
   footer?: React.ReactNode;
+  /** Rendered after each group of messages: where a confirmation raised in
+   * that group appears, at the point it was raised. */
+  afterGroup?: (messages: Message[]) => React.ReactNode;
 }) {
   const { t } = useI18n();
   const updateSubtask = useUpdateSubtask();
   const messages = thread.messages;
   const groupedMessages = getMessageGroups(messages);
+  const multiAgent = isMultiAgent(messages);
   const turnUsageMessagesByGroupIndex =
     getAssistantTurnUsageMessages(groupedMessages);
   const tokenDebugSteps = useMemo(
@@ -262,6 +273,239 @@ export function MessageList({
     return <MessageListSkeleton />;
   }
 
+  const renderGroup = (
+    group: (typeof groupedMessages)[number],
+    groupIndex: number,
+  ): React.ReactNode => {
+    const groupKey = `${group.type}-${group.id ?? "group"}-${groupIndex}`;
+    const turnUsageMessages = turnUsageMessagesByGroupIndex[groupIndex];
+    const isStreamingGroup =
+      thread.isLoading && groupIndex === groupedMessages.length - 1;
+    const groupRehypePlugins = isStreamingGroup
+      ? [rehypeSplitWordsIntoSpans]
+      : [];
+
+    if (group.type === "human" || group.type === "assistant") {
+      return (
+        <div
+          key={groupKey}
+          className={cn(
+            "w-full",
+            group.type === "assistant" && "group/assistant-turn",
+          )}
+        >
+          {group.type === "assistant" && multiAgent && group.messages[0] && (
+            <AgentHeader agentId={agentOf(group.messages[0])} />
+          )}
+          {group.messages.map((msg, messageIndex) => {
+            return (
+              <MessageListItem
+                key={`${groupKey}-${msg.id ?? "message"}-${messageIndex}`}
+                message={msg}
+                isLoading={isStreamingGroup}
+                threadId={threadId}
+                showCopyButton={group.type !== "assistant"}
+                className={
+                  group.type === "assistant" && multiAgent
+                    ? "-mt-3 pl-[42px]" // under its header: aligned with the name, close below it
+                    : undefined
+                }
+              />
+            );
+          })}
+          {renderTokenUsage({
+            messages: group.messages,
+            turnUsageMessages,
+            isLoading: isStreamingGroup,
+          })}
+          {group.type === "assistant" &&
+            renderAssistantCopyButton(group.messages)}
+        </div>
+      );
+    } else if (group.type === "assistant:clarification") {
+      const message = group.messages[0];
+      if (message && hasContent(message)) {
+        return (
+          <div key={groupKey} className="w-full">
+            <MarkdownContent
+              content={extractContentFromMessage(message)}
+              isLoading={isStreamingGroup}
+              rehypePlugins={groupRehypePlugins}
+            />
+            {renderTokenUsage({
+              messages: group.messages,
+              turnUsageMessages,
+              isLoading: isStreamingGroup,
+            })}
+          </div>
+        );
+      }
+      return null;
+    } else if (group.type === "assistant:present-files") {
+      const files: string[] = [];
+      for (const message of group.messages) {
+        if (hasPresentFiles(message)) {
+          const presentFiles = extractPresentFilesFromMessage(message);
+          files.push(...presentFiles);
+        }
+      }
+      return (
+        <div className="w-full" key={groupKey}>
+          {group.messages[0] && hasContent(group.messages[0]) && (
+            <MarkdownContent
+              content={extractContentFromMessage(group.messages[0])}
+              isLoading={isStreamingGroup}
+              rehypePlugins={groupRehypePlugins}
+              className="mb-4"
+            />
+          )}
+          <ArtifactFileList
+            files={normalizeArtifactEntries(files)}
+            threadId={threadId}
+          />
+          {renderTokenUsage({
+            messages: group.messages,
+            turnUsageMessages,
+            isLoading: isStreamingGroup,
+          })}
+        </div>
+      );
+    } else if (group.type === "assistant:handoff") {
+      return (
+        <div key={groupKey} className="flex w-full flex-col gap-2">
+          {group.messages.flatMap(handoffsOf).map((handoff, index) => (
+            <HandoffLine key={`${groupKey}-${index}`} handoff={handoff} />
+          ))}
+        </div>
+      );
+    } else if (group.type === "assistant:subagent") {
+      const tasks = new Set<Subtask>();
+      for (const message of group.messages) {
+        if (message.type === "ai") {
+          for (const toolCall of message.tool_calls ?? []) {
+            if (toolCall.name === "task") {
+              const task: Subtask = {
+                id: toolCall.id!,
+                subagent_type: toolCall.args.subagent_type,
+                description: toolCall.args.description,
+                prompt: toolCall.args.prompt,
+                status: "in_progress",
+              };
+              updateSubtask(task);
+              tasks.add(task);
+            }
+          }
+        } else if (message.type === "tool") {
+          const taskId = message.tool_call_id;
+          if (taskId) {
+            const result = extractTextFromMessage(message);
+            if (result.startsWith("Task Succeeded. Result:")) {
+              updateSubtask({
+                id: taskId,
+                status: "completed",
+                result: result.split("Task Succeeded. Result:")[1]?.trim(),
+              });
+            } else if (result.startsWith("Task failed.")) {
+              updateSubtask({
+                id: taskId,
+                status: "failed",
+                error: result.split("Task failed.")[1]?.trim(),
+              });
+            } else if (result.startsWith("Task timed out")) {
+              updateSubtask({
+                id: taskId,
+                status: "failed",
+                error: result,
+              });
+            } else {
+              updateSubtask({
+                id: taskId,
+                status: "in_progress",
+              });
+            }
+          }
+        }
+      }
+
+      const results: React.ReactNode[] = group.messages
+        .flatMap(handoffsOf)
+        .map((handoff, index) => (
+          <HandoffLine key={`handoff-${index}`} handoff={handoff} />
+        ));
+      const subagentDebugMessageIds: string[] = [];
+      if (tasks.size > 0) {
+        results.push(
+          <div
+            key="subtask-count"
+            className="text-muted-foreground pt-2 text-sm font-normal"
+          >
+            {t.subtasks.executing(tasks.size)}
+          </div>,
+        );
+      }
+      for (const message of group.messages.filter(
+        (message) => message.type === "ai",
+      )) {
+        if (hasReasoning(message)) {
+          results.push(
+            <MessageGroup
+              key={"thinking-group-" + message.id}
+              messages={[message]}
+              isLoading={isStreamingGroup}
+              tokenDebugSteps={tokenDebugSteps.filter(
+                (step) => step.messageId === message.id,
+              )}
+              showTokenDebugSummaries={tokenUsageInlineMode === "step_debug"}
+            />,
+          );
+        } else if (message.id) {
+          subagentDebugMessageIds.push(message.id);
+        }
+        const taskIds = message.tool_calls
+          ?.filter((toolCall) => toolCall.name === "task")
+          .map((toolCall) => toolCall.id);
+        for (const taskId of taskIds ?? []) {
+          results.push(
+            <SubtaskCard
+              key={"task-group-" + taskId}
+              taskId={taskId!}
+              isLoading={isStreamingGroup}
+            />,
+          );
+        }
+      }
+      return (
+        <div key={groupKey} className="relative z-1 flex flex-col gap-2">
+          {results}
+          {renderTokenUsage({
+            messages: group.messages,
+            turnUsageMessages,
+            debugMessageIds: subagentDebugMessageIds,
+            isLoading: isStreamingGroup,
+          })}
+        </div>
+      );
+    }
+    return (
+      <div key={groupKey} className="w-full">
+        <MessageGroup
+          messages={group.messages}
+          isLoading={isStreamingGroup}
+          tokenDebugSteps={tokenDebugSteps.filter((step) =>
+            group.messages.some((message) => message.id === step.messageId),
+          )}
+          showTokenDebugSummaries={tokenUsageInlineMode === "step_debug"}
+        />
+        {renderTokenUsage({
+          messages: group.messages,
+          turnUsageMessages,
+          inlineDebug: false,
+          isLoading: isStreamingGroup,
+        })}
+      </div>
+    );
+  };
+
   return (
     <Conversation
       className={cn("flex size-full flex-col justify-center", className)}
@@ -272,221 +516,14 @@ export function MessageList({
           hasMore={hasMoreHistory}
           loadMore={loadMoreHistory}
         />
-        {groupedMessages.map((group, groupIndex) => {
-          const groupKey = `${group.type}-${group.id ?? "group"}-${groupIndex}`;
-          const turnUsageMessages = turnUsageMessagesByGroupIndex[groupIndex];
-          const isStreamingGroup =
-            thread.isLoading && groupIndex === groupedMessages.length - 1;
-          const groupRehypePlugins = isStreamingGroup
-            ? [rehypeSplitWordsIntoSpans]
-            : [];
-
-          if (group.type === "human" || group.type === "assistant") {
-            return (
-              <div
-                key={groupKey}
-                className={cn(
-                  "w-full",
-                  group.type === "assistant" && "group/assistant-turn",
-                )}
-              >
-                {group.messages.map((msg, messageIndex) => {
-                  return (
-                    <MessageListItem
-                      key={`${groupKey}-${msg.id ?? "message"}-${messageIndex}`}
-                      message={msg}
-                      isLoading={isStreamingGroup}
-                      threadId={threadId}
-                      showCopyButton={group.type !== "assistant"}
-                    />
-                  );
-                })}
-                {renderTokenUsage({
-                  messages: group.messages,
-                  turnUsageMessages,
-                  isLoading: isStreamingGroup,
-                })}
-                {group.type === "assistant" &&
-                  renderAssistantCopyButton(group.messages)}
-              </div>
-            );
-          } else if (group.type === "assistant:clarification") {
-            const message = group.messages[0];
-            if (message && hasContent(message)) {
-              return (
-                <div key={groupKey} className="w-full">
-                  <MarkdownContent
-                    content={extractContentFromMessage(message)}
-                    isLoading={isStreamingGroup}
-                    rehypePlugins={groupRehypePlugins}
-                  />
-                  {renderTokenUsage({
-                    messages: group.messages,
-                    turnUsageMessages,
-                    isLoading: isStreamingGroup,
-                  })}
-                </div>
-              );
-            }
-            return null;
-          } else if (group.type === "assistant:present-files") {
-            const files: string[] = [];
-            for (const message of group.messages) {
-              if (hasPresentFiles(message)) {
-                const presentFiles = extractPresentFilesFromMessage(message);
-                files.push(...presentFiles);
-              }
-            }
-            return (
-              <div className="w-full" key={groupKey}>
-                {group.messages[0] && hasContent(group.messages[0]) && (
-                  <MarkdownContent
-                    content={extractContentFromMessage(group.messages[0])}
-                    isLoading={isStreamingGroup}
-                    rehypePlugins={groupRehypePlugins}
-                    className="mb-4"
-                  />
-                )}
-                <ArtifactFileList
-                  files={normalizeArtifactEntries(files)}
-                  threadId={threadId}
-                />
-                {renderTokenUsage({
-                  messages: group.messages,
-                  turnUsageMessages,
-                  isLoading: isStreamingGroup,
-                })}
-              </div>
-            );
-          } else if (group.type === "assistant:subagent") {
-            const tasks = new Set<Subtask>();
-            for (const message of group.messages) {
-              if (message.type === "ai") {
-                for (const toolCall of message.tool_calls ?? []) {
-                  if (toolCall.name === "task") {
-                    const task: Subtask = {
-                      id: toolCall.id!,
-                      subagent_type: toolCall.args.subagent_type,
-                      description: toolCall.args.description,
-                      prompt: toolCall.args.prompt,
-                      status: "in_progress",
-                    };
-                    updateSubtask(task);
-                    tasks.add(task);
-                  }
-                }
-              } else if (message.type === "tool") {
-                const taskId = message.tool_call_id;
-                if (taskId) {
-                  const result = extractTextFromMessage(message);
-                  if (result.startsWith("Task Succeeded. Result:")) {
-                    updateSubtask({
-                      id: taskId,
-                      status: "completed",
-                      result: result
-                        .split("Task Succeeded. Result:")[1]
-                        ?.trim(),
-                    });
-                  } else if (result.startsWith("Task failed.")) {
-                    updateSubtask({
-                      id: taskId,
-                      status: "failed",
-                      error: result.split("Task failed.")[1]?.trim(),
-                    });
-                  } else if (result.startsWith("Task timed out")) {
-                    updateSubtask({
-                      id: taskId,
-                      status: "failed",
-                      error: result,
-                    });
-                  } else {
-                    updateSubtask({
-                      id: taskId,
-                      status: "in_progress",
-                    });
-                  }
-                }
-              }
-            }
-
-            const results: React.ReactNode[] = [];
-            const subagentDebugMessageIds: string[] = [];
-            if (tasks.size > 0) {
-              results.push(
-                <div
-                  key="subtask-count"
-                  className="text-muted-foreground pt-2 text-sm font-normal"
-                >
-                  {t.subtasks.executing(tasks.size)}
-                </div>,
-              );
-            }
-            for (const message of group.messages.filter(
-              (message) => message.type === "ai",
-            )) {
-              if (hasReasoning(message)) {
-                results.push(
-                  <MessageGroup
-                    key={"thinking-group-" + message.id}
-                    messages={[message]}
-                    isLoading={isStreamingGroup}
-                    tokenDebugSteps={tokenDebugSteps.filter(
-                      (step) => step.messageId === message.id,
-                    )}
-                    showTokenDebugSummaries={
-                      tokenUsageInlineMode === "step_debug"
-                    }
-                  />,
-                );
-              } else if (message.id) {
-                subagentDebugMessageIds.push(message.id);
-              }
-              const taskIds = message.tool_calls
-                ?.filter((toolCall) => toolCall.name === "task")
-                .map((toolCall) => toolCall.id);
-              for (const taskId of taskIds ?? []) {
-                results.push(
-                  <SubtaskCard
-                    key={"task-group-" + taskId}
-                    taskId={taskId!}
-                    isLoading={isStreamingGroup}
-                  />,
-                );
-              }
-            }
-            return (
-              <div key={groupKey} className="relative z-1 flex flex-col gap-2">
-                {results}
-                {renderTokenUsage({
-                  messages: group.messages,
-                  turnUsageMessages,
-                  debugMessageIds: subagentDebugMessageIds,
-                  isLoading: isStreamingGroup,
-                })}
-              </div>
-            );
-          }
-          return (
-            <div key={groupKey} className="w-full">
-              <MessageGroup
-                messages={group.messages}
-                isLoading={isStreamingGroup}
-                tokenDebugSteps={tokenDebugSteps.filter((step) =>
-                  group.messages.some(
-                    (message) => message.id === step.messageId,
-                  ),
-                )}
-                showTokenDebugSummaries={tokenUsageInlineMode === "step_debug"}
-              />
-              {renderTokenUsage({
-                messages: group.messages,
-                turnUsageMessages,
-                inlineDebug: false,
-                isLoading: isStreamingGroup,
-              })}
-            </div>
-          );
-        })}
+        {groupedMessages.map((group, groupIndex) => (
+          <Fragment
+            key={`after-${group.type}-${group.id ?? "group"}-${groupIndex}`}
+          >
+            {renderGroup(group, groupIndex)}
+            {afterGroup?.(group.messages)}
+          </Fragment>
+        ))}
         {thread.isLoading && <StreamingIndicator className="my-4" />}
         {footer}
         <div style={{ height: `${paddingBottom}px` }} />
