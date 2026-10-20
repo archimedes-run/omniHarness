@@ -46,9 +46,12 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { getAPIClient } from "@/core/api";
 import { fetch as apiFetch } from "@/core/api/fetcher";
+import { revealSecret } from "@/core/mcp-studio/reveal";
 import { streamdownPlugins } from "@/core/streamdown";
 import type { AgentThreadState } from "@/core/threads/types";
 import { cn } from "@/lib/utils";
+
+import { RevealSecretDialog } from "./reveal-secret-dialog";
 
 // ── CodeMirror dark theme ──────────────────────────────────────────────────────
 const cmDarkTheme = monokaiInit({
@@ -323,15 +326,6 @@ async function apiGetSecretsInfo(
   return r.json() as Promise<{
     keys: { key_name: string; key_hint: string | null }[];
   }>;
-}
-
-async function apiRevealSecrets(
-  id: string,
-): Promise<{ values: Record<string, string> }> {
-  const r = await apiFetch(`/api/mcp-studio/servers/${id}/secrets/reveal`);
-  if (!r.ok)
-    throw new Error(`${r.status}: ${await r.text().catch(() => r.statusText)}`);
-  return r.json() as Promise<{ values: Record<string, string> }>;
 }
 
 async function apiDeploy(id: string): Promise<McpBuildStatus> {
@@ -1253,7 +1247,8 @@ function SecretRow({
   const isStored = hint !== undefined;
   const [showReveal, setShowReveal] = useState(false);
   const [revealed, setRevealed] = useState<string | null>(null);
-  const [revealing, setRevealing] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const eyeRef = useRef<HTMLButtonElement>(null);
 
   // When user starts typing a new value, hide any revealed value
   const handleChange = (v: string) => {
@@ -1276,32 +1271,38 @@ function SecretRow({
       setShowReveal(false);
       return;
     }
-    // Reveal from server
+    // Reveal from server, after the password is re-entered
     if (!isStored) return;
-    setRevealing(true);
+    setAsking(true);
+  };
+
+  const reveal = async (password: string): Promise<string | null> => {
     try {
-      const resp = await apiRevealSecrets(serverId);
-      const plaintext = resp.values[keyName];
-      if (plaintext !== undefined) {
-        setRevealed(plaintext);
-        setShowReveal(true);
-      }
+      const result = await revealSecret(serverId, keyName, password);
+      if (!result.ok) return result.message;
+      setRevealed(result.value);
+      setShowReveal(true);
+      return null;
     } catch {
-      // silently ignore; user can try again
-    } finally {
-      setRevealing(false);
+      return "Could not reach the server. Try again.";
     }
   };
 
   // Determine what to display in the input
   const displayValue = revealed ?? value;
+  const eyeLabel =
+    showReveal || revealed !== null
+      ? "Hide"
+      : isStored && !value
+        ? "Reveal stored value"
+        : "Show";
   const inputType = showReveal ? "text" : "password";
 
   // Placeholder: show hint if stored, otherwise prompt
   let placeholder = "Enter value…";
   if (isStored) {
     const tail = hint ?? "";
-    placeholder = `•••••${tail} — click 🔓 to reveal or type to update`;
+    placeholder = `•••••${tail} — reveal with the eye, or type to update`;
   }
 
   return (
@@ -1329,29 +1330,28 @@ function SecretRow({
           className="border-border bg-card text-foreground placeholder:text-muted-foreground focus:border-highlight flex-1 rounded-lg border px-2 py-1.5 font-mono text-xs focus:shadow-[0_0_0_2px_rgba(91,87,224,0.15)] focus:outline-none"
         />
         <button
+          ref={eyeRef}
           type="button"
           onClick={() => void handleEye()}
-          disabled={revealing || (!isStored && !value)}
+          disabled={!isStored && !value}
           className="text-muted-foreground hover:bg-muted hover:text-foreground rounded p-1 disabled:opacity-30"
-          title={
-            revealing
-              ? "Revealing…"
-              : showReveal || revealed !== null
-                ? "Hide"
-                : isStored
-                  ? "Reveal stored value"
-                  : "Show"
-          }
+          title={eyeLabel}
+          aria-label={`${eyeLabel}: ${keyName}`}
         >
-          {revealing ? (
-            <Loader2Icon className="size-3.5 animate-spin" />
-          ) : showReveal || revealed !== null ? (
+          {showReveal || revealed !== null ? (
             <EyeOffIcon className="size-3.5" />
           ) : (
             <EyeIcon className="size-3.5" />
           )}
         </button>
       </div>
+      <RevealSecretDialog
+        open={asking}
+        keyName={keyName}
+        onOpenChange={setAsking}
+        onReveal={reveal}
+        returnFocusTo={eyeRef}
+      />
     </div>
   );
 }

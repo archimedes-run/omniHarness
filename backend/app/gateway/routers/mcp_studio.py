@@ -7,14 +7,18 @@ POST /api/mcp-studio/servers                        create server + kick off age
 GET  /api/mcp-studio/servers/{id}                   server detail (includes phase, approved)
 GET  /api/mcp-studio/servers/{id}/build             build status snapshot
 PUT  /api/mcp-studio/servers/{id}/secrets           write secrets (write-only)
+POST /api/mcp-studio/servers/{id}/secrets/reveal    one stored value, owner only, password re-entered
 POST /api/mcp-studio/servers/{id}/test              trigger test pipeline
 POST /api/mcp-studio/servers/{id}/approve           mark server approved
 POST /api/mcp-studio/servers/{id}/register          register approved server for agent use
-POST /api/mcp-studio/servers/{id}/stop              stop running server
+POST /api/mcp-studio/servers/{id}/stop              stop and remove the server's container
+DELETE /api/mcp-studio/servers/{id}                 remove container, config entry, secrets, record
 
 Security invariants
 -------------------
-* All secrets endpoints accept but never return secret values.
+* Secrets endpoints never return secret values, except POST .../secrets/reveal:
+  one key, to the server's owner, after the owner's password is re-entered.
+  Every reveal call is logged with the key NAME and outcome, never the value.
 * owner_id passed to the vault / manager is always the verified requesting user,
   never server.owner_id read back from the row.
 * test / approve / register / stop each call _load_and_verify as their first action.
@@ -23,6 +27,8 @@ Security invariants
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import uuid
 from typing import Any
 
@@ -32,6 +38,7 @@ from pydantic import BaseModel, Field
 from app.gateway.authz import require_permission
 from app.gateway.deps import (
     get_config,
+    get_local_provider,
     get_mcp_secrets_vault,
     get_mcp_server_manager,
     get_mcp_server_repo,
@@ -39,6 +46,7 @@ from app.gateway.deps import (
     get_run_manager,
     get_stream_bridge,
 )
+from app.gateway.mcp_server_manager import McpDeployInProgressError, McpTeardownError
 from app.gateway.services import (
     build_run_config,
     normalize_input,
@@ -46,6 +54,8 @@ from app.gateway.services import (
     resolve_agent_factory,
 )
 from omniharness.runtime import run_agent
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mcp-studio", tags=["mcp-studio"])
 
@@ -141,6 +151,11 @@ class McpSecretsInfoItem(BaseModel):
 
 class McpSecretsInfoResponse(BaseModel):
     keys: list[McpSecretsInfoItem]
+
+
+class McpSecretsRevealRequest(BaseModel):
+    key_name: str = Field(..., min_length=1, max_length=256)
+    password: str = Field(..., min_length=1, max_length=1024, description="The caller's own account password, re-entered.")
 
 
 class McpSecretsRevealResponse(BaseModel):
@@ -414,30 +429,90 @@ async def get_mcp_secrets_info(server_id: str, request: Request) -> McpSecretsIn
 
 
 # ---------------------------------------------------------------------------
-# GET /servers/{id}/secrets/reveal
+# POST /servers/{id}/secrets/reveal
 # ---------------------------------------------------------------------------
 
+# Wrong-password lockout for reveal, per user: a stolen session cookie must not
+# become a password oracle. Same numbers as the login lockout. Per process.
+_REVEAL_MAX_FAILURES = 5
+_REVEAL_LOCKOUT_SECONDS = 300
+_reveal_failures: dict[str, tuple[int, float]] = {}
 
-@router.get("/servers/{server_id}/secrets/reveal", response_model=McpSecretsRevealResponse)
+
+def _reveal_locked(user_id: str) -> bool:
+    count, lock_until = _reveal_failures.get(user_id, (0, 0.0))
+    if count < _REVEAL_MAX_FAILURES:
+        return False
+    if time.time() < lock_until:
+        return True
+    _reveal_failures.pop(user_id, None)
+    return False
+
+
+def _record_reveal_failure(user_id: str) -> None:
+    count = _reveal_failures.get(user_id, (0, 0.0))[0] + 1
+    lock_until = time.time() + _REVEAL_LOCKOUT_SECONDS if count >= _REVEAL_MAX_FAILURES else 0.0
+    _reveal_failures[user_id] = (count, lock_until)
+
+
+def _audit_reveal(user_id: str, server_id: str, key_name: str, outcome: str) -> None:
+    # The key NAME and the outcome only. The value never reaches a log.
+    log = logger.info if outcome == "revealed" else logger.warning
+    log("mcp secret reveal: user=%s server=%s key=%s outcome=%s", user_id, server_id, key_name, outcome)
+
+
+@router.post("/servers/{server_id}/secrets/reveal", response_model=McpSecretsRevealResponse)
 @require_permission("threads", "write")
-async def reveal_mcp_secrets(server_id: str, request: Request) -> McpSecretsRevealResponse:
-    """Decrypt and return all secrets for the authenticated owner.
+async def reveal_mcp_secret(server_id: str, body: McpSecretsRevealRequest, request: Request) -> McpSecretsRevealResponse:
+    """Decrypt one stored secret for the server's owner, after a password re-entry.
 
-    Requires write permission (same level as storing secrets). The caller is the
-    human owner who stored the values; this endpoint lets them verify what is
-    stored. Returned values MUST NOT be forwarded to agent or model context.
+    * Owner only: another account gets 404, the same as a missing server, so
+      the call does not confirm that the server exists.
+    * The caller's password travels in the JSON body (never the URL) and is
+      checked with the account's password hasher. Five wrong passwords lock
+      reveal for that account for five minutes (429).
+    * Accounts with no password (OAuth sign-in) cannot reveal; they can type
+      a new value instead.
+    * Every call is logged with user, server, key name and outcome.
+
+    Returned values MUST NOT be forwarded to agent or model context.
     """
     _check_flag(request)
     user_id = _get_user_id(request)
+    key_name = body.key_name
 
-    repo = get_mcp_server_repo(request)
-    server = await repo.get(server_id)
+    if _reveal_locked(user_id):
+        _audit_reveal(user_id, server_id, key_name, "locked_out")
+        raise HTTPException(status_code=429, detail="Too many wrong passwords. Try again in a few minutes.")
+
+    # Explicit owner scope: a server someone else owns reads as not found.
+    server = await get_mcp_server_repo(request).get(server_id, user_id=user_id)
     if server is None:
+        _audit_reveal(user_id, server_id, key_name, "not_found")
         raise HTTPException(status_code=404, detail="MCP server not found")
 
-    vault = get_mcp_secrets_vault(request)
-    values = await vault.reveal(server_id=server_id, owner_id=user_id)
-    return McpSecretsRevealResponse(values=values)
+    from app.gateway.auth.password import verify_password_async
+
+    user = await get_local_provider().get_user(user_id)
+    if user is None or user.password_hash is None:
+        _audit_reveal(user_id, server_id, key_name, "no_password")
+        raise HTTPException(
+            status_code=400,
+            detail="This account signs in without a password, so stored values cannot be revealed. Type a new value to replace it.",
+        )
+    # 403, not 401: the session is valid, and the UI treats 401 as signed out.
+    if not await verify_password_async(body.password, user.password_hash):
+        _record_reveal_failure(user_id)
+        _audit_reveal(user_id, server_id, key_name, "wrong_password")
+        raise HTTPException(status_code=403, detail="Password is incorrect.")
+    _reveal_failures.pop(user_id, None)
+
+    value = await get_mcp_secrets_vault(request).reveal(server_id=server_id, owner_id=user_id, key_name=key_name)
+    if value is None:
+        _audit_reveal(user_id, server_id, key_name, "not_stored")
+        raise HTTPException(status_code=404, detail=f"No stored value for {key_name}")
+    _audit_reveal(user_id, server_id, key_name, "revealed")
+    return McpSecretsRevealResponse(values={key_name: value})
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +612,10 @@ async def stop_mcp_server(server_id: str, request: Request) -> McpServerResponse
         record = await manager.stop(server_id=server_id, user_id=user_id)
     except PermissionError:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    except McpDeployInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except McpTeardownError as exc:
+        raise HTTPException(status_code=502, detail=f"The server was not stopped: {exc}") from exc
 
     repo = get_mcp_server_repo(request)
     server = await repo.get(server_id)
@@ -603,6 +682,10 @@ async def undeploy_mcp_server(server_id: str, request: Request) -> McpBuildStatu
         record = await manager.undeploy(server_id=server_id, user_id=user_id)
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except McpDeployInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except McpTeardownError as exc:
+        raise HTTPException(status_code=502, detail=f"The server was not stopped: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -654,24 +737,31 @@ async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResp
 @router.delete("/servers/{server_id}", status_code=204)
 @require_permission("threads", "write")
 async def delete_mcp_server(server_id: str, request: Request) -> None:
+    """Delete a server and everything it left running or stored.
+
+    In order: stop and remove its container, drop its extensions_config entry
+    (both via ``manager.stop``), delete its secrets, then its record. If the
+    container or config entry cannot be removed, nothing is deleted and the
+    call fails, so the server stays listed and the delete can be retried.
+    """
     _check_flag(request)
     user_id = _get_user_id(request)
     repo = get_mcp_server_repo(request)
+    manager = get_mcp_server_manager(request)
 
-    # Best-effort: stop the server if it is running.
-    manager = getattr(request.app.state, "mcp_server_manager", None)
-    if manager is not None:
-        try:
-            await manager.stop(server_id=server_id, user_id=user_id)
-        except Exception:
-            pass
-        # Remove the in-memory record regardless of stop outcome.
-        manager._records.pop(server_id, None)
+    try:
+        await manager.stop(server_id=server_id, user_id=user_id)
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    except McpDeployInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except McpTeardownError as exc:
+        raise HTTPException(status_code=502, detail=f"The server was not deleted: {exc}") from exc
 
+    # Secrets before the record: if the record delete then fails, the server is
+    # still listed (retryable) rather than gone with its secrets orphaned.
+    await get_mcp_secrets_vault(request).delete_all_for_server(server_id=server_id, owner_id=user_id)
     deleted = await repo.delete(server_id, user_id=user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    # A deleted server's secrets go with it. They were left in the vault,
-    # encrypted but orphaned, and a server later created with the same id
-    # would have inherited them.
-    await get_mcp_secrets_vault(request).delete_all_for_server(server_id=server_id, owner_id=user_id)
+    manager._records.pop(server_id, None)
