@@ -48,10 +48,3 @@ def is_synthetic_turn(runtime_context: dict | None) -> bool:
     if not runtime_context:
         return False
     return runtime_context.get(PROVENANCE_KEY) == SYNTHETIC
-
-
-def firing_rule(runtime_context: dict | None) -> str | None:
-    """Which rule injected this turn, when one did. For the audit trail."""
-    if not runtime_context:
-        return None
-    return runtime_context.get(RULE_KEY)

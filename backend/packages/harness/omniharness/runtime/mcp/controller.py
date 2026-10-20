@@ -36,10 +36,6 @@ class MCPBuildController(Protocol):
     """Protocol the app layer implements so the harness can trigger MCP builds
     without a direct dependency on app.gateway."""
 
-    async def request_build(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
-        """Enqueue a build for *server_id*. Non-raising on scheduling success."""
-        ...
-
     async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
         """Run scanner + secrets check + egress validation. No execution in Phase 2."""
         ...

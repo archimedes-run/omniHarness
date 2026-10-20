@@ -1,7 +1,7 @@
 """Tests for app.gateway.mcp_secrets.McpSecretsVault.
 
 All tests use an in-memory SQLite database — no gateway process, no Fernet key file.
-Secrets are never returned to the caller; list_key_names() returns names only.
+Secrets are never returned to the caller; tests read the stored key names straight from the table.
 """
 
 from __future__ import annotations
@@ -29,6 +29,17 @@ async def _make_vault():
 
 
 # ---------------------------------------------------------------------------
+async def _names(vault, *, server_id: str, owner_id: str) -> list[str]:
+    """The stored key names, read from the table (the vault exposes none)."""
+    from sqlalchemy import select
+
+    from omniharness.persistence.mcp_secrets.model import McpSecretRow
+
+    async with vault._sf() as session:
+        rows = await session.execute(select(McpSecretRow.key_name).where(McpSecretRow.server_id == server_id, McpSecretRow.owner_id == owner_id).order_by(McpSecretRow.key_name))
+        return list(rows.scalars())
+
+
 # store / list_key_names
 # ---------------------------------------------------------------------------
 
@@ -37,7 +48,7 @@ async def _make_vault():
 async def test_store_and_list_key_names() -> None:
     vault, engine = await _make_vault()
     await vault.store(server_id="srv1", owner_id="user_a", key_name="API_KEY", plaintext_value="super-secret")
-    names = await vault.list_key_names(server_id="srv1", owner_id="user_a")
+    names = await _names(vault, server_id="srv1", owner_id="user_a")
     assert names == ["API_KEY"]
     await engine.dispose()
 
@@ -46,7 +57,7 @@ async def test_store_and_list_key_names() -> None:
 async def test_list_key_names_never_returns_plaintext() -> None:
     vault, engine = await _make_vault()
     await vault.store(server_id="srv1", owner_id="user_a", key_name="SECRET", plaintext_value="hunter2")
-    names = await vault.list_key_names(server_id="srv1", owner_id="user_a")
+    names = await _names(vault, server_id="srv1", owner_id="user_a")
     assert "hunter2" not in str(names)
     assert names == ["SECRET"]
     await engine.dispose()
@@ -57,7 +68,7 @@ async def test_store_upserts_on_duplicate_key() -> None:
     vault, engine = await _make_vault()
     await vault.store(server_id="srv1", owner_id="user_a", key_name="TOKEN", plaintext_value="v1")
     await vault.store(server_id="srv1", owner_id="user_a", key_name="TOKEN", plaintext_value="v2")
-    names = await vault.list_key_names(server_id="srv1", owner_id="user_a")
+    names = await _names(vault, server_id="srv1", owner_id="user_a")
     assert names.count("TOKEN") == 1  # upsert, not insert-duplicate
     await engine.dispose()
 
@@ -71,7 +82,7 @@ async def test_store_upserts_on_duplicate_key() -> None:
 async def test_cross_user_cannot_list_other_users_keys() -> None:
     vault, engine = await _make_vault()
     await vault.store(server_id="srv1", owner_id="user_a", key_name="API_KEY", plaintext_value="secret-a")
-    names_b = await vault.list_key_names(server_id="srv1", owner_id="user_b")
+    names_b = await _names(vault, server_id="srv1", owner_id="user_b")
     assert names_b == []
     await engine.dispose()
 
@@ -96,7 +107,7 @@ async def test_delete_removes_key() -> None:
     await vault.store(server_id="srv1", owner_id="user_a", key_name="TO_DELETE", plaintext_value="x")
     deleted = await vault.delete(server_id="srv1", owner_id="user_a", key_name="TO_DELETE")
     assert deleted is True
-    names = await vault.list_key_names(server_id="srv1", owner_id="user_a")
+    names = await _names(vault, server_id="srv1", owner_id="user_a")
     assert "TO_DELETE" not in names
     await engine.dispose()
 
@@ -116,7 +127,7 @@ async def test_delete_all_for_server() -> None:
     await vault.store(server_id="srv1", owner_id="user_a", key_name="B", plaintext_value="2")
     count = await vault.delete_all_for_server(server_id="srv1", owner_id="user_a")
     assert count == 2
-    assert await vault.list_key_names(server_id="srv1", owner_id="user_a") == []
+    assert await _names(vault, server_id="srv1", owner_id="user_a") == []
     await engine.dispose()
 
 

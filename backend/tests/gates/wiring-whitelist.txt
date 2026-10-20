@@ -3,38 +3,16 @@
 # for something that IS reached fails as stale. 'UNWIRED' entries are real orphans, listed in
 # ROADMAP-FOLLOWUPS for wire-or-delete; the rest are public API or framework-loaded by design.
 
-app.channels.manager:register_inbound_file_reader  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.channels.message_bus:MessageBus.inbound_queue  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.channels.store:ChannelStore.remove  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 app.gateway.auth.local_provider:LocalAuthProvider.count_users  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.local_provider:LocalAuthProvider.get_user_by_oauth  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.repositories.base:UserRepository.count_users  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.repositories.base:UserRepository.get_user_by_oauth  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.repositories.sqlite:SQLiteUserRepository.count_users  # auth repository interface for OAuth and user counting, not built yet; no production caller
 app.gateway.auth.repositories.sqlite:SQLiteUserRepository.get_user_by_oauth  # auth repository interface for OAuth and user counting, not built yet; no production caller
-app.gateway.authz:require_auth  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.composio_client:ComposioClient.get_mcp_url  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.composio_client:ComposioClient.list_connections  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.csrf_middleware:get_csrf_token  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.internal_auth:internal_auth_is_shared  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.langgraph_auth:add_owner_filter  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.mcp_build_controller_adapter:GatewayMCPBuildController.request_build  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.mcp_secrets:McpSecretsVault.delete_all_for_server  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.gateway.mcp_secrets:McpSecretsVault.list_key_names  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.confirm:restate  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.explain:render  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.lineage:latest_user_turn  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.models:PolicyDecision.explain  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.provenance:firing_rule  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.trigger_engine.sources.calendar:CalendarSource  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.trigger_engine.sources.calendar:DEFAULT_HORIZON  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.trigger_engine.sources.completion:CompletionSource  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.agents.lead_agent.prompt:clear_skills_system_prompt_cache  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.agents.lead_agent.prompt:warm_enabled_skills_cache  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.agents.memory.queue:MemoryUpdateQueue.flush_nowait  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.agents.memory.queue:MemoryUpdateQueue.is_processing  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.agents.memory.queue:MemoryUpdateQueue.pending_count  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.agents.memory.updater:MemoryUpdater.aupdate_memory  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
+app.gateway.langgraph_auth:add_owner_filter  # framework-loaded: LangGraph server registers it via langgraph.json auth.path (@auth.on); no Python caller by design
+app.trigger_engine.sources.calendar:CalendarSource  # UNWIRED, wire in Feature 005: calendar evidence and the Today view (upcoming meetings, pre-meeting brief automations) (specs/005-project-ledger/plan-inputs.md)
+app.trigger_engine.sources.calendar:DEFAULT_HORIZON  # UNWIRED, wire in Feature 005: goes with CalendarSource (specs/005-project-ledger/plan-inputs.md)
+app.trigger_engine.sources.completion:CompletionSource  # UNWIRED, wire in Feature 005: fires on a ledger task or workflow run completing (specs/005-project-ledger/plan-inputs.md)
 omniharness.client:OmniHarnessClient.clear_memory  # public API of the embedded Python client (README 'Embedded Python Client'); its callers are library users, not the gateway
 omniharness.client:OmniHarnessClient.create_memory_fact  # public API of the embedded Python client (README 'Embedded Python Client'); its callers are library users, not the gateway
 omniharness.client:OmniHarnessClient.delete_upload  # public API of the embedded Python client (README 'Embedded Python Client'); its callers are library users, not the gateway
@@ -92,14 +70,10 @@ omniharness.models.patched_deepseek:PatchedChatDeepSeek.lc_secrets  # model prov
 omniharness.models.patched_minimax:PatchedChatMiniMax  # model provider, loaded by a `use:` path in a user's config.yaml (no shipped config names it)
 omniharness.models.patched_openai:PatchedChatOpenAI  # model provider, loaded by a `use:` path in a user's config.yaml (no shipped config names it)
 omniharness.models.vllm_provider:VllmChatModel  # model provider, loaded by a `use:` path in a user's config.yaml (no shipped config names it)
-omniharness.persistence.composio_connections.sql:ComposioConnectionRepository.mark_active  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 omniharness.persistence.run.sql:RunRepository.list_pending  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.platform.events:PlatformEvent.from_row  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.platform.idempotency:compute_idempotency_key  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.platform.idempotency:stable_hash  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.runtime.converters:langchain_messages_to_openai  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.runtime.converters:langchain_to_openai_completion  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.runtime.converters:langchain_to_openai_message  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
+omniharness.platform.events:PlatformEvent.from_row  # UNWIRED, wire in Feature 005: workflow-run evidence is read back from persisted run events (specs/005-project-ledger/plan-inputs.md)
+omniharness.platform.idempotency:compute_idempotency_key  # UNWIRED, wire in Feature 005: scheduled automations created from chat must not run twice for one trigger (specs/005-project-ledger/plan-inputs.md)
+omniharness.platform.idempotency:stable_hash  # UNWIRED, wire in Feature 005: goes with compute_idempotency_key (specs/005-project-ledger/plan-inputs.md)
 omniharness.runtime.events.store.base:RunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.base:RunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.db:DbRunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
@@ -108,26 +82,17 @@ omniharness.runtime.events.store.jsonl:JsonlRunEventStore.count_messages  # stor
 omniharness.runtime.events.store.jsonl:JsonlRunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.memory:MemoryRunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.memory:MemoryRunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.runtime.mcp.controller:MCPBuildController.request_build  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.runtime.runs.manager:RunManager.has_inflight  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 omniharness.runtime.runs.store.base:RunStore.list_pending  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.runs.store.memory:MemoryRunStore.list_pending  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.runtime.user_context:require_current_user  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 omniharness.sandbox.exceptions:SandboxCommandError  # sandbox exception type in the harness's public API; raised by no current provider
 omniharness.sandbox.exceptions:SandboxFileNotFoundError  # sandbox exception type in the harness's public API; raised by no current provider
 omniharness.sandbox.exceptions:SandboxPermissionError  # sandbox exception type in the harness's public API; raised by no current provider
 omniharness.sandbox.sandbox_provider:reset_sandbox_provider  # sandbox provider set/reset/shutdown hook for embedders and tests
 omniharness.sandbox.sandbox_provider:set_sandbox_provider  # sandbox provider set/reset/shutdown hook for embedders and tests
 omniharness.sandbox.sandbox_provider:shutdown_sandbox_provider  # sandbox provider set/reset/shutdown hook for embedders and tests
-omniharness.sandbox.tools:sandbox_from_runtime  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.skills.storage.skill_storage:SkillStorage.get_container_root  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.skills.storage.skill_storage:SkillStorage.install_skill_from_archive  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.skills.tool_policy:NamedTool  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.subagents.executor:list_background_tasks  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-omniharness.utils.readability:Article.to_message  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-session_watcher.discovery:Discovery.is_sticky  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-session_watcher.record_source:RecordStats.drift_signals  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-session_watcher.registry:SessionRegistry.is_empty  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-session_watcher.registry:SessionRegistry.is_observable  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-session_watcher.reply:observe_only_notice  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-session_watcher.summarize.on_demand_model:OnDemandModelSummarizer  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
+omniharness.skills.storage.skill_storage:SkillStorage.install_skill_from_archive  # reached from the embedded Python client (OmniHarnessClient.install_skill), public API
+omniharness.skills.tool_policy:NamedTool  # used as a PEP 695 type-parameter bound (filter_tools_by_skill_allowed_tools[ToolT: NamedTool]), which the gate does not see
+session_watcher.record_source:RecordStats.drift_signals  # UNWIRED, wire in Feature 005: drift (unknown record types) surfaced for Claude and Codex alike (specs/005-project-ledger/plan-inputs.md)
+session_watcher.registry:SessionRegistry.is_empty  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
+session_watcher.registry:SessionRegistry.is_observable  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
+session_watcher.reply:observe_only_notice  # UNWIRED, wire in Feature 005: FR-015 wording when the user tries to answer a watched (Claude or Codex) session (specs/005-project-ledger/plan-inputs.md)

@@ -70,19 +70,6 @@ def is_user_turn(message: Any) -> bool:
     return _message_type(message) in USER_ORIGINS and not is_tool_result(message)
 
 
-def latest_user_turn(messages: list[Any]) -> Any | None:
-    """The most recent genuine user turn, or None.
-
-    This is what a confirmation is read from. Scanning backwards for the first
-    eligible message means tool results interleaved after the user's reply
-    cannot displace it.
-    """
-    for message in reversed(messages or []):
-        if is_user_turn(message):
-            return message
-    return None
-
-
 def eligible_to_confirm(message: Any) -> bool:
     """FR-005. Only a genuine user turn may satisfy a confirmation."""
     return is_user_turn(message)

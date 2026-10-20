@@ -133,15 +133,6 @@ class PolicyDecision:
     deciding_rule: ClassificationRule | None
     raised_by: RuleException | None = None
 
-    def explain(self) -> str:
-        if self.deciding_rule is None:
-            return f"{self.tier.label}: no rule matches '{self.tool_name}' — unknown tools are Tier 3 (FR-009)"
-        base = f"{self.tier.label}: {self.deciding_rule.describe()}"
-        if self.raised_by is not None:
-            line = f":{self.raised_by.source_line}" if self.raised_by.source_line else ""
-            return f"{base} -> raised by exception when {self.raised_by.when}{line}"
-        return base
-
 
 @dataclass
 class PendingAction:

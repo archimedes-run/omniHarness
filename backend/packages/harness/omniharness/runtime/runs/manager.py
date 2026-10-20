@@ -228,11 +228,6 @@ class RunManager:
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)
         return record
 
-    async def has_inflight(self, thread_id: str) -> bool:
-        """Return ``True`` if *thread_id* has a pending or running run."""
-        async with self._lock:
-            return any(r.thread_id == thread_id and r.status in (RunStatus.pending, RunStatus.running) for r in self._runs.values())
-
     async def cleanup(self, run_id: str, *, delay: float = 300) -> None:
         """Remove a run record after an optional delay."""
         if delay > 0:

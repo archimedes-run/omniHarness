@@ -104,7 +104,7 @@ def test_a_foreign_token_is_still_rejected():
 def test_the_shared_token_is_reported_as_shared():
     """Operators and the readiness check need to distinguish 'configured' from
     'generated', because the two are indistinguishable from a single worker."""
-    check = "from app.gateway.internal_auth import internal_auth_is_shared;print(internal_auth_is_shared())"
+    check = "from app.gateway import internal_auth;print(internal_auth._FROM_ENV)"
 
     assert _worker(check, SHARED_ENV) == "True"
     assert _worker(check) == "False", "a generated fallback must not report itself as shared"

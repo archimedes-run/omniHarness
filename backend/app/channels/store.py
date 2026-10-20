@@ -106,36 +106,6 @@ class ChannelStore:
             }
             self._save()
 
-    def remove(self, channel_name: str, chat_id: str, topic_id: str | None = None) -> bool:
-        """Remove a mapping.
-
-        If ``topic_id`` is provided, only that specific conversation/topic mapping is removed.
-        If ``topic_id`` is omitted, all mappings whose key starts with
-        ``"<channel_name>:<chat_id>"`` (including topic-specific ones) are removed.
-
-        Returns True if at least one mapping was removed.
-        """
-        with self._lock:
-            # Remove a specific conversation/topic mapping.
-            if topic_id is not None:
-                key = self._key(channel_name, chat_id, topic_id)
-                if key in self._data:
-                    del self._data[key]
-                    self._save()
-                    return True
-                return False
-
-            # Remove all mappings for this channel/chat_id (base and any topic-specific keys).
-            prefix = self._key(channel_name, chat_id)
-            keys_to_delete = [k for k in self._data if k == prefix or k.startswith(prefix + ":")]
-            if not keys_to_delete:
-                return False
-
-            for k in keys_to_delete:
-                del self._data[k]
-            self._save()
-            return True
-
     def list_entries(self, channel_name: str | None = None) -> list[dict[str, Any]]:
         """List all stored mappings, optionally filtered by channel."""
         results = []

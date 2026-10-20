@@ -215,13 +215,6 @@ class MemoryUpdateQueue:
 
         self._process_queue()
 
-    def flush_nowait(self) -> None:
-        """Start queue processing immediately in a background thread."""
-        with self._lock:
-            # Daemon thread: queued messages may be lost if the process exits
-            # before _process_queue completes. Acceptable for best-effort memory updates.
-            self._schedule_timer(0)
-
     def clear(self) -> None:
         """Clear the queue without processing.
 
@@ -233,18 +226,6 @@ class MemoryUpdateQueue:
                 self._timer = None
             self._queue.clear()
             self._processing = False
-
-    @property
-    def pending_count(self) -> int:
-        """Get the number of pending updates."""
-        with self._lock:
-            return len(self._queue)
-
-    @property
-    def is_processing(self) -> bool:
-        """Check if the queue is currently being processed."""
-        with self._lock:
-            return self._processing
 
 
 # Global singleton instance

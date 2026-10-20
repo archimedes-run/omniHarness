@@ -76,20 +76,6 @@ def get_current_user() -> CurrentUser | None:
     return _current_user.get()
 
 
-def require_current_user() -> CurrentUser:
-    """Return the current user, or raise :class:`RuntimeError`.
-
-    Used by repository code that must not be called outside a
-    request-authenticated context. The error message is phrased so
-    that a caller debugging a stack trace can locate the offending
-    code path.
-    """
-    user = _current_user.get()
-    if user is None:
-        raise RuntimeError("repository accessed without user context")
-    return user
-
-
 # ---------------------------------------------------------------------------
 # Effective user_id helpers (filesystem isolation)
 # ---------------------------------------------------------------------------

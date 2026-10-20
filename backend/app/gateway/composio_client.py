@@ -130,34 +130,12 @@ class ComposioClient:
                 return None
             return _extract_display(r.json())
 
-    async def list_connections(self, *, entity_id: str) -> list[dict[str, Any]]:
-        """List connections for *entity_id*. Each item: ``{toolkit, composio_connection_id, status}``."""
-        async with self._http() as client:
-            r = await client.get("/v3/connected_accounts", params={"user_id": entity_id})
-            if not r.is_success:
-                raise ComposioError(f"Failed to list connections for {entity_id}: HTTP {r.status_code} — {r.text[:300]}")
-            result: list[dict[str, Any]] = []
-            for item in r.json().get("items", []):
-                slug = item.get("toolkit", {}).get("slug") or ""
-                result.append(
-                    {
-                        "toolkit": slug.upper(),
-                        "composio_connection_id": item.get("id"),
-                        "status": _normalize_status(item.get("status")),
-                    }
-                )
-            return result
-
     async def revoke_connection(self, *, composio_connection_id: str) -> None:
         """Delete the connected account on Composio's side."""
         async with self._http() as client:
             r = await client.delete(f"/v3/connected_accounts/{composio_connection_id}")
             if not r.is_success:
                 raise ComposioError(f"Failed to revoke connection {composio_connection_id}: HTTP {r.status_code} — {r.text[:300]}")
-
-    def get_mcp_url(self, *, toolkit: str, entity_id: str) -> str:
-        """Return the Composio MCP Tool Router SSE URL for *toolkit* + *entity_id*."""
-        return f"https://mcp.composio.dev/{toolkit.lower()}?apiKey={self._api_key}&entityId={entity_id}"
 
 
 def _extract_display(data: dict[str, Any]) -> str | None:

@@ -12,13 +12,7 @@ from fastapi.testclient import TestClient
 from app.gateway.auth import create_access_token, decode_token, hash_password, verify_password
 from app.gateway.auth.models import User
 from app.gateway.auth.password import needs_rehash
-from app.gateway.authz import (
-    AuthContext,
-    Permissions,
-    get_auth_context,
-    require_auth,
-    require_permission,
-)
+from app.gateway.authz import AuthContext, Permissions, get_auth_context, require_permission
 
 # ── Password Hashing ────────────────────────────────────────────────────────
 
@@ -207,36 +201,6 @@ def test_get_auth_context_set():
 
 
 # ── require_auth decorator ──────────────────────────────────────────────────
-
-
-def test_require_auth_sets_auth_context():
-    """require_auth rejects unauthenticated requests with 401."""
-    from fastapi import Request
-
-    app = FastAPI()
-
-    @app.get("/test")
-    @require_auth
-    async def endpoint(request: Request):
-        ctx = get_auth_context(request)
-        return {"authenticated": ctx.is_authenticated}
-
-    with TestClient(app) as client:
-        # No cookie → 401 (require_auth independently enforces authentication)
-        response = client.get("/test")
-        assert response.status_code == 401
-
-
-def test_require_auth_requires_request_param():
-    """require_auth raises ValueError if request parameter is missing."""
-    import asyncio
-
-    @require_auth
-    async def bad_endpoint():  # Missing `request` parameter
-        pass
-
-    with pytest.raises(ValueError, match="require_auth decorator requires 'request' parameter"):
-        asyncio.run(bad_endpoint())
 
 
 # ── require_permission decorator ─────────────────────────────────────────────

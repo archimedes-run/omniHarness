@@ -32,10 +32,6 @@ class GatewayMCPBuildController:
     def __init__(self, manager: MCPServerManager) -> None:
         self._manager = manager
 
-    async def request_build(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
-        record = await self._manager.get_status(server_id=server_id, user_id=user_id)
-        return _to_status(record)
-
     async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
         record = await self._manager.test_server(server_id=server_id, user_id=user_id)
         return _to_status(record)

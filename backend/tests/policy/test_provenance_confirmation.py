@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.policy.confirm import Verdict, recognise
 from app.policy.models import PendingAction, Tier
-from app.policy.provenance import PROVENANCE_KEY, RULE_KEY, SYNTHETIC, firing_rule, is_synthetic_turn
+from app.policy.provenance import PROVENANCE_KEY, RULE_KEY, SYNTHETIC, is_synthetic_turn
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
 SYNTHETIC_CONTEXT = {"thread_id": "t1", PROVENANCE_KEY: SYNTHETIC, RULE_KEY: "morning-briefing"}
@@ -74,11 +74,6 @@ def test_turn_provenance_absence_means_a_user_turn():
     assert not is_synthetic_turn({})
     assert not is_synthetic_turn({"thread_id": "t1"})
     assert is_synthetic_turn(SYNTHETIC_CONTEXT)
-
-
-def test_turn_provenance_records_which_rule_fired():
-    assert firing_rule(SYNTHETIC_CONTEXT) == "morning-briefing"
-    assert firing_rule(USER_CONTEXT) is None
 
 
 def test_turn_provenance_a_synthetic_turn_cannot_decline_either():

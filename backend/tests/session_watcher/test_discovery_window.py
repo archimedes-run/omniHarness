@@ -99,12 +99,12 @@ def test_sticky_membership_survives_going_quiet(tmp_session_dir, make_record, ag
 
     refs = disc.sweep()
     assert [r.session_id for r in refs] == ["live"]
-    assert disc.is_sticky("live")
+    assert "live" in disc._sticky
 
     # Now it goes quiet past the window. Membership must not be re-decided.
     disc.config.window = timedelta(seconds=1)
     refs = disc.sweep()
-    assert disc.is_sticky("live"), "sticky membership was re-tested against the window (FR-005c)"
+    assert "live" in disc._sticky, "sticky membership was re-tested against the window (FR-005c)"
     assert [r.session_id for r in refs] == ["live"], "a live session aged out mid-run"
 
 
@@ -120,7 +120,7 @@ def test_backfilled_session_is_not_sticky_and_ages_out(tmp_session_dir, make_rec
     disc = Discovery(ClaudeCodeAdapter(RecordSource(root=root)), DiscoveryConfig(window=timedelta(hours=24)))
     refs = disc.sweep()
     assert refs == [], "a 20-day-old session was listed inside a 24h activity window"
-    assert not disc.is_sticky("ancient")
+    assert "ancient" not in disc._sticky
 
 
 def test_release_drops_stickiness(tmp_session_dir, make_record, ago) -> None:
@@ -128,9 +128,9 @@ def test_release_drops_stickiness(tmp_session_dir, make_record, ago) -> None:
     disc = Discovery(ClaudeCodeAdapter(RecordSource(root=root)), DiscoveryConfig(window=WINDOW))
     disc.started_at = datetime.now(UTC) - timedelta(minutes=5)
     disc.sweep()
-    assert disc.is_sticky("done")
+    assert "done" in disc._sticky
     disc.release("done")
-    assert not disc.is_sticky("done")
+    assert "done" not in disc._sticky
 
 
 # --- the retention reset (FR-005c) ------------------------------------------
@@ -152,11 +152,11 @@ def test_retention_reset_clears_sticky_membership(tmp_session_dir, make_record, 
     disc.started_at = start
     disc.last_reset_at = start
     disc.sweep()
-    assert disc.is_sticky("live")
+    assert "live" in disc._sticky
 
     dropped = disc.reset_retention(datetime.now(UTC))
     assert "live" in dropped
-    assert not disc.is_sticky("live")
+    assert "live" not in disc._sticky
 
 
 def test_retention_reset_fires_automatically_after_the_interval(tmp_session_dir, make_record, ago) -> None:

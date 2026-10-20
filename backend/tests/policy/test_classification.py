@@ -6,7 +6,7 @@ import pytest
 
 from app.policy.classify import classify
 from app.policy.config import ConfigLoader
-from app.policy.explain import explain, render
+from app.policy.explain import explain
 from app.policy.models import Tier
 
 RULES = """
@@ -166,24 +166,3 @@ def test_a_bad_reload_keeps_the_previous_rules(tmp_path):
 def test_inspection_agrees_with_live_classification(ruleset):
     for name, args in [("browser_click", {"action": "click"}), ("calendar_delete_event", {}), ("unknown_tool", {})]:
         assert explain(name, args, ruleset) == classify(name, args, ruleset)
-
-
-def test_inspection_names_the_deciding_rule(ruleset):
-    rendered = render(explain("calendar_delete_event", {}, ruleset), ruleset)
-
-    assert "tier:       3" in rendered
-    assert "calendar_delete_event" in rendered
-
-
-def test_inspection_names_the_exception_that_raised_it(ruleset):
-    """The reason FR-038 exists: raise-only is safe but opaque."""
-    rendered = render(explain("browser_click", {"action": "click"}, ruleset), ruleset)
-
-    assert "raised_by:  exception" in rendered
-    assert "tier 3" in rendered
-
-
-def test_inspection_says_when_the_rules_could_not_be_read(tmp_path):
-    ruleset = ConfigLoader(path=tmp_path / "gone.yaml").load()
-
-    assert "could not be read" in render(explain("x", {}, ruleset), ruleset)

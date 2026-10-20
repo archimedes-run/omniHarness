@@ -254,7 +254,15 @@ From `specs/004-assistant-ui-surfaces/gate-scope-audit.md`. Each is a real gap a
 - **MCP page colours.** `components/workspace/mcp/mcp-server-detail.tsx` hardcodes `bg-white` and hex colours with no dark variant. The T088 token check covers the Feature 004 surfaces only. Extend its surface list when that page is next touched.
 - **Frontend exports nothing imports.** ESLint's `no-unused-vars` cannot see one. That needs knip or ts-prune.
 
-## Unwired code the generalised wiring gate found — wire it or delete it
+## Unwired code the generalised wiring gate found — wire it or delete it — TRIAGED 2026-10-19 (pre-005 hygiene PR)
+
+**Resolved:**
+- **Wired 6:** `limits.py` describe_absent, describe_tier and describe_expiry, plus ABSENT_CAPABILITIES; `confirm.restate` (FR-035 was unmet); `McpSecretsVault.delete_all_for_server` (secrets outlived their server).
+- **Deleted 35.**
+- **Reclassified 3:** they were reached all along, by langgraph.json, by the public client API and as a type bound.
+- **Left 10 for Feature 005:** listed in `specs/005-project-ledger/plan-inputs.md` and tagged in the whitelist.
+
+The original report follows.
 
 `tests/gates/test_wiring.py` (T079) found **54 public definitions that nothing in production reaches**. Each is whitelisted as `UNWIRED` in `tests/gates/wiring-whitelist.txt`, so the gate is green today only because of them. They are not all bugs: some are leftovers, some unfinished work. The notable ones:
 

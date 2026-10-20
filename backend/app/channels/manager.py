@@ -46,10 +46,6 @@ def _slim_metadata(meta: dict[str, Any]) -> dict[str, Any]:
 INBOUND_FILE_READERS: dict[str, InboundFileReader] = {}
 
 
-def register_inbound_file_reader(channel_name: str, reader: InboundFileReader) -> None:
-    INBOUND_FILE_READERS[channel_name] = reader
-
-
 async def _read_http_inbound_file(file_info: dict[str, Any], client: httpx.AsyncClient) -> bytes | None:
     url = file_info.get("url")
     if not isinstance(url, str) or not url:
