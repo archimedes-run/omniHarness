@@ -93,9 +93,13 @@ describe("fonts ship with the app (no Google Fonts)", () => {
     ]) {
       expect(statSync(join(fonts, name)).size).toBeGreaterThan(1000);
     }
-    const ofl = readFileSync(join(fonts, "OFL.txt"), "utf8");
-    expect(ofl).toContain("The Inter Project Authors");
-    expect(ofl).toContain("The JetBrains Mono Project Authors");
-    expect(ofl).toContain("SIL OPEN FONT LICENSE Version 1.1");
+    for (const [file, holder] of [
+      ["Inter-OFL.txt", "The Inter Project Authors"],
+      ["JetBrainsMono-OFL.txt", "The JetBrains Mono Project Authors"],
+    ] as const) {
+      const ofl = readFileSync(join(fonts, file), "utf8");
+      expect(ofl).toContain(holder);
+      expect(ofl).toContain("SIL OPEN FONT LICENSE Version 1.1");
+    }
   });
 });

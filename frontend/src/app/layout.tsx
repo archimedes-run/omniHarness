@@ -8,8 +8,8 @@ import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
 
 // Inter and JetBrains Mono ship in the repo (src/fonts/, SIL OFL 1.1, see
-// src/fonts/OFL.txt): no build, CI run or page ever fetches a font from
-// Google. These are the variable-font latin subsets Next's Google font
+// Inter-OFL.txt and JetBrainsMono-OFL.txt there): no build, CI run or page
+// ever fetches a font from Google. These are the variable-font latin subsets Next's Google font
 // loader used to download; next/font/local preloads them and generates the
 // size-adjusted fallback, as before. The latin-ext subsets cannot be given a
 // unicode-range here, so they are declared with @font-face in

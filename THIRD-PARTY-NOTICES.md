@@ -72,4 +72,4 @@ Shipped in `frontend/src/fonts/` and served by the app itself; nothing is fetche
 - Inter: Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1.
 - JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono). SIL Open Font License 1.1.
 
-The full licence text is in `frontend/src/fonts/OFL.txt`, next to the files.
+Each family's licence, copied verbatim from its upstream repository (`rsms/inter` `LICENSE.txt`, `JetBrains/JetBrainsMono` `OFL.txt`), is next to the files: `frontend/src/fonts/Inter-OFL.txt` and `frontend/src/fonts/JetBrainsMono-OFL.txt`.
