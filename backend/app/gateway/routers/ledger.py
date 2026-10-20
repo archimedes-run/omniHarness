@@ -325,3 +325,23 @@ async def promote(body: PromoteIn, request: Request) -> list[dict]:
         return _write(lambda: service.promote(user_id=user, project_id=body.project_id, thread_id=body.thread_id, titles=body.titles))
 
     return await asyncio.to_thread(work)
+
+
+@router.post("/writes/{write_id}/undo")
+@require_permission("threads", "write")
+async def undo_write(write_id: str, request: Request) -> dict:
+    """Undo, from a disclosure: revert a write the assistant made without a
+    confirmation (a routine Tier 2 change, or one under a standing grant).
+    Only the caller's own writes; refused with 409, changing nothing, when
+    anything it touched has been edited since or it was already undone."""
+
+    def work():
+        service, user = _service(request), _user(request)
+        try:
+            return {"write_id": write_id, "undone": service.undo_write(user_id=user, write_id=write_id)}
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="no such write") from exc
+        except LedgerError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return await asyncio.to_thread(work)

@@ -36,7 +36,7 @@ from .limits import describe_expiry
 from .lineage import initiation_origin
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
-from .provenance import DISCLOSED, GRANTED, executed_as
+from .provenance import DISCLOSED, GRANTED, executed_as, new_write_id
 from .targets import source_argument
 
 logger = logging.getLogger(__name__)
@@ -94,9 +94,11 @@ class PolicyMiddleware(AgentMiddleware):
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
+            if grant is None:
+                grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED), self._reserved(grant):
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()), self._reserved(grant):
                 result = handler(request)
             if grant:
                 self._record_grant_use(request, decision, grant)
@@ -126,9 +128,11 @@ class PolicyMiddleware(AgentMiddleware):
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
+            if grant is None:
+                grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED), self._reserved(grant):
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()), self._reserved(grant):
                 result = await handler(request)
             if grant:
                 self._record_grant_use(request, decision, grant)
@@ -185,6 +189,23 @@ class PolicyMiddleware(AgentMiddleware):
             logger.warning("policy: %s's standing grant covers %s (%d actions), but this run already took %d of %d; it waits", agent, decision.tool_name, actions, done, GRANT_CAP_PER_RUN)
             return f"This run already did {done} of the {GRANT_CAP_PER_RUN} things one run may do on its own under {agent}'s standing grants, and this call would do {actions} more, so it waits for you."
         return GrantedCall(classes=used, actions=actions, total=total, run_key=run_key)
+
+    def _chat_suggestion(self, request, decision) -> str | None:
+        """In chat, a routine ledger write (grant-governed Tier 2) runs on its
+        own ONLY when it follows from the user's own message in this turn
+        (005 FR-009 amendment, user decision 2026-10-20). One that content the
+        agent read caused (a tool result, an email, a page, a subagent's
+        output; feature 003's lineage, FR-006) is a SUGGESTION: it is stated
+        on a card and runs only if the user confirms it there. None: run it."""
+        from .grants import governed_by_grants
+
+        if not governed_by_grants(decision.tool_name):
+            return None
+        origin, source, via = self._origin(request)
+        if origin == "user":
+            return None
+        logger.info("policy: %s was suggested by %s (%s); it waits on its card", decision.tool_name, origin, source or via or "-")
+        return "This is a suggestion: it came from something I read, not from your message, so I did not do it. It runs only if you confirm it here."
 
     @contextmanager
     def _reserved(self, grant):

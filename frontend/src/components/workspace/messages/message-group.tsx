@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../artifacts";
 import { FlipDisplay } from "../flip-display";
+import { LedgerWriteStep } from "../ledger/ledger-write-step";
 import { Tooltip } from "../tooltip";
 
 import { MarkdownContent } from "./markdown-content";
@@ -652,6 +653,13 @@ function ToolCall({
         label={resolveLabel(t.toolCalls.needYourHelp)}
         icon={MessageCircleQuestionMarkIcon}
       ></ChainOfThoughtStep>
+    );
+  } else if (name === "ledger_apply" && typeof result === "string") {
+    return (
+      <LedgerWriteStep
+        label={resolveLabel(t.toolCalls.useTool(name))}
+        result={result}
+      />
     );
   } else if (name === "write_todos") {
     return (
