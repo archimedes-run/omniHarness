@@ -39,7 +39,7 @@ class ToolCapableFake(GenericFakeChatModel):
 
 @tool("send_email")
 def send_email(to: str, body: str) -> str:
-    """Send an email (no rule names it, so Tier 3 by the FR-009 default)."""
+    """Send an email (Tier 3 by a rule the fixture adds: an unruled tool is refused, 007)."""
     SENT.append({"to": to, "body": body})
     return f"sent to {to}"
 
@@ -52,8 +52,9 @@ def web_fetch(url: str) -> str:
 
 @pytest.fixture
 def gateway(tmp_path, monkeypatch):
-    """As tests/ledger/conftest.py, with one rules change: `task` is Tier 2,
-    so delegation runs at dispatch and the SUBAGENT's send is what is gated."""
+    """As tests/ledger/conftest.py, with two rules changes: `task` is Tier 2,
+    so delegation runs at dispatch and the SUBAGENT's send is what is gated;
+    and the test's `send_email` is named at Tier 3."""
     from app.gateway.auth.config import AuthConfig, set_auth_config
     from app.policy.registration import DEFAULT_RULES
     from omniharness.config.app_config import reset_app_config
@@ -62,7 +63,11 @@ def gateway(tmp_path, monkeypatch):
     rules = tmp_path / "rules.yaml"
     text = DEFAULT_RULES.read_text()
     assert '- pattern: "task"\n      tier: 3' in text
-    rules.write_text(text.replace('- pattern: "task"\n      tier: 3', '- pattern: "task"\n      tier: 2'))
+    text = text.replace('- pattern: "task"\n      tier: 3', '- pattern: "task"\n      tier: 2')
+    # This test's own outbound tool. Named, because a tool no rule names is
+    # refused outright (007) and would never reach the confirmation this
+    # test is about.
+    rules.write_text(text.replace("  rules:\n", '  rules:\n    - pattern: "send_email"\n      tier: 3\n', 1))
 
     config = yaml.safe_load(EXAMPLE.read_text())
     config["database"] = {"backend": "sqlite", "sqlite_dir": str(tmp_path / "data")}

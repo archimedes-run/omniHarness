@@ -13,6 +13,29 @@ _cache_initialized = False
 _initialization_lock = asyncio.Lock()
 _config_mtime: float | None = None  # Track config file modification time
 
+#: Told the loaded tool list each time the cache is (re)initialised. The
+#: application registers the policy coverage check here (app.policy.coverage):
+#: MCP tools load lazily, after startup, so "every registered tool has a policy
+#: rule" can only be checked for them once they exist. A hook rather than an
+#: import, for the same reason as agents/middlewares/policy_hook.py: the
+#: harness must not import `app`.
+_loaded_listeners: list = []
+
+
+def add_tools_loaded_listener(listener) -> None:
+    """Call `listener(tools)` after every MCP cache (re)initialisation."""
+    if listener not in _loaded_listeners:
+        _loaded_listeners.append(listener)
+
+
+def loaded_mcp_tools() -> list[BaseTool] | None:
+    """The cached MCP tools, or None when they have not been loaded yet.
+
+    Never triggers a load (unlike get_cached_mcp_tools): a startup check must
+    not spawn every configured MCP server just to read their names.
+    """
+    return list(_mcp_tools_cache or []) if _cache_initialized else None
+
 
 def _get_config_mtime() -> float | None:
     """Get the modification time of the extensions config file.
@@ -75,6 +98,11 @@ async def initialize_mcp_tools() -> list[BaseTool]:
         _cache_initialized = True
         _config_mtime = _get_config_mtime()  # Record config file mtime
         logger.info(f"MCP tools initialized: {len(_mcp_tools_cache)} tool(s) loaded (config mtime: {_config_mtime})")
+        for listener in list(_loaded_listeners):
+            try:
+                listener(list(_mcp_tools_cache))
+            except Exception:  # noqa: BLE001 — a listener must not break tool loading
+                logger.exception("an MCP tools-loaded listener failed")
 
         return _mcp_tools_cache
 

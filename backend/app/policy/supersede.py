@@ -41,13 +41,20 @@ def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> 
     superseded = []
     for action in store.open_actions(now):
         decision = classify(action.tool_name, action.arguments, ruleset)
-        if decision.tier is Tier.TIER_3:
+        if decision.tier is Tier.TIER_3 and not decision.refused:
             continue
         # Claimed first, through the same one-shot claim confirmation uses, so
         # a supersede cannot race a confirmation on another worker into a
         # double resolution.
         claimed = take_claim(store, action.id, CLAIMANT)
         if claimed is None:
+            continue
+        if decision.refused:
+            # 007: no rule names it any more, so it may not run at all — not
+            # even with the confirmation it was waiting for.
+            store.resolve(claimed, Outcome.SUPERSEDED, f"the rules changed: no policy rule covers {action.tool_name} any more, so it is refused. It was NOT run.")
+            logger.info("policy: superseded %s (%s now has no rule)", action.id, action.tool_name)
+            superseded.append(claimed)
             continue
         rule = decision.deciding_rule.pattern if decision.deciding_rule is not None else "the default"
         store.resolve(

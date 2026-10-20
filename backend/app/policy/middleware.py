@@ -79,6 +79,8 @@ class PolicyMiddleware(AgentMiddleware):
         from omniharness.agents.invitation import inviting_turn
 
         decision = self._classify(request)
+        if decision.refused:
+            return self._refuse_unruled(request, decision)
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
@@ -102,6 +104,8 @@ class PolicyMiddleware(AgentMiddleware):
         from omniharness.agents.invitation import inviting_turn
 
         decision = self._classify(request)
+        if decision.refused:
+            return self._refuse_unruled(request, decision)
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
@@ -151,13 +155,41 @@ class PolicyMiddleware(AgentMiddleware):
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(self._disclose(handler(request.override(messages=note) if note else request)))
+        return self._guard_self_verdict(self._disclose(handler(self._offered(request, note))))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(self._disclose(await handler(request.override(messages=note) if note else request)))
+        return self._guard_self_verdict(self._disclose(await handler(self._offered(request, note))))
+
+    # ---- tools with no rule are not offered (007) -------------------------
+    #
+    # A tool no rule names is refused at dispatch (`_refuse_unruled`); it is
+    # also kept OUT of the tool list the model sees, so the model does not plan
+    # around a tool it cannot use. Connector tools load per user and per turn,
+    # so this is also where their coverage is checked and logged.
+
+    def _offered(self, request: Any, note: Any) -> Any:
+        from .coverage import check
+
+        changes: dict[str, Any] = {}
+        if note:
+            changes["messages"] = note
+        tools = list(getattr(request, "tools", None) or [])
+        named = [getattr(t, "name", None) for t in tools]
+        if any(named):
+            report = check([n for n in named if n], self.loader.load(notify=False), where="offered to the model")
+            if report.unruled:
+                unruled = set(report.unruled)
+                changes["tools"] = [t for t in tools if getattr(t, "name", None) not in unruled]
+        return request.override(**changes) if changes else request
+
+    def _refuse_unruled(self, request: Any, decision: Any) -> Any:
+        from .coverage import refusal_text
+
+        logger.warning("policy: refused %s — no policy rule covers it", decision.tool_name)
+        return self._as_tool_result(request, refusal_text(decision.tool_name))
 
     # ---- the assistant never answers for the user -------------------------
     #
