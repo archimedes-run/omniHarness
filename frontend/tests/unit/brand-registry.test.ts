@@ -79,13 +79,30 @@ describe("logo registry (Feature 006)", () => {
 
   it("OpenAI and Slack use their official assets; Outlook stays a monogram", () => {
     const by = (id: string) => BRANDS.find((b) => b.id === id)!;
-    expect(by("openai").logo).toEqual({
+    expect(by("openai").logo).toMatchObject({
       kind: "themed",
       light: "/brand/openai-blossom-black.svg",
       dark: "/brand/openai-blossom-white.svg",
     });
     expect(by("slack").logo).toEqual({ kind: "file", src: "/brand/slack.png" });
     expect(by("outlook").logo).toBeUndefined();
+  });
+
+  it("OpenAI's ink is the share of its file the Blossom really spans", () => {
+    // The pack's SVG keeps its own clear space; BrandLogo scales by 1 / ink so
+    // the Blossom draws as large as Anthropic's mark (home.spec.ts measures it).
+    const logo = BRANDS.find((b) => b.id === "openai")!.logo;
+    if (logo?.kind !== "themed") throw new Error("openai is not themed");
+    for (const src of [logo.light, logo.dark]) {
+      const svg = readFileSync(join(ROOT, "public", src), "utf8");
+      const box = Number(/viewBox="0 0 (\d+(?:\.\d+)?)/.exec(svg)![1]);
+      const d = /<path d="([^"]+)"/.exec(svg)![1]!;
+      const xs = [...d.matchAll(/-?\d+(?:\.\d+)?/g)]
+        .map((m) => Number(m[0]))
+        .filter((_, i) => i % 2 === 0);
+      const spans = (Math.max(...xs) - Math.min(...xs)) / box;
+      expect(logo.ink, src).toBeCloseTo(spans, 2);
+    }
   });
 
   it("every mark has path data, and every brand with a logo is in THIRD-PARTY-NOTICES", () => {

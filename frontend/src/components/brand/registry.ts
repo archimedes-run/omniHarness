@@ -27,7 +27,18 @@ export interface BrandEntry {
   aliases?: string[];
   logo?:
     | { kind: "file"; src: string }
-    | { kind: "themed"; light: string; dark: string }
+    | {
+        kind: "themed";
+        light: string;
+        dark: string;
+        /**
+         * How much of the file's width the mark itself spans (0 to 1), when
+         * the file carries its own clear space. The logo is drawn larger by
+         * 1 / ink, so the mark, not the file, fills the tile like a "mark"
+         * logo does. Omitted means the mark fills its file.
+         */
+        ink?: number;
+      }
     | { kind: "mark" };
 }
 
@@ -36,10 +47,11 @@ const FILE = (file: string) => ({
   src: `/brand/${file}`,
 });
 const MARK = { kind: "mark" as const };
-const THEMED = (light: string, dark: string) => ({
+const THEMED = (light: string, dark: string, ink?: number) => ({
   kind: "themed" as const,
   light: `/brand/${light}`,
   dark: `/brand/${dark}`,
+  ink,
 });
 
 export const BRANDS: readonly BrandEntry[] = [
@@ -56,7 +68,13 @@ export const BRANDS: readonly BrandEntry[] = [
     name: "OpenAI",
     monogram: "OAI",
     aliases: ["codex", "chatgpt", "gpt"],
-    logo: THEMED("openai-blossom-black.svg", "openai-blossom-white.svg"),
+    // The pack's Blossom sits in a 716-unit square with built-in clear space:
+    // the mark spans x 174.96 to 540.72, about 51% of it.
+    logo: THEMED(
+      "openai-blossom-black.svg",
+      "openai-blossom-white.svg",
+      (540.72 - 174.96) / 716,
+    ),
   },
   // Composio toolkits (backend/app/gateway/routers/composio.py TOOLKIT_CATALOG).
   { id: "gmail", name: "Gmail", monogram: "M", logo: FILE("gmail.svg") },

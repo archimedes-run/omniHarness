@@ -10,7 +10,9 @@ import { monogramFor, resolveBrand } from "./registry";
  *
  * Clear space: the mark sits inside its box at about 70% of the box, so the
  * padding around it is never less than the brands' minimum clear space, and
- * the box is never drawn under 16 px.
+ * the box is never drawn under 16 px. That 70% is the mark's own extent: a
+ * file that ships with extra clear space (OpenAI's Blossom) is scaled up by
+ * its registry `ink` so it does not read smaller than the others.
  */
 export function BrandLogo({
   source,
@@ -44,22 +46,25 @@ export function BrandLogo({
   const dims = { width: box, height: box };
 
   if (brand?.logo?.kind === "themed") {
-    // The brand's own black and white versions; only one is ever shown.
+    // The brand's own black and white versions; only one is ever shown. A file
+    // with its own clear space is drawn larger, so its mark (not the file)
+    // spans `inner`, the same as a "mark" logo's; the box clips the margin.
+    const drawn = Math.round(inner / (brand.logo.ink ?? 1));
     return (
       <span className={boxClass} style={dims} data-brand={brand.id} {...a11y}>
         <img
           src={brand.logo.light}
           alt=""
-          width={inner}
-          height={inner}
-          className="object-contain dark:hidden"
+          width={drawn}
+          height={drawn}
+          className="max-w-none shrink-0 object-contain dark:hidden"
         />
         <img
           src={brand.logo.dark}
           alt=""
-          width={inner}
-          height={inner}
-          className="hidden object-contain dark:block"
+          width={drawn}
+          height={drawn}
+          className="hidden max-w-none shrink-0 object-contain dark:block"
         />
       </span>
     );
