@@ -56,3 +56,14 @@ def actual_bind(argv: list[str] | None = None) -> tuple[str, int] | None:
                 else:
                     port = int(value)
     return host, port
+
+
+def published_address_warning(environ: dict | None = None) -> str | None:
+    """The compose nginx publish address (BIND_ADDR, passed to the gateway so
+    it can say so) when it is NOT loopback: then the app is reachable from the
+    network. None when loopback or unset (the default is 127.0.0.1)."""
+    env = os.environ if environ is None else environ
+    bind = (env.get("BIND_ADDR") or "").strip()
+    if not bind or bind in ("127.0.0.1", "::1", "[::1]", "localhost"):
+        return None
+    return f"The app is published on {bind} (BIND_ADDR), not loopback: anyone who can reach that address can reach the login page."

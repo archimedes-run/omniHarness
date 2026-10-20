@@ -113,3 +113,28 @@ def test_an_explicit_owner_that_matches_no_account_admits_nobody(make_gateway, m
     for email, password in (("first@example.com", "F1rst!Strong"), OWNER):
         _, resp = login(app, email, password)
         assert resp.status_code == 401, email
+
+
+def test_ownerless_rows_go_to_the_owner_even_with_no_admin_account(make_gateway) -> None:
+    """The live shape: the owner has role "user". The NULL-owner migration used
+    to be skipped whenever no admin-role account existed."""
+    from app.gateway.app import _ensure_admin_user
+
+    app, client = make_gateway(initialize=False)
+
+    async def _seed():
+        from app.gateway.deps import get_local_provider
+        from omniharness.persistence.engine import get_session_factory
+        from omniharness.persistence.thread_meta.model import ThreadMetaRow
+
+        owner = await get_local_provider().create_user(email="first@example.com", password="F1rst!Strong", system_role="user")
+        async with get_session_factory()() as s:
+            s.add(ThreadMetaRow(thread_id="legacy-thread", user_id=None))
+            await s.commit()
+        await _ensure_admin_user(app)
+        async with get_session_factory()() as s:
+            row = await s.get(ThreadMetaRow, "legacy-thread")
+        return str(owner.id), row.user_id
+
+    owner_id, row_owner = client.portal.call(_seed)
+    assert row_owner == owner_id

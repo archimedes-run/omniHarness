@@ -534,3 +534,15 @@ def test_old_pre_rotation_copies_follow_retention(tmp_path) -> None:
     h.emit(_record("x"))
     h.close()
     assert not old.exists() and recent.exists()
+
+
+def test_a_non_loopback_bind_addr_is_warned_and_the_default_is_loopback() -> None:
+    from app.gateway.config import published_address_warning
+
+    assert published_address_warning({}) is None
+    assert published_address_warning({"BIND_ADDR": "127.0.0.1"}) is None
+    assert "0.0.0.0" in published_address_warning({"BIND_ADDR": "0.0.0.0"})
+    doc = yaml.load((REPO / "docker/docker-compose.yaml").read_text(), Loader=_ComposeLoader)  # noqa: S506
+    [nginx_port] = doc["services"]["nginx"]["ports"]
+    assert nginx_port.startswith("${BIND_ADDR:-127.0.0.1}:"), nginx_port
+    assert "BIND_ADDR=${BIND_ADDR:-127.0.0.1}" in doc["services"]["gateway"]["environment"]

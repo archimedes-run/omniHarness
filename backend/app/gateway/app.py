@@ -120,23 +120,18 @@ async def _ensure_admin_user(app: FastAPI) -> None:
     except Exception:
         logger.exception("Could not resolve the owner account at startup (non-fatal)")
 
-    admin_count = await provider.count_admin_users()
-
-    if admin_count == 0:
-        logger.info("=" * 60)
-        logger.info("  First boot detected — no admin account exists.")
-        logger.info("  Visit /setup to complete admin account creation.")
-        logger.info("=" * 60)
-        return
-
-    # Admin already exists — run orphan thread migration for any
-    # LangGraph thread metadata that pre-dates the auth module.
-    # Orphans go to the OWNER account (app.gateway.ownership), not to "an
-    # admin": the admin-role account need not be the person who owns the data.
+    # Orphan migrations follow the OWNER (app.gateway.ownership), whether or not
+    # an admin-role account exists: the owner is whoever is pinned, and the
+    # role says nothing about whose data it is.
     from app.gateway.ownership import owner_user_id
 
     owner = await owner_user_id()
     if owner is None:
+        if await provider.count_admin_users() == 0:
+            logger.info("=" * 60)
+            logger.info("  First boot detected — no account exists yet.")
+            logger.info("  Visit /setup to create the owner account.")
+            logger.info("=" * 60)
         return
     admin_id = owner
 
@@ -286,7 +281,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log_unused_secrets()
     except Exception:
         logger.exception("Could not check for unused secret keys (non-fatal)")
-    from app.gateway.config import actual_bind
+    from app.gateway.config import actual_bind, published_address_warning
+
+    warning = published_address_warning()
+    if warning:
+        logger.warning(warning)
 
     bind = actual_bind()
     if bind is None:
