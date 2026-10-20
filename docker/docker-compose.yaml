@@ -170,8 +170,46 @@ services:
       - GATEWAY_TRUSTED_PROXIES=${OMNI_HARNESS_NGINX_IP:-172.30.226.10}
       # So the gateway can WARN at startup when nginx is published off loopback.
       - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
-    env_file:
-      - ../.env
+      # Allowlisted keys from .env (secret_usage.GATEWAY_ENV_KEYS); NO env_file.
+      # Bare names: passed only when set (compose --env-file ../.env), never as "".
+      - ANTHROPIC_API_KEY
+      - ANTHROPIC_AUTH_TOKEN
+      - ANTHROPIC_BILLING_HEADER
+      - AUTH_JWT_SECRET
+      - AUTH_TRUSTED_PROXIES
+      - CLAUDE_CODE_CREDENTIALS_PATH
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - COMPOSIO_API_KEY
+      - COMPOSIO_CONNECTED_ACCOUNT_ID
+      - COMPOSIO_IMPORTANT_ONLY
+      - COMPOSIO_TOOLKIT
+      - COMPOSIO_USER_ID
+      - DEEPSEEK_API_KEY
+      - DISCORD_BOT_TOKEN
+      - EXA_API_KEY
+      - FIRECRAWL_API_KEY
+      - GATEWAY_ENABLE_DOCS
+      - GEMINI_API_KEY
+      - GITHUB_TOKEN
+      - GOOGLE_API_KEY
+      - INFOQUEST_API_KEY
+      - JINA_API_KEY
+      - LANGSMITH_API_KEY
+      - LANGSMITH_ENDPOINT
+      - LANGSMITH_PROJECT
+      - LANGSMITH_TRACING
+      - MOONSHOT_API_KEY
+      - OMNI_HARNESS_INTERNAL_AUTH_TOKEN
+      - OPENAI_API_KEY
+      - OPENCLAW_BEARER_TOKEN
+      - OPENROUTER_API_KEY
+      - SERPER_API_KEY
+      - SLACK_APP_TOKEN
+      - SLACK_BOT_TOKEN
+      - TAVILY_API_KEY
+      - TELEGRAM_BOT_TOKEN
+      - TZ
+      - VOLCENGINE_API_KEY
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -197,8 +235,7 @@ services:
       - KUBECONFIG_PATH=/root/.kube/config
       - NODE_HOST=host.docker.internal
       - K8S_API_SERVER=https://host.docker.internal:26443
-    env_file:
-      - ../.env
+    # NO env_file: the provisioner reads only the K8S_* settings above.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

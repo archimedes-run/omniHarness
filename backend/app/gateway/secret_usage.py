@@ -77,6 +77,63 @@ IMPLICIT_ENV_READS: dict[str, tuple[str, Predicate]] = {
 }
 
 
+#: Keys the config may name as ``$VAR`` (channels, models, tools, MCP servers).
+#: They count as used only when an ENABLED entry references them, but each must
+#: be PASSED into the gateway container, or the reference resolves to nothing.
+CONFIG_REFERENCE_KEYS: dict[str, str] = {
+    "TELEGRAM_BOT_TOKEN": "channels.telegram.bot_token",
+    "SLACK_BOT_TOKEN": "channels.slack.bot_token",
+    "SLACK_APP_TOKEN": "channels.slack.app_token",
+    "DISCORD_BOT_TOKEN": "channels.discord.bot_token",
+    "OPENCLAW_BEARER_TOKEN": "channels.openclaw.bearer_token",
+    "DEEPSEEK_API_KEY": "a model's api_key",
+    "GEMINI_API_KEY": "a model's api_key",
+    "GOOGLE_API_KEY": "a model's api_key",
+    "OPENROUTER_API_KEY": "a model's api_key",
+    "VOLCENGINE_API_KEY": "a model's api_key",
+    "MOONSHOT_API_KEY": "a model's api_key",
+    "GITHUB_TOKEN": "an MCP server's env (extensions_config.json)",
+}
+
+#: Non-secret settings the gateway reads from the environment (.env).
+OPERATIONAL_ENV_KEYS: dict[str, str] = {
+    "AUTH_TRUSTED_PROXIES": "login rate limiter (routers/auth.py)",
+    "ANTHROPIC_BILLING_HEADER": "claude provider",
+    "COMPOSIO_USER_ID": "Composio connectors",
+    "COMPOSIO_CONNECTED_ACCOUNT_ID": "Composio connectors",
+    "COMPOSIO_TOOLKIT": "Composio connectors",
+    "COMPOSIO_IMPORTANT_ONLY": "Composio connectors",
+    "GATEWAY_ENABLE_DOCS": "gateway docs routes",
+    "LANGSMITH_TRACING": "LangSmith tracing (read by langsmith)",
+    "LANGSMITH_API_KEY": "LangSmith tracing (read by langsmith)",
+    "LANGSMITH_PROJECT": "LangSmith tracing (read by langsmith)",
+    "LANGSMITH_ENDPOINT": "LangSmith tracing (read by langsmith)",
+    "TZ": "timezone",
+}
+
+#: Read by the FRONTEND container, never passed to the gateway.
+FRONTEND_ENV_KEYS = frozenset({"BETTER_AUTH_SECRET"})
+
+#: The ONLY environment keys the gateway container is given (docker compose
+#: `environment:` entries; there is no env_file). tests/security keeps the
+#: compose files equal to this list.
+GATEWAY_ENV_KEYS: tuple[str, ...] = tuple(sorted((set(IMPLICIT_ENV_READS) | set(CONFIG_REFERENCE_KEYS) | set(OPERATIONAL_ENV_KEYS)) - FRONTEND_ENV_KEYS))
+
+
+def env_file_keys_not_passed(env_file: str | Path) -> list[str]:
+    """For `make env-check`: keys in the repo .env that NO container receives
+    (names only). Compose-interpolation keys used in the compose files count."""
+    from dotenv import dotenv_values
+
+    compose_keys = set()
+    for compose in ("docker-compose.yaml", "docker-compose-dev.yaml"):
+        path = Path(__file__).resolve().parents[3] / "docker" / compose
+        if path.is_file():
+            compose_keys |= set(_REF_RE.findall(path.read_text(encoding="utf-8")))
+    passed = set(GATEWAY_ENV_KEYS) | FRONTEND_ENV_KEYS | compose_keys
+    return sorted(k for k in dotenv_values(env_file) if k not in passed)
+
+
 def _active_refs(node: Any) -> set[str]:
     """$VAR references in enabled entries of a parsed config tree."""
     found: set[str] = set()
@@ -150,8 +207,19 @@ def log_unused_secrets() -> list[str]:
         extensions = {}
     # The .env's own keys when it is readable here; otherwise (a container
     # given the file through env_file) the process environment.
-    present = _env_file_keys() or set(os.environ)
+    present = _env_file_keys() or {k for k, v in os.environ.items() if v}
     unused = unused_secret_keys(present, config, extensions)
     if unused:
         logger.info("env: %d secret key(s) present but unused: %s", len(unused), ", ".join(unused))
     return unused
+
+
+if __name__ == "__main__":  # `make env-check`: names only, never values
+    import sys
+
+    target = sys.argv[1] if len(sys.argv) > 1 else ".env"
+    missing = env_file_keys_not_passed(target)
+    if missing:
+        print(f"env-check: {len(missing)} key(s) in {target} reach no container: {', '.join(missing)}")
+    else:
+        print(f"env-check: every key in {target} is passed to a container that reads it")
