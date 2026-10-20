@@ -279,6 +279,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         error_msg = f"Failed to load configuration during gateway startup: {e}"
         logger.exception(error_msg)
         raise RuntimeError(error_msg) from e
+    # Dead secrets: name (never show) any secret key nothing active uses.
+    try:
+        from app.gateway.secret_usage import log_unused_secrets
+
+        log_unused_secrets()
+    except Exception:
+        logger.exception("Could not check for unused secret keys (non-fatal)")
     from app.gateway.config import actual_bind
 
     bind = actual_bind()
