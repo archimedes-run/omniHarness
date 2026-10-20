@@ -1,87 +1,64 @@
 "use client";
 
-import { PlusIcon, SparklesIcon } from "lucide-react";
 import { useCallback } from "react";
 
 import { usePromptInputController } from "@/components/ai-elements/prompt-input";
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
-import { ConfettiButton } from "@/components/ui/confetti-button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useI18n } from "@/core/i18n/hooks";
 
-/** The new-chat quick actions under the bar (unchanged from the old box). */
+/**
+ * The new-chat starters under the bar (Chat-Bar-v2.dc.html). Each fills the
+ * message box and puts the caret at its end; nothing is sent until the user
+ * sends it.
+ */
+export const STARTERS: { label: string; prompt: string }[] = [
+  {
+    label: "Plan my week",
+    prompt:
+      "Plan my week: look at my calendar and open tasks, and suggest what to do each day.",
+  },
+  {
+    label: "What's blocked?",
+    prompt:
+      "What's blocked right now? Check my projects, tasks and coding sessions.",
+  },
+  {
+    label: "Review a coding session",
+    prompt:
+      "Review my most recent coding session: what it did, what is unfinished, and what needs me.",
+  },
+  {
+    label: "New automation",
+    prompt: "Help me set up a new automation: ",
+  },
+];
+
 export function WelcomeSuggestions() {
-  const { t } = useI18n();
   const { textInput } = usePromptInputController();
-  const handleSuggestionClick = useCallback(
-    (prompt: string | undefined) => {
-      if (!prompt) return;
+  const fill = useCallback(
+    (prompt: string) => {
       textInput.setInput(prompt);
-      setTimeout(() => {
-        const textarea = document.querySelector<HTMLTextAreaElement>(
+      requestAnimationFrame(() => {
+        const box = document.querySelector<HTMLTextAreaElement>(
           "textarea[name='message']",
         );
-        if (textarea) {
-          const selStart = prompt.indexOf("[");
-          const selEnd = prompt.indexOf("]");
-          if (selStart !== -1 && selEnd !== -1) {
-            textarea.setSelectionRange(selStart, selEnd + 1);
-            textarea.focus();
-          }
-        }
-      }, 500);
+        if (!box) return;
+        box.focus();
+        box.setSelectionRange(prompt.length, prompt.length);
+      });
     },
     [textInput],
   );
   return (
-    <Suggestions className="min-h-16 w-fit items-start">
-      <ConfettiButton
-        className="border-foreground/15 text-foreground/60 hover:border-foreground/30 hover:bg-foreground/[0.05] hover:text-foreground cursor-pointer rounded-full bg-transparent px-4 text-xs font-normal shadow-none"
-        variant="outline"
-        size="sm"
-        onClick={() => handleSuggestionClick(t.inputBox.surpriseMePrompt)}
-      >
-        <SparklesIcon className="size-4" /> {t.inputBox.surpriseMe}
-      </ConfettiButton>
-      {t.inputBox.suggestions.map((suggestion) => (
-        <Suggestion
-          key={suggestion.suggestion}
-          icon={suggestion.icon}
-          suggestion={suggestion.suggestion}
-          onClick={() => handleSuggestionClick(suggestion.prompt)}
-        />
+    <div className="flex flex-wrap justify-center gap-2" data-testid="starters">
+      {STARTERS.map((s) => (
+        <button
+          key={s.label}
+          type="button"
+          onClick={() => fill(s.prompt)}
+          className="border-border text-foreground-2 hover:bg-surface-raised hover:text-foreground focus-visible:ring-ring h-[34px] rounded-[17px] border px-3.5 text-sm outline-none focus-visible:ring-2 max-sm:h-11"
+        >
+          {s.label}
+        </button>
       ))}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Suggestion icon={PlusIcon} suggestion={t.common.create} />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuGroup>
-            {t.inputBox.suggestionsCreate.map((suggestion, index) =>
-              "type" in suggestion && suggestion.type === "separator" ? (
-                <DropdownMenuSeparator key={index} />
-              ) : (
-                !("type" in suggestion) && (
-                  <DropdownMenuItem
-                    key={suggestion.suggestion}
-                    onClick={() => handleSuggestionClick(suggestion.prompt)}
-                  >
-                    {suggestion.icon && <suggestion.icon className="size-4" />}
-                    {suggestion.suggestion}
-                  </DropdownMenuItem>
-                )
-              ),
-            )}
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </Suggestions>
+    </div>
   );
 }
