@@ -112,48 +112,64 @@ ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
 ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter's origin applies
 
 
+#: Tool results the harness itself produced, which therefore cannot carry
+#: anyone else's words: write acknowledgements and receipts (user decision
+#: 2026-10-20). THE ONE PLACE that says which tool output is trusted. Anything
+#: not listed (mail, web, files, list cells, stored runs, MCP reads, a
+#: subagent's or a called agent's output, and every tool added later) is
+#: UNTRUSTED by default.
+#:
+#: `ledger_apply` answers with what it wrote ("Added T-1 …", a suggestion's
+#: plan, an Undo id), composed by the ledger service from the call's own
+#: arguments. `ledger_read` is NOT here: it returns stored text that content
+#: may have put there.
+TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"})
+
+
+def tool_result_is_trusted(tool_name: str | None) -> bool:
+    """True only for a harness-internal acknowledgement (TRUSTED_TOOL_RESULTS)."""
+    return bool(tool_name) and tool_name in TRUSTED_TOOL_RESULTS
+
+
 def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) -> tuple[str, str]:
     """FR-006. Which turn caused the call being dispatched, and its source.
 
     Content the agent READ may SUGGEST an action but can never confirm it or
-    originate it silently. So the question is not "is the last message a tool
-    result" — at dispatch the last message is ALWAYS the AI message making the
-    call, which is why that check never fired (reported 2026-10-19). Walk back
-    past the AI message(s) of this step; the first other message is the cause:
+    originate it silently. So the question is: did UNTRUSTED content enter
+    this turn before the call? Walk back from the call to the turn's start
+    (the user's message), past the AI messages of each step:
 
-      a genuine user turn  -> ("user", "")
-      tool result(s)       -> ("content", "<the tool(s) that produced them>")
-      anything else        -> ("unknown", "")   fails toward card-only
+      any untrusted tool result on the way  -> ("content", "<those tools>")
+      only trusted ones (the harness's own
+        write acknowledgements), then the
+        user's message                       -> ("user", "")
+      anything else first                    -> ("unknown", "")  fails toward card-only
 
-    A trigger-injected turn is a HumanMessage by shape, so `synthetic` (from
-    runtime context, provenance.is_synthetic_turn) is consulted first.
+    Trust is decided in one place (tool_result_is_trusted, default untrusted).
+    Once untrusted content is in the turn, every later call in it is tainted,
+    whatever came after. A trigger-injected turn is a HumanMessage by shape,
+    so `synthetic` (from runtime context, provenance.is_synthetic_turn) is
+    consulted first.
     """
     if synthetic:
         return ORIGIN_AUTOMATION, ""
     items = list(messages or [])
+    untrusted: list[str] = []
     for index in range(len(items) - 1, -1, -1):
         message = items[index]
         if _message_type(message) == "ai" and not is_tool_result(message):
             continue
         if is_tool_result(message):
-            return ORIGIN_CONTENT, _content_source(items, index)
+            name = _tool_name_of(items, message)
+            if not tool_result_is_trusted(name) and name not in untrusted:
+                untrusted.insert(0, name)
+            continue
         if is_invitation(message):
-            return ORIGIN_INVITATION, ""
+            return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_INVITATION, "")
         if is_user_turn(message):
-            return ORIGIN_USER, ""
-        return ORIGIN_UNKNOWN, ""
-    return ORIGIN_UNKNOWN, ""
-
-
-def _content_source(items: list[Any], index: int) -> str:
-    """The tool(s) whose results sit at the end of the read, in call order."""
-    names: list[str] = []
-    while index >= 0 and is_tool_result(items[index]):
-        name = _tool_name_of(items, items[index])
-        if name not in names:
-            names.insert(0, name)
-        index -= 1
-    return ", ".join(names)
+            return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_USER, "")
+        return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
+    return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
 
 
 def _tool_name_of(items: list[Any], result: Any) -> str:
