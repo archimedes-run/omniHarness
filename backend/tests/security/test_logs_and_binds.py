@@ -296,6 +296,7 @@ def reopen(*_):
     global f
     f.close()
     f = open(os.path.join(d, "access.log"), "a", buffering=1)
+    open(os.path.join(d, "error.log"), "a").close()  # nginx reopens every log
 signal.signal(signal.SIGUSR1, reopen)
 open(os.path.join(d, "ready"), "w").close()
 i = 0
@@ -494,3 +495,42 @@ def test_no_host_command_execution_remains(monkeypatch):
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "internal-token-value-xyz")
     out = LocalSandbox("t").execute_command("env")
     assert out == HOST_EXECUTION_REMOVED and "internal-token-value-xyz" not in out
+
+
+def test_console_captures_are_capped_without_losing_the_capture(tmp_path) -> None:
+    import gzip
+
+    if shutil.which("gzip") is None:
+        pytest.skip("gzip not installed: cap NOT checked")
+    log = tmp_path / "gateway.console.log"
+    log.write_text("x" * 2000 + "\n")
+    subprocess.run(["sh", str(REPO / "docker/nginx/rotate-logs.sh"), "cap", str(log), "1000"], check=True, timeout=30)
+    [kept] = list(tmp_path.glob("gateway.console-*.log.gz"))
+    assert gzip.decompress(kept.read_bytes()).decode() == "x" * 2000 + "\n"
+    assert log.read_text() == ""
+    subprocess.run(["sh", str(REPO / "docker/nginx/rotate-logs.sh"), "cap", str(log), "1000"], check=True, timeout=30)
+    assert len(list(tmp_path.glob("gateway.console-*.log.gz"))) == 1  # under the cap: untouched
+
+
+def test_the_host_nginx_and_console_logs_are_rotated_by_serve_sh() -> None:
+    serve = (REPO / "scripts/serve.sh").read_text()
+    assert 'LOG_NAMES="nginx-access nginx-error"' in serve and "rotate-logs.sh loop logs logs/nginx.pid" in serve
+    caps = re.search(r'CAP_FILES="([^"]+)"', serve).group(1).split()
+    assert {"logs/gateway.console.log", "logs/frontend.log", "logs/nginx.log"} <= set(caps)
+    local = (REPO / "docker/nginx/nginx.local.conf").read_text()
+    assert "pid logs/nginx.pid;" in local
+
+
+def test_old_pre_rotation_copies_follow_retention(tmp_path) -> None:
+    import os
+    import time
+
+    old = tmp_path / "gateway-pre-rotation-1.log"
+    old.write_text("old")
+    os.utime(old, (time.time() - 40 * 86400, time.time() - 40 * 86400))
+    recent = tmp_path / "gateway-pre-rotation-2.log"
+    recent.write_text("recent")
+    h = _handler(tmp_path, [date(2026, 10, 20)])
+    h.emit(_record("x"))
+    h.close()
+    assert not old.exists() and recent.exists()

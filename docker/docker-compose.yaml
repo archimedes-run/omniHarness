@@ -36,9 +36,11 @@ services:
       - ${OMNI_HARNESS_LOG_DIR:-../logs}/nginx:/var/log/nginx
       # Daily rotation, 30 days kept, gzip (USR1 reopen: no lines lost).
       - ./nginx/rotate-logs.sh:/etc/nginx/rotate-logs.sh:ro
+      # The console captures the other containers append to, size-capped here.
+      - ${OMNI_HARNESS_LOG_DIR:-../logs}:/var/log/omni
     command: >
       sh -c "cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
-      && (sh /etc/nginx/rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &)
+      && (CAP_FILES='/var/log/omni/gateway.console.log /var/log/omni/frontend.log' sh /etc/nginx/rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &)
       && nginx -g 'daemon off;'"
     depends_on:
       - frontend

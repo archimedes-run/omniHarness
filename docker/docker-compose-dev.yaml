@@ -73,6 +73,8 @@ services:
       - ../logs/nginx:/var/log/nginx
       # Daily rotation, 30 days kept, gzip (USR1 reopen: no lines lost).
       - ./nginx/rotate-logs.sh:/etc/nginx/rotate-logs.sh:ro
+      # The console captures the other containers append to, size-capped here.
+      - ../logs:/var/log/omni
     command:
       - sh
       - -c
@@ -80,7 +82,7 @@ services:
         set -e
         cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
         test -e /proc/net/if_inet6 || sed -i '/^[[:space:]]*listen[[:space:]]\+\[::\]:2026;/d' /etc/nginx/nginx.conf
-        sh /etc/nginx/rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &
+        CAP_FILES='/var/log/omni/gateway.console.log /var/log/omni/frontend.log' sh /etc/nginx/rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &
         exec nginx -g 'daemon off;'
     depends_on:
       - frontend

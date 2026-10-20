@@ -81,6 +81,16 @@ class DailyAppendFileHandler(logging.Handler):
         """Delete dated files older than the retention window; return them."""
         cutoff = today - timedelta(days=self.retention_days)
         removed = []
+        # Copies kept from the old shell redirect follow the same retention.
+        pre_rotation = f"{self.path.stem}-pre-rotation-"
+        now = datetime.now().timestamp()
+        for candidate in self.path.parent.glob(f"{pre_rotation}*"):
+            try:
+                if now - candidate.stat().st_mtime > self.retention_days * 86400:
+                    candidate.unlink()
+                    removed.append(candidate)
+            except OSError:
+                pass
         for candidate in self.path.parent.iterdir():
             match = self._pattern.match(candidate.name)
             if not match:
