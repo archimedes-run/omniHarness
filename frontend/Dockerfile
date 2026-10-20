@@ -26,6 +26,9 @@ COPY frontend ./frontend
 # ── Dev: install only, CMD is overridden by docker-compose ───────────────────
 FROM base AS dev
 RUN cd /app/frontend && pnpm install --frozen-lockfile
+# Container-internal: nginx reaches this container over the compose network,
+# so Next binds every interface INSIDE it; the host publishes nothing.
+ENV NEXT_HOST=0.0.0.0
 EXPOSE 3000
 
 # ── Builder: install + compile Next.js ───────────────────────────────────────
@@ -49,5 +52,8 @@ RUN pnpm config set store-dir ${PNPM_STORE_PATH}
 RUN if [ -n "${NPM_REGISTRY}" ]; then pnpm config set registry "${NPM_REGISTRY}"; fi
 WORKDIR /app
 COPY --from=builder /app/frontend ./frontend
+# Container-internal: nginx reaches this container over the compose network,
+# so Next binds every interface INSIDE it; the host publishes nothing.
+ENV NEXT_HOST=0.0.0.0
 EXPOSE 3000
 CMD ["sh", "-c", "cd /app/frontend && pnpm start"]

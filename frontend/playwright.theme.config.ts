@@ -17,11 +17,11 @@ export default defineConfig({
   retries: 0,
   reporter: "list",
   timeout: 60_000,
-  use: { baseURL: "http://localhost:3000", ...devices["Desktop Chrome"] },
+  use: { baseURL: "http://127.0.0.1:3000", ...devices["Desktop Chrome"] },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "pnpm build && pnpm start",
-    url: "http://localhost:3000",
+    command: "pnpm build && pnpm exec next start -H 127.0.0.1 -p 3000",
+    url: "http://127.0.0.1:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
     env: {
