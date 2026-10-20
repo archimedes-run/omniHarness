@@ -217,3 +217,52 @@ test("a save made from an old version is refused and says so", async ({
     "changed since you opened it",
   );
 });
+
+test("granting a reversible action saves as a new version, from the one shown", async ({
+  page,
+}) => {
+  const seen = await stubStudio(page);
+  await page.goto("/workspace/chats?panel=agents&item=evening-wrap-up", {
+    waitUntil: "networkidle",
+  });
+  await page.getByTestId("studio-tab-autonomy").click();
+  await expect(page.getByTestId("grant-tasks").locator("input")).toBeChecked();
+  await expect(page.getByTestId("grant-archive")).toContainText(
+    "Changing its status brings it back.",
+  );
+  await expect(page.getByTestId("always-waits")).toContainText(
+    "github_create_issue",
+  );
+  await page.getByRole("button", { name: "Show all 10" }).click();
+  await expect(page.getByTestId("always-waits")).toContainText(
+    "github_merge_pull_request",
+  );
+  await page.getByTestId("grant-archive").locator("input").check();
+  await page.getByTestId("grant-notes").locator("input").uncheck();
+  expect(seen.autonomyPuts).toEqual([]);
+  await page.getByTestId("studio-save").click();
+  await expect.poll(() => seen.autonomyPuts.length).toBe(1);
+  expect(seen.autonomyPuts[0]).toEqual({
+    agent: "evening-wrap-up",
+    granted: ["tasks", "archive"],
+    base_version: 3,
+  });
+  expect(seen.agentWrites, "an unchanged agent was rewritten").toEqual([]);
+});
+
+test("an agent edit and a grant saved together chain their versions", async ({
+  page,
+}) => {
+  const seen = await stubStudio(page);
+  await page.goto("/workspace/chats?panel=agents&item=evening-wrap-up", {
+    waitUntil: "networkidle",
+  });
+  await page.getByLabel("What it does, in one line").fill("Wraps up the day");
+  await page.getByTestId("studio-tab-autonomy").click();
+  await page.getByTestId("grant-archive").locator("input").check();
+  await page.getByTestId("studio-save").click();
+  await expect.poll(() => seen.autonomyPuts.length).toBe(1);
+  expect(seen.agentWrites[0]!.body).toMatchObject({ base_version: 3 });
+  // The agent edit made version 4; the grant is based on it, not on 3.
+  expect(seen.autonomyPuts[0]).toMatchObject({ base_version: 4 });
+});

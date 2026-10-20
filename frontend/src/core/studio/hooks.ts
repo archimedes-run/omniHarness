@@ -38,3 +38,22 @@ export function useAgentRuns(name: string | null) {
   });
   return { runs: data, error, isLoading };
 }
+
+export function useAutonomy(name: string | null) {
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["studio", "autonomy", name],
+    queryFn: () => api.loadAutonomy(name!),
+    enabled: !!name,
+  });
+  return { autonomy: data, error, isLoading };
+}
+
+export function useGrantUses(name: string | null) {
+  const { data, error } = useQuery({
+    queryKey: ["studio", "grant-uses", name],
+    queryFn: () => api.loadGrantUses(name!),
+    enabled: !!name,
+    refetchInterval: 60_000,
+  });
+  return { uses: data, error };
+}

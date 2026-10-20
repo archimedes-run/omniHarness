@@ -3,6 +3,8 @@ import { getBackendBaseURL } from "@/core/config";
 
 import type {
   AgentRuns,
+  AutonomyView,
+  GrantUse,
   CustomSkill,
   DraftResponse,
   SkillFiles,
@@ -111,3 +113,23 @@ export const undoTo = (
     method: "POST",
     body: JSON.stringify({ to_version: toVersion, base_version: baseVersion }),
   });
+
+export const loadAutonomy = (name: string) =>
+  call<AutonomyView>(`/api/studio/agents/${encodeURIComponent(name)}/autonomy`);
+
+/** Grant exactly `granted` (revoking the rest), as a new agent version. */
+export const saveAutonomy = (
+  name: string,
+  granted: string[],
+  baseVersion: number,
+) =>
+  call<AutonomyView>(
+    `/api/studio/agents/${encodeURIComponent(name)}/autonomy`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ granted, base_version: baseVersion }),
+    },
+  );
+
+export const loadGrantUses = (name: string) =>
+  call<GrantUse[]>(`/api/studio/agents/${encodeURIComponent(name)}/grant-uses`);

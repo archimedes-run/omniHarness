@@ -82,3 +82,35 @@ export interface Versions {
   current: number;
   versions: VersionSummary[];
 }
+
+/** Mirrors the autonomy routes of app/gateway/routers/studio.py. */
+export interface ActionClassView {
+  id: string;
+  label: string;
+  /** What it lets the agent do, in plain words. */
+  allows: string;
+  granted: boolean;
+  grantable: boolean;
+  not_grantable_reason: string;
+}
+
+export interface AutonomyView {
+  agent: string;
+  version: number;
+  classes: ActionClassView[];
+  cap_per_run: number;
+  always_waits: string[];
+  rules_error: string | null;
+}
+
+export interface GrantUse {
+  at: string;
+  tool: string;
+  classes: string[];
+  targets: string[];
+  thread_id: string | null;
+  rule_id: string | null;
+  origin: "automation" | "content" | "unknown" | string;
+  origin_source: string;
+  count_in_run: number;
+}

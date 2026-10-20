@@ -15,6 +15,7 @@ import { useProjects } from "@/core/ledger/hooks";
 import { useSkills } from "@/core/skills/hooks";
 import { useAgentRuns, useStudioOptions } from "@/core/studio";
 
+import { DoneOnItsOwn } from "./autonomy";
 import { useStudioCopy } from "./copy";
 import { DraftBar, DraftNote } from "./draft-bar";
 import { nextRunText, RecentRuns, ScheduleList } from "./runs";
@@ -46,6 +47,8 @@ interface TabProps {
 interface OverviewProps extends TabProps {
   /** null for an agent not saved yet. */
   agentId: string | null;
+  /** The granted classes' labels; null when they cannot be read yet. */
+  grantLabels: string[] | null;
 }
 
 export function usesSummary(
@@ -67,7 +70,13 @@ export function usesSummary(
   return `${tools} · ${skills}`;
 }
 
-export function OverviewTab({ form, patch, isLead, agentId }: OverviewProps) {
+export function OverviewTab({
+  form,
+  patch,
+  isLead,
+  agentId,
+  grantLabels,
+}: OverviewProps) {
   const c = useStudioCopy().agents;
   const { projects, error: projectsError } = useProjects();
   const { runs, error: runsError } = useAgentRuns(agentId);
@@ -139,10 +148,17 @@ export function OverviewTab({ form, patch, isLead, agentId }: OverviewProps) {
         </div>
         <div className={statCard} data-testid="overview-on-its-own">
           <div className="text-muted-foreground text-xs">{c.mayOnItsOwn}</div>
-          <div className="mt-1">{c.nothingOnItsOwn}</div>
+          <div className="mt-1">
+            {!agentId || grantLabels?.length === 0
+              ? c.nothingOnItsOwn
+              : grantLabels
+                ? grantLabels.join(", ")
+                : "…"}
+          </div>
         </div>
       </div>
       {agentId ? <RecentRuns agentId={agentId} /> : null}
+      {agentId ? <DoneOnItsOwn agentId={agentId} /> : null}
     </TabPanel>
   );
 }
@@ -308,15 +324,6 @@ export function ToolsTab({
         testId="agent-skills"
       />
       <DraftNote note={draftNote && !draftNote.bad ? draftNote : null} />
-    </TabPanel>
-  );
-}
-
-export function AutonomyTab({ isLead: _isLead }: { isLead: boolean }) {
-  const c = useStudioCopy().agents;
-  return (
-    <TabPanel value="autonomy" className="flex flex-col gap-3.5 outline-none">
-      <p className="text-foreground-2 m-0">{c.autonomyIntro}</p>
     </TabPanel>
   );
 }

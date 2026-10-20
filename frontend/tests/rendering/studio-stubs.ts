@@ -188,6 +188,9 @@ export async function stubStudio(
         );
       }
       Object.assign(agent ?? {}, body);
+      if (agent)
+        (agent as { version?: number }).version =
+          ((agent as { version?: number }).version ?? 0) + 1;
       return json(route, agent);
     }
     return agent ? json(route, agent) : json(route, { detail: "nope" }, 404);
@@ -275,6 +278,88 @@ export async function stubStudio(
           },
           dropped: [],
         });
+  });
+  const autonomy = {
+    version: 3,
+    granted: ["tasks", "notes"] as string[],
+  };
+  await page.route("**/api/studio/agents/*/autonomy", (route) => {
+    const agent = decodeURIComponent(route.request().url().split("/").at(-2)!);
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as { granted: string[] };
+      seen.autonomyPuts.push({ agent, ...body });
+      autonomy.granted = body.granted;
+      autonomy.version += 1;
+    }
+    const mine = agent === "evening-wrap-up" ? autonomy.granted : [];
+    return json(route, {
+      agent,
+      version: agent === "evening-wrap-up" ? autonomy.version : 0,
+      cap_per_run: 20,
+      rules_error: null,
+      always_waits: [
+        "task",
+        "mcp_build",
+        "filesystem_delete*",
+        "googlecalendar_delete_event",
+        "googlecalendar_update_event",
+        "connector-gmail_GMAIL_DELETE_MESSAGE",
+        "github_add_issue_comment",
+        "github_create_issue",
+        "github_merge_pull_request",
+        "github_create_repository",
+      ],
+      classes: [
+        {
+          id: "tasks",
+          label: "Create and update tasks",
+          allows:
+            "Add tasks to your projects, and change a task's title, due date or status. It never drops a task.",
+          granted: mine.includes("tasks"),
+          grantable: true,
+          not_grantable_reason: "",
+        },
+        {
+          id: "notes",
+          label: "Add notes and decisions",
+          allows:
+            "Write a note or a decision into a project. You can edit or remove it later.",
+          granted: mine.includes("notes"),
+          grantable: true,
+          not_grantable_reason: "",
+        },
+        {
+          id: "archive",
+          label: "Archive stale tasks",
+          allows:
+            "Mark a task dropped, which hides it from the lists. Changing its status brings it back.",
+          granted: mine.includes("archive"),
+          grantable: true,
+          not_grantable_reason: "",
+        },
+      ],
+    });
+  });
+  await page.route("**/api/studio/agents/*/grant-uses", (route) => {
+    const agent = decodeURIComponent(route.request().url().split("/").at(-2)!);
+    return json(
+      route,
+      agent === "evening-wrap-up"
+        ? [
+            {
+              at: new Date(Date.now() - 3_600_000).toISOString(),
+              tool: "ledger_apply",
+              classes: ["tasks"],
+              targets: ["Add task “Follow up on judging” to “HackMIT 2026”"],
+              thread_id: "t-run",
+              rule_id: "evening-wrap",
+              origin: "content",
+              origin_source: "web_fetch",
+              count_in_run: 1,
+            },
+          ]
+        : [],
+    );
   });
   await page.route("**/api/studio/options", (route) =>
     json(route, {
