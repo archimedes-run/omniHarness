@@ -45,6 +45,7 @@ from typing import Literal
 from app.gateway.mcp_build_flow import placeholder, scrub
 from app.gateway.mcp_docker import CliDockerRunner, DockerRunner
 from app.gateway.mcp_egress import build_egress_rules
+from app.gateway.mcp_names import name_collision, slugify, tool_name_collision, wire_key
 from app.gateway.mcp_secrets import McpSecretsVault
 from app.gateway.mcp_view_tokens import ViewTokens
 from omniharness.persistence.mcp_server.approval import code_sha256
@@ -149,6 +150,17 @@ def _init_deploy_steps() -> list[dict]:
     return steps
 
 
+def _read_config(path: Path | None) -> dict:
+    """The extensions config as raw JSON (every field kept), or {} if absent."""
+    if path is None or not Path(path).exists():
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _tar_context(files: dict[str, str]) -> bytes:
     """A docker build context as an in-memory tar (no files on disk)."""
     buf = io.BytesIO()
@@ -188,8 +200,8 @@ def _container_name(server_id: str) -> str:
 
 
 def _config_entry_name(server_name: str) -> str:
-    """The extensions_config.json key ``connect`` writes for a server."""
-    return re.sub(r"[^a-z0-9\-]", "-", server_name.lower()).strip("-")
+    """The extensions_config.json key ``connect`` writes for a server (#59: built/<slug>)."""
+    return wire_key(slugify(server_name))
 
 
 # The URL ``connect`` writes: a studio container on a local port. An entry with
@@ -696,6 +708,9 @@ class MCPServerManager:
         if code_sha256_seen != current:
             raise PermissionError("code changed: the code you approved is not the code stored now")
         tools = {t.get("name") for t in (server.get("tools_discovered") or status.tools_discovered or [])}
+        problem = await self.name_problem(server, [t for t in tools if t])
+        if problem:
+            raise PermissionError(f"name collision: {problem}")
         tiers = dict(tool_tiers or {})
         for name, tier in tiers.items():
             if name not in tools or tier not in (1, 2, 3):
@@ -709,6 +724,31 @@ class MCPServerManager:
         }
         await self._repo.set_pending_approval(server_id, pending, user_id=user_id)
         return pending
+
+    async def name_problem(self, server: dict, tools: list[str]) -> str | None:
+        """Why this server's name or tool names can't be registered, or None (#59).
+
+        Its slug must not equal any configured MCP server (canonically, with or
+        without ``built__``) or another built server; its prefixed tool names
+        must not equal or read as another server's.
+        """
+        from omniharness.config.extensions_config import ExtensionsConfig
+
+        server_id = server["id"]
+        slug = slugify(server["name"])
+        key = wire_key(slug)
+        path = ExtensionsConfig.resolve_config_path()
+        raw = _read_config(path) if path is not None else {}
+        configured = raw.get("mcpServers") or {}
+        others = {k: v for k, v in configured.items() if not (k == key and isinstance(v, dict) and v.get("server_id") == server_id)}
+        if key in others:
+            return f"{key!r} is already configured for another server"
+        built_rows = [r for r in await self._repo.list_servers(user_id=None, limit=500) if r["id"] != server_id]
+        clash = name_collision(slug, others.keys(), [slugify(r["name"]) for r in built_rows])
+        if clash:
+            return f"{('built/' + slug)!r} collides with {clash!r}"
+        other_tools = [f"{wire_key(slugify(r['name']))}_{t.get('name')}" for r in built_rows for t in (r.get("tools_discovered") or []) if t.get("name")]
+        return tool_name_collision(key, tools, others.keys(), other_tools)
 
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Stop a server: stop and remove its container, drop its agent config entry.
@@ -1028,7 +1068,7 @@ class MCPServerManager:
 
         Returns {"sse_url": ..., "server_name": ...}.
         """
-        from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
+        from omniharness.config.extensions_config import ExtensionsConfig, atomic_write_json, reload_extensions_config
 
         db_server = await self._load_and_verify(server_id, user_id)
         if not db_server.get("approved"):
@@ -1050,25 +1090,36 @@ class MCPServerManager:
 
         internal_url = f"http://{internal_host}:{container_port}/sse"
         display_url = f"http://{display_host}:{container_port}/sse"
-        server_name = _config_entry_name(db_server["name"])
+        slug = slugify(db_server["name"])
+        server_name = wire_key(slug)
+        approval = db_server.get("approval") or {}
+        tools = sorted((approval.get("tool_tiers") or {}).keys()) or [t.get("name") for t in db_server.get("tools_discovered") or [] if t.get("name")]
+        problem = await self.name_problem(db_server, tools)
+        if problem:
+            raise PermissionError(f"name collision: {problem}")
 
         config_path = ExtensionsConfig.resolve_config_path()
         if config_path is None:
             config_path = Path.cwd().parent / "extensions_config.json"
-
-        current_cfg = get_extensions_config()
-        config_data: dict = {
-            "mcpServers": {n: s.model_dump() for n, s in current_cfg.mcp_servers.items()},
-            "skills": {n: {"enabled": sk.enabled} for n, sk in current_cfg.skills.items()},
-        }
-        config_data["mcpServers"][server_name] = {
+        raw = _read_config(config_path)
+        servers = raw.setdefault("mcpServers", {})
+        # #59: the reserved built/ namespace; this server's entry carries its
+        # id and the approval it runs under (hash + the tiers the user set).
+        # The file is changed in place, so every other entry is kept as is.
+        servers[server_name] = {
             "enabled": True,
             "type": "sse",
             "url": internal_url,  # gateway-accessible URL
             "description": db_server.get("description") or f"MCP server: {db_server['name']}",
+            "server_id": server_id,
+            "built": {
+                "display_name": f"built/{slug}",
+                "code_sha256": approval.get("code_sha256"),
+                "tool_tiers": dict(approval.get("tool_tiers") or {}),
+            },
         }
-        with open(config_path, "w", encoding="utf-8") as fh:
-            json.dump(config_data, fh, indent=2)
+        raw.setdefault("skills", {})
+        atomic_write_json(config_path, raw)
 
         reload_extensions_config()
         logger.info("MCP server %r connected at %s (extensions_config updated)", server_name, internal_url)

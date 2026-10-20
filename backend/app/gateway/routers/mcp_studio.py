@@ -46,6 +46,7 @@ from app.gateway.deps import (
     get_stream_bridge,
 )
 from app.gateway.mcp_build_flow import build_prompt, describe_build, extract_secrets, scrub, server_name_from
+from app.gateway.mcp_names import slugify
 from app.gateway.mcp_server_manager import McpDeployInProgressError, McpTeardownError
 from app.gateway.services import (
     build_run_config,
@@ -266,6 +267,17 @@ async def _described(request: Request, server: dict, user_id: str | None) -> Mcp
     )
 
 
+async def _refuse_name_collision(request: Request, slug: str) -> None:
+    """409 before anything is created when *slug* collides with a configured
+    MCP server or another built server (#59: built servers live under built/)."""
+    manager = getattr(request.app.state, "mcp_server_manager", None)
+    if manager is None:
+        return
+    problem = await manager.name_problem({"id": "", "name": slug}, [])
+    if problem:
+        raise HTTPException(status_code=409, detail=f"Can't build it under that name: {problem}. Describe it differently, or remove the other server first.")
+
+
 def _user_or_none(request: Request) -> str | None:
     auth = getattr(request.state, "auth", None)
     return str(auth.user.id) if auth and auth.user else None
@@ -343,7 +355,8 @@ async def start_build(body: StartBuildRequest, request: Request) -> StartBuildRe
     _check_flag(request)
     user_id = _get_user_id(request)
     extracted = extract_secrets(body.description.strip())
-    name = server_name_from(extracted.text)
+    name = slugify(server_name_from(extracted.text))
+    await _refuse_name_collision(request, name)
     repo = get_mcp_server_repo(request)
     server = await repo.create(name=name, owner_id=user_id, language="python", description=extracted.text, egress_hosts=[])
     server_id = server["id"]
@@ -452,6 +465,8 @@ async def enable_mcp_server(server_id: str, body: EnableRequest, request: Reques
             raise HTTPException(status_code=404, detail="MCP server not found") from exc
         if "code changed" in str(exc):
             raise HTTPException(status_code=409, detail="The code changed since you opened it; review it again.") from exc
+        if "name collision" in str(exc):
+            raise HTTPException(status_code=409, detail=f"Can't turn it on under that name: {exc}") from exc
         raise HTTPException(status_code=409, detail="It can be approved only after its sandbox tests pass.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -503,13 +518,15 @@ async def create_mcp_server(
     _check_flag(request)
     user_id = _get_user_id(request)
     repo = get_mcp_server_repo(request)
+    name = slugify(body.name)  # #59: [a-z0-9-] only, the same slug rule everywhere
+    await _refuse_name_collision(request, name)
 
     extracted = extract_secrets(body.description) if body.description else None
     description = extracted.text if extracted else None
     # Outbound hosts are read from the code the agent writes, never taken
     # from the client (#59): they are part of what the user approves.
     server = await repo.create(
-        name=body.name,
+        name=name,
         owner_id=user_id,
         language=body.language or "python",
         description=description,
@@ -526,7 +543,7 @@ async def create_mcp_server(
     prompt_parts = [
         "Use the mcp-server-builder skill to build an MCP server.",
         f"Server ID: {server_id}",
-        f"Name: {body.name}",
+        f"Name: {name}",
     ]
     if description:
         prompt_parts.append(f"Description: {description}")
@@ -537,7 +554,7 @@ async def create_mcp_server(
     initial_message = "\n".join(prompt_parts)
     del extracted
 
-    thread_id = await _start_build_run(request, server_id=server_id, name=body.name, message=initial_message, user_id=user_id)
+    thread_id = await _start_build_run(request, server_id=server_id, name=name, message=initial_message, user_id=user_id)
 
     return McpServerCreateResponse(server_id=server_id, thread_id=thread_id)
 

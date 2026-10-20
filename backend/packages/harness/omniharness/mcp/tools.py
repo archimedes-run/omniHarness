@@ -73,6 +73,7 @@ async def get_mcp_tools() -> list[BaseTool]:
     # reflected when initializing MCP tools.
     extensions_config = ExtensionsConfig.from_file()
     servers_config = build_servers_config(extensions_config)
+    _drop_unapproved_built(extensions_config, servers_config)
 
     if not servers_config:
         logger.info("No enabled MCP servers configured")
@@ -150,6 +151,25 @@ async def get_mcp_tools() -> list[BaseTool]:
     except Exception as e:
         logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
         return []
+
+
+def _drop_unapproved_built(extensions_config: ExtensionsConfig, servers_config: dict) -> None:
+    """The ``built__`` prefix is reserved for servers the MCP builder turned on
+    (Feature 006, #59). An entry under it that does not carry the builder's
+    record (its server id and the approved code hash) is not loaded, and the
+    refusal is reported as a failing source, not skipped silently."""
+    from omniharness.tools.names import canonical_tool_name
+
+    for name in list(servers_config):
+        if not canonical_tool_name(name).startswith("built__"):
+            continue
+        entry = extensions_config.mcp_servers.get(name)
+        extra = (getattr(entry, "model_extra", None) or {}) if entry is not None else {}
+        built = extra.get("built") if isinstance(extra.get("built"), dict) else {}
+        if extra.get("server_id") and built.get("code_sha256"):
+            continue
+        servers_config.pop(name, None)
+        load_report.record_failed(name, PermissionError("built/ is reserved for servers the MCP builder approved; this entry has no approval record"))
 
 
 def _apply_tool_surface(extensions_config: ExtensionsConfig, server_name: str, server_tools: list) -> list:

@@ -142,6 +142,6 @@ def test_tests_run_in_the_sandbox_with_placeholders_and_enabling_needs_approval(
     assert server["approved"] is True
     assert server["state"] == "enabled", server
     config = json.loads(builder_gateway.extensions.read_text())
-    assert server["name"] in config["mcpServers"]
+    assert f"built__{server['name']}" in config["mcpServers"]  # #59: the reserved namespace
     # Turned on with the real key; still nothing returned carries it.
     assert SECRET not in client.get("/api/mcp-studio/servers").text

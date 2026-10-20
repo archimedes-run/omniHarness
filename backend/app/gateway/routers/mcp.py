@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.gateway.mcp_names import is_built_key
 from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
 
 logger = logging.getLogger(__name__)
@@ -144,9 +145,25 @@ async def update_mcp_configuration(request: McpConfigUpdateRequest) -> McpConfig
         # Load current config to preserve skills configuration
         current_config = get_extensions_config()
 
-        # Convert request to dict format for JSON serialization
+        # Convert request to dict format for JSON serialization.
+        # #59: built/ servers (keys `built__*`) belong to the MCP builder. They
+        # are carried over from the file exactly as written there (their
+        # approval record included); a request may only switch one on or off,
+        # and may not add one by hand.
+        current_raw = _read_raw(config_path)
+        current_built = {k: v for k, v in (current_raw.get("mcpServers") or {}).items() if is_built_key(k)}
+        servers_out: dict = {}
+        for name, server in request.mcp_servers.items():
+            if is_built_key(name):
+                if name not in current_built:
+                    raise HTTPException(status_code=400, detail=f"{name!r}: built/ servers are added by the MCP builder, not by hand")
+                servers_out[name] = {**current_built[name], "enabled": bool(server.enabled)}
+            else:
+                servers_out[name] = server.model_dump()
+        for name, entry in current_built.items():
+            servers_out.setdefault(name, entry)
         config_data = {
-            "mcpServers": {name: server.model_dump() for name, server in request.mcp_servers.items()},
+            "mcpServers": servers_out,
             "skills": {name: {"enabled": skill.enabled} for name, skill in current_config.skills.items()},
         }
 
@@ -165,6 +182,18 @@ async def update_mcp_configuration(request: McpConfigUpdateRequest) -> McpConfig
         reloaded_config = reload_extensions_config()
         return McpConfigResponse(mcp_servers={name: McpServerConfigResponse(**server.model_dump()) for name, server in reloaded_config.mcp_servers.items()})
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update MCP configuration: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update MCP configuration: {str(e)}")
+
+
+def _read_raw(path) -> dict:
+    import json
+
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8")) if path is not None and Path(path).exists() else {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}

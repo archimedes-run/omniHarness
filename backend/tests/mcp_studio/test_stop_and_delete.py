@@ -10,7 +10,7 @@ Through the real app; docker is a recorder (no daemon is touched).
 from __future__ import annotations
 
 CONTAINER = "omni-mcp-{}"
-ENTRY = "github-issue-connector"
+ENTRY = "built__github-issue-connector"  # #59: built servers live under built/
 
 
 def _container(server_id: str) -> str:

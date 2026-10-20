@@ -25,6 +25,7 @@ from typing import Any
 
 from omniharness.tools.names import canonical_tool_name
 
+from .built_tiers import built_tool_tier, is_built_tool
 from .config import RuleSet
 from .models import ClassificationRule, PolicyDecision, RuleException, Tier
 
@@ -41,6 +42,14 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet)
     reimplementing the logic — an inspector that answers a slightly different
     question is worse than none, because it is believed (FR-038).
     """
+    # Feature 006 #59: a built server's tools never match the shared rules (a
+    # built server named `github` must not inherit `github_*` Tier 1, nor a
+    # user's `*`). Their tier is the one set on the approval screen, else 3.
+    # Unreadable rules make everything Tier 3, built tools included.
+    if is_built_tool(tool_name):
+        tier = UNKNOWN_TOOL_TIER if ruleset.unreadable else built_tool_tier(tool_name)
+        return PolicyDecision(tool_name=tool_name, tier=tier, deciding_rule=None)
+
     best: tuple[Tier, ClassificationRule | None, RuleException | None] = (UNKNOWN_TOOL_TIER, None, None)
     matched = False
     name = canonical_tool_name(tool_name)
