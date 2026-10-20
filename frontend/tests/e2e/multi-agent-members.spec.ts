@@ -247,3 +247,35 @@ test("a result that ran while the chat was replying says it is waiting to post, 
   );
   await expect(page.getByTestId("awaiting-post")).toContainText("wipe_backup");
 });
+
+test("a result whose chat was deleted is kept on the card, said plainly", async ({
+  page,
+}) => {
+  await setUp(page, ["researcher"]);
+  await page.route("**/api/confirmations", (route) =>
+    route.fulfill({
+      json: {
+        actions: [],
+        awaiting_post: [
+          {
+            id: "abcdef123456",
+            thread_id: THREAD,
+            tool_name: "wipe_backup",
+            requester: "researcher",
+            post_state: "dropped",
+            result: "Done. researcher ran wipe_backup. Result: wiped nightly",
+          },
+        ],
+        readable: true,
+        error: "",
+      },
+    }),
+  );
+  await page.goto(`/workspace/chats/${THREAD}`);
+  const item = page.getByTestId("awaiting-post");
+  await expect(item).toHaveAttribute("data-post-state", "dropped", {
+    timeout: 15_000,
+  });
+  await expect(item).toContainText("Chat deleted; result kept here");
+  await expect(item).toContainText("wiped nightly");
+});

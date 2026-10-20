@@ -18,6 +18,13 @@ export type ResolveOutcome =
   /** The chat is mid-reply, and this result is posted into it. Nothing ran;
    *  confirm again when the reply has finished. */
   | "thread_busy"
+  /** Too many confirmed calls are running; nothing ran, confirm again later. */
+  | "confirm_busy"
+  /** A decline that arrived while the confirmed call was running: it cannot
+   *  stop it, and the result is shown when it finishes. */
+  | "already_running"
+  /** The chat this was proposed in was deleted: refused, nothing ran. */
+  | "chat_deleted"
   /** A typed "yes" in chat for an action the user did not cause: only the
    *  card's button can confirm it. Never returned by the card's own route. */
   | "card_only";
@@ -63,6 +70,11 @@ export interface AwaitingPost {
   thread_id: string | null;
   tool_name: string;
   requester: string;
+  /** "waiting" (it will be posted), "failed" (retries ran out) or "dropped"
+   *  (the chat was deleted). Absent from an older gateway: "waiting". */
+  post_state?: "waiting" | "failed" | "dropped";
+  /** For "failed" and "dropped": the result, kept here. */
+  result?: string;
 }
 
 export interface PendingList {
