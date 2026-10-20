@@ -242,7 +242,11 @@ def test_synthetic_claim_without_grant_is_dropped(sec, agent_turns) -> None:
     tid = internal.post("/api/threads", json={}).json()["thread_id"]
     r = _say(internal, tid, "x", context={"turn_provenance": "synthetic-trigger"}, config={"configurable": {"turn_provenance": "synthetic-trigger"}, "metadata": {"turn_provenance": "synthetic-trigger"}})
     assert r.status_code == 200
-    assert is_user_turn(_last_human(SEEN[0]))  # not synthetic
+    # [author's edit] Was `is_user_turn(...)`: a bare internal-token call was a
+    # tagged user turn. The user's later rule (review round 3) is that ONLY a
+    # person's session, or a channel message with a channel-owner grant, is the
+    # user; so the claim is still dropped (not synthetic) AND not the user.
+    assert not is_user_turn(_last_human(SEEN[0]))
 
 
 def test_grant_single_use_body_bound_path_bound_and_race(sec) -> None:

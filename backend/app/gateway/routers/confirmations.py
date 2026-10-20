@@ -234,8 +234,9 @@ async def list_pending(request: Request) -> PendingListResponse:
 
 async def _resolve(request: Request, action_id: str, *, confirm: bool, body: ResolveRequest) -> ResolveResponse:
     from app.gateway.authz import get_auth_context
-    from app.gateway.ownership import require_access
+    from app.gateway.ownership import require_access, require_person
 
+    require_person(request)
     _, middleware, flow = _policy(request)
     action = middleware.pending.get(action_id)
     if action is not None:
@@ -265,10 +266,11 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
     it, through this trusted channel. Only tools in EDITABLE_TOOLS.
     """
     from app.gateway.authz import get_auth_context
-    from app.gateway.ownership import require_access
+    from app.gateway.ownership import require_access, require_person
     from app.policy.confirm_flow import take_claim
     from app.policy.models import Outcome, PendingAction, Tier, default_expiry
 
+    require_person(request)
     _, middleware, flow = _policy(request)
     now = datetime.now(UTC)
     action = middleware.pending.get(action_id)

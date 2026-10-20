@@ -294,6 +294,21 @@ async def filter_accessible[T](request: Request, records: Iterable[T], owner_of:
     return [r for r in records if await can_access(request, owner_of(r))]
 
 
+def require_person(request: Request) -> None:
+    """Raise 403 for the internal principal: some actions are a PERSON's only.
+
+    Confirming, declining or editing a plan is the owner pressing a button.
+    The internal token (channels, the trigger engine, and anything else that
+    can read it) must never be that button; a channel's owner answers by
+    typing, through the channel path, as a vouched-for user turn.
+    """
+    user = _request_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if is_internal(user):
+        raise HTTPException(status_code=403, detail="Only a person signed in as the owner can answer a confirmation.")
+
+
 async def require_owner_account(request: Request) -> None:
     """FastAPI dependency: the OWNER account (or the internal principal) only.
 

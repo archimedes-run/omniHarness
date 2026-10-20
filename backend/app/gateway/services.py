@@ -557,9 +557,20 @@ async def start_run(
 
     # A channel message is the user's own turn only when the channel's explicit
     # allowlist vouched for the sender; otherwise it is relayed content.
-    from app.gateway.internal_auth import channel_header_present, channel_of, channel_sender_is_owner, trigger_grant_presented
+    from app.gateway.internal_auth import channel_header_present, channel_of, channel_sender_is_owner, trigger_grant_presented  # noqa: F401
 
-    relayed = channel_header_present(request) and not channel_sender_is_owner(request)
+    # Who is speaking? A person's own session: the user. The internal
+    # principal (channels, the trigger engine, anything holding the token) is
+    # the user ONLY for a channel message whose sender the channel's allowlist
+    # vouched for, proven by a single-use channel-owner grant. A bare
+    # internal-token call is never the user's turn.
+    from app.gateway.ownership import is_internal
+
+    caller = getattr(request.state, "user", None)
+    if is_internal(caller):
+        relayed = not await channel_sender_is_owner(request)
+    else:
+        relayed = channel_header_present(request)
 
     # Scheduled-run provenance, decided BEFORE the input is read: only a grant
     # the trigger engine issued for exactly this request marks a turn synthetic.

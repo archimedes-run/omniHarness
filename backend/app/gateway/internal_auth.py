@@ -90,9 +90,11 @@ TRIGGER_GRANT_HEADER_NAME = "X-OmniHarness-Trigger-Grant"
 CHANNEL_HEADER_NAME = "X-OmniHarness-Channel"
 
 
-#: Sent by the channel manager only when the channel's explicit allowlist says
-#: the sender is the owner. Honoured only with the internal token.
-CHANNEL_OWNER_HEADER_NAME = "X-OmniHarness-Channel-Sender-Is-Owner"
+#: Carries a single-use CHANNEL-OWNER grant (kind "channel-owner"), issued by the
+#: channel manager only when the channel's explicit allowlist names the sender.
+#: A bare internal-token call cannot forge it: it is a nonce the manager wrote
+#: to the shared grant directory for exactly this thread's run.
+CHANNEL_OWNER_HEADER_NAME = "X-OmniHarness-Channel-Owner-Grant"
 
 
 def channel_header_present(request) -> bool:
@@ -109,9 +111,18 @@ def trigger_grant_presented(request) -> bool:
     return is_valid_internal_auth_token(headers.get(INTERNAL_AUTH_HEADER_NAME)) and headers.get(TRIGGER_GRANT_HEADER_NAME) is not None
 
 
-def channel_sender_is_owner(request) -> bool:
+async def channel_sender_is_owner(request) -> bool:
+    """A valid channel name AND a channel-owner grant for this very run path."""
     headers = getattr(request, "headers", None) or {}
-    return channel_of(request) is not None and headers.get(CHANNEL_OWNER_HEADER_NAME) == "1"
+    if channel_of(request) is None:
+        return False
+    return redeem_trigger_grant(headers.get(CHANNEL_OWNER_HEADER_NAME), request.method, request.url.path, b"", kind="channel-owner")
+
+
+def issue_channel_owner_grant(run_path: str) -> str:
+    """For the channel manager: this run's message is from the allowlisted owner.
+    Bound to the method and path (the SDK builds the body), single-use."""
+    return issue_trigger_grant("POST", run_path, b"", kind="channel-owner")
 
 
 def channel_of(request) -> str | None:
@@ -141,11 +152,11 @@ def _grant_dir():
     return directory
 
 
-def _request_digest(method: str, path: str, body: bytes) -> str:
-    return hashlib.sha256(method.upper().encode() + b"\0" + path.encode() + b"\0" + body).hexdigest()
+def _request_digest(method: str, path: str, body: bytes, kind: str = "trigger") -> str:
+    return hashlib.sha256(kind.encode() + b"\0" + method.upper().encode() + b"\0" + path.encode() + b"\0" + body).hexdigest()
 
 
-def issue_trigger_grant(method: str, path: str, body: bytes) -> str:
+def issue_trigger_grant(method: str, path: str, body: bytes, *, kind: str = "trigger") -> str:
     """Called by the trigger engine just before it sends ONE request."""
     import json
     import time
@@ -159,7 +170,7 @@ def issue_trigger_grant(method: str, path: str, body: bytes) -> str:
         except OSError:
             pass
     nonce = secrets.token_urlsafe(32)
-    payload = json.dumps({"digest": _request_digest(method, path, body), "expires": now + GRANT_TTL_SECONDS})
+    payload = json.dumps({"digest": _request_digest(method, path, body, kind), "expires": now + GRANT_TTL_SECONDS})
     tmp = directory / f".{nonce}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -168,7 +179,7 @@ def issue_trigger_grant(method: str, path: str, body: bytes) -> str:
     return nonce
 
 
-def redeem_trigger_grant(nonce: str | None, method: str, path: str, body: bytes) -> bool:
+def redeem_trigger_grant(nonce: str | None, method: str, path: str, body: bytes, *, kind: str = "trigger") -> bool:
     """True once, for the request the grant was issued for; False otherwise."""
     import json
     import time
@@ -192,7 +203,7 @@ def redeem_trigger_grant(nonce: str | None, method: str, path: str, body: bytes)
             pass
     if float(grant.get("expires", 0)) < time.time():
         return False
-    return secrets.compare_digest(str(grant.get("digest", "")), _request_digest(method, path, body))
+    return secrets.compare_digest(str(grant.get("digest", "")), _request_digest(method, path, body, kind))
 
 
 async def is_trigger_engine_request(request) -> bool:
