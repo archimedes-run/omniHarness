@@ -76,3 +76,14 @@ def test_settings_show_the_cap_warning(gateway) -> None:
     settings = client.get("/api/run-history/settings").json()
     assert settings["cap_bytes"] == 1_000
     assert "recorded without its content" in settings["warning"]
+
+
+def test_a_run_whose_blob_is_gone_reads_as_withheld_over_http(gateway) -> None:
+    client, home = gateway
+    history = client.app.state.run_history
+    run_id = history.record(kind="automation", source_id="r", body={"big": "m" * (70 * 1024)}, status="completed")
+    (history.blobs / f"{run_id}.json").unlink()
+
+    resp = client.get(f"/api/run-history/runs/{run_id}")
+    assert resp.status_code == 200
+    assert "Withheld" in resp.json()["body"]["withheld"]

@@ -197,3 +197,98 @@ def test_past_the_total_cap_runs_are_recorded_without_content_and_it_warns(tmp_p
 
     store.delete_all()
     assert store.warning() is None
+
+
+def test_a_delete_during_a_record_never_leaves_a_row_without_its_blob(tmp_path, monkeypatch) -> None:
+    """delete_all fires exactly while a large run's blob is being written. With
+    the store's lock it waits for the record to finish; the row and the blob
+    are then deleted together. Either way, no row may name a missing blob."""
+    import threading
+
+    store = RunHistory(tmp_path)
+    original = store._write_blob
+    deleter: list[threading.Thread] = []
+
+    def write_then_delete(name: str, data: bytes) -> None:
+        original(name, data)
+        t = threading.Thread(target=store.delete_all)
+        deleter.append(t)
+        t.start()
+        t.join(timeout=0.3)  # without the lock, the delete completes here
+
+    monkeypatch.setattr(store, "_write_blob", write_then_delete)
+    store.record(kind="automation", source_id="r", body={"big": "z" * (INLINE_MAX + 100)}, status="completed")
+    deleter[0].join()
+
+    for run in store.list(limit=500):
+        assert store.get(run.id)["body"].get("withheld") is None, "a row names a blob that is gone"
+        assert any((tmp_path / "blobs").glob(f"{run.id}.json"))
+
+
+def test_concurrent_records_and_deletes_stay_consistent(tmp_path) -> None:
+    import threading
+
+    store = RunHistory(tmp_path)
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            for _ in range(15):
+                store.record(kind="automation", source_id="r", body={"big": "w" * (INLINE_MAX + 10)}, status="completed")
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def deleter() -> None:
+        try:
+            for _ in range(10):
+                store.delete_all()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer) for _ in range(3)] + [threading.Thread(target=deleter)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    referenced = {f"{r.id}.json" for r in store.list(limit=500)}
+    on_disk_blobs = {p.name for p in (tmp_path / "blobs").iterdir() if not p.name.startswith(".")}
+    assert referenced == on_disk_blobs, "rows and blobs disagree after concurrent deletes"
+
+
+def test_a_missing_blob_reads_as_withheld_not_an_error(tmp_path) -> None:
+    from app.run_history.store import BLOB_MISSING
+
+    store = RunHistory(tmp_path)
+    run_id = store.record(kind="automation", source_id="r", body={"big": "m" * (INLINE_MAX + 10)}, status="completed")
+    (tmp_path / "blobs" / f"{run_id}.json").unlink()
+
+    assert store.get(run_id)["body"] == {"withheld": BLOB_MISSING}
+
+
+def test_a_record_during_a_delete_never_loses_its_blob(tmp_path) -> None:
+    """The mirror case: a record fires exactly while delete_all is removing
+    blob files. It must wait, then land whole: its row AND its blob."""
+    import threading
+
+    store = RunHistory(tmp_path)
+    recorded: list[str] = []
+
+    def record() -> None:
+        recorded.append(store.record(kind="automation", source_id="r", body={"big": "k" * (INLINE_MAX + 10)}, status="completed"))
+
+    class _Blobs(type(store.blobs)):
+        def iterdir(self):
+            t = threading.Thread(target=record)
+            t.start()
+            t.join(timeout=0.3)  # without the lock, the record completes here
+            self._recorder = t
+            return super().iterdir()
+
+    store.blobs = _Blobs(store.blobs)
+    store.delete_all()
+    store.blobs._recorder.join()
+
+    (run_id,) = recorded
+    assert store.get(run_id)["body"].get("withheld") is None, "the run's blob was deleted under it"

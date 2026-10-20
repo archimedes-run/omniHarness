@@ -27,7 +27,10 @@ each tested (tests/run_history):
     the directory 0700 and the database 0600. Nothing here syncs anywhere.
   * DELETABLE. `delete_all()` removes every run and every blob file.
 
-Thread-safe: one connection per call, and SQLite's own locking. The trigger
+Thread-safe: one connection per call, and SQLite's own locking. One lock
+covers a record's blob AND row, and a delete's rows AND blobs, so neither can
+land between the other's two steps; a blob that is missing anyway (another
+process) reads as BLOB_MISSING, never an error. The trigger
 engine records from its worker thread; the routers read from the event loop.
 """
 
@@ -53,6 +56,8 @@ INLINE_MAX = 64 * 1024
 DEFAULT_RETENTION_DAYS = 30
 #: What a string is stored as when it could not be redacted.
 WITHHELD = "[Withheld: could not be redacted]"
+#: A run's body when its blob file is missing or unreadable.
+BLOB_MISSING = "[Withheld: this run's stored content is missing or unreadable]"
 #: One run's stored body is cut to this (bytes of JSON): the longest strings
 #: are shortened first, each saying how much was cut, and the body says so.
 RUN_MAX_BYTES = 2 * 1024 * 1024
@@ -267,12 +272,14 @@ class RunHistory:
             clean = {"not_stored": f"The run history is full ({self.total_max_bytes // (1024 * 1024)} MB). This run's content was not stored. Delete the history or shorten the retention to make room."}
             encoded = _dumps(clean)
         data = encoded.decode()
-        blob_name = None
-        if len(encoded) > INLINE_MAX:
-            blob_name = f"{run_id}.json"
-            self._write_blob(blob_name, encoded)
+        blob_name = f"{run_id}.json" if len(encoded) > INLINE_MAX else None
         started = (started_at or self._now()).isoformat()
+        # One lock over the blob AND its row, the same lock delete_all and
+        # purge hold over rows AND blobs: a delete can never land between the
+        # two and leave a row naming a blob that is gone (or a stray blob).
         with self._lock, self._connect() as c:
+            if blob_name:
+                self._write_blob(blob_name, encoded)
             c.execute(
                 "INSERT INTO runs (id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size, body, blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, kind, source_id, event_id, thread_id, started, finished_at.isoformat() if finished_at else None, status, clean_error, len(encoded), None if blob_name else data, blob_name),
@@ -299,9 +306,9 @@ class RunHistory:
             c.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
             if rows:
                 c.execute("DELETE FROM settings WHERE key = 'not_stored_runs'")
-        for row in rows:
-            if row["blob"]:
-                (self.blobs / row["blob"]).unlink(missing_ok=True)
+            for row in rows:
+                if row["blob"]:
+                    (self.blobs / row["blob"]).unlink(missing_ok=True)
         return len(rows)
 
     def delete_all(self) -> int:
@@ -310,10 +317,10 @@ class RunHistory:
             n = c.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
             c.execute("DELETE FROM runs")
             c.execute("DELETE FROM settings WHERE key = 'not_stored_runs'")
-        for f in self.blobs.iterdir():
-            if f.is_file():
-                f.unlink(missing_ok=True)
-        with self._connect() as c:
+            for f in self.blobs.iterdir():
+                if f.is_file():
+                    f.unlink(missing_ok=True)
+        with self._lock, self._connect() as c:
             c.execute("VACUUM")
         return int(n)
 
@@ -342,9 +349,14 @@ class RunHistory:
         if row is None:
             return None
         out = dict(row)
-        raw = (self.blobs / row["blob"]).read_text() if row["blob"] else row["body"]
         out.pop("blob")
-        out["body"] = json.loads(raw) if raw else None
+        try:
+            raw = (self.blobs / row["blob"]).read_text() if row["blob"] else row["body"]
+            out["body"] = json.loads(raw) if raw else None
+        except (OSError, ValueError):
+            # Gone (deleted under us, or by another process) or unreadable:
+            # said in words, never a 500 and never a guess.
+            out["body"] = {"withheld": BLOB_MISSING}
         return out
 
     def used_bytes(self) -> int:
