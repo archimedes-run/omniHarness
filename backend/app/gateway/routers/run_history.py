@@ -65,6 +65,15 @@ def _history(request: Request):
     return history
 
 
+async def _require_history_access(request: Request) -> None:
+    """The history as a whole (settings, delete-all) is the system's: the owner
+    account and the internal principal only; anyone else reads 404."""
+    from app.gateway.ownership import require_access
+    from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+    await require_access(request, DEFAULT_USER_ID, what="run history")
+
+
 def _settings(h) -> HistorySettings:
     return HistorySettings(retention_days=h.retention_days(), runs=h.count(), location=str(h.root), used_bytes=h.used_bytes(), cap_bytes=h.total_max_bytes, warning=h.warning())
 
@@ -72,6 +81,7 @@ def _settings(h) -> HistorySettings:
 @router.get("/settings", response_model=HistorySettings)
 @require_permission("threads", "read")
 async def get_settings(request: Request) -> HistorySettings:
+    await _require_history_access(request)
     h = _history(request)
     return _settings(h)
 
@@ -79,6 +89,7 @@ async def get_settings(request: Request) -> HistorySettings:
 @router.put("/settings", response_model=HistorySettings)
 @require_permission("threads", "write")
 async def put_settings(body: RetentionSettings, request: Request) -> HistorySettings:
+    await _require_history_access(request)
     h = _history(request)
     h.set_retention_days(body.retention_days)
     h.purge()  # a shorter retention applies now, not at the next hourly run
@@ -94,6 +105,7 @@ async def delete_all(confirm: str, request: Request) -> Deleted:
 
     if confirm != "delete-all":
         raise HTTPException(status_code=422, detail="Deleting the run history needs confirm=delete-all.")
+    await _require_history_access(request)
     _history(request)
     try:
         result = await delete_history_and_threads(request.app)
@@ -105,13 +117,19 @@ async def delete_all(confirm: str, request: Request) -> Deleted:
 @router.get("/runs", response_model=list[RunSummaryView])
 @require_permission("threads", "read")
 async def list_runs(request: Request, kind: str | None = None, source_id: str | None = None, limit: int = 50) -> list[RunSummaryView]:
-    return [RunSummaryView(**r.__dict__) for r in _history(request).list(kind=kind, source_id=source_id, limit=min(max(limit, 1), 500))]
+    from app.gateway.ownership import filter_accessible
+
+    runs = _history(request).list(kind=kind, source_id=source_id, limit=min(max(limit, 1), 500))
+    return [RunSummaryView(**r.__dict__) for r in await filter_accessible(request, runs, lambda r: r.owner_id)]
 
 
 @router.get("/runs/{run_id}", response_model=RunDetail)
 @require_permission("threads", "read")
 async def get_run(run_id: str, request: Request) -> RunDetail:
+    from app.gateway.ownership import can_access
+
     run = _history(request).get(run_id)
-    if run is None:
+    # Someone else's run reads exactly like a missing one.
+    if run is None or not await can_access(request, run.get("owner_id")):
         raise HTTPException(status_code=404, detail="No such run (it may have been purged).")
     return RunDetail(**run)

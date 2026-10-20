@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.run_history.store import TRIGGER, RunHistory
+from omniharness.runtime.user_context import DEFAULT_USER_ID
 
 #: The run kind for a trigger rule's run; source_id is the rule id.
 AUTOMATION = "automation"
@@ -24,6 +25,12 @@ def automation_recorder(history: RunHistory) -> Callable[[dict], None]:
             body=_with_body_provenance(run.get("body") or {}),
             # The turn starts with the prompt the engine injected, not a person.
             first_human=TRIGGER,
+            # WHO OWNS A SCHEDULED RUN: the system user. The engine injects
+            # its turns as the internal principal, and the server sets that
+            # run's context user_id to DEFAULT_USER_ID ("the system acting for
+            # the owner"). ownership.can_access gives system-owned records to
+            # the owner account (and the internal principal) and to no one else.
+            owner_id=run.get("user_id") or DEFAULT_USER_ID,
         )
 
     return _record

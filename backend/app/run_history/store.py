@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS runs (
     error TEXT,
     size INTEGER NOT NULL,
     body TEXT,
-    blob TEXT
+    blob TEXT,
+    owner_id TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_source ON runs (kind, source_id, started_at);
 CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at);
@@ -238,6 +239,8 @@ class RunSummary:
     status: str
     error: str | None
     size: int
+    #: Who the run belongs to (ownership.can_access decides who may see it).
+    owner_id: str | None = None
 
 
 class RunHistory:
@@ -269,6 +272,11 @@ class RunHistory:
         self._lock = threading.Lock()
         with self._connect() as c:
             c.executescript(_SCHEMA)
+            # A store created before owners were stored: add the column. Its
+            # rows keep a NULL owner, which the ownership rule gives to the
+            # owner account only (app/gateway/ownership.py).
+            if "owner_id" not in {r["name"] for r in c.execute("PRAGMA table_info(runs)")}:
+                c.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db, timeout=10)
@@ -306,6 +314,7 @@ class RunHistory:
         finished_at: datetime | None = None,
         error: str | None = None,
         first_human: str = USER,
+        owner_id: str | None = None,
     ) -> str:
         """Store one run. Every message gets its provenance and everything is
         redacted first; returns the run id."""
@@ -329,8 +338,8 @@ class RunHistory:
             if blob_name:
                 self._write_blob(blob_name, encoded)
             c.execute(
-                "INSERT INTO runs (id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size, body, blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, kind, source_id, event_id, thread_id, started, finished_at.isoformat() if finished_at else None, status, clean_error, len(encoded), None if blob_name else data, blob_name),
+                "INSERT INTO runs (id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size, body, blob, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (run_id, kind, source_id, event_id, thread_id, started, finished_at.isoformat() if finished_at else None, status, clean_error, len(encoded), None if blob_name else data, blob_name, owner_id),
             )
         return run_id
 
@@ -382,7 +391,7 @@ class RunHistory:
         if source_id:
             where.append("source_id = ?")
             args.append(source_id)
-        sql = "SELECT id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size FROM runs"
+        sql = "SELECT id, kind, source_id, event_id, thread_id, started_at, finished_at, status, error, size, owner_id FROM runs"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY started_at DESC LIMIT ?"
