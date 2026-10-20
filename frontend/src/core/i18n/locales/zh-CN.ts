@@ -170,6 +170,7 @@ export const zhCN: Translations = {
     inbox: "收件箱",
     automations: "自动化",
     connections: "连接",
+    projects: "项目",
     settings: "设置",
   },
 

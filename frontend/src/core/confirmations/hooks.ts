@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { confirmAction, declineAction, loadPending } from "./api";
+import {
+  confirmAction,
+  declineAction,
+  editAndConfirm,
+  loadPending,
+} from "./api";
 
 const KEY = ["pendingConfirmations"];
 
@@ -28,6 +33,29 @@ export function useResolveConfirmation() {
       confirm: boolean;
       typedCount?: number;
     }) => (confirm ? confirmAction(id, typedCount) : declineAction(id)),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: KEY }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: KEY });
+      // A confirmed ledger change shows on Projects at once.
+      void queryClient.invalidateQueries({ queryKey: ["ledger"] });
+    },
+  });
+}
+
+export function useEditConfirmation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      args,
+      typedCount,
+    }: {
+      id: string;
+      args: Record<string, unknown>;
+      typedCount?: number;
+    }) => editAndConfirm(id, args, typedCount),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: KEY });
+      void queryClient.invalidateQueries({ queryKey: ["ledger"] });
+    },
   });
 }

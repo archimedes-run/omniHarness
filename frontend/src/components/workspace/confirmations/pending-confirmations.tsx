@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   usePendingConfirmations,
+  useEditConfirmation,
   useResolveConfirmation,
 } from "@/core/confirmations/hooks";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
@@ -32,6 +33,7 @@ export function PendingConfirmations({
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
+  const edit = useEditConfirmation();
   const [resolved, setResolved] = useState<
     Record<string, { result: ResolveResult; action: PendingAction }>
   >({});
@@ -75,8 +77,20 @@ export function PendingConfirmations({
         <PendingActionCard
           key={action.id}
           action={action}
-          busy={resolve.isPending}
+          busy={resolve.isPending || edit.isPending}
           result={resolved[action.id]?.result}
+          onEdit={(args, typedCount) =>
+            edit.mutate(
+              { id: action.id, args, typedCount },
+              {
+                onSuccess: (result) =>
+                  setResolved((previous) => ({
+                    ...previous,
+                    [action.id]: { result, action },
+                  })),
+              },
+            )
+          }
           onResolve={(confirm, typedCount) =>
             resolve.mutate(
               { id: action.id, confirm, typedCount },

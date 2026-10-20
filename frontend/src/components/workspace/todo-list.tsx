@@ -17,12 +17,15 @@ export function TodoList({
   collapsed: controlledCollapsed,
   hidden = false,
   onToggle,
+  action,
 }: {
   className?: string;
   todos: Todo[];
   collapsed?: boolean;
   hidden?: boolean;
   onToggle?: () => void;
+  /** A control in the header, e.g. promoting the to-dos (Feature 005). */
+  action?: React.ReactNode;
 }) {
   const [internalCollapsed, setInternalCollapsed] = useState(true);
   const isControlled = controlledCollapsed !== undefined;
@@ -56,7 +59,8 @@ export function TodoList({
             <div>To-dos</div>
           </div>
         </div>
-        <div>
+        <div className="flex items-center gap-3">
+          {action}
           <ChevronUpIcon
             className={cn(
               "text-muted-foreground size-4 transition-transform duration-300 ease-out",
