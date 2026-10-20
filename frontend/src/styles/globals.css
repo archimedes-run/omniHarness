@@ -168,6 +168,10 @@
   --color-border-strong: var(--border-strong);
   --color-primary-subtle: var(--primary-subtle);
   --color-overlay: var(--overlay);
+  --color-avatar-lead: var(--avatar-lead);
+  --color-avatar-lead-foreground: var(--avatar-lead-foreground);
+  --color-avatar-0: var(--avatar-0);
+  --color-avatar-0-foreground: var(--avatar-0-foreground);
   --color-avatar-1: var(--avatar-1);
   --color-avatar-1-foreground: var(--avatar-1-foreground);
   --color-avatar-2: var(--avatar-2);
@@ -176,6 +180,12 @@
   --color-avatar-3-foreground: var(--avatar-3-foreground);
   --color-avatar-4: var(--avatar-4);
   --color-avatar-4-foreground: var(--avatar-4-foreground);
+  --color-avatar-5: var(--avatar-5);
+  --color-avatar-5-foreground: var(--avatar-5-foreground);
+  --color-avatar-6: var(--avatar-6);
+  --color-avatar-6-foreground: var(--avatar-6-foreground);
+  --color-avatar-7: var(--avatar-7);
+  --color-avatar-7-foreground: var(--avatar-7-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -280,15 +290,28 @@
   --primary-subtle: #e7ebfa;
   /* Scrim behind panels and dialogs; use with an opacity (bg-overlay/60). */
   --overlay: #17181b;
-  /* Agent avatars (1 = the lead). Foreground 3 is also the @mention colour. */
-  --avatar-1: #f1f2f4;
-  --avatar-1-foreground: #17181b;
-  --avatar-2: #e0e6fa;
-  --avatar-2-foreground: #2945b0;
-  --avatar-3: #eee6f7;
-  --avatar-3-foreground: #6b3fa0;
-  --avatar-4: #dff1e7;
-  --avatar-4-foreground: #1e6b44;
+  /* Agent avatars: a fixed lead colour and eight others, picked per agent
+   * by src/core/agents/avatar.ts. The foreground is also that agent's
+   * @mention colour, so it is AA on its fill, the page and a card. Initials
+   * always show, so colour is never the only identifier. */
+  --avatar-lead: #e4e6ea;
+  --avatar-lead-foreground: #17181b;
+  --avatar-0: #dee7f7;
+  --avatar-0-foreground: #285abd;
+  --avatar-1: #e7def7;
+  --avatar-1-foreground: #5f28bd;
+  --avatar-2: #f7def7;
+  --avatar-2-foreground: #a022a0;
+  --avatar-3: #f7dee7;
+  --avatar-3-foreground: #b12554;
+  --avatar-4: #f7e3de;
+  --avatar-4-foreground: #a83e24;
+  --avatar-5: #f7eede;
+  --avatar-5-foreground: #825d1c;
+  --avatar-6: #def7eb;
+  --avatar-6-foreground: #187245;
+  --avatar-7: #def5f7;
+  --avatar-7-foreground: #196e76;
   --secondary: #f1f2f4;
   --secondary-foreground: #17181b;
   --muted: #f1f2f4;
@@ -339,14 +362,24 @@
   --primary-foreground: #121316;
   --primary-subtle: #2f3a5c;
   --overlay: #0c0d0f;
-  --avatar-1: #24272d;
-  --avatar-1-foreground: #ecedef;
-  --avatar-2: #2f3a5c;
-  --avatar-2-foreground: #b7c6ff;
-  --avatar-3: #3d2f4f;
-  --avatar-3-foreground: #c9a8ff;
-  --avatar-4: #23423a;
-  --avatar-4-foreground: #9fe3c0;
+  --avatar-lead: #24272d;
+  --avatar-lead-foreground: #ecedef;
+  --avatar-0: #2b3750;
+  --avatar-0-foreground: #87a9ee;
+  --avatar-1: #382b50;
+  --avatar-1-foreground: #b694f0;
+  --avatar-2: #502b50;
+  --avatar-2-foreground: #ed82ed;
+  --avatar-3: #502b37;
+  --avatar-3-foreground: #ee8bac;
+  --avatar-4: #50322b;
+  --avatar-4-foreground: #ed9782;
+  --avatar-5: #50422b;
+  --avatar-5-foreground: #ecc279;
+  --avatar-6: #2b503d;
+  --avatar-6-foreground: #79ecb3;
+  --avatar-7: #2b4d50;
+  --avatar-7-foreground: #79e2ec;
   --secondary: #24272d;
   --secondary-foreground: #ecedef;
   --muted: #24272d;

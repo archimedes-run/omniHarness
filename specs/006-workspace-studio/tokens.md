@@ -43,10 +43,7 @@ the old theme used.
 | `--sidebar-ring` | `ring-sidebar-ring` | focus in the sidebar | `#3355D6` | `#8FA8FF` |
 | `--primary-subtle` | `bg-primary-subtle` | selected tab / selected "+" fill (text on it: `text-foreground`, never muted) | `#E7EBFA` | `#2F3A5C` |
 | `--overlay` | `bg-overlay/60` | scrim behind panels and dialogs | `#17181B` | `#0C0D0F` |
-| `--avatar-1` / `-foreground` | `bg-avatar-1 text-avatar-1-foreground` | agent avatar, the lead | `#F1F2F4` / `#17181B` | `#24272D` / `#ECEDEF` |
-| `--avatar-2` / `-foreground` | `bg-avatar-2 text-avatar-2-foreground` | agent avatar | `#E0E6FA` / `#2945B0` | `#2F3A5C` / `#B7C6FF` |
-| `--avatar-3` / `-foreground` | `bg-avatar-3 text-avatar-3-foreground` | agent avatar; foreground is also the @mention colour | `#EEE6F7` / `#6B3FA0` | `#3D2F4F` / `#C9A8FF` |
-| `--avatar-4` / `-foreground` | `bg-avatar-4 text-avatar-4-foreground` | agent avatar | `#DFF1E7` / `#1E6B44` | `#23423A` / `#9FE3C0` |
+| `--avatar-lead`, `--avatar-0..7` (+ `-foreground`) | `bg-avatar-N text-avatar-N-foreground`; mention `text-avatar-N-foreground` | agent avatars and @mentions, see below | see below | see below |
 | `--chart-1..5` | `bg-chart-N` | chart series (unchanged) | oklch, see CSS | oklch, see CSS |
 
 Opacity modifiers are fine (`bg-primary/10`, `border-border/60`).
@@ -74,8 +71,6 @@ Opacity modifiers are fine (`bg-primary/10`, `border-border/60`).
 | foreground on primary-subtle | 14.93 | 9.53 |
 | muted-foreground on primary-subtle (NOT allowed) | 5.32 | **4.41, fails** |
 | primary on primary-subtle | 5.18 | 4.90 |
-| avatar-N-foreground on avatar-N (1..4) | 15.85 / 6.56 / 6.08 / 5.51 | 12.78 / 6.67 / 6.13 / 7.44 |
-| avatar-3-foreground (@mention) on card | 7.38 | 8.36 |
 
 `tests/rendering/theme.spec.ts` re-measures the token pairs from painted pixels in both themes.
 
@@ -88,6 +83,31 @@ white (`hover:text-primary/80` or a `color-mix`), status-pill borders are the st
 switch is told by its knob (muted, 5.9:1), a field by its fill and its label, a selected tab by
 `bg-primary-subtle` plus `text-foreground` (the shadcn tabs already use `text-foreground` when
 active).
+
+## Agent avatars and @mentions
+
+`src/core/agents/avatar.ts` picks the colour: `avatarColor(agentId)` is a stable FNV-1a hash of the
+id modulo 8, and the lead agent (`lead_agent`) always gets `lead`. `avatarClasses(id)` and
+`mentionClasses(id)` return literal class names. An @mention takes the colour of the mentioned
+agent's avatar, so there is no separate mention colour. Each foreground is AA on its own fill, on
+the page and on a card, because it is also the mention text.
+
+**Colour is never the only identifier.** An avatar always shows the agent's initials
+(`avatarInitials`), and a mention always shows the name.
+
+| N | Hue | Light fill / fg | fg on fill / on page | Dark fill / fg | fg on fill / on page |
+|---|---|---|---|---|---|
+| `lead` | neutral | `#E4E6EA` / `#17181B` | 13.95 / 16.58 | `#24272D` / `#ECEDEF` | 12.78 / 15.86 |
+| `0` | blue | `#DEE7F7` / `#285ABD` | 5.13 / 5.97 | `#2B3750` / `#87A9EE` | 5.07 / 7.91 |
+| `1` | violet | `#E7DEF7` / `#5F28BD` | 6.41 / 7.77 | `#382B50` / `#B694F0` | 5.21 / 7.5 |
+| `2` | magenta | `#F7DEF7` / `#A022A0` | 5.18 / 6.07 | `#502B50` / `#ED82ED` | 5.0 / 7.98 |
+| `3` | pink | `#F7DEE7` / `#B12554` | 5.08 / 6.01 | `#502B37` / `#EE8BAC` | 5.12 / 7.89 |
+| `4` | red-orange | `#F7E3DE` / `#A83E24` | 5.03 / 5.8 | `#50322B` / `#ED9782` | 5.1 / 8.27 |
+| `5` | amber | `#F7EEDE` / `#825D1C` | 5.16 / 5.55 | `#50422B` / `#ECC279` | 5.83 / 11.11 |
+| `6` | green | `#DEF7EB` / `#187245` | 5.27 / 5.55 | `#2B503D` / `#79ECB3` | 6.24 / 12.79 |
+| `7` | teal | `#DEF5F7` / `#196E76` | 5.24 / 5.55 | `#2B4D50` / `#79E2EC` | 6.1 / 12.3 |
+
+`tests/rendering/theme.spec.ts` measures every pair (fg on fill, on background, on card) in both themes.
 
 ## Type and shape
 
