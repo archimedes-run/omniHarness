@@ -53,6 +53,10 @@ class PolicyAuditLog:
             "thread_id": action.thread_id,
             "requester": action.requester,
             "delegation_chain": list(action.delegation_chain),
+            # Whose run stated it: the audit list is filtered by it.
+            "owner_id": action.owner_id,
+            # How it was answered: via, confirming thread, user and message.
+            "confirmation": action.confirmation,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:

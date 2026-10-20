@@ -34,6 +34,15 @@ policy:
 """
 
 
+class _ConversationFlow(ConfirmationFlow):
+    """A typed reply only answers plans of its own conversation (security
+    baseline). These tests reply in the conversation make_pending states
+    plans in, "t1", unless they say otherwise."""
+
+    def from_message(self, message, *, run_tool, runtime_context=None):
+        return super().from_message(message, run_tool=run_tool, runtime_context=runtime_context if runtime_context is not None else {"thread_id": "t1"})
+
+
 @pytest.fixture
 def build_flow(tmp_path):
     def build(*, threshold: int = 10, now: datetime = FLOW_NOW):
@@ -59,7 +68,7 @@ def build_flow(tmp_path):
             store=store,
             audit=audit,
             middleware=middleware,
-            flow=ConfirmationFlow(store=store, middleware=middleware, now=lambda: now),
+            flow=_ConversationFlow(store=store, middleware=middleware, now=lambda: now),
             ran=ran,
             run_tool=run_tool,
             now=now,

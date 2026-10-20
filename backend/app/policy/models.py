@@ -162,6 +162,10 @@ class PendingAction:
     claimed_by: str | None = None
     outcome: Outcome | None = None
     outcome_reason: str = ""
+    #: HOW it was answered (security baseline): {"via": "button" | "edit" |
+    #: "typed_reply" | "channel:<name>", "thread_id", "user_id", "message_id"}.
+    #: claimed_by says only which worker; this says who, where and by what.
+    confirmation: dict | None = None
     #: What caused the proposal (lineage.initiation_origin). Only "user" may be
     #: confirmed by a typed reply in chat; content the agent read, a trigger's
     #: turn, or a cause nobody could tell may only be confirmed with the
