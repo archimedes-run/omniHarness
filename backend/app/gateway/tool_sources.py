@@ -49,6 +49,11 @@ class ToolSource(BaseModel):
     last_error: str | None = None
     #: True when last_error could not be safely redacted and is withheld.
     last_error_withheld: bool = False
+    #: Tools this source registered that NO policy rule names, so they are
+    #: refused: not offered to the assistant, not run (007). Empty when every
+    #: tool has a rule; None when the source's tools are not known here (not
+    #: loaded, or a connector, whose tools load per conversation).
+    unruled_tools: list[str] | None = None
 
 
 class ToolSourcesView(BaseModel):
@@ -73,6 +78,7 @@ def describe_tool_sources(
     selected: set[str] | None,
     thread_id: str | None = None,
     health: dict[str, Any] | None = None,
+    unruled: dict[str, list[str]] | None = None,
 ) -> ToolSourcesView:
     """Pure: configured servers, what their last load did, and connector state.
 
@@ -81,7 +87,9 @@ def describe_tool_sources(
     ACTIVE connection, or None when Composio is not available; `selected` the
     conversation's namespaced source ids, or None for no conversation;
     `health` what the tool-call chokepoint observed per source id
-    (ToolSourceHealthRepository.for_user), or None when it cannot be read.
+    (ToolSourceHealthRepository.for_user), or None when it cannot be read;
+    `unruled` server name -> its loaded tools that no policy rule names, for
+    the servers whose tools were checked (app.policy.coverage).
     """
     out: list[ToolSource] = []
     for name in EXPECTED_LOCAL_SOURCES:
@@ -100,7 +108,7 @@ def describe_tool_sources(
         if load is None:
             out.append(ToolSource(id=sid, name=name, kind="local", state="not-loaded", selected=sel))
         elif load.loaded:
-            out.append(ToolSource(id=sid, name=name, kind="local", state="live", tool_count=load.tool_count, selected=sel))
+            out.append(ToolSource(id=sid, name=name, kind="local", state="live", tool_count=load.tool_count, selected=sel, unruled_tools=(unruled or {}).get(name)))
         else:
             out.append(ToolSource(id=sid, name=name, kind="local", state="unreachable", error=load.error, selected=sel))
 

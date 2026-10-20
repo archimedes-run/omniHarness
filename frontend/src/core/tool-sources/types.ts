@@ -26,6 +26,10 @@ export interface ToolSource {
   last_failure_at?: string | null;
   last_error?: string | null;
   last_error_withheld?: boolean;
+  /** 007: tools this source registered that no permission policy rule names,
+   * so they are refused (never offered, never run). [] when every tool has a
+   * rule; null/absent when not known (not loaded, a connector, older gateway). */
+  unruled_tools?: string[] | null;
 }
 
 export interface ToolSourcesView {

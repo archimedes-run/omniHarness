@@ -21,13 +21,16 @@ class ServerLoad:
     tool_count: int
     error: str | None
     at: datetime
+    #: The names the tools were registered under (prefixed), so a surface can
+    #: say which of them the policy refuses for want of a rule (007).
+    tool_names: tuple[str, ...] = ()
 
 
 _LAST: dict[str, ServerLoad] = {}
 
 
-def record_loaded(name: str, tool_count: int) -> None:
-    _LAST[name] = ServerLoad(name=name, loaded=True, tool_count=tool_count, error=None, at=datetime.now(UTC))
+def record_loaded(name: str, tool_count: int, tool_names: tuple[str, ...] | list[str] = ()) -> None:
+    _LAST[name] = ServerLoad(name=name, loaded=True, tool_count=tool_count, error=None, at=datetime.now(UTC), tool_names=tuple(tool_names))
 
 
 def record_failed(name: str, error: BaseException) -> None:

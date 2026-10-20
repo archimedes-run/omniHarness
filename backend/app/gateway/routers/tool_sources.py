@@ -62,9 +62,21 @@ async def describe_for_request(request: Request, thread_id: str | None) -> ToolS
         except Exception:
             logger.warning("tool-source health could not be read", exc_info=True)
 
+    last_loads = load_report.last_loads()
+    unruled = None
+    try:
+        from app.policy.coverage import unruled_by_server
+
+        unruled = unruled_by_server({name: load.tool_names for name, load in last_loads.items() if load.loaded}, request.app.state.config)
+    except Exception:
+        # Not knowing is shown as not knowing (unruled_tools None), never as
+        # "every tool has a rule".
+        logger.warning("tool-source policy coverage could not be computed", exc_info=True)
+
     return describe_tool_sources(
         servers=get_extensions_config().mcp_servers,
-        last_loads=load_report.last_loads(),
+        last_loads=last_loads,
+        unruled=unruled,
         connector_toolkits=list(CONNECTOR_TOOLKITS),
         authorised=authorised,
         selected=selected,

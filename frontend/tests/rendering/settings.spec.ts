@@ -27,6 +27,26 @@ const SOURCES = {
       last_failure_at: null,
     },
     {
+      id: "local:my-tools",
+      name: "my-tools",
+      kind: "local",
+      state: "live",
+      tool_count: 2,
+      error: null,
+      selected: null,
+      unruled_tools: ["my-tools_do_thing", "my-tools_undo-thing"],
+    },
+    {
+      id: "local:filesystem",
+      name: "filesystem",
+      kind: "local",
+      state: "live",
+      tool_count: 14,
+      error: null,
+      selected: null,
+      unruled_tools: [],
+    },
+    {
       id: "connector:GMAIL",
       name: "Gmail",
       kind: "connector",
@@ -144,6 +164,29 @@ test("Safety lists the tool sources, with a failing one's real error", async ({
   await expect(gmail).toContainText("(observed)");
   // And the policy, below.
   await expect(page.getByTestId("rule")).toContainText("gmail_fetch_*");
+});
+
+test("a source's tools with no policy rule are named as refused (007)", async ({
+  page,
+}) => {
+  await stub(page);
+  await page.goto("/workspace/settings/safety");
+  const sources = page.getByTestId("safety-tool-sources");
+  const mine = sources.locator('[data-source="local:my-tools"]');
+  await expect(mine.getByTestId("safety-source-unruled")).toHaveText(
+    "No policy rule: 2 tools are refused, not offered and not run: my-tools_do_thing, my-tools_undo-thing",
+  );
+  // Every tool ruled: nothing said. Not known (a connector): nothing claimed.
+  await expect(
+    sources
+      .locator('[data-source="local:filesystem"]')
+      .getByTestId("safety-source-unruled"),
+  ).toHaveCount(0);
+  await expect(
+    sources
+      .locator('[data-source="connector:GMAIL"]')
+      .getByTestId("safety-source-unruled"),
+  ).toHaveCount(0);
 });
 
 for (const old of ["/workspace/tool-sources", "/workspace/policy"]) {
