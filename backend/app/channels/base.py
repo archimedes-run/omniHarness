@@ -35,7 +35,6 @@ class Channel(ABC):
         self.config = config
         self._running = False
 
-    @property
     def sender_is_the_owner(self, user_id: str | None) -> bool:
         """Is this sender the person who owns the install? (security baseline)
 
@@ -46,6 +45,7 @@ class Channel(ABC):
         """
         return False
 
+    @property
     def is_running(self) -> bool:
         return self._running
 
