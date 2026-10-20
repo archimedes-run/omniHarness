@@ -6,7 +6,9 @@ each tested (tests/run_history):
   * FULL CONTENT. No truncation (the run_events table cuts trace content at
     10 KB). A body above INLINE_MAX bytes is written to its own file under
     `blobs/`, atomically, and the row names it.
-  * SECRETS REDACTED BEFORE STORING. Every string in the run, at any depth, goes
+  * SECRETS REDACTED BEFORE STORING. Every string in the run, at any depth, is
+    first cleared of every secret VALUE the process loaded (exact match, also
+    base64 and URL-encoded; see default_redactor), then goes
     through the same credential patterns the session watcher and the trigger
     engine's deliveries use (session_watcher.redaction), plus the URL
     credential filter the gateway's logs use. A string redaction cannot be
@@ -64,13 +66,31 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
-def default_redactor() -> Callable[[str], tuple[str, bool]]:
-    """The credential redaction the rest of the system uses, as (text, ok)."""
+def default_redactor(known=None) -> Callable[[str], tuple[str, bool]]:
+    """The run history's redaction, as (text, ok). Two passes, in this order:
+
+    1. EXACT MATCH: every secret value this process loaded (.env, config.yaml,
+       the extensions config, the MCP vault, the OAuth stores, and each token
+       as it is refreshed), in raw, base64 and URL-encoded forms
+       (omniharness.utils.known_secrets). This catches values no pattern
+       recognises.
+    2. PATTERNS: the credential shapes the session watcher and the trigger
+       engine's deliveries use, plus the URL credential filter of the logs.
+
+    Either pass failing withholds the string.
+    """
     from session_watcher.redaction import Channel, redact_or_suppress
 
     from app.gateway.log_redaction import redact_url_credentials
+    from omniharness.utils.known_secrets import KNOWN_SECRETS
+
+    registry = KNOWN_SECRETS if known is None else known
 
     def _redact(text: str) -> tuple[str, bool]:
+        try:
+            text, _ = registry.redact(text)
+        except Exception:  # noqa: BLE001 — fail closed
+            return WITHHELD, False
         out, ok = redact_or_suppress(text, Channel.LOCAL)
         if not ok:
             return WITHHELD, False

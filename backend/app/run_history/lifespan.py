@@ -26,6 +26,21 @@ def open_history(base_dir: Path) -> RunHistory:
     return history
 
 
+async def load_known_secrets(app) -> None:
+    """Register every secret value the gateway can load, for the run history's
+    exact-match redaction. Logs counts per source, never values. Never raises."""
+    from omniharness.utils.known_secrets import load_process_secrets
+
+    try:
+        counts = await asyncio.to_thread(load_process_secrets)
+        vault = getattr(app.state, "mcp_secrets_vault", None)
+        if vault is not None:
+            counts["mcp-vault"] = await vault.register_known_secrets()
+        logger.info("run history: exact-match redaction knows %s", ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    except Exception:
+        logger.exception("run history: loading known secret values failed; only pattern redaction applies")
+
+
 async def purge_forever(history: RunHistory, interval: float = PURGE_INTERVAL_SECONDS) -> None:
     """The retention job: purge, sleep, repeat, until cancelled."""
     while True:

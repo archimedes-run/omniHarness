@@ -356,9 +356,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # run-history routes say it is unavailable.
         purge_task = None
         try:
-            from app.run_history.lifespan import open_history, purge_forever
+            from app.run_history.lifespan import load_known_secrets, open_history, purge_forever
             from omniharness.config.paths import get_paths
 
+            await load_known_secrets(app)
             app.state.run_history = open_history(get_paths().base_dir)
             purge_task = asyncio.create_task(purge_forever(app.state.run_history))
         except Exception:

@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from app.run_history.store import INLINE_MAX, WITHHELD, RunHistory
+from app.run_history.store import INLINE_MAX, WITHHELD, RunHistory, default_redactor
+from omniharness.utils.known_secrets import KnownSecrets
 
 GITHUB = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
 OPENAI = "sk-" + "proj9Zx8Yw7Vu6Ts5Rq4Po3Nm2"
@@ -108,3 +109,22 @@ def test_list_filters_by_source_newest_first(tmp_path) -> None:
     b = store.record(kind="automation", source_id="r", body={}, status="failed", started_at=t0 - timedelta(hours=1))
     store.record(kind="automation", source_id="other", body={}, status="completed")
     assert [r.id for r in store.list(kind="automation", source_id="r")] == [b, a]
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "ya29." + "a0AfH6SMBfakefakefakefake1234",
+        "1//" + "0gFakeRefreshTokenValue12345",
+        "1234567890:" + "AAHfakeTelegramBotTokenValue1234567",
+        "x-api-key: " + "fakeheadervalue123",
+    ],
+)
+def test_new_credential_shapes_are_redacted(tmp_path, secret) -> None:
+    """Google access and refresh tokens, a bare Telegram bot token, and an
+    x-api-key header, none of which the earlier patterns caught."""
+    store = RunHistory(tmp_path, redact=default_redactor(known=KnownSecrets()))
+    run_id = store.record(kind="automation", source_id="r", body={"tool": f"got {secret} back"}, status="completed")
+    value = secret.split(" ")[-1]
+    assert value.encode() not in on_disk(tmp_path)
+    assert "[redacted]" in store.get(run_id)["body"]["tool"]
