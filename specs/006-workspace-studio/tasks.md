@@ -145,7 +145,7 @@ After Phase 1: **STOP** for review.
 
 ## Phase 2: Multi-agent chat (outline)
 
-- [ ] T200 Spike: subagent suspend and resume for confirmation, and the tools at confirm time. Write the decision in plan.md §2.0 before T201.
+- [X] T200 Spike: subagent suspend and resume for confirmation, and the tools at confirm time. Write the decision in plan.md §2.0 before T201.
 - [ ] T201 Build the decision. Acceptance and sabotages are in plan.md §2.0: a page-suggested delegation confirmed by button runs once; a subagent's own Tier 3 action confirmed from the lead's chat runs once with its own tools.
 
 - T201 Thread participants (`thread_meta`, `routers/thread_participants.py`), with the lead as default.
