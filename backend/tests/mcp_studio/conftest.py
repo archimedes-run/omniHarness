@@ -128,10 +128,14 @@ def studio(tmp_path, monkeypatch):
         s._csrf()
         s.owner_id = str(client.get("/api/v1/auth/me").json()["id"])
 
-        resp = client.post("/api/v1/auth/register", json={"email": OTHER_EMAIL, "password": OTHER_PASSWORD})
-        assert resp.status_code == 201, resp.text
-        s._csrf()
-        s.other_id = str(client.get("/api/v1/auth/me").json()["id"])
+        # Registration is closed once the owner exists (security baseline), so
+        # the second account is inserted directly, and the single-owner door is
+        # opened so these tests prove the per-server ownership check itself.
+        async def _other():
+            return await deps.get_local_provider().create_user(email=OTHER_EMAIL, password=OTHER_PASSWORD, system_role="user")
+
+        s.other_id = str(client.portal.call(_other).id)
+        monkeypatch.setattr("app.gateway.ownership.admits_additional_accounts", lambda: True)
 
         s.login(OWNER_EMAIL, OWNER_PASSWORD)
         yield s
