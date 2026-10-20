@@ -531,3 +531,20 @@ def test_server_owned_context_keys_are_stripped_from_a_run_body() -> None:
     strip_server_owned_context(config)
 
     assert config["context"] == {"thread_id": "t1", "model_name": "m"}
+
+
+def test_the_card_gets_each_argument_for_display_redacted(gateway, monkeypatch) -> None:
+    """The card shows a call's arguments one row each; a value that fails
+    redaction reads Withheld. Display only: the stored call is what runs."""
+    import app.gateway.routers.confirmations as confirmations
+
+    def fake_for_display(text):
+        return ("Withheld", True) if "SECRET" in text else (text, False)
+
+    monkeypatch.setattr(confirmations, "for_display", fake_for_display)
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    [listed] = _pending(gateway, "wipe_backup")
+    assert listed["arguments_display"] == {"name": "nightly"}
+
+    view = confirmations._arguments_for_display({"name": "nightly", "token": "SECRET-1", "n": 3})
+    assert view == {"name": "nightly", "token": "Withheld", "n": "3"}
