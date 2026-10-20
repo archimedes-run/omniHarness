@@ -137,3 +137,12 @@ test("the size cap warning is shown", async ({ page }) => {
     "93% of its 512 MB cap",
   );
 });
+
+test("retention says it covers the automations' conversations", async ({
+  page,
+}) => {
+  await serve(page);
+  await expect(page.getByTestId("run-history-settings")).toContainText(
+    "the automation starts a fresh conversation (forgetting earlier runs)",
+  );
+});

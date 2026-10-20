@@ -46,7 +46,10 @@ export function RunHistorySettings() {
       <p className="text-muted-foreground text-sm">
         The full record of each automation run (what it was asked, the tools it
         used and what they returned, and its answer), kept on this machine only.
-        Secrets are redacted before anything is stored.
+        Secrets are redacted before anything is stored. The retention also
+        applies to each automation&apos;s conversation: once its oldest content
+        is past it, the automation starts a fresh conversation (forgetting
+        earlier runs) and the old one is deleted.
       </p>
       {error != null && (
         <Alert variant="destructive">
