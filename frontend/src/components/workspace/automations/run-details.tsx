@@ -12,7 +12,12 @@ type Message = {
   provenance?: string;
 };
 
+function promptSource(body: Body): string {
+  return body.provenance?.prompt ?? body.messages?.[0]?.provenance ?? "unknown";
+}
+
 type Body = {
+  provenance?: { prompt?: string };
   prompt?: string;
   messages?: Message[];
   reply?: string;
@@ -29,6 +34,9 @@ type Body = {
 /** Where a part came from, in words (the store's provenance labels). */
 const SOURCE: Record<string, string> = {
   trigger: "Sent by the automation",
+  trigger_with_untrusted_event:
+    "Sent by the automation, with event text in it. Untrusted: the event's words were written by whoever sent it",
+  user_concurrent: "Written by you while the automation was running",
   user: "Written by you",
   assistant: "Written by the assistant",
   system: "System instructions",
@@ -107,7 +115,7 @@ export function RunDetails({ runId }: { runId: string }) {
           {`Text that could not be checked for secrets was not stored and reads "${WITHHELD_MARK}". It was not empty.`}
         </Notice>
       )}
-      <Part label="Asked" source={SOURCE.trigger}>
+      <Part label="Asked" source={SOURCE[promptSource(body)] ?? SOURCE.unknown}>
         {body.prompt ?? "Not recorded"}
       </Part>
       {body.turn_found === false ? (
