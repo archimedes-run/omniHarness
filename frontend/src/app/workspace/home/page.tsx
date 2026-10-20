@@ -1,8 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 
-import { AwayAlerts } from "@/components/workspace/home/away-alerts";
 import { Greeting } from "@/components/workspace/home/greeting";
 import { MovedCard } from "@/components/workspace/home/moved-card";
 import { NamePrompt } from "@/components/workspace/home/name-prompt";
@@ -29,8 +29,9 @@ const HomeChatBar = dynamic(
  *  - a greeting, the date and how many things need you;
  *  - Waiting on you: approvals (Decline / Confirm inline) and coding sessions
  *    that look blocked on you;
+ *    and automation alerts missed or held, dismissable (kept on the server;
+ *    the board has no separate "While you were away" block);
  *  - Projects, Coding sessions, Upcoming and What moved today;
- *  - While you were away: missed alerts, dismissable (kept on the server);
  *  - the chat bar, at the bottom: sending starts a new chat (the board marks
  *    Home as "New chat").
  * Every block keeps "empty" apart from "can't tell". /workspace/inbox
@@ -54,7 +55,17 @@ export default function HomePage() {
             <UpcomingCard now={now} />
             <MovedCard now={now} />
           </div>
-          <AwayAlerts />
+          <p className="text-muted-foreground text-xs">
+            A dismissed alert stays dismissed on every device. Everything
+            delivered is in the{" "}
+            <Link
+              href="/workspace/settings/activity"
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              Activity log
+            </Link>
+            .
+          </p>
         </div>
       </div>
       <div

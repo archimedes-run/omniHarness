@@ -170,3 +170,10 @@ export function sortTime(start: string, allDay: boolean): number {
   const [y, m, d] = start.split("-").map(Number);
   return new Date(y ?? 0, (m ?? 1) - 1, d ?? 1).getTime();
 }
+
+/** "morning-briefing" -> "Morning briefing": rules have an id, not a name
+ * (the gateway's rule_title says the same). */
+export function ruleTitle(ruleId: string): string {
+  const text = ruleId.split(/[-_]/).filter(Boolean).join(" ");
+  return text ? text[0]!.toUpperCase() + text.slice(1) : ruleId;
+}

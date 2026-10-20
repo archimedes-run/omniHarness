@@ -521,7 +521,8 @@ test("a dismissed alert is kept on the server: it stays gone after a reload, and
   ).toHaveCount(1);
   await expect(page.getByTestId("inbox-badge")).toHaveText("2");
   await page.getByRole("button", { name: "Dismiss blocked-session" }).click();
-  await expect(page.getByTestId("no-alerts")).toBeVisible();
+  await expect(page.getByTestId("alert")).toHaveCount(0);
+  await expect(page.getByTestId("inbox-badge")).toHaveText("1");
   await expect(page.getByText("on every device")).toBeVisible();
 });
 
@@ -533,9 +534,9 @@ test("the name is asked once: Not now is remembered on the server", async ({
     promptDismissed: false,
   });
   await page.goto("/workspace/home");
-  // The fallback (the email's local part) until a name is chosen.
-  await expect(page.getByTestId("greeting")).toContainText(
-    "rishabh.sharma1103",
+  // No name until one is chosen: never the account id.
+  await expect(page.getByTestId("greeting")).toHaveText(
+    /^Good (morning|afternoon|evening)$/,
   );
   await expect(page.getByTestId("name-prompt")).toBeVisible();
   await page.getByTestId("name-prompt-not-now").click();

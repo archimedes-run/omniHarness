@@ -11,17 +11,21 @@ import {
   useResolveConfirmation,
 } from "@/core/confirmations/hooks";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
-import { ago, knownBy } from "@/core/home/logic";
+import { useDismissAlerts } from "@/core/home/hooks";
+import { ago, alertKey, knownBy } from "@/core/home/logic";
+import { countsTowardBadge, useInboxAlerts } from "@/core/inbox/hooks";
 import type { SessionRow } from "@/core/sessions/types";
 
+import { AlertWaitingRow } from "./alert-waiting-row";
 import { ApprovalRow } from "./approval-row";
 import type { SessionsState } from "./use-home-sessions";
 
 /**
  * Waiting on you (Main board): coding sessions that look blocked on the user,
- * and Tier 3 approvals with Decline / Confirm inline, from every conversation
- * and Telegram. Each half says on its own when it cannot be read; "nothing
- * waiting" is said only for a half that was read.
+ * Tier 3 approvals with Decline / Confirm inline (from every conversation and
+ * Telegram), and automation alerts missed or held, dismissable (kept on the
+ * server). Each source says on its own when it cannot be read; "nothing
+ * waiting" is said only for a source that was read.
  */
 export function WaitingOnYou({
   sessions,
@@ -45,7 +49,10 @@ export function WaitingOnYou({
   ];
   const approvalsUnreadable = error != null || pending?.readable === false;
   const waiting = sessions.waiting;
-  const rows = shown.length + (waiting?.length ?? 0);
+  const inbox = useInboxAlerts();
+  const dismiss = useDismissAlerts();
+  const away = inbox.alerts?.alerts.filter(countsTowardBadge);
+  const rows = shown.length + (waiting?.length ?? 0) + (away?.length ?? 0);
 
   return (
     <section
@@ -53,12 +60,23 @@ export function WaitingOnYou({
       className="bg-card text-card-foreground border-border rounded-xl border py-1.5"
       data-testid="waiting-on-you"
     >
-      <h2
-        id="waiting"
-        className="text-warning m-0 px-5 pt-3 pb-2 text-[13px] font-semibold"
-      >
-        Waiting on you
-      </h2>
+      <div className="flex items-center justify-between gap-2 px-5 pt-3 pb-2">
+        <h2 id="waiting" className="text-warning m-0 text-[13px] font-semibold">
+          Waiting on you
+        </h2>
+        {away && away.length > 1 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 max-md:min-h-11"
+            disabled={dismiss.isPending}
+            onClick={() => dismiss.mutate(away.map(alertKey))}
+            data-testid="dismiss-all"
+          >
+            Dismiss all alerts
+          </Button>
+        )}
+      </div>
 
       {waiting?.map((s) => (
         <WaitingSession key={s.session_id} session={s} now={now} />
@@ -86,6 +104,20 @@ export function WaitingOnYou({
         />
       ))}
 
+      {away && away.length > 0 && (
+        <div className="contents" data-testid="alerts-waiting">
+          {away.map((a) => (
+            <AlertWaitingRow
+              key={alertKey(a)}
+              alert={a}
+              now={now}
+              busy={dismiss.isPending}
+              onDismiss={() => dismiss.mutate([alertKey(a)])}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="space-y-1 px-5 pb-3 empty:hidden">
         {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
         {approvalsUnreadable && (
@@ -101,6 +133,30 @@ export function WaitingOnYou({
         {rows === 0 && pending?.readable && (
           <p className="text-muted-foreground text-sm" data-testid="empty">
             No approval is waiting for you.
+          </p>
+        )}
+        {inbox.error != null && (
+          <p className="text-warning text-sm" data-testid="alerts-unreadable">
+            {`I can't read the alert record, so missed alerts may not be shown. ${String(inbox.error)}`}
+          </p>
+        )}
+        {inbox.alerts?.dismissals_readable === false && (
+          <p
+            className="text-warning text-sm"
+            data-testid="dismissals-unreadable"
+          >
+            Your dismissals could not be read, so alerts you dismissed may show
+            again.
+          </p>
+        )}
+        {dismiss.isError && (
+          <p className="text-warning text-sm" data-testid="dismiss-failed">
+            {`That dismissal was not saved: ${dismiss.error.message}`}
+          </p>
+        )}
+        {rows === 0 && away?.length === 0 && (
+          <p className="text-muted-foreground text-sm" data-testid="no-alerts">
+            No automation alert was missed.
           </p>
         )}
         {rows === 0 && waiting?.length === 0 && (

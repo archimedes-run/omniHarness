@@ -21,7 +21,9 @@ export function Greeting({
   sessions: SessionsState;
   now: Date;
 }) {
-  const { displayName } = usePreferences();
+  // Only a name the user chose: without one, "Good evening" with no name
+  // (the email fallback reads as an account id, not a name).
+  const { preferences } = usePreferences();
   const { pending, error: pendingError } = usePendingConfirmations();
   const { alerts, error: alertsError } = useInboxAlerts();
   const approvals =
@@ -39,7 +41,7 @@ export function Greeting({
         className="text-foreground m-0 text-[28px] leading-tight font-semibold tracking-[-0.01em]"
         data-testid="greeting"
       >
-        {greeting(now, displayName)}
+        {greeting(now, preferences?.display_name)}
       </h1>
       <p className="text-muted-foreground mt-1.5" data-testid="needs-you">
         {dateLine(now)} · {needsYou([waiting, approvals, away])}
