@@ -69,6 +69,9 @@ class PendingActionResponse(BaseModel):
     confirmable_by_typing: bool = True
     #: Whose run stated it (security baseline); the list is filtered by it.
     owner_id: str | None = None
+    #: A routine ledger write waiting as a suggestion (005 FR-009 Amendment
+    #: 1): it may be applied with others through "Apply all". Tier 3 is never.
+    suggestion: bool = False
 
 
 class PendingListResponse(BaseModel):
@@ -194,7 +197,14 @@ def _view(action, threshold: int) -> PendingActionResponse:
         origin_via=action.origin_via,
         confirmable_by_typing=action.confirmable_by_typing,
         owner_id=action.owner_id,
+        suggestion=_is_suggestion(action),
     )
+
+
+def _is_suggestion(action) -> bool:
+    from app.policy.models import Tier
+
+    return action.tool_name in EDITABLE_TOOLS and action.tier_at_statement is Tier.TIER_2
 
 
 def read_pending(middleware, now: datetime) -> PendingListResponse:
@@ -327,3 +337,50 @@ async def decline(action_id: str, body: ResolveRequest, request: Request) -> Res
     hesitant user toward the dangerous answer.
     """
     return await _resolve(request, action_id, confirm=False, body=body)
+
+
+class ApplyAllRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=50, description="The suggestion cards to apply together")
+
+
+class ApplyAllResponse(BaseModel):
+    #: One Undo (POST /api/ledger/writes/{write_id}/undo) reverts every write
+    #: this batch made. None when nothing was written.
+    write_id: str | None
+    results: list[ResolveResponse]
+
+
+@router.post("/apply-all", response_model=ApplyAllResponse)
+@require_permission("threads", "write")
+async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse:
+    """ "Apply all" on a group of suggestion cards (005 FR-009 Amendment 1).
+
+    Each card is confirmed by this click, through the same flow as its own
+    Confirm button, and every ledger write they make carries ONE write id, so
+    one Undo reverts the batch. Only routine ledger suggestions qualify (a
+    ledger_apply stated at Tier 2); anything Tier 3, or any other tool, still
+    needs its own button and is refused here, untouched."""
+    from app.gateway.authz import get_auth_context
+    from app.gateway.ownership import require_access
+    from app.policy.provenance import CONFIRMED, executed_as, new_write_id
+
+    _, middleware, flow = _policy(request)
+    user_id = _user_id(get_auth_context(request))
+    actions = []
+    for action_id in dict.fromkeys(body.ids):
+        action = middleware.pending.get(action_id)
+        if action is None:
+            raise HTTPException(status_code=404, detail=f"Confirmation {action_id} not found")
+        await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
+        if not _is_suggestion(action):
+            raise HTTPException(status_code=422, detail=f"{action_id} ({action.tool_name}) is not a routine ledger suggestion; confirm it on its own card")
+        actions.append(action)
+    write_id = new_write_id()
+    results: list[ResolveResponse] = []
+    with executed_as(CONFIRMED, write_id) as batch:
+        for action in actions:
+            run_tool = await _runner(request, action.thread_id, user_id)
+            answered = {"via": "apply-all", "thread_id": None, "user_id": user_id, "message_id": None}
+            result = flow.explicit(action.id, confirm=True, run_tool=run_tool, answered=answered)
+            results.append(ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=result.message, detail=result.detail))
+    return ApplyAllResponse(write_id=write_id if batch.get("committed") else None, results=results)

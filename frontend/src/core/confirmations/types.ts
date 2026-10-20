@@ -46,6 +46,9 @@ export interface PendingAction {
   /** For a subagent's request: the agent the content reached it through. */
   origin_via?: string;
   confirmable_by_typing?: boolean;
+  /** A routine ledger write waiting as a suggestion: it can be applied with
+   *  others in one undoable batch ("Apply all"). Never true for Tier 3. */
+  suggestion?: boolean;
 }
 
 export interface PendingList {
