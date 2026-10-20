@@ -5,6 +5,11 @@ Branch: `006-E-mcp-build`. Prerequisite: the security baseline (review round 2, 
 
 Revision 2 (2026-10-20) addresses an independent review: 4 HIGH, 4 MED and 5 LOW findings (§10).
 Revision 3 (2026-10-20) records the user's answers to the four questions, and replaces our own proxy with **Squid** (§4, §10.2).
+Revision 4 (2026-10-20, **plan approved; building**) folds in the user's build-time changes (§10.3):
+- Alpine is pinned by digest;
+- **no secrets in environment variables at all**: they are delivered as 0400 files on a tmpfs;
+- the CDN-fronting residual is **accepted**;
+- the runtime image gets its Python packages without a pip download.
 
 Every claim about current behaviour below was read in the code at `366765e`, or observed on the live stack with read-only commands (`docker ps`, `docker inspect` (names only, never values)). Line references are to that commit.
 
@@ -69,11 +74,18 @@ This plan also adds a startup check: the gateway refuses to enable MCP Build whi
 
 ### Design
 1. **One runtime image, built from our Dockerfile:** `omni-mcp-runtime:<version>`, in a new file `docker/mcp-runtime/Dockerfile`.
-   - Base: `python:3.12-slim`, pinned by digest.
-   - Packages: `mcp` and `httpx`, pinned with hashes.
+   - Base: `python:3.12-slim`, pinned by digest (`python@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9`, already in the local image store, arm64).
+   - **Packages, without a pip download (revision 4).** The user allowed only the Alpine and Squid download. So `mcp`, `httpx` and their dependency closure are **copied from the gateway's own installed environment**, which `uv` installed from `uv.lock` with hashes.
+     - Every copied file is checked against its distribution's `RECORD` sha256 as the build context is assembled. A mismatch refuses the build.
+     - Where the files come from:
+       - a gateway running in Docker (Linux) uses its own `sys.prefix`;
+       - anywhere else (a bare-host gateway on macOS, or the tests) uses a throwaway, labelled, `--rm`, `--network none` container of the configured packages-source image (`OMNI_MCP_RUNTIME_PACKAGES_IMAGE`, default `omni-harness-dev-gateway:latest`), which writes the tar to stdout.
+       - A platform or Python-version mismatch refuses, visibly.
+     - The image labels record the package versions.
    - User: `app` (uid 10001), with no shell login and no sudo.
    - A launcher, `/opt/omni/launch.py`. It imports `/app/server.py` as a module, finds its `FastMCP` instance, and runs it with stdio or SSE, chosen by `MCP_TRANSPORT`. The generated code is **never rewritten**: `_patch_main_for_sse` and `_DOCKER_MAIN_NEW` are deleted.
-   - The gateway builds this image once, from a tar context it streams to the Docker daemon. Our own Dockerfile is the only thing that ever runs `pip` with network access.
+   - The gateway builds this image once, from a tar context it streams to the Docker daemon. Nothing runs `pip`, and the build uses `--network none`.
+   - Probed on Docker 29.5.3 (2026-10-20): the classic builder accepts `FROM sha256:<local image ID>`. BuildKit **tried to resolve it on docker.io** and failed. So MED 6 is real, and the classic builder is what we use.
 2. **One image per code hash:** `omni-mcp-built:<full 64-hex sha256>`. Tags are never truncated.
    - **The build:** `DOCKER_BUILDKIT=0 docker build --pull=false --network none -t omni-mcp-built:<sha> -`. The classic builder on the local daemon uses images already in the local store; a BuildKit `docker-container` driver could otherwise resolve `FROM` remotely. The tar context holds only:
      `FROM sha256:<runtime image ID>` / `COPY server.py /app/server.py` / `LABEL omni.code_sha256=<sha> omni.runtime_id=<runtime ID>`.
@@ -107,12 +119,12 @@ docker run --rm -i \
   --cpus 0.5 \
   --ulimit nofile=256:256 \
   --stop-timeout 2 \
-  --env-file /dev/shm/omni-mcp-<rand>.env        # placeholders only; file 0600, deleted in finally
+  --tmpfs /run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid=10001,gid=10001 \
   -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e MCP_TRANSPORT=stdio \
   sha256:<built image ID> \
   python -I -B /opt/omni/launch.py
 ```
-There is no `-v` or `--mount` of any kind, no `-p`, no Docker socket and no `--privileged`. The 30 s discovery timeout and the 10 s per-call timeout stay. On a timeout the gateway runs `docker kill` on the named container: closing the pipe alone does not stop it.
+There is no `-v` or `--mount` of any kind, no `-p`, no Docker socket and no `--privileged`. **No env-file:** the placeholders are delivered the same way as real secrets (§4 Secrets), through `docker exec` into `/run/omni`, and the launcher waits for them. The 30 s discovery timeout and the 10 s per-call timeout stay. On a timeout the gateway runs `docker kill` on the named container: closing the pipe alone does not stop it.
 
 ---
 
@@ -313,7 +325,7 @@ Squid wins on the two properties that matter most here: the SNI check and refusa
 - "Outer network" means the gateway's compose network (Docker gateway). For a bare-host gateway it is a dedicated non-internal bridge, `omni-mcp-pub-<id12>`, the only network the `127.0.0.1` publish attaches to.
 - Squid's own outbound traffic leaves through the outer network's route.
 
-**Residual risk, stated:** the allowlist bounds **where** traffic goes, not **what** it carries.
+**Residual risk, stated, and the CDN-fronting part ACCEPTED by the user (2026-10-20):** the allowlist bounds **where** traffic goes, not **what** it carries.
 - Code allowed to reach `api.github.com` can still exfiltrate through that API (gist, issue body), using whatever token it holds.
 - The SNI check requires the SNI to be **on the allowlist**, not equal to the CONNECT host. With two allowlisted hosts on the same CDN, one can be fronted through the other.
 - A mismatched HTTP `Host` header inside TLS can't be seen at all.
@@ -337,22 +349,33 @@ Why this topology, on Docker Desktop for Mac:
 - `_find_free_port` probes `127.0.0.1`.
 - `connect()` writes through `atomic_write_json` (`extensions_config.py:23`), not `open(..., "w")` (`mcp_server_manager.py:964`).
 
-**Secrets.**
-- They go in a `--env-file` on `/dev/shm` (tmpfs; inside the gateway container in Docker mode), never on argv, in a log or in a host file.
-- The rendered Squid and dnsmasq configs travel the same way: as base64 values in the sidecar's env-file. They carry the proxy password hash and the inbound token.
-- **Validation, before the file is written.** One bad key or value refuses the whole deploy, naming the key but never the value.
+**Secrets (revision 4): never in environment variables, never in `docker inspect`.**
+- **Nothing secret goes in `-e` or `--env-file`**, for the built server or the sidecar. That covers the stored keys, the placeholders, the proxy login and the endpoint token. The env-file design is dropped.
+- **Delivery.** Each container gets `--tmpfs /run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid=<its uid>,gid=<its gid>`. After the container starts, the gateway delivers each file over **stdin** with:
+  `docker exec -i -u <uid> <container> sh -c 'umask 0377 && cat > /run/omni/<name>'`
+  where `<name>` comes from a fixed set (`secrets`, `squid.conf`, `dnsmasq.conf`, `passwd`). It then runs `touch /run/omni/ready && chmod 0500 /run/omni`.
+  - Each file is **mode 0400, owned by the container's non-root user**, on a tmpfs, so it lives only in memory.
+  - The values travel on stdin, so they are not in the container config and not in any exec's recorded command.
+- **"Read-only", honestly.** A truly read-only tmpfs needs either a remount (`CAP_SYS_ADMIN`) or a host bind mount, and both are ruled out. What we have instead: the file is 0400 and its directory 0500, both owned by the container's own non-root user. The only thing that could change them is the code the file is for.
+- **The containers read them at startup:**
+  - the launcher waits for `/run/omni/ready` (up to 30 s), reads `/run/omni/secrets` (`KEY=VALUE` lines) into its **own process's** `os.environ` (which `docker inspect` never sees), then imports the server;
+  - the sidecar's entrypoint waits for `ready`, then runs Squid and dnsmasq against the delivered configs.
+- **After a restart.** tmpfs content is lost when a container restarts, so a container brought back by `--restart` (for example after Docker Desktop restarts) waits for its files.
+  - The gateway re-delivers them on its startup reconcile, and whenever a built server fails to load its tools.
+  - Until then the server isn't usable, and the board shows "Waiting for the gateway to hand over its keys".
+- **File-format validation**, kept from the env-file design. One bad key or value refuses the whole deploy, naming the key but never the value.
   - Each key must match `^[A-Z][A-Z0-9_]{0,63}$`.
   - Reserved names are refused:
     - `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `ALL_PROXY` (and their lower-case forms);
     - `HOME`, `PATH`;
     - `MCP_*`, `PYTHON*`, `LD_*`, `SSL_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`;
     - anything starting with `__`.
-    Only the gateway's own deploy code may set the proxy variables. A user's stored secret never can.
   - Each value must not contain `\n`, `\r` or NUL.
   - `PUT /secrets` applies the same key rules.
-- The file is created with `os.open(..., O_CREAT|O_EXCL|O_WRONLY, 0o600)` and removed in `finally`, on success and on failure.
+- **The proxy setting is not a secret, but its password is.** The server's `HTTPS_PROXY=http://mcp:<pw>@<.2>:3128` is written by the gateway into the secrets **file**, not into `-e`. Only the gateway's deploy code writes proxy variables.
 - **Real secrets go only to an approved image.** The vault's decrypt-for-deploy takes the approved sha256 and refuses unless the server's derived approval is for exactly that hash (answered: Q3). The test phase only ever gets placeholders (§1).
-- Residual: Docker keeps env-file values in the container's config, so `docker inspect` shows them to whoever holds the Docker socket. That is the gateway, which already holds the vault key, and the user.
+- **Test (T20):** `docker inspect` of a running built server **and** its sidecar contains no secret value: no stored key, proxy password or endpoint token, also searched for in base64. The sabotage passes one secret with `-e`, and the test turns red.
+- **Residual:** anyone holding the Docker socket can still `docker exec` and read `/run/omni`. That is the gateway, which already holds the vault key, and the user.
 
 ### Exact `docker` commands: deploy phase
 ```
@@ -370,7 +393,7 @@ docker run -d --name omni-mcp-<id12> \
   --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
   --memory 256m --memory-swap 256m --pids-limit 64 --cpus 0.5 --ulimit nofile=512:512 \
   --restart unless-stopped \
-  --env-file /dev/shm/omni-mcp-<rand>.env   # real secrets + HTTPS_PROXY=http://mcp:<pw>@<.2>:3128; validated, 0600, removed in finally
+  --tmpfs /run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid=10001,gid=10001 \
   -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e MCP_TRANSPORT=sse -e MCP_PORT=8080 \
   sha256:<built image ID, label verified == approved sha> python -I -B /opt/omni/launch.py
 
@@ -383,11 +406,16 @@ docker create --name omni-mcp-egress-<id12> \
   --sysctl net.ipv4.ip_unprivileged_port_start=53 \
   --memory 128m --memory-swap 128m --pids-limit 64 --cpus 0.5 \
   --restart unless-stopped \
-  --env-file /dev/shm/omni-egress-<rand>.env   # SQUID_CONF_B64, DNSMASQ_CONF_B64, OUTER_SUBNET; validated, 0600, removed in finally
+  --tmpfs /run/omni:rw,noexec,nosuid,nodev,size=64k,mode=0700,uid=<squid uid>,gid=<squid gid> \
+  -e OUTER_SUBNET=<cidr>                       # not a secret
   [-p 127.0.0.1:<port>:8080]                   # bare-host gateway only
   sha256:<omni-mcp-egress image ID>            # entrypoint: decode configs to /tmp, bind by subnet, dnsmasq, then exec squid -N
 docker network connect --ip <.2> omni-mcp-net-<id12> omni-mcp-egress-<id12>
 docker start omni-mcp-egress-<id12>
+
+# 3. hand over the files (values on stdin only), for the sidecar and then the server
+docker exec -i -u <uid> <container> sh -c 'umask 0377 && cat > /run/omni/<name>'   # once per file
+docker exec -u <uid> <container> sh -c 'touch /run/omni/ready && chmod 0500 /run/omni'
 ```
 **Undeploy, delete and stop** remove both containers, the networks and the `extensions_config` entry. The separate hotfix makes stop and delete remove containers and secrets from now on (§8 step 11 builds on it).
 
@@ -482,7 +510,8 @@ The HTTP tests go through `create_app()` and its lifespan, as in `backend/tests/
 | T13 | **Deployed DNS.** Inside the deployed server, `socket.getaddrinfo("example.com", 443)` and a lookup of a random name both **fail**; the sidecar's own name still resolves. | Docker, deploy phase | Remove `--dns 127.0.0.1`: whether this goes red depends on the Docker version's internal-network DNS forwarding, so the test records which. If it stays green without the flag, the flag is kept anyway, and the report says it was unproven on this Docker version. |
 | T14 | **Squid listeners bound per network; the endpoint's login.**<br>- From a test container on the **outer** network: `:3128` is refused (connection refused, not 407).<br>- `:8080` without the token → 403; with a wrong token → 403; with the right token, `tools/list` over SSE returns the server's tools, which also proves SSE streams through Squid's accel port.<br>- From inside the server, `:8080` on `.2` is refused.<br>- `:3128` without the proxy login → 407. | Docker, deploy phase | Render `http_port 3128` without an address: `:3128` reachable from outer. Drop `inbound_token` from the `http_access`/`cache_peer_access` lines: no-token gets through. Drop `mcp_login`: 407 becomes 200. |
 | T15 | **Enable→deploy race.** The fake runner **blocks** inside `docker build` on an event. While it is held, the agent submits new code through the `mcp_build` path; then the event is released. Expect: no `docker run` is issued (argv log), `pending_approval` is cleared, the server is not approved, and the state reads "The code changed while turning on". Also: a retagged built image (the label doesn't match) makes the deploy refuse, and `docker run` is always given `sha256:<ID>`, never a tag. | HTTP, `create_app()` | Drop the under-lock re-read before `docker run`: a run is issued for the new code. Run by tag: the argv assertion goes red. |
-| T16 | **Env-file safety.** Storing secret names `HTTPS_PROXY`, `ld_preload`, `MCP_PORT`, `__INBOUND_TOKEN`, or a value containing `\n` is refused at `PUT /secrets` and again at deploy. The recording runner checks that the env-file existed with mode 0600 while `docker run` ran, and is **gone afterwards on both a successful and a failed run** (rc=1). | HTTP + fake runner | Remove the reserved-name check: `HTTPS_PROXY` is stored. Remove the `finally` unlink: the file is still there after the failed run. |
+| T16 | **Secrets-file safety** (revision 4: a file, no longer an env-file). Storing secret names `HTTPS_PROXY`, `ld_preload`, `MCP_PORT`, `__INBOUND_TOKEN`, or a value containing `\n` is refused at `PUT /secrets` and again at deploy. The recording runner sees the values **only** on `docker exec -i` stdin, never on any argv. Docker variant: the delivered `/run/omni/secrets` is mode 0400 and owned by uid 10001, and `/run/omni` is 0500. | HTTP + fake runner + Docker | Remove the reserved-name check: `HTTPS_PROXY` is stored. Write the file with umask 022: the mode assertion goes red. |
+| T20 | **Nothing secret in `docker inspect`.** For a running built server and its sidecar, the full `docker inspect` JSON contains none of: the stored values, the proxy password, the endpoint token, or their base64 forms. | Docker | Pass one stored secret with `-e K=V`: red. |
 | T8 | **The collision with `github`.** `extensions_config` has `github`. `POST /builds` for a description that slugs to `github` gives 409 naming it, and no row is created. `connect()` for a row whose key exists and isn't tagged with its id refuses, and the file is unchanged (byte compare). The same 409 for `GitHub`, `git_hub` and `git-hub`. A `POST /servers` body name containing `_` is slugged with no `_`. Prefix overlap: a built `git` server whose tool `hub_x` would produce a prefixed name already registered by another server is refused at connect. The classifier: with the shipped rules plus a user rule `*` → Tier 1, `built__github_get_issue` is **Tier 3**. After an approval sets `get_issue: 1` it is Tier 1, and it is Tier 3 again after a code change. Two built servers each with a tool `x`: a tier set on one doesn't apply to the other (tiers are keyed by `(server_id, tool)`). | HTTP + unit | (a) Remove the collision check: 201. (b) Remove the `built__` branch in `classify()`: Tier 1 from `*`. (c) Key `built_tiers` by tool name only: the second server inherits the tier. (d) Skip the normaliser in the collision check: `git_hub` is accepted. |
 | T9 | **No secret on argv or in config; no 0.0.0.0.** Over the fake runner's recorded argv: no stored secret value appears; `extensions_config.json` contains no inbound token (byte search for the token); no `-p` on the server container; the sidecar's `-p` (bare-host mode only) starts with `127.0.0.1:`. Docker variant: `docker port` shows 127.0.0.1 only. The **production-rendered** configs (decoded from the recorded sidecar env-file) contain `stop-dns-rebind`, `server=127.0.0.11` and `deny fwd private_dst`, and the test-only renderer parameters are at their defaults. | HTTP (fake) + Docker | Re-add `-e K=V`: red. `"0.0.0.0:"` in `-p`: red. Make the deploy path pass `stop_dns_rebind=False`: red. |
 | T10 | **Vault key.** Startup refuses when `config.yaml` has `mcp_builder.vault_key`, when the key file's mode is 0644, or when the file is under the project root; MCP Build also refuses to enable with `sandbox.allow_host_bash: true`. The migration re-encrypts, the old key decrypts **no** remaining row, the new key decrypts all of them, and `VACUUM` ran. | `create_app()` lifespan | Sabotaged **one check at a time**, each turning its own assertion red: (a) accept the config key; (b) skip the mode check; (c) skip the path check; (d) skip the host-bash check. |
@@ -612,6 +641,16 @@ Decided in this plan (tell me if you disagree):
 | LOW 13: gateway compromise | §0 states that code execution in the gateway gets every built server's secrets and the host's `/Users` (rw `backend/` mount, compose `:187`; `docker.sock`, `:206`). It recommends gateway-mount hardening as a separate item. MCP Build refuses to enable while `sandbox.allow_host_bash` is true (tested in T10). | §0, T10 |
 
 No finding was rejected.
+
+### 10.3 Revision 4: build-time changes (plan approved 2026-10-20)
+1. **Alpine pinned by digest.** The `docker/mcp-egress/Dockerfile` names `alpine:<tag>@sha256:<digest>`. The digest is recorded at the approved pull, the `apk` package versions are pinned, and the built sidecar image is run by its recorded **ID**.
+2. **No secrets in environment variables:**
+   - files are delivered over `docker exec` stdin into a per-container tmpfs, 0400, owned by the non-root user (§4 Secrets);
+   - the env-file design is dropped, and its key and value validation is kept for the file format;
+   - new test **T20**: `docker inspect` of a running server and sidecar contains no secret, with a sabotage that passes one with `-e`.
+   - This changes MED 7's meaning: the injection risk is now the file's line format, guarded by the same validation. T16 now checks the delivered file's mode and owner instead of env-file cleanup.
+3. **The CDN-fronting residual is accepted** by the user (2026-10-20).
+4. **The runtime image's packages come from the gateway's installed environment**, verified against `RECORD` hashes, not from pip. The user didn't approve a pip download.
 
 ### 10.2 Revision 3: the user's answers, and Squid in place of our own proxy
 
