@@ -87,23 +87,6 @@ class ComposioConnectionRepository:
             rows = list((await session.execute(stmt)).scalars())
         return [self._row_to_dict(r) for r in rows]
 
-    async def mark_active(self, *, user_id: str, toolkit: str, account_display: str | None) -> dict[str, Any] | None:
-        async with self._sf() as session:
-            stmt = select(ComposioConnectionRow).where(
-                ComposioConnectionRow.user_id == user_id,
-                ComposioConnectionRow.toolkit == toolkit,
-            )
-            row = (await session.execute(stmt)).scalar_one_or_none()
-            if row is None:
-                return None
-            row.status = "active"
-            if account_display is not None:
-                row.account_display = account_display
-            row.updated_at = datetime.now(UTC)
-            await session.commit()
-            await session.refresh(row)
-            return self._row_to_dict(row)
-
     async def mark_revoked(self, *, user_id: str, toolkit: str) -> dict[str, Any] | None:
         async with self._sf() as session:
             stmt = select(ComposioConnectionRow).where(

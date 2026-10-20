@@ -42,6 +42,31 @@ export default function SafetyPage() {
 
       <TierCheckForm />
 
+      {/* FR-023: absent, not forbidden. No rule could allow these. */}
+      {rules?.cannot_do && rules.cannot_do.length > 0 && (
+        <section className="space-y-2" aria-labelledby="cannot-heading">
+          <h2 id="cannot-heading" className="text-sm font-semibold">
+            What I can&apos;t do
+          </h2>
+          <p className="text-muted-foreground text-xs">
+            No tool exists for these, so no rule can allow them.
+          </p>
+          <ul className="space-y-1" data-testid="cannot-do">
+            {rules.cannot_do.map((item) => (
+              <li
+                key={item.capability}
+                className="border-border rounded-md border px-3 py-2 text-sm"
+              >
+                <span className="text-foreground font-medium capitalize">
+                  {item.capability}
+                </span>
+                <p className="text-muted-foreground mt-0.5">{item.wording}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="space-y-2" aria-labelledby="rules-heading">
         <h2 id="rules-heading" className="text-sm font-semibold">
           Rules in force

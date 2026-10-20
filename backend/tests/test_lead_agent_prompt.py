@@ -244,7 +244,7 @@ def test_refresh_skills_system_prompt_cache_async_reloads_immediately(monkeypatc
     _set_skills_cache_state()
 
     try:
-        prompt_module.warm_enabled_skills_cache()
+        prompt_module._ensure_enabled_skills_cache().wait()
         assert [skill.name for skill in prompt_module._get_enabled_skills()] == ["first-skill"]
 
         state["skills"] = [make_skill("second-skill")]
@@ -349,26 +349,15 @@ def test_clear_cache_does_not_spawn_parallel_refresh_workers(monkeypatch, tmp_pa
     _set_skills_cache_state()
 
     try:
-        prompt_module.clear_skills_system_prompt_cache()
+        prompt_module._invalidate_enabled_skills_cache()
         assert started.wait(timeout=5)
 
-        prompt_module.clear_skills_system_prompt_cache()
+        prompt_module._invalidate_enabled_skills_cache()
         release.set()
-        prompt_module.warm_enabled_skills_cache()
+        prompt_module._ensure_enabled_skills_cache().wait()
 
         assert max_active_loads == 1
         assert [skill.name for skill in prompt_module._get_enabled_skills()] == ["skill-2"]
     finally:
         release.set()
         _set_skills_cache_state()
-
-
-def test_warm_enabled_skills_cache_logs_on_timeout(monkeypatch, caplog):
-    event = threading.Event()
-    monkeypatch.setattr(prompt_module, "_ensure_enabled_skills_cache", lambda: event)
-
-    with caplog.at_level("WARNING"):
-        warmed = prompt_module.warm_enabled_skills_cache(timeout_seconds=0.01)
-
-    assert warmed is False
-    assert "Timed out waiting" in caplog.text

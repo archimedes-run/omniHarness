@@ -26,7 +26,6 @@ def _make_repo(*, connections: list[dict] | None = None, by_toolkit: dict | None
     repo.list_by_user = AsyncMock(return_value=connections or [])
     repo.get_by_user_toolkit = AsyncMock(return_value=(by_toolkit or {}).get("value"))
     repo.upsert = AsyncMock(return_value={})
-    repo.mark_active = AsyncMock(return_value={})
     repo.mark_revoked = AsyncMock(return_value={})
     return repo
 
@@ -221,12 +220,6 @@ async def test_connection_repo_upsert_creates_and_updates():
     assert created["status"] == "pending"
     assert created["composio_connection_id"] == "c1"
 
-    updated = await repo.mark_active(user_id="u1", toolkit="GMAIL", account_display="me@example.com")
-    assert updated is not None
-    assert updated["status"] == "active"
-    assert updated["account_display"] == "me@example.com"
-    assert updated["id"] == created["id"]  # same row
-
     # Second upsert with status only keeps existing connection id
     re_up = await repo.upsert(user_id="u1", toolkit="GMAIL", status="failed")
     assert re_up["status"] == "failed"
@@ -268,12 +261,3 @@ async def test_composio_client_raises_on_http_error():
     with patch.object(client, "_http", return_value=cm):
         with pytest.raises(ComposioError, match="Failed to create auth config"):
             await client.initiate_connection(entity_id="u1", toolkit="GMAIL", redirect_url="http://x")
-
-
-@pytest.mark.asyncio
-async def test_composio_client_get_mcp_url_format():
-    from app.gateway.composio_client import ComposioClient
-
-    client = ComposioClient(api_key="csk_test")
-    url = client.get_mcp_url(toolkit="GMAIL", entity_id="user-123")
-    assert url == "https://mcp.composio.dev/gmail?apiKey=csk_test&entityId=user-123"

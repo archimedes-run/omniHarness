@@ -671,3 +671,7 @@ async def delete_mcp_server(server_id: str, request: Request) -> None:
     deleted = await repo.delete(server_id, user_id=user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    # A deleted server's secrets go with it. They were left in the vault,
+    # encrypted but orphaned, and a server later created with the same id
+    # would have inherited them.
+    await get_mcp_secrets_vault(request).delete_all_for_server(server_id=server_id, owner_id=user_id)

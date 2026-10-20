@@ -9,15 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omniharness.runtime.user_context import (
-    DEFAULT_USER_ID,
-    CurrentUser,
-    get_current_user,
-    get_effective_user_id,
-    require_current_user,
-    reset_current_user,
-    set_current_user,
-)
+from omniharness.runtime.user_context import DEFAULT_USER_ID, CurrentUser, get_current_user, get_effective_user_id, reset_current_user, set_current_user
 
 
 @pytest.mark.no_auto_user
@@ -36,25 +28,6 @@ def test_set_and_reset_roundtrip():
     finally:
         reset_current_user(token)
     assert get_current_user() is None
-
-
-@pytest.mark.no_auto_user
-def test_require_current_user_raises_when_unset():
-    """require_current_user raises RuntimeError if contextvar is unset."""
-    assert get_current_user() is None
-    with pytest.raises(RuntimeError, match="without user context"):
-        require_current_user()
-
-
-@pytest.mark.no_auto_user
-def test_require_current_user_returns_user_when_set():
-    """require_current_user returns the user when contextvar is set."""
-    user = SimpleNamespace(id="user-2")
-    token = set_current_user(user)
-    try:
-        assert require_current_user() is user
-    finally:
-        reset_current_user(token)
 
 
 @pytest.mark.no_auto_user

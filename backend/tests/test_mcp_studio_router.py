@@ -190,3 +190,48 @@ def test_get_cross_user_returns_404():
 
     resp = TestClient(app).get("/api/mcp-studio/servers/belongs-to-another-user")
     assert resp.status_code == 404
+
+
+def test_deleting_a_server_deletes_its_secrets(tmp_path):
+    """Before, DELETE removed the server and left its encrypted secrets in the
+    vault, orphaned, for a later server with the same id to inherit."""
+    import asyncio
+
+    from cryptography.fernet import Fernet
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.gateway.mcp_secrets import McpSecretsVault
+    from omniharness.persistence.mcp_secrets.model import McpSecretRow
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'vault.db'}")
+
+    async def create() -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync: McpSecretRow.__table__.create(sync))
+
+    asyncio.run(create())
+    sf = async_sessionmaker(engine, expire_on_commit=False)
+
+    from _router_auth_helpers import _make_stub_user
+
+    owner = _make_stub_user()  # one user across both requests
+    app = make_authed_test_app(user_factory=lambda: owner)
+    app.state.config = _FLAG_ON
+    repo = AsyncMock()
+    repo.get = AsyncMock(return_value=_SERVER)
+    repo.delete = AsyncMock(return_value=True)
+    app.state.mcp_server_repo = repo
+    app.state.mcp_secrets_vault = McpSecretsVault(Fernet.generate_key(), sf)
+    app.include_router(mcp_studio.router)
+    client = TestClient(app)
+
+    assert client.put("/api/mcp-studio/servers/srv-1/secrets", json={"secrets": {"OPENAI_API_KEY": "sk-fake-e2e"}}).status_code == 200
+
+    async def stored() -> list[str]:
+        async with sf() as session:
+            return list((await session.execute(select(McpSecretRow.key_name).where(McpSecretRow.server_id == "srv-1"))).scalars())
+
+    assert asyncio.run(stored()) == ["OPENAI_API_KEY"]
+    assert client.delete("/api/mcp-studio/servers/srv-1").status_code == 204
+    assert asyncio.run(stored()) == [], "the deleted server's secrets are still in the vault"

@@ -150,23 +150,6 @@ class McpSecretsVault:
     # Read operations — key names only; values never returned
     # ------------------------------------------------------------------
 
-    async def list_key_names(self, *, server_id: str, owner_id: str) -> list[str]:
-        """Return the env-var names stored for this server + owner.
-
-        Values (ciphertext or plaintext) are NEVER included in the return value.
-        """
-        stmt = (
-            select(McpSecretRow.key_name)
-            .where(
-                McpSecretRow.server_id == server_id,
-                McpSecretRow.owner_id == owner_id,
-            )
-            .order_by(McpSecretRow.key_name)
-        )
-        async with self._sf() as session:
-            result = await session.execute(stmt)
-            return [row[0] for row in result.fetchall()]
-
     async def list_key_info(self, *, server_id: str, owner_id: str) -> list[dict]:
         """Return key names and their non-sensitive hints.
 

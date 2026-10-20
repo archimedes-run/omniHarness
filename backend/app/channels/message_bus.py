@@ -143,10 +143,6 @@ class MessageBus:
         """Block until the next inbound message is available."""
         return await self._inbound_queue.get()
 
-    @property
-    def inbound_queue(self) -> asyncio.Queue[InboundMessage]:
-        return self._inbound_queue
-
     # -- outbound ----------------------------------------------------------
 
     def subscribe_outbound(self, callback: OutboundCallback) -> None:

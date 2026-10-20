@@ -100,14 +100,6 @@ def prime_enabled_skills_cache() -> None:
     _ensure_enabled_skills_cache()
 
 
-def warm_enabled_skills_cache(timeout_seconds: float = _ENABLED_SKILLS_REFRESH_WAIT_TIMEOUT_SECONDS) -> bool:
-    if _ensure_enabled_skills_cache().wait(timeout=timeout_seconds):
-        return True
-
-    logger.warning("Timed out waiting %.1fs for enabled skills cache warm-up", timeout_seconds)
-    return False
-
-
 def _get_enabled_skills():
     return get_cached_enabled_skills()
 
@@ -155,10 +147,6 @@ def get_enabled_skills_for_config(app_config: AppConfig | None = None) -> list[S
 
 def _skill_mutability_label(category: SkillCategory | str) -> str:
     return "[custom, editable]" if category == SkillCategory.CUSTOM else "[built-in]"
-
-
-def clear_skills_system_prompt_cache() -> None:
-    _invalidate_enabled_skills_cache()
 
 
 async def refresh_skills_system_prompt_cache_async() -> None:

@@ -220,12 +220,3 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             )
 
         return response
-
-
-def get_csrf_token(request: Request) -> str | None:
-    """Get the CSRF token from the current request's cookies.
-
-    This is useful for server-side rendering where you need to embed
-    token in forms or headers.
-    """
-    return request.cookies.get(CSRF_COOKIE_NAME)

@@ -144,56 +144,6 @@ async def _authenticate(request: Request) -> AuthContext:
     return AuthContext(user=user, permissions=_ALL_PERMISSIONS)
 
 
-def require_auth[**P, T](func: Callable[P, T]) -> Callable[P, T]:
-    """Decorator that authenticates the request and enforces authentication.
-
-    Independently raises HTTP 401 for unauthenticated requests, regardless of
-    whether ``AuthMiddleware`` is present in the ASGI stack. Sets the resolved
-    ``AuthContext`` on ``request.state.auth`` for downstream handlers.
-
-    Must be placed ABOVE other decorators (executes after them).
-
-    Usage:
-        @router.get("/{thread_id}")
-        @require_auth  # Bottom decorator (executes first after permission check)
-        @require_permission("threads", "read")
-        async def get_thread(thread_id: str, request: Request):
-            auth: AuthContext = request.state.auth
-            ...
-
-    Raises:
-        HTTPException: 401 if the request is unauthenticated.
-        ValueError: If 'request' parameter is missing.
-    """
-
-    @functools.wraps(func)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        request = kwargs.get("request")
-        if request is None:
-            # Unit tests may call decorated handlers directly without a
-            # FastAPI Request object. Inject a minimal request stub when
-            # the wrapped function declares `request`.
-            if "request" in inspect.signature(func).parameters:
-                kwargs["request"] = _make_test_request_stub()
-            else:
-                raise ValueError("require_auth decorator requires 'request' parameter")
-            request = kwargs["request"]
-
-        if getattr(request, "_omniharness_test_bypass_auth", False):
-            return await func(*args, **kwargs)
-
-        # Authenticate and set context
-        auth_context = await _authenticate(request)
-        request.state.auth = auth_context
-
-        if not auth_context.is_authenticated:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        return await func(*args, **kwargs)
-
-    return wrapper
-
-
 def require_permission(
     resource: str,
     action: str,

@@ -177,10 +177,6 @@ class SkillStorage(ABC):
     # Concrete path helpers (layout is part of the SKILL.md protocol)
     # ------------------------------------------------------------------
 
-    def get_container_root(self) -> str:
-        """Origin: ``omniharness.config.skills_config.SkillsConfig.container_path`` accessor."""
-        return self._container_root
-
     def get_custom_skill_dir(self, name: str) -> Path:
         """Path to ``custom/<name>``. Does not create the directory.
 

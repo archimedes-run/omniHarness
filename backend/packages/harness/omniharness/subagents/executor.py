@@ -776,16 +776,6 @@ def get_background_task_result(task_id: str) -> SubagentResult | None:
         return _background_tasks.get(task_id)
 
 
-def list_background_tasks() -> list[SubagentResult]:
-    """List all background tasks.
-
-    Returns:
-        List of all SubagentResult instances.
-    """
-    with _background_tasks_lock:
-        return list(_background_tasks.values())
-
-
 def cleanup_background_task(task_id: str) -> None:
     """Remove a completed task from background tasks.
 

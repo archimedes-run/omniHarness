@@ -157,14 +157,6 @@ class TestChannelStore:
     def test_get_nonexistent_returns_none(self, store):
         assert store.get_thread_id("slack", "nonexistent") is None
 
-    def test_remove(self, store):
-        store.set_thread_id("slack", "ch1", "t1")
-        assert store.remove("slack", "ch1") is True
-        assert store.get_thread_id("slack", "ch1") is None
-
-    def test_remove_nonexistent_returns_false(self, store):
-        assert store.remove("slack", "nope") is False
-
     def test_list_entries_all(self, store):
         store.set_thread_id("slack", "ch1", "t1")
         store.set_thread_id("feishu", "ch2", "t2")

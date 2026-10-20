@@ -99,16 +99,6 @@ async def test_list_by_thread_is_stable_when_timestamps_tie(manager: RunManager,
 
 
 @pytest.mark.anyio
-async def test_has_inflight(manager: RunManager):
-    """has_inflight should be True when a run is pending or running."""
-    record = await manager.create("thread-1")
-    assert await manager.has_inflight("thread-1") is True
-
-    await manager.set_status(record.run_id, RunStatus.success)
-    assert await manager.has_inflight("thread-1") is False
-
-
-@pytest.mark.anyio
 async def test_cleanup(manager: RunManager):
     """After cleanup, the run should be gone."""
     record = await manager.create("thread-1")

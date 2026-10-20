@@ -90,9 +90,6 @@ class Discovery:
         dated = [r.at for r in ref.records if r.at is not None]
         return max(dated) if dated else None
 
-    def is_sticky(self, session_id: str) -> bool:
-        return session_id in self._sticky
-
     def release(self, session_id: str) -> None:
         """Drop stickiness once a session is terminal or retention resets it.
 

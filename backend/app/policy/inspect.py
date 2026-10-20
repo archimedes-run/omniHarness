@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 from .config import ConfigLoader, RuleSet
 from .explain import explain
+from .limits import ABSENT_CAPABILITIES, describe_absent, describe_tier
+from .models import Tier
 
 
 class ExceptionView(BaseModel):
@@ -28,6 +30,11 @@ class RuleView(BaseModel):
     source_line: int | None = None
 
 
+class CannotDo(BaseModel):
+    capability: str
+    wording: str
+
+
 class RulesInForce(BaseModel):
     source_file: str
     rules: list[RuleView]
@@ -39,6 +46,9 @@ class RulesInForce(BaseModel):
     error: str | None = None
     threshold_targets: int
     expires_after_seconds: int
+    #: What the assistant cannot do at all, and what it says instead (FR-023).
+    #: Absent, not forbidden: no rule could allow these.
+    cannot_do: list[CannotDo] = []
 
 
 class TierCheck(BaseModel):
@@ -51,6 +61,11 @@ class TierCheck(BaseModel):
     #: tier alone and mean different things.
     from_default: bool
     raised_by: ExceptionView | None = None
+    #: What will happen, in the words the assistant uses (FR-023).
+    in_plain_words: str = ""
+    #: Set when the name is a capability the assistant does not have at all
+    #: (FR-012): no tool exists, so the tier above describes nothing real.
+    absent: str | None = None
 
 
 class Tier3Execution(BaseModel):
@@ -76,6 +91,7 @@ def rules_in_force(loader: ConfigLoader) -> RulesInForce:
         error=loader.last_error or (ruleset.error or None),
         threshold_targets=ruleset.threshold_targets,
         expires_after_seconds=ruleset.expires_after_seconds,
+        cannot_do=[CannotDo(capability=c, wording=w) for c, w in ABSENT_CAPABILITIES.items()],
     )
 
 
@@ -88,6 +104,8 @@ def tier_check(tool: str, arguments: dict[str, Any] | None, ruleset: RuleSet) ->
         deciding_rule=decision.deciding_rule.describe() if decision.deciding_rule else None,
         from_default=decision.deciding_rule is None,
         raised_by=ExceptionView(tier=int(raised.tier), when=dict(raised.when), unless=dict(raised.unless)) if raised else None,
+        in_plain_words=describe_tier(Tier(decision.tier), tool),
+        absent=describe_absent(tool),
     )
 
 

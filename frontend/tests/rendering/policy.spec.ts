@@ -24,6 +24,12 @@ const RULES = {
   error: null as string | null,
   threshold_targets: 10,
   expires_after_seconds: 14400,
+  cannot_do: [
+    {
+      capability: "send email",
+      wording: "I can't send email — I have no tool that sends.",
+    },
+  ],
 };
 
 const RUN = {
@@ -64,6 +70,11 @@ async function serve(page: Page, rules = RULES, audit = AUDIT, path = SAFETY) {
         deciding_rule: known ? "calendar_delete_event → Tier 3" : null,
         from_default: !known,
         raised_by: null,
+        in_plain_words: `I won't use ${tool} until you confirm. I'll tell you what I intend to do first.`,
+        absent:
+          tool === "send email"
+            ? "I can't send email — I have no tool that sends."
+            : null,
       }),
     );
   });
@@ -144,4 +155,29 @@ test("a recorded plan that failed redaction shows as withheld (FR-031, SC-015)",
 
   await expect(page.getByTestId("withheld")).toBeVisible();
   await expect(page.getByTestId("plan")).toHaveCount(0);
+});
+
+test("the check says what will happen in plain words, and an absent capability is not given a tier (FR-023)", async ({
+  page,
+}) => {
+  await serve(page);
+  const result = await check(page, "calendar_delete_event");
+  await expect(result.getByTestId("plain-words")).toContainText(
+    "I won't use calendar_delete_event until you confirm",
+  );
+
+  await page.getByLabel("Tool name").fill("send email");
+  await page.getByRole("button", { name: "Check" }).click();
+  await expect(page.getByTestId("absent")).toContainText("I can't send email");
+  await expect(page.getByTestId("tier-result")).toHaveCount(0);
+});
+
+test("the Safety page lists what the assistant cannot do at all (FR-023)", async ({
+  page,
+}) => {
+  await serve(page);
+  await expect(page.getByTestId("cannot-do")).toContainText("send email");
+  await expect(page.getByTestId("cannot-do")).toContainText(
+    "I have no tool that sends",
+  );
 });

@@ -46,10 +46,4 @@ def describe_expiry(action: PendingAction) -> str:
     that never existed — the same shape as Feature 001's empty registry reading
     as "you have no sessions running".
     """
-    return f"I asked about this at {action.expires_at.isoformat(timespec='minutes')} and didn't hear back, so I did NOT do it. Nothing changed. Ask again if you still want it."
-
-
-#: Article X: this is measured, not estimated. If the browser worker lands, this
-#: figure goes in setup guidance rather than being omitted for being awkward.
-BROWSER_DISK_COST_MB = 550
-BROWSER_DISK_NOTE = "A browser adds about 550 MB of disk (measured: a 356 MB Chromium build plus a 196 MB headless shell). It runs only when asked and is not held in memory."
+    return f"I asked to use {action.tool_name} and didn't hear back by {action.expires_at.strftime('%H:%M')} UTC, so I did NOT do it. Nothing changed. Ask again if you still want it."

@@ -57,12 +57,6 @@ if not _FROM_ENV:
     )
 
 
-def internal_auth_is_shared() -> bool:
-    """True when the token came from the environment and is therefore shared by
-    every worker of this server. Read by the multi-worker readiness test."""
-    return _FROM_ENV
-
-
 def create_internal_auth_headers() -> dict[str, str]:
     """Return headers that authenticate Gateway internal calls."""
     return {INTERNAL_AUTH_HEADER_NAME: _INTERNAL_AUTH_TOKEN}
