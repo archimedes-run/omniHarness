@@ -211,6 +211,13 @@ test.describe("the theme toggle changes what the user sees", () => {
     ["--warning-foreground", "--warning"],
     ["--destructive-foreground", "--destructive"],
     ["--sidebar-foreground", "--sidebar-accent"],
+    ["--foreground", "--primary-subtle"],
+    ["--primary", "--primary-subtle"],
+    ["--avatar-1-foreground", "--avatar-1"],
+    ["--avatar-2-foreground", "--avatar-2"],
+    ["--avatar-3-foreground", "--avatar-3"],
+    ["--avatar-4-foreground", "--avatar-4"],
+    ["--avatar-3-foreground", "--card"],
   ];
 
   for (const scheme of ["light", "dark"] as const)
@@ -411,3 +418,126 @@ for (const surface of SURFACES) {
     ).not.toBe(light.row);
   });
 }
+
+/**
+ * Feature 006: Settings > Appearance is remembered per user on the server.
+ * The gateway is stubbed with page.route; the backend half is tested through
+ * create_app() in backend/tests/preferences.
+ */
+test.describe("Settings > Appearance", () => {
+  const PREF = "**/api/preferences/appearance";
+
+  test("choosing Dark applies it and saves it to the account", async ({
+    page,
+  }) => {
+    const puts: unknown[] = [];
+    await page.route(PREF, async (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON() as {
+          appearance: string;
+        };
+        puts.push(body);
+        return route.fulfill(ok({ appearance: body.appearance, chosen: true }));
+      }
+      return route.fulfill(ok({ appearance: "system", chosen: false }));
+    });
+    await page.addInitScript(() => localStorage.setItem("theme", "light"));
+    await page.goto("/workspace/settings/appearance");
+    const dark = page.getByTestId("theme-option-dark");
+    await expect(dark).toHaveAttribute("role", "radio");
+    await dark.click();
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    await expect(dark).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("appearance-save-state")).toContainText(
+      "Saved to your account",
+    );
+    expect(puts).toEqual([{ appearance: "dark" }]);
+  });
+
+  test("arrow keys move the choice, as a radiogroup should", async ({
+    page,
+  }) => {
+    await page.route(PREF, (route) =>
+      route.fulfill(ok({ appearance: "light", chosen: true })),
+    );
+    await page.addInitScript(() => localStorage.setItem("theme", "light"));
+    await page.goto("/workspace/settings/appearance");
+    await page.getByTestId("theme-option-light").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("theme-option-dark")).toBeFocused();
+    await expect(page.getByTestId("theme-option-dark")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  test("a failed save is said, not swallowed", async ({ page }) => {
+    await page.route(PREF, (route) =>
+      route.request().method() === "PUT"
+        ? route.fulfill({ status: 503, body: "{}" })
+        : route.fulfill(ok({ appearance: "system", chosen: false })),
+    );
+    await page.goto("/workspace/settings/appearance");
+    await page.getByTestId("theme-option-dark").click();
+    await expect(page.getByTestId("appearance-save-state")).toContainText(
+      "Could not save to your account",
+    );
+    // It still applies in this browser.
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  });
+
+  test("the stored choice wins over this browser's cache on load", async ({
+    page,
+  }) => {
+    await page.route(PREF, (route) =>
+      route.fulfill(ok({ appearance: "dark", chosen: true })),
+    );
+    await page.addInitScript(() => localStorage.setItem("theme", "light"));
+    await page.goto("/workspace/settings/appearance");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe(
+      "dark",
+    );
+  });
+
+  test("a user who never chose follows the system", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.route(PREF, (route) =>
+      route.fulfill(ok({ appearance: "system", chosen: false })),
+    );
+    await page.goto("/workspace/settings/appearance");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    await expect(page.getByTestId("theme-option-system")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+});
+
+test("Inter for text and JetBrains Mono for code, self-hosted", async ({
+  page,
+}) => {
+  const fontRequests: string[] = [];
+  page.on("request", (r) => {
+    if (/\.(woff2?|ttf)(\?|$)/.test(r.url()) || r.url().includes("fonts.g"))
+      fontRequests.push(r.url());
+  });
+  await page.goto("/", { waitUntil: "networkidle" });
+  const families = await page.evaluate(() => {
+    const mono = document.createElement("code");
+    mono.className = "font-mono";
+    document.body.appendChild(mono);
+    const out = {
+      body: getComputedStyle(document.body).fontFamily,
+      mono: getComputedStyle(mono).fontFamily,
+    };
+    mono.remove();
+    return out;
+  });
+  expect(families.body).toMatch(/Inter/);
+  expect(families.mono).toMatch(/JetBrains Mono/);
+  const external = fontRequests.filter(
+    (u) => !u.startsWith("http://localhost"),
+  );
+  expect(external, "a font was fetched from outside the app").toEqual([]);
+});
