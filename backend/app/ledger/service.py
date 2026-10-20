@@ -292,7 +292,9 @@ class LedgerService:
             tasks = self.repo.children("task", p["id"])
             open_ = [t for t in tasks if t["status"] not in ("done", "dropped")]
             overdue = [t for t in open_ if t["due_date"] and date.fromisoformat(t["due_date"]) < today]
-            out.append({**p, "open_tasks": len(open_), "overdue": len(overdue), "done_tasks": sum(1 for t in tasks if t["status"] == "done")})
+            dues = sorted(t["due_date"] for t in open_ if t["due_date"])
+            # next_due: the earliest due date of an open task (Home shows it).
+            out.append({**p, "open_tasks": len(open_), "overdue": len(overdue), "done_tasks": sum(1 for t in tasks if t["status"] == "done"), "next_due": dues[0] if dues else None})
         return out
 
     def read_text(self, *, user_id: str, project: str | None, today: date) -> str:

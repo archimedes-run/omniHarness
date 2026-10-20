@@ -178,6 +178,12 @@ class LedgerRepository:
             rows = s.scalars(select(LedgerLinkRow).where(LedgerLinkRow.to_kind == to_kind, LedgerLinkRow.to_ref == to_ref))
             return [to_dict(r) for r in rows]
 
+    def changes_since(self, owner_id: str | None, since: datetime) -> list[dict]:
+        """Every change this owner's ledger recorded at or after `since`, oldest first."""
+        with self._sf() as s:
+            rows = s.scalars(select(LedgerChangeRow).where(LedgerChangeRow.owner_id == owner_id, LedgerChangeRow.at >= since).order_by(LedgerChangeRow.id))
+            return [to_dict(r) for r in rows]
+
     def changes(self, entity_id: str) -> list[dict]:
         with self._sf() as s:
             rows = s.scalars(select(LedgerChangeRow).where(LedgerChangeRow.entity_id == entity_id).order_by(LedgerChangeRow.id))

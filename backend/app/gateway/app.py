@@ -23,6 +23,7 @@ from app.gateway.routers import (
     composio,
     confirmations,
     feedback,
+    home,
     inbox,
     ledger,
     mcp,
@@ -536,6 +537,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Inbox: alerts the engine held, failed or delivered (Phase 2.5).
     app.include_router(inbox.router)
+
+    # Home (Feature 006): alert dismissals, upcoming automation runs, today.
+    app.include_router(home.router)
 
     # The Project Ledger: projects, goals, tasks, decisions, links (Feature 005).
     app.include_router(ledger.router)
