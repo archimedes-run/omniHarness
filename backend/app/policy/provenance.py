@@ -36,6 +36,10 @@ from contextvars import ContextVar
 #: Set by Feature 002's injector. Structural — a message body cannot reach it.
 PROVENANCE_KEY = "turn_provenance"
 RULE_KEY = "trigger_rule_id"
+#: Which firing of the rule this run is: the event's fingerprint, the same for
+#: every attempt at it. Standing grants count a run's actions under it, so a
+#: retry continues the count (grants.GrantRunCounts).
+FIRING_KEY = "trigger_firing_id"
 
 #: The one value meaning "this turn was generated, not sent by a person".
 SYNTHETIC = "synthetic-trigger"

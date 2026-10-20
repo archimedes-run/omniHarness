@@ -122,6 +122,10 @@ async def test_one_full_cycle_drives_a_rule_end_to_end(tmp_path) -> None:
     assert body["input"]["messages"][0]["role"] == "human"
     assert body["metadata"]["turn_provenance"] == "synthetic-trigger"
     assert "darcy-repo is waiting: Pin the version" in body["input"]["messages"][0]["content"]
+    # The firing's id (its fingerprint) travels with the run, so standing
+    # grants count this run's actions under it (Feature 006).
+    firing = body["config"]["configurable"]["trigger_firing_id"]
+    assert firing and body["metadata"]["trigger_firing_id"] == firing
 
     assert len(dest.delivered) == 1
     assert audit.entries()[0]["outcome"] == "delivered"
@@ -171,4 +175,28 @@ async def test_a_broken_rule_does_not_stop_the_cycle(tmp_path) -> None:
     loop.runner.run_blocking = selective
     results = await loop.cycle()
     assert results["good"] is True and results["broken"] is False
+    assert len(dest.delivered) == 1
+
+
+async def test_a_retried_firing_carries_the_same_firing_id(tmp_path) -> None:
+    """A failed attempt is retried on the next cycle with the SAME firing id,
+    so a retry continues the run's granted-action count (Feature 006)."""
+    loop, gw, dest, _ = _build(tmp_path, [{"id": "blocked", "type": "watcher", "match": {"event": "waiting-on-user"}, "prompt": "{project}", "destination": "quiet"}])
+    original = gw.post
+    calls = {"n": 0}
+
+    def flaky(path, body):
+        if path.endswith("/runs/wait"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                gw.runs.append((path, body))
+                raise RuntimeError("model unavailable")
+        return original(path, body)
+
+    gw.post = flaky
+    loop.runner.injector.post = flaky
+    await loop.cycle()
+    await loop.cycle()
+    ids = [body["config"]["configurable"]["trigger_firing_id"] for _, body in gw.runs]
+    assert len(ids) == 2 and ids[0] == ids[1]
     assert len(dest.delivered) == 1

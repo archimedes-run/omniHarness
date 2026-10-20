@@ -33,6 +33,9 @@ DEFAULT_ASSISTANT_ID = "lead_agent"
 PROVENANCE_KEY = "turn_provenance"
 SYNTHETIC = "synthetic-trigger"
 RULE_KEY = "trigger_rule_id"
+#: The firing's fingerprint: one value for every attempt at the same event
+#: (app/policy/provenance.FIRING_KEY reads it at dispatch).
+FIRING_KEY = "trigger_firing_id"
 
 
 class InjectionError(RuntimeError):
@@ -105,7 +108,7 @@ class TurnInjector:
         rec = self.put(f"/api/threads/{thread_id}/tools", {"sources": sources})
         return rec.get("sources", [])
 
-    def inject(self, thread_id: str, rule_id: str, prompt: str) -> str:
+    def inject(self, thread_id: str, rule_id: str, prompt: str, firing_id: str | None = None) -> str:
         """Inject the turn and return the assistant's reply text."""
         # The markers go in `configurable` and `metadata` ONLY — deliberately.
         #
@@ -135,6 +138,9 @@ class TurnInjector:
             },
             "metadata": {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: rule_id},
         }
+        if firing_id:
+            payload["config"]["configurable"][FIRING_KEY] = firing_id
+            payload["metadata"][FIRING_KEY] = firing_id
         self.reset_turn()
         result = self.post(f"/api/threads/{thread_id}/runs/wait", payload)
         turn = turn_messages(result, marker)

@@ -44,8 +44,8 @@ def _call(changes: list[dict], call_id: str) -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": changes}, "id": call_id}])
 
 
-def _run(studio, steps: list[AIMessage], *, scheduled: bool, agent: str = "wrap-up", first: str = "Evening wrap-up, as of 18:00", thread: str = "t-run"):
-    from app.policy.provenance import PROVENANCE_KEY, RULE_KEY, SYNTHETIC
+def _agent(studio, steps: list[AIMessage], *, scheduled: bool, agent: str = "wrap-up", thread: str = "t-run", firing: str | None = "fire-1"):
+    from app.policy.provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY, SYNTHETIC
     from omniharness.agents.middlewares.policy_hook import build_policy_middleware
     from omniharness.config import get_app_config
     from omniharness.tools.tools import get_available_tools
@@ -57,6 +57,13 @@ def _run(studio, steps: list[AIMessage], *, scheduled: bool, agent: str = "wrap-
     context = {"thread_id": thread, "user_id": studio.user_id, "agent_name": agent}
     if scheduled:
         context |= {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: "evening-wrap"}
+        if firing:
+            context[FIRING_KEY] = firing
+    return built, context
+
+
+def _run(studio, steps: list[AIMessage], *, scheduled: bool, agent: str = "wrap-up", first: str = "Evening wrap-up, as of 18:00", thread: str = "t-run", firing: str | None = "fire-1"):
+    built, context = _agent(studio, steps, scheduled=scheduled, agent=agent, thread=thread, firing=firing)
     return built.invoke({"messages": [HumanMessage(content=first)]}, context=context, config={"recursion_limit": 200})
 
 
@@ -77,6 +84,12 @@ def _tasks(studio) -> list[str]:
 
 def _pending(studio) -> list[dict]:
     return [a for a in studio.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "ledger_apply"]
+
+
+def _decline_all(studio) -> None:
+    """Clear what waits, so the next turn is not read as an answer to it."""
+    for action in _pending(studio):
+        assert studio.client.post(f"/api/confirmations/{action['id']}/decline", json={}).status_code == 200
 
 
 def _uses(studio, agent: str = "wrap-up") -> list[dict]:
@@ -165,8 +178,107 @@ def test_the_cap_pauses_the_run_at_action_21(studio) -> None:
     assert len(_tasks(studio)) == 20
     [waiting] = _pending(studio)
     assert "Task 21" in json.dumps(waiting["arguments"])
-    assert "the most one run may do" in waiting["plan_text"]
+    assert "20 of the 20 things one run may do" in waiting["plan_text"]
     assert [u["count_in_run"] for u in _uses(studio)][:1] == [20]
+
+
+def test_the_cap_counts_actions_not_calls_one_call_with_21_changes_waits_whole(studio) -> None:
+    """A ledger_apply with N changes is N actions. 21 in one call cannot fit
+    (it is all or nothing), so none runs; 20 in one call fills the run."""
+    _setup(studio, ["tasks"])
+    _run(studio, [_call([_task(f"Big {i}") for i in range(1, 22)], "c1")], scheduled=True)
+    assert _tasks(studio) == []
+    [waiting] = _pending(studio)
+    assert "would do 21 more" in waiting["plan_text"]
+    assert _uses(studio) == []
+    _decline_all(studio)
+    _run(studio, [_call([_task(f"Fits {i}") for i in range(1, 21)], "c2"), _call([_task("One more")], "c3")], scheduled=True, firing="fire-2")
+    assert len(_tasks(studio)) == 20 and "One more" not in _tasks(studio)
+    assert [u["count_in_run"] for u in _uses(studio)] == [20]
+
+
+def _parallel(n: int) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [_task(f"P{i}")]}, "id": f"p{i}"} for i in range(1, n + 1)])
+
+
+def test_21_parallel_calls_in_one_step_never_exceed_20(studio) -> None:
+    """One model step, 21 ledger_apply calls run concurrently by the tool
+    node: the reservation is atomic, so exactly 20 run and one waits."""
+    _setup(studio, ["tasks"])
+    _run(studio, [_parallel(21)], scheduled=True)
+    assert len(_tasks(studio)) == 20
+    assert len(_pending(studio)) == 1
+    assert sorted(u["count_in_run"] for u in _uses(studio)) == list(range(1, 21))
+
+
+def test_21_parallel_calls_on_the_async_path_never_exceed_20(studio) -> None:
+    """The gateway runs agents asynchronously (awrap_tool_call): same cap."""
+    import asyncio
+
+    _setup(studio, ["tasks"])
+    built, context = _agent(studio, [_parallel(21)], scheduled=True)
+    asyncio.run(built.ainvoke({"messages": [HumanMessage(content="Evening wrap-up")]}, context=context, config={"recursion_limit": 200}))
+    assert len(_tasks(studio)) == 20
+    assert len(_pending(studio)) == 1
+
+
+def test_a_retry_of_the_same_firing_continues_its_count(studio) -> None:
+    """The count is stored per firing, durably: a retry (a new run, a new
+    middleware, the same firing id) has 5 left after 15, not a fresh 20."""
+    _setup(studio, ["tasks"])
+    _run(studio, [_call([_task(f"First {i}")], f"a{i}") for i in range(1, 16)], scheduled=True, firing="fire-9")
+    assert len(_tasks(studio)) == 15
+    _run(studio, [_call([_task(f"Retry {i}")], f"b{i}") for i in range(1, 7)], scheduled=True, firing="fire-9")
+    assert len(_tasks(studio)) == 20 and "Retry 6" not in _tasks(studio)
+    [waiting] = _pending(studio)
+    assert "Retry 6" in json.dumps(waiting["arguments"])
+    _decline_all(studio)
+    # Another firing of the rule is another run, with its own 20.
+    _run(studio, [_call([_task("Tomorrow")], "c1")], scheduled=True, firing="fire-10")
+    assert "Tomorrow" in _tasks(studio)
+
+
+def test_a_scheduled_run_with_no_firing_id_uses_no_grant(studio) -> None:
+    """Without a run to count against, a grant cannot be capped, so it is not
+    used (fails closed)."""
+    _setup(studio, ["tasks"])
+    _run(studio, [_call([_task("Uncounted")], "c1")], scheduled=True, firing=None)
+    assert _tasks(studio) == []
+    [waiting] = _pending(studio)
+    assert "can't be counted" in waiting["plan_text"]
+
+
+def test_an_agent_invited_during_a_scheduled_run_is_in_that_run(studio) -> None:
+    """A subagent the scheduled run delegates to starts from the run's
+    markers (invitation.invited_agent_context), so its routine ledger write
+    needs a grant like the run's own; it is never treated as a chat."""
+    from omniharness.agents.invitation import current_inviting_turn, invited_agent_context
+
+    _setup(studio, ["tasks"])
+    seen = {}
+
+    @tool("web_search")
+    def capture(query: str) -> str:
+        """Tier 1 in the shipped rules; records the invitation mark in force."""
+        seen["turn"] = current_inviting_turn()
+        return "ok"
+
+    from omniharness.agents.middlewares.policy_hook import build_policy_middleware
+    from omniharness.config import get_app_config
+    from omniharness.tools.tools import get_available_tools
+
+    built, context = _agent(studio, [], scheduled=True)
+    model = ToolCapableFake(messages=iter([AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "q"}, "id": "s1"}]), AIMessage(content="done")]))
+    create_agent(model=model, tools=[capture], middleware=[build_policy_middleware(get_app_config())]).invoke({"messages": [HumanMessage(content="wrap up")]}, context=context)
+    invited = invited_agent_context(seen["turn"], "helper")
+    assert invited["turn_provenance"] == "synthetic-trigger" and invited["trigger_firing_id"] == "fire-1"
+
+    config = get_app_config()
+    ledger = [t for t in get_available_tools(app_config=config, include_mcp=False) if t.name == "ledger_apply"]
+    helper = ToolCapableFake(messages=iter([_call([_task("By the helper")], "h1"), AIMessage(content="ok")]))
+    create_agent(model=helper, tools=ledger, middleware=[build_policy_middleware(config)]).invoke({"messages": [HumanMessage(content="add it")]}, context={**invited, "thread_id": "t-run", "user_id": studio.user_id})
+    assert _tasks(studio) == []
+    assert len(_pending(studio)) == 1
 
 
 def test_archiving_needs_its_own_grant(studio) -> None:
