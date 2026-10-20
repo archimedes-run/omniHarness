@@ -257,3 +257,29 @@ def test_a_silent_watcher_shows_the_last_answer_labelled_with_its_age(tmp_path, 
     assert body["unreachable_detail"], "and must say why it is stale"
     assert body["last_known_age_seconds"] is not None and body["last_known_age_seconds"] >= 0
     assert [r["display_state"] for r in body["sessions"]] == ["waiting-on-user"]
+
+
+def test_claude_and_codex_sessions_reach_the_page_together(tmp_path, point_at) -> None:
+    """Feature 005 US3, end to end: the watcher built as main() builds it
+    (build_service, both roots), served over real SSE, read by the gateway
+    route the Coding sessions page calls."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "session_watcher"))
+    from codex_records import event, meta, plan_call, plan_ok, write
+    from session_watcher.server import build_service
+
+    _write_session(tmp_path / "claude")
+    write(tmp_path / "codex", "2026/10/19", "codex-1", [meta(0, "codex-1"), plan_call(1, "c1", [("Parse", "completed"), ("Ship", "pending")]), plan_ok(1.1, "c1"), event(2, "task_started", turn_id="t")])
+    port = _free_port()
+    server = _serve_watcher(build_service(tmp_path / "claude", tmp_path / "codex"), port)
+    point_at(port)
+    try:
+        body = _get()
+    finally:
+        server.should_exit = True
+
+    by_agent = {row["agent"]: row for row in body["sessions"]}
+    assert set(by_agent) == {"claude", "codex"}
+    assert by_agent["codex"]["agent_label"] == "Codex"
+    assert by_agent["codex"]["todos"] == [{"title": "Parse", "status": "completed"}, {"title": "Ship", "status": "pending"}]
+    assert by_agent["claude"]["todos"] is None
+    assert {a["agent"]: a["readable"] for a in body["agents"]} == {"claude": True, "codex": True}

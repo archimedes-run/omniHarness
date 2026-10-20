@@ -1,6 +1,7 @@
 "use client";
 
 import { BotIcon, PlusIcon } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -28,10 +29,15 @@ export function AgentGallery() {
             {t.agents.description}
           </p>
         </div>
-        <Button onClick={handleNewAgent}>
-          <PlusIcon className="mr-1.5 h-4 w-4" />
-          {t.agents.newAgent}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/workspace/sessions">Coding sessions</Link>
+          </Button>
+          <Button onClick={handleNewAgent}>
+            <PlusIcon className="mr-1.5 h-4 w-4" />
+            {t.agents.newAgent}
+          </Button>
+        </div>
       </div>
 
       {/* Content */}

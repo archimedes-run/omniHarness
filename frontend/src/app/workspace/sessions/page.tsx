@@ -14,8 +14,8 @@ export default function SessionsPage() {
       <header className="space-y-1">
         <h1 className="text-xl font-semibold">Coding sessions</h1>
         <p className="text-muted-foreground text-sm">
-          What your Claude Code sessions are doing, as the session watcher sees
-          them.
+          What your Claude Code and Codex sessions are doing, as the session
+          watcher sees them, with each agent&apos;s own task list.
         </p>
       </header>
 
@@ -80,6 +80,20 @@ export default function SessionsPage() {
           Watcher live.
         </p>
       )}
+
+      {/* Feature 005 FR-026: an agent whose files cannot be read is "can't
+          tell" for that agent, said once, never an absence of sessions. */}
+      {view?.agents
+        ?.filter((agent) => !agent.readable)
+        .map((agent) => (
+          <p
+            key={agent.agent}
+            className="text-muted-foreground text-sm"
+            data-testid="agent-unreadable"
+          >
+            {`Can't read ${agent.label} sessions: ${agent.reason ?? "unknown reason"}. Sessions may be running there.`}
+          </p>
+        ))}
 
       {view?.sessions != null && (
         <>

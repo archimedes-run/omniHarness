@@ -162,3 +162,71 @@ test("a watcher that did not answer in time shows its last answer, labelled with
   await expect(page.getByTestId("watcher-health")).toContainText("40s ago");
   await expect(page.getByTestId("session")).toHaveCount(2);
 });
+
+const CODEX = {
+  ...session("working", "observed", "beta-site"),
+  agent: "codex",
+  agent_label: "Codex",
+  todos: [
+    { title: "Parse records", status: "completed" },
+    { title: "Write tests", status: "in_progress" },
+    { title: "Ship", status: "pending" },
+  ],
+  files_changed: 3,
+};
+
+test("Claude Code and Codex sessions share one list, each labelled by agent, with its task progress (Feature 005)", async ({
+  page,
+}) => {
+  await serve(page, {
+    ...LIVE,
+    sessions: [
+      {
+        ...session("completed", "observed", "omniHarness"),
+        agent: "claude",
+        agent_label: "Claude Code",
+        todos: null,
+      },
+      CODEX,
+    ],
+  });
+  const rows = page.getByTestId("session");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByTestId("agent")).toHaveText("Claude Code");
+  await expect(rows.nth(1).getByTestId("agent")).toHaveText("Codex");
+  await expect(rows.nth(0).getByTestId("plan")).toHaveCount(0);
+
+  const plan = rows.nth(1).getByTestId("plan");
+  await expect(plan.getByTestId("plan-progress")).toHaveText("Tasks 1 of 3");
+  await expect(plan).toContainText("Write tests");
+  await plan.locator("summary").click();
+  await expect(plan.locator('[data-status="pending"]')).toHaveText("Ship");
+  await expect(rows.nth(1)).toContainText("3 files changed");
+});
+
+test("an agent whose files cannot be read says so, and is never just absent (FR-026)", async ({
+  page,
+}) => {
+  await serve(page, {
+    ...LIVE,
+    agents: [
+      {
+        agent: "claude",
+        label: "Claude Code",
+        readable: true,
+        reason: null,
+        drift: 0,
+      },
+      {
+        agent: "codex",
+        label: "Codex",
+        readable: false,
+        reason: "/root/.codex/sessions is not mounted or not readable",
+        drift: 0,
+      },
+    ],
+  });
+  await expect(page.getByTestId("agent-unreadable")).toContainText(
+    "Can't read Codex sessions",
+  );
+});
