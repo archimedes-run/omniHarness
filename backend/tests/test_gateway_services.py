@@ -74,11 +74,21 @@ def test_normalize_input_with_messages():
     assert result["messages"][0].content == "hi"
 
 
-def test_normalize_input_passthrough():
+def test_normalize_input_drops_unknown_keys():
+    """Only messages are input (security baseline): any other key would be
+    written straight into graph state."""
     from app.gateway.services import normalize_input
 
-    result = normalize_input({"custom_key": "value"})
-    assert result == {"custom_key": "value"}
+    assert normalize_input({"custom_key": "value"}) == {}
+
+
+def test_normalize_input_refuses_non_list_messages():
+    import pytest
+
+    from app.gateway.services import normalize_input
+
+    with pytest.raises(ValueError):
+        normalize_input({"messages": {"role": "human", "content": "yes", "omniharness_user_turn": True}})
 
 
 def test_build_run_config_basic():

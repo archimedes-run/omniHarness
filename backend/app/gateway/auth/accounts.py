@@ -11,9 +11,8 @@ refused at login with exactly the wrong-password answer, refused on every route
 as the owner (app.gateway.ownership). Disabling also bumps ``token_version``,
 so any session it holds dies at once.
 
-Disabling the OWNER needs ``--force``: with no explicit
-``OMNI_HARNESS_OWNER_USER_ID`` the next-earliest enabled account would become
-the owner.
+Disabling the OWNER needs ``--force``: the owner is pinned, so nobody else
+becomes the owner and every account is locked out until it is re-enabled.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ async def set_disabled(email: str, *, disabled: bool, reason: str | None = None,
         raise AccountError(f"no account with email {email!r}")
     if disabled:
         if not force and str(user.id) == await owner_user_id():
-            raise AccountError("that is the owner account; disabling it would make another account the owner. Pass --force if you mean it.")
+            raise AccountError("that is the owner account; disabling it locks EVERY account out until it is enabled again (or OMNI_HARNESS_OWNER_USER_ID names another). Pass --force if you mean it.")
         user.disabled_at = user.disabled_at or datetime.now(UTC)
         user.disabled_reason = reason or user.disabled_reason or "disabled by the operator"
         user.token_version += 1
