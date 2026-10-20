@@ -28,7 +28,7 @@ Decision key: **adopt** (same idea, our design), **change** (same goal, differen
 | Replace mode | Deletes all rows and adopts the file's columns; irreversible | None | **Drop.** An irreversible bulk delete in an import dialog is the wrong place for one. A user can archive rows (restorable) and import. |
 | Add rows from chat | "Ask Darcy" from the list | From chat or Telegram via `insert_rows` | **Adopt**, through tools any agent can use. |
 | Find Rows | Mentioned only in passing (a calibration form an agent provides "used by the Find Rows chat"); **no page in their docs** | User describes; agent proposes; user approves the batch | **Add** (our own design). We could not verify how theirs works. |
-| Row statuses | Pending, Processing, Complete, Failed, Disqualified (with reason), Submitted | Same six | **Adopt.** Their docs give no detail on Submitted; ours requires a successful Tier 2+ tool result. |
+| Row statuses | Pending, Processing, Complete, Failed, Disqualified (with reason), Submitted | Same six | **Adopt.** Their docs give no detail on Submitted; ours requires a successful Tier 2+ call, for that row, of the list's explicitly declared submit tool. |
 | Disqualification | Agent marks with a reason (examples: defunct, B2C) | Criteria written per list, evaluated once referenced columns are filled; remaining columns skipped | **Change.** Explicit criteria are inspectable; skipping saves cost. |
 | Processing flow | Picks pending, failed and paused rows; sends in batches; streams over WebSocket | Durable queue of row × column work; SSE from stored events | **Change.** SSE is what the gateway already uses, and stored events work across workers (R5). |
 | Pause / resume | Yes | Yes, and survives a gateway restart (tested) | **Adopt** and **add** the durability test. Restart behaviour is **not in their docs**. |
@@ -93,7 +93,7 @@ Decision: tables in the gateway's database (the same SQLAlchemy engine family as
 
 **Progress streaming.** The gateway runs several uvicorn workers; the browser's SSE connection may land on a worker that is not running the queue. Progress is therefore written to `lists_run_events` (append-only, with a sequence number), and `GET /api/lists/{id}/runs/{run_id}/events` streams them by tailing that table from the client's last sequence number (`Last-Event-ID`). This reuses `format_sse` and works across workers and reconnects. In-memory pub/sub was rejected: it passes every single-process test and fails at four workers (Article XI's first row).
 
-**Concurrency.** Defaults (tracked, Q12): 3 rows in parallel per list, 6 across all lists. A run never holds more than its share, so a large run does not starve a small one.
+**Concurrency.** Limits (tracked, spec FR-045): 3 rows in parallel per list, 6 across all lists, and each integration's rate limits below. A run never holds more than its share, so a large run does not starve a small one.
 
 **Rate limits per integration.** A token bucket per tool source (`web_search`, `web_fetch`, each MCP server by name), with tracked defaults and a per-source override in config. A worker that would exceed a bucket waits; it does not fail the cell. A 429 from a source halves that source's rate for 60 s. Model-provider errors: 3 consecutive failures pause the run with the reason, rather than failing every row.
 
@@ -110,7 +110,7 @@ Decision:
 - Access is checked in the list service on every call (FR-073). Denials return a fixed message with no list metadata (FR-074, FR-075).
 - Alternative rejected: a separate MCP process like session-watcher. It would need registration in a gitignored file (Article XIV), a way to learn the caller's identity per call, and a network hop for every row read, for no isolation benefit: lists are gateway data.
 
-Tier rules go in `app/policy/default_rules.yaml`: `omni-lists_list_lists|get_schema|query_rows|aggregate|insert_rows|preview_delete` Tier 1; `omni-lists_update_rows` Tier 2 with a `RuleException` raising it to Tier 3 (the confirmation path, spec Q1 default) when the resolved target cells include any with origin user; `omni-lists_delete_rows`, `create_list`, `process_rows` Tier 2 (Q7); purge Tier 3. Because the classifier can only raise a tier from arguments, the "touches user cells" predicate is computed by a resolver the policy layer calls (as `targets.py` resolves targets), not by the tool and not by the model.
+Tier rules go in `app/policy/default_rules.yaml`: `omni-lists_list_lists|get_schema|query_rows|aggregate|preview_delete` Tier 1; `omni-lists_insert_rows` Tier 2 (the reply lists the inserted rows with an Undo); the processing writer's AI-cell fills Tier 2, disclosed in the run summary; `omni-lists_update_rows` Tier 2 with a `RuleException` raising it to Tier 3 (the confirmation path, with a diff) when the resolved target cells include any with origin user; `omni-lists_delete_rows`, `create_list` Tier 2; `omni-lists_process_rows` Tier 2 with a `RuleException` raising it to Tier 3 when the resolved estimate exceeds the list's remaining cap or the list has no cap; purge by an agent Tier 3. All of this is Article II as written (spec FR-063). Because the classifier can only raise a tier from arguments, the "touches user cells" and "over the cap" predicates are computed by a resolver the policy layer calls (as `targets.py` resolves targets), not by the tool and not by the model.
 
 The approval card's **diff**: today the card shows plan text and targets only. `update_rows` adds a structured `changes` payload (row, column, before, after) to the pending action, rendered as a diff on `pending-action-card.tsx` like the existing `ledger_apply` change list. Before-values are re-read at confirmation; if any changed, the action is declined as targets-drifted (existing 003 outcome).
 
@@ -134,7 +134,7 @@ Tests: the injection fixture (FR-092) through the production root; a sabotage th
 1. the median measured tokens of this column's filled cells in this list (once there are at least 5);
 2. otherwise a static estimate: rendered prompt tokens + a tracked research-overhead constant per tool set + the typical answer size for the type.
 
-The dialog says which basis it used. Money is shown only if the model has a configured price (no price table exists in the code today, Q6). Measured usage comes from the model's reported `usage_metadata`; missing usage is "unknown", never 0 (FR-043).
+The dialog says which basis it used. Money is shown only if the user has set a price for the model in Settings (spec FR-046); there is no built-in price table. Measured usage comes from the model's reported `usage_metadata`; missing usage is "unknown", never 0 (FR-043).
 
 ## R9. Automations: a deterministic "process new rows" action
 

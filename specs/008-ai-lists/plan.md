@@ -6,7 +6,7 @@
 
 ## Summary
 
-Lists live in the gateway, in the gateway's own database, as typed tables (`lists_*`): typed cells with state, origin, label and sources; append-only change history; durable runs, queue items and run events. Agents reach them through **`omni-lists`**: ten tools defined once in the gateway, served in-process to our agents with the caller's identity taken from the runtime context, and optionally over MCP HTTP to external clients (research.md R6). Access (none / read / read+write per agent per list) is enforced in the list service on every call. Tiers are in the tracked policy rules; user-written cells need approval with a diff on the existing confirmation card.
+Lists live in the gateway, in the gateway's own database, as typed tables (`lists_*`): typed cells with state, origin, label and sources; append-only change history; durable runs, queue items and run events. Agents reach them through **`omni-lists`**: ten tools defined once in the gateway, served in-process to our agents with the caller's identity taken from the runtime context, and optionally over MCP HTTP to external clients (research.md R6). Access (none / read / read+write per agent per list) is enforced in the list service on every call. Tiers are in the tracked policy rules and follow Article II as written: reads Tier 1; inserts, AI-cell fills, agent-cell updates, archive-deletes and in-cap processing Tier 2 (run, then disclose, undoable); edits to user-written cells, over-cap processing and purge by an agent Tier 3, with a diff on the existing confirmation card for cell edits.
 
 Processing is a durable queue of (row × AI column) items in dependency order, claimed with leases by one elected worker, budget-checked at claim time, and streamed to the UI from stored events over SSE (R4, R5). Untrusted cell text cannot initiate actions: processing gets Tier 1 research tools only, and in chat, list-initiated Tier 2/3 actions become button-only proposals (R7). Finish notices go through the trigger engine's politeness pipeline (R11). A deterministic 002 rule action processes new rows on a schedule (R9). The UI adds Lists to the sidebar with full-page boards (R12).
 
@@ -42,13 +42,13 @@ Four slices, each releasable, each with sabotage-checked gates and at least one 
 | Article | How this plan complies |
 |---|---|
 | I. Gateway-only integration | Lists are a gateway domain (`app/lists`). The trigger engine reaches them only through `gateway_post` to `/api/lists/*`. External MCP clients reach them through the gateway's MCP mount. No module imports gateway internals. |
-| II. Three-tier policy | Every `omni-lists` tool is classified in `default_rules.yaml` (tracked). The user-written-cell distinction is made by a policy-side resolver from stored cell origin, not by the tool or model. Unknown tools stay Tier 3. Departures from the article's wording are in Complexity Tracking. |
+| II. Three-tier policy | Every `omni-lists` tool is classified in `default_rules.yaml` (tracked). The user-written-cell distinction is made by a policy-side resolver from stored cell origin, not by the tool or model. Unknown tools stay Tier 3. No departure from the article's wording: every write is Tier 2 or Tier 3; Tier 1 is reads only. |
 | III. Provenance over trust | Cell and Find rows text is data. Confirmations of list-initiated proposals are button-only (`confirmable_by_typing` false for content origin). |
 | IV. Human in the loop | Not engaged (no coding-agent approvals). |
 | V. Non-goals | No email is sent from list content; processing has no outbound tools (FR-093). No browser actions initiated from cells. |
 | VI. Lite by default | The queue worker is a task inside the gateway's elected worker, sleeping when idle. No Docker requirement. |
 | VII. Politeness | Finish notices enter the existing pipeline: quiet hours, coalescing, no interruption, presence (R11). |
-| VIII. Privacy | Memory is used per column only when toggled on, and recorded per cell. Purge is Tier 3 and audit-logged. |
+| VIII. Privacy | Memory is used per column only when toggled on, and recorded per cell. Purge by an agent is Tier 3; the automatic 30-day purge and every purge are audit-logged. |
 | IX. Ship in slices | Four slices, each useful alone (below). Slice 1 is a usable store with no AI or UI. |
 | X. Honest limits | Cell states (empty / filled / can't tell / failed), withheld, unknown spend, estimate basis stated, "stopped at your budget cap". |
 | XI. Production shape | Each slice has a `create_app()` + lifespan test; the restart test uses the real lifespan twice on one database with claim contention; the automation test uses `build_production_loop`; the SSE test reads events from a different app instance than the one processing. |
@@ -56,7 +56,7 @@ Four slices, each releasable, each with sabotage-checked gates and at least one 
 | XIII. Initiation ≠ confirmation | FR-090 and FR-091 are separate, with separate tests (G1-5 / G2-6 vs G1-6). |
 | XIV. Tracked defaults | Templates, system library, policy rules, rate-limit and concurrency defaults, and the `omni-lists` registration are tracked; a gate runs on a fresh clone. Tests build config from `config.example.yaml`. No test reads `.env` or `config.yaml`. |
 
-**Result: PASS**, with the departures listed in Complexity Tracking.
+**Result: PASS**, with no departures (Complexity Tracking records none).
 
 ## Project Structure
 
@@ -132,7 +132,7 @@ Each slice ends with: its gates green, each gate's sabotage recorded in `gate-ve
 
 Delivers: lists, typed columns (all six types), rows, cells with state and origin, change history, column library (system + user, API only), and all ten `omni-lists` tools, with `process_rows` returning "processing arrives in Slice 2" honestly (Article X). REST `/api/lists/*` for the same operations. Policy rules and the update diff payload on the pending action (the card renders it as plain change lines until Slice 3 styles it).
 
-Requirements: FR-001–FR-011, FR-013 (cycle refusal at save), FR-016, FR-020–FR-021, FR-030(1,3), FR-033 (statuses stored), FR-051 (server side, API), FR-060–FR-076, FR-090–FR-091 (chat side), FR-094, FR-130–FR-135.
+Requirements: FR-001–FR-011, FR-013 (cycle refusal at save), FR-016, FR-020–FR-021, FR-030(1,3), FR-033 (statuses stored), FR-039, FR-051 (server side, API), FR-060–FR-076, FR-090–FR-091 (chat side), FR-094, FR-130–FR-135.
 
 Gates (each with its sabotage):
 
@@ -141,13 +141,15 @@ Gates (each with its sabotage):
 | G1-1 typed storage | 9 sorts before 10; datetimes sort by instant across timezones; bad link / bad option / bad boolean refused per cell | store numbers as text in the number column path |
 | G1-2 cycle refusal | a→b→a and a→b→c→a refused, naming the columns | skip the graph check on save |
 | G1-3 ambiguous update | expecting one, 2 matches → refused with "2 rows match", no change; 0 matches refused | replace the count check with "take the first" |
-| G1-4 delete token | changed count → refused with the new count; reused, expired and other-caller tokens refused; same count different rows refused (Q10) | drop the count comparison in `delete_rows` |
-| G1-5 tiers | each tool's tier from the shipped rules; `update_rows` on a user cell creates a pending action and changes nothing; on an AI cell executes and discloses | mark the resolver's "touches user cells" always false |
+| G1-4 delete token | changed count → refused with the new count; reused, expired and other-caller tokens refused; same count different rows refused (FR-066) | drop the count comparison in `delete_rows` |
+| G1-5 tiers | each tool's tier from the shipped rules; no write is Tier 1; `insert_rows` executes and its reply lists the rows with an Undo that archives exactly them; `update_rows` on a user cell is Tier 3, creates a pending action with a diff and changes nothing; on an AI cell executes and discloses; `process_rows` is Tier 2 within the remaining cap and Tier 3 above it or with no cap | mark the resolver's "touches user cells" always false; separately, set `insert_rows` to Tier 1 |
 | G1-6 button-only | a list-initiated proposal cannot be confirmed by typing "yes"; the button confirms it | set `confirmable_by_typing` true for content origin |
 | G1-7 access sabotage (FR-075) | an agent with `none` gets the fixed denial; no cell value of the list appears anywhere in the thread state, tool results or errors; `list_lists` omits the list | remove the access check in `service.query_rows` |
 | G1-8 identity | a call with no gateway-established agent identity is denied; an `agent` argument supplied by the model is ignored | read identity from tool arguments |
-| G1-9 archive/restore | delete archives; restore within 30 days returns cells, sources, history; purge by an agent is Tier 3 | hard-delete in `delete_rows` |
+| G1-9 archive/restore/purge | delete archives; restore within 30 days returns cells, sources, history; archived rows carry a purge-due date; rows past 30 days are purged by the sweep and audit-logged, younger ones are not; purge by an agent is Tier 3 | hard-delete in `delete_rows`; separately, purge at 0 days |
 | G1-10 never "unable to determine" | no cell value matches the can't-tell phrase list; can't tell has no value | let the writer store the reason as the value |
+| G1-12 single-select options | add and rename succeed (rename updates rows); removing an in-use option is refused with the count | skip the in-use count on removal |
+| G1-13 submitted | with no declared submit tool no call marks a row submitted; with one, only its successful call for that row does | mark submitted on any successful Tier 2+ call |
 | G1-11 tracked registration | on a fresh clone with an empty `extensions_config.json`, `omni-lists_*` tools are in the catalog | move registration into the example extensions file |
 
 Composition-root test: `tests/lists/test_omni_lists_through_the_app.py`, using the ledger-style `gateway` fixture (`create_app()` + real lifespan, config from `config.example.yaml`, tmp SQLite). It runs the US1 journey: create list, insert, query with every operator, aggregate, ambiguous update, two-step delete with a changed count, restore, and a no-access agent. **Structural difference named**: tool calls made through `get_available_tools` and the policy middleware as the lead agent builds them, not service calls, because hand-calling the service would bypass identity and tier classification.
@@ -156,7 +158,7 @@ Composition-root test: `tests/lists/test_omni_lists_through_the_app.py`, using t
 
 Delivers: AI columns with references, dependency order and memory toggle; the durable queue (runs, items, leases, events); per-cell structured fills with type validation, labels and sources; disqualification; estimate and "Try on 5"; budget cap; pause, resume, rerun failed; SSE progress; finish notice through the politeness pipeline; processing tool surface restriction; the injection test.
 
-Requirements: FR-012, FR-014–FR-019, FR-033–FR-044, FR-047, FR-055 (API), FR-062, FR-092–FR-093, FR-136.
+Requirements: FR-012, FR-014–FR-019, FR-033–FR-046, FR-047, FR-055 (API), FR-062, FR-092–FR-093, FR-136.
 
 Gates:
 
@@ -172,6 +174,10 @@ Gates:
 | G2-8 unknown spend | a model with no usage reported records "unknown", never 0 | default missing usage to 0 |
 | G2-9 quiet hours | a run ending inside quiet hours delivers its notice at the window's end, coalesced | route the notice straight to `deliver` |
 | G2-10 SSE across workers | events written by app A are streamed by app B from `Last-Event-ID` | publish events in memory only |
+| G2-12 can't tell is not failed | a mandatory AI column answering can't tell leaves the row complete with has gaps; the has-gaps filter finds it; nothing is requeued without a user rerun | fail the row on a mandatory can't tell; separately, auto-requeue has-gaps rows |
+| G2-13 concurrency | never more than 3 rows in progress per list or 6 overall; a source's rate limit makes the claim wait, not fail | raise the per-list limit to unbounded |
+| G2-14 money only when priced | no price set: no money in estimate, summary or notice; price set: money shown | fall back to a built-in price |
+| G2-15 fills disclosed | the run summary lists every AI cell filled in the run, each revertible from change history | omit fills from the summary |
 | G2-11 idle cost | with nothing queued, the worker makes no DB query for 60 s (beyond one slow poll) | replace the wake signal with a 100 ms poll |
 
 Composition-root tests: `tests/lists/test_processing_through_the_app.py` (US2 end to end with the stand-in model) and `tests/lists/test_restart_through_the_app.py` (G2-1). **Structural differences named**: the restart test exists because in-process tests never lose memory; the SSE test exists because one-process tests hide per-worker state (Article XI's first row).
@@ -199,9 +205,9 @@ Composition-root test: Playwright e2e against the production build and the real 
 
 ### Slice 4: Find rows, templates, pivot, automations
 
-Delivers: Find rows (proposals, batch approval, untrusted labelling, counted against the budget); the six built-in templates and user templates with favourites; the pivot (server-side, copy, CSV); the 002 `lists.process_new_rows` rule action; row → ledger task with a back link; lists on the project view.
+Delivers: Find rows (proposals, batch approval, untrusted labelling, estimate first and spend counted against the list's cap, FR-032a); the six built-in templates and user templates with favourites; the pivot (server-side, copy, CSV); the 002 `lists.process_new_rows` rule action; row → ledger task with a back link; lists on the project view.
 
-Requirements: FR-031–FR-032, FR-048–FR-049, FR-052, FR-095, FR-100–FR-102, FR-120–FR-121.
+Requirements: FR-031–FR-032a, FR-048–FR-049, FR-052, FR-095, FR-100–FR-102, FR-120–FR-121.
 
 Gates:
 
@@ -209,6 +215,7 @@ Gates:
 |---|---|---|
 | G4-1 batch approval | nothing from a proposal is inserted before approval; exactly the approved subset is inserted, origin "found" | insert on proposal |
 | G4-2 Find rows untrusted | an action initiated by proposal text is card-only | mark proposals as user origin |
+| G4-7 Find rows budget | Find rows spend is added to the list's spent total and stops at the cap | record Find rows spend outside the list |
 | G4-3 pivot correctness | every aggregate equals a direct computation on 10k rows; 2 / 1 / 1 limits enforced | compute over the first page only |
 | G4-4 templates tracked | on a fresh clone each built-in template creates its columns, AI columns and (Leads) disqualification criteria | load templates from a gitignored path |
 | G4-5 automation is deterministic | a cron firing creates a run for only never-processed pending rows, within the cap, and no agent turn is injected | route the action through the prompt injector |
@@ -218,13 +225,10 @@ Composition-root tests: `tests/lists/test_automation_through_the_loop.py` with `
 
 ## Post-design Constitution re-check
 
-No new process; the worker lives in the elected gateway worker. One new tool source, registered in code. Two departures from Article II's wording (below), both tied to open questions. All 14 articles still hold. **PASS.**
+No new process; the worker lives in the elected gateway worker. One new tool source, registered in code. No departures from Article II's wording, and no open questions (spec Clarifications are all resolved). All 14 articles hold as written. **PASS.**
 
 ## Complexity Tracking
 
-| Departure | Why needed | Simpler alternative rejected because |
-|---|---|---|
-| `insert_rows` is Tier 1 although it writes (spec Q2) | The brief's constraint; inserts are additive, visible and recorded, and blocking them would make "add from Telegram" a confirmation dance | Tier 2 is the constitutional fit and is one rules-file line away if the user prefers it |
-| AI-cell fills are Tier 1 writes | The assigned agent writing the cells it was asked to fill is the run itself; each fill is recorded with sources | Classifying each fill as Tier 2 would append a disclosure per cell to nothing (background runs have no reply) |
-| "Tier 2, needs approval" for user-written cells (spec Q1) | The brief's constraint; the constitution's Tier 2 does not wait | Implemented as Tier 3 (the existing confirmation path) with a diff; a constitutional "Tier 2 with approval" would be an amendment |
-| Tier 2 actions initiated by list content become proposals | Article XIII's initiation rule for the largest untrusted channel | Leaving Tier 2 to execute would let a cell rewrite other cells |
+No constitutional departures. Every write is Tier 2 or Tier 3 under Article II's own definitions (spec FR-063), so nothing needs an exception or an amendment.
+
+One choice is stricter than the article requires and is recorded so a reviewer does not mistake it for a departure: **Tier 2 actions initiated by list content become card-only proposals** (FR-090). Article XIII's initiation rule applies to the largest untrusted channel; leaving Tier 2 to execute would let a cell rewrite other cells or insert rows.
