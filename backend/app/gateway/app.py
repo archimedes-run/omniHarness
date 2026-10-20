@@ -91,11 +91,9 @@ async def _ensure_admin_user(app: FastAPI) -> None:
     alongside the auth module via create_all, so freshly created tables
     never contain NULL-owner rows.
     """
-    from sqlalchemy import select
 
     from app.gateway.deps import get_local_provider
     from omniharness.persistence.engine import get_session_factory
-    from omniharness.persistence.user.model import UserRow
 
     try:
         provider = get_local_provider()
@@ -109,6 +107,14 @@ async def _ensure_admin_user(app: FastAPI) -> None:
     if sf is None:
         return
 
+    # Security baseline: say which account is the owner (by id only).
+    try:
+        from app.gateway.ownership import log_owner_at_startup
+
+        await log_owner_at_startup()
+    except Exception:
+        logger.exception("Could not resolve the owner account at startup (non-fatal)")
+
     admin_count = await provider.count_admin_users()
 
     if admin_count == 0:
@@ -120,14 +126,23 @@ async def _ensure_admin_user(app: FastAPI) -> None:
 
     # Admin already exists — run orphan thread migration for any
     # LangGraph thread metadata that pre-dates the auth module.
-    async with sf() as session:
-        stmt = select(UserRow).where(UserRow.system_role == "admin").limit(1)
-        row = (await session.execute(stmt)).scalar_one_or_none()
+    # Orphans go to the OWNER account (app.gateway.ownership), not to "an
+    # admin": the admin-role account need not be the person who owns the data.
+    from app.gateway.ownership import owner_user_id
 
-    if row is None:
-        return  # Should not happen (admin_count > 0 above), but be safe.
+    owner = await owner_user_id()
+    if owner is None:
+        return
+    admin_id = owner
 
-    admin_id = str(row.id)
+    # Security baseline: NULL-owner rows used to be readable by every account.
+    # They become the owner's (app.gateway.ownership). Non-fatal.
+    try:
+        from app.gateway.ownership import assign_ownerless_rows_to_owner
+
+        await assign_ownerless_rows_to_owner()
+    except Exception:
+        logger.exception("Owner-less row migration failed (non-fatal)")
 
     # LangGraph store orphan migration — non-fatal.
     # This covers the "no-auth → with-auth" upgrade path for users

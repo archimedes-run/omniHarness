@@ -17,6 +17,7 @@ from app.gateway.auth.config import get_auth_config
 from app.gateway.auth.errors import AuthErrorCode, AuthErrorResponse
 from app.gateway.csrf_middleware import is_secure_request
 from app.gateway.deps import get_current_user_from_request, get_local_provider
+from app.gateway.ownership import REGISTRATION_CLOSED, SECOND_ACCOUNT_REFUSED, account_admitted, any_account_exists
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +293,13 @@ async def login_local(
         )
 
     _record_login_success(client_ip)
+    # Single-owner baseline: a correct password for any account but the owner's
+    # is refused with a plain reason, and no session cookie is issued.
+    if not await account_admitted(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=AuthErrorResponse(code=AuthErrorCode.ACCOUNT_NOT_PERMITTED, message=SECOND_ACCOUNT_REFUSED).model_dump(),
+        )
     token = create_access_token(str(user.id), token_version=user.token_version)
     _set_session_cookie(response, token, request)
 
@@ -303,13 +311,20 @@ async def login_local(
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(request: Request, response: Response, body: RegisterRequest):
-    """Register a new user account (always 'user' role).
+    """Register the owner account on a fresh install; closed afterwards.
 
-    Admin is auto-created on first boot. This endpoint creates regular users.
-    Auto-login by setting the session cookie.
+    OmniHarness is single-owner until multi-user is designed. Once any account
+    exists this answers 403 with a plain reason and creates nothing. On a fresh
+    install the account it creates IS the owner (admin role), exactly as
+    ``/initialize`` would. Auto-login by setting the session cookie.
     """
+    if await any_account_exists():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=AuthErrorResponse(code=AuthErrorCode.REGISTRATION_CLOSED, message=REGISTRATION_CLOSED).model_dump(),
+        )
     try:
-        user = await get_local_provider().create_user(email=body.email, password=body.password, system_role="user")
+        user = await get_local_provider().create_user(email=body.email, password=body.password, system_role="admin", needs_setup=False)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

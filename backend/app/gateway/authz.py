@@ -140,8 +140,19 @@ async def _authenticate(request: Request) -> AuthContext:
     if user is None:
         return AuthContext(user=None, permissions=[])
 
-    # In future, permissions could be stored in user record
-    return AuthContext(user=user, permissions=_ALL_PERMISSIONS)
+    return AuthContext(user=user, permissions=await permissions_for(user))
+
+
+async def permissions_for(user: Any) -> list[str]:
+    """Every permission for the owner and the internal principal; none otherwise.
+
+    Single-owner baseline: every account used to get every permission. Until
+    multi-user is designed, only the owner account (and the system acting for
+    it) holds any. See app.gateway.ownership.
+    """
+    from app.gateway.ownership import account_admitted
+
+    return list(_ALL_PERMISSIONS) if await account_admitted(user) else []
 
 
 def require_permission(
@@ -230,22 +241,30 @@ def require_permission(
                 if thread_id is None:
                     raise ValueError("require_permission with owner_check=True requires 'thread_id' parameter")
 
-                from app.gateway.deps import get_thread_store
+                from app.gateway.ownership import require_thread_access
 
-                thread_store = get_thread_store(request)
-                allowed = await thread_store.check_access(
-                    thread_id,
-                    str(auth.user.id),
-                    require_existing=require_existing,
-                )
-                if not allowed:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Thread {thread_id} not found",
-                    )
+                await require_thread_access(request, thread_id, require_existing=require_existing)
 
             return await func(*args, **kwargs)
 
         return wrapper
 
     return decorator
+
+
+def permission_dependency(resource: str, action: str) -> Callable[[Request], Any]:
+    """The same permission check as :func:`require_permission`, as a FastAPI
+    dependency, for routes whose body parameter is already named ``request``
+    (``dependencies=[Depends(permission_dependency("threads", "delete"))]``)."""
+
+    async def _check(request: Request) -> None:
+        auth: AuthContext | None = getattr(request.state, "auth", None)
+        if auth is None:
+            auth = await _authenticate(request)
+            request.state.auth = auth
+        if not auth.is_authenticated:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not auth.has_permission(resource, action):
+            raise HTTPException(status_code=403, detail=f"Permission denied: {resource}:{action}")
+
+    return _check

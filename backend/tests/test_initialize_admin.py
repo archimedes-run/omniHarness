@@ -98,14 +98,14 @@ def test_initialize_rejected_when_admin_exists(client):
     assert body["detail"]["code"] == "system_already_initialized"
 
 
-def test_initialize_register_does_not_block_initialization(client):
-    """/register creating a user before /initialize doesn't block admin creation."""
-    # Register a regular user first
-    client.post("/api/v1/auth/register", json={"email": "regular@example.com", "password": "Tr0ub4dor3a"})
-    # /initialize should still succeed (checks admin_count, not total user_count)
+def test_register_on_a_fresh_install_creates_the_owner(client):
+    """Security baseline: /register on a fresh install creates the OWNER (admin),
+    after which the system is initialised and /initialize refuses."""
+    first = client.post("/api/v1/auth/register", json={"email": "first@example.com", "password": "Tr0ub4dor3a"})
+    assert first.status_code == 201
+    assert first.json()["system_role"] == "admin"
     resp = client.post("/api/v1/auth/initialize", json=_init_payload())
-    assert resp.status_code == 201
-    assert resp.json()["system_role"] == "admin"
+    assert resp.status_code == 409
 
 
 # ── Endpoint is public (no cookie required) ───────────────────────────────
@@ -160,12 +160,12 @@ def test_setup_status_after_initialization(client):
     assert resp.json()["needs_setup"] is False
 
 
-def test_setup_status_false_when_only_regular_user_exists(client):
-    """setup-status returns needs_setup=True even when regular users exist (no admin)."""
-    client.post("/api/v1/auth/register", json={"email": "regular@example.com", "password": "Tr0ub4dor3a"})
+def test_setup_status_false_once_the_first_registration_made_the_owner(client):
+    """The first /register makes the owner, so setup is no longer needed."""
+    client.post("/api/v1/auth/register", json={"email": "first@example.com", "password": "Tr0ub4dor3a"})
     resp = client.get("/api/v1/auth/setup-status")
     assert resp.status_code == 200
-    assert resp.json()["needs_setup"] is True
+    assert resp.json()["needs_setup"] is False
 
 
 def test_setup_status_rate_limited_on_second_call(client):
