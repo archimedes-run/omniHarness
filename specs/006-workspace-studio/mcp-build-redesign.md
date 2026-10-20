@@ -3,7 +3,8 @@
 Status: **PLAN ONLY. Waiting for the user's OK before any product code changes.**
 Branch: `006-E-mcp-build`. Prerequisite: the security baseline (review round 2, item C.0: owner-only registration, server-owned context, ownership checks, 127.0.0.1 bindings) lands on `main` first; this work rebases onto it.
 
-Revision 2 (2026-10-20) addresses an independent review: 4 HIGH, 4 MED and 5 LOW findings. The changes are listed per finding in §10.
+Revision 2 (2026-10-20) addresses an independent review: 4 HIGH, 4 MED and 5 LOW findings (§10).
+Revision 3 (2026-10-20) records the user's answers to the four questions, and replaces our own proxy with **Squid** (§4, §10.2).
 
 Every claim about current behaviour below was read in the code at `366765e`, or observed on the live stack with read-only commands (`docker ps`, `docker inspect` (names only, never values)). Line references are to that commit.
 
@@ -24,6 +25,14 @@ Every claim about current behaviour below was read in the code at `366765e`, or 
 The same class of problem (0.0.0.0) also applies to `omni-harness-session-watcher` (`0.0.0.0:18101`). Item C.0 owns that one.
 
 **Recommended now, by the user:** run `docker rm -f omni-mcp-c641ac8dc68d` and rotate that GitHub token. The token sat in `docker inspect`, and its server was reachable from the LAN. This plan's startup reconcile (§9) also stops non-conforming built containers, but it should not be the first line of defence for a token that is already exposed.
+
+**Update, reported by the coordinator (not re-observed by me):**
+- the container `omni-mcp-c641ac8dc68d` is now **stopped**;
+- the `github-issue-connector` config entry still points at `host.docker.internal:18100`;
+- `mcp_servers` is **empty**;
+- 21 orphaned `mcp_secrets` rows remain, across 12 server ids.
+
+§9 plans their retirement.
 
 ### A worse finding than the user's list: the test phase can escape to the host today
 
@@ -191,7 +200,10 @@ The Keychain is reachable only from a macOS process. The gateway runs in Docker 
   - `/deploy` becomes "turn back on". It needs a derived-approved server and re-uses the approved image.
   - `/connect` is no longer a route; only the deploy task calls it.
   - The old detail page's "Approve and deploy" button opens the new approval screen.
-- **If the agent changes code while the server is on:** the running container keeps running the **approved** image, because it is hash-bound. The card says "New code is waiting for your approval; the approved version is still on" (open question Q3).
+- **If the agent changes code while the server is on:** the running container keeps running the **approved** image, because it is hash-bound. The card says "New code is waiting for your approval; the approved version is still on" (answered: Q3). Until the new hash is approved:
+- the new code gets **placeholders only**: test runs never get real values (§1);
+- the vault's decrypt-for-deploy refuses any hash that isn't the approved one (§4);
+- `/deploy` refuses the new code (T19).
 
 ### UI: the approval screen (in `build-view.tsx`, Graphite components)
 - A dialog opened by "Review and approve", replacing the direct "Approve and turn on". It has a focus trap, closes on Esc and returns focus, and its tabs are a real tablist:
@@ -213,130 +225,171 @@ The Keychain is reachable only from a macOS process. The gateway runs in Docker 
 - Secrets go in as `-e K=V` on argv (`:846-847`).
 - Deleting a server calls `manager.stop()` (`mcp_studio.py:810`), which only updates a status (`:650-667`). **The container keeps running, with its secrets, and its `extensions_config` entry stays.**
 
-### Choice: an `--internal` network per server, plus an allowlisting egress proxy sidecar
+### Choice: an `--internal` network per server, plus a **Squid** egress sidecar (with dnsmasq in front of its DNS)
+Revision 3 (the user's instruction): **we do not write our own proxy.** The sidecar runs Squid, a proven proxy, from a pinned image. Our code is limited to:
+- a pure Python function in the gateway that **renders** the Squid and dnsmasq configs (unit-tested);
+- a short POSIX `sh` entrypoint that writes those configs to tmpfs and starts the two daemons.
+
 How it works:
-- The MCP container is attached **only** to `omni-mcp-net-<id12>`, which is created `--internal` and so has no route off the network.
-- Its sole neighbour is the sidecar `omni-mcp-egress-<id12>`, which is attached to that network and to an outer network (below). Each of its listeners is bound to one network only.
-- The sidecar does two jobs:
-  1. a **forward proxy** on `:3128`, internal interface only. It accepts only `CONNECT <host>:443` for hosts on this server's approved allowlist, after normalising the host (exact match, no wildcards). The full hardening is below. Every refusal is logged with its host and reason and shown on the server's page ("Blocked: tried to reach evil.example").
-  2. a **reverse proxy** on `:8080` that forwards SSE to `omni-mcp-<id12>:8080`. It requires a per-server random bearer token.
+- **The built server** is attached **only** to `omni-mcp-net-<id12>`. That network is created `--internal` (no route off it) with a `/28` subnet the gateway allocates. The server gets the fixed address `.3`.
+- **Its only neighbour is the sidecar** `omni-mcp-egress-<id12>`, at the fixed address `.2` on the internal network, and also attached to an outer network (below).
+- **Squid** does two jobs, each on its own `http_port`, bound to one network's address only:
+  1. a **forward proxy**, `http_port <internal .2>:3128`, that only accepts `CONNECT` to allowlisted hosts on port 443, and needs a login. The ACLs are below.
+     - The server reaches it as `HTTPS_PROXY=http://mcp:<proxy password>@<internal .2>:3128`. It uses the literal IP, so no DNS is needed. `httpx` honours this, including the login.
+     - The **login** (`auth_param basic`, with an `htpasswd` hash rendered from a per-server random password) is defence in depth: only the server can reach this port in the first place.
+  2. a **reverse proxy in front of the endpoint**, `http_port <outer IP>:8080 accel`. It forwards to `cache_peer <internal .3> 8080 originserver`, but only when the request carries the per-server bearer token (`acl inbound_token req_header Authorization ^Bearer\ <token>$`; the token is hex, so it is safe inside a regex). Anything without it gets 403. This is the endpoint's login.
      - **The token is never written to `extensions_config.json`.** The entry carries `server_id` and `"auth": "built-server-token"`, and no secret.
-     - The token is stored in the vault as `__INBOUND_TOKEN` under the server's id. The `__` prefix is reserved: it is never handed to the server container.
-     - At tool-load time, `omniharness/mcp/tools.py` asks a token provider for it. The gateway lifespan registers that provider, so the harness package does not import the app's vault. The provider adds the `Authorization` header to the in-memory server params only.
-     - Why not keep it in the file: I did not prove that the agent's `read_file` mappings can't reach `extensions/`, so keeping the token out of the file is the safer claim.
+     - The token is stored in the vault as `__INBOUND_TOKEN`. That name is reserved and never handed to the server container.
+     - At tool-load time, `omniharness/mcp/tools.py` asks a token provider for it. The gateway lifespan registers that provider. The provider adds the `Authorization` header to the in-memory server params only.
+- **dnsmasq**, inside the sidecar on `127.0.0.1:53`, is **Squid's only resolver** (`dns_nameservers 127.0.0.1`).
+  - It runs with `--stop-dns-rebind`, which **drops any upstream answer in a private, loopback or link-local range before Squid ever sees it**. That closes DNS rebinding by construction, however fast an answer flips.
+  - It also runs with `--no-hosts --no-resolv --server=127.0.0.11` (Docker's embedded DNS) and `--cache-size=0`.
+  - Port 53 binds without a capability via `--sysctl net.ipv4.ip_unprivileged_port_start=53`, so `--cap-drop ALL` still holds.
+- **Code that ignores the proxy** (raw sockets, its own DNS) **has no route at all**. Enforcement comes from the network topology; the code doesn't have to cooperate.
 
-**Hardening of the forward proxy (decision logic is one pure function, unit-tested):**
-1. **Normalise the CONNECT target before any check:**
-   - lower-case it;
-   - strip **one** trailing dot;
-   - IDNA-encode it (UTF-8 → A-label, refusing on encoding error);
-   - refuse any target containing `@`, `/`, whitespace, `%` or a userinfo part;
-   - refuse **IP literals** (v4, v6, bracketed, decimal/octal/hex integer forms; parsed with `ipaddress` after stripping brackets, plus an all-digits/0x check);
-   - refuse a port other than 443.
-   It then compares the result to the allowlist, which is normalised the same way.
-2. **Resolve once, check every answer, then connect to the vetted address:**
-   - `getaddrinfo` once;
-   - **every** result must satisfy `ipaddress.ip_address(a).is_global`, which excludes loopback, RFC 1918, link-local, CGNAT, ULA, multicast, the Docker Desktop host and gateway ranges, and IPv4-mapped forms after unmapping. If any one fails, the request is refused, not filtered.
-   - The proxy then opens the TCP connection to **that vetted IP**, never to the name again. That closes the DNS-rebinding window between check and connect.
-   - There is no production switch to relax this. The positive-control test uses a public host instead (§7 T7).
-3. **SNI check (on):**
-   - the proxy peeks the TLS ClientHello on the tunnel; its SNI must equal the normalised CONNECT host;
-   - a missing or different SNI closes the tunnel;
-   - it reads only the plaintext ClientHello and never terminates TLS.
-4. **Residual risk, stated:** the allowlist bounds **where** traffic goes, not **what** it carries.
-   - Code allowed to reach `api.github.com` can still exfiltrate through that API (gist, issue body), using whatever token it holds.
-   - Domain fronting is partly closed by the SNI check, but **not** against a mismatched HTTP `Host` header inside TLS, which the proxy can't see. A CDN that routes on `Host` could carry traffic to another tenant.
-   - Mitigations are the user's review of the code and hosts, plus Tier 3 by default. The proxy does not prevent it.
+**The forward-proxy ACLs, rendered into `squid.conf`.** Order matters: the first match wins.
+```
+acl fwd myportname fwd                      # http_port <internal .2>:3128 name=fwd ssl-bump tls-cert=/tmp/never-presented.pem
+acl inbound myportname inbound              # http_port <outer ip>:8080 name=inbound accel defaultsite=mcp no-vhost
+acl CONNECT method CONNECT
+acl tls_port port 443
+acl allowed dstdomain -n <A-label hosts, from build_egress_rules>      # -n: never reverse-resolve
+acl ip_literal dstdom_regex -n ^[0-9.]+$ ^\[ ^[0-9a-f:]+$ ^0x
+acl private_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 \
+                    192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/3 ::/128 ::1 ::ffff:0:0/96 \
+                    64:ff9b::/96 fc00::/7 fe80::/10 ff00::/8
+acl mcp_login proxy_auth REQUIRED
+acl inbound_token req_header Authorization ^Bearer\ <hex token>$
+http_access deny fwd !CONNECT               # no plain-HTTP forwarding at all
+http_access deny fwd !tls_port              # HTTPS 443 only (answered: Q2)
+http_access deny fwd ip_literal
+http_access deny fwd !allowed
+http_access deny fwd private_dst            # evaluated on the RESOLVED addresses; any private answer denies
+http_access allow fwd mcp_login
+http_access allow inbound inbound_token
+http_access deny all
+acl step1 at_step SslBump1
+acl sni_ok ssl::server_name --client-requested -n <same hosts>
+ssl_bump peek step1                         # read the ClientHello only
+ssl_bump splice sni_ok                      # SNI the client sent must be on the allowlist
+ssl_bump terminate all                      # missing or other SNI: closed; TLS is never decrypted
+on_unsupported_protocol respond all         # non-TLS bytes in a tunnel: refused, never tunnelled
+cache deny all
+via off
+forwarded_for delete
+httpd_suppress_version_string on
+dns_nameservers 127.0.0.1
+cache_peer <internal .3> parent 8080 0 no-query originserver name=mcp
+cache_peer_access mcp allow inbound inbound_token
+cache_peer_access mcp deny all
+never_direct allow inbound
+read_timeout 60 minutes                     # SSE streams stay open
+```
+Notes:
+- `dns_v4_first` was removed in Squid 5, so it isn't used. `private_dst` lists the IPv6 ranges explicitly instead.
+- `-n` on `dstdomain` stops Squid from reverse-resolving an IP literal to a name that might happen to be allowlisted.
+- Squid strips one trailing dot from a hostname when it parses the URL.
+- Squid has no IDNA support: a non-ASCII CONNECT host fails URL parsing and is refused. The renderer writes allowlist entries as A-labels only, and refuses wildcards, IPs or ports in the allowlist.
+- The renderer refuses to output a config missing any directive above. A unit test checks that.
 
-**Each listener is bound to one network's interface only:**
-- The sidecar is **created** (`docker create`) on the outer network, so any `127.0.0.1` publish attaches to a network that can carry it. It is then connected to the internal network, then started. So when its process starts, both interfaces exist.
-- The gateway passes each network's subnet, from `docker network inspect` (`INTERNAL_SUBNET`, `OUTER_SUBNET`). The sidecar binds `:3128` **only** on its address inside `INTERNAL_SUBNET`, and `:8080` **only** on its address inside `OUTER_SUBNET`.
-  - The forward proxy is therefore unreachable from the gateway's network, so nothing else in the stack can use it to get out.
-  - The reverse proxy is unreachable from the server's own network.
-  - If the sidecar can't find exactly one address in each subnet, it refuses to start.
+**Why Squid, not Envoy:**
+
+| Need | Squid 6 | Envoy (dynamic forward proxy) |
+|---|---|---|
+| CONNECT allowlist by host, 443 only | `dstdomain` + `port` ACLs: mature and one line each | Route/RBAC match on `:authority`: workable |
+| SNI check inside the CONNECT tunnel | `ssl_bump peek` + `ssl::server_name --client-requested`, without decrypting | The tunnel's TLS is opaque to the HTTP connection manager; it needs an internal listener with `tls_inspector`. Complex. |
+| Refusing private destinations **after** resolution | `dst` ACL on resolved addresses: any private answer denies | No built-in filter on resolved IPs in the DFP DNS cache; it needs a Lua or ext_authz filter, which would be our own code again |
+| DNS rebinding | dnsmasq `--stop-dns-rebind` as the only resolver, plus `dst` | It would need the same dnsmasq trick, plus a filter |
+| Image and pinning | Our image: `alpine@sha256:<digest>` + `apk add squid=<6.x pinned> dnsmasq=<pinned> openssl=<pinned>`, about 25 MB. The image ID is recorded at build, and the build checks that `squid -v` lists `--with-openssl`. | Official `envoyproxy/envoy@sha256:…` (distroless), about 60-150 MB. Pinnable. |
+| Config reload | `squid -k reconfigure`. Not needed: the config is fixed per approval, so a change means a new sidecar. | xDS or hot restart. More moving parts. |
+
+Squid wins on the two properties that matter most here: the SNI check and refusal by resolved IP. Both are built in, so neither needs code of ours. Envoy would need custom filters for both.
+
+**Each listener is bound to one network's address only:**
+- The internal side is fixed (`.2`, from the allocated `/28`).
+- The sidecar is created (`docker create`) on the outer network, connected to the internal network with `--ip <.2>`, then started.
+- The entrypoint finds its one address inside `OUTER_SUBNET`, which the gateway passes from `docker network inspect`, and writes it into `http_port`. If it doesn't find exactly one, the entrypoint refuses to start.
+- So the forward proxy is unreachable from the gateway's network, and the endpoint is unreachable from the server's own network.
 - "Outer network" means the gateway's compose network (Docker gateway). For a bare-host gateway it is a dedicated non-internal bridge, `omni-mcp-pub-<id12>`, the only network the `127.0.0.1` publish attaches to.
-- The sidecar's own outbound traffic leaves through the outer network's route.
-- The MCP container gets `HTTPS_PROXY`/`HTTP_PROXY` pointing at the sidecar. `httpx` honours these by default.
-- Code that ignores the proxy (raw sockets, its own DNS) **has no route at all**. Enforcement comes from the network topology; the code doesn't have to cooperate.
+- Squid's own outbound traffic leaves through the outer network's route.
 
-Why this, on Docker Desktop for Mac:
+**Residual risk, stated:** the allowlist bounds **where** traffic goes, not **what** it carries.
+- Code allowed to reach `api.github.com` can still exfiltrate through that API (gist, issue body), using whatever token it holds.
+- The SNI check requires the SNI to be **on the allowlist**, not equal to the CONNECT host. With two allowlisted hosts on the same CDN, one can be fronted through the other.
+- A mismatched HTTP `Host` header inside TLS can't be seen at all.
+- Mitigations are the user's review of the code and hosts, plus Tier 3 by default. The proxy does not prevent this.
+
+Why this topology, on Docker Desktop for Mac:
 - `--internal` networks and multi-network containers work unchanged in Docker Desktop's VM. They need no `NET_ADMIN` and no host changes.
-- The alternative, iptables in a sidecar sharing the network namespace, has three problems:
+- The alternative, iptables in a sidecar, has three problems:
   - it needs `NET_ADMIN`;
-  - it allowlists by **IP**, which breaks on CDN-fronted APIs (api.github.com rotates) unless we also snoop DNS;
-  - Docker Desktop's VM iptables are not ours to manage and are rebuilt on restart.
-- A proxy decides by **hostname**, which is what the user approves, and it gives a readable log of denials.
-- Docker Desktop's own network policies (Enhanced Container Isolation) are a paid Business feature, so we can't rely on them.
+  - it allowlists by IP, which breaks on CDN-fronted APIs;
+  - Docker Desktop's VM iptables are not ours to manage.
+- Docker Desktop's network policies (Enhanced Container Isolation) are a paid Business feature, so we can't rely on them.
 
-**The sidecar is our own code:** about 200 lines of stdlib-only Python under `backend/app/gateway/mcp_egress_proxy/`. It runs in the same `omni-mcp-runtime` base image with a different entrypoint. Its allow/deny decision is a pure function that unit tests cover without Docker.
+**DNS for the server.** The server gets `--dns 127.0.0.1`, where nothing listens. It needs no names, since its proxy is a literal IP. T13 checks that external names don't resolve inside it.
 
-**DNS.** The MCP container gets `--dns 127.0.0.1`. Docker's embedded resolver still answers container names (which the sidecar needs), but external names have no upstream, which closes a DNS exfiltration channel even on Docker versions that forward DNS from internal networks. T13 checks that external names fail to resolve inside the deployed container, and records whether the flag was what made the difference on this Docker version.
-
-**Ports.** `build_egress_rules` drops port 80 and allows HTTPS (443) only (open question Q2). Its output becomes the sidecar's `ALLOW_HOSTS`. The function is no longer computed and thrown away; the deploy uses it, and the wiring gate covers it.
+**Ports.** `build_egress_rules` drops port 80 and allows HTTPS (443) only (answered: Q2). Its output feeds the renderer. The function is no longer computed and thrown away, and the wiring gate covers it.
 
 **Reachability:**
-- Gateway in Docker (the daily stack): `docker network connect <gateway-network> omni-mcp-egress-<id12>`, with URL `http://omni-mcp-egress-<id12>:8080/sse`. **No host port is published at all.** The gateway's network name comes from `OMNI_HARNESS_MCP_GATEWAY_NETWORK`, which compose sets (`omni-harness-dev` / `omni-harness`).
-- Gateway on the bare host (`make dev`): the sidecar publishes `-p 127.0.0.1:<port>:8080`, and only the sidecar.
+- Gateway in Docker (the daily stack): the sidecar's outer network is the gateway's compose network (`OMNI_HARNESS_MCP_GATEWAY_NETWORK`: `omni-harness-dev` / `omni-harness`). URL: `http://omni-mcp-egress-<id12>:8080/sse`. **No host port is published.**
+- Gateway on the bare host (`make dev`): the sidecar publishes `-p 127.0.0.1:<port>:8080` on `omni-mcp-pub-<id12>`. It is the only publish.
 - `_find_free_port` probes `127.0.0.1`.
-- `connect()` writes through `atomic_write_json` (already in `extensions_config.py:23`), not `open(..., "w")` (`mcp_server_manager.py:964`).
+- `connect()` writes through `atomic_write_json` (`extensions_config.py:23`), not `open(..., "w")` (`mcp_server_manager.py:964`).
 
 **Secrets.**
-- They go in a `--env-file` written to `/dev/shm` (tmpfs; inside the gateway container in Docker mode) with mode 0600, deleted in `finally`. They never appear on argv, in a log or in a host file.
-- **The env-file is validated before it is written**, for placeholders, secrets and the sidecar alike. One malformed key or value refuses the whole deploy, naming the key but never the value.
+- They go in a `--env-file` on `/dev/shm` (tmpfs; inside the gateway container in Docker mode), never on argv, in a log or in a host file.
+- The rendered Squid and dnsmasq configs travel the same way: as base64 values in the sidecar's env-file. They carry the proxy password hash and the inbound token.
+- **Validation, before the file is written.** One bad key or value refuses the whole deploy, naming the key but never the value.
   - Each key must match `^[A-Z][A-Z0-9_]{0,63}$`.
-  - Reserved names are refused, because a stored "secret" could otherwise redirect the proxy or the interpreter:
+  - Reserved names are refused:
     - `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `ALL_PROXY` (and their lower-case forms);
     - `HOME`, `PATH`;
     - `MCP_*`, `PYTHON*`, `LD_*`, `SSL_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`;
     - anything starting with `__`.
-  - Each value must not contain `\n`, `\r` or NUL: a newline would inject a second variable.
-  - The vault's `PUT /secrets` applies the same key rules, so a bad name is refused when it is stored, not just at deploy.
-  - The file is created with `os.open(..., O_CREAT|O_EXCL|O_WRONLY, 0o600)` and removed in `finally`, on success and on failure.
-- Residual, stated plainly: Docker stores env-file values in the container's config, so `docker inspect` still shows them to whoever holds the Docker socket. That is the gateway, which already holds the vault key, and the user.
-- A follow-up could deliver them over stdin to the launcher at start, but that breaks `--restart` (secrets lost on daemon restart) and is not proposed now.
+    Only the gateway's own deploy code may set the proxy variables. A user's stored secret never can.
+  - Each value must not contain `\n`, `\r` or NUL.
+  - `PUT /secrets` applies the same key rules.
+- The file is created with `os.open(..., O_CREAT|O_EXCL|O_WRONLY, 0o600)` and removed in `finally`, on success and on failure.
+- **Real secrets go only to an approved image.** The vault's decrypt-for-deploy takes the approved sha256 and refuses unless the server's derived approval is for exactly that hash (answered: Q3). The test phase only ever gets placeholders (§1).
+- Residual: Docker keeps env-file values in the container's config, so `docker inspect` shows them to whoever holds the Docker socket. That is the gateway, which already holds the vault key, and the user.
 
-### Exact `docker run` flags: deploy phase
+### Exact `docker` commands: deploy phase
 ```
-docker network create --internal --label omni.mcp.server=<server_id> omni-mcp-net-<id12>
-
+docker network create --internal --subnet <allocated /28> --label omni.mcp.server=<server_id> omni-mcp-net-<id12>
 # bare-host gateway only: the outer network that carries the 127.0.0.1 publish
 docker network create --label omni.mcp.server=<server_id> omni-mcp-pub-<id12>
 # OUTER = $OMNI_HARNESS_MCP_GATEWAY_NETWORK (Docker gateway) or omni-mcp-pub-<id12> (bare host)
-# INTERNAL_SUBNET / OUTER_SUBNET read with `docker network inspect`
 
-# sidecar: created on OUTER, connected to the internal network, THEN started, so it can bind per interface
-docker create --name omni-mcp-egress-<id12> \
-  --label omni.mcp.server=<server_id> --label omni.mcp.role=egress \
-  --network $OUTER \
-  --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=4m \
-  --user 10002:10002 --cap-drop ALL --security-opt no-new-privileges \
-  --memory 64m --memory-swap 64m --pids-limit 32 --cpus 0.25 \
-  --restart unless-stopped \
-  --env-file /dev/shm/omni-egress-<rand>.env     # INBOUND_TOKEN; validated, 0600, removed in finally
-  -e ALLOW_HOSTS=<normalised list from build_egress_rules> -e ALLOW_PORTS=443 \
-  -e INTERNAL_SUBNET=<cidr> -e OUTER_SUBNET=<cidr> \
-  -e UPSTREAM=omni-mcp-<id12>:8080 \
-  [-p 127.0.0.1:<port>:8080]                     # bare-host gateway only
-  sha256:<runtime image ID> python -I -B /opt/omni/egress_proxy.py
-docker network connect omni-mcp-net-<id12> omni-mcp-egress-<id12>
-docker start omni-mcp-egress-<id12>
-# :3128 binds on the INTERNAL_SUBNET address only; :8080 on the OUTER_SUBNET address only
-
-# the built server itself: no -p, no mounts, internal network only
+# 1. the built server: no -p, no mounts, internal network only, fixed address .3
 docker run -d --name omni-mcp-<id12> \
   --label omni.mcp.server=<server_id> --label omni.mcp.role=server \
   --label omni.code_sha256=<full sha> \
-  --network omni-mcp-net-<id12> --dns 127.0.0.1 \
+  --network omni-mcp-net-<id12> --ip <.3> --dns 127.0.0.1 \
   --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
   --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
   --memory 256m --memory-swap 256m --pids-limit 64 --cpus 0.5 --ulimit nofile=512:512 \
   --restart unless-stopped \
-  --env-file /dev/shm/omni-mcp-<rand>.env        # real secrets; validated, 0600, removed in finally
+  --env-file /dev/shm/omni-mcp-<rand>.env   # real secrets + HTTPS_PROXY=http://mcp:<pw>@<.2>:3128; validated, 0600, removed in finally
   -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e MCP_TRANSPORT=sse -e MCP_PORT=8080 \
-  -e HTTPS_PROXY=http://omni-mcp-egress-<id12>:3128 -e HTTP_PROXY=http://omni-mcp-egress-<id12>:3128 \
   sha256:<built image ID, label verified == approved sha> python -I -B /opt/omni/launch.py
+
+# 2. the Squid sidecar: created on OUTER, connected to the internal network at .2, THEN started
+docker create --name omni-mcp-egress-<id12> \
+  --label omni.mcp.server=<server_id> --label omni.mcp.role=egress \
+  --network $OUTER \
+  --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+  --user <squid uid>:<squid gid> --cap-drop ALL --security-opt no-new-privileges \
+  --sysctl net.ipv4.ip_unprivileged_port_start=53 \
+  --memory 128m --memory-swap 128m --pids-limit 64 --cpus 0.5 \
+  --restart unless-stopped \
+  --env-file /dev/shm/omni-egress-<rand>.env   # SQUID_CONF_B64, DNSMASQ_CONF_B64, OUTER_SUBNET; validated, 0600, removed in finally
+  [-p 127.0.0.1:<port>:8080]                   # bare-host gateway only
+  sha256:<omni-mcp-egress image ID>            # entrypoint: decode configs to /tmp, bind by subnet, dnsmasq, then exec squid -N
+docker network connect --ip <.2> omni-mcp-net-<id12> omni-mcp-egress-<id12>
+docker start omni-mcp-egress-<id12>
 ```
-**Undeploy, delete and stop** all remove both containers, the network and the `extensions_config` entry. Today, delete and stop leave the container running (see Current behaviour).
+**Undeploy, delete and stop** remove both containers, the networks and the `extensions_config` entry. The separate hotfix makes stop and delete remove containers and secrets from now on (§8 step 11 builds on it).
 
 ---
 
@@ -405,7 +458,14 @@ Kept as-is: "token is required" and "password field" stay unlifted (a stop-word 
 
 ## 7. Tests (each one sabotaged)
 
-The Docker tests are marked `@pytest.mark.docker`. They run on the developer's Docker Desktop with labelled, `--rm` containers, a test-only network name prefix (`omni-mcp-t-`), and cleanup in a fixture finalizer. Where Docker is unavailable they **skip, and the skip is reported**. A skip is never reported as a pass (open question Q1).
+The Docker tests are marked `@pytest.mark.docker`. They run on the developer's Docker Desktop (answered: Q1), with throwaway resources only:
+- every container is `--rm` and labelled `omni.mcp.test=<run id>`;
+- names start with `omni-mcp-t-`;
+- **no host mounts at all.** The fixture runs `docker inspect` on every container it starts and **fails the test** if `Mounts` is not empty.
+- Cleanup runs in a fixture finalizer.
+- **Every container, network and image the run created is listed in the test report.** The pytest terminal summary has a section with name, ID, image, created and removed times, and the observed `Mounts=[]`. The same list goes to `backend/test-results/docker-resources.json`, and the stop report quotes it.
+- A leftover resource (not removed) is a test failure.
+- Where Docker is unavailable, the tests **skip, and the skip is reported**. A skip is never reported as a pass.
 
 The HTTP tests go through `create_app()` and its lifespan, as in `backend/tests/ledger/conftest.py`. The lifespan builds a `DockerRunner` port. The tests that don't need real Docker swap in a recording fake that captures argv and env-file contents; the Docker tests use the real one.
 
@@ -417,17 +477,21 @@ The HTTP tests go through `create_app()` and its lifespan, as in `backend/tests/
 | T4 | **Code changed after approval.** Build → test (fake runner) → `GET /approval` → `POST /enable {hash, token, tiers}` → deploy commits. The agent then submits new code through the `mcp_build` tool path. Expect: `GET /servers/{id}` shows `approved:false` and state awaiting approval; `POST /deploy` gives 409; `POST /enable` with the old hash gives 409; the deploy re-check refuses an image whose label ≠ current hash. | HTTP, `create_app()` | (a) Remove the clear in `update_source_code`, which is still red through the derived check; (b) make the derived check return the stored record without comparing hashes, which is red on a row written without a clear (direct DB write). One sabotage per layer. |
 | T5 | **`/enable` with a failed deploy.** The fake runner returns rc=1 on `docker run`. Expect: not approved, state "Couldn't turn on", `pending_approval` cleared. Again with a gateway restart mid-deploy. | HTTP | Commit `approval` before the Docker work: red. |
 | T6 | **View code before Approve.** `POST /enable` → 409 in each of these cases:<br>- no token;<br>- an expired token;<br>- a token for another hash;<br>- a token issued **to another user** (a second account through real HTTP, after C.0);<br>- a token issued for **another server**;<br>- a token **already used once**. Playwright: Approve is disabled until the Code tab is shown; the dialog shows the full hash, the hosts and all code lines. | HTTP + rendering spec | Server: skip the token check. UI: `{false && …}` around the disabled condition. Both red. |
-| T7 | **Egress to a host not on the allowlist (deployed).** The real production deploy path runs with allowlist `[allowed.test, api.github.com]`. From inside the deployed server:<br>(1) `httpx.get("https://blocked.test")` → 403 from the proxy, and the denial shows in the server's blocked log;<br>(2) raw sockets to the T2 listener's **literal IP** and to the host gateway's **literal IP** fail, and the listener logs nothing. That proves **routing**, not just DNS;<br>(3) `allowed.test` is made to resolve **to the gateway network's IP of the listener** (`--add-host` on the sidecar, test fixture only). `CONNECT allowed.test:443` must be refused by the **real, unmodified** sidecar as "resolves to a non-global address". This is the rebinding case;<br>(4) positive control: `HEAD https://api.github.com` (no credentials) succeeds through the proxy. It is marked `internet`, and skipped **visibly** when offline. There is **no** switch in the proxy to relax the global-address rule, test or otherwise. | Docker, deploy phase | (a) `ALLOW_HOSTS=*`: blocked.test succeeds. (b) Put the server on `bridge` instead of the internal network: the literal-IP socket reaches the listener. (c) Replace the `is_global` check with a check on the first answer only, or connect by name: case 3 succeeds. |
+| T7 | **Egress through the real Squid sidecar (deployed).** The production deploy path, unmodified, with allowlist `[allowed.test, api.github.com]`. The test-only fake resolver is a `omni-mcp-t-dns` container running dnsmasq, used as the sidecar's dnsmasq **upstream**. That is a renderer parameter which keeps `--stop-dns-rebind` on; T9 asserts production renders `127.0.0.11`. From inside the deployed server:<br>(1) `httpx.get("https://blocked.test")` → 403 (`ERR_ACCESS_DENIED`), listed in the server's blocked log;<br>(2) raw sockets to the T2 listener's **literal IP** and to the host gateway's **literal IP** fail, and the listener logs nothing. That proves **routing**;<br>(3) the fake resolver answers `allowed.test` with the **listener's gateway-network IP**. `CONNECT allowed.test:443` fails with `ERR_DNS_FAIL`, because dnsmasq dropped the private answer; the listener logs nothing;<br>(4) **rebinding:** the fake resolver alternates a public TEST-NET answer and the listener's IP, with TTL 0, over 50 attempts. The listener logs **no** connection;<br>(5) positive control: `HEAD https://api.github.com` (no credentials) succeeds. It is marked `internet`, and skipped **visibly** when offline. | Docker, deploy phase | (a) Render `allowed` as `.` (all domains): blocked.test succeeds. (b) Put the server on `bridge`: the literal-IP socket reaches the listener. (c) Drop `--stop-dns-rebind` from the renderer: case 3 becomes `ERR_ACCESS_DENIED` instead of `ERR_DNS_FAIL` (red on the asserted reason). Drop it **and** `deny fwd private_dst`: the listener receives a connection. |
+| T7d | **Squid's resolved-address layer on its own.** The renderer is called **in the test** with `stop_dns_rebind=False`, so dnsmasq passes private answers. This parameter has no production caller; the wiring gate whitelists it as test-only, and T9 asserts the production config has `stop-dns-rebind`. The fake resolver answers `allowed.test` with `[public TEST-NET, listener IP]`. Expect `ERR_ACCESS_DENIED`, and the listener logs nothing. | Docker | Remove `http_access deny fwd private_dst`: the listener receives a connection. |
 | T13 | **Deployed DNS.** Inside the deployed server, `socket.getaddrinfo("example.com", 443)` and a lookup of a random name both **fail**; the sidecar's own name still resolves. | Docker, deploy phase | Remove `--dns 127.0.0.1`: whether this goes red depends on the Docker version's internal-network DNS forwarding, so the test records which. If it stays green without the flag, the flag is kept anyway, and the report says it was unproven on this Docker version. |
-| T14 | **Sidecar listeners bound per network.** From a test container on the **outer** network: `:3128` is refused, and `:8080` without the token gives 401. From inside the server (internal network), `:8080` on the sidecar is refused. | Docker, deploy phase | Bind both listeners to `0.0.0.0`: `:3128` is reachable from the outer network. |
+| T14 | **Squid listeners bound per network; the endpoint's login.**<br>- From a test container on the **outer** network: `:3128` is refused (connection refused, not 407).<br>- `:8080` without the token → 403; with a wrong token → 403; with the right token, `tools/list` over SSE returns the server's tools, which also proves SSE streams through Squid's accel port.<br>- From inside the server, `:8080` on `.2` is refused.<br>- `:3128` without the proxy login → 407. | Docker, deploy phase | Render `http_port 3128` without an address: `:3128` reachable from outer. Drop `inbound_token` from the `http_access`/`cache_peer_access` lines: no-token gets through. Drop `mcp_login`: 407 becomes 200. |
 | T15 | **Enable→deploy race.** The fake runner **blocks** inside `docker build` on an event. While it is held, the agent submits new code through the `mcp_build` path; then the event is released. Expect: no `docker run` is issued (argv log), `pending_approval` is cleared, the server is not approved, and the state reads "The code changed while turning on". Also: a retagged built image (the label doesn't match) makes the deploy refuse, and `docker run` is always given `sha256:<ID>`, never a tag. | HTTP, `create_app()` | Drop the under-lock re-read before `docker run`: a run is issued for the new code. Run by tag: the argv assertion goes red. |
 | T16 | **Env-file safety.** Storing secret names `HTTPS_PROXY`, `ld_preload`, `MCP_PORT`, `__INBOUND_TOKEN`, or a value containing `\n` is refused at `PUT /secrets` and again at deploy. The recording runner checks that the env-file existed with mode 0600 while `docker run` ran, and is **gone afterwards on both a successful and a failed run** (rc=1). | HTTP + fake runner | Remove the reserved-name check: `HTTPS_PROXY` is stored. Remove the `finally` unlink: the file is still there after the failed run. |
 | T8 | **The collision with `github`.** `extensions_config` has `github`. `POST /builds` for a description that slugs to `github` gives 409 naming it, and no row is created. `connect()` for a row whose key exists and isn't tagged with its id refuses, and the file is unchanged (byte compare). The same 409 for `GitHub`, `git_hub` and `git-hub`. A `POST /servers` body name containing `_` is slugged with no `_`. Prefix overlap: a built `git` server whose tool `hub_x` would produce a prefixed name already registered by another server is refused at connect. The classifier: with the shipped rules plus a user rule `*` → Tier 1, `built__github_get_issue` is **Tier 3**. After an approval sets `get_issue: 1` it is Tier 1, and it is Tier 3 again after a code change. Two built servers each with a tool `x`: a tier set on one doesn't apply to the other (tiers are keyed by `(server_id, tool)`). | HTTP + unit | (a) Remove the collision check: 201. (b) Remove the `built__` branch in `classify()`: Tier 1 from `*`. (c) Key `built_tiers` by tool name only: the second server inherits the tier. (d) Skip the normaliser in the collision check: `git_hub` is accepted. |
-| T9 | **No secret on argv or in config; no 0.0.0.0.** Over the fake runner's recorded argv: no stored secret value appears; `extensions_config.json` contains no inbound token (byte search for the token); no `-p` on the server container; the sidecar's `-p` (bare-host mode only) starts with `127.0.0.1:`. Docker variant: `docker port` shows 127.0.0.1 only. | HTTP (fake) + Docker | Re-add `-e K=V`: red. `"0.0.0.0:"` in `-p`: red. |
+| T9 | **No secret on argv or in config; no 0.0.0.0.** Over the fake runner's recorded argv: no stored secret value appears; `extensions_config.json` contains no inbound token (byte search for the token); no `-p` on the server container; the sidecar's `-p` (bare-host mode only) starts with `127.0.0.1:`. Docker variant: `docker port` shows 127.0.0.1 only. The **production-rendered** configs (decoded from the recorded sidecar env-file) contain `stop-dns-rebind`, `server=127.0.0.11` and `deny fwd private_dst`, and the test-only renderer parameters are at their defaults. | HTTP (fake) + Docker | Re-add `-e K=V`: red. `"0.0.0.0:"` in `-p`: red. Make the deploy path pass `stop_dns_rebind=False`: red. |
 | T10 | **Vault key.** Startup refuses when `config.yaml` has `mcp_builder.vault_key`, when the key file's mode is 0644, or when the file is under the project root; MCP Build also refuses to enable with `sandbox.allow_host_bash: true`. The migration re-encrypts, the old key decrypts **no** remaining row, the new key decrypts all of them, and `VACUUM` ran. | `create_app()` lifespan | Sabotaged **one check at a time**, each turning its own assertion red: (a) accept the config key; (b) skip the mode check; (c) skip the path check; (d) skip the host-bash check. |
 | T11 | **`extract_secrets` table.** Every row of §6, plus negatives ("token is required", "password field"). No output contains any character of a lifted value's tail. | Unit | Remove each new pattern in turn: its row goes red. |
-| T17 | **Proxy decision function (unit).** Allowed: `api.github.com` and `API.GitHub.com.` (one trailing dot). Refused, each with its reason:<br>- `api.github.com..`;<br>- `1.2.3.4`, `[::1]`, `2130706433`, `0x7f000001`;<br>- `user@api.github.com`;<br>- `api.github.com:80`;<br>- an IDNA homograph of an allowed host (`аpi.github.com`, Cyrillic а);<br>- answers `[global, 10.0.0.1]` (one bad answer refuses all);<br>- `::ffff:127.0.0.1`;<br>- `100.64.0.1`;<br>- SNI ≠ CONNECT host;<br>- no SNI.<br>The connect target is the vetted IP object, never the name. | Unit | Remove each normalisation step in turn; check `any` instead of `all`; return the name instead of the IP. Each turns its own row red. |
-| T12 | **Delete really stops it.** After delete there is no container, no network and no `extensions_config` entry (fake runner argv plus a file check). | HTTP | Revert delete to `manager.stop()`: red. |
+| T17 | **Squid conformance matrix, against the real egress image.** Raw CONNECTs from inside the deployed server; each case asserts its Squid error code.<br>Allowed: `api.github.com:443`, `API.GitHub.com.:443`.<br>Refused:<br>- `api.github.com..:443`;<br>- `1.2.3.4:443`, `[::1]:443`, `2130706433:443`, `0x7f000001:443`;<br>- `user@api.github.com:443`;<br>- `api.github.com:80`;<br>- the Cyrillic homograph `аpi.github.com` (raw UTF-8 and xn--);<br>- `GET http://api.github.com/` (plain forwarding);<br>- a CONNECT to an allowed host whose ClientHello carries SNI `evil.example`;<br>- a ClientHello with **no** SNI;<br>- non-TLS bytes inside an allowed tunnel. | Docker | One rendered line removed at a time (`-n`, `ip_literal`, `!tls_port`, `!CONNECT`, the `sni_ok`/`terminate` pair, `on_unsupported_protocol`). Each turns its own row red. |
+| T17u | **Config renderer (unit).**<br>- The A-label output is deterministic.<br>- It refuses `*`, IPs, ports or non-ASCII in the allowlist.<br>- It refuses to render without each required directive.<br>- The env-file values decode back to the same config.<br>- The token is hex only. | Unit | Remove the directive check: a config missing `deny fwd private_dst` renders. |
+| T18 | **Retirement of the old connector and the orphaned secrets (§9).** Fixture: an empty `mcp_servers`; `mcp_secrets` rows for several ids with no server; a config entry `github-issue-connector`; a **stopped** container plus image from a fake old-style deploy.<br>Expect, in order:<br>- audit rows were written first, with key **names** only (no values, no hints) and the recovered `server.py` with its sha256;<br>- the code was extracted with `docker create`/`docker cp` and **never started** (the event log shows no `start`);<br>- the container and image are gone, and the config entry is removed (byte check of the rest of the file);<br>- every orphaned secret row is deleted, then `VACUUM`;<br>- a `retired` server row exists with the recovered code and no approval;<br>- the Build board says what was retired.<br>A second run changes nothing (idempotent). | HTTP lifespan + Docker | Delete secrets before writing audit: the audit-first assertion goes red. Skip the config-entry removal: red. Start the container to read its code: red. |
+| T19 | **No real secrets for unapproved code (answered: Q3).** After the agent changes an approved, running server's code:<br>- the approved container keeps running and the old image ID is unchanged;<br>- the new code's test env-file holds placeholders only;<br>- `decrypt_for_deploy(sha=<new>)` refuses;<br>- `/deploy` gives 409;<br>- the card reads "New code is waiting for your approval; the approved version is still on". | HTTP + fake runner | Drop the approved-hash check in `decrypt_for_deploy`: the new hash gets real values. |
+| T12 | **Delete really stops it.** After delete there is no container, no network and no `extensions_config` entry (fake runner argv plus a file check). The hotfix ships the basic stop and delete behaviour; this test extends it to the sidecar and the networks. | HTTP | Revert delete to `manager.stop()`: red. |
 
 Every new public definition is reached from production or listed in `tests/gates/test_wiring.py` with a reason that isn't "UNWIRED". A separate review agent that hasn't seen the build re-checks every safety claim with its own adversarial HTTP test before the stop report (round 2's process change).
 
@@ -461,48 +525,75 @@ Every new public definition is reached from production or listed in `tests/gates
    - the `offline` badge;
    - the tool description made true;
    - T1-T3.
-9. `feat(mcp-build): the egress proxy sidecar`:
-   - the pure decision function (normalise, resolve once, all answers global, connect to the vetted IP, SNI);
-   - per-interface binding;
-   - T17.
+9. `feat(mcp-build): the Squid egress image and config renderer`:
+   - `docker/mcp-egress/Dockerfile` (`alpine@sha256` + pinned `squid`, `dnsmasq`, `openssl`; the build checks `--with-openssl`);
+   - the POSIX entrypoint;
+   - the pure config renderer in the gateway;
+   - T17u, and T17 against the real image.
 10. `feat(mcp-build): deployed servers sit on an internal network behind the allowlist, reachable only on 127.0.0.1 or the gateway's network`:
     - deploy argv (create, connect, start);
     - validated env-file secrets;
     - the inbound token kept in the vault and injected at load time;
     - `build_egress_rules` used;
     - port 443 only;
-    - T7, T9, T13, T14, T16.
-11. `feat(mcp-build): delete and stop remove the container, network and config entry; startup reconcile`, plus T12 and §9.
+    - T7, T7d, T9, T13, T14, T16, T19.
+11. `feat(mcp-build): startup reconcile, and retirement of the old connector and the orphaned secrets`: §9, T12 (extending the hotfix's stop and delete to the sidecar and networks), and T18. **It runs before step 12**, so orphaned rows are deleted rather than rotated.
 12. `feat(mcp-build): vault key lives in a 0600 secrets file, rotated on migration`. Compose `secrets:`, `make vault-key` and `vault-key-migrate`, the startup refusals (including `allow_host_bash`), `VACUUM`, and T10.
 13. `docs(006): spec and plan updated to what shipped`.
 
 Steps 1-6 need no Docker. Steps 7-12 do.
 
-## 9. Startup reconcile (for the container that is live today)
+## 9. Startup reconcile, and retiring what is left over
 When the gateway starts, it lists containers labelled `omni.mcp.*` and those named `omni-mcp-*`. It stops and removes (and removes the `extensions_config` entry for) any built container that:
 - lacks the hardened labels;
 - runs an image whose `omni.code_sha256` ≠ the row's derived approval;
 - or whose row no longer exists.
 
-Each removal is reported on the Build board ("Turned off github-issue-connector: it was started before approvals were bound to code; review and approve it again"). Nothing is removed silently. Under this rule, `omni-mcp-c641ac8dc68d` and its config entry are removed on the first start of the new gateway, unless the user has already removed them.
+Each removal is reported on the Build board. Nothing is removed silently.
+
+### Retiring `github-issue-connector` and the orphaned secrets (answered: Q4)
+The user's decision: remove the container and its secrets, **keep a record for the audit trail**, and re-approve under the new flow. Its `mcp_servers` row no longer exists, so the record is rebuilt from what remains.
+
+**New table.** Append-only `mcp_build_audit` (`id`, `at`, `actor`, `event`, `server_id`, `name`, `details JSON`). It is created by `create_all`. No route updates or deletes rows.
+
+**The retirement.** It is one idempotent job, run by the startup reconcile **once**, keyed by an audit marker `event=retirement-2026-10`. Its dry-run lists every action in the log before it acts. Steps, in order:
+1. **Write the audit rows first, and commit:**
+   - one `retired` row for `github-issue-connector`: the config entry's name and URL, the container name and ID, the image ID, and the env **names** seen in `docker inspect`;
+   - one `orphaned-secrets` row per orphaned server id, with key **names** only.
+   No values and no `key_hint`: the last five characters of a secret are part of the secret.
+2. **Recover the code without running it.** `docker create` from the old image, `docker cp :/app/server.py`, then `docker rm`. The container is never started. Its old rootfs isn't read-only, so `docker cp` works.
+   - The recovered source and its sha256 go into the audit row's details.
+   - A new `mcp_servers` row is made: status `retired`, name `github-issue-connector` (shown as `built/github-issue-connector`), the recovered source, no approval, owned by the owner account (C.0).
+   - "Re-approve under the new flow" is then concrete: open it, run **Test again** (the sandbox from §1), then the approval screen. The user enters a **new** GitHub token; the old one should be rotated.
+   - If the image is already gone, the audit row says "code not recoverable", and no row is made.
+3. Remove the container `omni-mcp-c641ac8dc68d` and its image (`docker rm -f`, `docker rmi`).
+4. Remove the `github-issue-connector` entry from `extensions_config.json` with `atomic_write_json`, leaving every other byte's meaning unchanged.
+5. **Delete every orphaned `mcp_secrets` row**: every row whose `server_id` has no `mcp_servers` row. That is the reported 21 rows across 12 ids, but the job counts what it finds rather than trusting those numbers. Then `VACUUM`.
+6. Report on the Build board: "Retired github-issue-connector: started before approvals were bound to code. Its code is kept; test and approve it again to use it. Deleted N stored secrets left by M removed servers."
+
+**Ordering with the other work:**
+- The separate **hotfix** makes stop and delete remove containers and secrets from now on, so no new orphans appear. This job cleans up what came before it.
+- The job runs **before** the vault-key rotation (step 12), so orphaned rows are deleted, not re-encrypted.
 
 ---
 
-## Open questions (each with a recommended default)
+## The user's answers (2026-10-20); no questions are open
 
-1. **Docker tests on your Docker Desktop.** May the build and the review agents start throwaway containers (labelled `omni-mcp-t-*`, `--rm`, cleaned up by the fixture) on your Docker Desktop to run T1-T3, T7, T9, T13 and T14? T7's positive control also makes one credential-less `HEAD https://api.github.com`. They don't touch the live stack's containers. **Default: yes.** Where Docker is absent they are reported as skipped, never as passed.
-2. **Egress ports.** HTTPS (443) only, dropping the plain-HTTP port 80 that `build_egress_rules` allows today. **Default: 443 only.** A tool that needs plain HTTP would need a later, explicit change.
-3. **The agent changes the code of a server that is on.** **Default: keep the approved version running** (it is hash-bound) and show "new code is waiting for your approval". The alternative is to turn it off until you approve.
-4. **The live `github-issue-connector` container.** **Default: the startup reconcile removes it**, together with its config entry, and you re-approve it under the new flow. Separately, please `docker rm -f omni-mcp-c641ac8dc68d` now and rotate that GitHub token.
+1. **Docker tests on your Docker Desktop.** May the build and the review agents start throwaway containers (labelled `omni-mcp-t-*`, `--rm`, cleaned up by the fixture) on your Docker Desktop to run T1-T3, T7, T9, T13 and T14? T7's positive control also makes one credential-less `HEAD https://api.github.com`. They don't touch the live stack's containers. **Answer: yes.** Throwaway containers, labelled, with no host mounts, auto-removed, and **listed in the test report** (§7).
+2. **Egress ports.** HTTPS (443) only, dropping the plain-HTTP port 80 that `build_egress_rules` allows today. **Answer: yes, 443 only.**
+3. **The agent changes the code of a server that is on.** **Answer: yes.** The approved version keeps running. New code shows "waiting for approval" and gets **no real secrets** until it is approved: placeholders only (§3, T19).
+4. **The live `github-issue-connector` container.** **Answer: yes, retire it.** Remove its container and secrets, **keep its record** for the audit trail, and re-approve it under the new flow. Plus the cleanup of all orphaned secrets (§9).
 
-Decided in this plan without a question (tell me if you disagree):
+Decided in this plan (tell me if you disagree):
 - the vault key is a 0600 secrets file, not the Keychain (§2);
-- egress uses an internal network plus our own proxy sidecar (§4);
+- egress uses an internal network plus a **Squid** sidecar, with dnsmasq `--stop-dns-rebind` as its resolver, **not** a proxy of our own (§4; the user's change);
 - the legacy `/approve` and `/register` routes are removed, not re-bound (§3);
 - the wire key is `built__<slug>`, displayed as `built/<slug>` (§5);
 - `--env-file` for secrets, with the `docker inspect` residual stated (§4).
 
-## 10. Revision 2: what changed per review finding
+## 10. Revision history
+
+### 10.1 Revision 2: what changed per review finding
 
 | Finding | Change | Where |
 |---|---|---|
@@ -521,5 +612,32 @@ Decided in this plan without a question (tell me if you disagree):
 | LOW 13: gateway compromise | §0 states that code execution in the gateway gets every built server's secrets and the host's `/Users` (rw `backend/` mount, compose `:187`; `docker.sock`, `:206`). It recommends gateway-mount hardening as a separate item. MCP Build refuses to enable while `sandbox.allow_host_bash` is true (tested in T10). | §0, T10 |
 
 No finding was rejected.
+
+### 10.2 Revision 3: the user's answers, and Squid in place of our own proxy
+
+**The answers:**
+- Q1: the Docker tests' resources are listed in the report, and any host mount fails the test (§7 header).
+- Q2: 443 only.
+- Q3: new code gets placeholders only, the vault refuses a hash that isn't approved, and T19 tests it.
+- Q4: the retirement and orphaned-secret cleanup, with the audit-first ordering, recovery of the code without running it, and a `retired` row (§9, T18).
+
+**The proxy change.** The 200-line Python proxy is gone. In its place: Squid 6 with a rendered config, plus dnsmasq `--stop-dns-rebind` as its only resolver. Squid's accel port, guarded by a bearer-token ACL, is the login in front of the endpoint. The forward port needs a proxy login. Envoy was considered and not chosen (§4 table).
+
+**Which reviewer findings change meaning with Squid:**
+
+| Finding | Before (our proxy) | Now (Squid) | Change in meaning |
+|---|---|---|---|
+| HIGH 1: normalisation | Our function: lower-case, one trailing dot, IDNA, refuse literals and `@` | Squid's URL parser (lower-case; strips one trailing dot; refuses userinfo in the CONNECT authority), `dstdomain -n`, the `ip_literal` ACL, `!tls_port`. Non-ASCII hosts fail parsing. The renderer writes A-labels only. | **Same intent, different proof.** No unit test can cover Squid's parser, so T17 is now a matrix of raw CONNECTs against the real image, sabotaged one config line at a time. |
+| HIGH 1: "every answer global" | `is_global` on every answer | `dst private_dst`, explicit ranges: any private answer denies (Squid's `dst` matches if **any** resolved address matches) | `is_global` becomes an explicit range list. I added the IPv6 ranges (`::ffff:0:0/96`, `64:ff9b::/96`, `fc00::/7`, `fe80::/10`). T7d tests this layer on its own. |
+| HIGH 1: "connect to the vetted IP" (rebinding) | Our proxy connected to the IP it checked | Squid resolves again internally. **The guarantee now comes from dnsmasq `--stop-dns-rebind`**: a private answer never reaches Squid at any moment, so a flip has nothing to flip to. | **Changed mechanism.** "Same IP for check and connect" becomes "private answers are dropped at the resolver". T7 case 4 (TTL-0 flipping, 50 tries) is the proof. |
+| HIGH 1: SNI check | SNI **equal to** the CONNECT host | `ssl::server_name --client-requested` **on the allowlist** | **Weaker.** Fronting **between allowlisted hosts** stays possible; that is stated as a residual. Missing SNI and SNI off the allowlist are still refused (T17). |
+| HIGH 2: per-network binding | Our proxy bound by subnet | `http_port <ip>:port`, with the IP fixed (`.2`) on the internal side and found by subnet on the outer side | Same meaning. T14 now also covers the proxy login (407) and the endpoint token (403). |
+| HIGH 3: proving deployed DNS and routing | Literal-IP sockets; T13; allowlisted name → gateway IP refused by the sidecar | Same, but the refusal is `ERR_DNS_FAIL` (dnsmasq). Squid's own layer is proven separately in T7d. | Same meaning, two layers. One test-only renderer parameter (`stop_dns_rebind=False`) exists for T7d. It has **no production caller**, and T9 asserts the production config keeps the flag. This is the only relaxation, and it is disclosed. |
+| MED 6: image pinning | One runtime image | The egress image is our Dockerfile from `alpine@sha256` with pinned `apk` versions. Its image ID is recorded and verified before each run, like the runtime image. | New image, same rule. Risk: Alpine drops old package versions, so a rebuild can fail. It fails visibly, and the recorded image is kept. |
+| MED 7: env-file validation | Secrets | Also carries the rendered configs (base64) | Same rules. The configs are generated by us and never by the user. |
+| MED 8: token out of `extensions_config.json` | Our reverse proxy checked the token | Squid's `req_header` ACL checks it. The token is now also in the sidecar's env-file (base64 config). | Same `docker inspect` residual as the other secrets. |
+| HIGH 4, MED 5, LOW 9-13 | — | — | Unchanged. |
+
+**Open risk:** SSE through Squid's accel port must stream without buffering. T14's `tools/list` over SSE is the check. If it fails, the endpoint side moves to Squid's `http_port` in plain forward-to-peer mode, or we report back before choosing anything else.
 
 Out of scope, noted: `GET /servers/{id}/secrets/reveal` (`mcp_studio.py:565-584`) returns plaintext secrets to any holder of `threads:write`. Worth a re-auth or removal under item C.0.
