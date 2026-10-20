@@ -191,6 +191,19 @@ def _message_key(message: Any) -> str:
     return str(get("id") or "") or json.dumps([get("type"), get("content")], default=str, sort_keys=True)
 
 
+class TrimIncomplete(RuntimeError):
+    """A big trim stopped after MAX_TRIM_WRITES rewrites; the next sweep goes on
+    (the trim is idempotent and resumable: each rewrite stands on its own)."""
+
+
+#: Checkpoint rewrites per trim call, so one call stays well inside STEP_TIMEOUT.
+MAX_TRIM_WRITES = 200
+
+
+def _get(message: Any, key: str):
+    return message.get(key) if isinstance(message, dict) else getattr(message, key, None)
+
+
 async def trim_thread(app, thread_id: str, cutoff) -> bool:
     """Retention for a thread a PERSON also wrote in: remove only content older
     than `cutoff`, keep the conversation. Returns True when the thread is kept;
@@ -228,6 +241,21 @@ async def trim_thread(app, thread_id: str, cutoff) -> bool:
             k = _message_key(m)
             first[k] = min(first.get(k, ts), ts)
     old = {k for k, ts in first.items() if ts < cutoff}
+    # A tool result never outlives its tool call: a result whose call is being
+    # removed is removed with it (a thread starting with an orphan tool result
+    # is refused by the model providers).
+    removed_calls = set()
+    for t in tuples:
+        for m in (t.checkpoint.get("channel_values") or {}).get("messages") or []:
+            if _message_key(m) in old:
+                for call in _get(m, "tool_calls") or []:
+                    call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+                    if call_id:
+                        removed_calls.add(call_id)
+    for t in tuples:
+        for m in (t.checkpoint.get("channel_values") or {}).get("messages") or []:
+            if _get(m, "tool_call_id") in removed_calls:
+                old.add(_message_key(m))
     latest = tuples[0]
     messages = (latest.checkpoint.get("channel_values") or {}).get("messages") or []
     if not any(_is_person(m) for m in messages if _message_key(m) not in old):
@@ -237,11 +265,15 @@ async def trim_thread(app, thread_id: str, cutoff) -> bool:
     again = await cp.aget_tuple(cfg)
     if again is None or again.checkpoint.get("id") != latest.checkpoint.get("id"):
         return True  # written meanwhile: leave it, the next sweep retries
+    writes = 0
     for t in tuples:
         values = dict(t.checkpoint.get("channel_values") or {})
         kept = [m for m in values.get("messages") or [] if _message_key(m) not in old]
         if len(kept) == len(values.get("messages") or []):
             continue
+        if writes >= MAX_TRIM_WRITES:
+            raise TrimIncomplete(f"{thread_id}: stopped after {writes} rewrites; continued by the next sweep")
+        writes += 1
         values["messages"] = kept
         checkpoint = {**t.checkpoint, "channel_values": values}
         parent = t.parent_config or {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
@@ -265,20 +297,29 @@ def _delete_ledgered(app, history, rule_map, run, thread_ids, result: DeleteResu
     wrote in within the window is trimmed instead (see trim_thread)."""
     mapped = {rule: rule_map.thread_of(rule) for rule in rule_map.known_rules()}
     for tid in sorted(thread_ids):
-        try:
-            if trim_before is not None and run(trim_thread(app, tid, trim_before)):
+        if trim_before is not None:
+            try:
+                kept = run(trim_thread(app, tid, trim_before))
+            except Exception as exc:  # noqa: BLE001 — a failed TRIM stays a trim
+                logger.exception("run history: trimming automation thread %s failed; retried as a trim", tid)
+                history.trim_failed(tid, type(exc).__name__)
+                result.threads_failed[tid] = type(exc).__name__
+                continue
+            if kept:
                 # Kept in the ledger: still the engine's thread, so "Delete run
                 # history" deletes it (the dialog says: including what you
                 # wrote in it). Trimming again finds nothing older to remove.
+                history.trim_done(tid)
                 result.threads_trimmed.append(tid)
                 for rule, mapped_tid in mapped.items():
                     if mapped_tid == tid:
                         rule_map.forget(rule)
                 continue
+        try:
             run(delete_thread_everywhere(app, tid))
         except Exception as exc:  # noqa: BLE001 — reported per thread, by id
             logger.exception("run history: deleting automation thread %s failed", tid)
-            history.thread_failed(tid, type(exc).__name__)
+            history.thread_failed(tid, type(exc).__name__, reason="retention" if trim_before is not None else "explicit")
             result.threads_failed[tid] = type(exc).__name__
             continue
         history.thread_gone(tid)
@@ -357,8 +398,11 @@ async def sweep_threads(app) -> DeleteResult | None:
         todo = sorted(set(history.threads_to_sweep(mapped)) | (stale - mapped))
         result = DeleteResult(runs=0)
         busy = set(run(_busy(app, set(todo))))
-        # A delete that failed is finished whole; retention trims or deletes.
-        pending = {t for t, row in history.ledger_threads().items() if row["pending_delete"]}
+        # Only an EXPLICIT delete that failed is finished whole. Everything
+        # else (a retention delete or trim that failed, an expired thread) goes
+        # through the trim path, which re-checks for a person's messages and
+        # deletes the whole thread only when there are none.
+        pending = history.explicit_deletes()
         ready = [t for t in todo if t not in busy]
         cutoff = history.retention_cutoff()
         _delete_ledgered(app, history, rule_map, run, [t for t in ready if t in pending], result)

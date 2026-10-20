@@ -118,7 +118,8 @@ class StoreKey:
         self.path = Path(path or default_key_path())
         self.store_path = self.path.with_name(KEY_STORE_NAME)
         self._forbidden = forbidden if forbidden is not None else forbidden_roots()
-        self._lock = threading.Lock()
+        # Re-entrant: a rotation checks for recent keys while holding it.
+        self._lock = threading.RLock()
         self._cached: tuple[tuple[float, int], bytes] | None = None
         self._check_location()
 
@@ -155,9 +156,20 @@ class StoreKey:
         st = self.path.stat()
         sig = (st.st_mtime, st.st_ino)
         if self._cached is None or self._cached[0] != sig:
-            raw = self.path.read_bytes().strip()
-            key = base64.b64decode(raw)
-            if len(key) != 32:
+            # A rotation on another worker replaces the file atomically; a read
+            # that raced the old inode being shredded sees zeros: read again.
+            for _ in range(5):
+                raw = self.path.read_bytes().strip()
+                try:
+                    key = base64.b64decode(raw, validate=True)
+                except ValueError:
+                    key = b""
+                if len(key) == 32:
+                    break
+                time.sleep(0.02)
+                st = self.path.stat()
+                sig = (st.st_mtime, st.st_ino)
+            else:
                 raise KeyRefused(f"The run store key file {self.path} does not hold a 256-bit key.")
             from omniharness.utils.known_secrets import register_secret
 
@@ -191,11 +203,26 @@ class StoreKey:
     # -- per-run data keys -------------------------------------------------------
 
     def new_data_key(self, key_id: str) -> bytes:
+        """A new data key, wrapped and stored. The key store's WRITE lock is
+        taken BEFORE the master key is read, so a rotation (which holds that
+        lock from its check to its new master) is either wholly before this,
+        and the new master wraps the key, or wholly after, and sees it."""
         dek = AESGCM.generate_key(bit_length=256)
-        with self._lock:
-            wrapped = _seal(self._master(), dek, f"data-key|{key_id}")
-            with self._db() as c:
-                c.execute("INSERT INTO data_keys (key_id, wrapped, created) VALUES (?, ?, ?)", (key_id, wrapped, time.time()))
+        # The in-process lock is NOT held while waiting for the database lock
+        # (another worker's rotation may hold that for a while).
+        c = self._db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            with self._lock:
+                master = self._master()
+            c.execute("INSERT INTO data_keys (key_id, wrapped, created) VALUES (?, ?, ?)", (key_id, _seal(master, dek, f"data-key|{key_id}"), time.time()))
+            c.execute("COMMIT")
+        except BaseException:
+            if c.in_transaction:
+                c.execute("ROLLBACK")
+            raise
+        finally:
+            c.close()
         return dek
 
     def data_key(self, key_id: str) -> bytes:
@@ -231,28 +258,55 @@ class StoreKey:
             return c.execute("SELECT 1 FROM data_keys WHERE created > ? LIMIT 1", (time.time() - within,)).fetchone() is not None
 
     def rotate(self) -> None:
-        """Destroy every data key and replace the master key with a new one.
-        The old master file's bytes are overwritten before the new file is
-        renamed over it."""
+        """Destroy every data key and replace the master key (unconditional:
+        "Delete run history")."""
+        self._rotate(unless_recent=None)
+
+    def rotate_if_quiet(self, within: float) -> bool:
+        """Rotate only if no data key is younger than `within` seconds, the
+        check and the rotation in ONE key-store write transaction, so no
+        record can slip a key in between (new_data_key waits for the lock).
+        Returns whether it rotated."""
+        return self._rotate(unless_recent=within)
+
+    def _rotate(self, *, unless_recent: float | None) -> bool:
         with self._lock:
-            with self._db() as c:
-                c.execute("DELETE FROM data_keys")
-            with self._db() as c:
-                c.execute("VACUUM")
-            tmp = self.path.with_name(f".{self.path.name}.new")
-            tmp.unlink(missing_ok=True)
-            self._write_new_master(tmp)
+            c = self._db()
             try:
-                size = self.path.stat().st_size
-                with open(self.path, "r+b") as fh:
-                    fh.write(b"\0" * size)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-            except OSError:
-                pass
-            os.replace(tmp, self.path)
-            self._cached = None
+                c.execute("BEGIN IMMEDIATE")
+                if unless_recent is not None and self.has_recent_keys(unless_recent):
+                    c.execute("ROLLBACK")
+                    return False
+                c.execute("DELETE FROM data_keys")
+                # The new master goes in by an atomic rename BEFORE the old
+                # one's bytes are overwritten (through a handle kept on the old
+                # inode), so a reader sees the old key or the new, never zeros.
+                tmp = self.path.with_name(f".{self.path.name}.new")
+                tmp.unlink(missing_ok=True)
+                self._write_new_master(tmp)
+                old = open(self.path, "r+b") if self.path.exists() else None
+                try:
+                    os.replace(tmp, self.path)
+                    self._cached = None
+                    c.execute("COMMIT")
+                    if old is not None:
+                        size = os.fstat(old.fileno()).st_size
+                        old.write(b"\0" * size)
+                        old.flush()
+                        os.fsync(old.fileno())
+                finally:
+                    if old is not None:
+                        old.close()
+            except BaseException:
+                if c.in_transaction:
+                    c.execute("ROLLBACK")
+                raise
+            finally:
+                c.close()
+            with self._db() as v:
+                v.execute("VACUUM")
         logger.info("run history: rotated its master key and destroyed every data key")
+        return True
 
     # -- sealing -------------------------------------------------------------------
 

@@ -121,7 +121,13 @@ CREATE TABLE IF NOT EXISTS automation_threads (
     rule_id TEXT,
     first_seen TEXT NOT NULL,
     pending_delete INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT
+    last_error TEXT,
+    -- Why a delete is pending: 'explicit' (the person asked: delete it whole)
+    -- or 'retention' (re-checked for a person's messages before deleting).
+    delete_reason TEXT,
+    -- A retention trim that failed or was cut short: retried as a TRIM, never
+    -- turned into a delete.
+    trim_pending INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -405,6 +411,11 @@ class RunHistory:
             # owner account only (app/gateway/ownership.py).
             if "owner_id" not in {r["name"] for r in c.execute("PRAGMA table_info(runs)")}:
                 c.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
+            ledger_cols = {r["name"] for r in c.execute("PRAGMA table_info(automation_threads)")}
+            if "delete_reason" not in ledger_cols:
+                c.execute("ALTER TABLE automation_threads ADD COLUMN delete_reason TEXT")
+            if "trim_pending" not in ledger_cols:
+                c.execute("ALTER TABLE automation_threads ADD COLUMN trim_pending INTEGER NOT NULL DEFAULT 0")
         self._clear_stale_tmp()
 
     def _clear_stale_tmp(self, older_than: float = 3600.0) -> None:
@@ -545,10 +556,12 @@ class RunHistory:
             # record on another worker writes its key before its row commits,
             # so a young key without a row may be a run being recorded now.
             self.key.destroy(self.key.key_ids(older_than=KEY_GRACE_SECONDS) - live)
-            if rows and not live and not self.key.has_recent_keys(KEY_GRACE_SECONDS):
-                # Nothing left that needs the master key, and no record in
-                # flight anywhere: rotate it too.
-                self.key.rotate()
+            if rows and not live:
+                # Nothing left that needs the master key: rotate it too, but
+                # only if no record is in flight anywhere (no key younger than
+                # the grace), the check and the rotation in one key-store
+                # transaction (rotate_if_quiet).
+                self.key.rotate_if_quiet(KEY_GRACE_SECONDS)
         self._flush_wal()
         return len(rows)
 
@@ -672,23 +685,44 @@ class RunHistory:
             return {r["thread_id"]: dict(r) for r in c.execute("SELECT * FROM automation_threads").fetchall()}
 
     def mark_threads_pending(self, thread_ids) -> None:
+        """The person asked to delete these threads ("Delete run history"):
+        an EXPLICIT delete, finished whole even if it has to be retried."""
         with self._connect() as c:
-            c.executemany("UPDATE automation_threads SET pending_delete = 1 WHERE thread_id = ?", [(t,) for t in thread_ids])
+            c.executemany("UPDATE automation_threads SET pending_delete = 1, delete_reason = 'explicit' WHERE thread_id = ?", [(t,) for t in thread_ids])
 
     def thread_gone(self, thread_id: str) -> None:
         with self._connect() as c:
             c.execute("DELETE FROM automation_threads WHERE thread_id = ?", (thread_id,))
 
-    def thread_failed(self, thread_id: str, error: str) -> None:
+    def thread_failed(self, thread_id: str, error: str, *, reason: str = "retention") -> None:
+        """A DELETE failed. An explicit delete stays explicit; otherwise it is
+        a retention delete, re-checked for a person's messages on retry."""
         with self._connect() as c:
-            c.execute("UPDATE automation_threads SET pending_delete = 1, last_error = ? WHERE thread_id = ?", (error[:500], thread_id))
+            c.execute(
+                "UPDATE automation_threads SET pending_delete = 1, last_error = ?, delete_reason = COALESCE(delete_reason, ?) WHERE thread_id = ?",
+                (error[:500], reason, thread_id),
+            )
+
+    def trim_failed(self, thread_id: str, error: str) -> None:
+        """A retention TRIM failed or was cut short: retried as a trim. Never
+        sets pending_delete, so a failed trim can never become a delete."""
+        with self._connect() as c:
+            c.execute("UPDATE automation_threads SET trim_pending = 1, last_error = ? WHERE thread_id = ?", (error[:500], thread_id))
+
+    def trim_done(self, thread_id: str) -> None:
+        with self._connect() as c:
+            c.execute("UPDATE automation_threads SET trim_pending = 0, last_error = NULL WHERE thread_id = ?", (thread_id,))
+
+    def explicit_deletes(self) -> set[str]:
+        with self._connect() as c:
+            return {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE pending_delete = 1 AND delete_reason = 'explicit'")}
 
     def threads_to_sweep(self, mapped: set[str]) -> list[str]:
         """Ledger threads to delete now: marked pending (a delete that failed or
         was interrupted), or no longer named by any stored run (retention
         purged them) and not the thread of a rule that still exists."""
         with self._connect() as c:
-            pending = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE pending_delete = 1")}
+            pending = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE pending_delete = 1 OR trim_pending = 1")}
             orphans = {r[0] for r in c.execute("SELECT thread_id FROM automation_threads WHERE thread_id NOT IN (SELECT thread_id FROM runs WHERE thread_id IS NOT NULL)")}
         return sorted(pending | (orphans - mapped))
 
