@@ -93,6 +93,7 @@ CONFIG_REFERENCE_KEYS: dict[str, str] = {
     "VOLCENGINE_API_KEY": "a model's api_key",
     "MOONSHOT_API_KEY": "a model's api_key",
     "GITHUB_TOKEN": "an MCP server's env (extensions_config.json)",
+    "OMNI_HARNESS_WATCHER_TOKEN": "the session-watcher MCP entry's X-OmniHarness-Watcher-Token header",
 }
 
 #: Non-secret settings the gateway reads from the environment (.env).
@@ -104,6 +105,7 @@ OPERATIONAL_ENV_KEYS: dict[str, str] = {
     "COMPOSIO_TOOLKIT": "Composio connectors",
     "COMPOSIO_IMPORTANT_ONLY": "Composio connectors",
     "GATEWAY_ENABLE_DOCS": "gateway docs routes",
+    "GATEWAY_ALLOWED_HOSTS": "extra Host names the gateway answers to (config.allowed_hosts)",
     "LANGSMITH_TRACING": "LangSmith tracing (read by langsmith)",
     "LANGSMITH_API_KEY": "LangSmith tracing (read by langsmith)",
     "LANGSMITH_PROJECT": "LangSmith tracing (read by langsmith)",

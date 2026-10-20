@@ -146,6 +146,9 @@ services:
         read_only: true
         bind:
           create_host_path: true
+    environment:
+      # Shared with the gateway (its MCP entry sends it); every request without it is refused.
+      - OMNI_HARNESS_WATCHER_TOKEN
     working_dir: /app
     networks:
       - omni-harness-dev
@@ -264,6 +267,7 @@ services:
       - DISCORD_BOT_TOKEN
       - EXA_API_KEY
       - FIRECRAWL_API_KEY
+      - GATEWAY_ALLOWED_HOSTS
       - GATEWAY_ENABLE_DOCS
       - GEMINI_API_KEY
       - GITHUB_TOKEN
@@ -276,6 +280,7 @@ services:
       - LANGSMITH_TRACING
       - MOONSHOT_API_KEY
       - OMNI_HARNESS_INTERNAL_AUTH_TOKEN
+      - OMNI_HARNESS_WATCHER_TOKEN
       - OPENAI_API_KEY
       - OPENCLAW_BEARER_TOKEN
       - OPENROUTER_API_KEY

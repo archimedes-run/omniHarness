@@ -21,6 +21,8 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
+from omniharness.utils.safe_env import scrubbed_environment
+
 logger = logging.getLogger(__name__)
 
 # The OAuth connector catalog (branding-neutral; no vendor name in tool ids).
@@ -87,7 +89,9 @@ def _build_stdio_spec(toolkit: str, connected_account_id: str, user_id: str, api
         "command": sys.executable,
         "args": [_composio_server_script()],
         "env": {
-            **os.environ,  # inherit PATH etc. for the subprocess
+            # A scrubbed base (PATH etc., never the gateway's secrets), plus
+            # exactly the four keys this server reads (security baseline).
+            **scrubbed_environment(),
             "COMPOSIO_API_KEY": api_key,
             "COMPOSIO_TOOLKIT": toolkit.upper(),
             "COMPOSIO_CONNECTED_ACCOUNT_ID": connected_account_id,

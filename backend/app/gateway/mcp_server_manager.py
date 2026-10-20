@@ -101,13 +101,21 @@ _MAIN_BLOCK_RE = re.compile(
 # FastMCP.run() does NOT accept host=/port= kwargs — those must be set on
 # mcp.settings before run(). transport_security is cleared so Docker port-
 # mapping from the host is not blocked by localhost rebinding protection.
+# Security baseline: protection stays ON, with the Host names the gateway
+# actually uses (loopback, Docker Desktop's host name) on any port; a page that
+# rebinds its own name to 127.0.0.1 gets 421, and any browser Origin 403.
 _DOCKER_MAIN_NEW = (
     'if __name__ == "__main__":\n'
     '    _transport = os.environ.get("MCP_TRANSPORT", "stdio")\n'
     '    if _transport == "sse":\n'
+    "        from mcp.server.transport_security import TransportSecuritySettings\n"
     '        mcp.settings.host = "0.0.0.0"\n'
     '        mcp.settings.port = int(os.environ.get("MCP_PORT", "8080"))\n'
-    "        mcp.settings.transport_security = None\n"
+    "        mcp.settings.transport_security = TransportSecuritySettings(\n"
+    "            enable_dns_rebinding_protection=True,\n"
+    '            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", "host.docker.internal:*"],\n'
+    "            allowed_origins=[],\n"
+    "        )\n"
     '        mcp.run(transport="sse")\n'
     "    else:\n"
     "        mcp.run()\n"
