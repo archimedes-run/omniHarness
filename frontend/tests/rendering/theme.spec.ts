@@ -544,30 +544,83 @@ test.describe("Settings > Appearance", () => {
   });
 });
 
-test("Inter for text and JetBrains Mono for code, self-hosted", async ({
+/**
+ * The fonts ship in the repo (src/fonts/) and nothing is fetched from Google.
+ * A family NAME in the computed font-family proves nothing (the name is there
+ * whether or not the file ever loads), so this asserts the faces the browser
+ * actually loaded: the next/font/local latin faces behind --font-inter and
+ * --font-jetbrains-mono, and the latin-ext @font-face rules once text outside
+ * latin ("Łódź", "Kraków") is on the page, each fetched from this app.
+ */
+test("Inter for text and JetBrains Mono for code, shipped with the app", async ({
   page,
 }) => {
-  const fontRequests: string[] = [];
-  page.on("request", (r) => {
-    if (/\.(woff2?|ttf)(\?|$)/.test(r.url()) || r.url().includes("fonts.g"))
-      fontRequests.push(r.url());
+  const fontResponses: { url: string; status: number }[] = [];
+  page.on("response", (r) => {
+    const url = r.url();
+    if (/\.(woff2?|ttf|otf)(\?|$)/.test(url) || url.includes("fonts.g"))
+      fontResponses.push({ url, status: r.status() });
   });
   await page.goto("/", { waitUntil: "networkidle" });
-  const families = await page.evaluate(() => {
+  const result = await page.evaluate(async () => {
+    const text = document.createElement("p");
+    text.textContent = "Inter Łódź Kraków";
     const mono = document.createElement("code");
     mono.className = "font-mono";
-    document.body.appendChild(mono);
+    mono.textContent = "thread_id Łódź";
+    document.body.append(text, mono);
+    await document.fonts.ready;
+    const root = getComputedStyle(document.documentElement);
+    const first = (stack: string) =>
+      stack
+        .split(",")[0]!
+        .trim()
+        .replace(/^["']|["']$/g, "");
+    const loaded = [...document.fonts]
+      .filter((f) => f.status === "loaded")
+      .map((f) => f.family.replace(/^["']|["']$/g, ""));
     const out = {
       body: getComputedStyle(document.body).fontFamily,
       mono: getComputedStyle(mono).fontFamily,
+      inter: first(root.getPropertyValue("--font-inter")),
+      jetbrains: first(root.getPropertyValue("--font-jetbrains-mono")),
+      loaded,
     };
+    text.remove();
     mono.remove();
     return out;
   });
-  expect(families.body).toMatch(/Inter/);
-  expect(families.mono).toMatch(/JetBrains Mono/);
-  const external = fontRequests.filter(
-    (u) => !u.startsWith("http://localhost"),
+  // The stacks resolve to the shipped families, latin-ext first.
+  expect(result.body).toMatch(/^"?Inter latin-ext"?, /);
+  expect(result.body).toContain(result.inter);
+  expect(result.mono).toMatch(/^"?JetBrains Mono latin-ext"?, /);
+  expect(result.mono).toContain(result.jetbrains);
+  // And the browser really loaded each of those faces.
+  expect(result.loaded).toEqual(
+    expect.arrayContaining([
+      result.inter,
+      result.jetbrains,
+      "Inter latin-ext",
+      "JetBrains Mono latin-ext",
+    ]),
+  );
+  // Every font file came from this app, and arrived. (next/font/local names
+  // the latin files after src, with "-" as "_"; the latin-ext ones keep theirs.)
+  const urls = fontResponses.map((r) => r.url);
+  for (const name of [
+    /\/inter_latin-/,
+    /\/inter-latin-ext\./,
+    /\/jetbrains_mono_latin-/,
+    /\/jetbrains-mono-latin-ext\./,
+  ]) {
+    expect(
+      urls.some((u) => name.test(u)),
+      `${name} was not fetched`,
+    ).toBe(true);
+  }
+  const external = fontResponses.filter(
+    (r) => !r.url.startsWith("http://localhost"),
   );
   expect(external, "a font was fetched from outside the app").toEqual([]);
+  expect(fontResponses.filter((r) => r.status >= 400)).toEqual([]);
 });
