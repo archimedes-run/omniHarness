@@ -129,7 +129,9 @@ function SheetFor({
       }}
     >
       <DialogPortal>
-        <DialogOverlay className="duration-100" />
+        {/* From md up the top bar stays in view above the scrim, so the
+            capsule shows which panel is open (Chat-Bar-v2.dc.html). */}
+        <DialogOverlay className="duration-100 md:top-16" />
         <DialogPrimitive.Content
           data-testid="panel-sheet"
           data-panel={id}
@@ -145,7 +147,7 @@ function SheetFor({
                 .querySelector<HTMLElement>(`[data-capsule="${id}"]`)
                 ?.focus();
           }}
-          className="bg-background text-foreground border-border data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 mx-auto flex max-w-[1240px] flex-col overflow-hidden duration-100 outline-none sm:inset-4 sm:rounded-xl sm:border sm:shadow-lg md:inset-6"
+          className="bg-background text-foreground border-border data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 mx-auto flex max-w-[1240px] flex-col overflow-hidden duration-100 outline-none sm:inset-4 sm:rounded-xl sm:border sm:shadow-lg md:inset-6 md:top-[72px]"
         >
           <div className="border-border flex shrink-0 items-center gap-3 border-b px-4 py-2 sm:px-5">
             <Icon className="text-muted-foreground size-4" aria-hidden />

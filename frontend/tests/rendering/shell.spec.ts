@@ -669,3 +669,30 @@ test("below 900 px of main area the capsule shows icons only, named and with too
   expect(title.x + title.width).toBeLessThanOrEqual(box.x);
   expect(box.x + box.width).toBeLessThanOrEqual(search.x);
 });
+
+test("with a panel open the top bar stays in view, so the capsule shows which panel it is", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await serve(page);
+  await page.goto("/workspace/chats");
+  await capsule(page, "agents").click();
+  await expect(sheet(page)).toBeVisible();
+  // A modal dialog turns pointer events off outside itself, and
+  // elementFromPoint skips such elements: turn them back on for the button,
+  // so only something drawn over it (the scrim) can hide it.
+  const onTop = await capsule(page, "agents").evaluate((el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    el.style.pointerEvents = "auto";
+    const hit = document.elementFromPoint(
+      r.left + r.width / 2,
+      r.top + r.height / 2,
+    );
+    el.style.pointerEvents = "";
+    return !!hit && el.contains(hit);
+  });
+  expect(onTop).toBe(true);
+  await expect(capsule(page, "agents")).toHaveAttribute("aria-pressed", "true");
+  const s = (await sheet(page).boundingBox())!;
+  expect(s.y).toBeGreaterThanOrEqual(64);
+});
