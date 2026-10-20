@@ -75,7 +75,15 @@ export async function discardBuilt(id: string): Promise<void> {
     method: "DELETE",
   });
   if (!response.ok && response.status !== 204) {
-    throw new Error(`${response.status}: could not discard`);
+    // e.g. 502: a container could not be removed, so nothing was deleted.
+    let detail = response.statusText;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      // the status line is all there is
+    }
+    throw new Error(`Not deleted: ${detail}`);
   }
 }
 
