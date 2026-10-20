@@ -63,6 +63,9 @@ class PendingActionResponse(BaseModel):
     origin_source: str = ""
     #: The sentence the card shows, e.g. "Suggested by content from web_fetch".
     origin_label: str = ""
+    #: For a subagent's request: the agent the content reached it through.
+    #: The full path is `delegation_chain`.
+    origin_via: str = ""
     confirmable_by_typing: bool = True
 
 
@@ -186,6 +189,7 @@ def _view(action, threshold: int) -> PendingActionResponse:
         origin=action.origin,
         origin_source=action.origin_source,
         origin_label=action.origin_label(),
+        origin_via=action.origin_via,
         confirmable_by_typing=action.confirmable_by_typing,
     )
 

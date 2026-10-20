@@ -53,6 +53,7 @@ def _to_dict(action: PendingAction) -> dict:
         "outcome_reason": action.outcome_reason,
         "origin": action.origin,
         "origin_source": action.origin_source,
+        "origin_via": action.origin_via,
     }
 
 
@@ -72,6 +73,7 @@ def _from_dict(raw: dict) -> PendingAction:
         # rather than being assumed to be the user's own request.
         origin=raw.get("origin") or "unknown",
         origin_source=raw.get("origin_source") or "",
+        origin_via=raw.get("origin_via") or "",
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):

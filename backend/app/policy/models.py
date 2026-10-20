@@ -165,28 +165,37 @@ class PendingAction:
     origin: str = "user"
     #: For origin "content": the tool(s) whose output suggested it.
     origin_source: str = ""
+    #: For an invited agent (a subagent): the agent whose turn the content or
+    #: automation reached it through. Empty when the cause was direct.
+    origin_via: str = ""
 
     @property
     def confirmable_by_typing(self) -> bool:
         return self.origin == "user"
 
+    def _cause(self) -> str:
+        """'content from web_fetch' / 'an automation'; '' when it cannot be said."""
+        if self.origin == "content":
+            return f"content from {self.origin_source or 'a tool result'}"
+        if self.origin == "automation":
+            return "an automation"
+        return ""
+
     def origin_label(self) -> str:
         """The sentence the card and the plan show; empty for the user's own request."""
         if self.origin == "user":
             return ""
-        if self.origin == "content":
-            return f"Suggested by content from {self.origin_source or 'a tool result'}"
-        if self.origin == "automation":
-            return "Suggested by an automation"
-        return "I could not tell what suggested this"
+        cause = self._cause()
+        if not cause:
+            return "I could not tell what suggested this"
+        return f"Suggested via {self.origin_via} from {cause}" if self.origin_via else f"Suggested by {cause}"
 
     def origin_reason(self) -> str:
         """Why a typed confirmation does not count, as a clause."""
-        if self.origin == "content":
-            return f"suggested by content from {self.origin_source or 'a tool result'}, not by you"
-        if self.origin == "automation":
-            return "suggested by an automation, not by you"
-        return "proposed without a request I could trace to you"
+        cause = self._cause()
+        if not cause:
+            return "proposed without a request I could trace to you"
+        return f"suggested via {self.origin_via} from {cause}, not by you" if self.origin_via else f"suggested by {cause}, not by you"
 
     def origin_note(self) -> str:
         """The plan's sentence about its cause; empty for the user's own request."""

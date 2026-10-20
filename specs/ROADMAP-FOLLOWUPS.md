@@ -172,7 +172,9 @@ Phase 1 (a214aaf) made the FR-029 re-check run on both confirmation routes, comp
 
 ## Subagent provenance: `delegation_chain` is never set (audit P-5)
 
-Nothing in production sets it; the subagent executor's context is `{thread_id, app_config}`, so a subagent's Tier 3 request is recorded as `lead_agent` with an empty chain (FR-033 unmet). `PolicyMiddleware` also never suspends, so confirming a subagent-only tool raises `LookupError`. **Reopens with**: the subagent suspend/resume work (003 FR-031/032).
+**Provenance part FIXED 2026-10-19 (branch `005-followups-policy`).** The subagent executor now starts each subagent from `omniharness.agents.invitation.invited_agent_context`: its requester, its `delegation_chain` (`lead_agent → <subagent>`), and the origin of the lead turn that delegated (user, content from `<source>`, automation, or unknown). Provenance only degrades. A subagent's Tier 3 request is labelled on the card ("Suggested via lead_agent from content from web_fetch", plus "via lead_agent → researcher") and can be confirmed by a typed "yes" only when the lead's turn came from the user's own message. Agents invited with @ (Phase 2) must use the same function. Tests: `backend/tests/policy/test_subagent_provenance.py`.
+
+**Still open**: `PolicyMiddleware` never suspends, so confirming a subagent-only tool from the lead's chat or card raises `LookupError` (reported as `failed`). The same applies to a confirmed `task` from the card: the confirmation route rebuilds tools without `subagent_enabled`, so `task` is not among them. **Reopens with**: the subagent suspend/resume work (003 FR-031/032).
 
 ## The watcher's UNKNOWN state is unreachable (audit W-2)
 

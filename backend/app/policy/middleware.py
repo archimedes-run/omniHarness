@@ -76,13 +76,17 @@ class PolicyMiddleware(AgentMiddleware):
     # -- the chokepoint ----------------------------------------------------
 
     def wrap_tool_call(self, request, handler):
+        from omniharness.agents.invitation import inviting_turn
+
         decision = self._classify(request)
 
         if decision.tier is Tier.TIER_1:
-            return handler(request)
+            with inviting_turn(self._inviting_for(request)):
+                return handler(request)
 
         if decision.tier is Tier.TIER_2:
-            result = handler(request)
+            with inviting_turn(self._inviting_for(request)):
+                result = handler(request)
             self.ledger.record(
                 tool_name=decision.tool_name,
                 arguments=self._arguments(request),
@@ -93,13 +97,19 @@ class PolicyMiddleware(AgentMiddleware):
         return self._require_confirmation(request, decision)
 
     async def awrap_tool_call(self, request, handler):
+        # Any agent this call invites (the `task` tool) starts from this
+        # call's provenance, not as the user (omniharness.agents.invitation).
+        from omniharness.agents.invitation import inviting_turn
+
         decision = self._classify(request)
 
         if decision.tier is Tier.TIER_1:
-            return await handler(request)
+            with inviting_turn(self._inviting_for(request)):
+                return await handler(request)
 
         if decision.tier is Tier.TIER_2:
-            result = await handler(request)
+            with inviting_turn(self._inviting_for(request)):
+                result = await handler(request)
             # PASS THE TARGETS WHEN THEY WERE GENUINELY RESOLVED, and not
             # otherwise. `covered()` requires the reply to name every target,
             # so handing it the fallback — a repr of the whole call — makes
@@ -312,9 +322,9 @@ class PolicyMiddleware(AgentMiddleware):
         it is marked with what caused it, and an action not caused by the
         user's own latest message can only be confirmed with the card's button.
         """
-        origin, origin_source = self._origin(request)
+        origin, origin_source, origin_via = self._origin(request)
         if origin != "user":
-            logger.warning("policy: %s was suggested by %s %s; it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source)
+            logger.warning("policy: %s was suggested by %s %s (via %s); it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source, origin_via or "-")
 
         tool_name = decision.tool_name
         arguments = self._arguments(request)
@@ -334,6 +344,7 @@ class PolicyMiddleware(AgentMiddleware):
             delegation_chain=self._delegation_chain(request),
             origin=origin,
             origin_source=origin_source,
+            origin_via=origin_via,
         )
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
@@ -405,13 +416,41 @@ class PolicyMiddleware(AgentMiddleware):
                 lines.append("Waiting for you: confirm on the card, or reply yes.")
         return "\n".join(lines)
 
-    def _origin(self, request) -> tuple[str, str]:
-        """What caused this call: the user, content the agent read, or a trigger."""
+    def _origin(self, request) -> tuple[str, str, str]:
+        """What caused this call: (origin, source, via).
+
+        An INVITED agent (a subagent, an @-invited agent) has no user of its
+        own: its first message is the instructions its inviter wrote. So where
+        lineage finds "the user", an invited agent gets its inviter's origin
+        instead (omniharness.agents.invitation). Content it read itself stays
+        content. Either way provenance only degrades; an invited context with
+        no origin recorded is "unknown", never "user".
+        """
+        from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY, INVITED_SOURCE_KEY, INVITED_VIA_KEY
+
         from .provenance import is_synthetic_turn
 
+        context = self._runtime_context(request) or {}
         state = getattr(request, "state", None) or {}
         messages = state.get("messages") if isinstance(state, dict) else None
-        return initiation_origin(messages, synthetic=is_synthetic_turn(self._runtime_context(request)))
+        own, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
+        invited = INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
+        if not invited or own != "user":
+            return own, source, ""
+        inherited = context.get(INVITED_ORIGIN_KEY) or "unknown"
+        if inherited == "user":
+            return "user", "", ""
+        return inherited, context.get(INVITED_SOURCE_KEY) or "", context.get(INVITED_VIA_KEY) or ""
+
+    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...]) -> Any:
+        """The mark an agent invited during this call starts from."""
+        from omniharness.agents.invitation import TurnOrigin
+
+        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via)
+
+    def _inviting_for(self, request) -> Any:
+        origin, source, via = self._origin(request)
+        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request))
 
     @staticmethod
     def _thread_id(request) -> str | None:
@@ -423,7 +462,7 @@ class PolicyMiddleware(AgentMiddleware):
         """Who asked. FR-031: a subagent's call is classified identically, so
         the requester is not always the lead agent."""
         context = getattr(getattr(request, "runtime", None), "context", None) or {}
-        return context.get("agent_name") or "lead_agent"
+        return context.get("invited_agent") or context.get("agent_name") or "lead_agent"
 
     @staticmethod
     def _delegation_chain(request) -> tuple[str, ...]:
@@ -468,7 +507,14 @@ class PolicyMiddleware(AgentMiddleware):
             )
             return None
 
-        result = run_tool(action.tool_name, action.arguments)
+        # A confirmed `task` invites a subagent: it starts from what caused the
+        # ACTION, not from the turn that confirmed it. Pressing Confirm on
+        # "delegate this" approves the delegation, not whatever the delegate
+        # is later asked to do, so the origin does not upgrade here.
+        from omniharness.agents.invitation import inviting_turn
+
+        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)):
+            result = run_tool(action.tool_name, action.arguments)
         self.pending.resolve(action, Outcome.EXECUTED)
         if self.audit is not None:
             self.audit.record_tier3(action=action, actor=self.actor, now=self.now())
