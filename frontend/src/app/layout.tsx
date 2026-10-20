@@ -7,7 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
 
-// Inter and JetBrains Mono ship in the repo (src/fonts/, SIL OFL 1.1, see
+// Inter and JetBrains Mono ship in the repo (public/fonts/, SIL OFL 1.1, see
 // Inter-OFL.txt and JetBrainsMono-OFL.txt there): no build, CI run or page
 // ever fetches a font from Google. These are the variable-font latin subsets Next's Google font
 // loader used to download; next/font/local preloads them and generates the
@@ -16,14 +16,14 @@ import { detectLocaleServer } from "@/core/i18n/server";
 // src/styles/globals.css and sit ahead of these families in --font-sans and
 // --font-mono.
 const inter = localFont({
-  src: "../fonts/inter-latin.woff2",
+  src: "../../public/fonts/inter-latin.woff2",
   weight: "400 600",
   style: "normal",
   variable: "--font-inter",
   display: "swap",
 });
 const jetbrainsMono = localFont({
-  src: "../fonts/jetbrains-mono-latin.woff2",
+  src: "../../public/fonts/jetbrains-mono-latin.woff2",
   weight: "400 500",
   style: "normal",
   variable: "--font-jetbrains-mono",

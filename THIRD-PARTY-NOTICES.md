@@ -60,7 +60,7 @@ Simple Icons is released under CC0-1.0 (https://github.com/simple-icons/simple-i
 
 ## Fonts (Inter, JetBrains Mono)
 
-Shipped in `frontend/src/fonts/` and served by the app itself; nothing is fetched from Google Fonts at build time or at runtime. The files are the variable-font woff2 subsets that `next/font/google` previously downloaded at build time, committed unmodified:
+Shipped in `frontend/public/fonts/` and served by the app itself (next/font/local for the app, `fonts.css` for the static demo thread artifacts); nothing is fetched from Google Fonts at build time or at runtime. The files are the variable-font woff2 subsets that `next/font/google` previously downloaded at build time, committed unmodified:
 
 | File | sha256 |
 |---|---|
@@ -72,4 +72,4 @@ Shipped in `frontend/src/fonts/` and served by the app itself; nothing is fetche
 - Inter: Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1.
 - JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono). SIL Open Font License 1.1.
 
-Each family's licence, copied verbatim from its upstream repository (`rsms/inter` `LICENSE.txt`, `JetBrains/JetBrainsMono` `OFL.txt`), is next to the files: `frontend/src/fonts/Inter-OFL.txt` and `frontend/src/fonts/JetBrainsMono-OFL.txt`.
+Each family's licence, copied verbatim from its upstream repository (`rsms/inter` `LICENSE.txt`, `JetBrains/JetBrainsMono` `OFL.txt`), is next to the files: `frontend/public/fonts/Inter-OFL.txt` and `frontend/public/fonts/JetBrainsMono-OFL.txt`.
