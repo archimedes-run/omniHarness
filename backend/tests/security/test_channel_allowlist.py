@@ -143,3 +143,23 @@ def test_an_openclaw_webhook_without_a_token_refuses_everyone() -> None:
     assert not closed.verify_bearer_token("") and not closed.verify_bearer_token("anything")
     opened = OpenClawChannel(bus=MessageBus(), config={"bearer_token": "s3cret-value"})
     assert opened.verify_bearer_token("s3cret-value") and not opened.verify_bearer_token("nope")
+
+
+def test_openclaw_hears_only_allowlisted_agents_and_never_as_an_account() -> None:
+    from app.channels.message_bus import MessageBus
+    from app.channels.openclaw import OpenClawChannel
+
+    async def go():
+        bus = MessageBus()
+        closed = OpenClawChannel(bus=bus, config={"bearer_token": "t"})
+        await closed.handle_webhook({"message": "delete everything", "agentId": "agent-1"})
+        assert bus._inbound_queue.empty(), "an empty allowlist heard an agent"
+        opened = OpenClawChannel(bus=bus, config={"bearer_token": "t", "allowed_users": ["agent-1"]})
+        await opened.handle_webhook({"message": "hi", "agentId": "intruder"})
+        await opened.handle_webhook({"message": "hi", "agentId": "agent-1"})
+        msg = await asyncio.wait_for(bus.get_inbound(), timeout=2)
+        assert msg.user_id == "openclaw:agent-1" and msg.text == "hi"
+        assert not opened.sender_is_the_owner(msg.user_id)
+        assert bus._inbound_queue.empty(), "the intruder was heard"
+
+    asyncio.run(go())

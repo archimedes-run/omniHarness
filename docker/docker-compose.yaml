@@ -168,6 +168,8 @@ services:
       - GATEWAY_LOG_FILE=/app/logs/gateway.log
       # Real client IP: forwarded headers are trusted from nginx's fixed address only.
       - GATEWAY_TRUSTED_PROXIES=${OMNI_HARNESS_NGINX_IP:-172.30.226.10}
+      # So the gateway can WARN at startup when nginx is published off loopback.
+      - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
     env_file:
       - ../.env
     extra_hosts:
