@@ -823,3 +823,75 @@ def test_a_confirmed_delegation_runs_off_the_default_thread_pool(gateway, monkey
 
     [name] = names
     assert name.startswith("confirmed-action"), f"the confirmed task ran on {name!r}, the shared pool"
+
+
+# ---------------------------------------------------------------------------
+# A waiting post is DURABLE: it survives a restart and lands exactly once
+# (condition 2: a durable pending record across a restart; never half done)
+# ---------------------------------------------------------------------------
+
+
+def _awaiting(gateway) -> list[dict]:
+    return gateway.client.get("/api/confirmations").json()["awaiting_post"]
+
+
+def _report_count(gateway, thread_id: str, action_id: str) -> int:
+    return [m.get("id") for m in _thread_messages(gateway, thread_id)].count(f"confirmation-{action_id}")
+
+
+def test_a_waiting_post_survives_a_restart_and_lands_exactly_once(gateway, monkeypatch) -> None:
+    from omniharness.runtime.runs.manager import RunManager
+
+    real_drain = RunManager.drain_deferred
+    crashed = {"before_drain": True}
+
+    async def drain(self, thread_id, *, finished_run_id):
+        # The gateway "stops" after the run's last checkpoint and before its
+        # in-memory queue is drained: only the durable record is left.
+        if not crashed["before_drain"]:
+            await real_drain(self, thread_id, finished_run_id=finished_run_id)
+
+    monkeypatch.setattr(RunManager, "drain_deferred", drain)
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    wipe_entered, wipe_release = threading.Event(), threading.Event()
+    HOLD["wipe"] = (wipe_entered, wipe_release)
+    box: dict = {}
+    confirming = threading.Thread(target=lambda: box.update(resp=gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={})))
+    confirming.start()
+    assert wipe_entered.wait(30)
+    run_id, release = _start_held_run(gateway, thread_id, "the late reply")
+    wipe_release.set()
+    confirming.join(30)
+    assert box["resp"].json()["detail"]["post_queued"] is True
+    release.set()
+    _join(gateway, thread_id, run_id)
+    HOLD.clear()
+
+    assert _report_count(gateway, thread_id, wipe["id"]) == 0
+    assert [a["id"] for a in _awaiting(gateway)] == [wipe["id"]], "a waiting result must be shown as waiting"
+
+    crashed["before_drain"] = False
+    gateway.restart()  # a NEW create_app() over the same database and policy state
+
+    assert _report_count(gateway, thread_id, wipe["id"]) == 1, "the waiting result did not land exactly once after the restart"
+    assert _awaiting(gateway) == []
+    gateway.restart()
+    assert _report_count(gateway, thread_id, wipe["id"]) == 1, "a second restart posted it again"
+    assert RAN == [("wipe_backup", {"name": "nightly"})], "the confirmed call ran again"
+
+
+def test_a_post_recorded_as_waiting_but_already_written_is_not_added_twice(gateway) -> None:
+    """The gateway stopped after the write and before recording it: the
+    fixed message id keeps the startup drain from adding it again."""
+    from app.policy.pending import PendingStore
+    from omniharness.config import get_app_config
+
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    assert gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()["detail"]["posted_to_thread"] is True
+    store = PendingStore(directory=Path(get_app_config().policy.state_dir) / "pending")
+    store.set_post_state(wipe["id"], "waiting")
+
+    gateway.restart()
+
+    assert _report_count(gateway, thread_id, wipe["id"]) == 1
+    assert _awaiting(gateway) == []

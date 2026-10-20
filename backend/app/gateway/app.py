@@ -348,6 +348,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             startup_check(app.state.config)
         except Exception:
             logger.exception("policy: the startup tool-coverage check failed")
+        # Confirmed results still waiting to be posted into their chat (the
+        # gateway stopped while a reply held the thread): posted now, once.
+        try:
+            from app.gateway.routers.confirmations import drain_waiting_posts
+
+            posted = await drain_waiting_posts(app)
+            if posted:
+                logger.info("Posted %d confirmed result(s) that were waiting", posted)
+        except Exception:
+            logger.exception("Confirmed results waiting to post could not be posted at startup")
 
         # Start the trigger engine, in exactly one worker.
         #

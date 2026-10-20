@@ -59,6 +59,8 @@ def _to_dict(action: PendingAction) -> dict:
         "surface": action.surface,
         "delegation_key": action.delegation_key,
         "result_excerpt": action.result_excerpt,
+        "post_state": action.post_state,
+        "post_content": action.post_content,
     }
 
 
@@ -84,6 +86,8 @@ def _from_dict(raw: dict) -> PendingAction:
         surface=dict(raw.get("surface") or {}),
         delegation_key=raw.get("delegation_key") or "",
         result_excerpt=raw.get("result_excerpt") or "",
+        post_state=raw.get("post_state") or "",
+        post_content=raw.get("post_content") or "",
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
@@ -156,6 +160,26 @@ class PendingStore:
             if action and action.outcome is None and not action.is_expired(now):
                 out.append(action)
         return out
+
+    def awaiting_post(self) -> list[PendingAction]:
+        """Confirmed actions whose result is not yet in their thread."""
+        out = []
+        for path in sorted(self.directory.glob("*.json")):
+            action = self.get(path.stem)
+            if action and action.post_state == "waiting":
+                out.append(action)
+        return out
+
+    def set_post_state(self, action_id: str, state: str, content: str | None = None) -> None:
+        """Record the post's progress on the stored action (re-read first, so
+        the resolution saved meanwhile is never overwritten)."""
+        action = self.get(action_id)
+        if action is None:
+            return
+        action.post_state = state
+        if content is not None:
+            action.post_content = content
+        self.save(action)
 
     def claim(self, action_id: str, claimant: str) -> PendingAction | None:
         """Take exclusive ownership. Returns the claimed action for exactly one

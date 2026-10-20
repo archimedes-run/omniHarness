@@ -79,8 +79,20 @@ class PendingActionResponse(BaseModel):
     arguments_display: dict[str, str] | None = None
 
 
+class AwaitingPost(BaseModel):
+    """A confirmed action whose result has run but is not yet in its chat."""
+
+    id: str
+    thread_id: str | None = None
+    tool_name: str
+    requester: str
+
+
 class PendingListResponse(BaseModel):
     actions: list[PendingActionResponse]
+    #: Results that ran and are waiting to be posted into their chat (the chat
+    #: was replying, or the gateway restarted first). Shown, never hidden.
+    awaiting_post: list[AwaitingPost] = Field(default_factory=list)
     #: FR-008. `readable=False` means we could not tell what is pending, which
     #: is a different fact from nothing being pending. A UI that renders an
     #: empty list for both tells the user the opposite of the truth in one case.
@@ -240,21 +252,27 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
     return run
 
 
-async def _append_to_checkpoint(request: Request, thread_id: str, message: Any) -> bool:
+async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any) -> bool:
     """Append one message to a thread's latest checkpoint, then READ IT BACK.
 
     True only when the message is in the thread's latest checkpoint afterwards:
-    "posted" is never claimed from the write call alone.
+    "posted" is never claimed from the write call alone. IDEMPOTENT by the
+    message's id: a post retried (after a restart) is never added twice.
     """
-    from app.gateway.deps import get_checkpointer
     from omniharness.utils.time import now_iso
 
-    checkpointer = get_checkpointer(request)
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+
+    def has_it(snapshot: Any) -> bool:
+        stored = ((getattr(snapshot, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or []
+        return any(getattr(m, "id", None) == message.id for m in stored)
+
     try:
         current = await checkpointer.aget_tuple(config)
         if current is None:
             return False
+        if has_it(current):
+            return True
         checkpoint: dict[str, Any] = dict(getattr(current, "checkpoint", {}) or {})
         metadata: dict[str, Any] = dict(getattr(current, "metadata", {}) or {})
         values: dict[str, Any] = dict(checkpoint.get("channel_values", {}))
@@ -262,16 +280,14 @@ async def _append_to_checkpoint(request: Request, thread_id: str, message: Any) 
         checkpoint["channel_values"] = values
         metadata.update({"updated_at": now_iso(), "source": "update", "step": metadata.get("step", 0) + 1})
         await checkpointer.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, checkpoint, metadata, {})
-        after = await checkpointer.aget_tuple(config)
-        stored = ((getattr(after, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or []
-        return any(getattr(m, "id", None) == message.id for m in stored)
+        return has_it(await checkpointer.aget_tuple(config))
     except Exception:  # noqa: BLE001 — reported to the caller, which says so
         logger.warning("could not post the confirmed result to thread %s", thread_id, exc_info=True)
         return False
 
 
-async def post_to_thread(request: Request, thread_id: str, message: Any) -> str:
-    """Post one message into a thread: "written", "queued" or "failed".
+async def post_result(*, checkpointer: Any, run_manager: Any, store: Any, action: Any, message: Any) -> str:
+    """Post a confirmed result into its thread: "written", "queued" or "failed".
 
     How a call confirmed from its CARD reaches the conversation: the card's
     route has no run to answer in, so the result is written into the thread,
@@ -282,15 +298,51 @@ async def post_to_thread(request: Request, thread_id: str, message: Any) -> str:
     runs was overwritten by the run's next step and the result vanished from
     the chat (review of PR #58). The run manager writes it now if the thread is
     idle, with no run able to start meanwhile, or queues it until the run ends.
-    """
-    from app.gateway.deps import get_run_manager
 
-    run_manager = get_run_manager(request)
+    DURABLE: the action records "waiting" (with the report's text) BEFORE the
+    write, and "posted" once it is read back. A post still waiting when the
+    gateway stops is written at the next startup (drain_waiting_posts), so a
+    confirmed result is never silently left out of the chat.
+    """
+    store.set_post_state(action.id, "waiting", str(message.content))
 
     async def write() -> bool:
-        return await _append_to_checkpoint(request, thread_id, message)
+        written = await _append_to_checkpoint(checkpointer, action.thread_id, message)
+        if written:
+            store.set_post_state(action.id, "posted")
+        return written
 
-    return await run_manager.write_when_idle(thread_id, write)
+    return await run_manager.write_when_idle(action.thread_id, write)
+
+
+async def drain_waiting_posts(app: Any) -> int:
+    """At gateway startup: post every confirmed result still waiting.
+
+    Called from the lifespan. No run is in flight at startup, so each is
+    written now (through the run manager all the same); one already in its
+    thread (the gateway stopped after the write, before recording it) is only
+    marked posted, never added twice. Returns how many were posted.
+    """
+    from app.policy.registration import build
+    from app.policy.surface_run import report_message
+    from omniharness.config import get_app_config
+
+    middleware = build(get_app_config())
+    checkpointer = getattr(app.state, "checkpointer", None)
+    run_manager = getattr(app.state, "run_manager", None)
+    if middleware is None or checkpointer is None or run_manager is None:
+        return 0
+    posted = 0
+    for action in middleware.pending.awaiting_post():
+        if not action.thread_id:
+            continue
+        message = report_message(action, None, content=action.post_content)
+        outcome = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=action, message=message)
+        if outcome == "written":
+            posted += 1
+        else:
+            logger.warning("a confirmed result for thread %s is still waiting to post (%s)", action.thread_id, outcome)
+    return posted
 
 
 def _arguments_for_display(arguments: dict[str, Any]) -> dict[str, str]:
@@ -344,11 +396,16 @@ def read_pending(middleware, now: datetime) -> PendingListResponse:
     try:
         rules = middleware.loader.load()
         actions = middleware.pending.open_actions(now)
+        waiting = middleware.pending.awaiting_post()
     except Exception as exc:  # noqa: BLE001 — FR-008: say we cannot tell
         logger.exception("the pending set could not be read")
         return PendingListResponse(actions=[], readable=False, error=str(exc))
 
-    return PendingListResponse(actions=[_view(a, rules.threshold_targets) for a in actions], readable=True)
+    return PendingListResponse(
+        actions=[_view(a, rules.threshold_targets) for a in actions],
+        awaiting_post=[AwaitingPost(id=a.id, thread_id=a.thread_id, tool_name=a.tool_name, requester=a.requester) for a in waiting],
+        readable=True,
+    )
 
 
 @router.get("", response_model=PendingListResponse)
@@ -412,7 +469,9 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
         # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
         # written and read back; "queued" when a run started on the chat while
         # this one ran, so it lands when that run ends.
-        posted = await post_to_thread(request, action.thread_id, report)
+        from app.gateway.deps import get_checkpointer, get_run_manager
+
+        posted = await post_result(checkpointer=get_checkpointer(request), run_manager=get_run_manager(request), store=middleware.pending, action=action, message=report)
         detail["posted_to_thread"] = posted == "written"
         detail["post_queued"] = posted == "queued"
         if posted == "queued":
