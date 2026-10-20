@@ -18,6 +18,7 @@ selected here" is a different fact from "not authorised", and is shown as one.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -40,6 +41,14 @@ class ToolSource(BaseModel):
     error: str | None = None
     #: Only meaningful when a conversation was asked about.
     selected: bool | None = None
+    #: Feature 006: when a call to this source last came back without error
+    #: (OBSERVED working), and when one last failed. None: never seen.
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    #: The last failure's error, redacted for display.
+    last_error: str | None = None
+    #: True when last_error could not be safely redacted and is withheld.
+    last_error_withheld: bool = False
 
 
 class ToolSourcesView(BaseModel):
@@ -63,13 +72,16 @@ def describe_tool_sources(
     authorised: set[str] | None,
     selected: set[str] | None,
     thread_id: str | None = None,
+    health: dict[str, Any] | None = None,
 ) -> ToolSourcesView:
     """Pure: configured servers, what their last load did, and connector state.
 
     `servers` is extensions_config's mcpServers (name -> config with `enabled`);
     `last_loads` the harness load report; `authorised` the toolkit slugs with an
     ACTIVE connection, or None when Composio is not available; `selected` the
-    conversation's namespaced source ids, or None for no conversation.
+    conversation's namespaced source ids, or None for no conversation;
+    `health` what the tool-call chokepoint observed per source id
+    (ToolSourceHealthRepository.for_user), or None when it cannot be read.
     """
     out: list[ToolSource] = []
     for name in EXPECTED_LOCAL_SOURCES:
@@ -104,6 +116,16 @@ def describe_tool_sources(
         else:
             state = "authorised-selected" if sid in selected else "authorised-not-selected"
         out.append(ToolSource(id=sid, name=toolkit.get("name", slug), kind="connector", state=state, selected=(sid in selected) if selected is not None else None))
+
+    for source in out:
+        observed = (health or {}).get(source.id)
+        if observed is not None:
+            source.last_success_at = observed.last_success_at
+            source.last_failure_at = observed.last_failure_at
+            if observed.last_error:
+                from app.gateway.display_redaction import for_display
+
+                source.last_error, source.last_error_withheld = for_display(observed.last_error)
 
     failing = sum(1 for s in out if s.state == "unreachable")
     return ToolSourcesView(sources=out, failing=failing, thread_id=thread_id, connectors_available=authorised is not None)

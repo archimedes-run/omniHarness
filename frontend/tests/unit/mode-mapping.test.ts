@@ -49,7 +49,7 @@ function contextFor(mode: Mode, reasoningEffortOverride?: string) {
   };
 }
 
-/** Mirror of input-box.tsx:91-102 — the resolver that stuck. */
+/** Mirror of chat-bar/logic.ts getResolvedMode — the resolver that stuck. */
 function getResolvedMode(
   mode: Mode | undefined,
   supportsThinking: boolean,

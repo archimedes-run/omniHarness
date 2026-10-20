@@ -124,6 +124,12 @@ def _build_runtime_middlewares(
     middlewares.append(SandboxAuditMiddleware())
     middlewares.append(ToolErrorHandlingMiddleware())
 
+    # Feature 006: inside the error handler, so it sees a failing call's
+    # exception, and inside the policy layer, so a blocked call is not counted.
+    from omniharness.agents.middlewares.tool_source_health_middleware import ToolSourceHealthMiddleware
+
+    middlewares.append(ToolSourceHealthMiddleware())
+
     # Feature 003 policy layer (FR-001, FR-002). LAST in the list, which places
     # it OUTERMOST at the tool-call chokepoint: middleware compose first-defined
     # = outermost for wrap_tool_call, so appending here means every other

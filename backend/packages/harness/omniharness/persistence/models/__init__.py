@@ -23,6 +23,7 @@ from omniharness.persistence.models.run_event import RunEventRow
 from omniharness.persistence.run.model import RunRow
 from omniharness.persistence.thread_meta.model import ThreadMetaRow
 from omniharness.persistence.thread_tool_selection.model import ThreadToolSelectionRow
+from omniharness.persistence.tool_source_health.model import ToolSourceHealthRow
 from omniharness.persistence.user.model import UserRow
 from omniharness.persistence.user_preferences.model import UserPreferenceRow
 from omniharness.persistence.workflow_artifact_links.model import WorkflowArtifactLinkRow
@@ -46,6 +47,7 @@ __all__ = [
     "RunRow",
     "ThreadMetaRow",
     "ThreadToolSelectionRow",
+    "ToolSourceHealthRow",
     "UserPreferenceRow",
     "UserRow",
     "WorkflowArtifactLinkRow",
