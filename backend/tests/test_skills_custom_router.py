@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from _router_auth_helpers import make_authed_test_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -38,10 +39,27 @@ def _make_skill(name: str, *, enabled: bool) -> Skill:
 
 
 def _make_test_app(config) -> FastAPI:
+    """The router with a stubbed signed-in user holding every permission.
+
+    Ownership (a custom skill reaches only its owner) is tested through the
+    production gateway in tests/studio/test_studio_ownership.py; this bare
+    app has no account database to decide who the owner is, so the check is
+    overridden here and these tests cover the routes' own behaviour."""
     app = make_authed_test_app()
     app.state.config = config
     app.include_router(skills_router.router)
+    app.dependency_overrides[skills_router._own_custom_skill] = lambda: None
     return app
+
+
+@pytest.fixture(autouse=True)
+def _every_custom_skill_is_listed(monkeypatch):
+    """Lists filter by owner; with no account database, list them all."""
+
+    async def allowed(request, owner):
+        return True
+
+    monkeypatch.setattr("app.gateway.ownership.can_access", allowed)
 
 
 def _make_skill_archive(tmp_path: Path, name: str, content: str | None = None) -> Path:
