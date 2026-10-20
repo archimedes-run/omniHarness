@@ -15,6 +15,8 @@ import {
   matchText,
   toCron,
 } from "@/core/automations/schedule";
+import { idFromName, quietHoursText } from "@/core/automations/wording";
+import type { QuietHoursView } from "@/core/triggers/types";
 import { cn } from "@/lib/utils";
 
 /** What each trigger type can put into a prompt (app/trigger_engine/config.py
@@ -33,7 +35,7 @@ const WATCHER_EVENTS = [
 const DESTINATIONS = [
   { value: "auto", label: "Automatic (Telegram when I'm away)" },
   { value: "remote", label: "Telegram" },
-  { value: "quiet", label: "Quietly, in the app only" },
+  { value: "quiet", label: "Home, quietly (in the app only)" },
   { value: "local", label: "On this machine" },
 ];
 
@@ -45,21 +47,56 @@ function zones(): string[] {
   }
 }
 
-const FIELD =
-  "border-input bg-background text-foreground rounded-md border px-2 py-1.5 text-sm";
+function browserZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
 
+/** A blank automation: what "New automation" starts from. */
+export function blankRule(): RuleDoc {
+  return {
+    id: "",
+    name: "",
+    type: "cron",
+    enabled: true,
+    match: { schedule: "0 9 * * 1-5", timezone: browserZone() },
+    prompt: "",
+    destination: "auto",
+    urgent: false,
+  };
+}
+
+const FIELD =
+  "border-input bg-background text-foreground min-h-11 rounded-md border px-2 py-1.5 text-sm md:min-h-9";
+
+/**
+ * Create or edit one automation. Every save goes through the one validated
+ * write path (POST or PUT /api/automations/rules), naming the version of the
+ * rule file it was based on; the engine's reason for refusing is shown inline,
+ * and the rules in force are untouched.
+ */
 export function RuleForm({
   initial,
   mode,
   version,
   writable,
+  takenIds = [],
+  quietHours,
   onSaved,
+  onCancel,
 }: {
   initial: RuleDoc;
   mode: "create" | "edit";
   version: string | null;
   writable: boolean;
+  /** Ids already in use: a new automation's id is made free of them. */
+  takenIds?: string[];
+  quietHours?: QuietHoursView | null;
   onSaved?: (id: string) => void;
+  onCancel?: () => void;
 }) {
   const save = useSaveRule();
   const [rule, setRule] = useState<RuleDoc>(initial);
@@ -71,6 +108,12 @@ export function RuleForm({
   const [cron, setCron] = useState(schedule);
   const [saved, setSaved] = useState(false);
   const timezone = matchText(rule.match.timezone);
+  // A new automation's id comes from its name (or the template's id), free
+  // of the ids in use; an existing one's never changes (it keys its thread).
+  const id =
+    mode === "create"
+      ? idFromName(rule.name?.trim() ? rule.name : initial.id, takenIds)
+      : rule.id;
 
   const set = (patch: Partial<RuleDoc>) => {
     setSaved(false);
@@ -78,6 +121,14 @@ export function RuleForm({
   };
   const setMatch = (patch: Record<string, unknown>) =>
     set({ match: { ...rule.match, ...patch } });
+  const setType = (type: string) =>
+    set({
+      type,
+      match:
+        type === "cron"
+          ? { timezone: timezone || browserZone() }
+          : { event: "waiting-on-user" },
+    });
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -89,12 +140,13 @@ export function RuleForm({
             schedule: raw ? cron.trim() : toCron({ time, days }),
           }
         : rule.match;
+    const body: RuleDoc = { ...rule, id, match, name: rule.name?.trim() ?? "" };
     save.mutate(
-      { rule: { ...rule, match }, version, create: mode === "create" },
+      { rule: body, version, create: mode === "create" },
       {
         onSuccess: () => {
           setSaved(true);
-          onSaved?.(rule.id);
+          onSaved?.(id);
         },
       },
     );
@@ -102,31 +154,71 @@ export function RuleForm({
 
   return (
     <form
-      className="space-y-5"
+      className="flex flex-col gap-5"
       onSubmit={submit}
-      aria-label="Automation"
+      aria-label={mode === "create" ? "New automation" : "Edit automation"}
       data-testid="rule-form"
     >
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">Name</span>
+        <Input
+          value={rule.name ?? ""}
+          onChange={(e) => set({ name: e.target.value })}
+          placeholder="Morning brief"
+          maxLength={80}
+          required={mode === "create"}
+          aria-describedby="name-hint"
+          data-testid="rule-name"
+        />
+        <span id="name-hint" className="text-muted-foreground text-xs">
+          {mode === "create" ? (
+            <>
+              Saved as <span className="font-mono">{id}</span>, which keys its
+              conversation and history and cannot change later.
+            </>
+          ) : (
+            <>
+              Its id stays <span className="font-mono">{rule.id}</span>.
+            </>
+          )}
+        </span>
+      </label>
+
       {mode === "create" && (
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">Name</span>
-          <Input
-            value={rule.id}
-            onChange={(e) => set({ id: e.target.value })}
-            aria-describedby="id-hint"
-            required
-          />
-          <span id="id-hint" className="text-muted-foreground text-xs">
-            A short id, like weekly-review. It cannot be changed later.
-          </span>
-        </label>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-medium">Trigger</legend>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { value: "cron", label: "On a schedule" },
+              { value: "watcher", label: "When a coding session changes" },
+            ].map((option) => (
+              <label
+                key={option.value}
+                className={cn(
+                  "border-input flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm md:min-h-9",
+                  rule.type === option.value && "border-primary bg-primary/10",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="trigger-type"
+                  value={option.value}
+                  checked={rule.type === option.value}
+                  onChange={() => setType(option.value)}
+                  className="accent-primary"
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
       )}
 
       {rule.type === "cron" && (
-        <fieldset className="space-y-2">
-          <legend className="text-sm font-medium">When</legend>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-medium">When</legend>
           {raw ? (
-            <label className="block space-y-1">
+            <label className="flex flex-col gap-1">
               <span className="text-muted-foreground text-xs">
                 Cron expression (minute hour day month weekday)
               </span>
@@ -137,6 +229,7 @@ export function RuleForm({
                   setCron(e.target.value);
                 }}
                 aria-label="Cron expression"
+                className="font-mono"
               />
             </label>
           ) : (
@@ -154,7 +247,11 @@ export function RuleForm({
                   aria-label="Time"
                 />
               </label>
-              <div className="flex gap-1" role="group" aria-label="Days">
+              <div
+                className="flex flex-wrap gap-1"
+                role="group"
+                aria-label="Days"
+              >
                 {DAY_NAMES.map((name, i) => {
                   const day = i as Day;
                   const on = days.includes(day);
@@ -170,10 +267,10 @@ export function RuleForm({
                         );
                       }}
                       className={cn(
-                        "rounded-md border px-2 py-1 text-xs",
+                        "min-h-11 min-w-11 rounded-md border px-2 text-xs md:min-h-8 md:min-w-10",
                         on
                           ? "bg-primary text-primary-foreground border-primary"
-                          : "border-input text-muted-foreground hover:bg-muted",
+                          : "border-input text-foreground-2 hover:bg-accent",
                       )}
                     >
                       {name}
@@ -189,7 +286,7 @@ export function RuleForm({
               <Input
                 list="tz-list"
                 value={timezone}
-                placeholder="UTC"
+                placeholder="America/New_York"
                 onChange={(e) => setMatch({ timezone: e.target.value })}
                 className="w-60"
                 aria-label="Time zone"
@@ -216,12 +313,13 @@ export function RuleForm({
       )}
 
       {rule.type === "watcher" && (
-        <label className="block space-y-1">
+        <label className="flex flex-col gap-1">
           <span className="text-sm font-medium">When</span>
           <select
             className={cn(FIELD, "block w-full")}
             value={matchText(rule.match.event)}
             onChange={(e) => setMatch({ event: e.target.value })}
+            aria-label="Watcher event"
           >
             {WATCHER_EVENTS.map((ev) => (
               <option key={ev.value} value={ev.value}>
@@ -232,27 +330,30 @@ export function RuleForm({
         </label>
       )}
 
-      <label className="block space-y-1">
-        <span className="text-sm font-medium">What to ask</span>
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">What to do</span>
         <Textarea
           value={rule.prompt}
           onChange={(e) => set({ prompt: e.target.value })}
           rows={3}
+          placeholder="Brief me on what is waiting."
           aria-describedby="prompt-hint"
+          data-testid="rule-prompt"
         />
         <span id="prompt-hint" className="text-muted-foreground text-xs">
-          Can use:{" "}
+          What the assistant is asked each time. It can use:{" "}
           {(FIELDS[rule.type] ?? []).map((f) => `{${f}}`).join(", ") || "none"}
         </span>
       </label>
 
-      <div className="flex flex-wrap items-center gap-6">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <label className="flex items-center gap-2 text-sm">
-          Send to
+          Send
           <select
             className={FIELD}
             value={rule.destination}
             onChange={(e) => set({ destination: e.target.value })}
+            aria-label="Destination"
           >
             {DESTINATIONS.map((d) => (
               <option key={d.value} value={d.value}>
@@ -261,19 +362,24 @@ export function RuleForm({
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-0">
           <input
             type="checkbox"
             checked={Boolean(rule.urgent)}
             onChange={(e) => set({ urgent: e.target.checked })}
+            className="accent-primary size-4"
           />
-          May interrupt quiet hours
+          Urgent: may interrupt quiet hours
+          <span className="text-muted-foreground">
+            ({quietHoursText(quietHours, timezone)})
+          </span>
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-0">
           <input
             type="checkbox"
             checked={rule.enabled}
             onChange={(e) => set({ enabled: e.target.checked })}
+            className="accent-primary size-4"
           />
           On
         </label>
@@ -293,9 +399,20 @@ export function RuleForm({
         </p>
       )}
 
-      <Button type="submit" disabled={!writable || !version || save.isPending}>
-        {mode === "create" ? "Create automation" : "Save changes"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="submit"
+          disabled={!writable || !version || save.isPending}
+          data-testid="rule-submit"
+        >
+          {mode === "create" ? "Create automation" : "Save changes"}
+        </Button>
+        {onCancel && (
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
     </form>
   );
 }

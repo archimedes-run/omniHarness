@@ -25,12 +25,25 @@ from ._store import JsonStore
 logger = logging.getLogger(__name__)
 
 
+#: The zone a rule that names none is evaluated in: the user's (Feature 006).
+#:
+#: MIGRATION: before 006 such a rule ran in UTC (this function returned `t`
+#: unchanged, and the engine stamps `now` in UTC). A rule written without a
+#: `match.timezone` now fires at its schedule's clock time in New York, so
+#: "0 9 * * *" moves from 09:00 UTC to 09:00 America/New_York. Rules that name
+#: a zone keep it. To keep the old behaviour, add "timezone": "UTC" to the
+#: rule's match. Fired instants are keyed in UTC (Scheduler._key), so the
+#: change cannot re-fire an instant that already fired.
+DEFAULT_TIMEZONE = "America/New_York"
+
+
 def _local(t: datetime, tz: str | None) -> datetime:
-    """`t` in the rule's zone. croniter evaluates the expression in the zone of
-    the datetime it is given, so "45 8 * * 1-5" in America/New_York is 12:45
-    UTC in summer and 13:45 UTC in winter — DST handled by the zone, not by
-    hand-converting the schedule to UTC (which is wrong half the year)."""
-    return t.astimezone(ZoneInfo(tz)) if tz else t
+    """`t` in the rule's zone (DEFAULT_TIMEZONE when it names none). croniter
+    evaluates the expression in the zone of the datetime it is given, so
+    "45 8 * * 1-5" in America/New_York is 12:45 UTC in summer and 13:45 UTC in
+    winter — DST handled by the zone, not by hand-converting the schedule to
+    UTC (which is wrong half the year)."""
+    return t.astimezone(ZoneInfo(tz or DEFAULT_TIMEZONE))
 
 
 def next_due(expr: str, after: datetime, tz: str | None = None) -> datetime:

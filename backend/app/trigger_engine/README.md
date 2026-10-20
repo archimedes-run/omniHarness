@@ -108,3 +108,12 @@ existed for, and the sabotage step is what found that.
 Gate 4's whitelist **self-expires**: every deferred entry names the task that
 wires it, and the gate fails once that task is marked complete. It went 43 → 20
 → 13 as phases closed, by construction rather than by anyone remembering.
+
+## Migration (Feature 006): the default time zone is America/New_York
+
+A cron rule whose `match` names no `timezone` used to run in UTC. It now runs in
+the user's zone, `America/New_York` (`scheduler.DEFAULT_TIMEZONE`): `"0 9 * * *"`
+fires at 09:00 New York time, not 09:00 UTC. Rules that name a zone keep it. To
+keep the old behaviour for a rule, add `"timezone": "UTC"` to its `match`. The
+engine logs one line per such rule when it loads the rule file. Fired instants
+are keyed in UTC, so the change never re-fires an instant that already fired.

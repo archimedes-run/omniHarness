@@ -45,7 +45,9 @@ describe("the schedule form round-trips what it can show", () => {
     expect(describeSchedule("45 8 * * 1-5", "America/New_York")).toBe(
       "Weekdays at 08:45 (America/New_York)",
     );
-    expect(describeSchedule("0 10 * * 0,6")).toBe("Weekends at 10:00 (UTC)");
+    expect(describeSchedule("0 10 * * 0,6")).toBe(
+      "Weekends at 10:00 (America/New_York)",
+    );
     expect(describeSchedule("*/15 * * * *", "UTC")).toBe(
       'Cron "*/15 * * * *" (UTC)',
     );

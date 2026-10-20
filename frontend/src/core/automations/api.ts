@@ -4,6 +4,8 @@ import { getBackendBaseURL } from "@/core/config";
 /** A rule as the rule file holds it (app/trigger_engine/config.py). */
 export interface RuleDoc {
   id: string;
+  /** Display name; the id stays the key. */
+  name?: string;
   type: string;
   enabled: boolean;
   match: Record<string, unknown>;

@@ -25,7 +25,10 @@ function useRuleWrite<T>(fn: (input: T) => Promise<{ version: string }>) {
   return useMutation({
     mutationFn: fn,
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: ["triggerRules"] }),
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["triggerRules"] }),
+        queryClient.invalidateQueries({ queryKey: ["triggerRuns"] }),
+      ]),
   });
 }
 

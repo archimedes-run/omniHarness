@@ -1,10 +1,25 @@
 "use client";
 
-import AutomationsPage from "@/app/workspace/automations/page";
+import { useState } from "react";
+
+import {
+  AutomationsBoard,
+  type AutomationSelection,
+} from "@/components/workspace/automations/automations-board";
+import { useAutomationTemplates } from "@/core/automations/hooks";
 
 import type { PanelProps } from "../panels";
 
-/** Automations panel, Phase 1: the Automations page. */
+/** Automations panel (Feature 006, Automations.dc.html): list, history,
+ * editing and new automations, all inside the sheet. */
 export default function AutomationsPanel(_props: PanelProps) {
-  return <AutomationsPage />;
+  const [selection, setSelection] = useState<AutomationSelection>(null);
+  const { templates } = useAutomationTemplates();
+  return (
+    <AutomationsBoard
+      selection={selection}
+      onSelect={setSelection}
+      templates={templates}
+    />
+  );
 }

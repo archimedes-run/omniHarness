@@ -104,8 +104,8 @@ for (const route of ["/workspace/chats/new", "/workspace/home"])
 const PANEL_MARKERS: Record<string, RegExp> = {
   agents: /Custom agents are turned off/,
   skills: /mode=skill/,
-  automations: /What I do without being asked/,
-  tasks: /What you are working toward/,
+  automations: /every weekday at 9, brief me/,
+  tasks: /Evidence is not set up yet/,
 };
 
 for (const route of [

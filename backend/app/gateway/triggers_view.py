@@ -15,16 +15,42 @@ recorded", never as a recorded absence.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel
 
+from app.trigger_engine.scheduler import DEFAULT_TIMEZONE
+
 Activity = Literal["never-evaluated", "evaluated-never-fired", "fired"]
 Recorded = Literal["recorded", "never", "not-recorded"]
+#: When the rule next runs, as far as the server can say (Feature 006):
+#: scheduled (next_run_at holds the instant) · off (the rule is switched off)
+#: · engine-off (nothing runs any rule) · on-event (a watcher rule runs when
+#: its event happens, so there is no time to give) · cant-tell (the schedule
+#: could not be computed; never a guessed time).
+NextRun = Literal["scheduled", "off", "engine-off", "on-event", "cant-tell"]
+#: One run of a rule, as the Automations history words it (Automations.dc.html):
+#: delivered · held-then-delivered · delivered-with-others · failed ·
+#: pending (held or awaiting delivery; not settled) · cant-tell.
+RunKind = Literal["delivered", "held-then-delivered", "delivered-with-others", "failed", "pending", "cant-tell"]
+#: Why a run was held, from the outcome the engine recorded: QUEUED behind an
+#: exchange, SUPPRESSED by quiet hours, or anything else (reason verbatim).
+HeldBecause = Literal["mid-conversation", "quiet-hours", "other"]
+
+#: The coalescing wait every delivery passes through. Not a hold: a run that
+#: only waited for the window was delivered on time.
+COALESCING_REASON = "awaiting the coalescing window"
+
+#: The zone a rule that names none runs in: the engine's own default
+#: (scheduler.DEFAULT_TIMEZONE), so what is shown is when it fires.
+USER_TIMEZONE = DEFAULT_TIMEZONE
 
 
 class RuleView(BaseModel):
     id: str
+    #: The display name the person gave it; empty for a rule written without one.
+    name: str = ""
     type: str
     enabled: bool
     match: dict
@@ -38,6 +64,22 @@ class RuleView(BaseModel):
     last_evaluated: Recorded
     last_fired_at: str | None = None
     last_outcome: str | None = None
+    next_run: NextRun = "cant-tell"
+    #: ISO instant the engine next fires it, when next_run is "scheduled".
+    next_run_at: str | None = None
+    #: When that run will actually be delivered: the end of quiet hours when
+    #: it fires inside them and is not urgent; otherwise next_run_at.
+    deliver_at: str | None = None
+    held_for_quiet_hours: bool = False
+    #: The zone to show its times in: the rule's own, else the user's.
+    timezone: str = "America/New_York"
+
+
+class QuietHoursView(BaseModel):
+    enabled: bool
+    start: str
+    end: str
+    timezone: str
 
 
 class BatchMember(BaseModel):
@@ -58,6 +100,40 @@ class FiringView(BaseModel):
     batch_id: str | None = None
     #: The OTHER firings delivered in the same message, resolved here (T053).
     delivered_with: list[BatchMember] = []
+    #: The conversation the firing ran in, when the record names one.
+    thread_id: str | None = None
+
+
+class RunView(BaseModel):
+    """One run of one rule: every audit record for one event, read together.
+
+    The audit log has a row per state change (held, then delivered), so a
+    single run is several rows. The wording is decided here, from the records,
+    and never guessed: a run whose records do not settle it is `pending` or
+    `cant-tell`, and says so.
+    """
+
+    event_id: str
+    #: When it was due: the scheduled instant for a cron run (its event id),
+    #: otherwise when it was first recorded.
+    at: str
+    kind: RunKind
+    #: When the final record was written (the delivery time, for a held run).
+    settled_at: str
+    #: The final record's reason, VERBATIM (FR-019); empty for a delivery.
+    reason: str = ""
+    held_because: HeldBecause | None = None
+    #: The hold's own reason, verbatim, when held_because is "other".
+    held_reason: str = ""
+    delivered_with: list[BatchMember] = []
+    #: Whether it went out alone is unknown: the record predates batch ids.
+    batch_not_recorded: bool = False
+    thread_id: str | None = None
+
+
+class RunsView(BaseModel):
+    rule_id: str
+    runs: list[RunView]
 
 
 class RulesView(BaseModel):
@@ -72,6 +148,8 @@ class RulesView(BaseModel):
     #: says so, for the page to show instead of edit controls.
     writable: bool = False
     not_writable_reason: str | None = None
+    #: The quiet hours in the rule file (None: the file could not be read).
+    quiet_hours: QuietHoursView | None = None
 
 
 class FiringsView(BaseModel):
@@ -88,8 +166,11 @@ def describe_rules(
     version: str | None = None,
     writable: bool = False,
     not_writable_reason: str | None = None,
+    quiet_hours=None,
+    now: datetime | None = None,
 ) -> RulesView:
     """Pure. `evaluated` maps rule id -> last evaluated ISO time (absent: no record)."""
+    now = now or datetime.now(UTC)
     out = []
     for rule in rules:
         mine = [e for e in audit if e.get("rule_id") == rule.id]
@@ -110,6 +191,7 @@ def describe_rules(
         out.append(
             RuleView(
                 id=rule.id,
+                name=getattr(rule, "name", ""),
                 type=str(rule.type),
                 enabled=rule.enabled,
                 match=dict(rule.match),
@@ -121,9 +203,47 @@ def describe_rules(
                 last_evaluated=recorded,
                 last_fired_at=last.get("at") if last else None,
                 last_outcome=last.get("outcome") if last else None,
+                timezone=(rule.match.get("timezone") if isinstance(rule.match, dict) else None) or USER_TIMEZONE,
+                **next_run(rule, now=now, engine_enabled=engine_enabled, quiet_hours=quiet_hours),
             )
         )
-    return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error, version=version, writable=writable, not_writable_reason=not_writable_reason)
+    qh = None
+    if quiet_hours is not None:
+        qh = QuietHoursView(enabled=quiet_hours.enabled, start=quiet_hours.start, end=quiet_hours.end, timezone=quiet_hours.timezone)
+    return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error, version=version, writable=writable, not_writable_reason=not_writable_reason, quiet_hours=qh)
+
+
+def next_run(rule, *, now: datetime, engine_enabled: bool, quiet_hours=None) -> dict:
+    """When `rule` next runs, computed with the scheduler's own function (the
+    one the engine fires by), in the rule's zone. Never a guess: a schedule that
+    cannot be computed is "cant-tell".
+
+    Quiet hours are the engine's own check (politeness.quiet_hours): a run that
+    fires inside them, and is not urgent, is held and delivered when they end,
+    so deliver_at says that time."""
+    from app.trigger_engine.politeness.quiet_hours import QuietHours, should_suppress
+    from app.trigger_engine.scheduler import next_due
+
+    if not engine_enabled:
+        return {"next_run": "engine-off"}
+    if not rule.enabled:
+        return {"next_run": "off"}
+    if str(rule.type) != "cron":
+        return {"next_run": "on-event"}
+    try:
+        due = next_due(str(rule.match["schedule"]), now, rule.match.get("timezone") or None)
+    except Exception:  # noqa: BLE001 — any failure means "cannot say", not a time
+        return {"next_run": "cant-tell"}
+    out = {"next_run": "scheduled", "next_run_at": due.isoformat(), "deliver_at": due.isoformat()}
+    if quiet_hours is not None:
+        window = QuietHours(start=quiet_hours.start, end=quiet_hours.end, enabled=quiet_hours.enabled, timezone=quiet_hours.timezone)
+        held, _ = should_suppress(rule.urgent, window, due)
+        if held:
+            out["held_for_quiet_hours"] = True
+            from zoneinfo import ZoneInfo
+
+            out["deliver_at"] = window.next_end(due.astimezone(ZoneInfo(window.timezone))).isoformat()
+    return out
 
 
 def describe_firings(audit: list[dict], *, limit: int = 200) -> FiringsView:
@@ -152,6 +272,95 @@ def describe_firings(audit: list[dict], *, limit: int = 200) -> FiringsView:
                 batch=batch,
                 batch_id=e.get("batch_id"),
                 delivered_with=mates,
+                thread_id=e.get("thread_id"),
             )
         )
     return FiringsView(firings=out)
+
+
+def _mates(entry: dict, audit: list[dict]) -> list[BatchMember]:
+    bid = entry.get("batch_id")
+    if not bid:
+        return []
+    seen: set[tuple[str, str]] = set()
+    out = []
+    for m in audit:
+        key = (m.get("rule_id", ""), m.get("event_id", ""))
+        if m.get("batch_id") == bid and key != (entry.get("rule_id"), entry.get("event_id")) and key not in seen:
+            seen.add(key)
+            out.append(BatchMember(rule_id=key[0], event_id=key[1]))
+    return out
+
+
+def _held(rows: list[dict]) -> tuple[HeldBecause, str] | None:
+    """The first real hold among a run's earlier records, if any."""
+    for r in rows:
+        if r.get("outcome") == "suppressed":
+            return "quiet-hours", r.get("reason", "")
+        if r.get("outcome") == "queued" and r.get("reason", "") != COALESCING_REASON:
+            reason = r.get("reason", "")
+            return ("mid-conversation" if reason.startswith("user is mid-exchange") else "other"), reason
+    return None
+
+
+def _instant(value: str) -> datetime:
+    try:
+        t = datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
+
+
+def _due_at(event_type: str, event_id: str, fallback: str) -> str:
+    if event_type == "cron":
+        try:
+            return datetime.fromisoformat(event_id).isoformat()
+        except ValueError:
+            pass
+    return fallback
+
+
+def describe_runs(audit: list[dict], rule_id: str, *, limit: int = 50) -> RunsView:
+    """Pure. One rule's runs, newest first, each worded from its records."""
+    groups: dict[str, list[dict]] = {}
+    for e in audit:
+        if e.get("rule_id") == rule_id:
+            groups.setdefault(e.get("event_id", ""), []).append(e)
+    runs = []
+    for event_id, rows in groups.items():
+        rows.sort(key=lambda e: e.get("at", ""))
+        final = rows[-1]
+        outcome = final.get("outcome")
+        held = _held(rows[:-1])
+        thread = next((r.get("thread_id") for r in reversed(rows) if r.get("thread_id")), None)
+        run = RunView(
+            event_id=event_id,
+            at=_due_at(final.get("event_type", ""), event_id, rows[0].get("at", "")),
+            kind="cant-tell",
+            settled_at=final.get("at", ""),
+            reason=final.get("reason", "") if outcome != "delivered" else "",
+            thread_id=thread,
+        )
+        if outcome == "delivered":
+            mates = _mates(final, audit)
+            run.delivered_with = mates
+            run.batch_not_recorded = "batch_id" not in final
+            if held is not None:
+                run.kind = "held-then-delivered"
+                run.held_because, why = held
+                run.held_reason = why if run.held_because == "other" else ""
+            elif mates:
+                run.kind = "delivered-with-others"
+            else:
+                run.kind = "delivered"
+        elif outcome in ("failed", "expired"):
+            run.kind = "failed"
+        elif outcome in ("queued", "suppressed"):
+            run.kind = "pending"
+            hold = _held([final])
+            if hold is not None:
+                run.held_because, why = hold
+                run.held_reason = why if run.held_because == "other" else ""
+        runs.append(run)
+    runs.sort(key=lambda r: _instant(r.at), reverse=True)
+    return RunsView(rule_id=rule_id, runs=runs[:limit])

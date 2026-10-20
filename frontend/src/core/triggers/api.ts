@@ -1,7 +1,7 @@
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
-import type { FiringsView, RulesView } from "./types";
+import type { FiringsView, RulesView, RunsView } from "./types";
 
 // A failed read throws, so the page shows "I cannot read the trigger records"
 // rather than treating an error body as data.
@@ -13,3 +13,5 @@ async function read<T>(path: string): Promise<T> {
 
 export const loadRules = () => read<RulesView>("/api/triggers/rules");
 export const loadFirings = () => read<FiringsView>("/api/triggers/firings");
+export const loadRuns = (ruleId: string) =>
+  read<RunsView>(`/api/triggers/rules/${encodeURIComponent(ruleId)}/runs`);
