@@ -65,8 +65,6 @@ SECRET_KEY_NAME = re.compile(
 )
 
 _BOOL_OR_NUMBER = re.compile(r"^(?:true|false|yes|no|on|off|none|null|[-+]?\d+(?:\.\d+)?)$", re.IGNORECASE)
-#: A run of base64 split over lines (MIME wraps at 76 columns).
-_WRAPPED_B64 = re.compile(r"(?:[A-Za-z0-9+/_=-]{8,}[ \t]*\r?\n[ \t]*)+[A-Za-z0-9+/_=-]{4,}")
 
 
 def _char_pattern(c: str) -> str:
@@ -113,15 +111,47 @@ VIEW_DEPTH = 2
 def _direct_pass(text: str, pattern: re.Pattern[str]) -> tuple[str, int]:
     out, n = pattern.subn(MARKER, text)
 
-    def _wrapped(m: re.Match[str]) -> str:
-        nonlocal n
-        joined = re.sub(r"\s+", "", m.group(0))
-        if pattern.search(joined):
-            n += 1
-            return MARKER
-        return m.group(0)
+    if "\n" not in out:
+        return out, n
+    out, m = _wrapped_blocks(out, pattern)
+    return out, n + m
 
-    return _WRAPPED_B64.sub(_wrapped, out), n
+
+_B64_FULL = re.compile(r"[A-Za-z0-9+/_=-]{4,}")
+_B64_TRAIL = re.compile(r"[A-Za-z0-9+/_=-]{8,}$")
+_B64_LEAD = re.compile(r"^[A-Za-z0-9+/_=-]{4,}")
+
+
+def _wrapped_blocks(text: str, pattern: re.Pattern[str]) -> tuple[str, int]:
+    """Base64 wrapped over lines (MIME): a block that starts with a line's
+    trailing base64 token, runs through whole base64 lines, and ends with the
+    next line's leading token. When the block, joined, holds a known value,
+    the block is replaced. Linear in the text (a line-by-line scan, not a
+    backtracking regex over the whole text)."""
+    lines = text.split("\n")
+    stripped = [ln.rstrip("\r").strip() for ln in lines]
+    full = [bool(_B64_FULL.fullmatch(s)) for s in stripped]
+    out: list[str] = []
+    n, i = 0, 0
+    while i < len(lines):
+        trail = _B64_TRAIL.search(stripped[i]) if i < len(lines) - 1 else None
+        if trail:
+            j = i + 1
+            while j < len(lines) and full[j]:
+                j += 1
+            lead = _B64_LEAD.match(stripped[j]) if j < len(lines) else None
+            last = j if lead else j - 1
+            if last > i:
+                joined = trail.group(0) + "".join(stripped[i + 1 : j]) + (lead.group(0) if lead else "")
+                if pattern.search(joined):
+                    # The whole block becomes one marker, on one line.
+                    n += 1
+                    out.append(stripped[i][: trail.start()] + MARKER + (stripped[j][lead.end() :] if lead else ""))
+                    i = last + 1
+                    continue
+        out.append(lines[i])
+        i += 1
+    return ("\n".join(out), n) if n else (text, 0)
 
 
 _JSON_ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|[nrtbf/\\\"])")
