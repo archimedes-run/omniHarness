@@ -448,6 +448,9 @@ for (const surface of SURFACES) {
  */
 test.describe("Settings > Appearance", () => {
   const PREF = "**/api/preferences/appearance";
+  /** Hydrated: before it, a click lands on server-rendered markup. */
+  const ready = (page: Page) =>
+    page.locator('[role="radiogroup"][data-ready]').waitFor();
 
   test("choosing Dark applies it and saves it to the account", async ({
     page,
@@ -465,6 +468,7 @@ test.describe("Settings > Appearance", () => {
     });
     await page.addInitScript(() => localStorage.setItem("theme", "light"));
     await page.goto("/workspace/settings/appearance");
+    await ready(page);
     const dark = page.getByTestId("theme-option-dark");
     await expect(dark).toHaveAttribute("role", "radio");
     await dark.click();
@@ -484,7 +488,10 @@ test.describe("Settings > Appearance", () => {
     );
     await page.addInitScript(() => localStorage.setItem("theme", "light"));
     await page.goto("/workspace/settings/appearance");
-    await page.getByTestId("theme-option-light").focus();
+    await ready(page);
+    const light = page.getByTestId("theme-option-light");
+    await expect(light).toHaveAttribute("aria-checked", "true");
+    await light.focus();
     await page.keyboard.press("ArrowRight");
     await expect(page.getByTestId("theme-option-dark")).toBeFocused();
     await expect(page.getByTestId("theme-option-dark")).toHaveAttribute(
@@ -500,6 +507,7 @@ test.describe("Settings > Appearance", () => {
         : route.fulfill(ok({ appearance: "system", chosen: false })),
     );
     await page.goto("/workspace/settings/appearance");
+    await ready(page);
     await page.getByTestId("theme-option-dark").click();
     await expect(page.getByTestId("appearance-save-state")).toContainText(
       "Could not save to your account",

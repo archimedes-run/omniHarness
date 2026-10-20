@@ -3,6 +3,7 @@
 import { MonitorSmartphoneIcon, MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -40,7 +41,24 @@ type SaveState = "idle" | "saving" | "saved" | "failed";
 export function AppearanceSettingsPage() {
   const { t, locale, changeLocale } = useI18n();
   const { theme, setTheme } = useTheme();
-  const currentTheme: Appearance = isAppearance(theme) ? theme : "system";
+  // What is selected comes from next-themes' own cache (localStorage), read
+  // once mounted, and then follows every change of `theme`. Measured in
+  // tests/rendering/theme.spec.ts: on this lazily loaded page, `theme` alone
+  // read undefined or "system" while the page was painted light from the
+  // cache, so the wrong card was selected.
+  const [choice, setChoice] = useState<Appearance | null>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(true);
+    try {
+      const cached = localStorage.getItem("theme");
+      if (isAppearance(cached)) setChoice(cached);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    if (isAppearance(theme)) setChoice(theme);
+  }, [theme]);
+  const currentTheme: Appearance = choice ?? "system";
   const [save, setSave] = useState<SaveState>("idle");
   const latest = useRef(0);
 
@@ -72,6 +90,7 @@ export function AppearanceSettingsPage() {
   // Apply at once, then remember it on the server for this user. A failed
   // save is said in words: this browser still remembers it, the account does not.
   const choose = (value: Appearance) => {
+    setChoice(value);
     setTheme(value);
     const call = ++latest.current;
     setSave("saving");
@@ -104,6 +123,7 @@ export function AppearanceSettingsPage() {
       >
         <div
           role="radiogroup"
+          data-ready={ready || undefined}
           aria-label={t.settings.appearance.themeTitle}
           className="grid gap-3 sm:grid-cols-3"
         >
