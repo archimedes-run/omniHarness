@@ -76,14 +76,14 @@ test("a capsule panel opens in under 150 ms, cold and warm", async ({
     await page.goto("/workspace/chats", { waitUntil: "networkidle" });
     cold.push(
       await page.evaluate<{ sheet: number; code: number; content: number }>(
-        `(${OPEN})(["agents", "perf-agent"])`,
+        `(${OPEN})(["agents", "Perf agent"])`,
       ),
     );
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("panel-sheet")).toHaveCount(0);
     warm.push(
       await page.evaluate<{ sheet: number; code: number; content: number }>(
-        `(${OPEN})(["agents", "perf-agent"])`,
+        `(${OPEN})(["agents", "Perf agent"])`,
       ),
     );
     await context.close();

@@ -1,10 +1,10 @@
 "use client";
 
-import { AgentGallery } from "@/components/workspace/agents/agent-gallery";
+import { AgentStudio } from "@/components/workspace/agents/studio/agent-studio";
 
 import type { PanelProps } from "../panels";
 
-/** Agents panel, Phase 1: the agent gallery as it is on /workspace/agents. */
+/** Agents panel, Phase 3: Agent Studio (Agent-Studio.dc.html). */
 export default function AgentsPanel(_props: PanelProps) {
-  return <AgentGallery />;
+  return <AgentStudio />;
 }

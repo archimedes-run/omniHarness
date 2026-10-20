@@ -1,14 +1,10 @@
 "use client";
 
-import { SkillSettingsPage } from "@/components/workspace/settings/skill-settings-page";
+import { SkillStudio } from "@/components/workspace/skills/studio/skill-studio";
 
 import type { PanelProps } from "../panels";
 
-/** Skills panel, Phase 1: the Settings > Skills page. */
-export default function SkillsPanel({ onClose }: PanelProps) {
-  return (
-    <div className="mx-auto w-full max-w-3xl p-6">
-      <SkillSettingsPage onClose={onClose} />
-    </div>
-  );
+/** Skills panel, Phase 3: Skill Studio (Skill-Studio.dc.html). */
+export default function SkillsPanel(_props: PanelProps) {
+  return <SkillStudio />;
 }
