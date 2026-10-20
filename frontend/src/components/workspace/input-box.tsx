@@ -26,7 +26,6 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
-import { BrandLogo } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -42,6 +41,7 @@ import { useModels } from "@/core/models/hooks";
 import type { AgentThreadContext } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
+import { AgentAvatar } from "./chat-bar/agent-avatar";
 import {
   EffortMenu,
   ModeMenu,
@@ -337,9 +337,7 @@ export function InputBox({
                 ? a.description || "Start the chat with this agent"
                 : MULTI_AGENT_LATER,
           disabled: !isNewChat || a.name === threadAgent,
-          leading: (
-            <BrandLogo source={null} name={a.name} size={26} decorative />
-          ),
+          leading: <AgentAvatar id={a.name} name={a.name} />,
         }))
       : commandMatches.map((c) => ({
           key: c.name,

@@ -13,6 +13,7 @@ import {
   rowAction,
   selectedIntegrations,
   showsReasoningEffort,
+  statusLine,
   statusWord,
 } from "@/components/workspace/chat-bar/logic";
 import type { ToolSource } from "@/core/tool-sources/types";
@@ -243,5 +244,65 @@ describe("skills chip (read-only, Open Question 7)", () => {
     expect(agentSkills(["a", "b", "c"], ["b", "z"])).toEqual(["b"]);
     expect(agentSkills(["a", "b"], null)).toEqual(["a", "b"]);
     expect(agentSkills(["a", "b"], [])).toEqual([]);
+  });
+});
+
+describe("two-stage status: Connected, then Live · last worked", () => {
+  it("a connector reads Connected until a call from it has worked", () => {
+    expect(statusWord(src("connector:GMAIL", "authorised"))).toBe("Connected");
+    expect(
+      statusWord(
+        src("connector:GMAIL", "authorised", {
+          last_success_at: "2026-10-19T09:00:00Z",
+        }),
+      ),
+    ).toBe("Live");
+  });
+
+  it("a failure alone never makes it Live", () => {
+    expect(
+      statusWord(
+        src("connector:GMAIL", "authorised-selected", {
+          last_failure_at: "2026-10-19T09:00:00Z",
+          last_error: "401",
+        }),
+      ),
+    ).toBe("Connected");
+  });
+
+  it("the line says when it last worked, or what was observed instead", () => {
+    const ago = () => "5 minutes ago";
+    expect(
+      statusLine(
+        { status: "Live", lastWorkedAt: "2026-10-19T09:00:00Z", toolCount: 4 },
+        ago,
+      ),
+    ).toBe("Live · last worked 5 minutes ago");
+    expect(
+      statusLine({ status: "Live", lastWorkedAt: null, toolCount: 4 }, ago),
+    ).toBe("Live · 4 tools");
+    expect(
+      statusLine(
+        { status: "Connected", lastWorkedAt: null, toolCount: null },
+        ago,
+      ),
+    ).toBe("Connected");
+  });
+
+  it("rows carry the observed time from the view", () => {
+    const rows = integrationRows(
+      [item("connector:GMAIL")],
+      [
+        src("connector:GMAIL", "authorised", {
+          last_success_at: "2026-10-19T09:00:00Z",
+        }),
+      ],
+      new Set(),
+      new Set(),
+    );
+    expect(rows[0]).toMatchObject({
+      status: "Live",
+      lastWorkedAt: "2026-10-19T09:00:00Z",
+    });
   });
 });

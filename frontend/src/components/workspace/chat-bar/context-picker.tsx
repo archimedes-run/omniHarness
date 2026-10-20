@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDistanceToNowStrict } from "date-fns";
 import { LockIcon, PaperclipIcon, SearchIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,8 +13,17 @@ import type { Agent } from "@/core/agents/types";
 import type { Project } from "@/core/ledger/types";
 import { cn } from "@/lib/utils";
 
+import { AgentAvatar } from "./agent-avatar";
 import type { PickerTab } from "./commands";
-import { rowAction, type IntegrationRow, type StatusWord } from "./logic";
+import {
+  rowAction,
+  statusLine,
+  type IntegrationRow,
+  type StatusWord,
+} from "./logic";
+
+const ago = (iso: string) =>
+  formatDistanceToNowStrict(new Date(iso), { addSuffix: true });
 
 export const MCP_SUITE_HREF = "/workspace/connections";
 
@@ -322,7 +332,7 @@ function AgentsTab({
       <ul className="flex flex-col px-1.5 pb-1.5" aria-label="Agents">
         {filtered.map((a) => (
           <Row key={a.name}>
-            <BrandLogo source={null} name={a.name} size={26} decorative />
+            <AgentAvatar id={a.name} name={a.name} />
             <span className="min-w-0 flex-1">
               <span className="block truncate">{a.name}</span>
               {a.description && (
@@ -439,10 +449,7 @@ function IntegrationsTab({
                 className={cn("text-xs", STATUS_CLASS[row.status])}
                 data-testid="integration-status"
               >
-                {row.status}
-                {row.status === "Live" &&
-                  row.toolCount != null &&
-                  ` · ${row.toolCount} tools`}
+                {statusLine(row, ago)}
               </span>
               {action.kind === "link" ? (
                 <Link

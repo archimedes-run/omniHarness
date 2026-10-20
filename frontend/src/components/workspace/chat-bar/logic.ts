@@ -57,9 +57,11 @@ export type StatusWord =
 
 /**
  * design-notes.md §Status vocabulary. One word per gateway state, said in
- * words. "Live" only for a local server whose load was observed; a Composio
- * connection is only REPORTED active, so it reads "Connected". "Not checked
- * yet" and "Status unknown" are can't-tell, never Live and never Off.
+ * words. "Live" only for what was observed working: a local server that
+ * loaded, or a connector whose tool call has come back without error
+ * (last_success_at, recorded at the tool-call chokepoint). A Composio
+ * connection with no such call is only REPORTED active: "Connected". "Not
+ * checked yet" and "Status unknown" are can't-tell, never Live and never Off.
  */
 export function statusWord(source: ToolSource | undefined): StatusWord {
   if (!source) return "Status unknown";
@@ -69,7 +71,7 @@ export function statusWord(source: ToolSource | undefined): StatusWord {
     case "authorised":
     case "authorised-selected":
     case "authorised-not-selected":
-      return "Connected";
+      return source.last_success_at ? "Live" : "Connected";
     case "disabled":
       return "Off";
     case "unreachable":
@@ -124,6 +126,8 @@ export interface IntegrationRow {
   toolCount: number | null;
   /** The real load error of an unreachable source. */
   error: string | null;
+  /** When a call to it last worked (observed); null when never seen. */
+  lastWorkedAt: string | null;
   selected: boolean;
   pinned: boolean;
 }
@@ -158,6 +162,7 @@ export function integrationRows(
       status: sources ? statusWord(src) : "Status unknown",
       toolCount: src?.tool_count ?? null,
       error: src?.error ?? null,
+      lastWorkedAt: src?.last_success_at ?? null,
       selected: isPinned || selected.has(item.tool_id),
       pinned: isPinned,
     };
@@ -173,6 +178,7 @@ export function integrationRows(
       status: statusWord(s),
       toolCount: s.tool_count,
       error: s.error,
+      lastWorkedAt: s.last_success_at ?? null,
       selected: false,
       pinned: pinned.has(s.id),
     });
@@ -234,4 +240,18 @@ export function findTrigger(text: string, caret: number): Trigger | null {
 /** Agents are mentioned by name; a name with spaces is written with dashes. */
 export function mentionToken(name: string): string {
   return `@${name.trim().replace(/\s+/g, "-")}`;
+}
+
+/**
+ * The status line: "Live · last worked 5 min ago" once a call is known to have
+ * worked, "Live · 4 tools" for a loaded server with no call seen, else the word.
+ */
+export function statusLine(
+  row: Pick<IntegrationRow, "status" | "lastWorkedAt" | "toolCount">,
+  ago: (iso: string) => string,
+): string {
+  if (row.status !== "Live") return row.status;
+  if (row.lastWorkedAt) return `Live · last worked ${ago(row.lastWorkedAt)}`;
+  if (row.toolCount != null) return `Live · ${row.toolCount} tools`;
+  return "Live";
 }
