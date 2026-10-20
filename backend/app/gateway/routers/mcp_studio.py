@@ -306,7 +306,7 @@ async def create_mcp_server(
             interrupt_after=None,
         )
     )
-    record.task = task
+    run_mgr.attach_task(record, task)
 
     return McpServerCreateResponse(server_id=server_id, thread_id=thread_id)
 
