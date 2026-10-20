@@ -249,7 +249,9 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 )
                 if retriable:
                     self._record_failure()
-                return AIMessage(content=self._build_user_message(exc, reason))
+                # Tagged in structure, so a caller can tell "the model failed"
+                # from an answer without reading the text.
+                return AIMessage(content=self._build_user_message(exc, reason), additional_kwargs={LLM_ERROR_KEY: True})
 
     @override
     async def awrap_model_call(
@@ -295,7 +297,13 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 )
                 if retriable:
                     self._record_failure()
-                return AIMessage(content=self._build_user_message(exc, reason))
+                # Tagged in structure, so a caller can tell "the model failed"
+                # from an answer without reading the text.
+                return AIMessage(content=self._build_user_message(exc, reason), additional_kwargs={LLM_ERROR_KEY: True})
+
+
+#: Set on the AIMessage this middleware returns in place of a failed model call.
+LLM_ERROR_KEY = "llm_error"
 
 
 def _matches_any(detail: str, patterns: tuple[str, ...]) -> bool:
