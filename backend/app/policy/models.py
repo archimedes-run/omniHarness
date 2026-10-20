@@ -132,6 +132,10 @@ class PolicyDecision:
     tier: Tier
     deciding_rule: ClassificationRule | None
     raised_by: RuleException | None = None
+    #: No rule names this tool (and the rules were readable): it is not offered
+    #: to the model and a call to it is not run (007). `tier` is then
+    #: meaningless and is never acted on.
+    refused: bool = False
 
 
 @dataclass

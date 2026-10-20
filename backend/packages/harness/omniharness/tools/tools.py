@@ -365,18 +365,22 @@ def apply_connector_tool_surface(config, connector_tools: list[BaseTool]) -> lis
             if server is not None:
                 break
         surface = getattr(server, "tools", None)
-        # Case-insensitively: the deny list is written `send_email` and the
-        # connector names the same capability `GMAIL_SEND_EMAIL`. A guarantee
-        # that depends on matching case is not a guarantee.
+        # Case-insensitively (via `permits`): the deny list is written
+        # `send_email` and the connector names the same capability
+        # `GMAIL_SEND_EMAIL`. A guarantee that depends on matching case is not
+        # a guarantee.
         # `server_name`, not the loop variable `name`: when no MCP servers are
         # configured the loop never runs and `name` is unbound. That passed on a
         # machine with an extensions_config.json and raised UnboundLocalError in
         # CI, which has none — a test inheriting ambient state, one day after
         # Article XIV was extended to say exactly that.
-        candidates = {unprefixed, unprefixed.lower(), unprefixed.upper()}
-        if server_name and unprefixed.upper().startswith(f"{server_name.upper()}_"):
-            bare = unprefixed[len(server_name) + 1 :]
-            candidates |= {bare, bare.lower(), bare.upper()}
+        # `permits` compares in canonical form (omniharness.tools.names), so
+        # only the toolkit's own repeated prefix (`GMAIL_`) is stripped here.
+        from omniharness.tools.names import canonical_tool_name
+
+        candidates = {unprefixed}
+        if server_name and canonical_tool_name(unprefixed).startswith(f"{canonical_tool_name(server_name)}_"):
+            candidates.add(unprefixed[len(server_name) + 1 :])
         if surface is None or all(surface.permits(c) for c in candidates):
             kept.append(tool)
         else:
