@@ -6,16 +6,33 @@ process knows many of its secrets by value: it read them from `.env`,
 config.yaml, the extensions config, the MCP secrets vault and the OAuth
 credential stores, and it receives fresh ones every time an OAuth token is
 refreshed. Every one of those values is registered here, and `redact()` replaces
-each occurrence, in its raw, base64 and URL-encoded forms, before any pattern
-pass runs.
+each occurrence before any pattern pass runs. It matches:
 
-What this does NOT do: catch a secret this process never loaded, or one embedded
-inside a larger encoded blob (base64 of "user:secret" is not base64 of
-"secret"). Those are left to the pattern pass. The limit is stated here, not
-implied away.
+  * the value in any letter case;
+  * with any of its characters JSON-escaped (\\uXXXX, \\/) or percent-encoded
+    (either hex case), so URL-, form- and JSON-encoded copies, and mixtures;
+  * as hex (either case);
+  * as base64 and base64url at all three byte alignments, so the value is found
+    inside a larger encoded body (a mail, a header), with or without padding;
+  * as base64 wrapped over several lines (MIME, 76 columns): a base64 block
+    that contains a known value once its line breaks are removed is replaced
+    whole.
 
-Values shorter than MIN_LENGTH are not registered: replacing every "true" or
-"8001" in a run would garble it without protecting anything.
+WHAT IT STILL CANNOT CATCH, stated rather than implied away: a secret this
+process never loaded; one compressed, encrypted, hashed or transformed in any
+way other than the encodings above (gzip, rot13, reversed, split by other
+text); one split across separate strings (the run store joins content parts
+for this, see store.redact_tree); one encoded twice. Those are left to the
+pattern pass, which has its own stated limits.
+
+LENGTH FLOOR, decided. A value under SECRET_MIN (4) characters is never
+registered: "1" or "abc" would be replaced everywhere and protect nothing. A
+value of 4 to 7 characters is registered only when it is KNOWN to be a secret
+(a secret-named key such as PIN or PASS, or an explicit register_secret hook),
+and is then matched only as a whole word, raw, never inside a longer token and
+never in encoded forms: "483920" is redacted where it stands alone, not inside
+"2483920". Any other value must be at least MIN_LENGTH (8) characters and look
+like a secret (see `secret_values_in`).
 """
 
 from __future__ import annotations
@@ -30,34 +47,63 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, quote_plus, urlsplit
+from urllib.parse import quote, urlsplit
 
 logger = logging.getLogger(__name__)
 
 MARKER = "[redacted]"
+#: Values not known to be secrets must be at least this long.
 MIN_LENGTH = 8
+#: Nothing shorter is ever registered (see the module docstring).
+SECRET_MIN = 4
 
-#: A key whose name says it holds a secret: its value is registered whatever it
-#: looks like (above MIN_LENGTH).
+#: A key whose name says it holds a secret: its value is registered whatever its
+#: shape (numbers included), from SECRET_MIN characters.
 SECRET_KEY_NAME = re.compile(
-    r"(secret|token|passw|pwd|api_?key|apikey|access_?key|private|credential|auth|cookie|session|signature|vault|dsn|webhook|bearer|(^|_)key$|^key)",
+    r"(secret|token|pass|pwd|(^|_)pin($|_)|otp|cvv|api_?key|apikey|access_?key|private|credential|auth|cookie|session|signature|vault|dsn|webhook|bearer|(^|_)key$|^key)",
     re.IGNORECASE,
 )
 
 _BOOL_OR_NUMBER = re.compile(r"^(?:true|false|yes|no|on|off|none|null|[-+]?\d+(?:\.\d+)?)$", re.IGNORECASE)
+#: A run of base64 split over lines (MIME wraps at 76 columns).
+_WRAPPED_B64 = re.compile(r"(?:[A-Za-z0-9+/_=-]{8,}[ \t]*\r?\n[ \t]*)+[A-Za-z0-9+/_=-]{4,}")
 
 
-def encoded_forms(value: str) -> set[str]:
-    """The raw value and the encodings a secret commonly travels in."""
-    raw = value.encode()
-    forms = {value}
-    for enc in (base64.b64encode(raw).decode(), base64.urlsafe_b64encode(raw).decode()):
-        forms.add(enc)
-        forms.add(enc.rstrip("="))
-    forms.add(quote(value, safe=""))
-    forms.add(quote_plus(value, safe=""))
-    forms.add(quote(value))
-    return {f for f in forms if len(f) >= MIN_LENGTH}
+def _char_pattern(c: str) -> str:
+    """One character: literal, JSON-escaped, or percent-encoded."""
+    alts = [re.escape(c), re.escape(f"\\u{ord(c):04x}") if ord(c) < 0x10000 else None]
+    pct = quote(c, safe="")
+    if pct != c:
+        alts.append(re.escape(pct))
+    if c == "/":
+        alts.append(re.escape("\\/"))
+    if c == " ":
+        alts.append(re.escape("+"))
+    alts = [a for a in alts if a]
+    return alts[0] if len(alts) == 1 else "(?:" + "|".join(alts) + ")"
+
+
+def _b64_segments(raw: bytes) -> set[str]:
+    """The base64/base64url characters fixed by `raw` alone, at each of the
+    three byte alignments it can start at inside a larger body."""
+    out: set[str] = set()
+    for k in range(3):
+        padded = b"\0" * k + raw
+        start, stop = (8 * k + 5) // 6, (8 * len(padded)) // 6
+        for enc in (base64.b64encode(padded).decode(), base64.urlsafe_b64encode(padded).decode()):
+            seg = enc[start:stop]
+            if len(seg) >= MIN_LENGTH:
+                out.add(seg)
+    return out
+
+
+def value_pattern(value: str) -> str:
+    """The regex source matching `value` in every supported form."""
+    if len(value) < MIN_LENGTH:
+        return r"(?<![A-Za-z0-9])" + re.escape(value) + r"(?![A-Za-z0-9])"
+    flex = "".join(_char_pattern(c) for c in value)
+    literal = sorted({value.encode().hex()} | _b64_segments(value.encode()), key=len, reverse=True)
+    return "|".join([flex, *(re.escape(f) for f in literal)])
 
 
 class KnownSecrets:
@@ -71,11 +117,13 @@ class KnownSecrets:
         self._last_check = 0.0
 
     def add(self, value: Any, source: str) -> bool:
-        """Register one value. Returns True if it is (now) known."""
+        """Register one KNOWN secret (from SECRET_MIN characters). Callers that
+        are guessing (a config value under an ordinary key) apply MIN_LENGTH
+        themselves; see `secret_values_in`."""
         if not isinstance(value, str):
             return False
         value = value.strip()
-        if len(value) < MIN_LENGTH:
+        if len(value) < SECRET_MIN:
             return False
         with self._lock:
             known = value in self._sources
@@ -100,21 +148,29 @@ class KnownSecrets:
     def _compiled(self) -> re.Pattern[str] | None:
         with self._lock:
             if self._pattern is None and self._sources:
-                forms: set[str] = set()
-                for v in self._sources:
-                    forms |= encoded_forms(v)
                 # Longest first, so a value never leaves a tail of a longer one.
-                alternation = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
-                self._pattern = re.compile(alternation)
+                values = sorted(self._sources, key=len, reverse=True)
+                self._pattern = re.compile("|".join(f"(?:{value_pattern(v)})" for v in values), re.IGNORECASE)
             return self._pattern
 
     def redact(self, text: str) -> tuple[str, int]:
-        """`text` with every known value (and its encodings) replaced."""
+        """`text` with every known value, in every supported form, replaced."""
         self.maybe_reload()
         pattern = self._compiled()
         if pattern is None:
             return text, 0
-        return pattern.subn(MARKER, text)
+        out, n = pattern.subn(MARKER, text)
+
+        def _wrapped(m: re.Match[str]) -> str:
+            nonlocal n
+            joined = re.sub(r"\s+", "", m.group(0))
+            if pattern.search(joined):
+                n += 1
+                return MARKER
+            return m.group(0)
+
+        out = _WRAPPED_B64.sub(_wrapped, out)
+        return out, n
 
     # -- files that change under us (an OAuth CLI refreshes its token file) --
 
@@ -136,7 +192,9 @@ class KnownSecrets:
             logger.warning("known secrets: could not read %s", path.name)
             return 0
 
-    def maybe_reload(self, *, every: float = 5.0) -> None:
+    def maybe_reload(self, *, every: float = 0.0) -> None:
+        """Reload watched files whose mtime changed. A stat per file per call:
+        cheap, and a token a CLI refreshed a moment ago is known at once."""
         now = time.monotonic()
         if now - self._last_check < every:
             return
@@ -195,13 +253,33 @@ def _url_password(value: str) -> str | None:
         return None
 
 
+#: Words that, anywhere in a secret-named key, make it a SETTING about the
+#: secret (a timeout, a URL, a path, a flag, a model's max_tokens), not one.
+NOT_SECRET_KEY_WORDS = frozenset("timeout ttl seconds minutes hours days port size count length limit max min expiry expires expiration url uri path file dir name enabled id type mode header field".split())
+
+
+def _key_words(key: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+    return [w for w in re.split(r"[_\-.\s]+", spaced.lower()) if w]
+
+
+_FLAG_WORD = re.compile(r"^(?:true|false|yes|no|on|off|none|null)$", re.IGNORECASE)
+
+
+def is_secret_key(key: str) -> bool:
+    return bool(SECRET_KEY_NAME.search(key)) and not NOT_SECRET_KEY_WORDS.intersection(_key_words(key))
+
+
 def secret_values_in(tree: Any, *, env: dict[str, str] | None = None, all_values: bool = False, key: str = "") -> list[str]:
     """Secret values in a parsed config tree.
 
-    A value under a secret-named key always counts. Any other string counts
-    unless it looks like plain configuration (`looks_non_secret`), or always
-    when `all_values` (a .env file is a file of secrets). `$VAR` references are
-    resolved from `env`, as the config loaders do.
+    A value under a secret-named key (`is_secret_key`) always counts, numbers
+    included, from SECRET_MIN characters, unless it is a flag word or a path.
+    Any other string counts only from MIN_LENGTH characters and unless it
+    looks like plain configuration (`looks_non_secret`); under `all_values` (a
+    .env file is a file of secrets) that is enough, otherwise it must also look
+    like a token. `$VAR` references are resolved from `env`, as the config
+    loaders do.
     """
     out: list[str] = []
     if isinstance(tree, dict):
@@ -210,16 +288,23 @@ def secret_values_in(tree: Any, *, env: dict[str, str] | None = None, all_values
     elif isinstance(tree, list):
         for v in tree:
             out += secret_values_in(v, env=env, all_values=all_values, key=key)
+    elif isinstance(tree, (int, float)) and not isinstance(tree, bool):
+        if is_secret_key(key) and len(str(tree)) >= SECRET_MIN:
+            out.append(str(tree))
     elif isinstance(tree, str):
         value = tree
         if value.startswith("$") and env is not None:
             value = env.get(value[1:], "")
+        value = value.strip()
         if not value:
             return out
         password = _url_password(value)
         if password:
             out.append(password)
-        if SECRET_KEY_NAME.search(key) or (all_values and not looks_non_secret(value)) or (not looks_non_secret(value) and _high_entropy(value)):
+        if is_secret_key(key):
+            if len(value) >= SECRET_MIN and not _FLAG_WORD.match(value) and not value.startswith(("/", "~", "./", "../")) and not (("://" in value) and looks_non_secret(value)):
+                out.append(value)
+        elif (all_values and not looks_non_secret(value)) or (not looks_non_secret(value) and _high_entropy(value)):
             out.append(value)
     return out
 
@@ -262,7 +347,7 @@ def raw_file_secret(path: Path) -> list[str]:
 def environ_secrets(environ: dict[str, str] | None = None) -> list[str]:
     """Process environment values under secret-named variables."""
     env = os.environ if environ is None else environ
-    return [v for k, v in env.items() if v and SECRET_KEY_NAME.search(k) and not looks_non_secret(v)]
+    return secret_values_in({k: v for k, v in env.items() if v and is_secret_key(k)})
 
 
 def _dotenv_paths() -> list[Path]:
