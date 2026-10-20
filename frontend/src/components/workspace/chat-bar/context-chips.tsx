@@ -5,7 +5,6 @@ import {
   LockIcon,
   PaperclipIcon,
   PlusIcon,
-  SparklesIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -25,7 +24,6 @@ import { cn } from "@/lib/utils";
 import { AgentAvatar } from "./agent-avatar";
 import {
   INTEGRATIONS_SHOWN,
-  SKILLS_SHOWN,
   chipKey,
   collapse,
   isUnhealthy,
@@ -93,7 +91,8 @@ function RemoveButton({
 /**
  * The context row above the message (Chat-Bar-v2.dc.html): every piece of
  * context is its own chip, removable right here. Project, agent,
- * integrations, skills and files, then "Add", which opens the picker.
+ * integrations and files, then "Add", which opens the picker. Skills are
+ * not chips (they are set in the picker's Skills tab).
  *
  * A chip that cannot be removed says why instead of offering ×: a pinned
  * integration is always on; the chat's own agent stays (Phase 1 has one
@@ -112,9 +111,6 @@ export const ContextChips = forwardRef<
     onRemoveAgent: (name: string) => void;
     integrations: IntegrationRow[];
     onRemoveIntegration: (id: string) => void;
-    skills: string[];
-    /** Undefined while this chat's skills cannot be read or saved. */
-    onRemoveSkill?: (name: string) => void;
     files: {
       id: string;
       filename?: string;
@@ -131,7 +127,6 @@ export const ContextChips = forwardRef<
 >(function ContextChips(p, ref) {
   const listRef = useRef<HTMLUListElement | null>(null);
   const addRef = useRef<HTMLButtonElement | null>(null);
-  const [skillsOpen, setSkillsOpen] = useState(false);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const pendingFocus = useRef<number | null>(null);
 
@@ -141,7 +136,6 @@ export const ContextChips = forwardRef<
     integrationsOpen,
     (row) => isUnhealthy(row.status),
   );
-  const skills = collapse(p.skills, SKILLS_SHOWN, skillsOpen);
 
   const items: Item[] = [
     ...p.projects.map<Item>((proj) => ({
@@ -202,19 +196,6 @@ export const ContextChips = forwardRef<
         padLeft: "pl-1.5",
       };
     }),
-    ...skills.visible.map<Item>((name) => ({
-      key: `skill:${name}`,
-      testId: "chip-skill",
-      label: name,
-      leading: <SparklesIcon className="text-primary size-4" aria-hidden />,
-      ...(p.onRemoveSkill
-        ? {
-            removeLabel: `Remove skill ${name}`,
-            onRemove: () => p.onRemoveSkill?.(name),
-          }
-        : { locked: "This chat's skills could not be read" }),
-      padLeft: "pl-2.5",
-    })),
     ...p.files.map<Item>((f) => {
       const isImage = !!f.url && !!f.mediaType?.startsWith("image/");
       const name = f.filename?.trim()
@@ -286,8 +267,6 @@ export const ContextChips = forwardRef<
   const moreIntegrations =
     ints.hidden > 0 ||
     (integrationsOpen && p.integrations.length > INTEGRATIONS_SHOWN);
-  const moreSkills =
-    skills.hidden > 0 || (skillsOpen && p.skills.length > SKILLS_SHOWN);
 
   return (
     <ul
@@ -343,26 +322,6 @@ export const ContextChips = forwardRef<
                 {integrationsOpen
                   ? "Fewer"
                   : `+${ints.hidden} ${plural(ints.hidden, "integration")}`}
-              </button>
-            </li>
-          )}
-          {moreSkills && index === lastOf("chip-skill") && (
-            <li>
-              <button
-                type="button"
-                className={PILL_BUTTON}
-                aria-expanded={skillsOpen}
-                aria-label={
-                  skillsOpen
-                    ? "Show fewer skills"
-                    : `Show ${skills.hidden} more ${plural(skills.hidden, "skill")}`
-                }
-                data-testid="more-skills"
-                onClick={() => setSkillsOpen((o) => !o)}
-              >
-                {skillsOpen
-                  ? "Fewer"
-                  : `+${skills.hidden} ${plural(skills.hidden, "skill")}`}
               </button>
             </li>
           )}

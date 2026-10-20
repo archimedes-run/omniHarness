@@ -44,7 +44,9 @@ for (const scheme of ["light", "dark"] as const) {
     ).toBe(scheme === "dark");
     await expect(page.getByTestId("chip-project")).toBeVisible();
     await expect(page.getByText("Unreachable").first()).toBeVisible();
-    await page.getByRole("button", { name: "Show 4 more skills" }).click();
+    await page
+      .getByRole("button", { name: "Show 3 more integrations" })
+      .click();
     await noLowContrast(page);
     await page.getByRole("button", { name: "Add context" }).click();
     await expect(page.getByTestId("integration-status").first()).toBeVisible();

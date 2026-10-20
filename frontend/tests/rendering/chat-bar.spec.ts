@@ -32,13 +32,8 @@ test("every piece of context is its own chip; removing a project detaches it", a
   await expect(
     chip(page, "integration", "filesystem").getByRole("button"),
   ).toHaveCount(0);
-  await expect(bar(page).getByTestId("chip-skill")).toHaveText([
-    /changelog/,
-    /cite/,
-  ]);
-  await expect(
-    page.getByRole("button", { name: "Remove skill cite" }),
-  ).toBeVisible();
+  // Skills are set in the picker, not shown as chips.
+  await expect(bar(page).getByTestId("chip-skill")).toHaveCount(0);
 
   await page
     .getByRole("button", { name: "Remove project OmniHarness" })

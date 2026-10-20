@@ -188,17 +188,8 @@ export default function ChatPage() {
                 tokenUsageInlineMode={tokenUsageInlineMode}
               />
             </div>
-            <div
-              className={cn(
-                "absolute right-0 left-0 z-30 flex justify-center",
-                // Chat-Bar-v2.dc.html: the new chat centres the heading, the
-                // bar and the starters; a thread keeps the bar at the bottom.
-                isWelcomeMode
-                  ? "top-0 bottom-0 items-center px-8 pb-20"
-                  : "bottom-0 px-4",
-              )}
-            >
-              <div className="relative w-full max-w-[960px]">
+            <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
+              <div className="relative w-full max-w-[816px]">
                 <div className="absolute -top-4 right-0 left-0 z-0">
                   <div className="absolute right-0 bottom-0 left-0">
                     <TodoList
@@ -220,10 +211,7 @@ export default function ChatPage() {
                 </div>
                 {mountedRef.current ? (
                   <InputBox
-                    className={cn(
-                      "bg-background/5 w-full",
-                      !isWelcomeMode && "-translate-y-4",
-                    )}
+                    className="bg-background/5 w-full -translate-y-4"
                     isWelcomeMode={isWelcomeMode}
                     threadId={threadId}
                     autoFocus={isWelcomeMode}

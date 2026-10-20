@@ -50,7 +50,7 @@ import {
   ModelMenu,
   SendButton,
 } from "./chat-bar/bar-controls";
-import { backspaceToChips, chatSkills, insertMention } from "./chat-bar/chips";
+import { backspaceToChips, insertMention } from "./chat-bar/chips";
 import {
   matchCommands,
   type PickerTab,
@@ -280,15 +280,6 @@ export function InputBox({
     );
     return enabledSkills.filter((s) => names.includes(s.name));
   }, [enabledSkills, threadAgentConfig, threadAgentName]);
-  // What this chat uses: the agent's skills less the ones removed here.
-  const chatSkillNames = useMemo(
-    () =>
-      chatSkills(
-        agentSkillList.map((s) => s.name),
-        threadSkills.excluded,
-      ),
-    [agentSkillList, threadSkills.excluded],
-  );
 
   // The caret goes where setText says as soon as the new text is committed,
   // before the next key is handled: a frame later, a fast typist's next
@@ -613,10 +604,17 @@ export function InputBox({
 
   return (
     <div ref={promptRootRef} className="relative flex flex-col gap-5">
+      {/* The bar stays at the bottom of every chat, new ones included; the
+          heading sits up in the empty page and the starters above the bar. */}
       {isWelcomeMode && !extraHeader && (
-        <h1 className="text-center text-[30px] leading-tight font-semibold tracking-[-0.01em]">
-          {heading}
-        </h1>
+        <div className="flex min-h-[32vh] items-start justify-center">
+          <h1 className="text-center text-[30px] leading-tight font-semibold tracking-[-0.01em]">
+            {heading}
+          </h1>
+        </div>
+      )}
+      {isWelcomeMode && searchParams.get("mode") !== "skill" && (
+        <WelcomeSuggestions />
       )}
       {showFollowups && (
         <div className="flex items-center justify-center pb-2">
@@ -738,12 +736,6 @@ export function InputBox({
               onRemoveAgent={() => onChooseAgent?.(null)}
               integrations={chipIntegrations}
               onRemoveIntegration={(id) => integrations.setSelected(id, false)}
-              skills={chatSkillNames}
-              onRemoveSkill={
-                threadSkills.error
-                  ? undefined
-                  : (name) => threadSkills.setUsed(name, false)
-              }
               files={attachments.files}
               onRemoveFile={attachments.remove}
               pickerOpen={pickerOpen}
@@ -806,12 +798,6 @@ export function InputBox({
           )}
         </PromptInput>
       </div>
-
-      {isWelcomeMode && searchParams.get("mode") !== "skill" && (
-        <div className="flex items-center justify-center pt-2">
-          <WelcomeSuggestions />
-        </div>
-      )}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

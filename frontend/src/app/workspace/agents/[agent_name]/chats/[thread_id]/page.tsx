@@ -183,15 +183,8 @@ export default function AgentChatPage() {
               />
             </div>
 
-            <div
-              className={cn(
-                "absolute right-0 left-0 z-30 flex justify-center",
-                isNewThread
-                  ? "top-0 bottom-0 items-center px-8 pb-20"
-                  : "bottom-0 px-4",
-              )}
-            >
-              <div className="relative w-full max-w-[960px]">
+            <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
+              <div className="relative w-full max-w-[816px]">
                 <div className="absolute -top-4 right-0 left-0 z-0">
                   <div className="absolute right-0 bottom-0 left-0">
                     <TodoList
@@ -213,10 +206,7 @@ export default function AgentChatPage() {
                 </div>
 
                 <InputBox
-                  className={cn(
-                    "bg-background/5 w-full",
-                    !isNewThread && "-translate-y-4",
-                  )}
+                  className="bg-background/5 w-full -translate-y-4"
                   isWelcomeMode={isNewThread}
                   threadId={threadId}
                   autoFocus={isNewThread}
