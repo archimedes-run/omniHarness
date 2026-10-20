@@ -49,7 +49,16 @@ export function TierCheckForm() {
           {String(check.error)}
         </p>
       )}
-      {result && (
+      {/* FR-023: absent is not a tier. No tool exists, so say that. */}
+      {result?.absent && (
+        <p
+          className="border-border text-foreground rounded-md border p-3 text-sm"
+          data-testid="absent"
+        >
+          {result.absent}
+        </p>
+      )}
+      {result && !result.absent && (
         <div
           className="border-border space-y-1 rounded-md border p-3"
           data-testid="tier-result"
@@ -76,6 +85,11 @@ export function TierCheckForm() {
               ? `Decided by: ${result.deciding_rule}`
               : "No rule matched this tool; unknown tools are Tier 3."}
           </p>
+          {result.in_plain_words && (
+            <p className="text-foreground text-sm" data-testid="plain-words">
+              {result.in_plain_words}
+            </p>
+          )}
           {result.raised_by && (
             <p
               className="text-muted-foreground text-sm"

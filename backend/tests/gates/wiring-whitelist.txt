@@ -23,12 +23,6 @@ app.gateway.mcp_secrets:McpSecretsVault.delete_all_for_server  # UNWIRED: built,
 app.gateway.mcp_secrets:McpSecretsVault.list_key_names  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 app.policy.confirm:restate  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 app.policy.explain:render  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.limits:ABSENT_CAPABILITIES  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.limits:BROWSER_DISK_COST_MB  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.limits:BROWSER_DISK_NOTE  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.limits:describe_absent  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.limits:describe_expiry  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
-app.policy.limits:describe_tier  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 app.policy.lineage:latest_user_turn  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 app.policy.models:PolicyDecision.explain  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it
 app.policy.provenance:firing_rule  # UNWIRED: built, never called in production. ROADMAP-FOLLOWUPS 'Unwired code the generalised wiring gate found' — wire it or delete it

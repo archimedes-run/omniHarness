@@ -30,6 +30,7 @@ from langchain.agents.middleware import AgentMiddleware
 from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
+from .limits import describe_expiry
 from .lineage import eligible_to_initiate
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
@@ -213,8 +214,10 @@ class PolicyMiddleware(AgentMiddleware):
             # FR-038: expiry TELLS the user rather than producing silence. It is
             # appended rather than short-circuited, because swallowing the turn
             # to deliver it would lose whatever the user actually asked.
-            said = ", ".join(a.tool_name for a in result.expired_meanwhile)
-            note = [*messages, AIMessage(content=f"(An earlier request to {said} expired before it was confirmed, so I did not do it.)")]
+            # The wording is limits.describe_expiry (FR-023): which tool, when,
+            # and that nothing changed.
+            said = " ".join(describe_expiry(a) for a in result.expired_meanwhile)
+            note = [*messages, AIMessage(content=f"({said})")]
 
         if result.outcome == confirm_flow.NO_VERDICT:
             return None, note

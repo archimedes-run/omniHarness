@@ -21,6 +21,8 @@ export interface RulesInForce {
   error: string | null;
   threshold_targets: number;
   expires_after_seconds: number;
+  /** Capabilities that do not exist at all, and what the assistant says (FR-023). */
+  cannot_do?: { capability: string; wording: string }[];
 }
 
 export interface TierCheck {
@@ -30,6 +32,10 @@ export interface TierCheck {
   /** No rule matched: this is the unknown-tool default, not a classification. */
   from_default: boolean;
   raised_by: ExceptionView | null;
+  /** What will happen, in the assistant's own words (FR-023). */
+  in_plain_words?: string;
+  /** Set when the name is a capability the assistant does not have at all. */
+  absent?: string | null;
 }
 
 export interface Tier3Execution {
