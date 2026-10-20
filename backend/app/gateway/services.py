@@ -438,6 +438,7 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
     if not isinstance(action_id, str):
         raise _continue_refused("the action id is not text")
 
+    from app.gateway.ownership import require_access
     from app.policy.models import Outcome
     from app.policy.registration import build
     from omniharness.config import get_app_config
@@ -446,6 +447,9 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
     action = middleware.pending.get(action_id) if middleware is not None else None
     if action is None:
         raise _continue_refused("no such confirmed action")
+    # OWNERSHIP first, before anything about the action is said: another
+    # account's action id is "not found", exactly as on the card's route.
+    await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
     if action.thread_id != thread_id:
         raise _continue_refused("that action belongs to another chat")
     if action.outcome != Outcome.EXECUTED:

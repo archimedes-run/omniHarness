@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_thread_store
+from app.gateway.ownership import require_thread_access
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ def _view(thread_id: str, names: list[str], user_id: str) -> ParticipantsRespons
 @require_permission("threads", "read")
 async def get_participants(thread_id: str, request: Request) -> ParticipantsResponse:
     user_id = _user_id(request)
+    await require_thread_access(request, thread_id)
     names = await stored_participants(get_thread_store(request), thread_id, user_id)
     return _view(thread_id, names, user_id)
 
@@ -102,6 +104,8 @@ async def get_participants(thread_id: str, request: Request) -> ParticipantsResp
 @require_permission("threads", "write")
 async def add_participant(thread_id: str, body: AddParticipantRequest, request: Request) -> ParticipantsResponse:
     user_id = _user_id(request)
+    # A chat with no run yet has no row, and is created below as the caller's.
+    await require_thread_access(request, thread_id)
     store = get_thread_store(request)
     agent = _agent(body.agent, user_id)
     if agent is None or agent.name == LEAD:
@@ -125,6 +129,9 @@ async def add_participant(thread_id: str, body: AddParticipantRequest, request: 
 @require_permission("threads", "write")
 async def remove_participant(thread_id: str, agent: str, request: Request) -> ParticipantsResponse:
     user_id = _user_id(request)
+    # OWNERSHIP before anything changes: removing a member also refuses its
+    # pending actions, which must never be another account's.
+    await require_thread_access(request, thread_id, require_existing=True)
     store = get_thread_store(request)
     if agent == LEAD:
         raise HTTPException(status_code=409, detail="the lead agent leads every chat and cannot be removed")
