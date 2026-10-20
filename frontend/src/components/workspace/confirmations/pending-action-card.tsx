@@ -99,6 +99,11 @@ export function PendingActionCard({
           >
             <span className="text-foreground font-medium">{suggestedBy}</span>,
             not by you. Only the Confirm button here can approve it.
+            {action.delegation_chain.length > 0 && (
+              <span className="mt-1 block" data-testid="origin-chain">
+                via {action.delegation_chain.join(" → ")}
+              </span>
+            )}
           </p>
         )}
         {/* The plan EXACTLY as it was stated. Not a summary: confirming a

@@ -39,6 +39,8 @@ export interface PendingAction {
   origin_source?: string;
   /** The sentence to show, e.g. "Suggested by content from web_fetch". */
   origin_label?: string;
+  /** For a subagent's request: the agent the content reached it through. */
+  origin_via?: string;
   confirmable_by_typing?: boolean;
 }
 

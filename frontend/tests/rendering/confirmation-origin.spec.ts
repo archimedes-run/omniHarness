@@ -100,6 +100,31 @@ test("an automation's suggestion says so", async ({ page }) => {
   );
 });
 
+test("a subagent's request shows the delegation chain next to its origin", async ({
+  page,
+}) => {
+  await openThread(page, [
+    {
+      ...action("a-sub", {
+        origin: "content",
+        origin_source: "web_fetch",
+        origin_via: "lead_agent",
+        origin_label: "Suggested via lead_agent from content from web_fetch",
+        confirmable_by_typing: false,
+      }),
+      requester: "researcher",
+      delegation_chain: ["lead_agent", "researcher"],
+    },
+  ]);
+
+  await expect(page.getByTestId("origin-label")).toContainText(
+    "Suggested via lead_agent from content from web_fetch",
+  );
+  await expect(page.getByTestId("origin-chain")).toHaveText(
+    "via lead_agent → researcher",
+  );
+});
+
 test("the user's own request carries no label", async ({ page }) => {
   await openThread(page, [
     action("a-user", { origin: "user", confirmable_by_typing: true }),
