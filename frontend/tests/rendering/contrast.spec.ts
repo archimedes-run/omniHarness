@@ -558,6 +558,8 @@ const NOT_AUDITED: Record<string, string> = {
   "/workspace/tool-sources": "redirects to /workspace/settings/safety",
   "/workspace/triggers": "redirects to /workspace/automations",
   "/workspace/workflows": "redirects to /workspace/automations",
+  "/workspace/runs/[firing_id]":
+    "audited in both themes by tests/rendering/run-summary.spec.ts (it needs a run's summary stubbed)",
 };
 
 /** src/app/workspace/** /page.tsx as route patterns, dynamic segments as [x]. */
