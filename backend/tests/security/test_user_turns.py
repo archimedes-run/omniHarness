@@ -68,7 +68,9 @@ def _plan(tid: str):
     from app.policy.registration import build
     from omniharness.config import get_app_config
 
-    plans = [a for a in build(get_app_config()).pending.open_actions(datetime.now(UTC)) if a.thread_id == tid]
+    # [rebase edit] Since #89 a web lookup after content entered the turn is its
+    # own Tier 3 card; the plan these tests examine is the delete's.
+    plans = [a for a in build(get_app_config()).pending.open_actions(datetime.now(UTC)) if a.thread_id == tid and a.tool_name not in {"web_fetch", "web_search", "image_search"}]
     assert len(plans) == 1, plans
     return plans[0]
 

