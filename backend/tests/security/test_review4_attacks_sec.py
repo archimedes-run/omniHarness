@@ -11,7 +11,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 BACKEND = Path(__file__).resolve().parents[2]
@@ -75,10 +74,7 @@ if __name__ == "__main__":
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="[author's edit] filed as follow-up #76: MCP Studio's test phase runs agent code beside the gateway on main; #59 replaces it (mcp_builder is off on the live stack). strict: fails loudly once fixed.",
-)
+# [author's edit] Was xfail(strict) for #76; passes since the in-gateway test phase is refused.
 def test_HOLE_mcp_build_test_runs_agent_code_beside_the_gateway(studio, monkeypatch) -> None:
     """mcp_build (agent tool, Tier 3) and POST /api/mcp-studio/servers/{id}/test
     run the server source with sys.executable as a child of the GATEWAY process,

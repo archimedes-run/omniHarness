@@ -592,12 +592,12 @@ run_events:
 #     enabled: false
 #     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
 #     app_token: $SLACK_APP_TOKEN     # xapp-... (Socket Mode)
-#     allowed_users: []               # YOUR Slack member id(s). EMPTY = NOBODY: every message is ignored, silently
+#     allowed_users: []               # YOUR Slack member id(s). EMPTY = NOBODY: senders get no reply; a WARNING is logged at startup.
 #
 #   telegram:
 #     enabled: false
 #     bot_token: $TELEGRAM_BOT_TOKEN
-#     allowed_users: []               # YOUR numeric Telegram user id(s). EMPTY = NOBODY: every message is ignored, silently.
+#     allowed_users: []               # YOUR numeric Telegram user id(s). EMPTY = NOBODY: senders get no reply; a WARNING is logged at startup.
 #                                     # Find yours by messaging @userinfobot in Telegram; it replies with your id.
 #
 

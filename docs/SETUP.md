@@ -298,7 +298,7 @@ Port 2026 is the default entry point. If it's in use:
 ```bash
 lsof -i :2026
 # Change the port in docker/docker-compose-dev.yaml:
-#   ports: ["YOUR_PORT:2026"]
+#   ports: ["127.0.0.1:YOUR_PORT:2026"]   # loopback only; put a TLS proxy in front for remote access
 ```
 
 **Checking the gateway picked up your `config.yaml` changes**
@@ -376,13 +376,13 @@ channels:
   telegram:
     enabled: true
     bot_token: $TELEGRAM_BOT_TOKEN
-    allowed_users: []   # your numeric Telegram user id; EMPTY = NOBODY (silently ignored)
+    allowed_users: []   # your numeric Telegram user id; EMPTY = NOBODY (the channel is closed: senders get no reply, and a WARNING is logged)
 
   slack:
     enabled: true
     bot_token: $SLACK_BOT_TOKEN    # xoxb-...
     app_token: $SLACK_APP_TOKEN    # xapp-... (Socket Mode)
-    allowed_users: []   # your Slack member id; EMPTY = NOBODY (silently ignored)
+    allowed_users: []   # your Slack member id; EMPTY = NOBODY (the channel is closed: senders get no reply, and a WARNING is logged)
 ```
 
 **Keys in `.env`:**

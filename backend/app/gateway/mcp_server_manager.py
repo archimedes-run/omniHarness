@@ -20,9 +20,9 @@ Security invariants (enforced at the top of every mutating method)
    ``_current_user`` from a ContextVar. Managers may run in background tasks
    where the ContextVar is not set.
 
-4. Agent-generated code NEVER runs in the gateway process. ``_run_server_sandbox_test``
-   launches it as a subprocess with a clean, constrained environment (only the owner's
-   decrypted secrets + PYTHONPATH/HOME/PATH; no gateway env vars leak in).
+4. Agent-generated code NEVER runs in the gateway process or as its child. The
+   test phase (``_run_server_sandbox_test``) is refused on main: it ran server.py
+   as a gateway subprocess. It returns with the MCP Build redesign, in a container.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ import json
 import logging
 import re
 import socket
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -68,6 +67,14 @@ _MISSING_ARGS_RE = re.compile(
     r"InputValidationError|argument.*required|required.*argument)",
     re.IGNORECASE,
 )
+
+
+#: Why the test phase is refused (security baseline; issue #76).
+MCP_BUILD_TEST_REFUSED = "MCP Build's test phase runs only in a container; available with the MCP Build redesign. Agent-written server code is not run beside the gateway."
+
+
+class MCPBuildTestUnavailable(RuntimeError):
+    """The agent-written server cannot be test-run here (no container runner)."""
 
 
 def _classify_output(text: str) -> str:
@@ -359,125 +366,15 @@ class MCPServerManager:
         user_id: str,
         source_code: str,
     ) -> tuple[list[dict], list[dict]]:
-        """Two-phase sandbox test: discovery (no secrets) then test-calls (placeholders).
+        """Refused: there is no in-container test runner on main.
 
-        Phase 1 — Discovery (no secrets injected):
-          Start the server with a clean environment, connect the MCP client, and
-          call list_tools. Tool registration must not require any secret — secrets
-          are read inside tool handlers at call time, not at startup. If the server
-          crashes at startup with no secrets, that is a generation defect.
-
-        Phase 2 — Test-calls (real secrets injected):
-          Restart with the owner's actual decrypted credentials, call each discovered
-          tool with empty args. Tools with zero required args (whoami, rate_limit,
-          health checks) make genuine API calls — green "pass" means the key works.
-          Tools with required args (owner, repo) return validation errors → "args" badge.
-          Auth failures (401/403) with non-functional keys → "401" badge.
-          Only a crash or timeout counts as ok: False. Phase 2 never blocks 'verified'.
-          Output is scrubbed for real secret values before being stored.
-
-        Returns (tools_discovered, test_results) — output/error fields are scrubbed.
+        This used to start the agent-written server.py with ``sys.executable``
+        over MCP stdio, a child of the GATEWAY process (docker.sock, the
+        gateway's env and secrets). Agent command execution happens only in the
+        container sandbox, so the phase is disabled until the MCP Build redesign
+        (#59) runs it in a container. Issue #76.
         """
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-
-        site_packages = str(Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
-        base_env: dict[str, str] = {
-            "PYTHONPATH": site_packages,
-            "HOME": str(Path.home()),
-            "PATH": "/usr/bin:/bin",
-        }
-
-        tools_discovered: list[dict] = []
-        test_results: list[dict] = []
-
-        with tempfile.TemporaryDirectory(prefix="omni_mcp_test_") as tmpdir:
-            server_file = Path(tmpdir) / "server.py"
-            server_file.write_text(source_code)
-
-            # ── Phase 1: Discovery — no secrets, validates clean startup ─────
-            discovery_params = StdioServerParameters(
-                command=sys.executable,
-                args=[str(server_file)],
-                env=base_env,
-            )
-            try:
-                async with asyncio.timeout(30):
-                    async with stdio_client(discovery_params) as (read, write):
-                        async with ClientSession(read, write) as session:
-                            await session.initialize()
-                            tools_resp = await session.list_tools()
-                            for t in tools_resp.tools:
-                                tools_discovered.append(
-                                    {
-                                        "name": t.name,
-                                        "description": (t.description or "")[:300],
-                                    }
-                                )
-            except TimeoutError:
-                raise RuntimeError("MCP server discovery timed out (30s)")
-            # Other startup/connection exceptions propagate to caller
-
-            if not tools_discovered:
-                return [], []
-
-            # ── Phase 2: Test-calls — real secrets, validates live connectivity ─
-            # The code scanner has already approved the server. Real credentials let
-            # tools with zero required args (whoami, rate_limit, health checks, etc.)
-            # make genuine API calls so the user can verify their keys work.
-            # Tools that require arguments (owner, repo, id) get Pydantic/validation
-            # errors with empty {}, which the "args" badge explains in the UI.
-            # The output-scrub step below redacts any credential that leaks into output.
-            real_env: dict[str, str] = {}
-            try:
-                real_env = await self._vault._decrypt_for_sandbox(server_id=server_id, owner_id=user_id)
-            except Exception:
-                pass  # No secrets stored yet — test still runs, tools that need keys will fail
-
-            test_params = StdioServerParameters(
-                command=sys.executable,
-                args=[str(server_file)],
-                env={**base_env, **real_env},
-            )
-            try:
-                async with asyncio.timeout(30):
-                    async with stdio_client(test_params) as (read, write):
-                        async with ClientSession(read, write) as session:
-                            await session.initialize()
-                            for t in tools_discovered:
-                                try:
-                                    result = await asyncio.wait_for(
-                                        session.call_tool(t["name"], {}),
-                                        timeout=10,
-                                    )
-                                    output = ""
-                                    if result.content:
-                                        item = result.content[0]
-                                        output = str(getattr(item, "text", None) or item)[:200]
-                                    # Classify result even on the success path — the tool may have
-                                    # returned an error payload (auth failure, missing args) rather
-                                    # than raising a Python exception. We label these so the UI can
-                                    # show the right badge instead of a misleading green "pass".
-                                    output_type = _classify_output(output)
-                                    entry: dict = {"tool": t["name"], "ok": True, "output_type": output_type}
-                                    if output:
-                                        entry["output"] = output
-                                    test_results.append(entry)
-                                except Exception as exc:
-                                    exc_msg = str(exc)[:200]
-                                    is_auth = self._is_auth_error(exc_msg)
-                                    output_type = "auth" if is_auth else _classify_output(exc_msg)
-                                    entry = {"tool": t["name"], "ok": is_auth, "output_type": output_type}
-                                    if is_auth:
-                                        entry["output"] = exc_msg
-                                    else:
-                                        entry["error"] = exc_msg
-                                    test_results.append(entry)
-            except Exception as exc:
-                # Test-call phase failure never blocks 'verified' — tools were already discovered.
-                logger.warning("MCP test-call phase failed for %s: %s", server_id, exc)
-
-        return tools_discovered, test_results
+        raise MCPBuildTestUnavailable(MCP_BUILD_TEST_REFUSED)
 
     async def submit_source_and_test(self, *, server_id: str, user_id: str, source_code: str) -> MCPBuildRecord:
         """Save source_code then run the full test pipeline.
@@ -592,6 +489,11 @@ class MCPServerManager:
                         user_id=user_id,
                         source_code=source,
                     )
+                except MCPBuildTestUnavailable as exc:
+                    record = MCPBuildRecord(server_id=server_id, phase="failed", owner_id=user_id, required_key_names=required_key_names, error=str(exc))
+                    async with self._lock:
+                        self._records[server_id] = record
+                    return record
                 except Exception as exc:
                     logger.warning("MCP sandbox test failed for %s: %s", server_id, exc)
                     test_results.append({"tool": "__sandbox__", "ok": False, "error": str(exc)[:400]})

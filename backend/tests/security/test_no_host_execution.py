@@ -20,8 +20,14 @@ BACKEND = Path(__file__).resolve().parents[2]
 #: running on the host. A new spawner anywhere in app/ or packages/ fails
 #: test_every_process_spawner_is_classified until it is added here.
 SPAWNERS = {
-    "app/gateway/mcp_server_manager.py": "container runtime only (docker build/run/rm for built MCP servers; published on 127.0.0.1)",
+    "app/gateway/mcp_server_manager.py": "container runtime only (docker build/run/rm for built MCP servers; published on 127.0.0.1). Its in-gateway stdio test phase is refused (#76)",
     "packages/harness/omniharness/community/aio_sandbox/local_backend.py": "container runtime only (the sandbox containers themselves)",
+    # Library launchers (a process started by a library from a spec we build):
+    "packages/harness/omniharness/mcp/client.py": (
+        "NOT agent-reachable: stdio MCP servers the OWNER configured in extensions_config.json (file, or PUT /api/mcp/config: signed-in owner only, never the internal token); the sandbox has no route to the gateway"
+    ),
+    "packages/harness/omniharness/tools/connector_tools.py": "NOT agent-chosen: fixed command (sys.executable + the bundled Composio server script), scrubbed env + exactly four COMPOSIO_* keys",
+    "packages/harness/omniharness/utils/readability.py": "NOT agent-chosen: readabilipy's fixed node script (Readability.js) on fetched HTML passed as data, no shell",
 }
 
 _SPAWN_CALLS = {
@@ -39,7 +45,27 @@ _SPAWN_CALLS = {
     ("os", "spawnv"),
     ("pty", "spawn"),
 }
-_SPAWN_NAMES = {"spawn_agent_process", "create_subprocess_exec", "create_subprocess_shell", "Popen"}
+_SPAWN_NAMES = {"spawn_agent_process", "create_subprocess_exec", "create_subprocess_shell", "Popen", "stdio_client", "StdioServerParameters", "StdioConnection"}
+#: Library calls that start a process for us.
+_LIBRARY_LAUNCHERS = {"stdio_client", "StdioServerParameters", "StdioConnection"}
+
+
+def _launches_via_library(node: ast.AST) -> bool:
+    # A langchain-mcp-adapters / MultiServerMCPClient spec: {"transport": "stdio", ...}
+    # or the transport chosen at run time from config ({"transport": transport_type}).
+    if isinstance(node, ast.Dict):
+        for key, value in zip(node.keys, node.values):
+            if isinstance(key, ast.Constant) and key.value == "transport":
+                if not (isinstance(value, ast.Constant) and value.value in ("sse", "http", "streamable_http", "websocket")):
+                    return True
+    # readabilipy runs node when use_readability is truthy.
+    if isinstance(node, ast.Call):
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if name == "simple_json_from_html_string":
+            for kw in node.keywords:
+                if kw.arg == "use_readability" and not (isinstance(kw.value, ast.Constant) and not kw.value.value):
+                    return True
+    return False
 
 
 def _spawns(tree: ast.AST) -> bool:
@@ -52,6 +78,10 @@ def _spawns(tree: ast.AST) -> bool:
                 return True
             if isinstance(func, ast.Name) and func.id in _SPAWN_NAMES:
                 return True
+            if isinstance(func, ast.Attribute) and func.attr in _LIBRARY_LAUNCHERS:
+                return True
+        if _launches_via_library(node):
+            return True
     return False
 
 
