@@ -126,7 +126,7 @@ async def add_participant(thread_id: str, body: AddParticipantRequest, request: 
 
 
 @router.delete("/threads/{thread_id}/participants/{agent}", response_model=ParticipantsResponse)
-@require_permission("threads", "write")
+@require_permission("threads", "delete")
 async def remove_participant(thread_id: str, agent: str, request: Request) -> ParticipantsResponse:
     user_id = _user_id(request)
     # OWNERSHIP before anything changes: removing a member also refuses its

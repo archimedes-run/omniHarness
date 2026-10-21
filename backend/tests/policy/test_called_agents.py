@@ -82,7 +82,12 @@ def gateway(tmp_path, monkeypatch):
 
     config = yaml.safe_load(EXAMPLE.read_text())
     config["database"] = {"backend": "sqlite", "sqlite_dir": str(tmp_path / "data")}
-    config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy")}
+    # The SHIPPED rules, plus one naming the test's stand-in Tier 3 tool: since
+    # 007 a tool no rule names is refused outright, never proposed.
+    rules = yaml.safe_load((Path(__file__).resolve().parents[2] / "app" / "policy" / "default_rules.yaml").read_text())
+    rules["policy"]["rules"].insert(0, {"pattern": "wipe_backup", "tier": 3})
+    (tmp_path / "rules.yaml").write_text(yaml.safe_dump(rules))
+    config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy"), "rules_path": str(tmp_path / "rules.yaml")}
     config["trigger_engine"] = {"enabled": False}
     config.setdefault("memory", {})["enabled"] = False
     config.setdefault("title", {})["enabled"] = False
@@ -412,3 +417,18 @@ def test_a_short_at_mention_is_not_swallowed_as_an_answer_to_a_pending_card(gate
     assert CALLED, "the @-mention was swallowed as an answer to the pending card"
     assert messages[-1]["name"] == "researcher"
     assert [a["id"] for a in gateway.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "wipe_backup"] == [action["id"]]
+
+
+def test_an_at_called_agent_told_yes_confirms_nothing(gateway) -> None:
+    """ "@researcher yes" is the person's turn HANDED to an agent: the agent's
+    instruction, never an answer to the open card."""
+    thread_id, action = _member_proposes_wipe(gateway)
+    _call_in(gateway, thread_id, "researcher")
+    SUB_SCRIPT[:] = [AIMessage(content="yes")]
+
+    CALLED.clear()
+    messages = _say(gateway, thread_id, "@researcher yes")
+
+    assert CALLED and messages[-1]["name"] == "researcher", "the handed-off turn was read as an answer to the card"
+    assert [a["id"] for a in gateway.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "wipe_backup"] == [action["id"]]
+    assert RAN == []
