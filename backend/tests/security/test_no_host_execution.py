@@ -22,8 +22,6 @@ BACKEND = Path(__file__).resolve().parents[2]
 SPAWNERS = {
     "app/gateway/mcp_server_manager.py": "container runtime only (docker build/run/rm for built MCP servers; published on 127.0.0.1)",
     "packages/harness/omniharness/community/aio_sandbox/local_backend.py": "container runtime only (the sandbox containers themselves)",
-    "app/tools/openclaude.py": "EXTERNAL coding-agent CLI on the host (openclaude_coder, Tier 3): scrubbed env, only OPENAI_* passed (reported for a decision)",
-    "packages/harness/omniharness/tools/builtins/invoke_acp_agent_tool.py": "EXTERNAL ACP agent CLIs on the host (invoke_acp_agent, Tier 3): scrubbed env + configured keys (reported for a decision)",
 }
 
 _SPAWN_CALLS = {
@@ -124,8 +122,64 @@ def test_local_sandbox_and_bash_tool_never_run_a_host_command(monkeypatch) -> No
     assert is_host_bash_allowed(container) is True
 
 
-def test_openclaude_gets_no_gateway_secrets() -> None:
-    from app.tools.openclaude import openclaude_environment
+def _example_config() -> dict:
+    import yaml
 
-    env = openclaude_environment({"PATH": "/bin", "HOME": "/h", "OPENAI_API_KEY": "sk-1", "OMNI_HARNESS_INTERNAL_AUTH_TOKEN": "t", "AUTH_JWT_SECRET": "j", "COMPOSIO_API_KEY": "c", "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/x"})
-    assert env == {"PATH": "/bin", "HOME": "/h", "OPENAI_API_KEY": "sk-1"}
+    return yaml.safe_load((BACKEND.parent / "config.example.yaml").read_text())
+
+
+@pytest.mark.parametrize(
+    "mutate, named",
+    [
+        (lambda d: d.__setitem__("acp_agents", {"codex": {"command": "npx", "args": ["-y", "@zed-industries/codex-acp"]}}), "acp_agents"),
+        (lambda d: d.__setitem__("acp_agents", {}), "acp_agents"),  # even empty: the key itself is refused
+        (lambda d: d.__setitem__("acp", {"agents": {}}), "acp"),
+        (lambda d: d.setdefault("tools", []).append({"name": "openclaude_coder", "group": "code", "use": "app.tools.openclaude:OpenClaudeTool"}), "openclaude_coder"),
+        (lambda d: d.setdefault("tools", []).append({"name": "coder", "group": "code", "use": "omniharness.tools.builtins.invoke_acp_agent_tool:x"}), "invoke_acp_agent"),
+    ],
+)
+def test_a_config_naming_openclaude_or_acp_is_refused_at_startup(tmp_path, mutate, named) -> None:
+    import yaml
+
+    from omniharness.config.app_config import AppConfig
+
+    data = _example_config()
+    mutate(data)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(Exception) as exc:
+        AppConfig.from_file(str(path))
+    assert named in str(exc.value) and "Delete" in str(exc.value) and "container sandbox" in str(exc.value)
+    with pytest.raises(Exception):  # and through direct construction, not only from_file
+        AppConfig.model_validate(data)
+
+
+def test_the_example_config_still_loads(tmp_path) -> None:
+    """Positive control for the refusals above."""
+    import yaml
+
+    from omniharness.config.app_config import AppConfig
+
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(_example_config()))
+    assert not hasattr(AppConfig.from_file(str(path)), "acp_agents")
+
+
+def test_no_code_can_start_openclaude_or_an_acp_agent() -> None:
+    """The launchers are gone: no module, no tool, no rule, nothing reachable."""
+    import importlib.util
+
+    for module in ("app.tools.openclaude", "omniharness.tools.builtins.invoke_acp_agent_tool", "omniharness.config.acp_config"):
+        try:
+            spec = importlib.util.find_spec(module)
+        except ModuleNotFoundError:
+            spec = None
+        assert spec is None, module
+    hits = []
+    for root in ("app", "packages"):
+        for path in (BACKEND / root).rglob("*"):
+            if path.suffix not in {".py", ".yaml", ".json"} or "tests" in path.parts or path.name == "app_config.py":
+                continue
+            text = path.read_text(errors="ignore")
+            hits += [f"{path.relative_to(BACKEND)}: {n}" for n in ("openclaude", "invoke_acp_agent", "acp_agents", "get_acp_agents", "spawn_agent_process") if n in text]
+    assert not hits, hits

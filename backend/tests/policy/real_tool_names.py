@@ -137,7 +137,6 @@ KNOWN_CONNECTOR_TOOLS: tuple[str, ...] = (
 
 #: Built-in, config and middleware tools, by the name each tool object carries
 #: (omniharness.tools.tools.registrable_tool_names lists them in production).
-#: openclaude_coder is app/tools/openclaude.py, offered only when configured.
 BUILTIN_TOOLS: tuple[str, ...] = (
     "web_search",
     "web_fetch",
@@ -162,8 +161,6 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "setup_agent",
     "update_agent",
     "write_todos",
-    "invoke_acp_agent",
-    "openclaude_coder",
 )
 
 MCP_TOOLS: tuple[str, ...] = tuple(f"{server}_{tool}" for server, tools in MCP_SERVER_TOOLS.items() for tool in tools)

@@ -153,12 +153,6 @@ policy:
       tier: 3
     - pattern: "mcp_build"
       tier: 3
-    # Delegates to an external coding agent (ACP) or the openclaude CLI:
-    # spawning, so Tier 3 for the same reason as `task`.
-    - pattern: "invoke_acp_agent"
-      tier: 3
-    - pattern: "openclaude_coder"
-      tier: 3
 
     # Named 007, at the tier they already had through the no-rule default, so
     # naming them changed nothing. Each is a candidate to decide individually.

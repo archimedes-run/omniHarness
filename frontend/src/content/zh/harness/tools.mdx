@@ -67,12 +67,6 @@ task(agent="general-purpose", task="...", context="...")
 
 ---
 
-### invoke_acp_agent
-
-使用 [Agent Connect Protocol (ACP)](https://agentconnectprotocol.org/) 调用外部 Agent。需要在 `config.yaml` 中配置 `acp_agents:`。参见[子 Agent](/docs/harness/subagents)页面了解 ACP 配置。
-
----
-
 ### tool_search
 
 按名称或描述搜索工具，并按需将其加载到 Agent 上下文中。仅当 `config.yaml` 中 `tool_search.enabled: true` 时激活。当 MCP 或其他工具集暴露大量工具且你希望减少上下文使用时很有用。

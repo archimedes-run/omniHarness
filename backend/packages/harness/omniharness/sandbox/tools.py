@@ -230,7 +230,7 @@ def _get_acp_workspace_host_path(thread_id: str | None = None) -> str | None:
 
     When *thread_id* is provided, returns the per-thread workspace
     ``{base_dir}/threads/{thread_id}/acp-workspace/`` (not cached — the
-    directory is created on demand by ``invoke_acp_agent_tool``).
+    directory is created with the thread dirs; nothing writes it since the ACP tool was removed).
 
     Falls back to the global ``{base_dir}/acp-workspace/`` when *thread_id*
     is ``None``; that result is cached after the first successful resolution.

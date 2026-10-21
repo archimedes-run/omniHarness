@@ -70,12 +70,6 @@ Persists updates to the current custom agent's `SOUL.md` and `config.yaml`. Boun
 
 ---
 
-### invoke_acp_agent
-
-Invokes an external agent using the [Agent Connect Protocol (ACP)](https://agentconnectprotocol.org/). Requires `acp_agents:` configuration in `config.yaml`. See the [Subagents](/docs/harness/subagents) page for ACP configuration.
-
----
-
 ### tool_search
 
 Searches for tools by name or description and loads them into the agent's context on demand. Only active when `tool_search.enabled: true` in `config.yaml`. Useful when MCP or other tool sets expose many tools and you want to reduce context usage.

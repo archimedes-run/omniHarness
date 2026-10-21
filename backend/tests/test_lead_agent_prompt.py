@@ -80,7 +80,6 @@ def test_apply_prompt_template_includes_custom_mounts(monkeypatch):
     monkeypatch.setattr("omniharness.config.get_app_config", lambda: config)
     monkeypatch.setattr(prompt_module, "_get_enabled_skills", lambda: [])
     monkeypatch.setattr(prompt_module, "get_deferred_tools_prompt_section", lambda **kwargs: "")
-    monkeypatch.setattr(prompt_module, "_build_acp_section", lambda **kwargs: "")
     monkeypatch.setattr(prompt_module, "_get_memory_context", lambda agent_name=None, **kwargs: "")
     monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None: "")
 
@@ -98,7 +97,6 @@ def test_apply_prompt_template_includes_relative_path_guidance(monkeypatch):
     monkeypatch.setattr("omniharness.config.get_app_config", lambda: config)
     monkeypatch.setattr(prompt_module, "_get_enabled_skills", lambda: [])
     monkeypatch.setattr(prompt_module, "get_deferred_tools_prompt_section", lambda **kwargs: "")
-    monkeypatch.setattr(prompt_module, "_build_acp_section", lambda **kwargs: "")
     monkeypatch.setattr(prompt_module, "_get_memory_context", lambda agent_name=None, **kwargs: "")
     monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None: "")
 
@@ -116,7 +114,6 @@ def test_apply_prompt_template_threads_explicit_app_config_without_global_config
         skill_evolution=SimpleNamespace(enabled=False),
         tool_search=SimpleNamespace(enabled=False),
         memory=SimpleNamespace(enabled=False, injection_enabled=True, max_injection_tokens=2000),
-        acp_agents={},
     )
 
     def fail_get_app_config():
@@ -155,7 +152,6 @@ def test_apply_prompt_template_threads_explicit_app_config_to_subagents_without_
         skill_evolution=SimpleNamespace(enabled=False),
         tool_search=SimpleNamespace(enabled=False),
         memory=SimpleNamespace(enabled=False, injection_enabled=True, max_injection_tokens=2000),
-        acp_agents={},
     )
 
     def fail_get_app_config():
@@ -173,20 +169,6 @@ def test_apply_prompt_template_threads_explicit_app_config_to_subagents_without_
 
     assert "**researcher**: Research agent" in prompt
     assert "**bash**" not in prompt
-
-
-def test_build_acp_section_uses_explicit_app_config_without_global_config(monkeypatch):
-    explicit_config = SimpleNamespace(acp_agents={"codex": object()})
-
-    def fail_get_acp_agents():
-        raise AssertionError("ambient get_acp_agents() must not be used when app_config is explicit")
-
-    monkeypatch.setattr("omniharness.config.acp_config.get_acp_agents", fail_get_acp_agents)
-
-    section = prompt_module._build_acp_section(app_config=explicit_config)
-
-    assert "ACP Agent Tasks" in section
-    assert "/mnt/acp-workspace/" in section
 
 
 def test_get_memory_context_uses_explicit_app_config_without_global_config(monkeypatch):

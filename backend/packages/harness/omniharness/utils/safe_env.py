@@ -1,13 +1,12 @@
 """The environment a child process may see (security baseline).
 
 Every place the harness builds a subprocess environment for something an agent
-drives (the openclaude coder, ACP agents) starts from :func:`scrubbed_environment`,
+drives (today: the Composio stdio MCP server) starts from :func:`scrubbed_environment`,
 never from ``os.environ``. It drops, by NAME, anything that looks like a secret
 and, by VALUE, anything that carries credentials (a URL with ``user:pass@``,
 a webhook URL). With ``isolate_home=True`` it also points HOME at an empty
 temporary directory and drops XDG_* paths, so dotfiles (~/.codex, ~/.claude,
-~/.ssh) are not reachable through $HOME; coding-agent CLIs that authenticate
-from their own dotfiles (openclaude, ACP agents) keep HOME.
+~/.ssh) are not reachable through $HOME.
 """
 
 from __future__ import annotations

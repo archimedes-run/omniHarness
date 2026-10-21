@@ -7,9 +7,8 @@ from typing import Any, Self
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from omniharness.config.acp_config import ACPAgentConfig, load_acp_config_from_dict
 from omniharness.config.agents_api_config import AgentsApiConfig, load_agents_api_config_from_dict
 from omniharness.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from omniharness.config.database_config import DatabaseConfig
@@ -84,6 +83,29 @@ def apply_logging_level(name: str | None) -> None:
             handler.setLevel(level)
 
 
+#: Features that started an agent CLI as a process on the HOST (removed,
+#: security baseline): commands run only in the container sandbox. A config
+#: that still names one is refused, saying what to delete.
+_REMOVED_TOOL_MARKERS = ("openclaude", "invoke_acp_agent")
+
+
+def refuse_removed_agent_launchers(config_data: Mapping[str, object]) -> None:
+    acp_keys = [k for k in config_data if str(k).lower().startswith("acp")]
+    if acp_keys:
+        raise ValueError(
+            f"'{acp_keys[0]}' is no longer supported: ACP agents ran as processes on the host and were removed for security. Delete the '{acp_keys[0]}:' block from config.yaml. Agent commands run only in the container sandbox."
+        )
+    for tool in config_data.get("tools") or []:
+        name = tool.get("name") if isinstance(tool, Mapping) else getattr(tool, "name", None)
+        use = tool.get("use") if isinstance(tool, Mapping) else getattr(tool, "use", None)
+        if any(marker in f"{name} {use}".lower() for marker in _REMOVED_TOOL_MARKERS):
+            raise ValueError(
+                f"The tool '{name}' (use: {use}) is no longer supported: it ran a coding agent as a process on the host and was removed "
+                f"for security. Delete the tools: entry '- name: {name}' (and its 'use: {use}' line) from config.yaml. "
+                "Agent commands run only in the container sandbox."
+            )
+
+
 class AppConfig(BaseModel):
     """Config for the OmniHarness application"""
 
@@ -105,12 +127,19 @@ class AppConfig(BaseModel):
     summarization: SummarizationConfig = Field(default_factory=SummarizationConfig, description="Conversation summarization configuration")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory subsystem configuration")
     agents_api: AgentsApiConfig = Field(default_factory=AgentsApiConfig, description="Custom-agent management API configuration")
-    acp_agents: dict[str, ACPAgentConfig] = Field(default_factory=dict, description="ACP-compatible agent configuration")
     subagents: SubagentsAppConfig = Field(default_factory=SubagentsAppConfig, description="Subagent runtime configuration")
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig, description="Guardrail middleware configuration")
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig, description="LLM circuit breaker configuration")
     loop_detection: LoopDetectionConfig = Field(default_factory=LoopDetectionConfig, description="Loop detection middleware configuration")
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_removed_agent_launchers(cls, data: object) -> object:
+        if isinstance(data, Mapping):
+            refuse_removed_agent_launchers(data)
+        return data
+
     database: DatabaseConfig = Field(default_factory=DatabaseConfig, description="Unified database backend configuration")
     run_events: RunEventsConfig = Field(default_factory=RunEventsConfig, description="Run event storage configuration")
     checkpointer: CheckpointerConfig | None = Field(default=None, description="Checkpointer configuration")
@@ -177,21 +206,11 @@ class AppConfig(BaseModel):
         config_data["extensions"] = extensions_config.model_dump()
 
         result = cls.model_validate(config_data)
-        acp_agents = cls._validate_acp_agents(config_data.get("acp_agents", {}))
-        cls._apply_singleton_configs(result, acp_agents)
+        cls._apply_singleton_configs(result)
         return result
 
     @classmethod
-    def _validate_acp_agents(
-        cls,
-        config_data: Mapping[str, Mapping[str, object]] | None,
-    ) -> dict[str, ACPAgentConfig]:
-        if config_data is None:
-            config_data = {}
-        return {name: ACPAgentConfig(**cfg) for name, cfg in config_data.items()}
-
-    @classmethod
-    def _apply_singleton_configs(cls, config: Self, acp_agents: dict[str, ACPAgentConfig]) -> None:
+    def _apply_singleton_configs(cls, config: Self) -> None:
         from omniharness.config.checkpointer_config import get_checkpointer_config
 
         previous_checkpointer_config = get_checkpointer_config()
@@ -205,7 +224,6 @@ class AppConfig(BaseModel):
         load_guardrails_config_from_dict(config.guardrails.model_dump())
         load_checkpointer_config_from_dict(config.checkpointer.model_dump() if config.checkpointer is not None else None)
         load_stream_bridge_config_from_dict(config.stream_bridge.model_dump() if config.stream_bridge is not None else None)
-        load_acp_config_from_dict({name: agent.model_dump() for name, agent in acp_agents.items()})
 
         if previous_checkpointer_config != config.checkpointer:
             # These runtime singletons derive their backend from checkpointer config.

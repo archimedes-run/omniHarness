@@ -96,7 +96,7 @@ def test_no_subprocess_environment_is_copied_whole() -> None:
     """Only the scrubber itself may start from the full environment."""
     import re
 
-    allowed = {"packages/harness/omniharness/utils/safe_env.py", "app/tools/openclaude.py"}
+    allowed = {"packages/harness/omniharness/utils/safe_env.py"}
     found = set()
     for root in ("app", "packages"):
         for path in (BACKEND / root).rglob("*.py"):

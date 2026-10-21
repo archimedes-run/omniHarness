@@ -440,7 +440,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     skills_for_tool_policy = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config)
 
-    # MCP and ACP tools are dynamically registered and unknown at skill authoring
+    # MCP tools are dynamically registered and unknown at skill authoring
     # time, so they must never be dropped by skill allowed-tools policies.
     def _dynamic_tool_names() -> set[str]:
         names: set[str] = set()
@@ -448,14 +448,6 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             from omniharness.mcp.cache import get_cached_mcp_tools
 
             names.update(t.name for t in (get_cached_mcp_tools() or []))
-        except Exception:
-            pass
-        try:
-            from omniharness.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
-
-            acp_agents = getattr(resolved_app_config, "acp_agents", {}) or {}
-            if acp_agents:
-                names.add(build_invoke_acp_agent_tool(acp_agents).name)
         except Exception:
             pass
         return names

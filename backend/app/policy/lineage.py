@@ -50,7 +50,7 @@ def _message_type(message: Any) -> str | None:
 def is_tool_result(message: Any) -> bool:
     """True when this message IS a tool result, whatever source produced it.
 
-    Builtin, MCP, connector and ACP tools all execute through the same tool node
+    Builtin, MCP and connector tools all execute through the same tool node
     and return `ToolMessage`, so one check covers every source. If a future
     source bypasses that, `test_lineage_control.py` is what notices.
     """

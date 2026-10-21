@@ -58,7 +58,6 @@ omniharness/
 │   ├── tracing_config.py    # TracingConfig, LangSmithTracingConfig, LangfuseTracingConfig
 │   ├── guardrails_config.py # GuardrailsConfig, GuardrailProviderConfig
 │   ├── loop_detection_config.py # LoopDetectionConfig, ToolFreqOverride
-│   ├── acp_config.py        # ACPAgentConfig, get_acp_agents()
 │   ├── agents_api_config.py # AgentsApiConfig
 │   ├── checkpointer_config.py   # CheckpointerConfig
 │   ├── database_config.py   # DatabaseConfig
@@ -143,8 +142,7 @@ omniharness/
 │       ├── view_image_tool.py         # view_image tool
 │       ├── tool_search.py             # tool_search + DeferredToolRegistry
 │       ├── setup_agent_tool.py        # setup_agent (bootstrap-only)
-│       ├── update_agent_tool.py       # update_agent (custom agent self-update)
-│       └── invoke_acp_agent_tool.py   # invoke_acp_agent tool
+│       └── update_agent_tool.py       # update_agent (custom agent self-update)
 │
 ├── community/
 │   ├── tavily/tools.py         # web_search, web_fetch
@@ -275,7 +273,6 @@ Top-level schema that aggregates all sub-configs.
 | `stream_bridge` | `StreamBridgeConfig` | default | SSE stream bridge config |
 | `skill_evolution` | `SkillEvolutionConfig` | default | Skill evolution (LLM-based moderation) |
 | `agents_api` | `AgentsApiConfig` | default | Agents API compatibility |
-| `acp_agents` | `dict[str, ACPAgentConfig]` | `{}` | External ACP agent definitions |
 | `config_version` | `int \| None` | `None` | Config schema version |
 
 Key methods:
@@ -765,7 +762,6 @@ Builds the full system prompt string. Sections injected:
 - `<skills>` — enabled skill paths with descriptions
 - `<subagents>` — available subagent types (if subagent enabled)
 - `<deferred-tools>` — names of tools hidden behind tool_search (if enabled)
-- `<acp-agents>` — ACP agent descriptions
 
 ```python
 @lru_cache(maxsize=1)
@@ -1310,9 +1306,10 @@ Assembles the full tool list for an agent run:
    - `get_cached_mcp_tools()` — lazy init with mtime cache invalidation
    - If `tool_search.enabled`: registers MCP tools in `DeferredToolRegistry`,
      adds `tool_search` to builtins
-4. ACP tools: `build_invoke_acp_agent_tool()` if any ACP agents configured
+Deduplication: config-loaded → built-ins → MCP → connectors; first-seen name wins.
 
-Deduplication: config-loaded → built-ins → MCP → ACP; first-seen name wins.
+ACP agents and the openclaude tool were removed (they ran coding agents as host
+processes); `acp_agents` or such a `tools:` entry is refused at startup.
 
 ---
 
@@ -2632,15 +2629,6 @@ skill_evolution:
 
 agents_api:
   enabled: false
-
-acp_agents:
-  codex:
-    command: npx
-    args: ["-y", "@zed-industries/codex-acp"]
-    env: {}
-    description: "OpenAI Codex CLI agent"
-    model: null
-    auto_approve_permissions: false
 ```
 
 ---

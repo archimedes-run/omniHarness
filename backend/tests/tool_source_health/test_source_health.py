@@ -220,7 +220,7 @@ def test_local_mcp_tools_are_tagged_with_their_server_at_assembly():
             return {"filesystem": object(), "github": object(), "composio-gmail": object()}
 
     cached = [FakeTool("filesystem_read_file"), FakeTool("github_list_repos"), FakeTool("composio-gmail_GMAIL_SEND")]
-    config = SimpleNamespace(tools=[], skill_evolution=None, models=[SimpleNamespace(name="m")], get_model_config=lambda name: SimpleNamespace(supports_vision=False), tool_search=SimpleNamespace(enabled=False), acp_agents={})
+    config = SimpleNamespace(tools=[], skill_evolution=None, models=[SimpleNamespace(name="m")], get_model_config=lambda name: SimpleNamespace(supports_vision=False), tool_search=SimpleNamespace(enabled=False))
     with (
         patch.object(tools_mod, "is_host_bash_allowed", return_value=True),
         patch("omniharness.mcp.cache.get_cached_mcp_tools", return_value=cached),

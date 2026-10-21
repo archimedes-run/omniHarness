@@ -9,7 +9,6 @@ import yaml
 from pydantic import ValidationError
 
 import omniharness.config.app_config as app_config_module
-from omniharness.config.acp_config import load_acp_config_from_dict
 from omniharness.config.agents_api_config import get_agents_api_config, load_agents_api_config_from_dict
 from omniharness.config.app_config import AppConfig, get_app_config, reset_app_config
 from omniharness.config.checkpointer_config import get_checkpointer_config, load_checkpointer_config_from_dict
@@ -34,7 +33,6 @@ def _reset_config_singletons() -> None:
     load_guardrails_config_from_dict({})
     load_checkpointer_config_from_dict(None)
     load_stream_bridge_config_from_dict(None)
-    load_acp_config_from_dict({})
     reset_checkpointer()
     reset_store()
     reset_app_config()

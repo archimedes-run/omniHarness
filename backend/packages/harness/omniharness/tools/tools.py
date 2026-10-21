@@ -287,29 +287,12 @@ def get_available_tools(
         except Exception as e:
             logger.error(f"Failed to load connector tools: {e}")
 
-    # Add invoke_acp_agent tool if any ACP agents are configured
-    acp_tools: list[BaseTool] = []
-    try:
-        from omniharness.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
-
-        if app_config is None:
-            from omniharness.config.acp_config import get_acp_agents
-
-            acp_agents = get_acp_agents()
-        else:
-            acp_agents = getattr(config, "acp_agents", {}) or {}
-        if acp_agents:
-            acp_tools.append(build_invoke_acp_agent_tool(acp_agents))
-            logger.info(f"Including invoke_acp_agent tool ({len(acp_agents)} agent(s): {list(acp_agents.keys())})")
-    except Exception as e:
-        logger.warning(f"Failed to load ACP tool: {e}")
-
-    logger.info(f"Total tools loaded: {len(loaded_tools)}, built-in tools: {len(builtin_tools)}, MCP tools: {len(mcp_tools)}, ACP tools: {len(acp_tools)}")
+    logger.info(f"Total tools loaded: {len(loaded_tools)}, built-in tools: {len(builtin_tools)}, MCP tools: {len(mcp_tools)}")
 
     # Deduplicate by tool name — config-loaded tools take priority, followed by
-    # built-ins, MCP tools, connector tools, and ACP tools.  Duplicate names
+    # built-ins, MCP tools and connector tools.  Duplicate names
     # cause the LLM to receive ambiguous schemas (issue #1803).
-    all_tools = loaded_tools + builtin_tools + mcp_tools + connector_tools + acp_tools
+    all_tools = loaded_tools + builtin_tools + mcp_tools + connector_tools
     seen_names: set[str] = set()
     unique_tools: list[BaseTool] = []
     for t in all_tools:
@@ -421,9 +404,5 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
             logger.warning("tool %r (%s) could not be loaded, so it is not offered", cfg.name, cfg.use)
     names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, skill_manage_tool, setup_agent, update_agent)]
     names += [t.name for t in TodoMiddleware().tools]
-    # Named, not built: building it needs a configured ACP agent, and the name is
-    # what the rules speak about. Always listed so a rule exists before an
-    # operator adds one.
-    names.append("invoke_acp_agent")
     names += [t.name for t in (loaded_mcp_tools() or [])]
     return list(dict.fromkeys(names))
