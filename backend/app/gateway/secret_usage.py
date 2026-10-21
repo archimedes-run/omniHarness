@@ -93,7 +93,6 @@ CONFIG_REFERENCE_KEYS: dict[str, str] = {
     "VOLCENGINE_API_KEY": "a model's api_key",
     "MOONSHOT_API_KEY": "a model's api_key",
     "GITHUB_TOKEN": "an MCP server's env (extensions_config.json)",
-    "OMNI_HARNESS_WATCHER_TOKEN": "the session-watcher MCP entry's X-OmniHarness-Watcher-Token header",
 }
 
 #: Non-secret settings the gateway reads from the environment (.env).

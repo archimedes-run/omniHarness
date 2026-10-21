@@ -15,6 +15,8 @@ DOCKER_DIR="$PROJECT_ROOT/docker"
 # Docker Compose command with project name. Keep this as an array so quoted
 # paths survive `cd "$DOCKER_DIR"` without becoming literal quote characters.
 COMPOSE_CMD=(docker compose --env-file "$PROJECT_ROOT/.env" -p omni-harness-dev -f docker-compose-dev.yaml)
+# The session-watcher token (required; mounted read-only into watcher and gateway).
+"$PROJECT_ROOT/scripts/ensure-watcher-token.sh"
 DEFAULT_SANDBOX_IMAGE="ghcr.io/archimedes-run/omni-harness-sandbox:latest"
 
 detect_sandbox_mode() {

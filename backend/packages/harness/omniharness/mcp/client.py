@@ -33,9 +33,13 @@ def build_server_params(server_name: str, config: McpServerConfig) -> dict[str, 
         if not config.url:
             raise ValueError(f"MCP server '{server_name}' with {transport_type} transport requires 'url' field")
         params["url"] = config.url
-        # Add headers if present
-        if config.headers:
-            params["headers"] = config.headers
+        # Add headers if present; the session-watcher also gets its required
+        # token, read from the mounted secrets file (never from config).
+        from omniharness.mcp.watcher_token import watcher_headers
+
+        headers = watcher_headers(server_name, config.headers)
+        if headers:
+            params["headers"] = headers
     else:
         raise ValueError(f"MCP server '{server_name}' has unsupported transport type: {transport_type}")
 

@@ -219,6 +219,7 @@ gateway container
 | `OMNI_HARNESS_ROOT` | from `.env` | Root of the repo on the host — required for bind mounts |
 | `OMNI_HARNESS_HOST_BASE_DIR` | `$OMNI_HARNESS_ROOT/backend/.omni-harness` | Host path prefix for thread directories |
 | `OMNI_HARNESS_SANDBOX_NETWORK` | `omni-harness-sandboxes` (set by compose) | Private Docker network sandboxes share with the gateway; they publish no host port and are reached by container name. Unset (a gateway on the host): sandboxes are refused |
+| `OMNI_HARNESS_WATCHER_TOKEN_FILE` | `~/.omni-harness-secrets/watcher.token` (compose: `/run/secrets/watcher.token`, mounted read-only) | The session-watcher's REQUIRED shared token. Created on first start by `scripts/ensure-watcher-token.sh` (run by `make daily`, deploy.sh, docker.sh, serve.sh); the gateway sends it to the `session-watcher` MCP server automatically. Nothing to put in `.env` or `extensions_config.json` |
 | `OMNI_HARNESS_HOST_SKILLS_PATH` | `$OMNI_HARNESS_ROOT/skills` | Host path for skills directory mount |
 | `SANDBOX_IMAGE` | `ghcr.io/archimedes-run/omni-harness-sandbox:latest` | Sandbox container image; override for mirrors or custom builds |
 

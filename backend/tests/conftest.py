@@ -24,6 +24,15 @@ os.environ.setdefault("OPENAI_API_KEY", "placeholder-not-a-real-key")
 # TestClient sends Host: testserver; the gateway answers only allowlisted
 # hosts (app.gateway.config.HostGuardMiddleware), so tests allow that name.
 os.environ.setdefault("GATEWAY_ALLOWED_HOSTS", "testserver")
+# The session-watcher's token is REQUIRED; tests share one throwaway token file
+# (read by the watcher and sent by the gateway's MCP client), never the user's.
+if not os.environ.get("OMNI_HARNESS_WATCHER_TOKEN_FILE"):
+    import tempfile as _tempfile
+
+    _token_dir = _tempfile.mkdtemp(prefix="omni-test-watcher-")
+    with open(os.path.join(_token_dir, "watcher.token"), "w", encoding="utf-8") as _fh:
+        _fh.write("test-watcher-token\n")
+    os.environ["OMNI_HARNESS_WATCHER_TOKEN_FILE"] = os.path.join(_token_dir, "watcher.token")
 
 # Make 'app' and 'omniharness' importable from any working directory
 sys.path.insert(0, str(Path(__file__).parent.parent))

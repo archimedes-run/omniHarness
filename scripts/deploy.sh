@@ -49,6 +49,8 @@ COMPOSE_CMD=(docker compose -p omni-harness -f "$DOCKER_DIR/docker-compose.yaml"
 if [ -f "$REPO_ROOT/.env" ]; then
     COMPOSE_CMD=(docker compose --env-file "$REPO_ROOT/.env" -p omni-harness -f "$DOCKER_DIR/docker-compose.yaml")
 fi
+# The session-watcher token (required; mounted read-only into watcher and gateway).
+"$REPO_ROOT/scripts/ensure-watcher-token.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 

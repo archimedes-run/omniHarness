@@ -77,6 +77,8 @@ services:
       # Loopback only; containers still reach it via host.docker.internal.
       - "127.0.0.1:18101:18101"
     volumes:
+      # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
+      - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
       # READ-ONLY by mount, not by convention.
       - type: bind
         source: ${HOME:?HOME must be set}/.claude
@@ -92,8 +94,7 @@ services:
         bind:
           create_host_path: true
     environment:
-      # Shared with the gateway (its MCP entry sends it); every request without it is refused.
-      - OMNI_HARNESS_WATCHER_TOKEN
+      - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
     working_dir: /app
     networks:
       - omni-harness
@@ -133,6 +134,8 @@ services:
     # kernel hands the connection to a different worker than minted it.
     command: sh -c "export OMNI_HARNESS_INTERNAL_AUTH_TOKEN=${OMNI_HARNESS_INTERNAL_AUTH_TOKEN:-$$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')} && cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-4}"
     volumes:
+      # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
+      - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
       - ${OMNI_HARNESS_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${OMNI_HARNESS_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
       - ../skills:/app/skills:ro
@@ -156,6 +159,7 @@ services:
           create_host_path: true
     working_dir: /app
     environment:
+      - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
       - CI=true
       - OMNI_HARNESS_PROJECT_ROOT=/app
       - OMNI_HARNESS_HOME=/app/backend/.omni-harness
@@ -206,7 +210,6 @@ services:
       - LANGSMITH_TRACING
       - MOONSHOT_API_KEY
       - OMNI_HARNESS_INTERNAL_AUTH_TOKEN
-      - OMNI_HARNESS_WATCHER_TOKEN
       - OPENAI_API_KEY
       - OPENCLAW_BEARER_TOKEN
       - OPENROUTER_API_KEY
@@ -266,3 +269,6 @@ networks:
   omni-harness-sandboxes:
     name: omni-harness-sandboxes
     driver: bridge
+    # No route out of it at all: sandboxes reach the gateway and nothing else
+    # (Docker Desktop routes host.docker.internal only through a non-internal network).
+    internal: true

@@ -222,6 +222,9 @@ run_service() {
 mkdir -p logs
 mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp temp/scgi_temp
 
+# The session-watcher token (required) for a gateway on the host to send.
+./scripts/ensure-watcher-token.sh
+
 # 1. Gateway API
 run_service "Gateway" \
     "cd backend && GATEWAY_LOG_FILE=../logs/gateway.log GATEWAY_TRUSTED_PROXIES=127.0.0.1 PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001 $GATEWAY_EXTRA_FLAGS >> ../logs/gateway.console.log 2>&1" \

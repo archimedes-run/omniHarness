@@ -194,6 +194,7 @@ up:
 DAILY_COMPOSE = cd docker && OMNI_HARNESS_ROOT=$(CURDIR) docker compose --env-file ../.env -p omni-harness-dev -f docker-compose-dev.yaml
 
 daily:
+	@./scripts/ensure-watcher-token.sh
 	$(DAILY_COMPOSE) up -d gateway session-watcher nginx
 	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend
 

@@ -128,6 +128,8 @@ services:
       # Loopback only; containers still reach it via host.docker.internal.
       - "127.0.0.1:18101:18101"
     volumes:
+      # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
+      - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
       # The sessions it reports on. READ-ONLY: this server never writes, and
       # the mount is what makes that structural rather than a promise.
       - type: bind
@@ -147,8 +149,7 @@ services:
         bind:
           create_host_path: true
     environment:
-      # Shared with the gateway (its MCP entry sends it); every request without it is refused.
-      - OMNI_HARNESS_WATCHER_TOKEN
+      - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
     working_dir: /app
     networks:
       - omni-harness-dev
@@ -198,6 +199,8 @@ services:
     container_name: omni-harness-gateway
     command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env'; } >> /app/logs/gateway.console.log 2>&1"
     volumes:
+      # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
+      - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
       - ../backend/:/app/backend/
       # Preserve the .venv built during Docker image build — mounting the full backend/
       # directory above would otherwise shadow it with the (empty) host directory.
@@ -233,6 +236,7 @@ services:
           create_host_path: true
     working_dir: /app
     environment:
+      - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
       - CI=true
       - OMNI_HARNESS_PROJECT_ROOT=/app
       # Point the gateway at the extensions config inside the DIRECTORY mount
@@ -282,7 +286,6 @@ services:
       - LANGSMITH_TRACING
       - MOONSHOT_API_KEY
       - OMNI_HARNESS_INTERNAL_AUTH_TOKEN
-      - OMNI_HARNESS_WATCHER_TOKEN
       - OPENAI_API_KEY
       - OPENCLAW_BEARER_TOKEN
       - OPENROUTER_API_KEY
@@ -318,3 +321,6 @@ networks:
   omni-harness-dev-sandboxes:
     name: omni-harness-dev-sandboxes
     driver: bridge
+    # No route out of it at all: sandboxes reach the gateway and nothing else
+    # (Docker Desktop routes host.docker.internal only through a non-internal network).
+    internal: true

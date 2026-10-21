@@ -467,6 +467,13 @@ class LocalContainerBackend(SandboxBackend):
                 "-d",
                 "--network",
                 network,
+                # The network is internal (no route out), and Docker Desktop's
+                # names for the host are pinned away, so sandbox code cannot
+                # reach host-loopback services through them.
+                "--add-host",
+                "host.docker.internal:0.0.0.0",
+                "--add-host",
+                "gateway.docker.internal:0.0.0.0",
                 "--name",
                 container_name,
             ]
