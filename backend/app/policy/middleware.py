@@ -270,39 +270,6 @@ class PolicyMiddleware(AgentMiddleware):
                 return None if getattr(message, "tool_calls", None) else message
         return None
 
-    def _may_answer_a_card(self, request: Any, messages: list) -> bool:
-        """THE ONE PLACE that decides whether this turn is read as a yes/no.
-
-        Every exclusion lives here, so the next one (same thread, same owner,
-        user turns only) is added in one function, not threaded through
-        `_complete_confirmation`.
-        """
-        from langchain_core.messages import HumanMessage
-
-        if not messages or not isinstance(messages[-1], HumanMessage):
-            # ONLY a turn that has just arrived can be a verdict. Without this,
-            # the same human turn that PROVOKED the proposal is re-read as an
-            # answer to it on the next loop, and every Tier 3 proposal is
-            # immediately met with "I did not recognise that".
-            return False
-        if self._is_invited(request):
-            # AN INVITED AGENT HAS NO USER. Its first message is the
-            # instructions its inviter wrote (omniharness.agents.invitation), so
-            # reading it as a verdict let "Wipe the backup" answer whatever was
-            # pending in the chat: a restated plan replaced the subagent's whole
-            # run (found 2026-10-20, test_delegated_confirmation.py). Only the
-            # user, in the lead's chat or on the card, answers a confirmation.
-            return False
-        context = self._runtime_context(request) or {}
-        if context.get("called_agent") or context.get("resume_action"):
-            # A TURN THE SERVER HANDED TO AN AGENT ("@member", or Continue on a
-            # card) is that agent's turn, not an answer to some other card.
-            # "Continue release-manager." read as a short reply was swallowed
-            # as "unrecognised" while any card was pending, and could have
-            # answered a different card (review of PR #58).
-            return False
-        return True
-
     def _complete_confirmation(self, request: Any) -> tuple[Any, Any]:
         from langchain_core.messages import AIMessage
 
@@ -310,7 +277,11 @@ class PolicyMiddleware(AgentMiddleware):
         from .confirm_flow import ConfirmationFlow
 
         messages = list(getattr(request, "messages", None) or [])
-        if not self._may_answer_a_card(request, messages):
+        # ONE GATE (confirm_flow.turn_may_answer): only the person's own,
+        # just-arrived, server-tagged turn is ever read as a yes/no. Not a
+        # subagent's, not a turn handed to an agent ("@member", Continue), not
+        # a scheduled one, not a tool result or an agent's reply.
+        if not messages or not confirm_flow.turn_may_answer(messages[-1], self._runtime_context(request)):
             return None, None
 
         flow = ConfirmationFlow(store=self.pending, middleware=self, now=self.now)

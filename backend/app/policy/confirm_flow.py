@@ -124,7 +124,7 @@ class ConfirmationFlow:
         # (synthetic) turn, whose "human" message is a rule's prompt. Without
         # the thread scope, "yes" typed in any chat (or any Telegram message)
         # answered whichever plan was pending anywhere.
-        pending = answerable_by_typed_reply(self.store.open_actions(now), runtime_context)
+        pending = answerable_by_typed_reply(self.store.open_actions(now), runtime_context, message)
         if not pending:
             return FlowResult(NO_VERDICT, expired_meanwhile=expired)
 
@@ -358,10 +358,42 @@ def _same_key(recorded: str | None, current: str | None) -> bool:
 
 #: Server-set markers of a turn that is not a person answering: a resumed or
 #: called agent (Feature 006 #58 sets these). Such a turn is never a verdict.
-_NOT_A_PERSONS_TURN_KEYS = ("continue_action", "called_agent")
+_NOT_A_PERSONS_TURN_KEYS = ("continue_action", "called_agent", "resume_action")
 
 
-def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dict | None) -> list[PendingAction]:
+def turn_may_answer(message: Any, runtime_context: dict | None) -> bool:
+    """THE ONE TEST of whether this turn may be read as a yes/no at all.
+
+    `answerable_by_typed_reply` applies it, and the policy middleware calls it
+    before anything else (so a turn that cannot answer does not even sweep
+    expiry). False for: a message that is not the person's own server-tagged
+    turn (lineage.is_user_turn: never a tool result, an agent's reply, an
+    injected message, a subagent's instruction or a resumed agent's observed
+    output); a scheduled (synthetic) turn; a turn the server handed to an
+    agent (called_agent, resume_action: "@member" or Continue); an invited
+    agent's (subagent's) turn.
+    """
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+
+    from .lineage import USER_ORIGINS, _message_type, is_invitation, is_tool_result
+    from .provenance import is_synthetic_turn
+
+    # A message that is not a person's message at all (a tool result, an
+    # agent's reply, a resumed agent's observed output, an invitation) is
+    # never an answer. Whether a human message is the person's own TAGGED turn
+    # is decided by recognise (lineage.eligible_to_confirm), which restates the
+    # plan to an untagged one rather than ignoring it.
+    if message is not None and (_message_type(message) not in USER_ORIGINS or is_tool_result(message) or is_invitation(message)):
+        return False
+    ctx = runtime_context or {}
+    if is_synthetic_turn(ctx) or any(ctx.get(k) for k in _NOT_A_PERSONS_TURN_KEYS):
+        return False
+    # An invited agent (subagent) has no person of its own: its "user" message
+    # is its inviter's instruction. Nothing typed there confirms anything.
+    return not (INVITED_ORIGIN_KEY in ctx or ctx.get(DELEGATION_CHAIN_KEY))
+
+
+def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dict | None, message: Any = None) -> list[PendingAction]:
     """THE gate for typed confirmations: which plans may this turn answer?
 
     - only a person's own turn: never a scheduled (synthetic) turn, never a
@@ -375,16 +407,8 @@ def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dic
     Several plans left after this gate and no id named: nothing is approved and
     each is restated (recognise / FR-035).
     """
-    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
-
-    from .provenance import is_synthetic_turn
-
+    if not turn_may_answer(message, runtime_context):
+        return []
     ctx = runtime_context or {}
-    if is_synthetic_turn(ctx) or any(ctx.get(k) for k in _NOT_A_PERSONS_TURN_KEYS):
-        return []
-    # An invited agent (subagent) has no person of its own: its "user" message
-    # is its inviter's instruction. Nothing typed there confirms anything.
-    if INVITED_ORIGIN_KEY in ctx or ctx.get(DELEGATION_CHAIN_KEY):
-        return []
     speaker, thread = ctx.get("user_id"), ctx.get("thread_id")
     return [a for a in actions if _same_owner(a.owner_id, speaker) and _same_key(a.thread_id, thread)]

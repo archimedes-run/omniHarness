@@ -38,7 +38,7 @@ def _agent_action(owner_id: str, thread_id: str, *, executed: bool = False, call
 
     action = PendingAction(
         plan_text="Wipe the backup named nightly",
-        tool_name="wipe_backup",
+        tool_name="gmail_delete_email",
         arguments={"name": "nightly"},
         targets=["nightly"],
         tier_at_statement=Tier.TIER_3,
