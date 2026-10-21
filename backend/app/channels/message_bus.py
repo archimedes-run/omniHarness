@@ -93,6 +93,10 @@ class OutboundMessage:
         thread_ts: Optional platform thread identifier for threaded replies.
         metadata: Arbitrary extra data.
         created_at: Unix timestamp.
+        server_links: URLs in `text` that the server built itself (the app's
+            own links). They stay live; every other URL in `text` is
+            defanged on the way out (app/channels/defang.py). Never filled
+            from agent or content text.
     """
 
     channel_name: str
@@ -105,6 +109,7 @@ class OutboundMessage:
     thread_ts: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
+    server_links: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------

@@ -103,6 +103,10 @@ class SlackChannel(Channel):
         kwargs: dict[str, Any] = {
             "channel": msg.chat_id,
             "text": _slack_md_converter.convert(msg.text),
+            # No unfurling: Slack's servers would fetch a URL in the text with
+            # no click (zero-click exfiltration; app/channels/defang.py).
+            "unfurl_links": False,
+            "unfurl_media": False,
         }
         if msg.thread_ts:
             kwargs["thread_ts"] = msg.thread_ts

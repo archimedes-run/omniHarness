@@ -107,7 +107,7 @@ class DiscordChannel(Channel):
 
         text = msg.text or ""
         for chunk in self._split_text(text):
-            send_future = asyncio.run_coroutine_threadsafe(target.send(chunk), self._discord_loop)
+            send_future = asyncio.run_coroutine_threadsafe(target.send(chunk, suppress_embeds=True), self._discord_loop)
             await asyncio.wrap_future(send_future)
 
     async def send_file(self, msg: OutboundMessage, attachment: ResolvedAttachment) -> bool:

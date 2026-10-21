@@ -13,6 +13,14 @@ from app.channels.message_bus import InboundMessage, InboundMessageType, Message
 logger = logging.getLogger(__name__)
 
 
+def _no_preview():
+    """Link previews off for a message (imported lazily, like the rest of
+    python-telegram-bot here)."""
+    from telegram import LinkPreviewOptions
+
+    return LinkPreviewOptions(is_disabled=True)
+
+
 class TelegramChannel(Channel):
     """Telegram bot channel using long-polling.
 
@@ -98,7 +106,9 @@ class TelegramChannel(Channel):
         except (ValueError, TypeError) as exc:
             raise ValueError(f"invalid Telegram chat_id {msg.chat_id!r}: it must be numeric") from exc
 
-        kwargs: dict[str, Any] = {"chat_id": chat_id, "text": msg.text}
+        # No link preview: Telegram's servers would fetch a URL in the text
+        # with no click (zero-click exfiltration; app/channels/defang.py).
+        kwargs: dict[str, Any] = {"chat_id": chat_id, "text": msg.text, "link_preview_options": _no_preview()}
 
         # Reply to the last bot message in this chat for threading
         reply_to = self._last_bot_message.get(msg.chat_id)
@@ -183,6 +193,7 @@ class TelegramChannel(Channel):
             await bot.send_message(
                 chat_id=int(chat_id),
                 text="Working on it...",
+                link_preview_options=_no_preview(),
                 reply_to_message_id=reply_to_message_id,
             )
             logger.info("[Telegram] 'Working on it...' reply sent in chat=%s", chat_id)
