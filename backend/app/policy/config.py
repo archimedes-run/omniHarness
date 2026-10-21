@@ -181,9 +181,14 @@ class ConfigLoader:
                         f"Predicates are a closed set in app/policy/predicates.py; adding one is "
                         f"a code change with a test, not a config edit."
                     )
-                if not (raw_exception.get("when") or unless):
-                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has neither `when` nor `unless`, so it can never apply.')
-                exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier, unless=unless))
+                after_content = raw_exception.get("after_content", False)
+                if not isinstance(after_content, bool):
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has after_content {after_content!r}; expected true or false.')
+                if after_content and (raw_exception.get("when") or unless):
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" combines `after_content` with `when`/`unless`. Write them as separate exceptions: each raises on its own condition.')
+                if not (raw_exception.get("when") or unless or after_content):
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has neither `when`, `unless` nor `after_content`, so it can never apply.')
+                exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier, unless=unless, after_content=after_content))
 
             rules.append(ClassificationRule(pattern=pattern, tier=tier, exceptions=tuple(exceptions), source_file=str(self.path), source_line=index))
 

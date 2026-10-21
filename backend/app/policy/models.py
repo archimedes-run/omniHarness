@@ -68,7 +68,19 @@ class RuleException:
     #: exception applies when the predicate is not satisfied.
     unless: dict[str, str] = field(default_factory=dict)
 
-    def matches(self, arguments: dict[str, Any]) -> bool:
+    #: Applies once content the agent READ (or an automation's turn) is what
+    #: led to this call: the turn's origin is not the user's own message
+    #: (lineage.initiation_origin, the same origin a Tier 3 card states). For
+    #: tools that send an agent-chosen URL or query off the machine
+    #: (web_fetch, web_search, image_search): silent in a clean turn, but once
+    #: a page or an email has been read, the next fetch could carry what it
+    #: asked for out in its URL (zero-click exfiltration, review 4). Never
+    #: combined with `when`/`unless` (refused at load).
+    after_content: bool = False
+
+    def matches(self, arguments: dict[str, Any], *, after_content: bool = False) -> bool:
+        if self.after_content:
+            return after_content
         args = arguments or {}
         for key, expected in self.when.items():
             actual = args.get(key)
