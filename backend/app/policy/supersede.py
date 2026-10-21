@@ -40,7 +40,9 @@ def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> 
         return []
     superseded = []
     for action in store.open_actions(now):
-        decision = classify(action.tool_name, action.arguments, ruleset)
+        # Classified as it was stated: an action content led to stays judged
+        # after content, or a rules reload would wave every one of them away.
+        decision = classify(action.tool_name, action.arguments, ruleset, after_content=action.origin != "user")
         if decision.tier is Tier.TIER_3 and not decision.refused:
             continue
         # Claimed first, through the same one-shot claim confirmation uses, so

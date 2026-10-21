@@ -34,12 +34,16 @@ from .models import ClassificationRule, PolicyDecision, RuleException, Tier
 UNKNOWN_TOOL_TIER = Tier.TIER_3
 
 
-def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet) -> PolicyDecision:
+def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet, *, after_content: bool = False) -> PolicyDecision:
     """Classify one call.
 
     THE ONE code path for this. `explain.py` calls it too rather than
     reimplementing the logic — an inspector that answers a slightly different
     question is worse than none, because it is believed (FR-038).
+
+    `after_content`: the call was led to by something other than the user's
+    own message (content the agent read, an automation's turn, or a cause
+    nobody could tell). Only `after_content` exceptions read it.
     """
     best: tuple[Tier, ClassificationRule | None, RuleException | None] = (UNKNOWN_TOOL_TIER, None, None)
     matched = False
@@ -49,7 +53,7 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet)
         matched = True
         tier, raised_by = rule.tier, None
         for exception in rule.exceptions:
-            if exception.matches(arguments or {}) and exception.tier > tier:
+            if exception.matches(arguments or {}, after_content=after_content) and exception.tier > tier:
                 tier, raised_by = exception.tier, exception
         # Highest tier wins on overlap — same direction as FR-037.
         if best[1] is None or tier > best[0]:

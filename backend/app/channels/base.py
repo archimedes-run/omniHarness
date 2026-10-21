@@ -10,6 +10,7 @@ from typing import Any
 from session_watcher.redaction import Channel as RedactionLevel
 from session_watcher.redaction import redact_or_suppress
 
+from app.channels.defang import defang_urls
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 
 logger = logging.getLogger(__name__)
@@ -81,12 +82,19 @@ class Channel(ABC):
         messages still get REMOTE, upstream in the trigger engine's Releaser.
         Patterns catch RECOGNISED secret shapes only; that limit is the
         redactor's, and is stated there.
+
+        Then every URL the server did not build itself is defanged
+        (app/channels/defang.py): an injected email or page can make the
+        agent end a reply with a URL carrying private data, and a platform
+        that previews links fetches it with no click. Each channel's `send`
+        also switches previews off.
         """
         safe, ok = redact_or_suppress(msg.text, RedactionLevel.LOCAL)
         if not ok:
             logger.error("[%s] redaction failed; withholding a message to chat %s", self.name, msg.chat_id)
             await self.send(replace(msg, text=WITHHELD_NOTICE, attachments=[], artifacts=[]))
             return False
+        safe = defang_urls(safe, msg.server_links)
         await self.send(msg if safe == msg.text else replace(msg, text=safe))
         return True
 

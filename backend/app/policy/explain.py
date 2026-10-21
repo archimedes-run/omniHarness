@@ -21,6 +21,7 @@ from .config import RuleSet
 from .models import PolicyDecision
 
 
-def explain(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet) -> PolicyDecision:
-    """The effective tier of a hypothetical call, and what decided it."""
-    return classify(tool_name, arguments, ruleset)
+def explain(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet, *, after_content: bool = False) -> PolicyDecision:
+    """The effective tier of a hypothetical call, and what decided it.
+    `after_content` asks about a call made after content entered the turn."""
+    return classify(tool_name, arguments, ruleset, after_content=after_content)

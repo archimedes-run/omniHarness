@@ -333,7 +333,11 @@ class PolicyMiddleware(AgentMiddleware):
         return dict(getattr(runtime, "context", None) or {}) if runtime is not None else None
 
     def _classify(self, request):
-        return classify(self._tool_name(request), self._arguments(request), self.loader.load())
+        # The same origin a Tier 3 card states (`_origin`, lineage +
+        # provenance + invitation): anything but the user's own message means
+        # content, an automation, or an unknown cause led to this call.
+        after_content = self._origin(request)[0] != "user"
+        return classify(self._tool_name(request), self._arguments(request), self.loader.load(), after_content=after_content)
 
     @staticmethod
     def _tool_name(request) -> str:
