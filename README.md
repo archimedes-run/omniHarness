@@ -1,664 +1,300 @@
-# OmniHarness
+<div align="center">
 
-[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](./backend/pyproject.toml)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](./Makefile)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+<a href="https://github.com/archimedes-run/omniHarness">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/banner-dark.png">
+    <img src="docs/readme/banner-light.png" alt="OmniHarness — an open-source, self-hosted AI agent workspace with a policy engine that asks before it acts" width="100%">
+  </picture>
+</a>
 
-**A self-extending agent platform — the agent builds, registers, and verifies its own capabilities at runtime, instead of you wiring them up and restarting the stack.**
+<h3>The open-source AI agent workspace that asks before it acts.</h3>
 
-OmniHarness is a long-horizon agent harness for tasks that take minutes to hours: it researches, codes, and creates inside real sandboxes, with memory, subagents, skills, and a multi-channel gateway. What makes it different is the bet underneath it — that the *capability layer itself* should be authored by the agent and hot-loaded, and that the agent should close its own build-run-fix loops instead of handing you errors to relay back.
+<p>
+  Chat with a team of agents · automate your week · watch your coding agents · keep every risky action behind a button.
+</p>
 
-Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](https://github.com/langchain-ai/langchain). Works with any OpenAI-compatible LLM.
+<p>
+  <a href="#-quick-start"><b>Quick start</b></a> ·
+  <a href="#-whats-inside">What's inside</a> ·
+  <a href="#-in-development">In development</a> ·
+  <a href="#%EF%B8%8F-safety-is-the-product">Safety</a> ·
+  <a href="#-contributing">Contribute</a>
+</p>
 
----
+[![License: MIT](https://img.shields.io/badge/license-MIT-8FA8FF.svg)](./LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](./backend/pyproject.toml)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-339933?logo=node.js&logoColor=white)](./Makefile)
+[![Built on LangGraph](https://img.shields.io/badge/built%20on-LangGraph-1C3C3C)](https://github.com/langchain-ai/langgraph)
+[![MCP](https://img.shields.io/badge/MCP-client%20%2B%20builder-6FD3A0)](#-mcp-suite)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-F2B65A.svg)](#-contributing)
 
-## Why OmniHarness?
+</div>
 
-> **Relationship to DeerFlow:** OmniHarness began as a fork of [DeerFlow 2.0](https://github.com/bytedance/deer-flow) (ByteDance, MIT) and owes it a real debt — see [Acknowledgements](#acknowledgments). It has since diverged into an independent project with its own thesis and roadmap. OmniHarness is **not affiliated with or endorsed by ByteDance**.
+<br>
 
-DeerFlow is an excellent, fast-moving SuperAgent harness. If you want the best-supported research/coding agent with the broadest community, use DeerFlow — it's backed by a large team.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/hero-dark.png">
+  <img src="docs/readme/hero-light.png" alt="OmniHarness chat with a lead agent and a researcher agent, an approval card for a Tier 3 email, and a Today dashboard showing coding agents, automations, policy activity and an agent-improvement proposal" width="100%">
+</picture>
 
-OmniHarness exists for a different goal: **removing the human from the inner loop entirely.**
-
-1. **The agent closes its own loops.** It doesn't just write code and stop — it runs the result, sees what breaks, fixes it, and confirms it's clean before handing anything back. Live preview is the first concrete instance of this.
-2. **The agent extends the platform itself.** New connectors, MCP servers, skills, and workflows are things the agent *builds and registers at runtime* — not things you hand-wire and `docker restart` to install.
-
-If that direction is what you're after, OmniHarness is the bet. If you need the broadest community and production mileage today, DeerFlow is the safer pick — and we'll say so honestly.
-
----
-
-## Available now
-
-### Live preview for web app development
-
-The agent builds a web app and the preview runs **inside the sandbox** with the gateway proxying it straight to your browser — no separate setup. For static pages and dev-server projects (anything with an `index.html` or a `package.json` dev script), the preview just comes up.
-
-**The self-verifying loop:** preview **auto-starts** when the agent produces a web artifact, and a verification gate stops the agent from declaring victory while the build is broken — it reads the dev-server/build error, fixes its own code, and re-checks until the preview runs clean. You stop being the courier who copy-pastes errors back to the agent.
-
-### The harness foundation
-
-- **Sandboxed execution** for code, shell, and file work — isolated Docker containers per thread
-- **Subagents** for decomposing long-horizon tasks and running them in parallel
-- **Persistent memory** across sessions
-- **Skills** — structured, domain-specific capability bundles, hot-loaded on demand
-- **Multi-channel gateway** — drive the agent from Slack, Telegram, Feishu, DingTalk, or the web UI
-- **MCP client + OAuth** for connecting external tools
+<p align="center"><sub>A multi-agent chat in OmniHarness: the researcher finds the blockers, the lead plans the week, and sending email waits for your <b>Confirm</b>. The <i>Today</i> panel on the right previews the dashboards in development; it is an illustrative mock with sample data.</sub></p>
 
 ---
 
-## Roadmap
+## What is OmniHarness?
 
-These are **in development**, not done — listed so you know where OmniHarness is going.
+**OmniHarness** is an open-source, self-hosted **AI agent workspace and agent harness**. You run it on your own machine. It gives you a team of LLM agents that research, plan, write code in sandboxes, work with your mail, calendar and GitHub, and run on a schedule — plus a **policy engine** that decides, for every single tool call, whether an agent may act, must tell you afterwards, or has to ask first.
 
-- **Agent-authored connectors, bring-your-own-key.** Describe an integration; the agent writes the connector code and wires it up. Your API keys are scoped per-connector and never readable back by the model.
-- **Agent-built MCP servers.** The agent scaffolds, builds, and registers MCP servers at runtime.
-- **Hot skill installation.** Add or update a skill live — no container restart.
-- **Workflows + triggers.** Multi-step automations fired on schedules, webhooks, or channel events.
+It is built for people who want an agent that does real work with real accounts, **without** handing it the keys to everything:
 
-> **On safety:** because OmniHarness lets the agent write and run code with your credentials, the guardrails *are* the product. Agent-authored code runs sandboxed off the control plane, secrets are scoped per-capability and never exposed back to the model, and first execution of any agent-built capability passes a human approval gate.
+- 🧑‍🤝‍🧑 **A team, not a chatbot.** A lead agent hands work to specialist agents (researcher, coder, your own) and you can `@`-mention any of them into a chat.
+- 🛡️ **Every tool call is tiered.** Reads run (Tier 1). Reversible writes run and are disclosed with an **Undo** (Tier 2). Anything that sends, deletes, spends or shares waits for **your** button (Tier 3). Tools without an explicit rule are refused, never defaulted.
+- 🗓️ **It works while you don't.** Automations fire on a schedule or an event — a morning brief, an inbox triage, an evening wrap-up — in your time zone, respecting quiet hours.
+- 👀 **It watches your other agents.** A session watcher follows your **Claude Code** and **Codex** sessions and tells you which one is working, finished, or waiting on you.
+- 🔌 **It speaks MCP.** Connect MCP servers and Composio toolkits — and, soon, have the agent **build** a new MCP server for you, sandboxed and approved by its code hash.
+- 🏠 **It stays home.** Single owner, loopback-only by default, secrets redacted before anything is stored, and nothing leaves the machine without a rule saying it may.
 
----
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-  - [Prerequisites](#prerequisites)
-  - [Configuration](#configuration)
-  - [Running with Docker](#running-with-docker)
-  - [Production deployment](#production-deployment)
-  - [Advanced](#advanced)
-- [Core Features](#core-features)
-- [Recommended Models](#recommended-models)
-- [Embedded Python Client](#embedded-python-client)
-- [Security Notice](#security-notice)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
+Built on [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](https://github.com/langchain-ai/langchain). Works with OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter and self-hosted vLLM models.
 
 ---
 
-## Quick Start
+## ✨ What's inside
 
-Docker is the only supported way to run OmniHarness. It handles all service wiring, sandbox isolation, and path mappings automatically.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-### Prerequisites
+### 💬 Multi-agent chat
+Agents carry their own name and colour in the thread, hand-offs read *Lead agent → Researcher*, plans render as real tables and lists, and approval cards sit **inline**, right where the agent asked. Pick a model and skills per chat, attach files, and `@` to bring in an agent.
 
-| Requirement | Minimum | Notes |
-|-------------|---------|-------|
-| [Docker Desktop](https://www.docker.com/products/docker-desktop/) | 4.x+ | macOS, Windows, Linux. [OrbStack](https://orbstack.dev) also works on macOS. |
-| Docker Compose | v2 | Bundled with Docker Desktop |
-| Disk space | 12 GB free | ~9 GB for the sandbox image + build artefacts |
-| RAM | 8 GB | 16 GB recommended for parallel sub-agents |
-| CPU | 4 vCPU | 8 vCPU recommended |
+### 🏠 Home
+"Good morning — 3 things need you." Waiting approvals with Decline and Confirm, blocked coding sessions, your projects, the next 7 days of Google Calendar (read-only), and *What moved today* — each line labelled **observed**, **reported** or **inferred**.
 
-> **Linux users**: add your user to the `docker` group (`sudo usermod -aG docker $USER`) so you can run Docker commands without `sudo`.
+### ✅ Tasks and the Project Ledger
+Projects, goals, tasks and notes that you and your agents share. Agents propose; routine writes are disclosed with Undo; anything bigger waits for you.
 
-### Configuration
+</td>
+<td width="50%" valign="top">
 
-1. **Clone the repository**
+### ⚡ Automations
+A trigger engine for schedules and events (cron, intervals, calendar, coding-session changes) with quiet hours, time zones, run history, and delivery to the web or Telegram.
 
-   ```bash
-   git clone https://github.com/archimedes-run/omniHarness.git
-   cd omni-harness
-   ```
+### 🛡️ Policy engine
+Three tiers decided per call and per argument — inviting people to a calendar event is Tier 3, a private hold is Tier 2. One tool-name normaliser for every source, and a startup check that refuses any tool without an explicit rule. ([tier changes](specs/007-agent-improvement/tier-changes.md))
 
-2. **Run the setup wizard**
+### 🔌 MCP Suite
+Connected MCP servers and Composio toolkits (Gmail, Calendar, Drive, GitHub and more) with live health, tool counts, and *Retry* when a source fails. Failing sources are never hidden.
 
-   ```bash
-   make setup
-   ```
+</td>
+</tr>
+<tr>
+<td valign="top">
 
-   The wizard guides you through choosing an LLM provider, optional web search, and sandbox settings. It generates `config.yaml` and writes your API keys to `.env`.
+### 👀 Coding sessions
+Follow every **Claude Code** and **Codex** session on your machine: working, finished, *looks like it's waiting on you*, its own todo list and progress — shown as evidence, never as a claim. ([how it works](#-coding-agents-observed-the-agenttrail-piece))
 
-   Run `make doctor` at any time to verify your configuration.
+</td>
+<td valign="top">
 
-   <details>
-   <summary>Manual model configuration examples</summary>
+### 🧰 The harness underneath
+Per-thread Docker sandboxes, subagents, long-term memory, hot-loaded **skills**, live preview of web apps the agent builds (it reads the build error and fixes its own code), and channels for **Telegram, Slack, Discord** and OpenClaw.
 
-   ```yaml
-   models:
-     - name: gpt-4o
-       display_name: GPT-4o
-       use: langchain_openai:ChatOpenAI
-       model: gpt-4o
-       api_key: $OPENAI_API_KEY
-
-     - name: claude-sonnet-4-6
-       display_name: Claude Sonnet 4.6
-       use: langchain_anthropic:ChatAnthropic
-       model: claude-sonnet-4-6
-       api_key: $ANTHROPIC_API_KEY
-       supports_thinking: true
-
-     - name: gemini-2-5-pro
-       display_name: Gemini 2.5 Pro
-       use: langchain_google_genai:ChatGoogleGenerativeAI
-       model: gemini-2.5-pro
-       gemini_api_key: $GEMINI_API_KEY
-
-     - name: openrouter-model
-       display_name: Any model via OpenRouter
-       use: langchain_openai:ChatOpenAI
-       model: google/gemini-2.5-flash-preview
-       api_key: $OPENROUTER_API_KEY
-       base_url: https://openrouter.ai/api/v1
-
-     - name: qwen3-32b-vllm
-       display_name: Qwen3 32B (self-hosted vLLM)
-       use: omniharness.models.vllm_provider:VllmChatModel
-       model: Qwen/Qwen3-32B
-       api_key: $VLLM_API_KEY
-       base_url: http://localhost:8000/v1
-       supports_thinking: true
-       when_thinking_enabled:
-         extra_body:
-           chat_template_kwargs:
-             enable_thinking: true
-   ```
-
-   CLI-backed providers:
-
-   ```yaml
-   models:
-     - name: codex-cli
-       display_name: GPT-5.4 (Codex CLI)
-       use: omniharness.models.openai_codex_provider:CodexChatModel
-       model: gpt-5.4
-       supports_thinking: true
-
-     - name: claude-code-oauth
-       display_name: Claude Sonnet 4.6 (Claude Code OAuth)
-       use: omniharness.models.claude_provider:ClaudeChatModel
-       model: claude-sonnet-4-6
-       supports_thinking: true
-   ```
-
-   - Codex CLI reads auth from `~/.codex/auth.json`
-   - Claude Code OAuth reads from `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, or `~/.claude/.credentials.json`
-
-   </details>
-
-3. **Set the repository root in `.env`**
-
-   The Docker sandbox uses bind mounts to give each agent thread an isolated filesystem on the host. It needs to know the absolute path to this repository:
-
-   ```bash
-   # .env
-   OMNI_HARNESS_ROOT=/absolute/path/to/omni-harness
-   ```
-
-   On macOS/Linux you can generate this automatically:
-
-   ```bash
-   echo "OMNI_HARNESS_ROOT=$(pwd)" >> .env
-   ```
-
-   > This is the most common reason sandbox tools (`bash`, `write_file`, `execute_python`) silently fail. If agent output looks like it's running but files never appear, check this value first.
-
-### Running with Docker
-
-#### 1. Pull the sandbox image
-
-```bash
-make docker-init
-```
-
-This pulls the default [AIO Sandbox](https://github.com/agent-infra/sandbox) container image (`ghcr.io/archimedes-run/omni-harness-sandbox:latest`, ~9 GB). The AIO Sandbox is a pre-built, isolated execution environment with Python 3, Node.js, bash, and common system tools — one container is spawned per agent thread and automatically cleaned up after 10 minutes of idle time.
-
-**Expected:** `ghcr.io/archimedes-run/omni-harness-sandbox:latest`
-
-Override the image for private mirrors or local builds by setting `SANDBOX_IMAGE` before running `make docker-init` or `make docker-start`.
-
-You only need to run this once, or again after an image update. The download can take several minutes depending on your connection.
-
-**Verifying the image is ready:**
-
-```bash
-docker images | grep omni-harness-sandbox
-# ghcr.io/archimedes-run/omni-harness-sandbox   latest   <id>   <date>   ~9GB
-```
-
-**Manual override** (if you use a private mirror or custom sandbox image):
-
-```bash
-SANDBOX_IMAGE=registry.example.com/omni-harness-sandbox:latest make docker-init
-SANDBOX_IMAGE=registry.example.com/omni-harness-sandbox:latest make docker-start
-```
-
-Then confirm `config.yaml` uses the same image, or omit `image` to use the default:
-
-```yaml
-sandbox:
-  use: omniharness.community.aio_sandbox:AioSandboxProvider
-  image: ghcr.io/archimedes-run/omni-harness-sandbox:latest
-```
-
-#### 2. Start all services
-
-```bash
-make docker-start
-```
-
-Access: **http://localhost:2026**
-
-On first run, `make docker-start` creates missing `.env` and `frontend/.env` files from their examples. If `config.yaml` is also missing, it creates one from `config.example.yaml` and stops so you can add API keys and model settings before starting containers.
-
-This starts three containers:
-
-| Container | Role | Internal port |
-|-----------|------|---------------|
-| `omni-harness-nginx` | Reverse proxy — single entry point | 2026 |
-| `omni-harness-gateway` | Backend API + LangGraph agent runtime | 8001 |
-| `omni-harness-frontend` | Next.js web UI (hot-reload in dev) | 3000 |
-
-Source code is mounted directly into the containers (`backend/` and `frontend/src/`), so code changes are reflected without a rebuild.
-
-**Stop services:**
-
-```bash
-make docker-stop
-```
-
-**Restart after a config change:**
-
-```bash
-make docker-stop && make docker-start
-```
-
-> `config.yaml` changes (models, skills, tools) are hot-reloaded automatically by the gateway — no restart needed for those. A restart is only required when adding new environment variables to `.env`.
-
-#### 3. How it works under the hood
-
-Understanding this architecture helps diagnose issues quickly.
-
-```
-Your browser
-    │
-    ▼
-nginx (port 2026)
-    ├── /api/langgraph/* → gateway:8001  (agent runtime / LangGraph)
-    ├── /api/*          → gateway:8001  (REST API)
-    └── /*              → frontend:3000 (Next.js UI)
-
-gateway container
-    ├── Reads config.yaml (hot-reload on mtime change)
-    ├── Mounts /var/run/docker.sock  ← can run Docker commands on the host
-    ├── On each agent thread:
-    │     docker run ghcr.io/archimedes-run/omni-harness-sandbox:latest  (spawns on HOST daemon)
-    │         bind-mount: $OMNI_HARNESS_ROOT/backend/.omni-harness/
-    │                     users/{user}/threads/{thread}/user-data/
-    │     Sandbox is reachable at host.docker.internal:{port}
-    └── Sandbox containers auto-removed after 10 min idle (--rm + idle GC)
-```
-
-**Key environment variables set automatically by docker-compose:**
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `OMNI_HARNESS_ROOT` | from `.env` | Root of the repo on the host — required for bind mounts |
-| `OMNI_HARNESS_HOST_BASE_DIR` | `$OMNI_HARNESS_ROOT/backend/.omni-harness` | Host path prefix for thread directories |
-| `OMNI_HARNESS_SANDBOX_HOST` | `host.docker.internal` | Hostname to reach sandbox containers from inside the gateway |
-| `OMNI_HARNESS_HOST_SKILLS_PATH` | `$OMNI_HARNESS_ROOT/skills` | Host path for skills directory mount |
-| `SANDBOX_IMAGE` | `ghcr.io/archimedes-run/omni-harness-sandbox:latest` | Sandbox container image; override for mirrors or custom builds |
-
-#### 4. Management commands
-
-```bash
-make docker-start       # Start all services (dev mode, hot-reload)
-make docker-stop        # Stop all services
-make docker-restart     # Stop then start
-make docker-logs        # Tail logs from all containers
-make docker-status      # Show container status
-make docker-init        # Pull the configured/default sandbox image (run once)
-```
-
-View logs for a specific service:
-
-```bash
-docker logs -f omni-harness-gateway    # backend + agent logs
-docker logs -f omni-harness-frontend   # Next.js build / page logs
-docker logs -f omni-harness-nginx      # proxy access logs
-```
-
-List active sandbox containers (spawned per agent thread):
-
-```bash
-docker ps --filter "name=omni-harness-sandbox"
-```
-
-#### 5. Troubleshooting sandbox issues
-
-The sandbox is what gives agents the ability to run `bash`, write files, and execute Python. If those tools silently fail or return errors, work through this checklist:
-
-**Sandbox containers never start**
-
-Check that the image exists and the tag matches `config.yaml`:
-
-```bash
-docker images | grep omni-harness-sandbox
-# Expected: ghcr.io/archimedes-run/omni-harness-sandbox   latest   <id>
-```
-
-If missing, re-run `make docker-init`.
-
-**Manual override** (if you use a private mirror or custom sandbox image):
-
-```bash
-SANDBOX_IMAGE=your-registry/your-image:tag make docker-init
-SANDBOX_IMAGE=your-registry/your-image:tag make docker-start
-```
-
-**`bind source path does not exist` errors in gateway logs**
-
-`OMNI_HARNESS_ROOT` is unset or wrong. The gateway uses it to build host-side bind-mount paths. Fix:
-
-```bash
-# In your .env file at the project root:
-OMNI_HARNESS_ROOT=/absolute/path/to/omni-harness
-```
-
-Then restart: `make docker-stop && make docker-start`.
-
-**Sandbox starts but agent can't reach it**
-
-The gateway connects to sandbox containers via `host.docker.internal`. Verify it resolves:
-
-```bash
-docker exec omni-harness-gateway ping -c 1 host.docker.internal
-```
-
-On Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to the gateway service in `docker/docker-compose-dev.yaml` if it doesn't resolve.
-
-**Port conflicts on startup**
-
-Port 2026 is the default entry point. If it's in use:
-
-```bash
-lsof -i :2026
-# Change the port in docker/docker-compose-dev.yaml:
-#   ports: ["YOUR_PORT:2026"]
-```
-
-**Checking the gateway picked up your `config.yaml` changes**
-
-```bash
-docker exec omni-harness-gateway /app/backend/.venv/bin/python3 -c "
-from omniharness.config.app_config import get_app_config
-cfg = get_app_config()
-print('sandbox.image:', cfg.sandbox.image)
-print('models:', [m.name for m in cfg.models])
-"
-```
-
-### Production deployment
-
-For a stable, persistent server (pre-built images, no source mounts):
-
-```bash
-make up      # Build images and start all services
-make down    # Stop and remove containers
-```
-
-| Target | Minimum | Recommended |
-|--------|---------|-------------|
-| Docker dev (`make docker-start`) | 4 vCPU, 8 GB RAM | 8 vCPU, 16 GB RAM |
-| Production (`make up`) | 8 vCPU, 16 GB RAM | 16 vCPU, 32 GB RAM |
+</td>
+</tr>
+</table>
 
 ---
 
-### Advanced
+## 🚧 In development
 
-#### Sandbox Mode
+OmniHarness is built in numbered, spec-driven features ([`specs/`](specs)). Everything below is work in flight. Every safety-relevant piece goes through independent adversarial review rounds before it merges.
 
-OmniHarness supports three sandbox execution modes:
+| | Feature | Status |
+|---|---|---|
+| 🔐 | **Security baseline** — one pinned owner at the auth door, server-owned run context, single-use scheduler grants, typed replies only *you* can give, no command execution on the host, sandboxes on a private network, loopback services with Host and Origin guards, an env-key allowlist, lossless 30-day logs | final review |
+| 🤝 | **Subagent confirmations** — a subagent's risky call becomes *your* card, the result is posted back as that agent, *Continue &lt;agent&gt;* resumes its own delegation, and it all survives a restart | in review ([#58](https://github.com/archimedes-run/omniHarness/pull/58)) |
+| 🎛️ | **Agent Studio and Skill Studio** — build agents and skills with a versioned store and undo, scheduled **autonomy grants** (Tier 2 only, at most 20 actions a run), Apply all, and a run summary with *Undo all* | in review ([#53](https://github.com/archimedes-run/omniHarness/pull/53)) |
+| 🗄️ | **Durable run store** — the full content of every automation run, redacted before it's written, encrypted with **per-run keys** that are destroyed on delete, kept for 30 days | in review ([#55](https://github.com/archimedes-run/omniHarness/pull/55)) |
+| 🏗️ | **MCP Build** — the agent writes an MCP server; it's tested in a locked container, you approve it by **code hash**, and it runs behind a Squid egress allowlist with SNI checks; secrets arrive only as read-only files | in review ([#59](https://github.com/archimedes-run/omniHarness/pull/59)) |
+| 🧠 | **Agent improvement (Harness²)** — scheduled agents that propose evidence-backed improvements to themselves | specified ([007](https://github.com/archimedes-run/omniHarness/tree/007-agent-improvement/specs/007-agent-improvement)) |
+| 📋 | **AI Lists** — tables where an agent researches, enriches or acts on every row, within a budget | specified ([008](https://github.com/archimedes-run/omniHarness/tree/008-ai-lists/specs/008-ai-lists)) |
 
-- **Docker** (recommended) — each thread gets an isolated container with a full filesystem, powered by [AIO Sandbox](https://github.com/agent-infra/sandbox)
-- **Local** — file tools mapped to per-thread host directories; host `bash` disabled by default
-- **Kubernetes** — containers provisioned as Pods via the optional provisioner service
+### 🧠 Agents that improve themselves (the Harness² piece)
 
-`config.yaml` sandbox section:
+Feature **007** adapts **Harness²** ([arXiv:2610.14224](https://arxiv.org/abs/2610.14224), [google-research/harness2](https://github.com/google-research/harness2), Apache-2.0) to a personal workspace with real accounts:
 
-```yaml
-sandbox:
-  use: omniharness.community.aio_sandbox:AioSandboxProvider
-  image: ghcr.io/archimedes-run/omni-harness-sandbox:latest
-  bash_output_max_chars: 20000
-  read_file_output_max_chars: 50000
-  ls_output_max_chars: 20000
-```
+1. **Propose → probe → compose.** For a scheduled agent such as *Evening wrap-up*, OmniHarness replays the agent's own stored runs against its current setup and against *k* candidate setups ("how it works" and "what it knows"). It then composes a proposal from **only the edits the evidence supports**, or says *no change*, which is a normal outcome.
+2. **Probes can't write.** Every probe runs behind a wrapper: reads are real, Tier 2 writes are simulated, and Tier 3 never runs. A sabotage test proves that a probe trying a real write fails the gate.
+3. **Signals without an answer key.** Execution evidence (as in the paper), **plus** your real feedback history (confirms, declines, edits, dismissals), **plus** honesty checks: a candidate that blurs *observed*, *reported* and *inferred* loses outright.
+4. **You approve the diff.** The output is a diff over a versioned agent store — instructions, tool guidance, skills, memory — with a **Lessons** store (the paper's experience library) you can read and edit. Policy tiers, grants and schedules are locked surfaces it can never touch. Nothing applies automatically.
 
-See [Configuration Guide](backend/docs/CONFIGURATION.md#sandbox) for all options including idle timeout, replica count, and Kubernetes provisioner setup.
+### 👀 Coding agents, observed (the agenttrail piece)
 
-#### MCP Servers
+The coding-session watcher (feature 001, extended in 005) borrows ideas from [**sodiumsun/agenttrail**](https://github.com/sodiumsun/agenttrail) (MIT), credited in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES.md):
 
-Connect any MCP server to extend the agent's toolset. HTTP/SSE and stdio transports are supported. OAuth token flows (`client_credentials`, `refresh_token`) are supported for HTTP/SSE servers.
+- a **Codex** adapter alongside Claude Code, reading local session logs (filtered by modification time, not folder);
+- **native todo lists** (Claude `TodoWrite` / `TaskCreate`, Codex `update_plan`), applied only after the tool result confirms success;
+- optional **Claude Code hooks** as a fidelity upgrade, so *waiting on you* becomes **observed** instead of inferred;
+- **declared versus observed scope**, so a session's plan and what it actually touched are never confused.
 
-See [MCP Server Guide](backend/docs/MCP_SERVER.md) for setup instructions.
-
-#### IM Channels
-
-OmniHarness can receive tasks from messaging apps. Channels auto-start when configured and require no public IP.
-
-| Channel | Transport |
-|---------|-----------|
-| Telegram | Bot API long-polling |
-| Slack | Socket Mode |
-
-**Configuration in `config.yaml`:**
-
-```yaml
-channels:
-  langgraph_url: http://localhost:8001/api
-  gateway_url: http://localhost:8001
-
-  telegram:
-    enabled: true
-    bot_token: $TELEGRAM_BOT_TOKEN
-    allowed_users: []   # empty = allow all
-
-  slack:
-    enabled: true
-    bot_token: $SLACK_BOT_TOKEN    # xoxb-...
-    app_token: $SLACK_APP_TOKEN    # xapp-... (Socket Mode)
-    allowed_users: []
-```
-
-**Keys in `.env`:**
-
-```bash
-TELEGRAM_BOT_TOKEN=...
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-```
-
-**Telegram Setup**
-
-1. Chat with [@BotFather](https://t.me/BotFather), send `/newbot`, copy the token.
-2. Set `TELEGRAM_BOT_TOKEN` in `.env` and enable the channel in `config.yaml`.
-
-**Slack Setup**
-
-1. Create a Slack App at [api.slack.com/apps](https://api.slack.com/apps).
-2. Under **OAuth & Permissions**, add scopes: `app_mentions:read`, `chat:write`, `im:history`, `im:read`, `im:write`, `files:write`.
-3. Enable **Socket Mode**, generate an App-Level Token (`xapp-…`) with `connections:write`.
-4. Subscribe to bot events: `app_mention`, `message.im`.
-5. Set both tokens in `.env` and enable the channel in `config.yaml`.
-
-> When running in Docker Compose, use container service names: `http://gateway:8001/api` and `http://gateway:8001`, or set `OMNI_HARNESS_CHANNELS_LANGGRAPH_URL` and `OMNI_HARNESS_CHANNELS_GATEWAY_URL`.
-
-**In-chat commands:**
-
-| Command | Description |
-|---------|-------------|
-| `/new` | Start a new conversation |
-| `/status` | Show current thread info |
-| `/models` | List available models |
-| `/memory` | View memory |
-| `/help` | Show help |
-
-#### Observability
-
-**LangSmith:**
-
-```bash
-LANGSMITH_TRACING=true
-LANGSMITH_ENDPOINT=https://api.smith.langchain.com
-LANGSMITH_API_KEY=lsv2_pt_...
-LANGSMITH_PROJECT=my-project
-```
-
-**Langfuse:**
-
-```bash
-LANGFUSE_TRACING=true
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
-```
-
-Both can be enabled simultaneously.
+Sessions feed Home, the Coding sessions page, automations ("tell me when this session finishes") and, next, evidence on Ledger tasks.
 
 ---
 
-## Core Features
+## 🛡️ Safety is the product
 
-### Skills & Tools
+An agent with your credentials is only as good as its guardrails. OmniHarness follows a written [constitution](.specify/memory/constitution.md) and these rules:
 
-Skills are structured capability modules — a `SKILL.md` file that defines a workflow, best practices, and references. OmniHarness ships with built-in skills for research, report generation, slide creation, web pages, and chart visualisation. You can add your own or replace the built-in ones.
-
-Skills are loaded progressively — only when a task needs them. This keeps the context window lean.
-
-Tools ship as a core set — web search, web fetch, file operations, bash execution — and extend via MCP servers or custom Python functions.
-
-```
-/mnt/skills/public/
-├── research/SKILL.md
-├── report-generation/SKILL.md
-├── slide-creation/SKILL.md
-├── web-page/SKILL.md
-└── chart-visualization/SKILL.md
-
-/mnt/skills/custom/
-└── your-skill/SKILL.md
-```
-
-### Sub-Agents
-
-The lead agent can spawn specialised sub-agents on the fly. Each runs in its own isolated context with scoped tools and a defined termination condition. Sub-agents execute in parallel when possible and report structured results back to the lead agent, which synthesises everything into a coherent output.
-
-Up to 3 sub-agents run concurrently by default (configurable).
-
-### Sandbox & File System
-
-Each task gets a per-thread execution environment powered by [AIO Sandbox](https://github.com/agent-infra/sandbox) — an isolated Docker container with a full filesystem the agent can read, write, and execute inside.
-
-```
-/mnt/user-data/
-├── uploads/     ← files you upload
-├── workspace/   ← agent working directory
-└── outputs/     ← final deliverables
-```
-
-Containers are spawned on demand, bind-mounted to a per-thread directory on the host, and removed automatically after 10 minutes of idle time. With `LocalSandboxProvider`, file tools map to per-thread host directories instead — host `bash` is disabled by default in that mode.
-
-### Long-Term Memory
-
-Across sessions, OmniHarness builds a persistent memory of your preferences, working context, and accumulated facts. Memory is stored locally per user and injected into the system prompt on each turn. The agent extracts and stores facts asynchronously after each conversation.
-
-### Context Engineering
-
-- **Isolated sub-agent context** — each sub-agent sees only what it needs
-- **Automatic summarisation** — completed sub-task context is compressed to keep the window lean
-- **Tool-call recovery** — dangling tool calls from interrupted turns are resolved before the next model invocation so provider-strict models do not fail with malformed history errors
+| Rule | What it means in practice |
+|---|---|
+| **Tiered tool calls** | Read → runs. Reversible write → runs, disclosed, undoable. Send, delete, share or spend → your button. A tool with no rule → refused and listed at startup. |
+| **Content can't pose as you** | Only messages the server tags as *yours* count as you. Text from mail, web pages, tool output or another agent can never confirm a plan by typing "yes". |
+| **Honest status** | *Empty*, *can't tell*, *withheld* and *not set up* are different states, and every line says whether it was **observed**, **reported** or **inferred**. |
+| **Secrets stay put** | Known secret values are redacted before anything is stored or shown; built MCP servers get secrets as read-only files; the gateway only receives an allowlist of env keys. |
+| **Local by default** | One owner, loopback-only bindings, Host and Origin guards against DNS rebinding, and sandboxes with no host port. |
+| **Proven, not promised** | Every check ships with a test through the real app and a **sabotage** run that breaks the check on purpose and watches the test fail. |
 
 ---
 
-## Recommended Models
+## 🚀 Quick start
 
-OmniHarness works with any OpenAI-compatible LLM. It performs best with models that support:
+Docker is the supported way to run OmniHarness.
 
-- Long context windows (100k+ tokens)
-- Reasoning / extended thinking
-- Multimodal input (vision)
-- Reliable tool use
+```bash
+git clone https://github.com/archimedes-run/omniHarness.git
+cd omniHarness
+make setup          # choose a model provider; writes config.yaml and .env
+make doctor         # check the configuration
+make docker-init    # pull the sandbox image
+make docker-start   # start the stack
+```
 
-Tested providers: OpenAI, Anthropic, Google Gemini, DeepSeek, vLLM (self-hosted), OpenRouter (multi-model gateway).
+Then open **http://localhost:2026** and create the owner account.
 
----
+You need Docker Desktop (or OrbStack) with Compose v2, about 12 GB of free disk and 8 GB of RAM (16 GB for parallel subagents). The full guide — models, sandboxes, channels, production — is in **[docs/SETUP.md](docs/SETUP.md)**.
 
-## Embedded Python Client
-
-Use OmniHarness as a library without running HTTP services:
+<details>
+<summary><b>Use it as a Python library</b></summary>
 
 ```python
 from omniharness.client import OmniHarnessClient
 
 client = OmniHarnessClient()
+print(client.chat("Summarise this paper", thread_id="my-thread"))
 
-# Synchronous chat
-response = client.chat("Summarise this paper", thread_id="my-thread")
-
-# Streaming (LangGraph SSE protocol)
 for event in client.stream("Write a report on quantum computing"):
     if event.type == "messages-tuple" and event.data.get("type") == "ai":
         print(event.data["content"], end="", flush=True)
-
-# Management
-models = client.list_models()
-skills = client.list_skills()
-client.update_skill("web-search", enabled=True)
-client.upload_files("thread-1", ["./report.pdf"])
 ```
 
-All dict-returning methods are validated against Gateway Pydantic response schemas in CI to keep the embedded client in sync with the HTTP API.
-
-See [`backend/packages/harness/omniharness/client.py`](backend/packages/harness/omniharness/client.py) for full documentation.
+See [`client.py`](backend/packages/harness/omniharness/client.py).
+</details>
 
 ---
 
-## Security Notice
+## 🏗️ Architecture
 
-OmniHarness has high-privilege capabilities — system command execution, file read/write — and is designed for deployment in a **local trusted environment** (loopback only by default).
+```mermaid
+flowchart LR
+  you([You]) -->|web · Telegram · Slack · Discord| nginx[nginx :2026<br/>loopback only]
+  nginx --> fe[Next.js workspace]
+  nginx --> gw[Gateway<br/>FastAPI + LangGraph]
+  gw --> agents[Lead agent + subagents]
+  agents --> policy{{Policy engine<br/>Tier 1 · 2 · 3}}
+  policy --> tools[Tools · skills · MCP · Composio]
+  gw --> trig[Trigger engine<br/>schedules · events]
+  gw --> ledger[(Project Ledger)]
+  gw --> sbx[Sandboxes<br/>private network]
+  watcher[Session watcher<br/>Claude Code · Codex] --> gw
+```
 
-If you expose it to a network, apply appropriate controls:
+| Path | What lives there |
+|---|---|
+| [`backend/app/gateway`](backend/app/gateway) | API, auth, routers, run manager |
+| [`backend/app/policy`](backend/app/policy) | tiers, rules, confirmations, provenance |
+| [`backend/packages/harness`](backend/packages/harness) | the agent harness: agents, tools, sandbox, memory, MCP |
+| [`backend/packages/session_watcher`](backend/packages/session_watcher) | Claude Code and Codex observation |
+| [`frontend`](frontend) | the workspace UI (Next.js, shadcn/ui, Graphite design tokens) |
+| [`specs`](specs) | one folder per feature: spec, plan, research, tasks |
 
-- **Authentication** — OmniHarness has a built-in auth system. Ensure it is enabled and `AUTH_JWT_SECRET` is set to a strong secret in production.
-- **IP allowlist** — restrict inbound access to known addresses via firewall rules or nginx ACLs.
-- **Network isolation** — place the service and trusted clients on a dedicated VLAN where possible.
-- **TLS** — terminate HTTPS at the reverse proxy for any non-localhost deployment.
+---
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and workflow.
+OmniHarness is young, opinionated and moving fast — a good time to help shape it.
 
-For local (non-Docker) development:
+**Good places to start**
+- 🏷️ Issues labelled [`review-followup`](https://github.com/archimedes-run/omniHarness/issues?q=is%3Aopen+label%3Areview-followup): well-scoped findings from security reviews, most with a failing test or a clear repro.
+- 🔌 New MCP and Composio integrations, with explicit policy rules for their tools.
+- 👀 More coding-agent adapters for the session watcher (Cursor, Aider, Gemini CLI…).
+- 🎨 UI polish against the Graphite design boards in [`specs/006-workspace-studio/design`](specs/006-workspace-studio/design).
+- 📚 Docs, setup notes for Linux and Windows, and translations.
+
+**How we work**
+- Each feature starts as a spec in [`specs/`](specs) (Spec Kit) and follows the [constitution](.specify/memory/constitution.md).
+- Nothing counts as done until production code calls it; a wiring gate checks that.
+- Every new behaviour gets a test through the real app (`create_app()` and its lifespan), and every check gets a **sabotage** run.
+- Small commits, one concern each.
 
 ```bash
-make check    # Verify prerequisites: Node.js 22+, pnpm, uv, nginx
-make install  # Install backend + frontend dependencies
-make dev      # Start all services with hot-reload (http://localhost:2026)
+make install                                  # backend (uv) + frontend (pnpm)
+make dev                                      # hot reload at http://localhost:2026
+cd backend && uv run pytest tests/ -q         # backend tests
+cd frontend && pnpm exec vitest run           # frontend unit tests
 ```
 
-## License
-
-MIT — see [LICENSE](./LICENSE).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before your first PR. Questions, ideas and design debates are welcome in [Issues](https://github.com/archimedes-run/omniHarness/issues).
 
 ---
 
-## Acknowledgments
+## ❓ FAQ
 
-OmniHarness stands on the shoulders of [**DeerFlow**](https://github.com/bytedance/deer-flow) by ByteDance, from which it was forked. The harness architecture, sandbox model, and gateway design all started there. DeerFlow is MIT-licensed; so is OmniHarness.
+<details>
+<summary><b>What is OmniHarness, in one sentence?</b></summary>
 
-**Original copyright notices retained per MIT terms:**
-- © 2025 Bytedance Ltd. and/or its affiliates
-- © 2025–2026 DeerFlow Authors — [Daniel Walnut](https://github.com/hetaoBackend/), [Henry Li](https://github.com/magiccube/)
+OmniHarness is an open-source, self-hosted AI agent workspace: a multi-agent harness built on LangGraph, with chat, automations, a coding-session watcher, MCP integrations and a per-call policy engine that keeps risky actions behind your approval.
+</details>
 
-OmniHarness is an independent project and is not affiliated with, sponsored by, or endorsed by ByteDance.
+<details>
+<summary><b>Is OmniHarness local-first? Does my data leave my machine?</b></summary>
 
-DeerFlow itself builds on the open-source community, and those debts carry through:
+It runs on your machine in Docker, binds to localhost and has a single owner. Data leaves only through the model provider you configure and the tools you connect, and anything that sends data off the machine is a Tier 3 action that waits for your button.
+</details>
 
-- **[LangGraph](https://github.com/langchain-ai/langgraph)** — multi-agent orchestration runtime
-- **[LangChain](https://github.com/langchain-ai/langchain)** — LLM integration framework
-- **[AIO Sandbox](https://github.com/agent-infra/sandbox)** — isolated per-thread execution containers
-- **[Shadcn UI](https://ui.shadcn.com/)** — frontend component system
-- **[Next.js](https://nextjs.org/)** — frontend framework
+<details>
+<summary><b>Which models does it support?</b></summary>
+
+Any OpenAI-compatible model, plus Anthropic, Google Gemini, DeepSeek, OpenRouter and self-hosted vLLM. Long context, reliable tool use and vision help most.
+</details>
+
+<details>
+<summary><b>How is it different from DeerFlow?</b></summary>
+
+OmniHarness began as a fork of [DeerFlow 2.0](https://github.com/bytedance/deer-flow) (ByteDance, MIT) and keeps its harness, sandbox and gateway roots. It has since become a personal agent *workspace*: the policy engine, multi-agent chat, Home, automations, the Project Ledger, the coding-session watcher, Agent Studio and MCP Build are OmniHarness's own. It is not affiliated with ByteDance.
+</details>
+
+<details>
+<summary><b>Can it watch Claude Code and Codex?</b></summary>
+
+Yes. The session watcher reads local session logs (read-only) and shows each session's state, todos and whether it's waiting on you — on Home, on the Coding sessions page, and as automation triggers.
+</details>
+
+---
+
+## 🙏 Acknowledgements
+
+- [**DeerFlow**](https://github.com/bytedance/deer-flow) by ByteDance — OmniHarness was forked from it. © 2025 Bytedance Ltd. and/or its affiliates; © 2025–2026 DeerFlow Authors ([Daniel Walnut](https://github.com/hetaoBackend/), [Henry Li](https://github.com/magiccube/)). OmniHarness is not affiliated with, sponsored by or endorsed by ByteDance.
+- [**agenttrail**](https://github.com/sodiumsun/agenttrail) (MIT) — ideas for observing Codex and Claude Code sessions.
+- [**Harness²**](https://github.com/google-research/harness2) (Apache-2.0) — the method behind agent improvement.
+- [LangGraph](https://github.com/langchain-ai/langgraph), [LangChain](https://github.com/langchain-ai/langchain), [AIO Sandbox](https://github.com/agent-infra/sandbox), [Next.js](https://nextjs.org/), [shadcn/ui](https://ui.shadcn.com/), [Inter](https://rsms.me/inter/) and [JetBrains Mono](https://www.jetbrains.com/lp/mono/).
+
+## 📄 License
+
+[MIT](./LICENSE). Third-party notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+<div align="center">
+<br>
+<img src="docs/readme/logo.svg" alt="OmniHarness logo" width="56">
+<br>
+<sub><b>OmniHarness</b> · open-source AI agent workspace · multi-agent harness · MCP · policy engine · self-hosted</sub>
+</div>
