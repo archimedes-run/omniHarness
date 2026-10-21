@@ -166,7 +166,9 @@ services:
       # DooD path/network translation
       - OMNI_HARNESS_HOST_BASE_DIR=${OMNI_HARNESS_HOME}
       - OMNI_HARNESS_HOST_SKILLS_PATH=${OMNI_HARNESS_REPO_ROOT}/skills
-      - OMNI_HARNESS_SANDBOX_HOST=host.docker.internal
+      # Sandboxes publish NO host port: they join this private network,
+      # shared only with the gateway, and are reached by container name.
+      - OMNI_HARNESS_SANDBOX_NETWORK=omni-harness-sandboxes
       # Logs: daily append-only files, 30 days kept (app/gateway/log_files.py).
       - GATEWAY_LOG_FILE=/app/logs/gateway.log
       # Real client IP: forwarded headers are trusted from nginx's fixed address only.
@@ -219,6 +221,7 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - omni-harness
+      - omni-harness-sandboxes
     restart: unless-stopped
 
   # ── Sandbox Provisioner (optional, Kubernetes mode) ────────────────────────
@@ -258,3 +261,8 @@ networks:
       config:
         # Fixed so nginx can have a fixed address (the only trusted proxy).
         - subnet: ${OMNI_HARNESS_SUBNET:-172.30.226.0/24}
+  # Gateway <-> sandbox containers only. A fixed name, because the gateway
+  # starts sandboxes through the host's Docker daemon and names this network.
+  omni-harness-sandboxes:
+    name: omni-harness-sandboxes
+    driver: bridge

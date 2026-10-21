@@ -218,7 +218,7 @@ gateway container
 |----------|-------|---------|
 | `OMNI_HARNESS_ROOT` | from `.env` | Root of the repo on the host — required for bind mounts |
 | `OMNI_HARNESS_HOST_BASE_DIR` | `$OMNI_HARNESS_ROOT/backend/.omni-harness` | Host path prefix for thread directories |
-| `OMNI_HARNESS_SANDBOX_HOST` | `host.docker.internal` | Hostname to reach sandbox containers from inside the gateway |
+| `OMNI_HARNESS_SANDBOX_NETWORK` | `omni-harness-sandboxes` (set by compose) | Private Docker network sandboxes share with the gateway; they publish no host port and are reached by container name. Unset (a gateway on the host): sandboxes are refused |
 | `OMNI_HARNESS_HOST_SKILLS_PATH` | `$OMNI_HARNESS_ROOT/skills` | Host path for skills directory mount |
 | `SANDBOX_IMAGE` | `ghcr.io/archimedes-run/omni-harness-sandbox:latest` | Sandbox container image; override for mirrors or custom builds |
 

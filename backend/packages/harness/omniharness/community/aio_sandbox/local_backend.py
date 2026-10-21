@@ -13,8 +13,6 @@ import shlex
 import subprocess
 from datetime import datetime
 
-from omniharness.utils.network import get_free_port, release_port
-
 from .backend import SandboxBackend, wait_for_sandbox_ready
 from .sandbox_info import SandboxInfo
 
@@ -127,51 +125,24 @@ def _format_container_command_for_log(cmd: list[str]) -> str:
     return shlex.join(cmd)
 
 
-def _normalize_sandbox_host(host: str) -> str:
-    return host.strip().lower()
+#: The user-defined Docker network the sandboxes share with the gateway
+#: (docker compose sets it). Sandboxes publish NO host port: the gateway reaches
+#: them as http://<container-name>:8080 on this network, and nothing on the host
+#: or in a browser can reach their shell-exec API at all.
+SANDBOX_NETWORK_ENV = "OMNI_HARNESS_SANDBOX_NETWORK"
+SANDBOX_API_PORT = 8080
+
+SANDBOX_REFUSED_WITHOUT_NETWORK = (
+    "Refusing to start a sandbox container: its API runs shell commands and must not be reachable from the host. "
+    "Sandboxes run only on a Docker network shared with the gateway (set by docker compose: OMNI_HARNESS_SANDBOX_NETWORK); "
+    "a gateway running on the host has no such network, and a token-checking proxy does not exist yet."
+)
+SANDBOX_REFUSED_APPLE = "Refusing to start a sandbox with the Apple container runtime: it cannot share a private network with the gateway, so its shell-exec API would be reachable from the host. Use Docker (the compose stack)."
 
 
-def _is_ipv6_loopback_sandbox_host(host: str) -> bool:
-    return _normalize_sandbox_host(host) in {"::1", "[::1]"}
-
-
-def _is_loopback_sandbox_host(host: str) -> bool:
-    return _normalize_sandbox_host(host) in {"", "localhost", "127.0.0.1", "::1", "[::1]"}
-
-
-def _resolve_docker_bind_host(sandbox_host: str | None = None, bind_host: str | None = None) -> str:
-    """Choose the host interface for legacy Docker ``-p`` sandbox publishing.
-
-    Bare-metal/local runs talk to sandboxes through localhost and should not
-    expose the sandbox HTTP API on every host interface.  Docker-outside-of-
-    Docker deployments commonly use ``host.docker.internal`` from another
-    container; keep their legacy broad bind unless operators opt into a
-    narrower bind with ``OMNI_HARNESS_SANDBOX_BIND_HOST``.  When operators choose
-    an IPv6 loopback sandbox host, bind Docker to IPv6 loopback as well so the
-    advertised sandbox URL and published socket use the same address family.
-    """
-    explicit_bind = bind_host if bind_host is not None else os.environ.get("OMNI_HARNESS_SANDBOX_BIND_HOST")
-    if explicit_bind is not None:
-        explicit_bind = explicit_bind.strip()
-        if explicit_bind:
-            logger.debug("Docker sandbox bind: %s (explicit bind host override)", explicit_bind)
-            return explicit_bind
-
-    host = sandbox_host if sandbox_host is not None else os.environ.get("OMNI_HARNESS_SANDBOX_HOST", "localhost")
-    if _is_ipv6_loopback_sandbox_host(host):
-        logger.debug("Docker sandbox bind: [::1] (IPv6 loopback sandbox host)")
-        return "[::1]"
-    if _is_loopback_sandbox_host(host):
-        logger.debug("Docker sandbox bind: 127.0.0.1 (loopback default)")
-        return "127.0.0.1"
-
-    # Security baseline: loopback even when the sandbox is reached via
-    # host.docker.internal. Docker Desktop (macOS/Windows) routes that name to
-    # loopback-published ports; on Linux, set OMNI_HARNESS_SANDBOX_BIND_HOST to
-    # the docker bridge address. Never every interface by default: the sandbox
-    # API runs arbitrary commands.
-    logger.debug("Docker sandbox bind: 127.0.0.1 (loopback; set OMNI_HARNESS_SANDBOX_BIND_HOST to override)")
-    return "127.0.0.1"
+def sandbox_network() -> str | None:
+    value = os.environ.get(SANDBOX_NETWORK_ENV, "").strip()
+    return value or None
 
 
 class LocalContainerBackend(SandboxBackend):
@@ -246,6 +217,18 @@ class LocalContainerBackend(SandboxBackend):
 
     # ── SandboxBackend interface ──────────────────────────────────────────
 
+    def _require_private_network(self) -> str:
+        """The shared network, or a refusal (fail closed)."""
+        if self._runtime != "docker":
+            raise RuntimeError(SANDBOX_REFUSED_APPLE)
+        network = sandbox_network()
+        if network is None:
+            raise RuntimeError(SANDBOX_REFUSED_WITHOUT_NETWORK)
+        return network
+
+    def _url_for(self, container_name: str) -> str:
+        return f"http://{container_name}:{SANDBOX_API_PORT}"
+
     def create(self, thread_id: str, sandbox_id: str, extra_mounts: list[tuple[str, str, bool]] | None = None) -> SandboxInfo:
         """Start a new container and return its connection info.
 
@@ -261,49 +244,23 @@ class LocalContainerBackend(SandboxBackend):
             RuntimeError: If the container fails to start.
         """
         container_name = f"{self._container_prefix}-{sandbox_id}"
-
-        # Retry loop: if Docker rejects the port (e.g. a stale container still
-        # holds the binding after a process restart), skip that port and try the
-        # next one.  The socket-bind check in get_free_port mirrors Docker's
-        # 0.0.0.0 bind, but Docker's port-release can be slightly asynchronous,
-        # so a reactive fallback here ensures we always make progress.
-        _next_start = self._base_port
-        container_id: str | None = None
-        port: int = 0
-        for _attempt in range(10):
-            port = get_free_port(start_port=_next_start)
-            try:
-                container_id = self._start_container(container_name, port, extra_mounts)
-                # Apple `container`: published only on a verified loopback address.
-                self._verify_loopback_publish(container_id)
-                break
-            except RuntimeError as exc:
-                release_port(port)
-                err = str(exc)
-                err_lower = err.lower()
-                # Port already bound: skip this port and retry with the next one.
-                if "port is already allocated" in err or "address already in use" in err_lower:
-                    logger.warning(f"Port {port} rejected by Docker (already allocated), retrying with next port")
-                    _next_start = port + 1
-                    continue
-                # Container-name conflict: another process may have already started
-                # the deterministic sandbox container for this sandbox_id. Try to
-                # discover and adopt the existing container instead of failing.
-                if "is already in use by container" in err_lower or "conflict. the container name" in err_lower:
-                    logger.warning(f"Container name {container_name} already in use, attempting to discover existing sandbox instance")
-                    existing = self.discover(sandbox_id)
-                    if existing is not None:
-                        return existing
-                raise
-        else:
-            raise RuntimeError("Could not start sandbox container: all candidate ports are already allocated by Docker")
-
-        # When running inside Docker (DooD), sandbox containers are reachable via
-        # host.docker.internal rather than localhost (they run on the host daemon).
-        sandbox_host = os.environ.get("OMNI_HARNESS_SANDBOX_HOST", "localhost")
+        network = self._require_private_network()
+        try:
+            container_id = self._start_container(container_name, network, extra_mounts)
+        except RuntimeError as exc:
+            err_lower = str(exc).lower()
+            # Container-name conflict: another process may have already started
+            # the deterministic sandbox container for this sandbox_id. Try to
+            # discover and adopt the existing container instead of failing.
+            if "is already in use by container" in err_lower or "conflict. the container name" in err_lower:
+                logger.warning(f"Container name {container_name} already in use, attempting to discover existing sandbox instance")
+                existing = self.discover(sandbox_id)
+                if existing is not None:
+                    return existing
+            raise
         return SandboxInfo(
             sandbox_id=sandbox_id,
-            sandbox_url=f"http://{sandbox_host}:{port}",
+            sandbox_url=self._url_for(container_name),
             container_name=container_name,
             container_id=container_id,
         )
@@ -316,15 +273,6 @@ class LocalContainerBackend(SandboxBackend):
         stop_target = info.container_id or info.container_name
         if stop_target:
             self._stop_container(stop_target)
-        # Extract port from sandbox_url for release
-        try:
-            from urllib.parse import urlparse
-
-            port = urlparse(info.sandbox_url).port
-            if port:
-                release_port(port)
-        except Exception:
-            pass
 
     def is_alive(self, info: SandboxInfo) -> bool:
         """Check if the container is still running (lightweight, no HTTP)."""
@@ -346,15 +294,12 @@ class LocalContainerBackend(SandboxBackend):
         """
         container_name = f"{self._container_prefix}-{sandbox_id}"
 
+        if self._runtime != "docker" or sandbox_network() is None:
+            return None  # not reachable without the shared network (fail closed)
         if not self._is_container_running(container_name):
             return None
 
-        port = self._get_container_port(container_name)
-        if port is None:
-            return None
-
-        sandbox_host = os.environ.get("OMNI_HARNESS_SANDBOX_HOST", "localhost")
-        sandbox_url = f"http://{sandbox_host}:{port}"
+        sandbox_url = self._url_for(container_name)
         if not wait_for_sandbox_ready(sandbox_url, timeout=5):
             return None
 
@@ -419,15 +364,15 @@ class LocalContainerBackend(SandboxBackend):
         inspections = self._batch_inspect(container_names)
 
         infos: list[SandboxInfo] = []
-        sandbox_host = os.environ.get("OMNI_HARNESS_SANDBOX_HOST", "localhost")
+        reachable = self._runtime == "docker" and sandbox_network() is not None
         for container_name in container_names:
             data = inspections.get(container_name)
             if data is None:
                 # Container disappeared between ps and inspect, or inspect failed
                 continue
-            created_at, host_port = data
+            created_at, _host_port = data
             sandbox_id = container_name[len(self._container_prefix) + 1 :]
-            sandbox_url = f"http://{sandbox_host}:{host_port}" if host_port else ""
+            sandbox_url = self._url_for(container_name) if reachable else ""
 
             infos.append(
                 SandboxInfo(
@@ -492,14 +437,14 @@ class LocalContainerBackend(SandboxBackend):
     def _start_container(
         self,
         container_name: str,
-        port: int,
+        network: str,
         extra_mounts: list[tuple[str, str, bool]] | None = None,
     ) -> str:
         """Start a new container.
 
         Args:
             container_name: Name for the container.
-            port: Host port to map to container port 8080.
+            network: The private Docker network shared with the gateway (no host port is published).
             extra_mounts: Additional volume mounts.
 
         Returns:
@@ -514,19 +459,14 @@ class LocalContainerBackend(SandboxBackend):
         if self._runtime == "docker":
             cmd.extend(["--security-opt", "seccomp=unconfined"])
 
-        # Both runtimes take ``[host-ip:]host-port:container-port``, and BOTH
-        # default to 0.0.0.0 when the address is left out (apple/container:
-        # Sources/Services/ContainerAPIService/Client/Parser.swift, the publish
-        # parser falls back to IPAddress("0.0.0.0")). So the address is always
-        # given: loopback unless OMNI_HARNESS_SANDBOX_BIND_HOST says otherwise.
-        port_mapping = f"{_resolve_docker_bind_host()}:{port}:8080"
-
+        # NO -p: nothing is published on the host. The container joins the
+        # private network it shares with the gateway (security baseline).
         cmd.extend(
             [
                 "--rm",
                 "-d",
-                "-p",
-                port_mapping,
+                "--network",
+                network,
                 "--name",
                 container_name,
             ]
@@ -573,42 +513,6 @@ class LocalContainerBackend(SandboxBackend):
             logger.error(f"Failed to start container using {self._runtime}: {e.stderr}")
             raise RuntimeError(f"Failed to start sandbox container: {e.stderr}")
 
-    def _verify_loopback_publish(self, container_id: str) -> None:
-        """Apple ``container``: refuse unless inspect PROVES a loopback publish.
-
-        Its -p takes ``[host-ip:]host-port:container-port`` and defaults to
-        0.0.0.0 (apple/container Parser.swift), and that CLI could not be
-        exercised here. So after start, ``container inspect`` must report every
-        published ``hostAddress`` as a loopback address; if it cannot be read
-        or is anything else, the container is stopped and the start refused.
-        Docker needs no check: its 127.0.0.1 publish is long established.
-        """
-        if self._runtime != "container":
-            return
-        import json
-
-        addresses: list[str] = []
-        try:
-            out = subprocess.run([self._runtime, "inspect", container_id], capture_output=True, text=True, check=True, timeout=30).stdout
-
-            def walk(node):
-                if isinstance(node, dict):
-                    if "hostAddress" in node:
-                        addresses.append(str(node["hostAddress"]))
-                    for value in node.values():
-                        walk(value)
-                elif isinstance(node, list):
-                    for value in node:
-                        walk(value)
-
-            walk(json.loads(out))
-        except Exception as exc:  # noqa: BLE001
-            self._stop_container(container_id)
-            raise RuntimeError(f"Refusing the Apple container sandbox: could not verify its published address ({type(exc).__name__}). Use Docker, or check `container inspect`.") from exc
-        if not addresses or any(a.strip("[]") not in ("127.0.0.1", "::1") for a in addresses):
-            self._stop_container(container_id)
-            raise RuntimeError(f"Refusing the Apple container sandbox: it is published on {addresses or 'an unknown address'}, not loopback only.")
-
     def _stop_container(self, container_id: str) -> None:
         """Stop a container (--rm ensures automatic removal)."""
         try:
@@ -638,27 +542,3 @@ class LocalContainerBackend(SandboxBackend):
             return result.returncode == 0 and result.stdout.strip().lower() == "true"
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return False
-
-    def _get_container_port(self, container_name: str) -> int | None:
-        """Get the host port of a running container.
-
-        Args:
-            container_name: The container name to inspect.
-
-        Returns:
-            The host port mapped to container port 8080, or None if not found.
-        """
-        try:
-            result = subprocess.run(
-                [self._runtime, "port", container_name, "8080"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                # Output format: "0.0.0.0:PORT" or ":::PORT"
-                port_str = result.stdout.strip().split(":")[-1]
-                return int(port_str)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
-            pass
-        return None

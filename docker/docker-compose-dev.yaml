@@ -243,7 +243,9 @@ services:
       - OMNI_HARNESS_CHANNELS_GATEWAY_URL=${OMNI_HARNESS_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - OMNI_HARNESS_HOST_BASE_DIR=${OMNI_HARNESS_ROOT}/backend/.omni-harness
       - OMNI_HARNESS_HOST_SKILLS_PATH=${OMNI_HARNESS_ROOT}/skills
-      - OMNI_HARNESS_SANDBOX_HOST=host.docker.internal
+      # Sandboxes publish NO host port: they join this private network,
+      # shared only with the gateway, and are reached by container name.
+      - OMNI_HARNESS_SANDBOX_NETWORK=omni-harness-dev-sandboxes
       # Logs: daily append-only files, 30 days kept (app/gateway/log_files.py).
       # The shell redirect above only APPENDS what precedes logging setup.
       - GATEWAY_LOG_FILE=/app/logs/gateway.log
@@ -296,6 +298,7 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - omni-harness-dev
+      - omni-harness-dev-sandboxes
     restart: unless-stopped
 
 volumes:
@@ -310,3 +313,8 @@ networks:
     ipam:
       config:
         - subnet: 192.168.200.0/24
+  # Gateway <-> sandbox containers only. A fixed name, because the gateway
+  # starts sandboxes through the host's Docker daemon and names this network.
+  omni-harness-dev-sandboxes:
+    name: omni-harness-dev-sandboxes
+    driver: bridge

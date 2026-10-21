@@ -192,10 +192,15 @@ def test_HOLE_apple_container_publish_has_no_host_address(monkeypatch) -> None:
 
     monkeypatch.setattr(lb.subprocess, "run", fake_run)
     backend = lb.LocalContainerBackend(image="img", base_port=18080, container_prefix="omni-harness-sandbox", config_mounts=[], environment={})
-    backend._start_container("omni-harness-sandbox-x", 18080, None)
+    # [author's edit] Was: the -p spec must start with 127.0.0.1. The user's
+    # later decision is stricter: sandboxes publish NO host port at all (they
+    # sit on a private network with the gateway), and the Apple runtime is
+    # refused outright. So: no -p, and create() refuses this runtime.
+    backend._start_container("omni-harness-sandbox-x", "omni-harness-sandboxes", None)
     cmd = seen[-1]
-    spec = cmd[cmd.index("-p") + 1]
-    assert spec.startswith("127.0.0.1:"), spec
+    assert "-p" not in cmd and "--publish" not in cmd, cmd
+    with pytest.raises(RuntimeError, match="Apple container runtime"):
+        backend.create("t", "x")
 
 
 def test_HOLE_host_nginx_logs_are_never_rotated() -> None:

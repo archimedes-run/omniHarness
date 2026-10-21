@@ -468,8 +468,8 @@ def test_uvicorn_on_the_host_binds_loopback() -> None:
 
 
 def test_docker_run_port_publishes_are_loopback() -> None:
-    """Every `-p` the code builds for `docker run` / Apple `container run`
-    names 127.0.0.1 (or the loopback-defaulting resolver). No exceptions."""
+    """Every `-p` the code builds names 127.0.0.1; sandbox containers publish
+    NOTHING (they share a private network with the gateway)."""
     found = 0
     for path in _repo_files("*.py", "*.sh"):
         rel = path.relative_to(REPO).as_posix()
@@ -478,14 +478,14 @@ def test_docker_run_port_publishes_are_loopback() -> None:
         text = path.read_text(errors="ignore")
         for mapping in re.findall(r'"-p",\s*(?:#[^\n]*\n\s*)*(f?"[^"]+")', text) + re.findall(r'port_mapping = (f"[^"]+")', text):
             found += 1
-            assert mapping.startswith(('f"127.0.0.1:', '"127.0.0.1:', 'f"{_resolve_docker_bind_host()}:')), (rel, mapping)
+            assert mapping.startswith(('f"127.0.0.1:', '"127.0.0.1:')), (rel, mapping)
         for mapping in re.findall(r"docker run[^\n]*\s-p\s+(\S+)", text):
             found += 1
             assert mapping.startswith("127.0.0.1:"), (rel, mapping)
-    assert found >= 2, "the sweep found no docker -p at all"
-    from omniharness.community.aio_sandbox.local_backend import _resolve_docker_bind_host
-
-    assert _resolve_docker_bind_host(sandbox_host="host.docker.internal", bind_host=None) == "127.0.0.1"
+    assert found >= 1, "the sweep found no docker -p at all"
+    sandbox = (REPO / "backend/packages/harness/omniharness/community/aio_sandbox/local_backend.py").read_text()
+    assert '"-p"' not in sandbox and "--publish" not in sandbox and "port_mapping" not in sandbox, "a sandbox publishes a host port"
+    assert '"--network"' in sandbox
 
 
 def test_no_host_command_execution_remains(monkeypatch):
