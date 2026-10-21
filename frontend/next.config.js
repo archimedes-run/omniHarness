@@ -27,8 +27,10 @@ import nextra from "nextra";
  * A NEXT_PUBLIC_*_BASE_URL on another origin is added to connect-src, since
  * the browser then talks to it directly.
  *
- * Applied to pages only, not /api/*: those are the gateway's, including an
- * app preview the user built, which frame-ancestors 'none' would break.
+ * Applied to pages only, not /api/* or /mock/api/*: those serve the
+ * gateway's responses and artifacts (an app preview the user built, a demo
+ * thread's HTML), which run in the artifact iframe; frame-ancestors 'none'
+ * would break that, and their own loads are not the app's.
  */
 function contentSecurityPolicy() {
   const dev = process.env.NODE_ENV !== "production";
@@ -81,7 +83,7 @@ const config = {
   async headers() {
     return [
       {
-        source: "/((?!api/).*)",
+        source: "/((?!api/|mock/api/).*)",
         headers: [
           { key: "Content-Security-Policy", value: contentSecurityPolicy() },
           // No referrer to other sites; "same-origin", not "no-referrer",
