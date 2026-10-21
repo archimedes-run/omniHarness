@@ -24,6 +24,7 @@ import {
 } from "@/components/ai-elements/chain-of-thought";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Button } from "@/components/ui/button";
+import { defangHost } from "@/core/display/defang";
 import { useI18n } from "@/core/i18n/hooks";
 import { formatTokenCount } from "@/core/messages/usage";
 import type { TokenDebugStep } from "@/core/messages/usage-model";
@@ -494,16 +495,14 @@ function ToolCall({
                     className="size-24 overflow-hidden rounded-lg object-cover"
                     href={item.source_url}
                     target="_blank"
-                    rel="noopener noreferrer"
+                    rel="noopener noreferrer nofollow"
+                    referrerPolicy="no-referrer"
                   >
-                    <div className="bg-accent size-24">
-                      <img
-                        className="size-full object-cover"
-                        src={item.thumbnail_url}
-                        alt={item.title}
-                        width={100}
-                        height={100}
-                      />
+                    {/* A search result's thumbnail is on another site: shown
+                        as its host, not fetched (zero-click exfiltration fix;
+                        the CSP's img-src blocks it too). */}
+                    <div className="bg-accent text-muted-foreground flex size-24 items-center justify-center p-1 text-center text-xs break-all">
+                      {defangHost(item.thumbnail_url) || item.title}
                     </div>
                   </a>
                 </Tooltip>
