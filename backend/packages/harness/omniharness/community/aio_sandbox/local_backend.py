@@ -169,6 +169,21 @@ def _egress_args(egress: tuple[str, str] | None) -> list[str]:
     return [*args, "--mount", f"type=volume,src={volume},dst={SANDBOX_EGRESS_CA_DIR},readonly"]
 
 
+def _is_hardened(entry: dict, container_name: str) -> bool:
+    """A container this gateway may adopt: keyed with this gateway's key for
+    its name (#98) and not seccomp-unconfined or privileged (#99). One started
+    before those changes (or by anything else) is not adopted."""
+    env = (entry.get("Config") or {}).get("Env") or []
+    try:
+        expected = f"{SANDBOX_KEY_ENV}={sandbox_api_key(container_name)}"
+    except RuntimeError:
+        return False
+    keyed = [e for e in env if e.startswith(f"{SANDBOX_KEY_ENV}=")]
+    host = entry.get("HostConfig") or {}
+    unconfined = any("unconfined" in str(opt) for opt in host.get("SecurityOpt") or [])
+    return keyed == [expected] and not unconfined and not host.get("Privileged")
+
+
 SANDBOX_REFUSED_WITHOUT_NETWORK = (
     "Refusing to start a sandbox container: its API runs shell commands and must not be reachable from the host. "
     "Sandboxes run only on a Docker network shared with the gateway (set by docker compose: OMNI_HARNESS_SANDBOX_NETWORK); "
@@ -335,6 +350,11 @@ class LocalContainerBackend(SandboxBackend):
             return None  # not reachable without the shared network (fail closed)
         if not self._is_container_running(container_name):
             return None
+        inspected = self._batch_inspect([container_name]).get(container_name)
+        if inspected is None or not inspected[2]:
+            logger.warning("Removing sandbox container %s: it has no key from this gateway or runs unconfined", container_name)
+            self._stop_container(container_name)
+            return None
 
         sandbox_url = self._url_for(container_name)
         if not wait_for_sandbox_ready(sandbox_url, timeout=5, headers=auth_headers(container_name)):
@@ -407,7 +427,13 @@ class LocalContainerBackend(SandboxBackend):
             if data is None:
                 # Container disappeared between ps and inspect, or inspect failed
                 continue
-            created_at, _host_port = data
+            created_at, _host_port, hardened = data
+            if not hardened:
+                # Unkeyed or unconfined (started before #98/#99, or not by this
+                # gateway): any other sandbox could drive it. Removed, never adopted.
+                logger.warning("Removing sandbox container %s: it has no key from this gateway or runs unconfined", container_name)
+                self._stop_container(container_name)
+                continue
             sandbox_id = container_name[len(self._container_prefix) + 1 :]
             sandbox_url = self._url_for(container_name) if reachable else ""
 
@@ -423,10 +449,10 @@ class LocalContainerBackend(SandboxBackend):
         logger.info(f"Found {len(infos)} running sandbox container(s)")
         return infos
 
-    def _batch_inspect(self, container_names: list[str]) -> dict[str, tuple[float, int | None]]:
+    def _batch_inspect(self, container_names: list[str]) -> dict[str, tuple[float, int | None, bool]]:
         """Batch-inspect containers in a single subprocess call.
 
-        Returns a mapping of ``container_name -> (created_at, host_port)``.
+        Returns a mapping of ``container_name -> (created_at, host_port, hardened)``.
         Missing containers or parse failures are silently dropped from the result.
         """
         if not container_names:
@@ -458,7 +484,7 @@ class LocalContainerBackend(SandboxBackend):
             logger.warning(f"Failed to parse docker inspect output as JSON: {e}")
             return {}
 
-        out: dict[str, tuple[float, int | None]] = {}
+        out: dict[str, tuple[float, int | None, bool]] = {}
         for entry in payload:
             # ``Name`` is prefixed with ``/`` in the docker inspect response
             name = (entry.get("Name") or "").lstrip("/")
@@ -466,7 +492,7 @@ class LocalContainerBackend(SandboxBackend):
                 continue
             created_at = _parse_docker_timestamp(entry.get("Created", ""))
             host_port = _extract_host_port(entry, 8080)
-            out[name] = (created_at, host_port)
+            out[name] = (created_at, host_port, _is_hardened(entry, name))
         return out
 
     # ── Container operations ─────────────────────────────────────────────

@@ -145,6 +145,7 @@ def test_squid_allows_only_the_registries_by_get_and_head_on_443() -> None:
     assert access == [
         "http_access deny !sandboxes",
         "http_access deny !tls_port",
+        "http_access deny !CONNECT !https",
         "http_access deny ip_literal",
         "http_access deny !registries",
         "http_access deny private_dst",
@@ -164,7 +165,8 @@ def test_the_proxy_ca_is_name_constrained_and_its_key_stays_in_the_container() -
     [constraint] = re.findall(r'nameConstraints=critical,([^"]+)"', script)
     assert sorted(constraint.split(",")) == ["permitted;DNS:npmjs.org", "permitted;DNS:pypi.org", "permitted;DNS:pythonhosted.org"]
     assert "pathlen:0" in script
-    assert 'cp "$RUN/ca.crt" /ca-out/' in script and "ca.key" not in script.split("/ca-out")[1], "only the certificate leaves the tmpfs"
+    # Only the certificate leaves the tmpfs, readable by the sandbox's unprivileged shell (review M2).
+    assert 'install -m 0644 "$RUN/ca.crt" /ca-out/' in script and "ca.key" not in script.split("/ca-out/ca.crt.tmp")[1]
     for compose in ("docker-compose.yaml", "docker-compose-dev.yaml"):
         egress = yaml.safe_load((REPO / "docker" / compose).read_text())["services"]["sandbox-egress"]
         assert "ports" not in egress, f"{compose}: the egress proxy publishes a port"
@@ -192,3 +194,99 @@ def test_bash_is_tier_2_and_offered_only_with_a_container_sandbox() -> None:
 def test_docker_end_to_end() -> None:
     result = subprocess.run(["bash", str(REPO / "scripts/sandbox-egress-e2e.sh")], capture_output=True, text=True, timeout=900)
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
+
+
+# ── adoption: nothing unkeyed or unconfined is ever handed to a thread (review H1)
+
+
+def _inspect(name: str, *, env: list[str] | None, security_opt: list[str] | None = None) -> dict:
+    return {"Name": f"/{name}", "Created": "2026-10-23T10:00:00Z", "NetworkSettings": {"Ports": {}}, "Config": {"Env": env or []}, "HostConfig": {"SecurityOpt": security_opt}}
+
+
+def _backend_with_containers(monkeypatch, entries: list[dict]):
+    import json as _json
+
+    from omniharness.community.aio_sandbox import local_backend as lb
+
+    stopped: list[str] = []
+
+    class _R:
+        def __init__(self, out: str = "", rc: int = 0):
+            self.stdout, self.returncode, self.stderr = out, rc, ""
+
+    def fake_run(cmd, *a, **k):
+        if cmd[1] == "ps":
+            if "--filter" in cmd and any(str(c).startswith("name=^") for c in cmd):
+                return _R("".join(e["Name"].lstrip("/") + "\n" for e in entries))
+            return _R("".join(e["Name"].lstrip("/") + "\n" for e in entries))
+        if cmd[1] == "inspect":
+            names = set(cmd[2:])
+            return _R(_json.dumps([e for e in entries if e["Name"].lstrip("/") in names]))
+        if cmd[1] == "stop":
+            stopped.append(cmd[-1])
+        return _R()
+
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-harness-dev-sandboxes")
+    monkeypatch.setattr(lb.subprocess, "run", fake_run)
+    monkeypatch.setattr(lb.LocalContainerBackend, "_detect_runtime", lambda self: "docker")
+    monkeypatch.setattr(lb.LocalContainerBackend, "_is_container_running", lambda self, name: True)
+    backend = lb.LocalContainerBackend(image="img", base_port=8080, container_prefix="omni-harness-sandbox", config_mounts=[], environment={})
+    return backend, stopped
+
+
+def test_containers_without_this_gateways_key_or_with_unconfined_seccomp_are_removed_not_adopted(monkeypatch) -> None:
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
+    from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
+
+    good = "omni-harness-sandbox-good"
+    entries = [
+        _inspect(good, env=[f"SANDBOX_API_KEY={sandbox_api_key(good)}"]),
+        _inspect("omni-harness-sandbox-old", env=["PATH=/bin"]),  # started before #98
+        _inspect("omni-harness-sandbox-wrong", env=["SANDBOX_API_KEY=someone-elses"]),
+        _inspect("omni-harness-sandbox-unconf", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-unconf')}"], security_opt=["seccomp=unconfined"]),
+    ]
+    backend, stopped = _backend_with_containers(monkeypatch, entries)
+    assert [i.container_name for i in backend.list_running()] == [good]
+    assert sorted(stopped) == ["omni-harness-sandbox-old", "omni-harness-sandbox-unconf", "omni-harness-sandbox-wrong"]
+
+
+def test_discover_removes_an_unkeyed_container_instead_of_adopting_it(monkeypatch) -> None:
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
+    from omniharness.community.aio_sandbox import local_backend as lb
+
+    backend, stopped = _backend_with_containers(monkeypatch, [_inspect("omni-harness-sandbox-old", env=[])])
+    monkeypatch.setattr(lb, "wait_for_sandbox_ready", lambda *a, **k: True)  # an unkeyed API answers anything
+    assert backend.discover("old") is None
+    assert stopped == ["omni-harness-sandbox-old"]
+
+
+# ── bash is Tier 2 only in the hardened sandbox (review M1) ─────────────────
+
+
+def _bash_tier(monkeypatch, *, use: str, provisioner_url: str | None = None, egress: bool = True) -> int:
+    from types import SimpleNamespace
+
+    from app.policy import runtime_floors
+    from app.policy.classify import classify
+    from app.policy.config import ConfigLoader
+
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-harness-dev-sandboxes")
+    if egress:
+        monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", "http://omni-harness-sandbox-egress:3128")
+        monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME", "v")
+    else:
+        monkeypatch.delenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", raising=False)
+    sandbox = SimpleNamespace(use=use, provisioner_url=provisioner_url, model_extra={})
+    monkeypatch.setattr("omniharness.config.get_app_config", lambda: SimpleNamespace(sandbox=sandbox))
+    assert runtime_floors is not None
+    ruleset = ConfigLoader(REPO / "backend/app/policy/default_rules.yaml").load()
+    return int(classify("bash", {"command": "ls"}, ruleset).tier)
+
+
+def test_bash_is_tier_2_only_in_the_hardened_container_sandbox(monkeypatch) -> None:
+    aio = "omniharness.community.aio_sandbox:AioSandboxProvider"
+    assert _bash_tier(monkeypatch, use=aio) == 2
+    assert _bash_tier(monkeypatch, use=aio, provisioner_url="http://provisioner:8002") == 3, "a remote sandbox is not keyed or confined here"
+    assert _bash_tier(monkeypatch, use=aio, egress=False) == 3, "no registries proxy configured"
+    assert _bash_tier(monkeypatch, use="omniharness.sandbox.local:LocalSandboxProvider") == 3

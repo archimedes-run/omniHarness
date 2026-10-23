@@ -50,7 +50,8 @@ for c in a b; do
   for _ in $(seq 1 60); do docker exec "$P-sandbox-$c" sh -c 'curl -s -o /dev/null --noproxy "*" localhost:8080/' 2>/dev/null && break; sleep 1; done
 done
 
-ex() { docker exec "$P-sandbox-a" bash -lc "$1" 2>/dev/null; }
+# As the sandbox's own user (the AIO shell API runs as gem, not root).
+ex() { docker exec -u gem "$P-sandbox-a" bash -lc "$1" 2>/dev/null; }
 code() { ex "curl -s -o /dev/null -w '%{http_code}' --max-time 20 $1" | tail -c 3; }
 CA=/etc/omni-egress/ca.crt
 
@@ -65,12 +66,14 @@ check "PUT registry.npmjs.org"           403 "$(code "--cacert $CA -X PUT https:
 check "GET github.com"                   000 "$(code "--cacert $CA https://github.com/")"
 check "GET example.com"                  000 "$(code "https://example.com/")"
 check "GET http://registry.npmjs.org"    403 "$(code "http://registry.npmjs.org/")"
+check "plaintext GET http://pypi.org:443" 403 "$(code "http://pypi.org:443/")"
 check "GET registry.npmjs.org:8443"      403 "$(code "--cacert $CA https://registry.npmjs.org:8443/")"
 check "GET an IP literal"                403 "$(code "-k https://104.16.0.35/")"
 check "GET host.docker.internal"         403 "$(code "-k https://host.docker.internal/")"
 check "around the proxy"                 000 "$(code "--noproxy '*' https://registry.npmjs.org/")"
 docker logs "$EGRESS" 2>&1 | grep -E 'CONNECT (github\.com|example\.com):443' | grep -vq 'TCP_DENIED' && check "denied CONNECTs never reached upstream" yes no || check "denied CONNECTs never reached upstream" yes yes
 
+check "the CA is readable by the sandbox user" yes "$(ex 'test -r /etc/omni-egress/ca.crt && echo yes || echo no')"
 KEY_A=$(docker exec "$P-sandbox-a" printenv SANDBOX_API_KEY)
 B="http://$P-sandbox-b:8080/v1/shell/exec"
 body='{"command":"echo pwned"}'

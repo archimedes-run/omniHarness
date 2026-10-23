@@ -16,7 +16,8 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=omni-harness sandb
 cat "$RUN/ca.crt" "$RUN/ca.key" > "$RUN/ca.pem"
 rm -f "$RUN/ca.key"
 umask 022
-cp "$RUN/ca.crt" /ca-out/ca.crt.tmp && mv /ca-out/ca.crt.tmp /ca-out/ca.crt
+# World-readable: the sandbox's shell runs as an unprivileged user.
+install -m 0644 "$RUN/ca.crt" /ca-out/ca.crt.tmp && mv /ca-out/ca.crt.tmp /ca-out/ca.crt
 rm -rf "$RUN/ssl_db"
 /usr/lib/squid/security_file_certgen -c -s "$RUN/ssl_db" -M 4MB >/dev/null
 touch "$RUN/access.log" "$RUN/cache.log"

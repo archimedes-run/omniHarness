@@ -27,6 +27,7 @@ from omniharness.tools.names import canonical_tool_name
 
 from .config import RuleSet
 from .models import ClassificationRule, PolicyDecision, RuleException, Tier
+from .runtime_floors import runtime_floor
 
 #: The tier carried by a call no rule matched. With readable rules such a call
 #: is REFUSED (`PolicyDecision.refused`) and this tier is never acted on; with
@@ -67,6 +68,11 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet,
         # Readable rules, and none names this tool: refused, never defaulted.
         return PolicyDecision(tool_name=tool_name, tier=UNKNOWN_TOOL_TIER, deciding_rule=None, refused=True)
 
+    # A tier that holds only where the tool runs (runtime_floors): raised,
+    # never lowered, when that place is not the hardened one.
+    floor = runtime_floor(name)
+    if floor is not None and floor > best[0]:
+        return PolicyDecision(tool_name=tool_name, tier=floor, deciding_rule=best[1], raised_by=best[2])
     return PolicyDecision(tool_name=tool_name, tier=best[0], deciding_rule=best[1], raised_by=best[2])
 
 
