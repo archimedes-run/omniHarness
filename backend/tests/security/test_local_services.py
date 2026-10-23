@@ -17,6 +17,12 @@ from fastapi.testclient import TestClient
 BACKEND = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _gateway_secret(monkeypatch):
+    """Sandbox containers are keyed from the gateway's secret (#98)."""
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "test-internal-secret")
+
+
 @pytest.fixture
 def watcher(tmp_path):
     sys.path.insert(0, str(BACKEND / "packages" / "session_watcher"))

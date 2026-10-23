@@ -23,17 +23,18 @@ class AioSandbox(Sandbox):
     from corrupting the container's single persistent session (see #1433).
     """
 
-    def __init__(self, id: str, base_url: str, home_dir: str | None = None):
+    def __init__(self, id: str, base_url: str, home_dir: str | None = None, headers: dict[str, str] | None = None):
         """Initialize the AIO sandbox.
 
         Args:
             id: Unique identifier for this sandbox instance.
             base_url: URL of the sandbox API (e.g., http://localhost:8080).
             home_dir: Home directory inside the sandbox. If None, will be fetched from the sandbox.
+            headers: Sent with every API call (the container's own API key, #98).
         """
         super().__init__(id)
         self._base_url = base_url
-        self._client = AioSandboxClient(base_url=base_url, timeout=600)
+        self._client = AioSandboxClient(base_url=base_url, headers=headers or None, timeout=600)
         self._home_dir = home_dir
         self._lock = threading.Lock()
 

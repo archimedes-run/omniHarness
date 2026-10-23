@@ -35,6 +35,7 @@ from .aio_sandbox import AioSandbox
 from .backend import SandboxBackend, wait_for_sandbox_ready
 from .local_backend import LocalContainerBackend
 from .remote_backend import RemoteSandboxBackend
+from .sandbox_auth import auth_headers
 from .sandbox_info import SandboxInfo
 
 logger = logging.getLogger(__name__)
@@ -481,7 +482,7 @@ class AioSandboxProvider(SandboxProvider):
             with self._lock:
                 if sandbox_id in self._warm_pool:
                     info, _ = self._warm_pool.pop(sandbox_id)
-                    sandbox = AioSandbox(id=sandbox_id, base_url=info.sandbox_url)
+                    sandbox = AioSandbox(id=sandbox_id, base_url=info.sandbox_url, headers=auth_headers(info.container_name))
                     self._sandboxes[sandbox_id] = sandbox
                     self._sandbox_infos[sandbox_id] = info
                     self._last_activity[sandbox_id] = time.time()
@@ -525,7 +526,7 @@ class AioSandboxProvider(SandboxProvider):
                             return existing_id
                     if sandbox_id in self._warm_pool:
                         info, _ = self._warm_pool.pop(sandbox_id)
-                        sandbox = AioSandbox(id=sandbox_id, base_url=info.sandbox_url)
+                        sandbox = AioSandbox(id=sandbox_id, base_url=info.sandbox_url, headers=auth_headers(info.container_name))
                         self._sandboxes[sandbox_id] = sandbox
                         self._sandbox_infos[sandbox_id] = info
                         self._last_activity[sandbox_id] = time.time()
@@ -536,7 +537,7 @@ class AioSandboxProvider(SandboxProvider):
                 # Backend discovery: another process may have created the container.
                 discovered = self._backend.discover(sandbox_id)
                 if discovered is not None:
-                    sandbox = AioSandbox(id=discovered.sandbox_id, base_url=discovered.sandbox_url)
+                    sandbox = AioSandbox(id=discovered.sandbox_id, base_url=discovered.sandbox_url, headers=auth_headers(discovered.container_name))
                     with self._lock:
                         self._sandboxes[discovered.sandbox_id] = sandbox
                         self._sandbox_infos[discovered.sandbox_id] = discovered
@@ -603,11 +604,11 @@ class AioSandboxProvider(SandboxProvider):
         info = self._backend.create(thread_id, sandbox_id, extra_mounts=extra_mounts or None)
 
         # Wait for sandbox to be ready
-        if not wait_for_sandbox_ready(info.sandbox_url, timeout=60):
+        if not wait_for_sandbox_ready(info.sandbox_url, timeout=60, headers=auth_headers(info.container_name)):
             self._backend.destroy(info)
             raise RuntimeError(f"Sandbox {sandbox_id} failed to become ready within timeout at {info.sandbox_url}")
 
-        sandbox = AioSandbox(id=sandbox_id, base_url=info.sandbox_url)
+        sandbox = AioSandbox(id=sandbox_id, base_url=info.sandbox_url, headers=auth_headers(info.container_name))
         with self._lock:
             self._sandboxes[sandbox_id] = sandbox
             self._sandbox_infos[sandbox_id] = info

@@ -14,6 +14,8 @@ import subprocess
 from datetime import datetime
 
 from .backend import SandboxBackend, wait_for_sandbox_ready
+from .sandbox_auth import CONTAINER_ENV as SANDBOX_KEY_ENV
+from .sandbox_auth import auth_headers, sandbox_api_key
 from .sandbox_info import SandboxInfo
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,41 @@ def _format_container_command_for_log(cmd: list[str]) -> str:
 #: or in a browser can reach their shell-exec API at all.
 SANDBOX_NETWORK_ENV = "OMNI_HARNESS_SANDBOX_NETWORK"
 SANDBOX_API_PORT = 8080
+
+#: The sandboxes' only way out (docker/sandbox-egress): package registries,
+#: GET/HEAD, port 443. Compose sets both; without them a sandbox has no egress.
+SANDBOX_EGRESS_PROXY_ENV = "OMNI_HARNESS_SANDBOX_EGRESS_PROXY"
+SANDBOX_EGRESS_CA_VOLUME_ENV = "OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME"
+SANDBOX_EGRESS_CA_DIR = "/etc/omni-egress"
+
+
+def sandbox_egress() -> tuple[str, str] | None:
+    proxy = os.environ.get(SANDBOX_EGRESS_PROXY_ENV, "").strip()
+    volume = os.environ.get(SANDBOX_EGRESS_CA_VOLUME_ENV, "").strip()
+    return (proxy, volume) if proxy and volume else None
+
+
+def _egress_args(egress: tuple[str, str] | None) -> list[str]:
+    if egress is None:
+        return []
+    proxy, volume = egress
+    ca = f"{SANDBOX_EGRESS_CA_DIR}/ca.crt"
+    env = {
+        "HTTPS_PROXY": proxy,
+        "HTTP_PROXY": proxy,
+        "https_proxy": proxy,
+        "http_proxy": proxy,
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1",
+        # The proxy terminates TLS with its own name-constrained CA.
+        "NODE_EXTRA_CA_CERTS": ca,
+        "PIP_CERT": ca,
+    }
+    args: list[str] = []
+    for key, value in env.items():
+        args += ["-e", f"{key}={value}"]
+    return [*args, "--mount", f"type=volume,src={volume},dst={SANDBOX_EGRESS_CA_DIR},readonly"]
+
 
 SANDBOX_REFUSED_WITHOUT_NETWORK = (
     "Refusing to start a sandbox container: its API runs shell commands and must not be reachable from the host. "
@@ -300,8 +337,8 @@ class LocalContainerBackend(SandboxBackend):
             return None
 
         sandbox_url = self._url_for(container_name)
-        if not wait_for_sandbox_ready(sandbox_url, timeout=5):
-            return None
+        if not wait_for_sandbox_ready(sandbox_url, timeout=5, headers=auth_headers(container_name)):
+            return None  # not ready, or not keyed with this gateway's secret
 
         return SandboxInfo(
             sandbox_id=sandbox_id,
@@ -455,9 +492,8 @@ class LocalContainerBackend(SandboxBackend):
         """
         cmd = [self._runtime, "run"]
 
-        # Docker-specific security options
-        if self._runtime == "docker":
-            cmd.extend(["--security-opt", "seccomp=unconfined"])
+        # Docker's default seccomp profile applies (#99): the image's browser,
+        # the only part that wanted it unconfined, is disabled.
 
         # NO -p: nothing is published on the host. The container joins the
         # private network it shares with the gateway (security baseline).
@@ -482,6 +518,10 @@ class LocalContainerBackend(SandboxBackend):
         # Environment variables
         for key, value in self._environment.items():
             cmd.extend(["-e", f"{key}={value}"])
+        # Its own API key (#98), set after the configured environment so
+        # nothing can replace it; then the egress proxy, when there is one.
+        cmd.extend(["-e", f"{SANDBOX_KEY_ENV}={sandbox_api_key(container_name)}"])
+        cmd.extend(_egress_args(sandbox_egress()))
 
         # Config-level volume mounts
         for mount in self._config_mounts:

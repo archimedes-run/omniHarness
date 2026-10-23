@@ -13,7 +13,7 @@ from .sandbox_info import SandboxInfo
 logger = logging.getLogger(__name__)
 
 
-def wait_for_sandbox_ready(sandbox_url: str, timeout: int = 30) -> bool:
+def wait_for_sandbox_ready(sandbox_url: str, timeout: int = 30, headers: dict[str, str] | None = None) -> bool:
     """Poll sandbox health endpoint until ready or timeout.
 
     Args:
@@ -26,7 +26,7 @@ def wait_for_sandbox_ready(sandbox_url: str, timeout: int = 30) -> bool:
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            response = requests.get(f"{sandbox_url}/v1/sandbox", timeout=5)
+            response = requests.get(f"{sandbox_url}/v1/sandbox", timeout=5, headers=headers or {})
             if response.status_code == 200:
                 return True
         except requests.exceptions.RequestException:

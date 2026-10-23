@@ -2,12 +2,20 @@ import logging
 import os
 from types import SimpleNamespace
 
+import pytest
+
 from omniharness.community.aio_sandbox.local_backend import (
     LocalContainerBackend,
     _format_container_command_for_log,
     _format_container_mount,
     _redact_container_command_for_log,
 )
+
+
+@pytest.fixture(autouse=True)
+def _gateway_secret(monkeypatch):
+    """Sandbox containers are keyed from the gateway's secret (#98)."""
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "test-internal-secret")
 
 
 def test_format_container_mount_uses_mount_syntax_for_docker_windows_paths():

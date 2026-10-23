@@ -423,3 +423,12 @@ Actions variables are plaintext and often hold configuration values. Already inc
 | `connector-github_GITHUB_LIST_REPOSITORY_ORGANIZATION_VARIABLES` | T1 | T3 |
 | `connector-github_GITHUB_LIST_REPOSITORY_VARIABLES` | T1 | T3 |
 | `connector-github_GITHUB_LIST_SELECTED_REPOSITORIES_FOR_AN_ORGANIZATION_VARIABLE` | T1 | T3 |
+
+## 2026-10-23: bash in the container sandbox
+
+| Tool | Arguments | Before | After | Direction |
+|---|---|---|---|---|
+| `bash` | any | T3 | T2 (runs, then disclosed) | **LESS STRICT** |
+
+Decided by the owner once the container sandbox was hardened: `bash` is offered only with a container sandbox (`sandbox.security.is_host_bash_allowed`), whose writable mounts are the thread's own folders, whose only egress is the registries proxy (`docker/sandbox-egress`: registry.npmjs.org, pypi.org, files.pythonhosted.org; GET/HEAD; 443), whose API takes a per-sandbox key (#98) and which runs under Docker's default seccomp profile (#99). Tools that act outside the sandbox keep their tiers.
+
