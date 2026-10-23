@@ -264,6 +264,18 @@ def _keep_autonomy(snapshot: dict | None, before: dict | None) -> dict | None:
     return {**snapshot, "config": config}
 
 
+def _without_autonomy(snapshot: dict | None) -> dict | None:
+    """An unversioned agent's state with no grants. Grants come only from the
+    Autonomy action, written to the store; an `autonomy` key in a config.yaml
+    written outside it (a hand edit, a restored backup) is never adopted, or
+    the first unrelated edit would make it live (review 5)."""
+    if snapshot is None:
+        return None
+    config = dict(snapshot.get("config") or {})
+    config.pop(AUTONOMY_KEY, None)
+    return {**snapshot, "config": config}
+
+
 def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, source: str, base_version: int | None = None, sets_autonomy: bool = False) -> Version:
     """Make `snapshot` ({"config": {...}, "soul": "..."}, or None to delete) the
     agent's new version. `base_version`: the version the change was made from;
@@ -279,7 +291,7 @@ def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, sou
         current = versions[-1].version if versions else 0
         if base_version is not None and base_version != current:
             raise StaleWriteError("agent", name, base_version, current)
-        before = versions[-1].snapshot if versions else _agent_on_disk(user_id, name)
+        before = versions[-1].snapshot if versions else _without_autonomy(_agent_on_disk(user_id, name))
         if not sets_autonomy:
             snapshot = _keep_autonomy(snapshot, before)
         now = datetime.now(UTC).isoformat()
