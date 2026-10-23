@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
+.PHONY: help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -25,6 +25,7 @@ help:
 	@echo "  make check           - Check if all required tools are installed"
 	@echo "  make install         - Install all dependencies (frontend + backend + pre-commit hooks)"
 	@echo "  make setup-sandbox   - Pre-pull sandbox container image (recommended)"
+	@echo "  make sandbox-image   - Build the agent sandbox from docker/sandbox/Dockerfile (pinned base)"
 	@echo "  make dev             - Start all services in development mode (with hot-reloading)"
 	@echo "  make dev-daemon      - Start dev services in background (daemon mode)"
 	@echo "  make start           - Start all services in production mode (optimized, no hot-reloading)"
@@ -84,6 +85,11 @@ install:
 	@echo "If you plan to use Docker/Container-based sandbox, you can pre-pull the image:"
 	@echo "  make setup-sandbox"
 	@echo ""
+
+# The agent's command sandbox, from our Dockerfile (base pinned by digest).
+SANDBOX_IMAGE_TAG ?= omni-harness-sandbox:1.11.0-oh1
+sandbox-image:
+	docker build -t $(SANDBOX_IMAGE_TAG) docker/sandbox
 
 # Pre-pull sandbox Docker image (optional but recommended)
 setup-sandbox:
