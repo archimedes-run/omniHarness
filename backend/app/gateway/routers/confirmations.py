@@ -191,6 +191,8 @@ _SLOTS = _ConfirmSlots()
 
 #: Refused before the claim: too many confirmed calls are running. Nothing ran.
 CONFIRM_BUSY = "confirm_busy"
+#: What a busy refusal says, on the card and to a typed "yes" alike.
+CONFIRM_BUSY_MESSAGE = f"{CONFIRMS_PER_USER} confirmed actions are already running, so this one has not started. Nothing has run. Confirm again when one finishes."
 #: Refused, and the card resolved: the chat it belongs to was deleted.
 CHAT_DELETED = "chat_deleted"
 
@@ -199,6 +201,33 @@ async def _off_the_request_pool(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     """Run a confirmation in _CONFIRM_POOL, with this request's context."""
     context = contextvars.copy_context()
     return await asyncio.get_running_loop().run_in_executor(_CONFIRM_POOL, functools.partial(context.run, fn, *args, **kwargs))
+
+
+async def run_in_a_slot(user: str, fn: Any, /, *args: Any) -> tuple[bool, Any]:
+    """A typed confirmation's admission: the card path's slot, then its pool (#118).
+
+    (False, None) when this user (or the pool) has no free slot: nothing ran,
+    and the caller answers CONFIRM_BUSY as the card does. Otherwise fn runs in
+    _CONFIRM_POOL with this context, and the slot is given back by the pool
+    thread when fn returns, not when this await ends: a cancelled run keeps
+    its slot until the confirmed call really stops, as a card's does.
+    """
+    if not _SLOTS.take(user):
+        return False, None
+
+    def held() -> Any:
+        try:
+            return fn(*args)
+        finally:
+            _SLOTS.give_back(user)
+
+    context = contextvars.copy_context()
+    try:
+        future = asyncio.get_running_loop().run_in_executor(_CONFIRM_POOL, functools.partial(context.run, held))
+    except BaseException:
+        _SLOTS.give_back(user)
+        raise
+    return True, await future
 
 
 def _response_detail(detail: dict[str, Any]) -> dict[str, Any]:
@@ -675,7 +704,7 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
         return ResolveResponse(
             outcome=CONFIRM_BUSY,
             action_id=action_id,
-            message=f"{CONFIRMS_PER_USER} confirmed actions are already running, so this one has not started. Nothing has run. Confirm again when one finishes.",
+            message=CONFIRM_BUSY_MESSAGE,
         )
     from app.gateway.deps import get_checkpointer, get_run_manager
 

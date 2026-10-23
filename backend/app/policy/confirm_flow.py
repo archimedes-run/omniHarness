@@ -71,6 +71,12 @@ ALREADY_RUNNING = "already_running"
 #: without inventing a verdict about an ordinary sentence.
 NO_VERDICT = "no_verdict"
 
+#: Internal too: a probe (`from_message(..., execute=False)`) reached the point
+#: where a confirmation would be claimed and run, and stopped there. Nothing
+#: was claimed or run. The chat path uses it to run only such a turn in the
+#: confirmation pool, in a slot (#118).
+WOULD_EXECUTE = "would_execute"
+
 #: A standalone run of digits, used as the scope proof above the threshold.
 #: Deliberately NOT matched inside the 12-hex action id, which is stripped by
 #: `recognise` and is not a count.
@@ -107,12 +113,16 @@ class ConfirmationFlow:
 
     # ---- entry points ---------------------------------------------------
 
-    def from_message(self, message: Any, *, run_tool: Callable[[str, dict], Any], runtime_context: dict | None = None) -> FlowResult:
+    def from_message(self, message: Any, *, run_tool: Callable[[str, dict], Any], runtime_context: dict | None = None, execute: bool = True) -> FlowResult:
         """The chat route. Always returns a result; NO_VERDICT is the usual one.
 
         A turn that says nothing about a pending action must not produce a
         verdict about an ordinary sentence — but it may still have found actions
         that expired, and those are reported either way (FR-038).
+
+        `execute=False` is a probe: every outcome is the same, except that a
+        confirmation which would now be claimed and run returns WOULD_EXECUTE
+        instead, before the claim. Nothing runs.
         """
         now = self.now()
         expired = self._expire(now)
@@ -170,7 +180,7 @@ class ConfirmationFlow:
             "user_id": ctx.get("user_id"),
             "message_id": getattr(message, "id", None) or (message.get("id") if isinstance(message, dict) else None),
         }
-        return self._apply(action, verdict.verdict, supplied, run_tool, expired, answered)
+        return self._apply(action, verdict.verdict, supplied, run_tool, expired, answered, execute=execute)
 
     def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None, answered: dict | None = None) -> FlowResult:
         """The UI route (Phase 3). Same claim, same execution, same outcomes."""
@@ -189,7 +199,7 @@ class ConfirmationFlow:
 
     # ---- the shared middle ----------------------------------------------
 
-    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...], answered: dict | None = None) -> FlowResult:
+    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...], answered: dict | None = None, *, execute: bool = True) -> FlowResult:
         answered = {"via": None, "thread_id": None, "user_id": None, "message_id": None, **(answered or {})}
         if verdict is Verdict.DECLINE:
             # A DECLINE TAKES THE CLAIM, exactly as a confirmation does: the
@@ -217,6 +227,10 @@ class ConfirmationFlow:
                     detail={"required_count": len(action.targets), "threshold": threshold, "supplied": supplied_count},
                     expired_meanwhile=expired,
                 )
+
+        if not execute:
+            # The probe stops here: this confirmation would be claimed and run.
+            return FlowResult(WOULD_EXECUTE, action.id, expired_meanwhile=expired)
 
         # RE-CHECKED AT CONFIRMATION, before the claim: never run a tool the
         # user has since removed from the chat. A runner that can tell says

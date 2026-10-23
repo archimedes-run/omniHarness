@@ -43,6 +43,11 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+#: A probe's answer (`_complete_confirmation(execute=False)`): this turn would
+#: claim and run a confirmation. Never returned when executing.
+_WOULD_RUN: Any = object()
+
+
 @dataclass
 class PolicyMiddleware(AgentMiddleware):
     """Classify, then act according to the tier.
@@ -158,19 +163,30 @@ class PolicyMiddleware(AgentMiddleware):
         return self._guard_self_verdict(self._disclose(handler(self._offered(request, note))))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        # OFF THE EVENT LOOP. A typed "yes" runs the confirmed call right here,
-        # and a confirmed `task` runs its whole subagent; run inline, it froze
-        # the gateway's loop (every request) until it finished (review of PR
-        # #58). It runs in the card path's confirmation pool, with this run's
-        # context, through the same flow: same gate, same claim, same result.
-        # Only a turn that may answer goes there; every other model call stays
-        # inline.
-        if self._may_answer(request):
-            from app.gateway.routers.confirmations import _off_the_request_pool
+        # OFF THE EVENT LOOP, AND ONLY WHAT RUNS. A typed "yes" runs the
+        # confirmed call right here, and a confirmed `task` runs its whole
+        # subagent; run inline, it froze the gateway's loop (every request)
+        # until it finished (review of PR #58). So the flow is first PROBED
+        # inline (execute=False: same gate, same recognition, nothing claimed
+        # or run), which settles every turn that runs nothing: an ordinary
+        # message, a decline, an unrecognised or card-only answer. Only a turn
+        # that would claim and run a confirmation goes to the card path's pool,
+        # in a per-user slot taken exactly as the card takes one, and there
+        # runs the same flow again: same claim, same result. Sending every
+        # person's turn to the pool made new chats wait while it was full
+        # (#118).
+        verdict, note = self._complete_confirmation(request, execute=False)
+        if verdict is _WOULD_RUN:
+            from langchain_core.messages import AIMessage
 
-            verdict, note = await _off_the_request_pool(self._complete_confirmation, request)
-        else:
-            verdict, note = None, None
+            from app.gateway.routers.confirmations import CONFIRM_BUSY, CONFIRM_BUSY_MESSAGE, run_in_a_slot
+
+            user = str((self._runtime_context(request) or {}).get("user_id") or "default")
+            started, outcome = await run_in_a_slot(user, self._complete_confirmation, request)
+            if not started:
+                logger.info("policy: confirmation resolved as %s (typed reply, no free slot)", CONFIRM_BUSY)
+                return AIMessage(content=CONFIRM_BUSY_MESSAGE)
+            verdict, note = outcome
         if verdict is not None:
             return verdict
         return self._guard_self_verdict(self._disclose(await handler(self._offered(request, note))))
@@ -292,7 +308,7 @@ class PolicyMiddleware(AgentMiddleware):
         # a scheduled one, not a tool result or an agent's reply.
         return bool(messages) and confirm_flow.turn_may_answer(messages[-1], self._runtime_context(request))
 
-    def _complete_confirmation(self, request: Any) -> tuple[Any, Any]:
+    def _complete_confirmation(self, request: Any, *, execute: bool = True) -> tuple[Any, Any]:
         from langchain_core.messages import AIMessage
 
         from . import confirm_flow
@@ -307,7 +323,11 @@ class PolicyMiddleware(AgentMiddleware):
             messages[-1],
             run_tool=self._runner(request),
             runtime_context=self._runtime_context(request),
+            execute=execute,
         )
+        if result.outcome == confirm_flow.WOULD_EXECUTE:
+            # Only from a probe: nothing was claimed or run (awrap_model_call).
+            return _WOULD_RUN, None
         note = None
         if result.expired_meanwhile:
             # FR-038: expiry TELLS the user rather than producing silence. It is
