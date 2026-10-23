@@ -103,7 +103,6 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
 
     objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, preview_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
     registry: dict[str, object] = {canonical_tool_name(getattr(t, "name", "")): t for t in objects}
-    registry[canonical_tool_name("invoke_acp_agent")] = "invoke_acp_agent"
     cfg = config
     if cfg is None:
         try:

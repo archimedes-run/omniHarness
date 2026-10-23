@@ -268,7 +268,9 @@ def test_an_agent_invited_during_a_scheduled_run_is_in_that_run(studio) -> None:
     _setup(studio, ["tasks"])
     seen = {}
 
-    @tool("web_search")
+    # read_file, not web_search: an outbound read in a scheduled run is Tier 3
+    # (after content), so it would wait instead of running.
+    @tool("read_file")
     def capture(query: str) -> str:
         """Tier 1 in the shipped rules; records the invitation mark in force."""
         seen["turn"] = current_inviting_turn()
@@ -279,7 +281,7 @@ def test_an_agent_invited_during_a_scheduled_run_is_in_that_run(studio) -> None:
     from omniharness.tools.tools import get_available_tools
 
     built, context = _agent(studio, [], scheduled=True)
-    model = ToolCapableFake(messages=iter([AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "q"}, "id": "s1"}]), AIMessage(content="done")]))
+    model = ToolCapableFake(messages=iter([AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"query": "q"}, "id": "s1"}]), AIMessage(content="done")]))
     create_agent(model=model, tools=[capture], middleware=[build_policy_middleware(get_app_config())]).invoke({"messages": [user_turn("wrap up")]}, context=context)
     invited = invited_agent_context(seen["turn"], "helper")
     assert invited["turn_provenance"] == "synthetic-trigger" and invited["trigger_firing_id"] == "fire-1"
@@ -480,7 +482,11 @@ def test_each_granted_write_names_its_source_never_the_body(studio, monkeypatch)
     _run(studio, steps, scheduled=True, firing="fire-src")
     summary = studio.client.get("/api/studio/runs/fire-src").json()
     labels = [w["source_label"] for w in summary["writes"]]
-    assert labels == ["from: the schedule's own prompt", "from: email “Lunch Friday”", "from: page “Launch notes”"], labels
+    # The fetch itself waits (an outbound read after content is Tier 3: the
+    # zero-click exfiltration guard), so the page is never read; the write
+    # after it names the page by its host, from the call, never a body.
+    assert labels == ["from: the schedule's own prompt", "from: email “Lunch Friday”", "from: page “example[.]com”"], labels
+    assert [a["tool_name"] for a in studio.client.get("/api/confirmations").json()["actions"]] == ["web_fetch"]
     assert "SECRET BODY" not in str(summary) and "BODY TEXT" not in str(summary)
     assert all(w["write_id"] and not w["undone"] for w in summary["writes"])
 

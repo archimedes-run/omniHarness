@@ -164,6 +164,7 @@ def test_HOLDS_double_click_on_a_suggestion_card_writes_once(studio) -> None:
     _launch(studio)
     _agent([_fetch(), _create("Wire the money")]).invoke({"messages": [user_turn("summarise")]}, context=_ctx(studio))
     [card] = _pending(studio)
+    studio.client.post("/api/threads", json={"thread_id": card["thread_id"]})  # a card confirms only into a chat that exists
     with ThreadPoolExecutor(4) as pool:
         outcomes = list(pool.map(lambda _: studio.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json().get("outcome"), range(4)))
     assert outcomes.count("executed") == 1, outcomes

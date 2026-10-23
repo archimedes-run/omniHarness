@@ -56,6 +56,8 @@ def _chat(studio, steps: list[AIMessage], said: str, thread: str = "t-chat", che
     model = ToolCapableFake(messages=iter([*steps, AIMessage(content="Done."), AIMessage(content="unused")]))
     agent = create_agent(model=model, tools=[web_fetch, gmail_read, *ledger], middleware=[build_policy_middleware(config)], checkpointer=checkpointer)
     config_ = {"configurable": {"thread_id": thread}} if checkpointer is not None else None
+    # The chat exists: a card is confirmed only into a chat that still does.
+    studio.client.post("/api/threads", json={"thread_id": thread})
     return agent.invoke({"messages": [user_turn(said)]}, config=config_, context={"thread_id": thread, "user_id": studio.user_id})
 
 

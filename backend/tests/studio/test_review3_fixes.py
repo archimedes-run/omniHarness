@@ -231,5 +231,6 @@ def test_a_confirmed_write_that_fails_is_reported_failed_not_executed(launch) ->
     bad = {"op": "update_task", "project": "Launch", "task": "T-99", "status": "done"}
     _agent([_read(), _call([bad], "c1")]).invoke({"messages": [user_turn("check mail")]}, context={"thread_id": "t4", "user_id": launch.user_id})
     [card] = [a for a in launch.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "ledger_apply"]
+    launch.client.post("/api/threads", json={"thread_id": "t4"})  # a card confirms only into a chat that exists
     body = launch.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()
     assert body["outcome"] == "failed" and "T-99" in body["message"], body
