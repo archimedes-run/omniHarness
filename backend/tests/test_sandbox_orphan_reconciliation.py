@@ -47,6 +47,12 @@ def test_backend_list_running_default_returns_empty():
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _gateway_secret(monkeypatch):
+    """Sandbox containers are keyed from the gateway's secret (#98)."""
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "test-internal-secret")
+
+
 def _make_local_backend():
     """Create a LocalContainerBackend with minimal config."""
     from omniharness.community.aio_sandbox.local_backend import LocalContainerBackend
@@ -65,10 +71,15 @@ def _make_inspect_entry(name: str, created: str, host_port: str | None = None) -
     ports: dict = {}
     if host_port is not None:
         ports["8080/tcp"] = [{"HostIp": "0.0.0.0", "HostPort": host_port}]
+    from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
+
     return {
         "Name": f"/{name}",  # docker inspect prefixes names with "/"
         "Created": created,
         "NetworkSettings": {"Ports": ports},
+        # Started by this gateway: keyed (#98), default seccomp (#99).
+        "Config": {"Env": [f"SANDBOX_API_KEY={sandbox_api_key(name)}"]},
+        "HostConfig": {"SecurityOpt": None},
     }
 
 

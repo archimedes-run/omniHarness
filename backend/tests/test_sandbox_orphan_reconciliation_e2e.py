@@ -47,6 +47,18 @@ E2E_TEST_IMAGE = "busybox:latest"
 E2E_PREFIX = "omni-harness-sandbox-e2e-test"
 
 
+def _keyed_run(name: str) -> list[str]:
+    """A container as this gateway starts one: keyed with its name (#98)."""
+    from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
+
+    return ["docker", "run", "--rm", "-d", "--name", name, "-e", f"SANDBOX_API_KEY={sandbox_api_key(name)}", E2E_TEST_IMAGE, "sleep", "3600"]
+
+
+@pytest.fixture(autouse=True)
+def _gateway_secret(monkeypatch):
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "test-internal-secret")
+
+
 @pytest.fixture(autouse=True)
 def cleanup_test_containers():
     """Ensure all test containers are cleaned up after the test."""
@@ -81,7 +93,7 @@ class TestOrphanReconciliationE2E:
 
         # Step 1: Start a container (simulating previous process lifecycle)
         result = subprocess.run(
-            ["docker", "run", "--rm", "-d", "--name", container_name, E2E_TEST_IMAGE, "sleep", "3600"],
+            _keyed_run(container_name),
             capture_output=True,
             text=True,
             timeout=30,
@@ -133,7 +145,7 @@ class TestOrphanReconciliationE2E:
             for i in range(3):
                 name = f"{E2E_PREFIX}-multi{i:02d}"
                 result = subprocess.run(
-                    ["docker", "run", "--rm", "-d", "--name", name, E2E_TEST_IMAGE, "sleep", "3600"],
+                    _keyed_run(name),
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -180,13 +192,13 @@ class TestOrphanReconciliationE2E:
         try:
             # Start an unrelated container
             subprocess.run(
-                ["docker", "run", "--rm", "-d", "--name", unrelated_name, E2E_TEST_IMAGE, "sleep", "3600"],
+                _keyed_run(unrelated_name),
                 capture_output=True,
                 timeout=30,
             )
             # Start our container
             subprocess.run(
-                ["docker", "run", "--rm", "-d", "--name", our_name, E2E_TEST_IMAGE, "sleep", "3600"],
+                _keyed_run(our_name),
                 capture_output=True,
                 timeout=30,
             )
@@ -213,3 +225,21 @@ class TestOrphanReconciliationE2E:
         finally:
             _stop_container(unrelated_name)
             _stop_container(our_name)
+
+    def test_an_unkeyed_orphan_is_removed_not_adopted(self):
+        """Review of #103 (H1): a container started before #98 (no key) is
+        removed at startup reconciliation instead of being handed to a thread."""
+        name = f"{E2E_PREFIX}-unkeyed"
+        result = subprocess.run(["docker", "run", "--rm", "-d", "--name", name, E2E_TEST_IMAGE, "sleep", "3600"], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        from omniharness.community.aio_sandbox.local_backend import LocalContainerBackend
+
+        backend = LocalContainerBackend(image=E2E_TEST_IMAGE, base_port=9990, container_prefix=E2E_PREFIX, config_mounts=[], environment={})
+        assert name not in {i.container_name for i in backend.list_running()}
+        import time as _time
+
+        for _ in range(30):
+            if not _container_running(name):
+                break
+            _time.sleep(0.5)
+        assert not _container_running(name), "the unkeyed container is still running"

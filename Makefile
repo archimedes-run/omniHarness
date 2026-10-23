@@ -87,7 +87,7 @@ install:
 	@echo ""
 
 # The agent's command sandbox, from our Dockerfile (base pinned by digest).
-SANDBOX_IMAGE_TAG ?= omni-harness-sandbox:1.11.0-oh1
+SANDBOX_IMAGE_TAG ?= omni-harness-sandbox:1.11.0-oh3
 sandbox-image:
 	docker build -t $(SANDBOX_IMAGE_TAG) docker/sandbox
 

@@ -262,6 +262,9 @@ services:
       # Sandboxes publish NO host port: they join this private network,
       # shared only with the gateway, and are reached by container name.
       - OMNI_HARNESS_SANDBOX_NETWORK=omni-harness-dev-sandboxes
+      # Sandbox egress (registries only); the CA volume the sandboxes mount read-only.
+      - OMNI_HARNESS_SANDBOX_EGRESS_PROXY=http://omni-harness-sandbox-egress:3128
+      - OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME=omni-harness-dev-sandbox-egress-ca
       # Logs: daily append-only files, 30 days kept (app/gateway/log_files.py).
       # The shell redirect above only APPENDS what precedes logging setup.
       - GATEWAY_LOG_FILE=/app/logs/gateway.log
@@ -316,7 +319,32 @@ services:
       - omni-harness-dev-sandboxes
     restart: unless-stopped
 
+  # The sandboxes' only way out: package registries, GET/HEAD, port 443
+  # (docker/sandbox-egress). On the internal sandbox network and on a network
+  # with a route out; it publishes no port.
+  sandbox-egress:
+    build:
+      context: ./sandbox-egress
+      args:
+        SQUID_VERSION: 6.12-r0
+        DNSMASQ_VERSION: 2.91-r1
+        OPENSSL_VERSION: 3.5.9-r0
+    image: omni-harness-sandbox-egress:1
+    container_name: omni-harness-sandbox-egress
+    volumes:
+      # Its CA certificate (public half) for the sandboxes to trust; the key
+      # stays on the tmpfs below.
+      - sandbox-egress-ca:/ca-out
+    tmpfs:
+      - /run/egress
+    networks:
+      - omni-harness-dev
+      - omni-harness-dev-sandboxes
+    restart: unless-stopped
+
 volumes:
+  sandbox-egress-ca:
+    name: omni-harness-dev-sandbox-egress-ca
   # Persist .venv across container restarts so dependencies installed during
   # image build are not shadowed by the host backend/ directory mount.
   gateway-venv:

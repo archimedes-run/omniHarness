@@ -47,6 +47,12 @@ def _sandbox_run_cmd(monkeypatch) -> list[str]:
     return captured["cmd"]
 
 
+@pytest.fixture(autouse=True)
+def _gateway_secret(monkeypatch):
+    """Sandbox containers are keyed from the gateway's secret (#98)."""
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "test-internal-secret")
+
+
 def test_sandbox_cannot_reach_host_loopback_via_host_docker_internal(monkeypatch) -> None:
     """HIGH (conditional): the sandbox network must not route to the host.
 

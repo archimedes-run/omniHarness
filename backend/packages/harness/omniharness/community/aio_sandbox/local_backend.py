@@ -14,6 +14,8 @@ import subprocess
 from datetime import datetime
 
 from .backend import SandboxBackend, wait_for_sandbox_ready
+from .sandbox_auth import CONTAINER_ENV as SANDBOX_KEY_ENV
+from .sandbox_auth import auth_headers, sandbox_api_key
 from .sandbox_info import SandboxInfo
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,56 @@ def _format_container_command_for_log(cmd: list[str]) -> str:
 #: or in a browser can reach their shell-exec API at all.
 SANDBOX_NETWORK_ENV = "OMNI_HARNESS_SANDBOX_NETWORK"
 SANDBOX_API_PORT = 8080
+
+#: The sandboxes' only way out (docker/sandbox-egress): package registries,
+#: GET/HEAD, port 443. Compose sets both; without them a sandbox has no egress.
+SANDBOX_EGRESS_PROXY_ENV = "OMNI_HARNESS_SANDBOX_EGRESS_PROXY"
+SANDBOX_EGRESS_CA_VOLUME_ENV = "OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME"
+SANDBOX_EGRESS_CA_DIR = "/etc/omni-egress"
+
+
+def sandbox_egress() -> tuple[str, str] | None:
+    proxy = os.environ.get(SANDBOX_EGRESS_PROXY_ENV, "").strip()
+    volume = os.environ.get(SANDBOX_EGRESS_CA_VOLUME_ENV, "").strip()
+    return (proxy, volume) if proxy and volume else None
+
+
+def _egress_args(egress: tuple[str, str] | None) -> list[str]:
+    if egress is None:
+        return []
+    proxy, volume = egress
+    ca = f"{SANDBOX_EGRESS_CA_DIR}/ca.crt"
+    env = {
+        "HTTPS_PROXY": proxy,
+        "HTTP_PROXY": proxy,
+        "https_proxy": proxy,
+        "http_proxy": proxy,
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1",
+        # The proxy terminates TLS with its own name-constrained CA.
+        "NODE_EXTRA_CA_CERTS": ca,
+        "PIP_CERT": ca,
+    }
+    args: list[str] = []
+    for key, value in env.items():
+        args += ["-e", f"{key}={value}"]
+    return [*args, "--mount", f"type=volume,src={volume},dst={SANDBOX_EGRESS_CA_DIR},readonly"]
+
+
+def _is_hardened(entry: dict, container_name: str) -> bool:
+    """A container this gateway may adopt: keyed with this gateway's key for
+    its name (#98) and not seccomp-unconfined or privileged (#99). One started
+    before those changes (or by anything else) is not adopted."""
+    env = (entry.get("Config") or {}).get("Env") or []
+    try:
+        expected = f"{SANDBOX_KEY_ENV}={sandbox_api_key(container_name)}"
+    except RuntimeError:
+        return False
+    keyed = [e for e in env if e.startswith(f"{SANDBOX_KEY_ENV}=")]
+    host = entry.get("HostConfig") or {}
+    unconfined = any("unconfined" in str(opt) for opt in host.get("SecurityOpt") or [])
+    return keyed == [expected] and not unconfined and not host.get("Privileged")
+
 
 SANDBOX_REFUSED_WITHOUT_NETWORK = (
     "Refusing to start a sandbox container: its API runs shell commands and must not be reachable from the host. "
@@ -298,10 +350,15 @@ class LocalContainerBackend(SandboxBackend):
             return None  # not reachable without the shared network (fail closed)
         if not self._is_container_running(container_name):
             return None
+        inspected = self._batch_inspect([container_name]).get(container_name)
+        if inspected is None or not inspected[2]:
+            logger.warning("Removing sandbox container %s: it has no key from this gateway or runs unconfined", container_name)
+            self._stop_container(container_name)
+            return None
 
         sandbox_url = self._url_for(container_name)
-        if not wait_for_sandbox_ready(sandbox_url, timeout=5):
-            return None
+        if not wait_for_sandbox_ready(sandbox_url, timeout=5, headers=auth_headers(container_name)):
+            return None  # not ready, or not keyed with this gateway's secret
 
         return SandboxInfo(
             sandbox_id=sandbox_id,
@@ -370,7 +427,13 @@ class LocalContainerBackend(SandboxBackend):
             if data is None:
                 # Container disappeared between ps and inspect, or inspect failed
                 continue
-            created_at, _host_port = data
+            created_at, _host_port, hardened = data
+            if not hardened:
+                # Unkeyed or unconfined (started before #98/#99, or not by this
+                # gateway): any other sandbox could drive it. Removed, never adopted.
+                logger.warning("Removing sandbox container %s: it has no key from this gateway or runs unconfined", container_name)
+                self._stop_container(container_name)
+                continue
             sandbox_id = container_name[len(self._container_prefix) + 1 :]
             sandbox_url = self._url_for(container_name) if reachable else ""
 
@@ -386,10 +449,10 @@ class LocalContainerBackend(SandboxBackend):
         logger.info(f"Found {len(infos)} running sandbox container(s)")
         return infos
 
-    def _batch_inspect(self, container_names: list[str]) -> dict[str, tuple[float, int | None]]:
+    def _batch_inspect(self, container_names: list[str]) -> dict[str, tuple[float, int | None, bool]]:
         """Batch-inspect containers in a single subprocess call.
 
-        Returns a mapping of ``container_name -> (created_at, host_port)``.
+        Returns a mapping of ``container_name -> (created_at, host_port, hardened)``.
         Missing containers or parse failures are silently dropped from the result.
         """
         if not container_names:
@@ -421,7 +484,7 @@ class LocalContainerBackend(SandboxBackend):
             logger.warning(f"Failed to parse docker inspect output as JSON: {e}")
             return {}
 
-        out: dict[str, tuple[float, int | None]] = {}
+        out: dict[str, tuple[float, int | None, bool]] = {}
         for entry in payload:
             # ``Name`` is prefixed with ``/`` in the docker inspect response
             name = (entry.get("Name") or "").lstrip("/")
@@ -429,7 +492,7 @@ class LocalContainerBackend(SandboxBackend):
                 continue
             created_at = _parse_docker_timestamp(entry.get("Created", ""))
             host_port = _extract_host_port(entry, 8080)
-            out[name] = (created_at, host_port)
+            out[name] = (created_at, host_port, _is_hardened(entry, name))
         return out
 
     # ── Container operations ─────────────────────────────────────────────
@@ -455,9 +518,8 @@ class LocalContainerBackend(SandboxBackend):
         """
         cmd = [self._runtime, "run"]
 
-        # Docker-specific security options
-        if self._runtime == "docker":
-            cmd.extend(["--security-opt", "seccomp=unconfined"])
+        # Docker's default seccomp profile applies (#99): the image's browser,
+        # the only part that wanted it unconfined, is disabled.
 
         # NO -p: nothing is published on the host. The container joins the
         # private network it shares with the gateway (security baseline).
@@ -482,6 +544,10 @@ class LocalContainerBackend(SandboxBackend):
         # Environment variables
         for key, value in self._environment.items():
             cmd.extend(["-e", f"{key}={value}"])
+        # Its own API key (#98), set after the configured environment so
+        # nothing can replace it; then the egress proxy, when there is one.
+        cmd.extend(["-e", f"{SANDBOX_KEY_ENV}={sandbox_api_key(container_name)}"])
+        cmd.extend(_egress_args(sandbox_egress()))
 
         # Config-level volume mounts
         for mount in self._config_mounts:

@@ -157,9 +157,13 @@ policy:
     # Named 007, at the tier they already had through the no-rule default, so
     # naming them changed nothing. Each is a candidate to decide individually.
     #
-    # Shell in the sandbox: anything a command can do, including network.
+    # Shell in the CONTAINER sandbox (bash is offered only there): it runs,
+    # then is disclosed. Its blast radius is the thread's own folders; its
+    # network is the registries proxy (GET/HEAD, 443); its API is keyed (#98)
+    # and seccomp-confined (#99). Anything that leaves the sandbox keeps its
+    # own rule.
     - pattern: "bash"
-      tier: 3
+      tier: 2
     # Creates or edits a skill: changes what the assistant does in every later
     # conversation, not only this one.
     - pattern: "skill_manage"

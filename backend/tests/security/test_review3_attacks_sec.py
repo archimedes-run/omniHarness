@@ -48,6 +48,12 @@ def _parent_env_command() -> str:
     return "python3 -c \"import os;print(open(os.sep+'proc/%d/environ'%os.getppid()).read())\""
 
 
+@pytest.fixture(autouse=True)
+def _gateway_secret(monkeypatch):
+    """Sandbox containers are keyed from the gateway's secret (#98)."""
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "test-internal-secret")
+
+
 def test_HOLE_host_bash_reads_the_gateways_full_environment_from_its_parent(monkeypatch) -> None:
     """The child env is scrubbed, but the PARENT (the gateway worker) is not:
     macOS `ps -E -ww -p $PPID` / Linux /proc/<ppid>/environ hand back
