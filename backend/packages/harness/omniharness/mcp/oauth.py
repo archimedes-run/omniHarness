@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from omniharness.config.extensions_config import ExtensionsConfig, McpOAuthConfig
+from omniharness.utils.known_secrets import register_secret
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,11 @@ class OAuthTokenManager:
         self._oauth_by_server = oauth_by_server
         self._tokens: dict[str, _OAuthToken] = {}
         self._locks: dict[str, asyncio.Lock] = {name: asyncio.Lock() for name in oauth_by_server}
+        # Run history redaction (Feature 006): the configured secrets are known
+        # by value, so they are redacted even in shapes no pattern recognises.
+        for oauth in oauth_by_server.values():
+            register_secret(getattr(oauth, "client_secret", None), "mcp-oauth")
+            register_secret(getattr(oauth, "refresh_token", None), "mcp-oauth")
 
     @classmethod
     def from_extensions_config(cls, extensions_config: ExtensionsConfig) -> OAuthTokenManager:
@@ -106,6 +112,9 @@ class OAuthTokenManager:
         access_token = payload.get(oauth.token_field)
         if not access_token:
             raise ValueError(f"OAuth token response missing '{oauth.token_field}'")
+        # A refreshed token joins the known secrets the moment it exists.
+        register_secret(access_token, "mcp-oauth-refresh")
+        register_secret(payload.get("refresh_token"), "mcp-oauth-refresh")
 
         token_type = str(payload.get(oauth.token_type_field, oauth.default_token_type) or oauth.default_token_type)
 

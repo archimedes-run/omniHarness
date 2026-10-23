@@ -4,6 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertRow } from "@/components/workspace/inbox/alert-row";
 import { PageColumn, PageHeader } from "@/components/workspace/page-kit";
 import { Tier3AuditList } from "@/components/workspace/policy/tier3-audit";
+import { RunHistorySettings } from "@/components/workspace/run-history/run-history-settings";
 import { FiringRow } from "@/components/workspace/triggers/firing-row";
 import { useInboxAlerts } from "@/core/inbox/hooks";
 import { useTriggerFirings } from "@/core/triggers/hooks";
@@ -27,6 +28,8 @@ export default function ActivityLogPage() {
         title="Activity log"
         description="What I did on my own initiative, and what I did with your confirmation."
       />
+
+      <RunHistorySettings />
 
       <section className="space-y-3" aria-labelledby="firings-heading">
         <h2 id="firings-heading" className="text-[15px] font-semibold">

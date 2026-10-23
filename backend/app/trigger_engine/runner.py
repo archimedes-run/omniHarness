@@ -12,8 +12,9 @@ import asyncio
 import logging
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from .audit import AuditLog
 from .compose import compose_proactive, render_prompt, with_late_note
@@ -75,6 +76,10 @@ class RuleRunner:
     #: hanging the gateway — which is what it did before.
     #: Failed attempts per event fingerprint, for the retry rule in `_give_up`.
     attempts: dict[str, int] = field(default_factory=dict)
+    #: Records each run's full content (Feature 006 run history): called once
+    #: per injected turn, succeeded or failed, with a plain dict. Optional, and
+    #: never allowed to break a firing.
+    record_run: Callable[[dict], None] | None = None
     worker: Executor = field(default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="trigger-engine"))
 
     async def offload(self, fn: Callable, *args):
@@ -111,20 +116,36 @@ class RuleRunner:
                 continue  # FR-017: already fired for this event
 
             firing = Firing(rule_id=rule.id, event=event, prompt=render_prompt(rule, event))
-            try:
-                firing.thread_id = self.threads.thread_for(rule.id)
-                if self.default_tools:
-                    self.injector.configure_tools(firing.thread_id, list(self.default_tools))
-                raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
-                if not raw.strip() and rule.type is not TriggerType.WATCHER:
-                    # A watcher alert still says something without a reply (its
-                    # header names the session); anything else would arrive as
-                    # "(the assistant returned nothing)", which is not a message.
-                    raise EmptyReply("the run completed with no reply")
-                firing.body = compose_proactive(rule, event, raw, late=False)
-                firing.reply = with_late_note(event, firing.body)
-            except Exception as exc:  # noqa: BLE001 — one firing, not the rule
-                if self._give_up(rule, firing, key, exc, now):
+            started = datetime.now(UTC)
+            raw = ""
+            # Every firing starts with no turn: one that fails before injecting
+            # must not record the previous firing's messages as its own.
+            reset = getattr(self.injector, "reset_turn", None)
+            if reset is not None:
+                reset()
+            # Held across resolving the thread, running the turn AND recording
+            # it: a delete of the automations' threads on any worker waits for
+            # (or refuses) the whole firing, and never lands between the turn
+            # and its record.
+            failure: Exception | None = None
+            with self._firing_lock():
+                try:
+                    firing.thread_id = self.threads.thread_for(rule.id)
+                    if self.default_tools:
+                        self.injector.configure_tools(firing.thread_id, list(self.default_tools))
+                    raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt)
+                    if not raw.strip() and rule.type is not TriggerType.WATCHER:
+                        # A watcher alert still says something without a reply (its
+                        # header names the session); anything else would arrive as
+                        # "(the assistant returned nothing)", which is not a message.
+                        raise EmptyReply("the run completed with no reply")
+                    firing.body = compose_proactive(rule, event, raw, late=False)
+                    firing.reply = with_late_note(event, firing.body)
+                except Exception as exc:  # noqa: BLE001 — one firing, not the rule
+                    failure = exc
+                self._record(rule, firing, started, raw, error=f"{type(failure).__name__}: {failure}" if failure else None)
+            if failure is not None:
+                if self._give_up(rule, firing, key, failure, now):
                     fired.append(firing)
                 continue
 
@@ -137,6 +158,42 @@ class RuleRunner:
             self._route(rule, firing, now)
             fired.append(firing)
         return fired
+
+    def _firing_lock(self):
+        lock = getattr(self.threads, "firing_lock", None)
+        return lock() if lock is not None else nullcontext()
+
+    def _record(self, rule: Rule, firing: Firing, started: datetime, reply: str, *, error: str | None) -> None:
+        if self.record_run is None:
+            return
+        try:
+            self.record_run(
+                {
+                    "rule_id": rule.id,
+                    "event_type": str(firing.event.type),
+                    "event_id": firing.event.event_id,
+                    "thread_id": firing.thread_id,
+                    "started_at": started,
+                    "finished_at": datetime.now(UTC),
+                    "status": "failed" if error else "completed",
+                    "error": error,
+                    "body": {
+                        "rule_id": rule.id,
+                        "event": {"type": str(firing.event.type), "id": firing.event.event_id, "fields": dict(firing.event.fields)},
+                        "prompt": firing.prompt,
+                        # The rule's own text: when the prompt differs, event
+                        # text was rendered into it (untrusted provenance).
+                        "prompt_template": rule.prompt,
+                        "messages": list(getattr(self.injector, "last_turn", []) or []),
+                        # False: the turn could not be found in the thread, so
+                        # no messages were kept (never the earlier turns).
+                        "turn_found": getattr(self.injector, "last_turn_found", None),
+                        "reply": reply,
+                    },
+                }
+            )
+        except Exception:  # noqa: BLE001 — history must never break a firing
+            logger.exception("rule %s: recording the run failed", rule.id)
 
     def _give_up(self, rule: Rule, firing: Firing, key: str, exc: Exception, now: datetime) -> bool:
         """Resolve a failed firing. Returns True when the event is settled.

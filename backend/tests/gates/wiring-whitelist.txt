@@ -78,13 +78,9 @@ omniharness.platform.events:PlatformEvent.from_row  # UNWIRED, wire in Feature 0
 omniharness.platform.idempotency:compute_idempotency_key  # UNWIRED, wire in Feature 005: scheduled automations created from chat must not run twice for one trigger (specs/005-project-ledger/plan-inputs.md)
 omniharness.platform.idempotency:stable_hash  # UNWIRED, wire in Feature 005: goes with compute_idempotency_key (specs/005-project-ledger/plan-inputs.md)
 omniharness.runtime.events.store.base:RunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.runtime.events.store.base:RunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.db:DbRunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.runtime.events.store.db:DbRunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.jsonl:JsonlRunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.runtime.events.store.jsonl:JsonlRunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.events.store.memory:MemoryRunEventStore.count_messages  # store interface method kept for the contract every backend implements; no production caller yet
-omniharness.runtime.events.store.memory:MemoryRunEventStore.delete_by_thread  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.runs.store.base:RunStore.list_pending  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.runtime.runs.store.memory:MemoryRunStore.list_pending  # store interface method kept for the contract every backend implements; no production caller yet
 omniharness.sandbox.exceptions:SandboxCommandError  # sandbox exception type in the harness's public API; raised by no current provider

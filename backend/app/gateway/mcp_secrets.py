@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omniharness.persistence.mcp_secrets.model import McpSecretRow
 from omniharness.skills.code_scanner import extract_env_keys
+from omniharness.utils.known_secrets import register_secret
 
 if TYPE_CHECKING:
     from omniharness.config.mcp_builder_config import McpBuilderConfig
@@ -95,6 +96,7 @@ class McpSecretsVault:
         response without a second DB read.
         """
         ciphertext: bytes = self._fernet.encrypt(plaintext_value.encode())
+        register_secret(plaintext_value, "mcp-vault")
         key_hint: str | None = plaintext_value[-5:] if len(plaintext_value) >= 5 else None
 
         async with self._sf() as session:
@@ -183,7 +185,11 @@ class McpSecretsVault:
         )
         async with self._sf() as session:
             row = (await session.execute(stmt)).scalar_one_or_none()
-        return None if row is None else self._fernet.decrypt(row.ciphertext).decode()
+        if row is None:
+            return None
+        value = self._fernet.decrypt(row.ciphertext).decode()
+        register_secret(value, "mcp-vault")
+        return value
 
     # ------------------------------------------------------------------
     # Internal decrypt — only called by MCPServerManager for sandbox injection
@@ -207,7 +213,29 @@ class McpSecretsVault:
             result = await session.execute(stmt)
             rows = result.scalars().all()
 
-        return {row.key_name: self._fernet.decrypt(row.ciphertext).decode() for row in rows}
+        return self._known({row.key_name: self._fernet.decrypt(row.ciphertext).decode() for row in rows})
+
+    @staticmethod
+    def _known(plain: dict[str, str]) -> dict[str, str]:
+        """Every decrypted value joins the known secrets (run history redaction)."""
+        for value in plain.values():
+            register_secret(value, "mcp-vault")
+        return plain
+
+    async def register_known_secrets(self) -> int:
+        """Decrypt every stored secret once, at startup, and register each value
+        for exact-match redaction (Feature 006 run history). Returns the count,
+        never the values. A row that cannot be decrypted is skipped."""
+        async with self._sf() as session:
+            rows = (await session.execute(select(McpSecretRow))).scalars().all()
+        n = 0
+        for row in rows:
+            try:
+                register_secret(self._fernet.decrypt(row.ciphertext).decode(), "mcp-vault")
+                n += 1
+            except Exception:  # noqa: BLE001 — a row under an old key is skipped
+                logger.warning("MCP secrets vault: a stored secret could not be decrypted for redaction")
+        return n
 
     # ------------------------------------------------------------------
     # Static helpers (no DB, no Fernet)
