@@ -30,9 +30,7 @@ export function openNewAgentPanel() {
   const url = new URL(window.location.href);
   url.searchParams.set("panel", "agents");
   url.searchParams.set(ITEM_PARAM, "new");
-  window.history.pushState(
-    window.history.state,
-    "",
-    `${url.pathname}${url.search}${url.hash}`,
-  );
+  // A null state, as the shell's own openPanel writes: Next then syncs
+  // useSearchParams (its own state object would mark the entry as Next's).
+  window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
