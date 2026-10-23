@@ -158,7 +158,19 @@ class PolicyMiddleware(AgentMiddleware):
         return self._guard_self_verdict(self._disclose(handler(self._offered(request, note))))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        verdict, note = self._complete_confirmation(request)
+        # OFF THE EVENT LOOP. A typed "yes" runs the confirmed call right here,
+        # and a confirmed `task` runs its whole subagent; run inline, it froze
+        # the gateway's loop (every request) until it finished (review of PR
+        # #58). It runs in the card path's confirmation pool, with this run's
+        # context, through the same flow: same gate, same claim, same result.
+        # Only a turn that may answer goes there; every other model call stays
+        # inline.
+        if self._may_answer(request):
+            from app.gateway.routers.confirmations import _off_the_request_pool
+
+            verdict, note = await _off_the_request_pool(self._complete_confirmation, request)
+        else:
+            verdict, note = None, None
         if verdict is not None:
             return verdict
         return self._guard_self_verdict(self._disclose(await handler(self._offered(request, note))))
@@ -270,6 +282,16 @@ class PolicyMiddleware(AgentMiddleware):
                 return None if getattr(message, "tool_calls", None) else message
         return None
 
+    def _may_answer(self, request: Any) -> bool:
+        from . import confirm_flow
+
+        messages = list(getattr(request, "messages", None) or [])
+        # ONE GATE (confirm_flow.turn_may_answer): only the person's own,
+        # just-arrived, server-tagged turn is ever read as a yes/no. Not a
+        # subagent's, not a turn handed to an agent ("@member", Continue), not
+        # a scheduled one, not a tool result or an agent's reply.
+        return bool(messages) and confirm_flow.turn_may_answer(messages[-1], self._runtime_context(request))
+
     def _complete_confirmation(self, request: Any) -> tuple[Any, Any]:
         from langchain_core.messages import AIMessage
 
@@ -277,11 +299,7 @@ class PolicyMiddleware(AgentMiddleware):
         from .confirm_flow import ConfirmationFlow
 
         messages = list(getattr(request, "messages", None) or [])
-        # ONE GATE (confirm_flow.turn_may_answer): only the person's own,
-        # just-arrived, server-tagged turn is ever read as a yes/no. Not a
-        # subagent's, not a turn handed to an agent ("@member", Continue), not
-        # a scheduled one, not a tool result or an agent's reply.
-        if not messages or not confirm_flow.turn_may_answer(messages[-1], self._runtime_context(request)):
+        if not self._may_answer(request):
             return None, None
 
         flow = ConfirmationFlow(store=self.pending, middleware=self, now=self.now)
