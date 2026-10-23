@@ -290,3 +290,14 @@ def test_bash_is_tier_2_only_in_the_hardened_container_sandbox(monkeypatch) -> N
     assert _bash_tier(monkeypatch, use=aio, provisioner_url="http://provisioner:8002") == 3, "a remote sandbox is not keyed or confined here"
     assert _bash_tier(monkeypatch, use=aio, egress=False) == 3, "no registries proxy configured"
     assert _bash_tier(monkeypatch, use="omniharness.sandbox.local:LocalSandboxProvider") == 3
+
+
+def test_the_sandbox_image_requires_the_key_on_every_request_but_the_ping() -> None:
+    """Review of #103, round 2: the upstream nginx exempted GETs ending in a
+    static-file extension, matched against the URI with its query string, so
+    `...&z=.json` read another sandbox's files. Our image deletes the
+    exemption and its build fails if anything but the ping stays open."""
+    dockerfile = (REPO / "docker" / "sandbox" / "Dockerfile").read_text()
+    assert "sed -i '/@proxy_without_auth;/{/GET:\\/v1\\/ping\"/!d}' /opt/gem/nginx-server-with-auth.conf" in dockerfile
+    assert "test \"$(grep -c '@proxy_without_auth;' /opt/gem/nginx-server-with-auth.conf)\" = 1" in dockerfile
+    assert "grep -q 'default @proxy_with_auth;'" in dockerfile

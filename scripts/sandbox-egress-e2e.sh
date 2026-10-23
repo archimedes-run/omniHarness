@@ -13,7 +13,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EGRESS_IMAGE=${EGRESS_IMAGE:-omni-harness-sandbox-egress:1}
-SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh1}
+SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh2}
 P=oh-e2e-$$
 NET_IN=$P-sbx NET_OUT=$P-out VOL=$P-ca EGRESS=$P-egress
 fail=0
@@ -79,6 +79,16 @@ B="http://$P-sandbox-b:8080/v1/shell/exec"
 body='{"command":"echo pwned"}'
 check "A -> B exec, no key"   401 "$(code "--noproxy '*' -H 'Content-Type: application/json' -d '$body' $B")"
 check "A -> B exec, A's key"  401 "$(code "--noproxy '*' -H 'X-AIO-API-Key: $KEY_A' -H 'Content-Type: application/json' -d '$body' $B")"
+# Every GET too, including the image's static-extension exemption matched
+# against the query string (review of #103: `&z=.json` read B's files).
+docker exec -u gem "$P-sandbox-b" bash -lc 'echo SECRET-FROM-B > /home/gem/secret.txt'
+D="http://$P-sandbox-b:8080/v1/file/download?path=/home/gem/secret.txt"
+check "A -> B file download, no key" 401 "$(code "--noproxy '*' '$D'")"
+for ext in json js css svg png woff2; do
+  check "A -> B file download, &z=.$ext" 401 "$(code "--noproxy '*' '$D&z=.$ext'")"
+done
+check "A -> B /v1/sandbox?z=.json" 401 "$(code "--noproxy '*' 'http://$P-sandbox-b:8080/v1/sandbox?z=.json'")"
+ex "curl -s --noproxy '*' '$D&z=.json'" | grep -q SECRET-FROM-B && check "B's file never reaches A" yes no || check "B's file never reaches A" yes yes
 cd "$ROOT/backend" && r=$(uv run --quiet python - "$P" <<'EOF'
 import subprocess, sys
 from omniharness.community.aio_sandbox.sandbox_auth import auth_headers
