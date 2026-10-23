@@ -14,11 +14,14 @@ through the SAME machinery as a delegated subagent (plan.md §2.0):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
+import threading
 import uuid
 from collections.abc import Callable
+from concurrent.futures import Future
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -190,6 +193,55 @@ def _resume_finished(action_id: str, succeeded: bool) -> None:
             logger.warning("the Continue listener failed for %s", action_id, exc_info=True)
 
 
+def _start_worker(run: Callable[[], Any]) -> Future:
+    """Run `run` on its own thread (with this context), as a Future that is
+    done only when THAT THREAD has finished, whatever happens to whoever
+    awaits it. Cancelling an `asyncio.to_thread` await cancels only the
+    await; the thread keeps running (review of PR #58)."""
+    future: Future = Future()
+    context = contextvars.copy_context()
+
+    def work() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(context.run(run))
+        except BaseException as exc:  # noqa: BLE001 - handed to the awaiter
+            future.set_exception(exc)
+
+    threading.Thread(target=work, name="called-agent", daemon=False).start()
+    return future
+
+
+def _new_holder(executor: Any) -> Any:
+    """The result object the run updates; its cancel event is what Stop sets."""
+    from datetime import datetime
+
+    from omniharness.subagents.executor import SubagentResult, SubagentStatus
+
+    return SubagentResult(task_id=uuid.uuid4().hex[:8], trace_id=executor.trace_id, status=SubagentStatus.RUNNING, started_at=datetime.now())
+
+
+async def _await_worker(future: Future, holder: Any) -> Any:
+    """Await the worker; on Stop, ask the agent to stop (it does at its next
+    step) and let the cancellation through. The thread is NOT waited for:
+    whatever must follow the thread hangs off the future itself."""
+    try:
+        return await asyncio.wrap_future(future)
+    except asyncio.CancelledError:
+        holder.cancel_event.set()
+        raise
+
+
+def _resume_succeeded(future: Future) -> bool:
+    from omniharness.subagents.executor import SubagentStatus
+
+    if future.cancelled() or future.exception() is not None:
+        return False
+    result = future.result()
+    return result.status == SubagentStatus.COMPLETED and not result.model_failed
+
+
 async def _resume(runtime: Any, context: dict, resume: dict) -> str:
     """Re-enter the delegation an invited agent stopped in, with its OWN history.
 
@@ -207,7 +259,11 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
 
     action_id = str(resume.get("id") or "")
     agent = str(resume.get("agent") or "")
-    succeeded = False
+    # Until the resumed agent's thread is started, this coroutine reports the
+    # outcome; from then on the THREAD does (a done-callback), so the Continue
+    # lock is held for exactly as long as the agent is inside its delegation:
+    # a Stop that cancels this await does not release it early (review of PR #58).
+    handed_off = False
     try:
         surface = dict(resume.get("surface") or {})
         app_config = context.get("app_config")
@@ -247,13 +303,20 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
                 user_id=surface.get("user_id"),
                 checkpoint_key=str(resume.get("delegation_key")),
             )
-        result = await asyncio.to_thread(executor.execute_resume, resume_messages(resume))
+        holder = _new_holder(executor)
+        messages = resume_messages(resume)
+        future = _start_worker(lambda: executor.execute_resume(messages, result_holder=holder))
+        # Registered before anyone awaits it, so the outcome is recorded before
+        # this coroutine resumes on success.
+        future.add_done_callback(lambda done: _resume_finished(action_id, _resume_succeeded(done)))
+        handed_off = True
+        result = await _await_worker(future, holder)
         if result.status == SubagentStatus.COMPLETED and not result.model_failed:
-            succeeded = True
             return result.result or "(no answer)"
         return f"{agent} could not continue: {result.error or result.result or result.status.value}. Continue can be pressed again."
     finally:
-        _resume_finished(action_id, succeeded)
+        if not handed_off:
+            _resume_finished(action_id, False)
 
 
 @tool(CALL_AGENT_TOOL, parse_docstring=True)
@@ -308,7 +371,10 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
         tool_surface=subagent_surface(subagent_type=agent, model_name=model_name, tool_groups=tool_groups, skills=config.skills, user_id=user_id, called_agent=True, selected_sources=selected),
         user_id=user_id,
     )
-    result = await asyncio.to_thread(executor.execute, prompt)
+    # Stop stops it: the run's cancellation sets the agent's cancel event, and
+    # it ends at its next step instead of running on unseen.
+    holder = _new_holder(executor)
+    result = await _await_worker(_start_worker(lambda: executor.execute(prompt, holder)), holder)
     if result.status == SubagentStatus.COMPLETED:
         return result.result or "(no answer)"
     return f"{agent} could not answer: {result.error or result.status.value}"

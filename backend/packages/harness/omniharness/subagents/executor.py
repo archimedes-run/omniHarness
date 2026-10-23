@@ -842,11 +842,11 @@ class SubagentExecutor:
             result.completed_at = datetime.now()
             return result
 
-    def execute_resume(self, messages: list[Any]) -> SubagentResult:
+    def execute_resume(self, messages: list[Any], result_holder: SubagentResult | None = None) -> SubagentResult:
         """Re-enter this delegation (checkpoint_key) with `messages` appended:
-        no task, no user turn."""
+        no task, no user turn. `result_holder` carries the cancel event."""
         self.resume_input = list(messages)
-        return self.execute("")
+        return self.execute("", result_holder)
 
     def execute_async(self, task: str, task_id: str | None = None) -> str:
         """Start a task execution in the background.

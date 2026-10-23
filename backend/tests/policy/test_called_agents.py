@@ -432,3 +432,52 @@ def test_an_at_called_agent_told_yes_confirms_nothing(gateway) -> None:
     assert CALLED and messages[-1]["name"] == "researcher", "the handed-off turn was read as an answer to the card"
     assert [a["id"] for a in gateway.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "wipe_backup"] == [action["id"]]
     assert RAN == []
+
+
+def test_stop_stops_an_at_called_agent(gateway, monkeypatch) -> None:
+    """Stop cancels the run's await; the called agent runs on a worker thread,
+    which a cancelled await used to leave running unseen (tool calls, model
+    calls and all). Stop now sets its cancel event: it ends at its next step."""
+    import threading
+    import time
+
+    thread_id = _thread(gateway)
+    _call_in(gateway, thread_id, "researcher")
+    SUB_SCRIPT[:] = [
+        AIMessage(content="", tool_calls=[{"name": "web_fetch", "args": {"url": "https://example.com"}, "id": "f1"}]),
+        AIMessage(content="I kept going after Stop."),
+    ]
+    entered, release = threading.Event(), threading.Event()
+    real = CalledFake._generate
+
+    def held(self, messages, stop=None, run_manager=None, **kw):
+        entered.set()
+        assert release.wait(30)
+        return real(self, messages, stop=stop, run_manager=run_manager, **kw)
+
+    monkeypatch.setattr(CalledFake, "_generate", held)
+    LEAD_SCRIPT[:] = [AIMessage(content="the lead must not answer")]
+    resp = gateway.client.post(f"/api/threads/{thread_id}/runs", json={"assistant_id": "lead_agent", "input": {"messages": [{"role": "user", "content": "@researcher read the page"}]}})
+    assert resp.status_code == 200, resp.text
+    run_id = resp.json()["run_id"]
+    try:
+        assert entered.wait(30), "the called agent never started"
+        assert gateway.client.post(f"/api/threads/{thread_id}/runs/{run_id}/cancel").status_code in (200, 202, 204)
+        for _ in range(100):
+            run = gateway.client.get(f"/api/threads/{thread_id}/runs/{run_id}").json()
+            if run.get("status") not in ("pending", "running"):
+                break
+            time.sleep(0.1)
+        assert run.get("status") not in ("pending", "running"), run
+    finally:
+        release.set()
+
+    # The held model call returns; give a still-running agent ample time to
+    # make its next one (the tool call, then a second model call).
+    [record] = CALLED
+    for _ in range(30):
+        if len(record.saw) >= 2:
+            break
+        time.sleep(0.1)
+    assert record.saw, "the called agent's first model call never returned"
+    assert len(record.saw) == 1, f"the @-called agent kept running after Stop: {len(record.saw)} model calls"
