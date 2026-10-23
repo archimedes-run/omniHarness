@@ -197,7 +197,7 @@ services:
         UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
     container_name: omni-harness-gateway
-    command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env'; } >> /app/logs/gateway.console.log 2>&1"
+    command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && mkdir -p .omni-harness && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude=/app/backend/.omni-harness; } >> /app/logs/gateway.console.log 2>&1"
     volumes:
       # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
       - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
