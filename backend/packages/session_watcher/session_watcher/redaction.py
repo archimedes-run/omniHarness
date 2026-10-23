@@ -34,11 +34,14 @@ class RedactionError(RuntimeError):
 
 
 # Recognized shapes. Not an assertion that secrets take only these shapes.
+# Shapes with a distinctive prefix (ghp_, AKIA, xox?-, AIza) match even when
+# glued to preceding text: a leading word boundary let "xxxxghp_..." through
+# whole (review of PR #58, a result padded up to the excerpt cut).
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("api-key", re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_\-]{16,}\b")),
-    ("aws-key-id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
-    ("slack-token", re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}\b")),
+    ("aws-key-id", re.compile(r"AKIA[0-9A-Z]{16}\b")),
+    ("github-token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("slack-token", re.compile(r"xox[abprs]-[A-Za-z0-9\-]{10,}\b")),
     ("bearer", re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{12,}")),
     ("uri-credentials", re.compile(r"\b([a-zA-Z][\w+.-]*)://[^\s:/@]+:[^\s/@]+@")),
     ("pem-block", re.compile(r"-----BEGIN[^-]{0,40}PRIVATE KEY-----.*?-----END[^-]{0,40}PRIVATE KEY-----", re.DOTALL)),
@@ -47,7 +50,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # below does NOT strengthen: these remain RECOGNIZED patterns, and
     # unrecognized shapes still pass through (FR-008d).
     ("gcp-service-account", re.compile(r'"type"\s*:\s*"service_account"')),
-    ("gcp-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    ("gcp-api-key", re.compile(r"AIza[0-9A-Za-z_\-]{35}\b")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")),
     ("openai-project-key", re.compile(r"\bsk-proj-[A-Za-z0-9_\-]{16,}\b")),
     ("private-key-header", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")),

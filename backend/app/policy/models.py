@@ -192,6 +192,35 @@ class PendingAction:
     #: (or the owner, for the system's own runs) may see, confirm, decline or
     #: edit it: app.gateway.ownership.can_access. None = predates owners.
     owner_id: str | None = None
+    #: How the proposing run's tool list was assembled
+    #: (omniharness.agents.tool_surface). A confirmation rebuilds THAT list,
+    #: from chat or from the card, so a subagent's own tool and a delegation
+    #: (`task`) can be run. Empty for actions recorded before it existed,
+    #: which keep the old behaviour.
+    surface: dict[str, Any] = field(default_factory=dict)
+    #: For an invited agent's call: the checkpoint key of the delegation it was
+    #: proposed in (omniharness.agents.invitation.DELEGATION_KEY). "Continue
+    #: <agent>" re-enters THAT delegation, with its own history.
+    delegation_key: str = ""
+    #: What the confirmed call returned, as the thread shows it (cut and
+    #: redacted; "Withheld" when it failed redaction). Set only for an invited
+    #: agent's call, as the observed context "Continue <agent>" hands it.
+    result_excerpt: str = ""
+    #: The confirmed result's post into the thread (card route only): "" none,
+    #: "waiting" (ran, not yet in the thread: the chat was replying, or the
+    #: gateway stopped first), "posted" (read back from the thread). DURABLE:
+    #: a waiting post is drained after the run ends and at gateway startup.
+    post_state: str = ""
+    #: The report's text for a waiting post, as the thread will show it
+    #: (already redacted by surface_run.result_report).
+    post_content: str = ""
+    #: Failed attempts to post it (transient errors). At POST_ATTEMPTS_CAP the
+    #: post is given up as "failed", shown on the card, never retried forever.
+    post_attempts: int = 0
+    #: "Continue <agent>" re-entered the delegation SUCCESSFULLY for this
+    #: action. Only then is Continue spent; a refused, failed or crashed one
+    #: can be pressed again.
+    continued: bool = False
 
     @property
     def confirmable_by_typing(self) -> bool:

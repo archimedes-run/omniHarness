@@ -23,6 +23,7 @@ twice, which is visible clutter.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -56,6 +57,13 @@ def _to_dict(action: PendingAction) -> dict:
         "origin_via": action.origin_via,
         "owner_id": action.owner_id,
         "confirmation": action.confirmation,
+        "surface": action.surface,
+        "delegation_key": action.delegation_key,
+        "result_excerpt": action.result_excerpt,
+        "post_state": action.post_state,
+        "post_content": action.post_content,
+        "post_attempts": action.post_attempts,
+        "continued": action.continued,
     }
 
 
@@ -78,6 +86,13 @@ def _from_dict(raw: dict) -> PendingAction:
         origin_via=raw.get("origin_via") or "",
         owner_id=raw.get("owner_id"),
         confirmation=raw.get("confirmation"),
+        surface=dict(raw.get("surface") or {}),
+        delegation_key=raw.get("delegation_key") or "",
+        result_excerpt=raw.get("result_excerpt") or "",
+        post_state=raw.get("post_state") or "",
+        post_content=raw.get("post_content") or "",
+        post_attempts=int(raw.get("post_attempts") or 0),
+        continued=bool(raw.get("continued")),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
@@ -151,6 +166,114 @@ class PendingStore:
                 out.append(action)
         return out
 
+    def awaiting_post(self, *, states: tuple[str, ...] = ("waiting",)) -> list[PendingAction]:
+        """Confirmed actions whose result is not (or could not be) in their thread."""
+        out = []
+        for path in sorted(self.directory.glob("*.json")):
+            action = self.get(path.stem)
+            if action and action.post_state in states:
+                out.append(action)
+        return out
+
+    def set_post_state(self, action_id: str, state: str, content: str | None = None, *, attempts: int | None = None) -> None:
+        """Record the post's progress on the stored action (re-read first, so
+        the resolution saved meanwhile is never overwritten)."""
+        with self.locked(action_id):
+            action = self.get(action_id)
+            if action is None:
+                return
+            action.post_state = state
+            if content is not None:
+                action.post_content = content
+            if attempts is not None:
+                action.post_attempts = attempts
+            self.save(action)
+
+    def _continue_path(self, action_id: str) -> Path:
+        return self.directory / f"{action_id}.continued"
+
+    def take_continue(self, action_id: str) -> bool:
+        """Start the ONE "Continue <agent>" of an executed action: True for
+        exactly one caller at a time.
+
+        The lock is a file created atomically WITH its owner already in it
+        (written to a temp file, then hard-linked into place: the link fails if
+        the lock exists, and a reader never sees an empty lock). The owner is
+        this process (host, boot, pid) and the time, so another worker's
+        startup releases it only if this process is gone or the lease expired
+        (recover_continues). It is SPENT only by success (finish_continue);
+        a Continue that is refused, fails or crashes releases it.
+        """
+        source = self._path(action_id)
+        if not source.exists():
+            return False
+        action = self.get(action_id)
+        if action is None or action.continued:
+            return False
+        fd, tmp = tempfile.mkstemp(dir=str(self.directory), suffix=".owner")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(continue_owner(), handle)
+            try:
+                os.link(tmp, self._continue_path(action_id))
+            except FileExistsError:
+                return False
+            return True
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+
+    def release_continue(self, action_id: str) -> None:
+        """A Continue that did not happen (refused, failed): pressable again."""
+        with contextlib.suppress(FileNotFoundError):
+            self._continue_path(action_id).unlink()
+
+    def finish_continue(self, action_id: str, succeeded: bool) -> None:
+        if succeeded:
+            with self.locked(action_id):
+                action = self.get(action_id)
+                if action is not None:
+                    action.continued = True
+                    self.save(action)
+        else:
+            self.release_continue(action_id)
+
+    def recover_continues(self, *, now: float | None = None) -> list[str]:
+        """At startup: release Continues whose owner is GONE.
+
+        Several workers share this folder, and any of them may be starting
+        while another runs a Continue. A lock is released only when its owner
+        cannot still be running it: its process is gone (same host and boot,
+        pid not alive), its host booted since, or its lease (CONTINUE_LEASE_SECONDS,
+        longer than any delegation runs) has expired. A live owner's lock is
+        never released (review of PR #58: releasing all of them let the same
+        delegation be entered twice at once). One recorded as done stays.
+        """
+        released = []
+        for lock in sorted(self.directory.glob("*.continued")):
+            action = self.get(lock.stem)
+            if action is not None and action.continued:
+                continue
+            if not continue_owner_gone(lock, now=now):
+                continue
+            with contextlib.suppress(FileNotFoundError):
+                lock.unlink()
+            released.append(lock.stem)
+        return released
+
+    @contextlib.contextmanager
+    def locked(self, action_id: str):
+        """Serialise read-modify-write of one action's record, across threads
+        and processes (an flock on a per-action lock file)."""
+        import fcntl
+
+        with open(self.directory / f"{action_id}.lock", "a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def claim(self, action_id: str, claimant: str) -> PendingAction | None:
         """Take exclusive ownership. Returns the claimed action for exactly one
         caller, None for everyone else (FR-030).
@@ -198,6 +321,64 @@ class PendingStore:
                 self.resolve(action, Outcome.EXPIRED, f"not confirmed before {action.expires_at.isoformat()}")
                 expired.append(action)
         return expired
+
+
+#: Longer than any delegation runs: a Continue lock older than this belongs to
+#: an owner that died without releasing it, whoever it was.
+CONTINUE_LEASE_SECONDS = 4 * 3600
+
+
+def _boot_id() -> str:
+    """This host's boot: the kernel's boot id where there is one, else the
+    boot time to the minute."""
+    import time
+
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return str(round((time.time() - time.monotonic()) / 60))
+
+
+def continue_owner() -> dict:
+    import socket
+    import time
+
+    return {"host": socket.gethostname(), "boot": _boot_id(), "pid": os.getpid(), "at": time.time()}
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def continue_owner_gone(lock: Path, *, now: float | None = None) -> bool:
+    """Whether the process that took this Continue lock can no longer be
+    running it. Can't-tell (unreadable owner) is decided by the lease alone."""
+    import socket
+    import time
+
+    now = time.time() if now is None else now
+    try:
+        owner = json.loads(lock.read_text(encoding="utf-8"))
+        at = float(owner["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        try:
+            at = lock.stat().st_mtime
+        except OSError:
+            return False
+        return now - at > CONTINUE_LEASE_SECONDS
+    if now - at > CONTINUE_LEASE_SECONDS:
+        return True
+    if owner.get("host") != socket.gethostname():
+        return False  # another host's process: only its lease can say it is gone
+    if owner.get("boot") != _boot_id():
+        return True
+    return not _pid_alive(int(owner.get("pid") or 0))
 
 
 def targets_still_match(action: PendingAction, current_targets: list[str]) -> bool:

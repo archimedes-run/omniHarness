@@ -186,19 +186,39 @@ test("@ in a new chat: arrows and Enter pick the chat's agent in place; Esc clos
   await expect(message(page)).toHaveValue("@release-manager ");
 });
 
-test("@ in an existing chat lists agents but cannot call one in yet, and says why", async ({
+test("@ in an existing chat calls an agent in (Phase 2): it joins on the server, and the mention stays", async ({
   page,
 }) => {
   await stub(page);
+  const posted: unknown[] = [];
+  await page.route("**/api/threads/*/participants", (route) => {
+    if (route.request().method() === "POST")
+      posted.push(route.request().postDataJSON());
+    return route.fulfill({
+      json: {
+        thread_id: THREAD,
+        participants: [
+          { name: "lead_agent", description: "", lead: true },
+          ...posted.map(() => ({
+            name: "researcher",
+            description: "",
+            lead: false,
+          })),
+        ],
+      },
+    });
+  });
   await page.goto(`/workspace/chats/${THREAD}`);
   await message(page).click();
   await page.keyboard.type("@res");
   const option = page.getByRole("option", { name: /researcher/ });
-  await expect(option).toHaveAttribute("aria-disabled", "true");
-  await expect(option).toContainText("arrives with multi-agent chat");
+  await expect(option).not.toHaveAttribute("aria-disabled", "true");
+  await expect(option).not.toContainText("arrives with multi-agent chat");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(new RegExp(`/workspace/chats/${THREAD}$`));
-  await expect(message(page)).toHaveValue("@res");
+  await expect(message(page)).toHaveValue("@researcher ");
+  await expect.poll(() => posted).toEqual([{ agent: "researcher" }]);
+  await expect(chip(page, "agent", "researcher")).toBeVisible();
 });
 
 test("/ at the start opens the commands; /project opens the picker on Projects", async ({

@@ -43,6 +43,11 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+#: A probe's answer (`_complete_confirmation(execute=False)`): this turn would
+#: claim and run a confirmation. Never returned when executing.
+_WOULD_RUN: Any = object()
+
+
 @dataclass
 class PolicyMiddleware(AgentMiddleware):
     """Classify, then act according to the tier.
@@ -158,7 +163,30 @@ class PolicyMiddleware(AgentMiddleware):
         return self._guard_self_verdict(self._disclose(handler(self._offered(request, note))))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        verdict, note = self._complete_confirmation(request)
+        # OFF THE EVENT LOOP, AND ONLY WHAT RUNS. A typed "yes" runs the
+        # confirmed call right here, and a confirmed `task` runs its whole
+        # subagent; run inline, it froze the gateway's loop (every request)
+        # until it finished (review of PR #58). So the flow is first PROBED
+        # inline (execute=False: same gate, same recognition, nothing claimed
+        # or run), which settles every turn that runs nothing: an ordinary
+        # message, a decline, an unrecognised or card-only answer. Only a turn
+        # that would claim and run a confirmation goes to the card path's pool,
+        # in a per-user slot taken exactly as the card takes one, and there
+        # runs the same flow again: same claim, same result. Sending every
+        # person's turn to the pool made new chats wait while it was full
+        # (#118).
+        verdict, note = self._complete_confirmation(request, execute=False)
+        if verdict is _WOULD_RUN:
+            from langchain_core.messages import AIMessage
+
+            from app.gateway.routers.confirmations import CONFIRM_BUSY, CONFIRM_BUSY_MESSAGE, run_in_a_slot
+
+            user = str((self._runtime_context(request) or {}).get("user_id") or "default")
+            started, outcome = await run_in_a_slot(user, self._complete_confirmation, request)
+            if not started:
+                logger.info("policy: confirmation resolved as %s (typed reply, no free slot)", CONFIRM_BUSY)
+                return AIMessage(content=CONFIRM_BUSY_MESSAGE)
+            verdict, note = outcome
         if verdict is not None:
             return verdict
         return self._guard_self_verdict(self._disclose(await handler(self._offered(request, note))))
@@ -270,18 +298,24 @@ class PolicyMiddleware(AgentMiddleware):
                 return None if getattr(message, "tool_calls", None) else message
         return None
 
-    def _complete_confirmation(self, request: Any) -> tuple[Any, Any]:
-        from langchain_core.messages import AIMessage, HumanMessage
+    def _may_answer(self, request: Any) -> bool:
+        from . import confirm_flow
+
+        messages = list(getattr(request, "messages", None) or [])
+        # ONE GATE (confirm_flow.turn_may_answer): only the person's own,
+        # just-arrived, server-tagged turn is ever read as a yes/no. Not a
+        # subagent's, not a turn handed to an agent ("@member", Continue), not
+        # a scheduled one, not a tool result or an agent's reply.
+        return bool(messages) and confirm_flow.turn_may_answer(messages[-1], self._runtime_context(request))
+
+    def _complete_confirmation(self, request: Any, *, execute: bool = True) -> tuple[Any, Any]:
+        from langchain_core.messages import AIMessage
 
         from . import confirm_flow
         from .confirm_flow import ConfirmationFlow
 
         messages = list(getattr(request, "messages", None) or [])
-        if not messages or not isinstance(messages[-1], HumanMessage):
-            # ONLY a turn that has just arrived can be a verdict. Without this,
-            # the same human turn that PROVOKED the proposal is re-read as an
-            # answer to it on the next loop, and every Tier 3 proposal is
-            # immediately met with "I did not recognise that".
+        if not self._may_answer(request):
             return None, None
 
         flow = ConfirmationFlow(store=self.pending, middleware=self, now=self.now)
@@ -289,7 +323,11 @@ class PolicyMiddleware(AgentMiddleware):
             messages[-1],
             run_tool=self._runner(request),
             runtime_context=self._runtime_context(request),
+            execute=execute,
         )
+        if result.outcome == confirm_flow.WOULD_EXECUTE:
+            # Only from a probe: nothing was claimed or run (awrap_model_call).
+            return _WOULD_RUN, None
         note = None
         if result.expired_meanwhile:
             # FR-038: expiry TELLS the user rather than producing silence. It is
@@ -304,6 +342,14 @@ class PolicyMiddleware(AgentMiddleware):
             return None, note
 
         logger.info("policy: confirmation resolved as %s (%s)", result.outcome, result.action_id)
+        if result.outcome == confirm_flow.EXECUTED and result.action_id:
+            action = self.pending.get(result.action_id)
+            if action is not None and action.surface:
+                # Posted in the thread, attributed to the agent that proposed
+                # it, with the result; an invited agent's says it stopped.
+                from .surface_run import report_message
+
+                return report_message(action, result.detail.get("result")), None
         return AIMessage(content=result.message), None
 
     @staticmethod
@@ -318,13 +364,47 @@ class PolicyMiddleware(AgentMiddleware):
         state = getattr(request, "state", None)
 
         def run(tool_name: str, arguments: dict) -> Any:
+            from omniharness.agents.tool_surface import LEAD
+
+            from .surface_run import confirming_action, invoke, run_on_surface
+
+            action = confirming_action()
+            if action is not None and action.surface:
+                # A call a SUBAGENT proposed runs with the subagent's tools,
+                # rebuilt, never with the lead's live list: the subagent's own
+                # tool is not on it (LookupError, AUDIT-2026-10 addendum). A
+                # lead call takes its tool from the live list when it is on it,
+                # which is the same surface, still assembled. Either way the
+                # call runs with the PROPOSER's runtime (the live one has no run
+                # config, which `task` reads).
+                live = registry.get(tool_name) if action.surface.get("kind") == LEAD else None
+                return run_on_surface(action, tool_name, arguments, state=state, live_tool=live, selection=selection, snapshot=snapshot)
             tool = registry.get(tool_name)
             if tool is None:
                 # Loud, not silent. A confirmation that cannot execute must say
                 # so; the failure this whole phase closes was a quiet one.
                 raise LookupError(f"tool {tool_name!r} is not available on this worker, so the confirmation cannot be completed")
-            return tool.invoke(_with_injected(tool, arguments, runtime, state))
+            return invoke(tool, arguments, runtime=runtime, state=state, call_id=f"confirmed-{action.id if action else tool_name}")
 
+        # The chat's CURRENT selection, loaded by the gateway at this run's start.
+        context = getattr(runtime, "context", None) or {}
+        raw = context.get("selected_sources") if isinstance(context, dict) else None
+        selection = list(raw) if isinstance(raw, (list, tuple, set)) else None
+        from .surface_run import SurfaceSnapshot
+
+        # The proposer's tools, built once: checked and run from the same list.
+        snapshot = SurfaceSnapshot(selection)
+
+        def unavailable(action: Any) -> str | None:
+            from omniharness.agents.tool_surface import LEAD
+
+            from .surface_run import unavailable_reason
+
+            if (not action.surface or action.surface.get("kind") == LEAD) and action.tool_name in registry:
+                return None  # on the lead's live list, assembled from the chat's selection now
+            return unavailable_reason(action, selection, snapshot=snapshot)
+
+        run.unavailable = unavailable  # type: ignore[attr-defined]
         return run
 
     @staticmethod
@@ -382,10 +462,18 @@ class PolicyMiddleware(AgentMiddleware):
             origin_source=origin_source,
             origin_via=origin_via,
             owner_id=self._owner_id(request),
+            surface=self._surface(request),
+            delegation_key=self._delegation_key(request),
         )
         action.plan_text = self._plan_text_for(action)
         self.pending.save(action)
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
+        if self._is_invited(request):
+            from omniharness.agents.invitation import STOPPED_AT_KEY
+
+            context = getattr(getattr(request, "runtime", None), "context", None)
+            if isinstance(context, dict):
+                context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
         return self._as_tool_result(request, action.plan_text)
 
     @staticmethod
@@ -492,6 +580,30 @@ class PolicyMiddleware(AgentMiddleware):
         origin, source, via = self._origin(request)
         return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request))
 
+    def _is_invited(self, request) -> bool:
+        from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+
+        context = self._runtime_context(request) or {}
+        return INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
+
+    def _delegation_key(self, request) -> str:
+        """The proposing delegation's own checkpoint key; empty for the lead."""
+        from omniharness.agents.invitation import DELEGATION_KEY
+
+        if not self._is_invited(request):
+            return ""
+        context = self._runtime_context(request) or {}
+        key = context.get(DELEGATION_KEY)
+        return key if isinstance(key, str) else ""
+
+    @staticmethod
+    def _surface(request) -> dict:
+        """How the proposing run's tool list was built (plan.md §2.0)."""
+        from omniharness.agents.tool_surface import surface_of
+
+        context = getattr(getattr(request, "runtime", None), "context", None) or {}
+        return surface_of(context)
+
     @staticmethod
     def _thread_id(request) -> str | None:
         context = getattr(getattr(request, "runtime", None), "context", None) or {}
@@ -561,8 +673,21 @@ class PolicyMiddleware(AgentMiddleware):
         # is later asked to do, so the origin does not upgrade here.
         from omniharness.agents.invitation import inviting_turn
 
-        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)):
+        from .surface_run import confirming
+
+        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
+        from .surface_run import observed_result, result_report
+
+        # What "Continue <agent>" hands the agent as observed context.
+        action.result_excerpt = observed_result(result)
+        if getattr(run_tool, "posts_result", False) and action.thread_id and action.surface:
+            # THE SAME WRITE AS EXECUTED. A card's result is posted into its
+            # chat afterwards; recording "waiting" only then left a crash
+            # window in which the call had run and nothing said its result
+            # was still owed to the chat (review of PR #58).
+            action.post_state = "waiting"
+            action.post_content = result_report(action, result)
         self.pending.resolve(action, Outcome.EXECUTED)
         if self.audit is not None:
             self.audit.record_tier3(action=action, actor=self.actor, now=self.now())

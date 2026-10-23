@@ -226,7 +226,9 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
 
     assert output == "Task Succeeded. Result: all done"
     assert captured["prompt"] == "collect diagnostics"
-    assert captured["task_id"] == "tc-123"
+    # The background registry's id is the call id plus a random suffix:
+    # providers reuse call ids (review of PR #58).
+    assert captured["task_id"].startswith("tc-123-") and len(captured["task_id"]) > len("tc-123-")
     assert captured["executor_kwargs"]["thread_id"] == "thread-1"
     assert captured["executor_kwargs"]["parent_model"] == "ark-model"
     assert captured["executor_kwargs"]["config"].max_turns == 7
@@ -646,7 +648,7 @@ def test_cleanup_called_on_completed(monkeypatch):
     )
 
     assert output == "Task Succeeded. Result: done"
-    assert cleanup_calls == ["tc-cleanup-completed"]
+    assert len(cleanup_calls) == 1 and cleanup_calls[0].startswith("tc-cleanup-completed-")
 
 
 def test_cleanup_called_on_failed(monkeypatch):
@@ -686,7 +688,7 @@ def test_cleanup_called_on_failed(monkeypatch):
     )
 
     assert output == "Task failed. Error: error"
-    assert cleanup_calls == ["tc-cleanup-failed"]
+    assert len(cleanup_calls) == 1 and cleanup_calls[0].startswith("tc-cleanup-failed-")
 
 
 def test_cleanup_called_on_timed_out(monkeypatch):
@@ -726,7 +728,7 @@ def test_cleanup_called_on_timed_out(monkeypatch):
     )
 
     assert output == "Task timed out. Error: timeout"
-    assert cleanup_calls == ["tc-cleanup-timedout"]
+    assert len(cleanup_calls) == 1 and cleanup_calls[0].startswith("tc-cleanup-timedout-")
 
 
 def test_cleanup_not_called_on_polling_safety_timeout(monkeypatch):
@@ -832,7 +834,7 @@ def test_cleanup_scheduled_on_cancellation(monkeypatch):
 
     asyncio.run(scheduled_cleanup_coros.pop())
 
-    assert cleanup_calls == ["tc-cancelled-cleanup"]
+    assert len(cleanup_calls) == 1 and cleanup_calls[0].startswith("tc-cancelled-cleanup-")
 
 
 def test_cancelled_cleanup_stops_after_timeout(monkeypatch):
@@ -942,7 +944,7 @@ def test_cancellation_calls_request_cancel(monkeypatch):
             tool_call_id="tc-cancel-request",
         )
 
-    assert cancel_requests == ["tc-cancel-request"]
+    assert len(cancel_requests) == 1 and cancel_requests[0].startswith("tc-cancel-request-")
 
 
 def test_task_tool_returns_cancelled_message(monkeypatch):
@@ -987,4 +989,4 @@ def test_task_tool_returns_cancelled_message(monkeypatch):
 
     assert output == "Task cancelled by user."
     assert any(e.get("type") == "task_cancelled" for e in events)
-    assert cleanup_calls == ["tc-poll-cancelled"]
+    assert len(cleanup_calls) == 1 and cleanup_calls[0].startswith("tc-poll-cancelled-")

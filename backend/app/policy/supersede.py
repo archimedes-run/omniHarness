@@ -33,6 +33,24 @@ logger = logging.getLogger(__name__)
 CLAIMANT = "rules-reload"
 
 
+def refuse_removed_agent(store: PendingStore, thread_id: str, agent: str, now: datetime) -> list[PendingAction]:
+    """An agent taken out of a chat: its open actions there are refused, never run.
+
+    Claimed through the one claim site first, so a confirmation racing the
+    removal either wins (and ran before the removal) or finds it resolved.
+    """
+    refused: list[PendingAction] = []
+    for action in store.open_actions(now):
+        if action.thread_id != thread_id or action.requester != agent or not action.surface.get("called_agent"):
+            continue
+        claimed = take_claim(store, action.id, "member-removed")
+        if claimed is None:
+            continue
+        store.resolve(claimed, Outcome.DECLINED, f"{agent} was taken out of this chat, so its request was refused. Nothing has run.")
+        refused.append(claimed)
+    return refused
+
+
 def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> list[PendingAction]:
     """Resolve SUPERSEDED every open action the current rules no longer make Tier 3."""
     if ruleset.unreadable:

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Literal
 
 from omniharness.utils.time import now_iso as _now_iso
 
@@ -38,6 +40,11 @@ class RunRecord:
     error: str | None = None
 
 
+#: An active run row in the store not updated for this long belongs to a
+#: worker that died; it no longer holds its thread (write_when_idle).
+OTHER_WORKER_RUN_STALE_AFTER = timedelta(hours=1)
+
+
 class RunManager:
     """In-memory run registry with optional persistent RunStore backing.
 
@@ -50,6 +57,118 @@ class RunManager:
         self._runs: dict[str, RunRecord] = {}
         self._lock = asyncio.Lock()
         self._store = store
+        #: Thread writes waiting for that thread's run to end (write_when_idle).
+        self._deferred: dict[str, list[Callable[[], Awaitable[bool]]]] = {}
+        #: Drains scheduled from finished run tasks (held until they finish).
+        self._drains: set[asyncio.Task] = set()
+
+    def _busy(self, thread_id: str, *, exclude: str | None = None) -> bool:
+        """A run on this thread is in flight: pending, running, or its task not
+        yet finished (a cancelled run is marked interrupted before its task
+        unwinds, and may still write its checkpoint)."""
+        for record in self._runs.values():
+            if record.thread_id != thread_id or record.run_id == exclude:
+                continue
+            if record.status in (RunStatus.pending, RunStatus.running):
+                return True
+            if record.task is not None and not record.task.done():
+                return True
+        return False
+
+    async def thread_busy(self, thread_id: str) -> bool:
+        """Whether a run on this thread is in flight now."""
+        async with self._lock:
+            return self._busy(thread_id)
+
+    async def _active_elsewhere(self, thread_id: str) -> bool:
+        """A run on this thread that ANOTHER worker recorded as active.
+
+        This manager only sees its own process's runs; the run store sees
+        every worker's. A row still "pending"/"running" but not updated for
+        OTHER_WORKER_RUN_STALE_AFTER is a crashed worker's, and not counted.
+        A store that cannot be read is can't-tell: treated as busy (the post
+        waits and is retried), never as idle.
+        """
+        if self._store is None:
+            return False
+        try:
+            rows = await self._store.list_by_thread(thread_id, user_id=None)
+        except Exception:
+            logger.warning("Could not read runs of thread %s from the run store; treating it as busy", thread_id, exc_info=True)
+            return True
+        now = datetime.now(UTC)
+        for row in rows or []:
+            if row.get("run_id") in self._runs or row.get("status") not in ("pending", "running"):
+                continue
+            updated = row.get("updated_at") or row.get("created_at")
+            try:
+                when = datetime.fromisoformat(str(updated).replace("Z", "+00:00")) if updated else None
+            except ValueError:
+                when = None
+            if when is not None and when.tzinfo is None:
+                when = when.replace(tzinfo=UTC)
+            if when is None or now - when < OTHER_WORKER_RUN_STALE_AFTER:
+                return True
+        return False
+
+    async def write_when_idle(self, thread_id: str, write: Callable[[], Awaitable[bool]]) -> Literal["written", "queued", "elsewhere", "failed"]:
+        """Write to a thread's checkpoint WITHOUT racing a run on it.
+
+        A run holds the thread's state in memory and checkpoints it as it goes,
+        so a write made while it runs is overwritten by its next checkpoint: a
+        confirmed action's result posted from its card was lost that way
+        (review of PR #58). Under the lock no run can start (create_or_reject
+        takes it), so an idle thread is written now; a busy one is queued and
+        written when its run ends (drain_deferred, from the run worker).
+
+        `write` returns True only when the write persisted (re-read).
+        """
+        async with self._lock:
+            if self._busy(thread_id):
+                self._deferred.setdefault(thread_id, []).append(write)
+                logger.info("Thread %s is running; a write is queued until the run ends", thread_id)
+                return "queued"
+            if await self._active_elsewhere(thread_id):
+                # Another worker's run holds the thread: the caller waits and
+                # tries again (this process is not told when that run ends).
+                return "elsewhere"
+            return "written" if await write() else "failed"
+
+    async def drain_deferred(self, thread_id: str, *, finished_run_id: str) -> None:
+        """Called by the run worker when a run ends: write what was queued for
+        its thread, unless another run is already in flight (its end drains)."""
+        await self._drain(thread_id, finished_run_id=finished_run_id)
+
+    def attach_task(self, record: RunRecord, task: asyncio.Task) -> None:
+        """Bind a run's task, and drain its thread's queue AFTER the task is done.
+
+        The worker drains in its `finally`, while its own task is still running;
+        a write queued after that drain (the task not yet done, so the thread
+        still busy) was left in memory until the next run or a restart. The
+        task's done-callback drains once nothing of the run is left.
+        """
+        record.task = task
+
+        def drained(_task: asyncio.Task) -> None:
+            loop = _task.get_loop()
+            if not loop.is_closed():
+                follow_up = loop.create_task(self._drain(record.thread_id, finished_run_id=record.run_id))
+                self._drains.add(follow_up)
+                follow_up.add_done_callback(self._drains.discard)
+
+        task.add_done_callback(drained)
+
+    async def _drain(self, thread_id: str, *, finished_run_id: str) -> None:
+        async with self._lock:
+            if thread_id not in self._deferred or self._busy(thread_id, exclude=finished_run_id):
+                return
+            writes = self._deferred.pop(thread_id)
+            for write in writes:
+                try:
+                    if not await write():
+                        logger.warning("A queued write to thread %s did not persist", thread_id)
+                except Exception:
+                    logger.warning("A queued write to thread %s failed", thread_id, exc_info=True)
 
     async def _persist_to_store(self, record: RunRecord) -> None:
         """Best-effort persist run record to backing store."""

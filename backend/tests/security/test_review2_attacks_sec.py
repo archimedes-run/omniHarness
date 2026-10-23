@@ -280,7 +280,10 @@ def test_server_owned_and_unknown_config_keys_are_dropped(sec, monkeypatch) -> N
 
     monkeypatch.setattr(services, "launch_agent_run_detached", fake_launch)
     tid = sec.owner.post("/api/threads", json={}).json()["thread_id"]
-    evil = {"user_id": "attacker", "invited_agent": "x", "delegation_chain": ["a"], "called_agent": "x", "continue_action": "x", "__pregel_send": 1, "callbacks": [1], "selected_sources": ["all"]}
+    # No continue_action here: it is a client CHOICE the server validates (an
+    # unknown id is refused 409 before launch, test_delegated_confirmation),
+    # not a key it silently drops.
+    evil = {"user_id": "attacker", "invited_agent": "x", "delegation_chain": ["a"], "called_agent": "x", "__pregel_send": 1, "callbacks": [1], "selected_sources": ["all"]}
     body = {
         "assistant_id": "lead_agent",
         "input": {"messages": [{"role": "human", "content": "hi"}]},

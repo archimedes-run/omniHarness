@@ -5,9 +5,10 @@ import atexit
 import logging
 import threading
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from contextlib import asynccontextmanager
 from contextvars import Context, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -70,6 +71,9 @@ class SubagentResult:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     ai_messages: list[dict[str, Any]] | None = None
+    #: The run ended on a failed model call (the error middleware's message),
+    #: not on an answer: COMPLETED in form, a failure in fact.
+    model_failed: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def __post_init__(self):
@@ -188,6 +192,44 @@ def _submit_to_isolated_loop_in_context(
     )
 
 
+def subagent_checkpoint_key(thread_id: str, task_id: str) -> str:
+    """Where one delegation's own checkpoints live: never the chat's key, and
+    never another delegation's.
+
+    The random suffix is the point. `task_id` is the provider's tool-call id,
+    and providers reuse call ids (a fresh "call_0" every turn, in some), so a
+    key made from it alone let a later delegation in the same chat start from
+    an earlier one's messages (review of PR #58).
+    """
+    return f"{thread_id}/subagent/{task_id}/{uuid.uuid4().hex[:12]}"
+
+
+@asynccontextmanager
+async def _sqlite_run_checkpointer(path: str) -> AsyncIterator[Any]:
+    """One subagent run's connection to the app's SQLite checkpoint store.
+
+    The gateway holds its own connection to the same file, and several
+    subagents may run at once, so this one waits for a busy database (30 s)
+    instead of failing with "database is locked", and uses WAL so readers
+    never block the writer.
+    """
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from omniharness.runtime.store._sqlite_utils import ensure_sqlite_parent_dir
+
+    ensure_sqlite_parent_dir(path)
+    conn = await aiosqlite.connect(path, timeout=30)
+    try:
+        await conn.execute("PRAGMA journal_mode=WAL;")
+        await conn.execute("PRAGMA busy_timeout=30000;")
+        saver = AsyncSqliteSaver(conn)
+        await saver.setup()
+        yield saver
+    finally:
+        await conn.close()
+
+
 def _filter_tools(
     all_tools: list[BaseTool],
     allowed: list[str] | None,
@@ -232,7 +274,9 @@ class SubagentExecutor:
         thread_id: str | None = None,
         trace_id: str | None = None,
         checkpointer: Any | None = None,
+        tool_surface: dict[str, Any] | None = None,
         user_id: str | None = None,
+        checkpoint_key: str | None = None,
     ):
         """Initialize the executor.
 
@@ -258,6 +302,21 @@ class SubagentExecutor:
         self.config = config
         self.user_id = user_id
         self.app_config = app_config
+        #: How this subagent's tool list was assembled
+        #: (omniharness.agents.tool_surface). Carried in its runtime context, so
+        #: a Tier 3 call it proposes is confirmed against THIS list, rebuilt,
+        #: and not against the lead's.
+        self.tool_surface = tool_surface
+        self.user_id = user_id
+        #: This delegation's own checkpoint key. None for a new delegation (a
+        #: fresh, random one is made when it runs); set to RESUME one.
+        self.checkpoint_key = checkpoint_key
+        #: Re-entering an existing delegation: its checkpoint holds its history,
+        #: and the run's input is only what is new.
+        self.resuming = checkpoint_key is not None
+        #: For a resumed delegation: the messages appended to its history
+        #: (execute_resume). None for an ordinary run, which starts from a task.
+        self.resume_input: list[Any] | None = None
         self.checkpointer = checkpointer
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
@@ -289,7 +348,42 @@ class SubagentExecutor:
 
         logger.info(f"[trace={self.trace_id}] SubagentExecutor initialized: {config.name} with {len(self.tools)} tools")
 
-    def _create_agent(self, tools: list[BaseTool] | None = None):
+    def _run_checkpointer(self) -> Any:
+        """An async context manager yielding the checkpointer for ONE run.
+
+        DURABLE WHEN THE APP IS. A delegation's checkpoint is what "Continue
+        <agent>" re-enters, so it must survive a process restart: it goes to
+        the store configured under `database:` (or a legacy `checkpointer:`),
+        opened for this run on THIS run's event loop (subagents run on their
+        own loop, and an async saver is bound to the loop that opened it).
+        It used to be the process singleton, an InMemorySaver unless a legacy
+        `checkpointer:` section existed, so after a restart Continue re-entered
+        an empty delegation (review of PR #58). Only an in-memory app keeps the
+        process singleton, so in-process suspend/resume still works there.
+        """
+        import contextlib
+
+        if self.checkpointer is not None:
+            return contextlib.nullcontext(self.checkpointer)
+        try:
+            app_config = self.app_config or get_app_config()
+        except FileNotFoundError:
+            app_config = None
+        durable = app_config is not None and (getattr(app_config, "checkpointer", None) is not None or getattr(getattr(app_config, "database", None), "backend", "memory") != "memory")
+        if durable:
+            database = getattr(app_config, "database", None)
+            if getattr(app_config, "checkpointer", None) is None and getattr(database, "backend", None) == "sqlite":
+                from omniharness.runtime.checkpointer.delegations import delegation_sqlite_path
+
+                return _sqlite_run_checkpointer(delegation_sqlite_path(database.checkpointer_sqlite_path))
+            from omniharness.runtime.checkpointer.async_provider import make_checkpointer
+
+            return make_checkpointer(app_config)
+        from omniharness.runtime.checkpointer import get_checkpointer
+
+        return contextlib.nullcontext(get_checkpointer())
+
+    def _create_agent(self, tools: list[BaseTool] | None = None, *, checkpointer: Any | None = None):
         """Create the agent instance."""
         app_config = self.app_config or get_app_config()
         if self.model_name is None:
@@ -313,7 +407,8 @@ class SubagentExecutor:
         # backend/tests/policy/test_subagent_suspend.py, whose positive control
         # (test_suspend_resume_control.py) establishes that the probe can detect
         # suspension where it is known to work.
-        checkpointer = self.checkpointer
+        if checkpointer is None:
+            checkpointer = self.checkpointer
         if checkpointer is None:
             from omniharness.runtime.checkpointer import get_checkpointer
 
@@ -328,8 +423,8 @@ class SubagentExecutor:
             checkpointer=checkpointer,
         )
 
-    async def _load_skills(self) -> list[Skill]:
-        """Load enabled skill metadata based on config.skills."""
+    def _load_skills_sync(self) -> list[Skill]:
+        """Load enabled skill metadata based on config.skills (blocking)."""
         if self.config.skills is not None and len(self.config.skills) == 0:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=[] — skipping skill loading")
             return []
@@ -338,9 +433,8 @@ class SubagentExecutor:
             from omniharness.skills.storage import get_or_new_skill_storage
 
             storage_kwargs = {"app_config": self.app_config} if self.app_config is not None else {}
-            storage = await asyncio.to_thread(get_or_new_skill_storage, **storage_kwargs)
-            # Use asyncio.to_thread to avoid blocking the event loop (LangGraph ASGI requirement)
-            all_skills = await asyncio.to_thread(storage.load_skills, enabled_only=True)
+            storage = get_or_new_skill_storage(**storage_kwargs)
+            all_skills = storage.load_skills(enabled_only=True)
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} loaded {len(all_skills)} enabled skills from disk")
         except Exception:
             logger.exception(f"[trace={self.trace_id}] Failed to load skills for subagent {self.config.name}")
@@ -355,6 +449,17 @@ class SubagentExecutor:
             allowed = set(self.config.skills)
             return [s for s in all_skills if s.name in allowed]
         return all_skills
+
+    async def _load_skills(self) -> list[Skill]:
+        """Load enabled skill metadata based on config.skills."""
+        # Use asyncio.to_thread to avoid blocking the event loop (LangGraph ASGI requirement)
+        return await asyncio.to_thread(self._load_skills_sync)
+
+    def effective_tools(self) -> list[BaseTool]:
+        """The tools this subagent runs with: the config's allow/deny filter, then
+        its skills' allowed-tools. The same steps `_build_initial_state` takes,
+        callable without running the agent (a confirmation rebuilds them)."""
+        return self._apply_skill_allowed_tools(self._load_skills_sync())
 
     def _apply_skill_allowed_tools(self, skills: list[Skill]) -> list[BaseTool]:
         return filter_tools_by_skill_allowed_tools(self._base_tools, skills)
@@ -402,18 +507,24 @@ class SubagentExecutor:
         # Load skills as conversation items (Codex pattern)
         skills = await self._load_skills()
         filtered_tools = self._apply_skill_allowed_tools(skills)
-        skill_messages = await self._load_skill_messages(skills)
+        # A resumed delegation already has its skill messages in its history.
+        skill_messages = [] if self.resuming else await self._load_skill_messages(skills)
 
         messages: list[Any] = []
         # Skill content injected as developer/system messages before the task
         messages.extend(skill_messages)
-        # Then the actual task
-        # Written by the inviting agent's MODEL, never by the person: marked as
-        # an invitation (not a user turn), so lineage substitutes the inviter's
-        # recorded origin and a typed "yes" in it can never confirm anything.
-        from omniharness.agents.turns import mark_invitation
+        if self.resume_input is not None:
+            # RE-ENTERING a delegation: what is new is given as given (the
+            # confirmed call and its OBSERVED output), never as a user turn.
+            messages.extend(self.resume_input)
+        else:
+            # Then the actual task
+            # Written by the inviting agent's MODEL, never by the person: marked as
+            # an invitation (not a user turn), so lineage substitutes the inviter's
+            # recorded origin and a typed "yes" in it can never confirm anything.
+            from omniharness.agents.turns import mark_invitation
 
-        messages.append(mark_invitation(HumanMessage(content=task)))
+            messages.append(mark_invitation(HumanMessage(content=task)))
 
         state: dict[str, Any] = {
             "messages": messages,
@@ -454,9 +565,13 @@ class SubagentExecutor:
             ai_messages = []
             result.ai_messages = ai_messages
 
+        import contextlib
+
+        resources = contextlib.AsyncExitStack()
         try:
             state, filtered_tools = await self._build_initial_state(task)
-            agent = self._create_agent(filtered_tools)
+            checkpointer = await resources.enter_async_context(self._run_checkpointer())
+            agent = self._create_agent(filtered_tools, checkpointer=checkpointer)
 
             # Build config with thread_id for sandbox access and recursion limit
             run_config: RunnableConfig = {
@@ -466,8 +581,22 @@ class SubagentExecutor:
 
             context: dict[str, Any] = invited_agent_context(self.inviting_turn, self.config.name)
             if self.thread_id:
-                run_config["configurable"] = {"thread_id": self.thread_id}
+                # THE CHECKPOINT KEY IS THIS DELEGATION'S, NOT THE CHAT'S. It was
+                # the lead's thread id, so with the process checkpointer a second
+                # delegation in a chat started from the first one's messages
+                # (measured, plan.md §2.0). The runtime context keeps the chat's
+                # thread id: sandbox, thread data and the policy layer read that.
+                if self.checkpoint_key is None:
+                    self.checkpoint_key = subagent_checkpoint_key(self.thread_id, result.task_id)
+                run_config["configurable"] = {"thread_id": self.checkpoint_key}
                 context["thread_id"] = self.thread_id
+                from omniharness.agents.invitation import DELEGATION_KEY
+
+                context[DELEGATION_KEY] = self.checkpoint_key
+            if self.tool_surface is not None:
+                from omniharness.agents.tool_surface import TOOL_SURFACE_KEY
+
+                context[TOOL_SURFACE_KEY] = self.tool_surface
             if self.user_id:
                 context["user_id"] = self.user_id
             if self.app_config is not None:
@@ -489,7 +618,13 @@ class SubagentExecutor:
                         result.completed_at = datetime.now()
                 return result
 
-            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+            # DURABILITY "sync": each step's checkpoint is written before the
+            # next step runs. A delegation's checkpoint is what Continue
+            # re-enters; with the default (async) writes, a run could propose
+            # its Tier 3 call and finish while its checkpoint write was still
+            # pending, and the history was intermittently missing (review of
+            # PR #58, found by a test that read the store back).
+            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values", durability="sync"):  # type: ignore[arg-type]
                 # Cooperative cancellation: check if parent requested stop.
                 # Note: cancellation is only detected at astream iteration boundaries,
                 # so long-running tool calls within a single iteration will not be
@@ -544,6 +679,9 @@ class SubagentExecutor:
                         break
 
                 if last_ai_message is not None:
+                    from omniharness.agents.middlewares.llm_error_handling_middleware import LLM_ERROR_KEY
+
+                    result.model_failed = bool((last_ai_message.additional_kwargs or {}).get(LLM_ERROR_KEY))
                     content = last_ai_message.content
                     # Handle both str and list content types for the final result
                     if isinstance(content, str):
@@ -598,6 +736,14 @@ class SubagentExecutor:
                     logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no messages in final state")
                     result.result = "No response generated"
 
+            # A subagent that stopped at a Tier 3 call says so in its result:
+            # its task is not done, and its inviter must not report it as done.
+            from omniharness.agents.invitation import STOPPED_AT_KEY, stopped_notice
+
+            notice = stopped_notice(self.config.name, context.get(STOPPED_AT_KEY))
+            if notice:
+                result.result = f"{result.result or ''}\n\n{notice}".strip()
+
             result.status = SubagentStatus.COMPLETED
             result.completed_at = datetime.now()
 
@@ -606,6 +752,11 @@ class SubagentExecutor:
             result.status = SubagentStatus.FAILED
             result.error = str(e)
             result.completed_at = datetime.now()
+        finally:
+            try:
+                await resources.aclose()
+            except Exception:
+                logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} checkpointer did not close cleanly", exc_info=True)
 
         return result
 
@@ -690,6 +841,12 @@ class SubagentExecutor:
             result.error = str(e)
             result.completed_at = datetime.now()
             return result
+
+    def execute_resume(self, messages: list[Any], result_holder: SubagentResult | None = None) -> SubagentResult:
+        """Re-enter this delegation (checkpoint_key) with `messages` appended:
+        no task, no user turn. `result_holder` carries the cancel event."""
+        self.resume_input = list(messages)
+        return self.execute("", result_holder)
 
     def execute_async(self, task: str, task_id: str | None = None) -> str:
         """Start a task execution in the background.

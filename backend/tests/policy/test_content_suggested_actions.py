@@ -139,7 +139,7 @@ def test_a_user_requested_action_still_confirms_with_a_typed_yes(build_flow):
     out = agent.invoke({"messages": [*first["messages"], user_turn(content="yes")]})
 
     assert RAN == [{"meetings": ["Standup"]}]
-    assert out["messages"][-1].content == "Done."
+    assert out["messages"][-1].content.startswith("Done. I ran **")
 
 
 def test_a_triggers_turn_is_card_only_and_says_an_automation(build_flow):

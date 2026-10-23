@@ -22,6 +22,7 @@ depends on which route the user happens to take is not a defence.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -32,6 +33,8 @@ from typing import TYPE_CHECKING, Any
 from .confirm import Verdict, recognise, restate
 from .models import Outcome, PendingAction
 from .pending import PendingStore
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: middleware imports this module
     from .middleware import PolicyMiddleware
@@ -51,12 +54,28 @@ FAILED = "failed"
 #: the agent read, or a trigger, suggested it, so only the card's button counts.
 #: Not claimed, not resolved: the action stays open for the button.
 CARD_ONLY = "card_only"
+#: The proposing run's tool is not available in this chat NOW: its source was
+#: removed from the chat, or is disconnected (plan.md §2.0). Not claimed, not
+#: resolved: the action stays open, so restoring the source and confirming
+#: again works.
+TOOL_UNAVAILABLE = "tool_unavailable"
+#: A decline that arrived while the confirmed call was already running: it
+#: lost the claim, so it cannot stop the call, and it says so (review of PR #58:
+#: it used to answer "I have not done it" and record DECLINED, then the run
+#: recorded EXECUTED over it).
+ALREADY_RUNNING = "already_running"
 
 #: Internal, and deliberately NOT one of the seven. It means "this turn said
 #: nothing about any pending action", which is what almost every turn is. It
 #: exists so the flow can still report actions that expired while it looked,
 #: without inventing a verdict about an ordinary sentence.
 NO_VERDICT = "no_verdict"
+
+#: Internal too: a probe (`from_message(..., execute=False)`) reached the point
+#: where a confirmation would be claimed and run, and stopped there. Nothing
+#: was claimed or run. The chat path uses it to run only such a turn in the
+#: confirmation pool, in a slot (#118).
+WOULD_EXECUTE = "would_execute"
 
 #: A standalone run of digits, used as the scope proof above the threshold.
 #: Deliberately NOT matched inside the 12-hex action id, which is stripped by
@@ -94,12 +113,16 @@ class ConfirmationFlow:
 
     # ---- entry points ---------------------------------------------------
 
-    def from_message(self, message: Any, *, run_tool: Callable[[str, dict], Any], runtime_context: dict | None = None) -> FlowResult:
+    def from_message(self, message: Any, *, run_tool: Callable[[str, dict], Any], runtime_context: dict | None = None, execute: bool = True) -> FlowResult:
         """The chat route. Always returns a result; NO_VERDICT is the usual one.
 
         A turn that says nothing about a pending action must not produce a
         verdict about an ordinary sentence — but it may still have found actions
         that expired, and those are reported either way (FR-038).
+
+        `execute=False` is a probe: every outcome is the same, except that a
+        confirmation which would now be claimed and run returns WOULD_EXECUTE
+        instead, before the claim. Nothing runs.
         """
         now = self.now()
         expired = self._expire(now)
@@ -111,7 +134,7 @@ class ConfirmationFlow:
         # (synthetic) turn, whose "human" message is a rule's prompt. Without
         # the thread scope, "yes" typed in any chat (or any Telegram message)
         # answered whichever plan was pending anywhere.
-        pending = answerable_by_typed_reply(self.store.open_actions(now), runtime_context)
+        pending = answerable_by_typed_reply(self.store.open_actions(now), runtime_context, message)
         if not pending:
             return FlowResult(NO_VERDICT, expired_meanwhile=expired)
 
@@ -157,7 +180,7 @@ class ConfirmationFlow:
             "user_id": ctx.get("user_id"),
             "message_id": getattr(message, "id", None) or (message.get("id") if isinstance(message, dict) else None),
         }
-        return self._apply(action, verdict.verdict, supplied, run_tool, expired, answered)
+        return self._apply(action, verdict.verdict, supplied, run_tool, expired, answered, execute=execute)
 
     def explicit(self, action_id: str, *, confirm: bool, run_tool: Callable[[str, dict], Any], supplied_count: int | None = None, answered: dict | None = None) -> FlowResult:
         """The UI route (Phase 3). Same claim, same execution, same outcomes."""
@@ -167,7 +190,8 @@ class ConfirmationFlow:
         if action is None:
             return FlowResult(UNRECOGNISED, action_id, "no such action", expired_meanwhile=expired)
         if action.outcome is not None:
-            return FlowResult(ALREADY_RESOLVED, action_id, f"already resolved ({action.outcome})", expired_meanwhile=expired)
+            why = f": {action.outcome_reason}" if action.outcome == Outcome.DECLINED and action.outcome_reason else ""
+            return FlowResult(ALREADY_RESOLVED, action_id, f"already resolved ({action.outcome}){why}", expired_meanwhile=expired)
         if action.is_expired(now):
             return FlowResult(EXPIRED, action_id, "that action expired before it was confirmed", expired_meanwhile=expired)
         verdict = Verdict.CONFIRM if confirm else Verdict.DECLINE
@@ -175,11 +199,19 @@ class ConfirmationFlow:
 
     # ---- the shared middle ----------------------------------------------
 
-    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...], answered: dict | None = None) -> FlowResult:
+    def _apply(self, action: PendingAction, verdict: Verdict, supplied_count: int | None, run_tool: Callable[[str, dict], Any], expired: tuple[PendingAction, ...], answered: dict | None = None, *, execute: bool = True) -> FlowResult:
         answered = {"via": None, "thread_id": None, "user_id": None, "message_id": None, **(answered or {})}
         if verdict is Verdict.DECLINE:
-            action.confirmation = answered
-            self.store.resolve(action, Outcome.DECLINED, "declined by the user")
+            # A DECLINE TAKES THE CLAIM, exactly as a confirmation does: the
+            # one that loses never resolves the record.
+            claimed = take_claim(self.store, action.id, f"decline:{self._claimant()}")
+            if claimed is None:
+                current = self.store.get(action.id)
+                if current is not None and current.outcome is None:
+                    return FlowResult(ALREADY_RUNNING, action.id, "That was already confirmed and is running now, so it cannot be stopped. Its result will be shown when it finishes.", expired_meanwhile=expired)
+                return FlowResult(ALREADY_RESOLVED, action.id, f"already resolved ({current.outcome if current else 'unknown'})", expired_meanwhile=expired)
+            claimed.confirmation = answered
+            self.store.resolve(claimed, Outcome.DECLINED, "declined by the user")
             return FlowResult(DECLINED, action.id, "Understood — I have not done it.", expired_meanwhile=expired)
 
         threshold = self._threshold()
@@ -195,6 +227,18 @@ class ConfirmationFlow:
                     detail={"required_count": len(action.targets), "threshold": threshold, "supplied": supplied_count},
                     expired_meanwhile=expired,
                 )
+
+        if not execute:
+            # The probe stops here: this confirmation would be claimed and run.
+            return FlowResult(WOULD_EXECUTE, action.id, expired_meanwhile=expired)
+
+        # RE-CHECKED AT CONFIRMATION, before the claim: never run a tool the
+        # user has since removed from the chat. A runner that can tell says
+        # so through `unavailable` (surface_run.unavailable_reason).
+        check = getattr(run_tool, "unavailable", None)
+        reason = check(action) if callable(check) else None
+        if reason:
+            return FlowResult(TOOL_UNAVAILABLE, action.id, reason, detail={"reason": reason}, expired_meanwhile=expired)
 
         claimed = take_claim(self.store, action.id, self._claimant())
         if claimed is None:
@@ -214,6 +258,9 @@ class ConfirmationFlow:
             # only by expiry, and silent until then. Found by running a real
             # gateway: a tool raised on a missing injected argument and the
             # action sat claimed with outcome None.
+            # The exception's TYPE only: its text (and a traceback's) can carry
+            # the call's arguments, and a log is not a redacted surface.
+            logger.error("policy: confirmed action %s (%s) did not complete: %s", claimed.id, claimed.tool_name, type(exc).__name__)
             self.store.resolve(claimed, Outcome.FAILED, f"authorised, but the tool did not complete: {exc}")
             return FlowResult(
                 FAILED,
@@ -325,10 +372,42 @@ def _same_key(recorded: str | None, current: str | None) -> bool:
 
 #: Server-set markers of a turn that is not a person answering: a resumed or
 #: called agent (Feature 006 #58 sets these). Such a turn is never a verdict.
-_NOT_A_PERSONS_TURN_KEYS = ("continue_action", "called_agent")
+_NOT_A_PERSONS_TURN_KEYS = ("continue_action", "called_agent", "resume_action")
 
 
-def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dict | None) -> list[PendingAction]:
+def turn_may_answer(message: Any, runtime_context: dict | None) -> bool:
+    """THE ONE TEST of whether this turn may be read as a yes/no at all.
+
+    `answerable_by_typed_reply` applies it, and the policy middleware calls it
+    before anything else (so a turn that cannot answer does not even sweep
+    expiry). False for: a message that is not the person's own server-tagged
+    turn (lineage.is_user_turn: never a tool result, an agent's reply, an
+    injected message, a subagent's instruction or a resumed agent's observed
+    output); a scheduled (synthetic) turn; a turn the server handed to an
+    agent (called_agent, resume_action: "@member" or Continue); an invited
+    agent's (subagent's) turn.
+    """
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+
+    from .lineage import USER_ORIGINS, _message_type, is_invitation, is_tool_result
+    from .provenance import is_synthetic_turn
+
+    # A message that is not a person's message at all (a tool result, an
+    # agent's reply, a resumed agent's observed output, an invitation) is
+    # never an answer. Whether a human message is the person's own TAGGED turn
+    # is decided by recognise (lineage.eligible_to_confirm), which restates the
+    # plan to an untagged one rather than ignoring it.
+    if message is not None and (_message_type(message) not in USER_ORIGINS or is_tool_result(message) or is_invitation(message)):
+        return False
+    ctx = runtime_context or {}
+    if is_synthetic_turn(ctx) or any(ctx.get(k) for k in _NOT_A_PERSONS_TURN_KEYS):
+        return False
+    # An invited agent (subagent) has no person of its own: its "user" message
+    # is its inviter's instruction. Nothing typed there confirms anything.
+    return not (INVITED_ORIGIN_KEY in ctx or ctx.get(DELEGATION_CHAIN_KEY))
+
+
+def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dict | None, message: Any = None) -> list[PendingAction]:
     """THE gate for typed confirmations: which plans may this turn answer?
 
     - only a person's own turn: never a scheduled (synthetic) turn, never a
@@ -342,16 +421,8 @@ def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dic
     Several plans left after this gate and no id named: nothing is approved and
     each is restated (recognise / FR-035).
     """
-    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
-
-    from .provenance import is_synthetic_turn
-
+    if not turn_may_answer(message, runtime_context):
+        return []
     ctx = runtime_context or {}
-    if is_synthetic_turn(ctx) or any(ctx.get(k) for k in _NOT_A_PERSONS_TURN_KEYS):
-        return []
-    # An invited agent (subagent) has no person of its own: its "user" message
-    # is its inviter's instruction. Nothing typed there confirms anything.
-    if INVITED_ORIGIN_KEY in ctx or ctx.get(DELEGATION_CHAIN_KEY):
-        return []
     speaker, thread = ctx.get("user_id"), ctx.get("thread_id")
     return [a for a in actions if _same_owner(a.owner_id, speaker) and _same_key(a.thread_id, thread)]

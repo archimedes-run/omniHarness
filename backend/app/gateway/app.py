@@ -40,6 +40,7 @@ from app.gateway.routers import (
     sessions,
     skills,
     suggestions,
+    thread_participants,
     thread_runs,
     thread_skills,
     thread_tools,
@@ -348,6 +349,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             startup_check(app.state.config)
         except Exception:
             logger.exception("policy: the startup tool-coverage check failed")
+        # "Continue <agent>" is spent only when the agent re-enters its
+        # delegation successfully; one held when the process stopped is
+        # released, so it can be pressed again.
+        try:
+            from app.gateway.routers.confirmations import install_continue_listener
+
+            install_continue_listener()
+        except Exception:
+            logger.exception("The Continue listener could not be installed")
+
+        # Confirmed results still waiting to be posted into their chat (the
+        # gateway stopped while a reply held the thread): posted now, once.
+        try:
+            from app.gateway.routers.confirmations import drain_waiting_posts
+
+            posted = await drain_waiting_posts(app)
+            if posted:
+                logger.info("Posted %d confirmed result(s) that were waiting", posted)
+        except Exception:
+            logger.exception("Confirmed results waiting to post could not be posted at startup")
 
         # The run history (Feature 006): every automation run's full content,
         # redacted, kept locally under the data dir, purged past retention.
@@ -589,6 +610,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     # Per-conversation tools (catalog + per-thread selection + count/cap)
     app.include_router(thread_tools.router)
     app.include_router(thread_skills.router)
+    app.include_router(thread_participants.router)
 
     # Per-user preferences (appearance) are mounted at /api/preferences
     app.include_router(preferences.router)

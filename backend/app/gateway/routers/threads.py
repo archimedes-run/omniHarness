@@ -219,6 +219,15 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
                 await checkpointer.adelete_thread(thread_id)
         except Exception:
             logger.debug("Could not delete checkpoints for thread %s (not critical)", sanitize_log_param(thread_id))
+        # And every delegation's own checkpoints: each holds that agent's
+        # full messages (review of PR #58). Not best-effort-silent: logged.
+        try:
+            from omniharness.config import get_app_config
+            from omniharness.runtime.checkpointer.delegations import delete_delegation_checkpoints
+
+            await delete_delegation_checkpoints(checkpointer, thread_id, app_config=get_app_config())
+        except Exception:
+            logger.warning("Could not delete the delegation checkpoints of thread %s", sanitize_log_param(thread_id), exc_info=True)
 
     # Remove thread_meta row (best-effort) — required for sqlite backend
     # so the deleted thread no longer appears in /threads/search.

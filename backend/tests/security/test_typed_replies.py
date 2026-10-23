@@ -48,6 +48,10 @@ def agent_turns(monkeypatch):
         return create_agent(model=_Fake(messages=iter([*replies, AIMessage(content="ok")])), tools=[send_email], middleware=[build_policy_middleware(get_app_config())])
 
     monkeypatch.setattr("app.gateway.services.resolve_agent_factory", lambda assistant_id: factory)
+    # A confirmation rebuilds the PROPOSING run's tools (006 #58: the lead's
+    # tool surface); this fake run's tool list is [send_email], so the rebuild
+    # returns the same.
+    monkeypatch.setattr("omniharness.agents.lead_agent.agent.lead_agent_tools", lambda cfg, app_config=None: [send_email])
     SENT.clear()
     return queue
 
@@ -183,6 +187,10 @@ def test_a_content_caused_plan_is_not_confirmed_by_typing(sec, agent_turns, monk
         return create_agent(model=_Fake(messages=iter([*replies, AIMessage(content="ok")])), tools=[send_email, web_fetch], middleware=[build_policy_middleware(get_app_config())])
 
     monkeypatch.setattr("app.gateway.services.resolve_agent_factory", lambda assistant_id: factory)
+    # A confirmation rebuilds the PROPOSING run's tools (006 #58: the lead's
+    # tool surface); this fake run's tool list is [send_email], so the rebuild
+    # returns the same.
+    monkeypatch.setattr("omniharness.agents.lead_agent.agent.lead_agent_tools", lambda cfg, app_config=None: [send_email])
     a = _thread(sec)
     agent_turns.append(
         [

@@ -29,6 +29,7 @@ export function PendingConfirmations({
   quietWhenEmpty = false,
   only,
   exclude,
+  onContinue,
 }: {
   threadId?: string;
   quietWhenEmpty?: boolean;
@@ -36,6 +37,8 @@ export function PendingConfirmations({
   only?: string[];
   /** All but these: the cards not raised at a point the chat shows. */
   exclude?: string[];
+  /** In a chat: "Continue <agent>" once a call it stopped for has run. */
+  onContinue?: (agent: string, actionId: string) => void;
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
@@ -58,7 +61,25 @@ export function PendingConfirmations({
       .filter((a) => !actions.some((p) => p.id === a.id)),
   ];
 
-  if (quietWhenEmpty && pending?.readable && shown.length === 0) return null;
+  // Results that ran and are not yet in their chat. Shown once, where the
+  // chat's unanchored cards go (never in an `only` group), and not for a card
+  // still on screen here, which says so itself.
+  const awaiting =
+    only == null
+      ? (pending?.awaiting_post ?? []).filter(
+          (a) =>
+            (threadId == null || a.thread_id === threadId) &&
+            !(a.id in resolved),
+        )
+      : [];
+
+  if (
+    quietWhenEmpty &&
+    pending?.readable &&
+    shown.length === 0 &&
+    awaiting.length === 0
+  )
+    return null;
 
   return (
     <div className="space-y-3" data-testid="pending-confirmations">
@@ -76,7 +97,33 @@ export function PendingConfirmations({
         </Alert>
       )}
 
-      {pending?.readable && shown.length === 0 && (
+      {awaiting.map((item) => (
+        <div
+          key={item.id}
+          className="border-border text-muted-foreground rounded-md border px-3 py-2 text-sm"
+          data-testid="awaiting-post"
+          data-post-state={item.post_state ?? "waiting"}
+        >
+          <p>
+            {item.post_state === "failed"
+              ? "Result could not be posted to the chat"
+              : item.post_state === "dropped"
+                ? "Chat deleted; result kept here"
+                : "Result waiting to post"}{" "}
+            · <span className="text-foreground">{item.tool_name}</span>, run for{" "}
+            {item.requester}.
+            {(item.post_state ?? "waiting") === "waiting" &&
+              " It appears in the chat as soon as the chat is free."}
+          </p>
+          {item.result && (
+            <p className="text-foreground mt-1 whitespace-pre-wrap">
+              {item.result}
+            </p>
+          )}
+        </div>
+      ))}
+
+      {pending?.readable && shown.length === 0 && awaiting.length === 0 && (
         <p className="text-muted-foreground text-sm" data-testid="empty">
           Nothing is waiting for your confirmation.
         </p>
@@ -88,6 +135,7 @@ export function PendingConfirmations({
           action={action}
           busy={resolve.isPending || edit.isPending}
           result={resolved[action.id]?.result}
+          onContinue={onContinue}
           onEdit={(args, typedCount) =>
             edit.mutate(
               { id: action.id, args, typedCount },

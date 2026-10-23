@@ -20,6 +20,7 @@ import {
   MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM,
 } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
+import { ParticipantsStack } from "@/components/workspace/messages/participants-stack";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
@@ -133,6 +134,15 @@ export default function ChatPage() {
     thread.messages,
     !isNewThread,
     thread.isLoading,
+    // "Continue <agent>" on a confirmed card: the user's own turn, so the
+    // agent carries on only because the user asked it to. The server re-enters
+    // that agent's own delegation from the action id (and nothing else).
+    (agent, actionId) =>
+      void sendMessage(
+        threadId,
+        { text: `Continue ${agent}.`, files: [] },
+        { continue_action: actionId },
+      ),
   );
 
   const messageListPaddingBottom = showFollowups
@@ -157,6 +167,9 @@ export default function ChatPage() {
           >
             <div className="flex w-full items-center text-sm font-medium">
               <ThreadTitle threadId={threadId} thread={thread} />
+              <span className="ml-3">
+                <ParticipantsStack threadId={threadId} enabled={!isNewThread} />
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <TokenUsageIndicator
