@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -75,7 +75,7 @@ def normalize_stream_modes(raw: list[str] | str | None) -> list[str]:
     return raw if raw else ["values"]
 
 
-def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True) -> dict[str, Any]:
+def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True, keep_id: Callable[[Any], bool] | None = None) -> dict[str, Any]:
     """Convert LangGraph Platform input format to LangChain state dict.
 
     The person's own human message(s) are tagged as the user's turn
@@ -109,8 +109,15 @@ def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True)
             if isinstance(msg, dict):
                 role = msg.get("role", msg.get("type", "user"))
                 content = msg.get("content", "")
-                if role in ("user", "human") and user_turn:
-                    converted.append(tagged(content))
+                if role in ("user", "human"):
+                    # Only the trigger engine's signed, thread-bound, single-use
+                    # turn id is kept (`keep_id`, set by start_run for the
+                    # engine's own requests; run history, Feature 006). Any
+                    # other id is dropped: add_messages replaces by id, so
+                    # keeping it would let a caller rewrite an earlier message.
+                    msg_id = msg.get("id") if keep_id is not None and keep_id(msg.get("id")) else None
+                    kw = {"id": msg_id} if msg_id else {}
+                    converted.append(tagged(content, **kw) if user_turn else HumanMessage(content=content, **kw))
                 else:
                     # TODO: handle other message types (system, ai, tool)
                     converted.append(HumanMessage(content=content))
@@ -586,8 +593,20 @@ async def start_run(
         synthetic_rule_id = rule_id or ""
 
     # A scheduled turn's "human" message is a rule's prompt, never the person.
+    # The engine's own turn id (run history, Feature 006) is kept only on the
+    # engine's granted request, for this thread, once across every worker
+    # (the run history's database records it). No history: no id is kept.
+    from app.gateway.internal_auth import accept_turn_id
+
+    from_engine = synthetic_rule_id is not None
+    history = getattr(request.app.state, "run_history", None)
+    consume = history.consume_turn_id if history is not None else (lambda _id: False)
     try:
-        graph_input = normalize_input(body.input, user_turn=not relayed and synthetic_rule_id is None)
+        graph_input = normalize_input(
+            body.input,
+            user_turn=not relayed and synthetic_rule_id is None,
+            keep_id=lambda v: accept_turn_id(v, thread_id=thread_id, from_trigger_engine=from_engine, consume=consume),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:

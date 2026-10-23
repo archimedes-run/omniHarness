@@ -26,6 +26,7 @@ import type { RuleView, RulesView } from "@/core/triggers/types";
 import { cn } from "@/lib/utils";
 
 import { RuleForm, blankRule } from "./rule-form";
+import { RunDetails } from "./run-details";
 
 /** What the right-hand side shows: one automation, or the new-automation editor. */
 export type AutomationSelection =
@@ -387,6 +388,7 @@ function Card({ label, children }: { label: string; children: string }) {
 
 function History({ view, rule }: { view: RulesView; rule: RuleView }) {
   const runs = useTriggerRuns(rule.id);
+  const [open, setOpen] = useState<string | null>(null);
   const zone = ruleZone(rule);
   const names = new Map(view.rules.map((r) => [r.id, ruleName(r)]));
   return (
@@ -436,13 +438,39 @@ function History({ view, rule }: { view: RulesView; rule: RuleView }) {
                 <span className={TONE[words.tone]}>{words.label}</span>
                 {words.detail}
               </span>
-              {run.thread_id && (
-                <Link
-                  href={`/workspace/chats/${run.thread_id}`}
-                  className="text-primary underline underline-offset-2"
+              <span className="flex gap-3">
+                {run.content === "stored" && run.run_id && (
+                  <button
+                    type="button"
+                    className="text-primary underline underline-offset-2"
+                    aria-expanded={open === run.run_id}
+                    onClick={() =>
+                      setOpen(open === run.run_id ? null : (run.run_id ?? null))
+                    }
+                  >
+                    Details
+                  </button>
+                )}
+                {run.thread_id && (
+                  <Link
+                    href={`/workspace/chats/${run.thread_id}`}
+                    className="text-primary underline underline-offset-2"
+                  >
+                    Open thread
+                  </Link>
+                )}
+              </span>
+              {run.content === "not-stored" && (
+                <span
+                  className="text-muted-foreground w-full pl-[142px] text-xs"
+                  data-testid="not-stored"
                 >
-                  Open thread
-                </Link>
+                  Its full record is not stored (from before the run history, or
+                  past its retention).
+                </span>
+              )}
+              {open === run.run_id && run.run_id && (
+                <RunDetails runId={run.run_id} />
               )}
             </li>
           );

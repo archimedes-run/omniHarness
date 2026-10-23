@@ -91,6 +91,17 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("card-number", re.compile(r"\b(?:\d[ -]?){13,19}\b(?=[^\d]|$)")),
     # Cookie and Set-Cookie headers, which a page fetch can surface verbatim.
     ("cookie-header", re.compile(r"\b(?:Set-)?Cookie:\s*[^\s;]{8,}", re.IGNORECASE)),
+    # --- widened for feature 006 (run history) -----------------------------
+    # A run stores tool output verbatim, and these shapes turn up in it. Still
+    # RECOGNIZED patterns only; the run history adds an exact-match pass for
+    # the values the process itself loaded (omniharness.utils.known_secrets).
+    # Google OAuth access tokens, and Google refresh tokens.
+    ("google-oauth-access-token", re.compile(r"\bya29\.[0-9A-Za-z_\-]{20,}")),
+    ("google-refresh-token", re.compile(r"(?<![\w/])1//[0-9A-Za-z_\-]{20,}")),
+    # A bare Telegram bot token: the bot id, a colon, 35 characters.
+    ("telegram-bot-token", re.compile(r"(?<![\w:])\d{8,10}:[A-Za-z0-9_\-]{35}(?![A-Za-z0-9_\-])")),
+    # An x-api-key header (or its JSON/assignment shape) with its value.
+    ("x-api-key-header", re.compile(r"\b(x-api-key[\"']?\s*[:=]\s*[\"']?)[^\s\"',;}]{8,}", re.IGNORECASE)),
 )
 
 # Remote-only reduction (FR-011c, SC-004m).
@@ -110,6 +121,8 @@ def _apply_patterns(text: str) -> tuple[str, list[str]]:
                 return f"{m.group(1)}={MARKER}"
             if _name == "bearer":
                 return f"Bearer {MARKER}"
+            if _name == "x-api-key-header":
+                return f"{m.group(1)}{MARKER}"
             return MARKER
 
         text = pat.sub(_sub, text)

@@ -1,8 +1,10 @@
 """Cache for MCP tools to avoid repeated loading."""
 
 import asyncio
+import concurrent.futures
 import logging
 import os
+import threading
 
 from langchain_core.tools import BaseTool
 
@@ -10,7 +12,10 @@ logger = logging.getLogger(__name__)
 
 _mcp_tools_cache: list[BaseTool] | None = None
 _cache_initialized = False
-_initialization_lock = asyncio.Lock()
+# A THREAD lock, and the load runs on its own loop: callers on any thread or
+# loop wait here, and none waits for a coroutine parked on a loop it is
+# blocking (two first requests after a restart deadlocked the gateway).
+_initialization_lock = threading.Lock()
 _config_mtime: float | None = None  # Track config file modification time
 
 #: Told the loaded tool list each time the cache is (re)initialised. The
@@ -76,17 +81,20 @@ def _is_cache_stale() -> bool:
     return False
 
 
-async def initialize_mcp_tools() -> list[BaseTool]:
-    """Initialize and cache MCP tools.
+def _run_on_own_loop(make_coro):
+    """Run `make_coro()` to completion on a loop of its own."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make_coro())
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(make_coro())).result()
 
-    This should be called once at application startup.
 
-    Returns:
-        List of LangChain tools from all enabled MCP servers.
-    """
+def _load_once() -> list[BaseTool]:
     global _mcp_tools_cache, _cache_initialized, _config_mtime
 
-    async with _initialization_lock:
+    with _initialization_lock:
         if _cache_initialized:
             logger.info("MCP tools already initialized")
             return _mcp_tools_cache or []
@@ -94,7 +102,7 @@ async def initialize_mcp_tools() -> list[BaseTool]:
         from omniharness.mcp.tools import get_mcp_tools
 
         logger.info("Initializing MCP tools...")
-        _mcp_tools_cache = await get_mcp_tools()
+        _mcp_tools_cache = _run_on_own_loop(get_mcp_tools)
         _cache_initialized = True
         _config_mtime = _get_config_mtime()  # Record config file mtime
         logger.info(f"MCP tools initialized: {len(_mcp_tools_cache)} tool(s) loaded (config mtime: {_config_mtime})")
@@ -105,6 +113,17 @@ async def initialize_mcp_tools() -> list[BaseTool]:
                 logger.exception("an MCP tools-loaded listener failed")
 
         return _mcp_tools_cache
+
+
+async def initialize_mcp_tools() -> list[BaseTool]:
+    """Initialize and cache MCP tools (once; concurrent callers share the load).
+
+    Returns:
+        List of LangChain tools from all enabled MCP servers.
+    """
+    if _cache_initialized:
+        return _mcp_tools_cache or []
+    return await asyncio.to_thread(_load_once)
 
 
 def get_cached_mcp_tools() -> list[BaseTool]:
@@ -131,26 +150,7 @@ def get_cached_mcp_tools() -> list[BaseTool]:
     if not _cache_initialized:
         logger.info("MCP tools not initialized, performing lazy initialization...")
         try:
-            # Try to initialize in the current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If loop is already running (e.g., in LangGraph Studio),
-                # we need to create a new loop in a thread
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, initialize_mcp_tools())
-                    future.result()
-            else:
-                # If no loop is running, we can use the current loop
-                loop.run_until_complete(initialize_mcp_tools())
-        except RuntimeError:
-            # No event loop exists, create one
-            try:
-                asyncio.run(initialize_mcp_tools())
-            except Exception:
-                logger.exception("Failed to lazy-initialize MCP tools")
-                return []
+            return _load_once()
         except Exception:
             logger.exception("Failed to lazy-initialize MCP tools")
             return []

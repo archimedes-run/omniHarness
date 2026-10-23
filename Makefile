@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
+.PHONY: help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -190,7 +190,7 @@ docker-logs-gateway:
 # ==========================================
 
 # Build and start production services
-up:
+up: run-store-keys
 	@$(RUN_WITH_GIT_BASH) ./scripts/deploy.sh
 
 # Day-to-day use: the dev stack's gateway, watcher, nginx and data, with a
@@ -199,7 +199,16 @@ up:
 # provisioner sandbox mode uses (scripts/docker.sh makes the same choice).
 DAILY_COMPOSE = cd docker && OMNI_HARNESS_ROOT=$(CURDIR) docker compose --env-file ../.env -p omni-harness-dev -f docker-compose-dev.yaml
 
-daily:
+# The run history's key directory (Feature 006): the master key and the key
+# store of per-run data keys, in their own subdirectory of the secrets dir,
+# outside the project and the data dir, owner-only. The gateway creates the
+# key files on first run; this makes the 0700 host dirs so Docker does not
+# create them root-owned. Never back it up with the data dir.
+SECRETS_DIR ?= $(HOME)/.omni-harness-secrets
+run-store-keys:
+	@mkdir -p "$(SECRETS_DIR)/run-store" && chmod 700 "$(SECRETS_DIR)" "$(SECRETS_DIR)/run-store" && echo "Run history key dir: $(SECRETS_DIR)/run-store (0700)"
+
+daily: run-store-keys
 	@./scripts/ensure-watcher-token.sh
 	$(DAILY_COMPOSE) up -d gateway session-watcher nginx
 	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend

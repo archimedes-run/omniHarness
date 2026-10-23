@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from omniharness.utils.known_secrets import register_secret
+
 logger = logging.getLogger(__name__)
 
 # Required beta headers for Claude Code OAuth tokens
@@ -109,6 +111,7 @@ def _credential_from_direct_token(access_token: str, source: str) -> ClaudeCodeC
     token = access_token.strip()
     if not token:
         return None
+    register_secret(token, source)
     return ClaudeCodeCredential(access_token=token, source=source)
 
 
@@ -132,6 +135,8 @@ def _extract_claude_code_credential(data: dict[str, Any], source: str) -> Claude
         logger.debug("Claude Code credentials container exists but no accessToken found")
         return None
 
+    register_secret(access_token, source)
+    register_secret(oauth.get("refreshToken"), source)
     cred = ClaudeCodeCredential(
         access_token=access_token,
         refresh_token=oauth.get("refreshToken", ""),
@@ -211,6 +216,8 @@ def load_codex_cli_credential() -> CodexCliCredential | None:
         logger.debug("Codex CLI credentials file exists but no token found")
         return None
 
+    register_secret(access_token, "codex-cli")
+    register_secret(tokens.get("refresh_token"), "codex-cli")
     logger.info("Loaded Codex CLI credential")
     return CodexCliCredential(
         access_token=access_token,
