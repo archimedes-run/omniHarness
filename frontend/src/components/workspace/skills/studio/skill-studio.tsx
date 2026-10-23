@@ -32,6 +32,7 @@ import {
   composeSkillMd,
   createCustomSkill,
   draft,
+  undoTo,
   parseSkillMd,
   saveCustomSkill,
   skillSlug,
@@ -161,7 +162,8 @@ function SkillEditor({
   skill: Skill | null;
   onCreated: (name: string) => void;
 }) {
-  const c = useStudioCopy().skills;
+  const copy = useStudioCopy();
+  const c = copy.skills;
   const queryClient = useQueryClient();
   const isNew = skill === null;
   const isCustom = skill?.category === "custom";
@@ -180,11 +182,13 @@ function SkillEditor({
   }, [content, skill]);
   const [title, setTitle] = useState("");
   const [doc, setDoc] = useState<SkillDoc>(initial);
-  const [tab, setTab] = useState<SkillTab>("details");
+  // A new skill starts where one sentence drafts it (Instructions).
+  const [tab, setTab] = useState<SkillTab>(isNew ? "instructions" : "details");
   const [status, setStatus] = useState<
     | { kind: "idle" }
     | { kind: "saving" }
-    | { kind: "saved" }
+    | { kind: "saved"; version: number | null; undoTo: number | null }
+    | { kind: "undone"; version: number }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
   useEffect(() => setDoc(initial), [initial]);
@@ -206,7 +210,7 @@ function SkillEditor({
   /** Draft for review; nothing is saved until Save skill. */
   async function runDraft(
     sentence: string,
-    apply: (d: { description: string; body: string }) => void,
+    apply: (d: { name?: string; description: string; body: string }) => void,
   ) {
     try {
       const result = await draft("skill", {
@@ -239,12 +243,15 @@ function SkillEditor({
   }
 
   async function draftBody(sentence: string) {
-    await runDraft(sentence, (d) =>
+    await runDraft(sentence, (d) => {
+      // One sentence fills the new skill: its name, when it loads, and its
+      // instructions; what the user already typed is kept.
+      if (isNew && !title.trim() && d.name) setTitle(d.name);
       patch({
         body: d.body || doc.body,
         description: doc.description.trim() ? doc.description : d.description,
-      }),
-    );
+      });
+    });
   }
 
   async function save() {
@@ -257,22 +264,46 @@ function SkillEditor({
       const md = composeSkillMd({ ...doc, name: slug });
       if (isNew) {
         await createCustomSkill(slug, md, fromDraft ? "draft" : "manual");
-      } else {
-        await saveCustomSkill(
-          slug,
-          md,
-          content?.version ?? 0,
-          fromDraft ? "draft" : "manual",
-        );
-        setFromDraft(false);
+        void queryClient.invalidateQueries({ queryKey: ["skills"] });
+        setStatus({ kind: "saved", version: null, undoTo: null });
+        onCreated(slug);
+        return;
       }
+      const before = content?.version ?? 0;
+      const saved = await saveCustomSkill(
+        slug,
+        md,
+        before,
+        fromDraft ? "draft" : "manual",
+      );
+      setFromDraft(false);
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
-      setStatus({ kind: "saved" });
-      if (isNew) onCreated(slug);
+      setStatus({
+        kind: "saved",
+        version: saved.version ?? null,
+        undoTo: before > 0 && saved.version ? before : null,
+      });
     } catch (e) {
       setStatus({
         kind: "error",
         message: c.saveFailed(e instanceof Error ? e.message : String(e)),
+      });
+    }
+  }
+
+  /** Restore the version the last save was made from, as a new version. */
+  async function undoSave(to: number, base: number) {
+    try {
+      await undoTo("skill", slug, to, base);
+      void queryClient.invalidateQueries({ queryKey: ["skills"] });
+      setStatus({ kind: "undone", version: to });
+    } catch (e) {
+      const stale = (e as { status?: number }).status === 409;
+      setStatus({
+        kind: "error",
+        message: stale
+          ? copy.agents.undoStale
+          : copy.agents.undoFailed(e instanceof Error ? e.message : String(e)),
       });
     }
   }
@@ -314,8 +345,30 @@ function SkillEditor({
           {status.message}
         </p>
       ) : status.kind === "saved" ? (
-        <p className="text-muted-foreground mr-auto text-sm" role="status">
-          {c.saved}
+        <p
+          className="text-muted-foreground mr-auto flex flex-wrap items-center gap-2 text-sm"
+          role="status"
+          data-testid="studio-saved"
+        >
+          {status.version ? copy.agents.savedVersion(status.version) : c.saved}
+          {status.undoTo && status.version ? (
+            <button
+              type="button"
+              className="text-primary min-h-11 underline-offset-2 hover:underline md:min-h-0"
+              onClick={() => void undoSave(status.undoTo!, status.version!)}
+              data-testid="studio-undo"
+            >
+              {copy.agents.undo}
+            </button>
+          ) : null}
+        </p>
+      ) : status.kind === "undone" ? (
+        <p
+          className="text-muted-foreground mr-auto text-sm"
+          role="status"
+          data-testid="studio-undone"
+        >
+          {copy.agents.undone(status.version)}
         </p>
       ) : null}
       <button

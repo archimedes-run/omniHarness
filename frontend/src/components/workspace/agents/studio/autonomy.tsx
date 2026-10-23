@@ -18,12 +18,18 @@ import { TabPanel } from "./studio-frame";
  */
 export function AutonomyTab({
   agentId,
+  isNew,
+  suggested,
   autonomy,
   error,
   granted,
   onChange,
 }: {
   agentId: string | null;
+  /** A new agent: the classes can be chosen now and are saved with it. */
+  isNew: boolean;
+  /** Class ids a draft suggested: marked, never ticked for the user. */
+  suggested: string[];
   autonomy: AutonomyView | undefined;
   error: unknown;
   granted: string[];
@@ -37,7 +43,7 @@ export function AutonomyTab({
   return (
     <TabPanel value="autonomy" className="flex flex-col gap-3.5 outline-none">
       <p className="text-foreground-2 m-0">{c.autonomyIntro}</p>
-      {!agentId ? (
+      {!agentId && !isNew ? (
         <p className="text-muted-foreground">{c.saveAgentFirst}</p>
       ) : error ? (
         <p className="text-destructive" role="alert">
@@ -50,6 +56,14 @@ export function AutonomyTab({
             data-testid="autonomy-grants"
           >
             <legend className="px-1.5 text-[13px]">{c.mayDoLegend}</legend>
+            {suggested.length > 0 ? (
+              <p
+                className="text-foreground-2 m-0 text-xs"
+                data-testid="autonomy-suggested-note"
+              >
+                {c.suggestedGrantsNote}
+              </p>
+            ) : null}
             {(autonomy?.classes ?? []).map((cls) => (
               <label
                 key={cls.id}
@@ -70,7 +84,17 @@ export function AutonomyTab({
                   }
                 />
                 <span>
-                  <span className="block">{cls.label}</span>
+                  <span className="block">
+                    {cls.label}
+                    {suggested.includes(cls.id) ? (
+                      <span
+                        className="border-primary text-foreground ml-2 rounded-md border px-1.5 py-px text-xs"
+                        data-testid={`grant-suggested-${cls.id}`}
+                      >
+                        {c.suggested}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="text-muted-foreground block text-xs">
                     {cls.grantable
                       ? cls.allows

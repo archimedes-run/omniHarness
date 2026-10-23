@@ -92,12 +92,17 @@ const enUS = {
     leadInstructions:
       "The lead agent's instructions are built in, so they can't be edited here.",
     draftReady: (model: string) =>
-      `Drafted by ${model}. Review the Instructions and Tools and skills tabs, then Save. Nothing is saved yet.`,
+      `Drafted by ${model}. Every tab is filled in for review: check them, then Save. Nothing is saved yet.`,
     draftFailed: (why: string) => `Could not draft: ${why}`,
     draftNeedsSentence: "Type a sentence first.",
     draftDropped: (names: string[]) =>
       `Left out because they don't exist here: ${names.join(", ")}.`,
     suggested: "Suggested by the draft",
+    suggestedNotSetUp: (when: string) => `Suggested: ${when} · not set up`,
+    suggestedScheduleHow:
+      "Not set up: a draft never creates a schedule. Set one up in Automations if you want it.",
+    suggestedGrantsNote:
+      "The draft suggests the ones marked. Tick them yourself if you agree: a draft never grants anything.",
     toolGroups: "Tool groups",
     allToolGroups: "All tool groups (no limit)",
     skillsEveryRun: "Skills loaded every run",
@@ -156,10 +161,16 @@ const enUS = {
     save: "Save",
     saving: "Saving…",
     saved: "Saved",
+    savedVersion: (v: number) => `Saved as version ${v}`,
+    undo: "Undo",
+    undone: (v: number) => `Undone: version ${v} is back, as a new version.`,
+    undoStale:
+      "Not undone: it changed elsewhere since you saved. Use History to pick a version.",
+    undoFailed: (why: string) => `Not undone: ${why}`,
+    testRunAfterSave: "Save the agent first, then try it in a chat.",
     unsaved: "Not saved",
     saveFailed: (why: string) => `Not saved: ${why}`,
     needName: "Give it a name first.",
-    chatToBuild: "Or build it by chatting",
     gone: (name: string) =>
       `"${name}" no longer exists. It may have been deleted.`,
     disabledTitle: "Custom agents are turned off",
@@ -193,7 +204,7 @@ const enUS = {
     draft: "Draft",
     drafting: "Drafting…",
     draftReady: (model: string) =>
-      `Drafted by ${model}. Review it, then Save skill. Nothing is saved yet.`,
+      `Drafted by ${model}. Review the Details and Instructions tabs, then Save skill. Nothing is saved yet.`,
     draftFailed: (why: string) => `Could not draft: ${why}`,
     draftNeedsSentence: "Type a sentence first.",
     draftWhenNeeds: "Give it a name or instructions first.",
@@ -226,8 +237,11 @@ const enUS = {
     testPlaceholder: "Type a test message",
     runTest: "Test",
     testing: "Testing…",
-    loadedOf: (n: number, total: number) => `Loaded ${n} of ${total}`,
-    notLoaded: (total: number) => `Didn't load (0 of ${total})`,
+    loads: "Loads",
+    doesntLoad: "Doesn't load",
+    cantTell: "Can't tell",
+    triesLoaded: (n: number, total: number) =>
+      `loaded in ${n} of ${total} tries`,
     errors: (n: number) => (n === 1 ? "1 try failed" : `${n} tries failed`),
     byModel: (model: string) => `Observed with ${model}`,
     testNeedsSave: "Save the skill first: a test uses the saved description.",
@@ -333,12 +347,17 @@ const zhCN: StudioCopy = {
     editFreely: "可随意修改。点击保存之前不会保存任何内容。",
     leadInstructions: "主智能体的指令是内置的，不能在这里修改。",
     draftReady: (model) =>
-      `由 ${model} 起草。请检查“指令”和“工具和技能”，然后保存。尚未保存任何内容。`,
+      `由 ${model} 起草。每个标签都已填写，请检查后保存。尚未保存任何内容。`,
     draftFailed: (why) => `无法起草：${why}`,
     draftNeedsSentence: "请先输入一句话。",
     draftDropped: (names) =>
       `以下项目在这里不存在，已略去：${names.join("、")}。`,
     suggested: "草稿建议",
+    suggestedNotSetUp: (when) => `建议：${when} · 未设置`,
+    suggestedScheduleHow:
+      "未设置：草稿从不创建日程。如需要，请在“自动化”中设置。",
+    suggestedGrantsNote:
+      "草稿建议了带标记的项目。如果同意，请自己勾选：草稿从不授予任何权限。",
     toolGroups: "工具组",
     allToolGroups: "所有工具组（不限制）",
     skillsEveryRun: "每次运行加载的技能",
@@ -392,10 +411,15 @@ const zhCN: StudioCopy = {
     save: "保存",
     saving: "保存中…",
     saved: "已保存",
+    savedVersion: (v) => `已保存为版本 ${v}`,
+    undo: "撤销",
+    undone: (v) => `已撤销：版本 ${v} 已恢复为新版本。`,
+    undoStale: "未撤销：保存后它已在别处修改。请在“历史”中选择版本。",
+    undoFailed: (why) => `未撤销：${why}`,
+    testRunAfterSave: "请先保存智能体，再在聊天中试用。",
     unsaved: "未保存",
     saveFailed: (why) => `未保存：${why}`,
     needName: "请先起个名字。",
-    chatToBuild: "或者通过聊天创建",
     gone: (name) => `“${name}”已不存在，可能已被删除。`,
     disabledTitle: "自定义智能体已关闭",
     disabledBody:
@@ -425,7 +449,7 @@ const zhCN: StudioCopy = {
     draft: "起草",
     drafting: "起草中…",
     draftReady: (model) =>
-      `由 ${model} 起草。请检查后保存技能。尚未保存任何内容。`,
+      `由 ${model} 起草。请检查“详情”和“指令”后保存技能。尚未保存任何内容。`,
     draftFailed: (why) => `无法起草：${why}`,
     draftNeedsSentence: "请先输入一句话。",
     draftWhenNeeds: "请先填写名称或指令。",
@@ -456,8 +480,10 @@ const zhCN: StudioCopy = {
     testPlaceholder: "输入一条测试消息",
     runTest: "测试",
     testing: "测试中…",
-    loadedOf: (n, total) => `加载了 ${n}/${total} 次`,
-    notLoaded: (total) => `未加载（0/${total}）`,
+    loads: "会加载",
+    doesntLoad: "不会加载",
+    cantTell: "无法判断",
+    triesLoaded: (n, total) => `${total} 次尝试中加载了 ${n} 次`,
     errors: (n) => `${n} 次尝试失败`,
     byModel: (model) => `使用 ${model} 观察`,
     testNeedsSave: "请先保存技能：测试使用已保存的描述。",

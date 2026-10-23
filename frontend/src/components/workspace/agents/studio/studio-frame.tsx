@@ -55,7 +55,10 @@ export function RailNew({
       onClick={onClick}
       aria-pressed={selected}
       data-testid="studio-new"
-      className="border-border-strong text-foreground hover:bg-accent focus-visible:ring-ring mb-2 min-h-11 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 md:min-h-0"
+      className={cn(
+        "border-border-strong text-foreground hover:bg-accent focus-visible:ring-ring mb-2 min-h-11 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 md:min-h-0",
+        selected && "bg-surface-raised font-medium",
+      )}
     >
       {label}
     </button>

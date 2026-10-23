@@ -51,18 +51,29 @@ export interface AgentRuns {
   recent: FiringView[];
 }
 
+/** One sentence fills every Agent Studio tab: these are SUGGESTIONS for
+ * review. A drafted grant is never ticked for the user and a drafted
+ * schedule is never created (app/gateway/routers/drafts.py). */
+export interface AgentDraft {
+  display_name: string;
+  description: string;
+  instructions: string;
+  tool_groups: string[];
+  skills: string[];
+  /** The caller's own ledger project ids (Overview: Works on). */
+  projects?: string[];
+  /** Grantable action-class ids it might do on its own (Autonomy). */
+  autonomy?: string[];
+  /** When it should run, if the sentence said (Schedule). */
+  schedule?: { cron: string; timezone: string | null } | null;
+}
+
 /** Mirrors app/gateway/routers/drafts.py. A draft is never saved. */
 export interface DraftResponse {
   kind: "agent" | "skill";
   model: string;
-  agent: {
-    display_name: string;
-    description: string;
-    instructions: string;
-    tool_groups: string[];
-    skills: string[];
-  } | null;
-  skill: { description: string; body: string } | null;
+  agent: AgentDraft | null;
+  skill: { name?: string; description: string; body: string } | null;
   dropped: string[];
 }
 

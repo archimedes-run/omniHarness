@@ -31,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { openNewAgentPanel } from "@/components/workspace/agents/studio/url-item";
 import { useI18n } from "@/core/i18n/hooks";
 import { saveAppearance, type Appearance } from "@/core/preferences";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
@@ -156,7 +157,10 @@ export function CommandPalette() {
       id: "new-agent",
       label: t.shell.newAgent,
       icon: BotIcon,
-      run: () => go("/workspace/agents/new"),
+      run: () => {
+        close();
+        openNewAgentPanel();
+      },
     },
     {
       id: "connect-slack",

@@ -19,3 +19,20 @@ export function writeItemParam(value: string | null) {
   const now = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (next !== now) window.history.replaceState(window.history.state, "", next);
 }
+
+/**
+ * Open Agent Studio's "+ New agent" over the current page (the panel and its
+ * item live in the URL; Next keeps useSearchParams in sync with the History
+ * API, so nothing navigates and the page underneath keeps its state).
+ */
+export function openNewAgentPanel() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("panel", "agents");
+  url.searchParams.set(ITEM_PARAM, "new");
+  window.history.pushState(
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+}

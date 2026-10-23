@@ -16,8 +16,10 @@ import {
   draft,
   saveAutonomy,
   skillSlug,
+  undoTo,
   useAgentRuns,
   useAutonomy,
+  type AgentDraft,
 } from "@/core/studio";
 import { cn } from "@/lib/utils";
 
@@ -243,12 +245,38 @@ function AgentEditor({
   const [status, setStatus] = useState<
     | { kind: "idle" }
     | { kind: "saving" }
-    | { kind: "saved" }
+    | { kind: "saved"; version: number | null; undoTo: number | null }
+    | { kind: "undone"; version: number }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
+
+  /** Restore the version the last save was made from, as a new version. */
+  async function undoSave(to: number, base: number) {
+    try {
+      await undoTo("agent", id, to, base);
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["studio"] });
+      setStatus({ kind: "undone", version: to });
+    } catch (e) {
+      const stale = (e as { status?: number }).status === 409;
+      setStatus({
+        kind: "error",
+        message: stale
+          ? c.undoStale
+          : c.undoFailed(e instanceof Error ? e.message : String(e)),
+      });
+    }
+  }
   const [draftNote, setDraftNote] = useState<{
     text: string;
     bad: boolean;
+  } | null>(null);
+  /** What the last draft suggested for the tabs a draft must not decide on
+   * the user's behalf: autonomy (never ticked for them) and a schedule
+   * (never created). Shown on those tabs for review. */
+  const [suggested, setSuggested] = useState<{
+    autonomy: string[];
+    schedule: AgentDraft["schedule"];
   } | null>(null);
   const create = useCreateAgent();
   const { runs } = useAgentRuns(
@@ -260,12 +288,17 @@ function AgentEditor({
   const id = isLead ? LEAD_AGENT_ID : (agent?.name ?? "new");
   const slug = mode === "new" ? skillSlug(form.display_name) : id;
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  // A new agent has no grants yet; the lead agent's view lists the classes
+  // the rules in force let you grant, so they can be chosen before it exists.
   const { autonomy, error: autonomyError } = useAutonomy(
-    mode === "new" ? null : id,
+    mode === "new" ? LEAD_AGENT_ID : id,
   );
-  const savedGrants = (autonomy?.classes ?? [])
-    .filter((cls) => cls.granted)
-    .map((cls) => cls.id);
+  const savedGrants =
+    mode === "new"
+      ? []
+      : (autonomy?.classes ?? [])
+          .filter((cls) => cls.granted)
+          .map((cls) => cls.id);
   // null: untouched, so the saved grants show.
   const [granted, setGranted] = useState<string[] | null>(null);
   const effectiveGrants = granted ?? savedGrants;
@@ -289,6 +322,9 @@ function AgentEditor({
         agent_name: mode === "agent" ? id : null,
       });
       const d = result.agent!;
+      // One sentence fills every tab: the text fields and the projects,
+      // tools and skills go into the form for review; grants and a schedule
+      // are shown as suggestions on their tabs.
       patch({
         display_name: form.display_name.trim()
           ? form.display_name
@@ -297,6 +333,11 @@ function AgentEditor({
         soul: d.instructions,
         tool_groups: d.tool_groups.length ? d.tool_groups : form.tool_groups,
         skills: d.skills.length ? d.skills : form.skills,
+        projects: d.projects?.length ? d.projects : form.projects,
+      });
+      setSuggested({
+        autonomy: d.autonomy ?? [],
+        schedule: d.schedule ?? null,
       });
       setFromDraft(true);
       setDraftNote({
@@ -334,7 +375,18 @@ function AgentEditor({
           ...fields,
           source: fromDraft ? "draft" : "manual",
         });
-        setStatus({ kind: "saved" });
+        // What the user ticked on Autonomy (never a draft's suggestion by
+        // itself), as the agent's next version.
+        if (effectiveGrants.length > 0) {
+          await saveAutonomy(
+            created.name,
+            effectiveGrants,
+            created.version ?? 1,
+          );
+        }
+        void queryClient.invalidateQueries({ queryKey: ["agents"] });
+        void queryClient.invalidateQueries({ queryKey: ["studio"] });
+        setStatus({ kind: "saved", version: null, undoTo: null });
         onCreated(created.name);
         return;
       }
@@ -342,6 +394,8 @@ function AgentEditor({
       // stale one. An agent edit makes a new version, so the grants that
       // follow it are based on that one.
       let version = autonomy?.version ?? agent?.version ?? 0;
+      const before = agent?.version ?? 0;
+      let edited = false;
       if (!isLead && dirty) {
         const saved = await update.mutateAsync({
           name: id,
@@ -352,15 +406,23 @@ function AgentEditor({
           },
         });
         version = saved.version ?? version;
+        edited = true;
         setFromDraft(false);
       }
       if (grantsDirty) {
-        await saveAutonomy(id, effectiveGrants, version);
+        const view = await saveAutonomy(id, effectiveGrants, version);
+        version = view.version ?? version;
         setGranted(null);
       }
       void queryClient.invalidateQueries({ queryKey: ["studio"] });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
-      setStatus({ kind: "saved" });
+      // Undo brings back the version this edit was made from (its content;
+      // grants are only ever changed on the Autonomy tab).
+      setStatus({
+        kind: "saved",
+        version: isLead ? null : version,
+        undoTo: edited && before > 0 ? before : null,
+      });
     } catch (e) {
       setStatus({
         kind: "error",
@@ -444,19 +506,44 @@ function AgentEditor({
           {status.message}
         </p>
       ) : status.kind === "saved" ? (
-        <p className="text-muted-foreground mr-auto text-sm" role="status">
-          {c.saved}
+        <p
+          className="text-muted-foreground mr-auto flex flex-wrap items-center gap-2 text-sm"
+          role="status"
+          data-testid="studio-saved"
+        >
+          {status.version ? c.savedVersion(status.version) : c.saved}
+          {status.undoTo && status.version ? (
+            <button
+              type="button"
+              className="text-primary min-h-11 underline-offset-2 hover:underline md:min-h-0"
+              onClick={() => void undoSave(status.undoTo!, status.version!)}
+              data-testid="studio-undo"
+            >
+              {c.undo}
+            </button>
+          ) : null}
+        </p>
+      ) : status.kind === "undone" ? (
+        <p
+          className="text-muted-foreground mr-auto text-sm"
+          role="status"
+          data-testid="studio-undone"
+        >
+          {c.undone(status.version)}
         </p>
       ) : (dirty && !isLead) || grantsDirty ? (
         <p className="text-muted-foreground mr-auto text-sm">{c.unsaved}</p>
       ) : null}
       {mode === "new" ? (
-        <Link
-          href="/workspace/agents/new"
-          className="text-primary mr-auto text-sm underline-offset-4 hover:underline"
+        <button
+          type="button"
+          className={outlineButton}
+          disabled
+          title={c.testRunAfterSave}
+          data-testid="studio-test-run"
         >
-          {c.chatToBuild}
-        </Link>
+          {c.testRun}
+        </button>
       ) : (
         <Link
           href={
@@ -507,6 +594,7 @@ function AgentEditor({
         isLead={isLead}
         agentId={mode === "new" ? null : id}
         grantLabels={autonomy ? grantLabels : null}
+        suggestedSchedule={suggested?.schedule ?? null}
       />
       <InstructionsTab
         form={form}
@@ -523,6 +611,8 @@ function AgentEditor({
       />
       <AutonomyTab
         agentId={mode === "new" ? null : id}
+        isNew={mode === "new"}
+        suggested={suggested?.autonomy ?? []}
         autonomy={autonomy}
         error={autonomyError}
         granted={effectiveGrants}
@@ -531,7 +621,11 @@ function AgentEditor({
           setStatus({ kind: "idle" });
         }}
       />
-      <ScheduleTab isLead={isLead} agentId={mode === "new" ? null : id} />
+      <ScheduleTab
+        isLead={isLead}
+        agentId={mode === "new" ? null : id}
+        suggested={suggested?.schedule ?? null}
+      />
     </StudioTabs>
   );
 }

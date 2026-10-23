@@ -17,6 +17,7 @@ import {
 import { BrandLogo, resolveBrand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { openNewAgentPanel } from "@/components/workspace/agents/studio/url-item";
 import type { Agent } from "@/core/agents/types";
 import type { Project } from "@/core/ledger/types";
 import { connectComposioToolkit } from "@/core/mcp/connect";
@@ -442,15 +443,19 @@ function AgentsTab({
           </li>
         )}
         <li className="border-border mt-1 border-t pt-1">
-          <Link
-            href="/workspace/agents/new"
-            className="text-foreground-2 hover:bg-accent flex min-h-11 items-center gap-3 rounded-md px-2.5 text-sm"
+          {/* Opens Agent Studio's + New agent over this chat (one sentence
+              drafts it), not a page of its own. */}
+          <button
+            type="button"
+            onClick={openNewAgentPanel}
+            className="text-foreground-2 hover:bg-accent flex min-h-11 w-full items-center gap-3 rounded-md px-2.5 text-left text-sm"
+            data-testid="picker-create-agent"
           >
             <span aria-hidden className="w-[26px] text-center">
               +
             </span>
             Create an agent
-          </Link>
+          </button>
         </li>
       </ul>
     </>

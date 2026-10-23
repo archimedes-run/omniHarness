@@ -11,9 +11,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useShell } from "@/components/workspace/shell/shell-context";
+import { describeSchedule, fromCron } from "@/core/automations/schedule";
+import { clock } from "@/core/automations/wording";
 import { useProjects } from "@/core/ledger/hooks";
 import { useSkills } from "@/core/skills/hooks";
-import { useAgentRuns, useStudioOptions } from "@/core/studio";
+import { useAgentRuns, useStudioOptions, type AgentDraft } from "@/core/studio";
 
 import { DoneOnItsOwn } from "./autonomy";
 import { useStudioCopy } from "./copy";
@@ -49,6 +51,21 @@ interface OverviewProps extends TabProps {
   agentId: string | null;
   /** The granted classes' labels; null when they cannot be read yet. */
   grantLabels: string[] | null;
+  /** A schedule the draft suggested (not set up). */
+  suggestedSchedule: AgentDraft["schedule"];
+}
+
+/** "Weekdays at 6:00 PM · America/New_York" (the board's words) for a
+ * drafted schedule; any other cron is shown as cron. */
+export function draftedScheduleText(
+  schedule: NonNullable<AgentDraft["schedule"]>,
+) {
+  // A rule naming no zone runs in the engine's default (scheduler.py).
+  const zone = schedule.timezone ?? "America/New_York";
+  const simple = fromCron(schedule.cron);
+  if (!simple) return describeSchedule(schedule.cron, zone);
+  const days = describeSchedule(schedule.cron, zone).split(" at ")[0];
+  return `${days} at ${clock(simple.time)} · ${zone}`;
 }
 
 export function usesSummary(
@@ -76,6 +93,7 @@ export function OverviewTab({
   isLead,
   agentId,
   grantLabels,
+  suggestedSchedule,
 }: OverviewProps) {
   const c = useStudioCopy().agents;
   const { projects, error: projectsError } = useProjects();
@@ -143,7 +161,11 @@ export function OverviewTab({
         <div className={statCard} data-testid="overview-next-run">
           <div className="text-muted-foreground text-xs">{c.nextRun}</div>
           <div className="mt-1">
-            {agentId ? nextRunText(runs, runsError, c) : c.notSetUp}
+            {agentId
+              ? nextRunText(runs, runsError, c)
+              : suggestedSchedule
+                ? c.suggestedNotSetUp(draftedScheduleText(suggestedSchedule))
+                : c.notSetUp}
           </div>
         </div>
         <div className={statCard} data-testid="overview-on-its-own">
@@ -331,14 +353,29 @@ export function ToolsTab({
 export function ScheduleTab({
   isLead,
   agentId,
+  suggested,
 }: {
   isLead: boolean;
   agentId: string | null;
+  /** A schedule the draft suggested. Shown, never created. */
+  suggested: AgentDraft["schedule"];
 }) {
   const c = useStudioCopy().agents;
   const { openPanel } = useShell();
   return (
     <TabPanel value="schedule" className="flex flex-col gap-3.5 outline-none">
+      {suggested ? (
+        <div
+          className="bg-card border-primary rounded-xl border px-4 py-3"
+          data-testid="schedule-suggested"
+        >
+          <p className="text-muted-foreground text-xs">{c.suggested}</p>
+          <p className="mt-0.5 font-medium">{draftedScheduleText(suggested)}</p>
+          <p className="text-muted-foreground mt-0.5 text-sm">
+            {c.suggestedScheduleHow}
+          </p>
+        </div>
+      ) : null}
       <div className="bg-card border-border-strong flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3">
         <div className="flex-[1_1_260px]">
           {isLead ? (

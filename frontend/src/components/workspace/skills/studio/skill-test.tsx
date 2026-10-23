@@ -12,9 +12,20 @@ const TRIES = 3;
 /**
  * Skill Studio's Test tab (Skill-Studio.dc.html, Clarification 6). Runs only
  * when the user presses Test: each try is a real model call, the same model
- * and prompt a run would use. Reports what it observed, "Loaded 2 of 3", and
- * the model, never a yes or no it did not see.
+ * and prompt a run would use. Each message reads as the board has it, "Loads"
+ * or "Doesn't load", decided by what was OBSERVED (most of the tries that
+ * answered), with the count and the model beside it. When no try answered it
+ * says "Can't tell", never a guess.
  */
+export function testVerdict(
+  r: SkillTestResult,
+): "loads" | "doesntLoad" | "cantTell" {
+  if (!r.listed) return "doesntLoad";
+  const answered = r.tries.filter((t) => !t.error).length;
+  if (answered === 0) return "cantTell";
+  return r.loaded * 2 > answered ? "loads" : "doesntLoad";
+}
+
 export function SkillTest({
   name,
   dirty,
@@ -41,7 +52,8 @@ export function SkillTest({
     try {
       const result = await testSkill(name!, text, TRIES);
       setRows((r) => [{ message: text, result }, ...r]);
-      setMessage("");
+      // Keep anything typed while the test ran.
+      setMessage((m) => (m.trim() === text ? "" : m));
     } catch (e) {
       setRows((r) => [
         {
@@ -82,27 +94,27 @@ export function SkillTest({
                 <span className="text-destructive text-[13px]">
                   {row.error}
                 </span>
-              ) : r && !r.listed ? (
-                <span className="text-muted-foreground text-[13px]">
-                  {c.notLoaded(0)}
-                </span>
               ) : r ? (
                 <span
                   className={cn(
-                    "text-[13px]",
-                    r.loaded > 0 ? "text-success" : "text-muted-foreground",
+                    "text-[13px] font-medium",
+                    testVerdict(r) === "loads"
+                      ? "text-success"
+                      : testVerdict(r) === "cantTell"
+                        ? "text-warning"
+                        : "text-muted-foreground",
                   )}
                   data-testid="skill-test-outcome"
                 >
-                  {r.loaded > 0
-                    ? c.loadedOf(r.loaded, r.total)
-                    : c.notLoaded(r.total)}
+                  {c[testVerdict(r)]}
                 </span>
               ) : null}
             </div>
             {r ? (
               <span className="text-muted-foreground text-xs">
-                {!r.listed ? `${c.notListed} · ` : ""}
+                {!r.listed
+                  ? `${c.notListed} · `
+                  : `${c.triesLoaded(r.loaded, r.total)} · `}
                 {c.byModel(r.model)}
                 {errors ? ` · ${c.errors(errors)}` : ""}
                 {others.length ? ` · ${c.otherSkills(others)}` : ""}
