@@ -7,17 +7,9 @@ _LOCAL_SANDBOX_PROVIDER_MARKERS = (
     "omniharness.sandbox.local.local_sandbox_provider:LocalSandboxProvider",
 )
 
-LOCAL_HOST_BASH_DISABLED_MESSAGE = (
-    "Host bash execution is disabled for LocalSandboxProvider because it is not a secure "
-    "sandbox boundary. Switch to AioSandboxProvider for isolated bash access, or set "
-    "sandbox.allow_host_bash: true only in a fully trusted local environment."
-)
+LOCAL_HOST_BASH_DISABLED_MESSAGE = "Running commands on the host was removed: it is not a sandbox boundary. Commands run only in a container sandbox; switch sandbox.use to AioSandboxProvider."
 
-LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE = (
-    "Bash subagent is disabled for LocalSandboxProvider because host bash execution is not "
-    "a secure sandbox boundary. Switch to AioSandboxProvider for isolated bash access, or "
-    "set sandbox.allow_host_bash: true only in a fully trusted local environment."
-)
+LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE = "The bash subagent needs a container sandbox: running commands on the host was removed. Switch sandbox.use to AioSandboxProvider."
 
 
 def uses_local_sandbox_provider(config=None) -> bool:
@@ -40,6 +32,6 @@ def is_host_bash_allowed(config=None) -> bool:
     sandbox_cfg = getattr(config, "sandbox", None)
     if sandbox_cfg is None:
         return False
-    if not uses_local_sandbox_provider(config):
-        return True
-    return bool(getattr(sandbox_cfg, "allow_host_bash", False))
+    # Commands run only in a container sandbox; the host-local provider never
+    # executes them (security baseline: host execution removed, no opt-in).
+    return not uses_local_sandbox_provider(config)

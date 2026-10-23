@@ -76,6 +76,13 @@ class WatcherClient:
             raise WatcherNotConfigured(f"the {SERVER_NAME!r} server must be type 'sse' with a url (found type {entry.type!r}, url {entry.url!r})")
         return entry.url
 
+    def _headers(self) -> dict[str, str]:
+        """The configured headers of the watcher entry (the token is added on top)."""
+        from omniharness.config.extensions_config import get_extensions_config
+
+        entry = get_extensions_config().mcp_servers.get(SERVER_NAME)
+        return dict(getattr(entry, "headers", None) or {})
+
     async def call(self, tool: str, arguments: dict | None = None) -> dict:
         """Call one watcher tool and return its structured payload."""
         from mcp import ClientSession
@@ -84,7 +91,9 @@ class WatcherClient:
         url = self._url()
 
         async def _call():
-            async with sse_client(url, timeout=self.timeout) as (read, write):
+            from omniharness.mcp.watcher_token import watcher_headers
+
+            async with sse_client(url, headers=watcher_headers(SERVER_NAME, self._headers()), timeout=self.timeout) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     return await session.call_tool(tool, arguments or {})

@@ -18,13 +18,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
-from langchain_core.messages import HumanMessage
 
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
 from app.policy.audit import PolicyAuditLog
 from app.policy.config import ConfigLoader
 from app.policy.confirm import recognise  # noqa: F401
 from app.policy.disclose import DisclosureLedger
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.middleware import PolicyMiddleware
 from app.policy.pending import PendingStore
 
@@ -55,7 +55,7 @@ def _request(name: str, args: dict):
         tool=SimpleNamespace(name=name),
         # The user's own turn: a plan with no traceable cause is card-only
         # (FR-006), and these workers confirm by typing.
-        state={"messages": [HumanMessage(content="do it")]},
+        state={"messages": [user_turn(content="do it")]},
         runtime=SimpleNamespace(context={"thread_id": "t1"}),
     )
 
@@ -88,9 +88,8 @@ async def confirm(request: Request):
         return {"pid": os.getpid(), "error": "internal auth rejected", "executed": False}
 
     body = await request.json()
-    from langchain_core.messages import HumanMessage
-
     from app.policy.confirm_flow import EXECUTED, ConfirmationFlow
+    from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 
     flow = ConfirmationFlow(store=_store, middleware=_middleware, now=lambda: datetime.now(UTC))
 
@@ -100,7 +99,7 @@ async def confirm(request: Request):
         return "done"
 
     result = flow.from_message(
-        HumanMessage(content=body["reply"]),
+        user_turn(content=body["reply"]),
         run_tool=_run,
         runtime_context={"thread_id": "t1"},
     )

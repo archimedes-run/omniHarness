@@ -456,7 +456,7 @@ You: "Deploying to staging..." [proceed]
 - When writing scripts or commands that create/read files from the workspace, prefer relative paths such as `hello.txt`, `../uploads/data.csv`, and `../outputs/report.md`
 - Avoid hardcoding `/mnt/user-data/...` inside generated scripts when a relative path from the workspace is enough
 - Final deliverables must be copied to `/mnt/user-data/outputs` and presented using `present_files` tool
-{acp_section}
+{custom_mounts_section}
 </working_directory>
 
 <response_style>
@@ -705,30 +705,6 @@ def get_deferred_tools_prompt_section(*, app_config: AppConfig | None = None) ->
     return f"<available-deferred-tools>\n{names}\n</available-deferred-tools>"
 
 
-def _build_acp_section(*, app_config: AppConfig | None = None) -> str:
-    """Build the ACP agent prompt section, only if ACP agents are configured."""
-    if app_config is None:
-        try:
-            from omniharness.config.acp_config import get_acp_agents
-
-            agents = get_acp_agents()
-        except Exception:
-            return ""
-    else:
-        agents = getattr(app_config, "acp_agents", {}) or {}
-
-    if not agents:
-        return ""
-
-    return (
-        "\n**ACP Agent Tasks (invoke_acp_agent):**\n"
-        "- ACP agents (e.g. codex, claude_code) run in their own independent workspace — NOT in `/mnt/user-data/`\n"
-        "- When writing prompts for ACP agents, describe the task only — do NOT reference `/mnt/user-data` paths\n"
-        "- ACP agent results are accessible at `/mnt/acp-workspace/` (read-only) — use `ls`, `read_file`, or `bash cp` to retrieve output files\n"
-        "- To deliver ACP output to the user: copy from `/mnt/acp-workspace/<file>` to `/mnt/user-data/outputs/<file>`, then use `present_files`"
-    )
-
-
 def _build_custom_mounts_section(*, app_config: AppConfig | None = None) -> str:
     """Build a prompt section for explicitly configured sandbox mounts."""
     if app_config is None:
@@ -795,10 +771,7 @@ def apply_prompt_template(
     # Get deferred tools section (tool_search)
     deferred_tools_section = get_deferred_tools_prompt_section(app_config=app_config)
 
-    # Build ACP agent section only if ACP agents are configured
-    acp_section = _build_acp_section(app_config=app_config)
     custom_mounts_section = _build_custom_mounts_section(app_config=app_config)
-    acp_and_mounts_section = "\n".join(section for section in (acp_section, custom_mounts_section) if section)
 
     # Format the prompt with dynamic skills and memory
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
@@ -811,7 +784,7 @@ def apply_prompt_template(
         subagent_section=subagent_section,
         subagent_reminder=subagent_reminder,
         subagent_thinking=subagent_thinking,
-        acp_section=acp_and_mounts_section,
+        custom_mounts_section=custom_mounts_section,
     )
 
     return prompt + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"

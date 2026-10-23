@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.gateway.authz import require_permission
 from app.gateway.workflows.generator import WorkflowGenerationError, WorkflowSpec, generate_workflow_spec
 from app.gateway.workflows.policy import requires_approval as _requires_approval
 from omniharness.config import get_app_config
@@ -361,6 +362,7 @@ async def patch_workflow(workflow_id: str, body: WorkflowPatch, request: Request
 
 
 @router.post("/{workflow_id}/archive", response_model=WorkflowResponse, summary="Archive Workflow")
+@require_permission("threads", "delete")
 async def archive_workflow(workflow_id: str, request: Request) -> WorkflowResponse:
     """Archive a workflow (sets status to 'archived')."""
     _check_enabled()

@@ -262,10 +262,12 @@ def _gateway_base_url() -> str:
 
 def _gateway_call(method: str):
     def _call(path: str, body: dict | None = None) -> dict:
+        import json
+
         import httpx
 
         from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
-        from app.gateway.internal_auth import create_internal_auth_headers
+        from app.gateway.internal_auth import TRIGGER_GRANT_HEADER_NAME, create_internal_auth_headers, issue_trigger_grant
 
         url = f"{_gateway_base_url()}{path}"
         # The gateway's CSRF middleware checks every POST/PUT, internal calls
@@ -274,8 +276,15 @@ def _gateway_call(method: str):
         # Same double-submit pair the channel manager sends (channels/manager.py).
         csrf = generate_csrf_token()
         headers = {**create_internal_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
+        content = json.dumps(body).encode() if body is not None else b""
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if path.endswith("/runs/wait"):
+            # A scheduled run: a single-use grant bound to these exact bytes
+            # (internal_auth.issue_trigger_grant). Nothing else may mark one.
+            headers[TRIGGER_GRANT_HEADER_NAME] = issue_trigger_grant(method, path, content)
         with httpx.Client(timeout=GATEWAY_CALL_TIMEOUT_SECONDS) as client:
-            resp = client.request(method, url, json=body, headers=headers)
+            resp = client.request(method, url, content=content or None, headers=headers)
             if resp.is_error:
                 raise GatewayCallFailed(method, path, resp)
             return resp.json() if resp.content else {}

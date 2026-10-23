@@ -30,7 +30,6 @@ def _fake_app_config():
         models=[SimpleNamespace(name="m")],
         get_model_config=lambda name: SimpleNamespace(supports_vision=False),
         tool_search=SimpleNamespace(enabled=False),
-        acp_agents={},
     )
 
 

@@ -376,7 +376,7 @@ async def get_connection(toolkit: str, request: Request):
 
 
 @router.delete("/connections/{toolkit}", status_code=204)
-@require_permission("threads", "write")
+@require_permission("threads", "delete")
 async def disconnect(toolkit: str, request: Request) -> Response:
     user_id = _get_user_id(request)
     toolkit = toolkit.upper()

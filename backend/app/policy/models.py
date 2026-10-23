@@ -174,6 +174,10 @@ class PendingAction:
     claimed_by: str | None = None
     outcome: Outcome | None = None
     outcome_reason: str = ""
+    #: HOW it was answered (security baseline): {"via": "button" | "edit" |
+    #: "typed_reply" | "channel:<name>", "thread_id", "user_id", "message_id"}.
+    #: claimed_by says only which worker; this says who, where and by what.
+    confirmation: dict | None = None
     #: What caused the proposal (lineage.initiation_origin). Only "user" may be
     #: confirmed by a typed reply in chat; content the agent read, a trigger's
     #: turn, or a cause nobody could tell may only be confirmed with the
@@ -184,6 +188,10 @@ class PendingAction:
     #: For an invited agent (a subagent): the agent whose turn the content or
     #: automation reached it through. Empty when the cause was direct.
     origin_via: str = ""
+    #: The user whose run stated this plan (security baseline). Only that user
+    #: (or the owner, for the system's own runs) may see, confirm, decline or
+    #: edit it: app.gateway.ownership.can_access. None = predates owners.
+    owner_id: str | None = None
 
     @property
     def confirmable_by_typing(self) -> bool:

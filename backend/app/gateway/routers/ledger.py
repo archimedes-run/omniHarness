@@ -281,7 +281,7 @@ async def create_link(body: LinkIn, request: Request) -> dict:
 
 
 @router.delete("/links/{link_id}", status_code=204)
-@require_permission("threads", "write")
+@require_permission("threads", "delete")
 async def delete_link(link_id: str, request: Request) -> None:
     def work():
         service, user = _service(request), _user(request)
@@ -297,7 +297,7 @@ async def delete_link(link_id: str, request: Request) -> None:
 
 
 @router.get("/threads/{thread_id}/projects")
-@require_permission("threads", "read")
+@require_permission("threads", "read", owner_check=True)
 async def thread_projects(thread_id: str, request: Request) -> list[dict]:
     """The projects a conversation is attached to (FR-011)."""
 

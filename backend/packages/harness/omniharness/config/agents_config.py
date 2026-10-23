@@ -16,7 +16,7 @@ import yaml
 from pydantic import BaseModel
 
 from omniharness.config.paths import get_paths
-from omniharness.runtime.user_context import get_effective_user_id
+from omniharness.runtime.user_context import get_effective_user_id, may_read_legacy_shared_data
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:
         return user_path
 
     legacy_path = paths.agent_dir(name)
-    if legacy_path.exists():
+    if legacy_path.exists() and may_read_legacy_shared_data(effective_user):
         return legacy_path
 
     return user_path
@@ -174,7 +174,9 @@ def list_custom_agents(*, user_id: str | None = None) -> list[AgentConfig]:
     user_root = paths.user_agents_dir(effective_user)
     legacy_root = paths.agents_dir
 
-    for root in (user_root, legacy_root):
+    # The legacy shared layout is the owner's (security baseline), not every account's.
+    roots = (user_root, legacy_root) if may_read_legacy_shared_data(effective_user) else (user_root,)
+    for root in roots:
         if not root.exists():
             continue
         for entry in sorted(root.iterdir()):

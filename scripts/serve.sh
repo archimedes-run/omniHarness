@@ -80,6 +80,7 @@ stop_all() {
     nginx -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
     sleep 1
     pkill -9 nginx 2>/dev/null || true
+    pkill -f "rotate-logs.sh loop logs " 2>/dev/null || true
     # Force-kill any survivors still holding the service ports
     _kill_port 8001
     _kill_port 3000
@@ -114,7 +115,8 @@ fi
 
 # Frontend command
 if $DEV_MODE; then
-    FRONTEND_CMD="pnpm run dev"
+    # Loopback only: nginx (127.0.0.1:3000 upstream) is the way in.
+    FRONTEND_CMD="pnpm exec next dev --turbo -H 127.0.0.1"
 else
     if command -v python3 >/dev/null 2>&1; then
         PYTHON_BIN="python3"
@@ -124,7 +126,7 @@ else
         echo "Python is required to generate BETTER_AUTH_SECRET."
         exit 1
     fi
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') pnpm run preview"
+    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') sh -c 'pnpm exec next build && pnpm exec next start -H 127.0.0.1'"
 fi
 
 # Extra flags for uvicorn
@@ -220,20 +222,28 @@ run_service() {
 mkdir -p logs
 mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp temp/scgi_temp
 
+# The session-watcher token (required) for a gateway on the host to send.
+./scripts/ensure-watcher-token.sh
+
 # 1. Gateway API
 run_service "Gateway" \
-    "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
+    "cd backend && GATEWAY_LOG_FILE=../logs/gateway.log GATEWAY_TRUSTED_PROXIES=127.0.0.1 PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001 $GATEWAY_EXTRA_FLAGS >> ../logs/gateway.console.log 2>&1" \
     8001 30
 
 # 2. Frontend
 run_service "Frontend" \
-    "cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1" \
+    "cd frontend && $FRONTEND_CMD >> ../logs/frontend.log 2>&1" \
     3000 120
 
 # 3. Nginx
 run_service "Nginx" \
-    "nginx -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
+    "nginx -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' >> logs/nginx.log 2>&1" \
     2026 10
+
+# 4. Log rotation for the host nginx (daily, 30 days, gzip, no line lost) and a
+#    size cap on the console captures (docker/nginx/rotate-logs.sh).
+LOG_NAMES="nginx-access nginx-error" CAP_FILES="logs/gateway.console.log logs/frontend.log logs/nginx.log" \
+    nohup sh docker/nginx/rotate-logs.sh loop logs logs/nginx.pid > /dev/null 2>>logs/rotate-logs.log &
 
 # ── Ready ────────────────────────────────────────────────────────────────────
 

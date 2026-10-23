@@ -20,10 +20,10 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage
 
 from app.policy.config import ConfigLoader
 from app.policy.disclose import DisclosureLedger
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.middleware import PolicyMiddleware
 from app.policy.pending import PendingStore
 
@@ -47,7 +47,7 @@ def _request(name, context, args=None):
     return SimpleNamespace(
         tool_call={"name": name, "args": args or {}, "id": "tc1", "type": "tool_call"},
         tool=SimpleNamespace(name=name),
-        state={"messages": [HumanMessage(content="tidy my calendar")]},
+        state={"messages": [user_turn(content="tidy my calendar")]},
         runtime=SimpleNamespace(context=context),
     )
 
@@ -120,4 +120,4 @@ def test_the_user_confirms_a_subagents_action_not_the_subagent(middleware):
     middleware.wrap_tool_call(_request("calendar_delete", SUBAGENT, {"ids": ["Standup"]}), lambda r: "deleted")
     pending = middleware.pending.open_actions(NOW)
 
-    assert recognise(HumanMessage(content=f"yes {pending[0].id}"), pending, runtime_context=LEAD).verdict is Verdict.CONFIRM
+    assert recognise(user_turn(content=f"yes {pending[0].id}"), pending, runtime_context=LEAD).verdict is Verdict.CONFIRM

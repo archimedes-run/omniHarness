@@ -7,7 +7,6 @@ from omniharness.community.aio_sandbox.local_backend import (
     _format_container_command_for_log,
     _format_container_mount,
     _redact_container_command_for_log,
-    _resolve_docker_bind_host,
 )
 
 
@@ -111,7 +110,7 @@ def test_start_container_logs_redacted_env_values(monkeypatch, caplog):
     monkeypatch.setattr("subprocess.run", fake_run)
 
     with caplog.at_level(logging.INFO, logger="omniharness.community.aio_sandbox.local_backend"):
-        backend._start_container("sandbox-test", 18080)
+        backend._start_container("sandbox-test", "omni-harness-sandboxes")
 
     joined_cmd = " ".join(captured_cmd)
     assert "API_KEY=secret-value" in joined_cmd
@@ -133,104 +132,66 @@ def _capture_start_container_command(monkeypatch, backend: LocalContainerBackend
         return SimpleNamespace(stdout="container-id\n", stderr="", returncode=0)
 
     monkeypatch.setattr("subprocess.run", fake_run)
-    backend._start_container("sandbox-test", 18080)
+    backend._start_container("sandbox-test", "omni-harness-sandboxes")
     return captured_cmd
 
 
-def test_resolve_docker_bind_host_defaults_loopback_for_localhost(monkeypatch):
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_HOST", raising=False)
-
-    assert _resolve_docker_bind_host() == "127.0.0.1"
-
-
-def test_resolve_docker_bind_host_keeps_dood_compatibility(monkeypatch):
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "host.docker.internal")
-
-    assert _resolve_docker_bind_host() == "0.0.0.0"
-
-
-def test_resolve_docker_bind_host_uses_ipv6_loopback_for_ipv6_sandbox_host(monkeypatch):
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "[::1]")
-
-    assert _resolve_docker_bind_host() == "[::1]"
-
-
-def test_resolve_docker_bind_host_logs_selected_bind_reason(caplog):
-    with caplog.at_level(logging.DEBUG, logger="omniharness.community.aio_sandbox.local_backend"):
-        assert _resolve_docker_bind_host(sandbox_host="localhost", bind_host="") == "127.0.0.1"
-
-    messages = "\n".join(record.getMessage() for record in caplog.records)
-    assert "Docker sandbox bind: 127.0.0.1 (loopback default)" in messages
-
-
-def test_resolve_docker_bind_host_allows_explicit_override(monkeypatch):
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "localhost")
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_BIND_HOST", "192.0.2.10")
-
-    assert _resolve_docker_bind_host() == "192.0.2.10"
-
-
-def test_start_container_binds_local_docker_port_to_loopback_by_default(monkeypatch):
-    backend = LocalContainerBackend(
-        image="sandbox:latest",
-        base_port=8080,
-        container_prefix="sandbox",
-        config_mounts=[],
-        environment={},
-    )
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_HOST", raising=False)
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
+def test_start_container_publishes_no_host_port_and_joins_the_private_network(monkeypatch):
+    """Security baseline: the sandbox API runs shell commands. No -p at all;
+    the container joins the network it shares with the gateway."""
+    backend = LocalContainerBackend(image="sandbox:latest", base_port=8080, container_prefix="sandbox", config_mounts=[], environment={})
 
     captured_cmd = _capture_start_container_command(monkeypatch, backend)
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "127.0.0.1:18080:8080"
+    assert "-p" not in captured_cmd and "--publish" not in captured_cmd
+    assert captured_cmd[captured_cmd.index("--network") + 1] == "omni-harness-sandboxes"
 
 
-def test_start_container_keeps_broad_bind_for_dood_sandbox_host(monkeypatch):
-    backend = LocalContainerBackend(
-        image="sandbox:latest",
-        base_port=8080,
-        container_prefix="sandbox",
-        config_mounts=[],
-        environment={},
-    )
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "host.docker.internal")
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
+def _create(monkeypatch, *, runtime="docker", network="omni-harness-sandboxes"):
+    import pytest
 
-    captured_cmd = _capture_start_container_command(monkeypatch, backend)
+    from omniharness.community.aio_sandbox import local_backend as lb
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "0.0.0.0:18080:8080"
+    if network is None:
+        monkeypatch.delenv(lb.SANDBOX_NETWORK_ENV, raising=False)
+    else:
+        monkeypatch.setenv(lb.SANDBOX_NETWORK_ENV, network)
+    calls = []
 
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(stdout="cid\n", stderr="", returncode=0)
 
-def test_start_container_binds_ipv6_sandbox_host_to_ipv6_loopback(monkeypatch):
-    backend = LocalContainerBackend(
-        image="sandbox:latest",
-        base_port=8080,
-        container_prefix="sandbox",
-        config_mounts=[],
-        environment={},
-    )
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_HOST", "[::1]")
-    monkeypatch.delenv("OMNI_HARNESS_SANDBOX_BIND_HOST", raising=False)
-
-    captured_cmd = _capture_start_container_command(monkeypatch, backend)
-
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "[::1]:18080:8080"
+    monkeypatch.setattr(lb.subprocess, "run", fake_run)
+    backend = LocalContainerBackend(image="img", base_port=18080, container_prefix="omni-harness-sandbox", config_mounts=[], environment={})
+    backend._runtime = runtime
+    return backend, calls, pytest
 
 
-def test_start_container_keeps_apple_container_port_format(monkeypatch):
-    backend = LocalContainerBackend(
-        image="sandbox:latest",
-        base_port=8080,
-        container_prefix="sandbox",
-        config_mounts=[],
-        environment={},
-    )
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_BIND_HOST", "127.0.0.1")
+def test_a_sandbox_is_reached_by_name_on_the_private_network(monkeypatch):
+    backend, calls, _ = _create(monkeypatch)
+    info = backend.create("t", "abc")
+    assert info.sandbox_url == "http://omni-harness-sandbox-abc:8080"
+    [run] = [c for c in calls if c[1] == "run"]
+    assert "-p" not in run
 
-    captured_cmd = _capture_start_container_command(monkeypatch, backend, runtime="container")
 
-    assert captured_cmd[captured_cmd.index("-p") + 1] == "18080:8080"
+def test_a_gateway_on_the_host_refuses_to_start_sandboxes(monkeypatch):
+    from omniharness.community.aio_sandbox.local_backend import SANDBOX_REFUSED_WITHOUT_NETWORK
+
+    backend, calls, pytest = _create(monkeypatch, network=None)
+    with pytest.raises(RuntimeError) as exc:
+        backend.create("t", "abc")
+    assert str(exc.value) == SANDBOX_REFUSED_WITHOUT_NETWORK
+    assert not [c for c in calls if c[1] == "run"], "nothing was started"
+    assert backend.discover("abc") is None
+
+
+def test_the_apple_container_runtime_is_refused(monkeypatch):
+    from omniharness.community.aio_sandbox.local_backend import SANDBOX_REFUSED_APPLE
+
+    backend, calls, pytest = _create(monkeypatch, runtime="container")
+    with pytest.raises(RuntimeError) as exc:
+        backend.create("t", "abc")
+    assert str(exc.value) == SANDBOX_REFUSED_APPLE
+    assert not [c for c in calls if c[1] == "run"]

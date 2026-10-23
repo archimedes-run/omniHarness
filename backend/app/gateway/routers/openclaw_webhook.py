@@ -25,8 +25,9 @@ async def receive_openclaw_webhook(
     """Accept an inbound message from OpenClaw and hand it to the agent.
 
     OpenClaw sends ``Authorization: Bearer <token>`` headers for auth.
-    The token must match ``channels.openclaw.bearer_token`` in config.yaml
-    (or auth is skipped when the token is left empty).
+    The token must match ``channels.openclaw.bearer_token`` in config.yaml;
+    with no token configured every request is refused, and only agentIds in
+    ``channels.openclaw.allowed_users`` are heard.
     """
     from app.channels.service import get_channel_service
 

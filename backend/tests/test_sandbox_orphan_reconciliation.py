@@ -105,7 +105,9 @@ def _mock_ps_and_inspect(monkeypatch, ps_output: str, inspect_payload: list | No
 
 
 def test_list_running_returns_containers(monkeypatch):
-    """list_running should enumerate containers via docker ps and batch-inspect them."""
+    """list_running should enumerate containers via docker ps and batch-inspect them.
+    Sandboxes are reached by name on the private network (no host port)."""
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-harness-sandboxes")
     backend = _make_local_backend()
     monkeypatch.setattr(backend, "_runtime", "docker")
 
@@ -124,8 +126,8 @@ def test_list_running_returns_containers(monkeypatch):
     ids = {info.sandbox_id for info in infos}
     assert ids == {"abc12345", "def67890"}
     urls = {info.sandbox_url for info in infos}
-    assert "http://localhost:8081" in urls
-    assert "http://localhost:8082" in urls
+    assert "http://omni-harness-sandbox-abc12345:8080" in urls
+    assert "http://omni-harness-sandbox-def67890:8080" in urls
 
 
 def test_list_running_empty_when_no_containers(monkeypatch):

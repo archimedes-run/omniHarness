@@ -2,9 +2,10 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.gateway.ownership import require_owner_account, require_person
 from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,9 @@ async def get_mcp_configuration() -> McpConfigResponse:
     response_model=McpConfigResponse,
     summary="Update MCP Configuration",
     description="Update Model Context Protocol (MCP) server configurations and save to file.",
+    # A stdio entry is a command the gateway starts: the signed-in owner only,
+    # never the internal token (security baseline).
+    dependencies=[Depends(require_person), Depends(require_owner_account)],
 )
 async def update_mcp_configuration(request: McpConfigUpdateRequest) -> McpConfigResponse:
     """Update the MCP configuration.

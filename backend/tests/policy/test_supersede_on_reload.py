@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.gateway.routers import confirmations
 from app.policy import registration
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.models import Outcome
 
 TOOL = "gmail_fetch_emails"
@@ -38,6 +39,13 @@ def policy(tmp_path, monkeypatch):
         return lambda name, args: ran.append(name) or "ran"
 
     monkeypatch.setattr(confirmations, "_runner", _runner)
+
+    # The stub user is the owner account (security baseline: plans with no
+    # recorded owner, as these are, are the owner's to answer).
+    async def _is_owner(user):
+        return True
+
+    monkeypatch.setattr("app.gateway.ownership.is_owner", _is_owner)
     middleware = registration.build(app_config)
     app = make_authed_test_app()
     app.include_router(confirmations.router)
@@ -80,7 +88,6 @@ def test_a_rules_change_supersedes_and_does_not_run(policy) -> None:
 def test_superseding_unblocks_the_next_confirmation(policy) -> None:
     """The cost the follow-up recorded: with orphans pending, a bare 'yes'
     could not be matched to anything. After the sweep, it can."""
-    from langchain_core.messages import HumanMessage
 
     from app.policy.confirm_flow import EXECUTED, ConfirmationFlow
 
@@ -89,11 +96,11 @@ def test_superseding_unblocks_the_next_confirmation(policy) -> None:
     policy.rules.write_text(RULES_TIER_1)
     _list(policy.app)
     policy.rules.write_text(RULES_TIER_3 + '    - pattern: "calendar_decline"\n      tier: 3\n')
-    request = SimpleNamespace(tool_call={"name": "calendar_decline", "args": {"meetings": ["Standup"]}, "id": "tc3"}, runtime=None, state={"messages": [HumanMessage(content="decline my standup")]})
+    request = SimpleNamespace(tool_call={"name": "calendar_decline", "args": {"meetings": ["Standup"]}, "id": "tc3"}, runtime=None, state={"messages": [user_turn(content="decline my standup")]})
     policy.middleware.wrap_tool_call(request, lambda r: pytest.fail("ran at statement"))
 
     flow = ConfirmationFlow(store=policy.middleware.pending, middleware=policy.middleware, now=policy.middleware.now)
-    result = flow.from_message(HumanMessage(content="yes"), run_tool=lambda name, args: policy.ran.append(name) or "done")
+    result = flow.from_message(user_turn(content="yes"), run_tool=lambda name, args: policy.ran.append(name) or "done")
 
     assert result.outcome == EXECUTED, result
     assert policy.ran == ["calendar_decline"]

@@ -278,9 +278,110 @@ def build_server(service: WatcherService) -> Server:
     return server
 
 
-def build_app(service: WatcherService) -> Starlette:
+#: Hosts the watcher answers to: loopback, Docker Desktop's host name, and the
+#: compose service name, on any port. Anything else is a DNS-rebinding attempt
+#: (a web page that points its own name at 127.0.0.1) and gets 421.
+WATCHER_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", "host.docker.internal", "session-watcher")
+#: Shared secret with the gateway, REQUIRED (sent as X-OmniHarness-Watcher-Token
+#: or a Bearer token). It lives in a 0600 file (default
+#: ~/.omni-harness-secrets/watcher.token; compose mounts it read-only at
+#: /run/secrets/watcher.token). With no token, EVERY request is refused (401):
+#: there is no unauthenticated mode.
+WATCHER_TOKEN_FILE_ENV = "OMNI_HARNESS_WATCHER_TOKEN_FILE"
+WATCHER_TOKEN_HEADER = "x-omniharness-watcher-token"
+_FROM_FILE = object()
+
+
+def watcher_token_path() -> Path:
+    configured = os.environ.get(WATCHER_TOKEN_FILE_ENV, "").strip()
+    return Path(configured) if configured else Path.home() / ".omni-harness-secrets" / "watcher.token"
+
+
+def read_watcher_token() -> str | None:
+    try:
+        return watcher_token_path().read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def ensure_watcher_token() -> str:
+    """First start on the host: create the token file (0600 in a 0700 dir)."""
+    import secrets
+
+    existing = read_watcher_token()
+    if existing:
+        return existing
+    path = watcher_token_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    token = secrets.token_urlsafe(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token + "\n")
+    return token
+
+
+def _host_name(host_header: str) -> str:
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        return host.split("]", 1)[0] + "]"
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+class _GuardMiddleware:
+    """Host, Origin and token, checked before ANY route (security baseline).
+
+    - Host must be one of WATCHER_ALLOWED_HOSTS (421 otherwise): blocks DNS
+      rebinding, where a page on evil.example resolves to 127.0.0.1 and is
+      then same-origin with the watcher.
+    - Any Origin header is refused (403): the gateway's MCP client sends none,
+      and no browser page has a reason to talk to the watcher.
+    - The request must carry the token (401). No token configured: every
+      request is refused (fail closed).
+    """
+
+    def __init__(self, app, token: str | None) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        import secrets
+
+        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
+        status, body = None, b""
+        if _host_name(headers.get("host", "")) not in WATCHER_ALLOWED_HOSTS:
+            status, body = 421, b"Invalid Host header"
+        elif headers.get("origin"):
+            status, body = 403, b"Invalid Origin header"
+        elif not self.token:
+            status, body = 401, b"Watcher token not configured: every request is refused"
+        else:
+            presented = headers.get(WATCHER_TOKEN_HEADER) or headers.get("authorization", "").removeprefix("Bearer ").strip()
+            if not presented or not secrets.compare_digest(presented, self.token):
+                status, body = 401, b"Unauthorized"
+        if status is not None:
+            await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"text/plain")]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        return await self.app(scope, receive, send)
+
+
+def build_app(service: WatcherService, *, token=_FROM_FILE) -> Starlette:
+    from mcp.server.transport_security import TransportSecuritySettings
+
     server = build_server(service)
-    sse = SseServerTransport("/messages/")
+    # The SDK's own DNS-rebinding protection too (it was OFF: no settings).
+    sse = SseServerTransport(
+        "/messages/",
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[f"{h}:*" for h in WATCHER_ALLOWED_HOSTS] + list(WATCHER_ALLOWED_HOSTS),
+            allowed_origins=[],
+        ),
+    )
+    token = read_watcher_token() if token is _FROM_FILE else token
 
     async def handle_sse(request):
         async with sse.connect_sse(request.scope, request.receive, request._send) as (r, w):
@@ -302,12 +403,15 @@ def build_app(service: WatcherService) -> Starlette:
             }
         )
 
+    from starlette.middleware import Middleware
+
     return Starlette(
         routes=[
             Route("/health", endpoint=health),
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse.handle_post_message),
-        ]
+        ],
+        middleware=[Middleware(_GuardMiddleware, token=token)],
     )
 
 
@@ -369,6 +473,10 @@ def main() -> None:
     service.refresh()
     start_background_refresh(service)
     # 0.0.0.0 so a containerized backend can reach us via host.docker.internal.
+    try:
+        ensure_watcher_token()  # first start on the host; read-only in compose
+    except OSError as exc:
+        raise SystemExit(f"session-watcher: no token at {watcher_token_path()} and it cannot be created ({exc}); run scripts/ensure-watcher-token.sh") from exc
     uvicorn.run(build_app(service), host="0.0.0.0", port=args.port, log_level=args.log_level)
 
 

@@ -162,8 +162,8 @@ tools:
     use: omniharness.sandbox.tools:str_replace_tool
 
   # Bash execution tool
-  # Active only when using an isolated shell sandbox or when
-  # sandbox.allow_host_bash: true explicitly opts into host bash.
+  # Runs only in a container sandbox (AioSandboxProvider). Commands never run
+  # on the host; with the local provider this tool is not loaded.
   - name: bash
     group: bash
     use: omniharness.sandbox.tools:bash_tool
@@ -232,10 +232,9 @@ uploads:
 
 sandbox:
   use: omniharness.sandbox.local:LocalSandboxProvider
-  # Host bash execution is disabled by default because LocalSandboxProvider is
-  # not a secure isolation boundary for shell access. Enable only for fully
-  # trusted, single-user local workflows.
-  allow_host_bash: false
+  # Commands never run on the host (security baseline): the local provider
+  # serves files only. Use AioSandboxProvider to run bash. A config that still
+  # sets allow_host_bash is refused at startup.
   # Optional: Mount additional host directories into the sandbox.
   # Each mount maps a host path to a virtual container path accessible by the agent.
   # mounts:
@@ -353,33 +352,9 @@ sandbox:
 #   # Set `model` to use a different model (e.g., a local Ollama model for cost savings).
 #   # The model name must match a name defined in the `models:` section above.
 
-# ============================================================================
-# ACP Agents Configuration
-# ============================================================================
-# Configure external ACP-compatible agents for the built-in `invoke_acp_agent` tool.
-
-# acp_agents:
-#   claude_code:
-#     # OmniHarness expects an ACP adapter here. The standard `claude` CLI does not
-#     # speak ACP directly. Install `claude-agent-acp` separately or use:
-#     command: npx
-#     args: ["-y", "@zed-industries/claude-agent-acp"]
-#     description: Claude Code for implementation, refactoring, and debugging
-#     model: null
-#     # auto_approve_permissions: false  # Set to true to auto-approve ACP permission requests
-#     # env:                             # Optional: inject environment variables into the agent subprocess
-#     #   ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY  # $VAR resolves from host environment
-#
-#   codex:
-#     # OmniHarness expects an ACP adapter here. The standard `codex` CLI does not
-#     # speak ACP directly. Install `codex-acp` separately or use:
-#     command: npx
-#     args: ["-y", "@zed-industries/codex-acp"]
-#     description: Codex CLI for repository tasks and code generation
-#     model: null
-#     # auto_approve_permissions: false  # Set to true to auto-approve ACP permission requests
-#     # env:                             # Optional: inject environment variables into the agent subprocess
-#     #   OPENAI_API_KEY: $OPENAI_API_KEY  # $VAR resolves from host environment
+# (ACP agents and the openclaude tool were removed: they ran coding agents as
+# processes on the host. A config naming `acp_agents` or an openclaude/
+# invoke_acp_agent tool is refused at startup.)
 
 # ============================================================================
 # Skills Configuration
@@ -617,12 +592,13 @@ run_events:
 #     enabled: false
 #     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
 #     app_token: $SLACK_APP_TOKEN     # xapp-... (Socket Mode)
-#     allowed_users: []               # empty = allow all; can also be a single Slack user ID string, e.g. U123456, but list form is recommended
+#     allowed_users: []               # YOUR Slack member id(s). EMPTY = NOBODY: senders get no reply; a WARNING is logged at startup.
 #
 #   telegram:
 #     enabled: false
 #     bot_token: $TELEGRAM_BOT_TOKEN
-#     allowed_users: []               # empty = allow all
+#     allowed_users: []               # YOUR numeric Telegram user id(s). EMPTY = NOBODY: senders get no reply; a WARNING is logged at startup.
+#                                     # Find yours by messaging @userinfobot in Telegram; it replies with your id.
 #
 
 # ============================================================================

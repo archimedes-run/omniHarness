@@ -1,8 +1,9 @@
 """Memory API router for retrieving and managing global memory data."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.gateway.authz import permission_dependency
 from omniharness.agents.memory.updater import (
     MemoryChanged,
     apply_memory_cleanup,
@@ -178,6 +179,7 @@ async def reload_memory() -> MemoryResponse:
 
 @router.delete(
     "/memory",
+    dependencies=[Depends(permission_dependency("threads", "delete"))],
     response_model=MemoryResponse,
     response_model_exclude_none=True,
     summary="Clear All Memory Data",
@@ -219,6 +221,7 @@ async def create_memory_fact_endpoint(request: FactCreateRequest) -> MemoryRespo
 
 @router.delete(
     "/memory/facts/{fact_id}",
+    dependencies=[Depends(permission_dependency("threads", "delete"))],
     response_model=MemoryResponse,
     response_model_exclude_none=True,
     summary="Delete Memory Fact",
@@ -278,6 +281,7 @@ async def export_memory() -> MemoryResponse:
 
 @router.post(
     "/memory/import",
+    dependencies=[Depends(permission_dependency("threads", "delete"))],
     response_model=MemoryResponse,
     response_model_exclude_none=True,
     summary="Import Memory Data",
@@ -431,6 +435,7 @@ async def preview_memory_cleanup() -> CleanupPreview:
 
 @router.post(
     "/memory/cleanup/apply",
+    dependencies=[Depends(permission_dependency("threads", "delete"))],
     response_model=MemoryResponse,
     response_model_exclude_none=True,
     summary="Apply an Accepted Memory Cleanup",

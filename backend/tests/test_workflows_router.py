@@ -10,6 +10,7 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
+from _router_auth_helpers import make_authed_test_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -38,7 +39,7 @@ def _make_config(enabled: bool) -> AppConfig:
 
 def _make_app(repo, *, enabled: bool) -> FastAPI:
     """Build a minimal FastAPI app with the workflows router and a real (or None) repo."""
-    app = FastAPI()
+    app = make_authed_test_app()
     app.state.workflow_repo = repo
     app.include_router(workflows_router.router)
     return app

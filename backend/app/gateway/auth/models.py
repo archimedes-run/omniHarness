@@ -31,6 +31,10 @@ class User(BaseModel):
     needs_setup: bool = Field(default=False, description="True for auto-created admin until setup completes")
     token_version: int = Field(default=0, description="Incremented on password change to invalidate old JWTs")
 
+    # Security baseline: refused everywhere while set (app.gateway.ownership).
+    disabled_at: datetime | None = Field(default=None, description="When the account was disabled; None = enabled")
+    disabled_reason: str | None = Field(default=None, description="Why, for the operator")
+
 
 class UserResponse(BaseModel):
     """Response model for user info endpoint."""

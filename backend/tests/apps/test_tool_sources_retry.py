@@ -27,13 +27,15 @@ def _free_port() -> int:
 def late_server(gateway, tmp_path):
     from omniharness.config.extensions_config import reset_extensions_config
     from omniharness.mcp import cache
+    from omniharness.mcp.watcher_token import TOKEN_HEADER, read_watcher_token
 
     port, dead = _free_port(), _free_port()
     (gateway.tmp / "extensions.json").write_text(
         json.dumps(
             {
                 "mcpServers": {
-                    "late": {"enabled": True, "type": "sse", "url": f"http://127.0.0.1:{port}/sse"},
+                    # A watcher under another name: it still requires its token.
+                    "late": {"enabled": True, "type": "sse", "url": f"http://127.0.0.1:{port}/sse", "headers": {TOKEN_HEADER: read_watcher_token()}},
                     "still-dead": {"enabled": True, "type": "sse", "url": f"http://127.0.0.1:{dead}/sse"},
                 },
                 "skills": {},

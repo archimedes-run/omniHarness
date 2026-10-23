@@ -30,6 +30,13 @@ def inspector(tmp_path, monkeypatch):
     rules.write_text(RULES)
     app_config = SimpleNamespace(policy=SimpleNamespace(enabled=True, rules_path=str(rules), state_dir=str(tmp_path / "state")))
     monkeypatch.setattr("omniharness.config.get_app_config", lambda: app_config)
+
+    # The stub user is the owner: the audit list shows only the caller's own
+    # (or, for the owner, the system's) entries. Ownership is tested in tests/security.
+    async def _is_owner(user):
+        return True
+
+    monkeypatch.setattr("app.gateway.ownership.is_owner", _is_owner)
     app = make_authed_test_app()
     app.include_router(policy_router.router)
     return SimpleNamespace(rules=rules, app_config=app_config, client=TestClient(app))

@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.gateway.authz import require_permission
 from app.gateway.automations_store import TEMPLATES, RulesEditError, read_rules, with_rule, without_rule, write_rules
+from app.gateway.ownership import require_owner_account
 
-router = APIRouter(prefix="/api/automations", tags=["automations"])
+# Install-wide records: the owner account only (security baseline).
+router = APIRouter(prefix="/api/automations", tags=["automations"], dependencies=[Depends(require_owner_account)])
 
 
 class RuleWrite(BaseModel):
@@ -99,6 +101,6 @@ async def set_enabled(rule_id: str, body: EnabledWrite, request: Request) -> Wri
 
 
 @router.delete("/rules/{rule_id}", response_model=WriteResult)
-@require_permission("threads", "write")
+@require_permission("threads", "delete")
 async def delete_rule(rule_id: str, version: str, request: Request) -> WriteResult:
     return _apply(request, lambda doc: without_rule(doc, rule_id), version)

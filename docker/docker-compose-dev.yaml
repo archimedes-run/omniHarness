@@ -45,8 +45,7 @@ services:
       # Override K8S API server URL since kubeconfig uses 127.0.0.1
       # which is unreachable from inside the container
       - K8S_API_SERVER=https://host.docker.internal:26443
-    env_file:
-      - ../.env
+    # NO env_file: the provisioner reads only the K8S_* settings above.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -69,6 +68,12 @@ services:
       - "127.0.0.1:2026:2026"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      # Access/error logs on the host: they survive container recreation.
+      - ../logs/nginx:/var/log/nginx
+      # Daily rotation, 30 days kept, gzip (USR1 reopen: no lines lost).
+      - ./nginx/rotate-logs.sh:/etc/nginx/rotate-logs.sh:ro
+      # The console captures the other containers append to, size-capped here.
+      - ../logs:/var/log/omni
     command:
       - sh
       - -c
@@ -76,12 +81,16 @@ services:
         set -e
         cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
         test -e /proc/net/if_inet6 || sed -i '/^[[:space:]]*listen[[:space:]]\+\[::\]:2026;/d' /etc/nginx/nginx.conf
+        CAP_FILES='/var/log/omni/gateway.console.log /var/log/omni/frontend.log' sh /etc/nginx/rotate-logs.sh loop /var/log/nginx /tmp/nginx.pid &
         exec nginx -g 'daemon off;'
     depends_on:
       - frontend
       - gateway
     networks:
-      - omni-harness-dev
+      omni-harness-dev:
+        # Fixed, so the gateway can trust X-Forwarded-For from THIS peer only
+        # (GATEWAY_TRUSTED_PROXIES below).
+        ipv4_address: 192.168.200.10
     restart: unless-stopped
 
   # Frontend - Next.js Development Server
@@ -119,6 +128,8 @@ services:
       # Loopback only; containers still reach it via host.docker.internal.
       - "127.0.0.1:18101:18101"
     volumes:
+      # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
+      - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
       # The sessions it reports on. READ-ONLY: this server never writes, and
       # the mount is what makes that structural rather than a promise.
       - type: bind
@@ -137,6 +148,8 @@ services:
         read_only: true
         bind:
           create_host_path: true
+    environment:
+      - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
     working_dir: /app
     networks:
       - omni-harness-dev
@@ -151,7 +164,7 @@ services:
         PNPM_STORE_PATH: ${PNPM_STORE_PATH:-/root/.local/share/pnpm/store}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
     container_name: omni-harness-frontend
-    command: sh -c "cd frontend && pnpm run dev > /app/logs/frontend.log 2>&1"
+    command: sh -c "cd frontend && pnpm run dev >> /app/logs/frontend.log 2>&1"
     volumes:
       - ../frontend/src:/app/frontend/src
       - ../frontend/public:/app/frontend/public
@@ -184,8 +197,10 @@ services:
         UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
     container_name: omni-harness-gateway
-    command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env'; } > /app/logs/gateway.log 2>&1"
+    command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env'; } >> /app/logs/gateway.console.log 2>&1"
     volumes:
+      # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
+      - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro
       - ../backend/:/app/backend/
       # Preserve the .venv built during Docker image build — mounting the full backend/
       # directory above would otherwise shadow it with the (empty) host directory.
@@ -221,6 +236,7 @@ services:
           create_host_path: true
     working_dir: /app
     environment:
+      - OMNI_HARNESS_WATCHER_TOKEN_FILE=/run/secrets/watcher.token
       - CI=true
       - OMNI_HARNESS_PROJECT_ROOT=/app
       # Point the gateway at the extensions config inside the DIRECTORY mount
@@ -231,14 +247,61 @@ services:
       - OMNI_HARNESS_CHANNELS_GATEWAY_URL=${OMNI_HARNESS_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - OMNI_HARNESS_HOST_BASE_DIR=${OMNI_HARNESS_ROOT}/backend/.omni-harness
       - OMNI_HARNESS_HOST_SKILLS_PATH=${OMNI_HARNESS_ROOT}/skills
-      - OMNI_HARNESS_SANDBOX_HOST=host.docker.internal
-    env_file:
-      - ../.env
+      # Sandboxes publish NO host port: they join this private network,
+      # shared only with the gateway, and are reached by container name.
+      - OMNI_HARNESS_SANDBOX_NETWORK=omni-harness-dev-sandboxes
+      # Logs: daily append-only files, 30 days kept (app/gateway/log_files.py).
+      # The shell redirect above only APPENDS what precedes logging setup.
+      - GATEWAY_LOG_FILE=/app/logs/gateway.log
+      # Real client IP: forwarded headers are trusted from nginx's fixed address only.
+      - GATEWAY_TRUSTED_PROXIES=192.168.200.10
+      # Allowlisted keys from .env (secret_usage.GATEWAY_ENV_KEYS); NO env_file.
+      # Bare names: passed only when set (compose --env-file ../.env), never as "".
+      - ANTHROPIC_API_KEY
+      - ANTHROPIC_AUTH_TOKEN
+      - ANTHROPIC_BILLING_HEADER
+      - AUTH_JWT_SECRET
+      - AUTH_TRUSTED_PROXIES
+      - CLAUDE_CODE_CREDENTIALS_PATH
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - COMPOSIO_API_KEY
+      - COMPOSIO_CONNECTED_ACCOUNT_ID
+      - COMPOSIO_IMPORTANT_ONLY
+      - COMPOSIO_TOOLKIT
+      - COMPOSIO_USER_ID
+      - DEEPSEEK_API_KEY
+      - DISCORD_BOT_TOKEN
+      - EXA_API_KEY
+      - FIRECRAWL_API_KEY
+      - GATEWAY_ALLOWED_HOSTS
+      - GATEWAY_ENABLE_DOCS
+      - GEMINI_API_KEY
+      - GITHUB_TOKEN
+      - GOOGLE_API_KEY
+      - INFOQUEST_API_KEY
+      - JINA_API_KEY
+      - LANGSMITH_API_KEY
+      - LANGSMITH_ENDPOINT
+      - LANGSMITH_PROJECT
+      - LANGSMITH_TRACING
+      - MOONSHOT_API_KEY
+      - OMNI_HARNESS_INTERNAL_AUTH_TOKEN
+      - OPENAI_API_KEY
+      - OPENCLAW_BEARER_TOKEN
+      - OPENROUTER_API_KEY
+      - SERPER_API_KEY
+      - SLACK_APP_TOKEN
+      - SLACK_BOT_TOKEN
+      - TAVILY_API_KEY
+      - TELEGRAM_BOT_TOKEN
+      - TZ
+      - VOLCENGINE_API_KEY
     extra_hosts:
       # For Linux: map host.docker.internal to host gateway
       - "host.docker.internal:host-gateway"
     networks:
       - omni-harness-dev
+      - omni-harness-dev-sandboxes
     restart: unless-stopped
 
 volumes:
@@ -253,3 +316,11 @@ networks:
     ipam:
       config:
         - subnet: 192.168.200.0/24
+  # Gateway <-> sandbox containers only. A fixed name, because the gateway
+  # starts sandboxes through the host's Docker daemon and names this network.
+  omni-harness-dev-sandboxes:
+    name: omni-harness-dev-sandboxes
+    driver: bridge
+    # No route out of it at all: sandboxes reach the gateway and nothing else
+    # (Docker Desktop routes host.docker.internal only through a non-internal network).
+    internal: true

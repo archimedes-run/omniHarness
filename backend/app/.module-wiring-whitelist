@@ -15,4 +15,3 @@
 # which is what "self-expiring" was meant to mean. Neither needed a reminder.
 
 middlewares    # config-loaded extension point: `use: app.middlewares.truncation:...` in config.yaml, no static importer by design
-tools          # config-loaded extension point: `use: app.tools.openclaude:openclaude_coder` in config.yaml, same

@@ -57,7 +57,7 @@ def _build_capturing(cfg: dict, *, enabled=ENABLED):
         return []
 
     model = SimpleNamespace(supports_thinking=False)
-    app_config = SimpleNamespace(models=[SimpleNamespace(name="m")], get_model_config=lambda name: model, acp_agents={})
+    app_config = SimpleNamespace(models=[SimpleNamespace(name="m")], get_model_config=lambda name: model)
     with (
         patch.object(lead_agent, "apply_prompt_template", side_effect=lambda *a, **k: fake_prompt(**k)),
         patch.object(lead_agent, "_load_enabled_skills_for_tool_policy", side_effect=fake_policy),

@@ -230,7 +230,7 @@ def _get_acp_workspace_host_path(thread_id: str | None = None) -> str | None:
 
     When *thread_id* is provided, returns the per-thread workspace
     ``{base_dir}/threads/{thread_id}/acp-workspace/`` (not cached — the
-    directory is created on demand by ``invoke_acp_agent_tool``).
+    directory is created with the thread dirs; nothing writes it since the ACP tool was removed).
 
     Falls back to the global ``{base_dir}/acp-workspace/`` when *thread_id*
     is ``None``; that result is cached after the first successful resolution.
@@ -891,9 +891,9 @@ def resolve_and_validate_user_data_path(path: str, thread_data: ThreadDataState)
 def validate_local_bash_command_paths(command: str, thread_data: ThreadDataState | None) -> None:
     """Validate absolute paths in local-sandbox bash commands.
 
-    This validation is only a best-effort guard for the explicit
-    ``sandbox.allow_host_bash: true`` opt-in. It is not a secure sandbox
-    boundary and must not be treated as isolation from the host filesystem.
+    Host command execution was REMOVED (security baseline): with the local
+    provider the bash tool refuses before this runs, and LocalSandbox no longer
+    executes anything. Kept only as defence in depth for the path checks.
 
     In local mode, commands must use virtual paths under /mnt/user-data for
     user data access. Skills paths under /mnt/skills, ACP workspace paths

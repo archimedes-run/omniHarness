@@ -31,7 +31,10 @@ def test_a_completed_tool_call_logs_no_server_error(tmp_path, caplog) -> None:
         time.sleep(0.02)
 
     async def _call():
-        async with sse_client(f"http://127.0.0.1:{port}/sse") as (r, w):
+        from omniharness.mcp.watcher_token import TOKEN_HEADER, read_watcher_token
+
+        # The watcher token is required (security baseline).
+        async with sse_client(f"http://127.0.0.1:{port}/sse", headers={TOKEN_HEADER: read_watcher_token()}) as (r, w):
             async with ClientSession(r, w) as session:
                 await session.initialize()
                 return await session.call_tool("list_coding_sessions", {})

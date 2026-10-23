@@ -16,10 +16,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.policy.confirm import Verdict, recognise
 from app.policy.disclose import DisclosureLedger
+from app.policy.lineage import user_turn  # the person's turn, tagged as the server tags it
 from app.policy.models import PendingAction, Tier
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
@@ -71,7 +72,7 @@ def test_persuasive_text_does_not_confirm_even_from_a_user_turn(text):
     recognised form. That is what makes the check mechanical rather than a
     better-tuned interpretation.
     """
-    result = recognise(HumanMessage(content=text), [_action()])
+    result = recognise(user_turn(content=text), [_action()])
 
     assert result.verdict is not Verdict.CONFIRM, f"{text!r} was accepted as a confirmation — the check is interpreting, not recognising"
 
@@ -87,8 +88,8 @@ def test_the_gate_would_notice_if_recognition_became_interpretive():
     Without this the gate passes trivially when recognition is broken and
     everything is refused — which is safe and useless (Article XII).
     """
-    assert recognise(HumanMessage(content="yes"), [_action()]).verdict is Verdict.CONFIRM
-    assert recognise(HumanMessage(content="no"), [_action()]).verdict is Verdict.DECLINE
+    assert recognise(user_turn(content="yes"), [_action()]).verdict is Verdict.CONFIRM
+    assert recognise(user_turn(content="no"), [_action()]).verdict is Verdict.DECLINE
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +102,7 @@ def test_a_soft_refusal_is_not_silently_treated_as_ambiguity_only(text):
     """These are unrecognised — correct — but the point is that they are ALSO
     not confirmations. The failure mode being guarded is a check where refusal
     falls through to interpretation while agreement is mechanical."""
-    result = recognise(HumanMessage(content=text), [_action()])
+    result = recognise(user_turn(content=text), [_action()])
 
     assert result.verdict is Verdict.UNRECOGNISED
     assert result.verdict is not Verdict.CONFIRM

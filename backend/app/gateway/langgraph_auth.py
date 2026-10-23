@@ -88,6 +88,12 @@ async def authenticate(request):
             detail="Token revoked (password changed)",
         )
 
+    # Single-owner baseline: only the owner account may use the app.
+    from app.gateway.ownership import SECOND_ACCOUNT_REFUSED, account_admitted
+
+    if not await account_admitted(user):
+        raise Auth.exceptions.HTTPException(status_code=403, detail=SECOND_ACCOUNT_REFUSED)
+
     return payload.sub
 
 
