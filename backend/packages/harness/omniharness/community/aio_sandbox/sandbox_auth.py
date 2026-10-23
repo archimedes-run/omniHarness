@@ -6,7 +6,10 @@ another's. Each container now starts with its own SANDBOX_API_KEY, derived
 from the gateway's internal secret and the container name:
 
 * every gateway worker, and a restarted gateway, derives the same key for a
-  container it adopts, so nothing is stored;
+  container it adopts, so nothing is stored. The root is the internal token
+  when it is configured, else AUTH_JWT_SECRET: both come from .env and are the
+  same in every worker (an unset internal token is random per process, which
+  would key each worker's sandboxes differently);
 * a sandbox knows only its own key and never the secret, so it cannot derive
   another sandbox's.
 
@@ -20,15 +23,24 @@ import hashlib
 import hmac
 import os
 
-SECRET_ENV = "OMNI_HARNESS_INTERNAL_AUTH_TOKEN"
+SECRET_ENVS = ("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "AUTH_JWT_SECRET")
 HEADER = "X-AIO-API-Key"
 CONTAINER_ENV = "SANDBOX_API_KEY"
 
-REFUSED_WITHOUT_SECRET = f"Refusing to use a sandbox container: its API key is derived from {SECRET_ENV}, which is not set, and an unkeyed sandbox can be driven by any other sandbox on its network."
+REFUSED_WITHOUT_SECRET = f"Refusing to use a sandbox container: its API key is derived from {' or '.join(SECRET_ENVS)}, neither is set, and an unkeyed sandbox can be driven by any other sandbox on its network."
+
+
+def key_secret() -> str:
+    """The root the keys are derived from ("" when there is none)."""
+    for name in SECRET_ENVS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
 
 
 def sandbox_api_key(container_name: str) -> str:
-    secret = os.environ.get(SECRET_ENV, "")
+    secret = key_secret()
     if not secret:
         raise RuntimeError(REFUSED_WITHOUT_SECRET)
     digest = hmac.new(secret.encode(), f"sandbox-api-key|{container_name}".encode(), hashlib.sha256).digest()

@@ -70,8 +70,22 @@ def test_a_configured_environment_cannot_replace_the_key(monkeypatch) -> None:
 
 def test_without_the_gateway_secret_no_sandbox_starts(monkeypatch) -> None:
     monkeypatch.delenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="OMNI_HARNESS_INTERNAL_AUTH_TOKEN"):
+    monkeypatch.delenv("AUTH_JWT_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="OMNI_HARNESS_INTERNAL_AUTH_TOKEN or AUTH_JWT_SECRET"):
         _run_cmd(monkeypatch)
+
+
+def test_with_only_the_jwt_secret_sandboxes_are_keyed_the_same_in_every_worker(monkeypatch) -> None:
+    """Live 2026-10-23: the internal token was unset (it is then random per
+    process), so no sandbox could be keyed. AUTH_JWT_SECRET comes from .env and
+    is the same in every worker."""
+    monkeypatch.delenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("AUTH_JWT_SECRET", "jwt-secret-from-dotenv-0123456789abcdef")
+    from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
+
+    key = _env(_run_cmd(monkeypatch, name="j"))["SANDBOX_API_KEY"]
+    assert key == sandbox_api_key("omni-harness-sandbox-j")
+    assert "jwt-secret-from-dotenv" not in key
 
 
 def test_every_call_to_a_local_sandbox_carries_its_key(monkeypatch) -> None:
@@ -270,7 +284,8 @@ def _bash_tier(monkeypatch, *, use: str, provisioner_url: str | None = None, egr
     from app.policy.classify import classify
     from app.policy.config import ConfigLoader
 
-    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
+    monkeypatch.delenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("AUTH_JWT_SECRET", "jwt-secret-from-dotenv-0123456789abcdef")  # as live: no internal token
     monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-harness-dev-sandboxes")
     if egress:
         monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", "http://omni-harness-sandbox-egress:3128")

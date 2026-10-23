@@ -10,8 +10,6 @@ raises a tier, never lowers it.
 
 from __future__ import annotations
 
-import os
-
 from .models import Tier
 
 _CONTAINER_PROVIDER_SUFFIX = ":AioSandboxProvider"
@@ -31,8 +29,9 @@ def bash_runs_in_the_hardened_sandbox() -> bool:
     if getattr(sandbox, "provisioner_url", None) or extra.get("provisioner_url"):
         return False  # remote sandboxes: not keyed or confined by this gateway
     from omniharness.community.aio_sandbox.local_backend import sandbox_egress, sandbox_network
+    from omniharness.community.aio_sandbox.sandbox_auth import key_secret
 
-    return sandbox_network() is not None and sandbox_egress() is not None and bool(os.environ.get("OMNI_HARNESS_INTERNAL_AUTH_TOKEN"))
+    return sandbox_network() is not None and sandbox_egress() is not None and bool(key_secret())
 
 
 def runtime_floor(canonical_name: str) -> Tier | None:
