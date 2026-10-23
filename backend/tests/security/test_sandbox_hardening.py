@@ -130,12 +130,12 @@ def test_sandboxes_run_under_the_default_seccomp_profile(monkeypatch) -> None:
 
 def test_with_the_proxy_configured_a_sandbox_trusts_its_ca_and_uses_it(monkeypatch) -> None:
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
-    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", "http://omni-harness-sandbox-egress:3128")
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", "http://omni-harness-egress:3128")
     monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME", "ca-vol")
     cmd = _run_cmd(monkeypatch)
     env = _env(cmd)
     for key in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
-        assert env[key] == "http://omni-harness-sandbox-egress:3128"
+        assert env[key] == "http://omni-harness-egress:3128"
     assert env["NODE_EXTRA_CA_CERTS"] == env["PIP_CERT"] == "/etc/omni-egress/ca.crt"
     assert "type=volume,src=ca-vol,dst=/etc/omni-egress,readonly" in cmd, "the CA must be mounted read-only"
 
@@ -252,26 +252,26 @@ def test_containers_without_this_gateways_key_or_with_unconfined_seccomp_are_rem
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
     from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
 
-    good = "omni-harness-sandbox-good"
+    good = "omni-harness-sandbox-0000000a"
     entries = [
         _inspect(good, env=[f"SANDBOX_API_KEY={sandbox_api_key(good)}"]),
-        _inspect("omni-harness-sandbox-old", env=["PATH=/bin"]),  # started before #98
-        _inspect("omni-harness-sandbox-wrong", env=["SANDBOX_API_KEY=someone-elses"]),
-        _inspect("omni-harness-sandbox-unconf", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-unconf')}"], security_opt=["seccomp=unconfined"]),
+        _inspect("omni-harness-sandbox-0000000b", env=["PATH=/bin"]),  # started before #98
+        _inspect("omni-harness-sandbox-0000000c", env=["SANDBOX_API_KEY=someone-elses"]),
+        _inspect("omni-harness-sandbox-0000000d", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000d')}"], security_opt=["seccomp=unconfined"]),
     ]
     backend, stopped = _backend_with_containers(monkeypatch, entries)
     assert [i.container_name for i in backend.list_running()] == [good]
-    assert sorted(stopped) == ["omni-harness-sandbox-old", "omni-harness-sandbox-unconf", "omni-harness-sandbox-wrong"]
+    assert sorted(stopped) == ["omni-harness-sandbox-0000000b", "omni-harness-sandbox-0000000c", "omni-harness-sandbox-0000000d"]
 
 
 def test_discover_removes_an_unkeyed_container_instead_of_adopting_it(monkeypatch) -> None:
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
     from omniharness.community.aio_sandbox import local_backend as lb
 
-    backend, stopped = _backend_with_containers(monkeypatch, [_inspect("omni-harness-sandbox-old", env=[])])
+    backend, stopped = _backend_with_containers(monkeypatch, [_inspect("omni-harness-sandbox-0000000b", env=[])])
     monkeypatch.setattr(lb, "wait_for_sandbox_ready", lambda *a, **k: True)  # an unkeyed API answers anything
-    assert backend.discover("old") is None
-    assert stopped == ["omni-harness-sandbox-old"]
+    assert backend.discover("0000000b") is None
+    assert stopped == ["omni-harness-sandbox-0000000b"]
 
 
 # ── bash is Tier 2 only in the hardened sandbox (review M1) ─────────────────
@@ -288,7 +288,7 @@ def _bash_tier(monkeypatch, *, use: str, provisioner_url: str | None = None, egr
     monkeypatch.setenv("AUTH_JWT_SECRET", "jwt-secret-from-dotenv-0123456789abcdef")  # as live: no internal token
     monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-harness-dev-sandboxes")
     if egress:
-        monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", "http://omni-harness-sandbox-egress:3128")
+        monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", "http://omni-harness-egress:3128")
         monkeypatch.setenv("OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME", "v")
     else:
         monkeypatch.delenv("OMNI_HARNESS_SANDBOX_EGRESS_PROXY", raising=False)
@@ -320,3 +320,25 @@ def test_the_sandbox_image_requires_the_key_on_every_request_but_the_ping() -> N
     assert ": > /opt/gem/nginx-server-port-proxy.conf.template" in dockerfile
     assert "test ! -s /opt/gem/nginx-server-port-proxy.conf.template" in dockerfile
     assert '"~^GET:/v1/ping$" @proxy_without_auth;' in dockerfile
+
+
+def test_a_container_that_only_shares_the_prefix_is_neither_adopted_nor_stopped(monkeypatch) -> None:
+    """Live 2026-10-23: the egress proxy was named omni-harness-sandbox-egress;
+    the gateway's restart reconciliation took it for an unkeyed sandbox and
+    stopped it, so npm in every sandbox lost its only way out."""
+    monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
+    from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
+
+    good = "omni-harness-sandbox-0000000a"
+    entries = [_inspect(good, env=[f"SANDBOX_API_KEY={sandbox_api_key(good)}"]), _inspect("omni-harness-sandbox-egress", env=[]), _inspect("omni-harness-sandbox-e2e-test-x", env=[])]
+    backend, stopped = _backend_with_containers(monkeypatch, entries)
+    assert [i.container_name for i in backend.list_running()] == [good]
+    assert stopped == [], f"stopped a container that is not a sandbox: {stopped}"
+    for compose in ("docker-compose.yaml", "docker-compose-dev.yaml"):
+        egress = yaml.safe_load((REPO / "docker" / compose).read_text())["services"]["sandbox-egress"]
+        assert not egress["container_name"].startswith("omni-harness-sandbox-"), compose
+
+
+def test_the_sandbox_api_proxy_allows_long_commands() -> None:
+    dockerfile = (REPO / "docker" / "sandbox" / "Dockerfile").read_text()
+    assert "proxy_read_timeout 3600s;" in dockerfile and "grep -q 'proxy_read_timeout 3600s;'" in dockerfile

@@ -89,7 +89,7 @@ class TestOrphanReconciliationE2E:
         3. Call list_running() → should find the container
         4. Simulate _reconcile_orphans() logic → container should be destroyed
         """
-        container_name = f"{E2E_PREFIX}-orphan01"
+        container_name = f"{E2E_PREFIX}-0a0a0a01"
 
         # Step 1: Start a container (simulating previous process lifecycle)
         result = subprocess.run(
@@ -117,11 +117,11 @@ class TestOrphanReconciliationE2E:
             # Step 3: list_running should find our container
             running = backend.list_running()
             found_ids = {info.sandbox_id for info in running}
-            assert "orphan01" in found_ids, f"Should find orphan01, got: {found_ids}"
+            assert "0a0a0a01" in found_ids, f"Should find 0a0a0a01, got: {found_ids}"
 
             # Step 4: Simulate reconciliation — this container's created_at is recent,
             # so with a very short idle_timeout it would be destroyed
-            orphan_info = next(info for info in running if info.sandbox_id == "orphan01")
+            orphan_info = next(info for info in running if info.sandbox_id == "0a0a0a01")
             assert orphan_info.created_at > 0, "created_at should be parsed from docker inspect"
 
             # Destroy it (simulating what _reconcile_orphans does for old containers)
@@ -143,7 +143,7 @@ class TestOrphanReconciliationE2E:
         try:
             # Start 3 containers
             for i in range(3):
-                name = f"{E2E_PREFIX}-multi{i:02d}"
+                name = f"{E2E_PREFIX}-0b0b0b{i:02d}"
                 result = subprocess.run(
                     _keyed_run(name),
                     capture_output=True,
@@ -166,9 +166,9 @@ class TestOrphanReconciliationE2E:
             running = backend.list_running()
             found_ids = {info.sandbox_id for info in running}
 
-            assert "multi00" in found_ids
-            assert "multi01" in found_ids
-            assert "multi02" in found_ids
+            assert "0b0b0b00" in found_ids
+            assert "0b0b0b01" in found_ids
+            assert "0b0b0b02" in found_ids
 
             # Destroy all
             for info in running:
@@ -187,7 +187,7 @@ class TestOrphanReconciliationE2E:
     def test_list_running_ignores_unrelated_containers(self):
         """Containers with different prefixes should not be listed."""
         unrelated_name = "unrelated-test-container"
-        our_name = f"{E2E_PREFIX}-ours001"
+        our_name = f"{E2E_PREFIX}-0c0c0c01"
 
         try:
             # Start an unrelated container
@@ -217,7 +217,7 @@ class TestOrphanReconciliationE2E:
             found_ids = {info.sandbox_id for info in running}
 
             # Should find ours but not unrelated
-            assert "ours001" in found_ids
+            assert "0c0c0c01" in found_ids
             # "unrelated-test-container" doesn't match "omni-harness-sandbox-e2e-test-" prefix
             for info in running:
                 assert not info.sandbox_id.startswith("unrelated")
@@ -229,7 +229,7 @@ class TestOrphanReconciliationE2E:
     def test_an_unkeyed_orphan_is_removed_not_adopted(self):
         """Review of #103 (H1): a container started before #98 (no key) is
         removed at startup reconciliation instead of being handed to a thread."""
-        name = f"{E2E_PREFIX}-unkeyed"
+        name = f"{E2E_PREFIX}-0d0d0d01"
         result = subprocess.run(["docker", "run", "--rm", "-d", "--name", name, E2E_TEST_IMAGE, "sleep", "3600"], capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         from omniharness.community.aio_sandbox.local_backend import LocalContainerBackend

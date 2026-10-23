@@ -3,7 +3,7 @@
 # on the upstream image (Apache-2.0, https://github.com/agent-infra/sandbox),
 # pinned by its multi-arch index digest, and removes what we do not use.
 #
-#   make sandbox-image   ->   omni-harness-sandbox:1.11.0-oh3
+#   make sandbox-image   ->   omni-harness-sandbox:1.11.0-oh4
 FROM ghcr.io/agent-infra/sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7
 
 # A cloud vendor's CLI and the outbound proxy service: not used here, and the
@@ -27,6 +27,11 @@ RUN sed -i '/@proxy_without_auth;/{/GET:\/v1\/ping"/!d}' /opt/gem/nginx-server-w
  && grep -q 'default @proxy_with_auth;' /opt/gem/nginx-server-with-auth.conf \
  && test ! -s /opt/gem/nginx-server-port-proxy.conf.template \
  && test "$(grep -c 'listen ${PUBLIC_LISTEN' /opt/gem/nginx-server-with-auth.conf)" = 2
+
+# A command may run for minutes (npm install); the public server's proxy to
+# the API used nginx's 60 s default and answered 504 mid-command.
+RUN sed -i 's|auth_request /_auth_handler;|auth_request /_auth_handler;\n        proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;|' /opt/gem/nginx-server-with-auth.conf \
+ && grep -q 'proxy_read_timeout 3600s;' /opt/gem/nginx-server-with-auth.conf
 
 # Only the API the provider calls runs: no browser, VNC, notebook or editor.
 ENV DISABLE_BROWSER=true \

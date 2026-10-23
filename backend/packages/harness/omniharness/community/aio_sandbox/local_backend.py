@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 from datetime import datetime
@@ -413,7 +414,11 @@ class LocalContainerBackend(SandboxBackend):
             return []
 
         # Filter to names matching our exact prefix (docker filter is substring-based)
-        container_names = [name.strip() for name in result.stdout.strip().splitlines() if name.strip().startswith(self._container_prefix + "-")]
+        # Only sandbox names: <prefix>-<8 hex> (the provider's deterministic id).
+        # Anything else that merely shares the prefix (the egress proxy was
+        # `omni-harness-sandbox-egress`) is neither adopted nor stopped.
+        sandbox_name = re.compile(re.escape(self._container_prefix) + r"-[0-9a-f]{8}")
+        container_names = [name.strip() for name in result.stdout.strip().splitlines() if sandbox_name.fullmatch(name.strip())]
         if not container_names:
             return []
 
