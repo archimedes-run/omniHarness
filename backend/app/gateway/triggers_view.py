@@ -129,6 +129,12 @@ class RunView(BaseModel):
     #: Whether it went out alone is unknown: the record predates batch ids.
     batch_not_recorded: bool = False
     thread_id: str | None = None
+    #: The run's full content in the run history (app/run_history): its id,
+    #: or None. `content` says which: "stored" · "not-stored" (no record for
+    #: this event: before the history existed, or purged) · "unavailable"
+    #: (the history could not be read here).
+    run_id: str | None = None
+    content: Literal["stored", "not-stored", "unavailable"] = "unavailable"
 
 
 class RunsView(BaseModel):
@@ -320,8 +326,15 @@ def _due_at(event_type: str, event_id: str, fallback: str) -> str:
     return fallback
 
 
-def describe_runs(audit: list[dict], rule_id: str, *, limit: int = 50) -> RunsView:
-    """Pure. One rule's runs, newest first, each worded from its records."""
+def describe_runs(audit: list[dict], rule_id: str, *, limit: int = 50, stored: list | None = None) -> RunsView:
+    """Pure. One rule's runs, newest first, each worded from its records.
+
+    `stored` is the rule's runs in the run history (RunSummary rows, newest
+    first), or None when the history cannot be read; each run links to the
+    latest stored run for its event."""
+    latest: dict[str, str] = {}
+    for summary in stored or []:
+        latest.setdefault(summary.event_id or "", summary.id)
     groups: dict[str, list[dict]] = {}
     for e in audit:
         if e.get("rule_id") == rule_id:
@@ -341,6 +354,9 @@ def describe_runs(audit: list[dict], rule_id: str, *, limit: int = 50) -> RunsVi
             reason=final.get("reason", "") if outcome != "delivered" else "",
             thread_id=thread,
         )
+        if stored is not None:
+            run.run_id = latest.get(event_id)
+            run.content = "stored" if run.run_id else "not-stored"
         if outcome == "delivered":
             mates = _mates(final, audit)
             run.delivered_with = mates

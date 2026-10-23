@@ -126,7 +126,14 @@ async def trigger_runs(rule_id: str, request: Request) -> RunsView:
     (delivered, held then delivered, delivered with others, failed, or not
     settled yet), newest first."""
     _, _, audit, _, _, _, _ = _engine_state(request.app.state)
-    return describe_runs(audit, rule_id)
+    history = getattr(request.app.state, "run_history", None)
+    stored = None
+    if history is not None:
+        try:
+            stored = history.list(kind="automation", source_id=rule_id, limit=500)
+        except Exception:  # noqa: BLE001 — unreadable history reads as "unavailable", not "none"
+            stored = None
+    return describe_runs(audit, rule_id, stored=stored)
 
 
 @router.get("/status", response_model=EngineStatus)

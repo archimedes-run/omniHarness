@@ -96,6 +96,9 @@ export interface RunView {
   delivered_with: { rule_id: string; event_id: string }[];
   batch_not_recorded: boolean;
   thread_id: string | null;
+  /** The run's full content in the run history, when stored. */
+  run_id?: string | null;
+  content?: "stored" | "not-stored" | "unavailable";
 }
 
 export interface RunsView {
