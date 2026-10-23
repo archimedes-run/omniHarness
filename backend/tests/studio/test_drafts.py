@@ -64,7 +64,7 @@ def test_a_skill_draft_returns_when_and_body(studio, fake_model) -> None:
     fake_model.replies.append(json.dumps({"description": "Use when reporting status.", "body": "# Status\n\n- Moved"}))
     resp = studio.client.post("/api/drafts/skill", json={"sentence": "how I want status reported"})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["skill"] == {"description": "Use when reporting status.", "body": "# Status\n\n- Moved"}
+    assert resp.json()["skill"] == {"name": "", "description": "Use when reporting status.", "body": "# Status\n\n- Moved"}
     assert not any((studio.tmp / "skills" / "custom").iterdir())
 
 
@@ -77,3 +77,50 @@ def test_an_unreadable_draft_says_so(studio, fake_model) -> None:
 
 def test_an_unknown_kind_is_refused(studio) -> None:
     assert studio.client.post("/api/drafts/project", json={"sentence": "x"}).status_code == 422
+
+
+def test_one_sentence_fills_every_agent_tab_with_what_exists_only(studio, fake_model) -> None:
+    """Agent Studio's + New: the draft also suggests the projects it works on
+    (the caller's own, by name), the reversible actions it might do on its
+    own (grantable classes only) and a schedule (a valid cron). Suggestions
+    only: no grant, schedule, agent or project is written."""
+    launch = studio.client.post("/api/ledger/projects", json={"name": "Launch"}).json()
+    fake_model.replies.append(
+        json.dumps(
+            {
+                "display_name": "Evening wrap-up",
+                "description": "Tells you what moved",
+                "instructions": "You are my evening wrap-up.",
+                "tool_groups": ["web"],
+                "skills": [],
+                "projects": ["launch", "Somebody else's project"],
+                "autonomy": ["tasks", "notes", "send_email"],
+                "schedule": {"cron": "0 18 * * 1-5", "timezone": "America/New_York"},
+            }
+        )
+    )
+    resp = studio.client.post("/api/drafts/agent", json={"sentence": "Every weekday at 6pm, wrap up Launch and add tasks for what's stuck"})
+    assert resp.status_code == 200, resp.text
+    agent = resp.json()["agent"]
+    assert agent["projects"] == [launch["id"]]
+    assert agent["autonomy"] == ["tasks", "notes"]
+    assert agent["schedule"] == {"cron": "0 18 * * 1-5", "timezone": "America/New_York"}
+    assert sorted(resp.json()["dropped"]) == ["Somebody else's project", "send_email"]
+    assert studio.client.get("/api/agents").json()["agents"] == [], "a draft created the agent"
+
+
+def test_a_drafted_schedule_that_is_not_cron_is_dropped_and_named(studio, fake_model) -> None:
+    fake_model.replies.append(json.dumps({**json.loads(AGENT_REPLY), "schedule": {"cron": "every evening", "timezone": "Mars/Base"}}))
+    body = studio.client.post("/api/drafts/agent", json={"sentence": "x"}).json()
+    assert body["agent"]["schedule"] is None
+    assert "schedule 'every evening'" in body["dropped"]
+    fake_model.replies.append(json.dumps({**json.loads(AGENT_REPLY), "schedule": {"cron": "30 7 * * *", "timezone": "Mars/Base"}}))
+    body = studio.client.post("/api/drafts/agent", json={"sentence": "x"}).json()
+    assert body["agent"]["schedule"] == {"cron": "30 7 * * *", "timezone": None}
+
+
+def test_a_new_skill_draft_names_it(studio, fake_model) -> None:
+    fake_model.replies.append(json.dumps({"name": "Status report", "description": "Use when reporting status.", "body": "# Status"}))
+    skill = studio.client.post("/api/drafts/skill", json={"sentence": "how I want status reported"}).json()["skill"]
+    assert skill["name"] == "Status report"
+    assert not any((studio.tmp / "skills" / "custom").iterdir())
