@@ -1290,3 +1290,34 @@ def test_continue_whose_observed_result_says_yes_confirms_nothing(gateway) -> No
 
     assert [a["id"] for a in _pending(gateway, "task")] == [open_task["id"]], "Continue (or its observed 'yes, confirm') answered another card"
     assert RAN == [("wipe_backup", {"name": "nightly"})]
+
+
+def test_a_continue_lock_is_released_only_when_its_owner_is_gone(tmp_path) -> None:
+    """A worker's startup releases another's Continue only if that worker's
+    process is gone, its host rebooted, or the lease expired."""
+    import json as _json
+    import os as _os
+    import socket
+    import subprocess
+    import time
+
+    from app.policy import pending as pending_module
+
+    store = pending_module.PendingStore(directory=tmp_path)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    base = {"host": socket.gethostname(), "boot": pending_module._boot_id(), "at": time.time()}
+    cases = {
+        "live": {**base, "pid": _os.getpid()},
+        "dead": {**base, "pid": dead.pid},
+        "rebooted": {**base, "boot": "another-boot", "pid": _os.getpid()},
+        "expired": {**base, "pid": _os.getpid(), "at": time.time() - pending_module.CONTINUE_LEASE_SECONDS - 1},
+        "elsewhere": {**base, "host": "another-host", "pid": 1},
+    }
+    for name, owner in cases.items():
+        (tmp_path / f"{name}.continued").write_text(_json.dumps(owner))
+
+    released = set(store.recover_continues())
+
+    assert released == {"dead", "rebooted", "expired"}, released
+    assert (tmp_path / "live.continued").exists() and (tmp_path / "elsewhere.continued").exists()
