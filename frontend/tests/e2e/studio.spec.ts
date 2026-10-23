@@ -107,6 +107,8 @@ test("a new skill is created under its slug", async ({ page }) => {
     waitUntil: "networkidle",
   });
   await page.getByTestId("studio-new").click();
+  // A new skill opens where one sentence drafts it; the name is on Details.
+  await page.getByTestId("studio-tab-details").click();
   await page.getByTestId("skill-name").fill("Cite every source");
   await page.getByTestId("skill-when").fill("Use when stating facts.");
   await page.getByTestId("studio-save").click();
@@ -199,7 +201,7 @@ test("History restores an earlier version as a new one", async ({ page }) => {
   await expect.poll(() => seen.undos.length).toBe(1);
   expect(seen.undos[0]!.url).toContain("/api/agents/evening-wrap-up/undo");
   expect(seen.undos[0]!.body).toEqual({ to_version: 1, base_version: 3 });
-  await expect(page.getByTestId("studio-history-note")).toHaveText(
+  await expect(page.getByTestId("studio-history-note")).toContainText(
     "Restored version 1 as a new version.",
   );
 });
@@ -283,7 +285,8 @@ test("Skill Test runs only when Test is pressed and reports what it observed", a
   expect(seen.tests[0]).toEqual({ message: "Wrap up my day", tries: 3 });
   const row = page.getByTestId("skill-test-row").first();
   await expect(row).toContainText("“Wrap up my day”");
-  await expect(row).toContainText("Loaded 2 of 3");
+  await expect(row.getByTestId("skill-test-outcome")).toHaveText("Loads");
+  await expect(row).toContainText("loaded in 2 of 3 tries");
   await expect(row).toContainText("Observed with default");
   await expect(row).toContainText("also opened cite-every-claim");
 });

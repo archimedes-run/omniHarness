@@ -217,11 +217,108 @@ for (const scheme of ["dark", "light"] as const) {
         msg,
       );
     }
+    // The board's words, from what was observed: most tries opened it.
     await expect(page.getByTestId("skill-test-outcome").first()).toHaveText(
-      "Loaded 2 of 3",
+      "Loads",
+    );
+    await expect(page.getByTestId("skill-test-outcome").nth(1)).toHaveText(
+      "Doesn't load",
     );
     await noLowContrast(page, "test");
     await shot(page, `skill-studio-test-live-${scheme}`);
+  });
+
+  test(`${scheme}: + New agent from one sentence fills every tab, and each meets AA`, async ({
+    page,
+  }) => {
+    await inTheme(page, scheme);
+    await stubStudio(page);
+    await page.goto("/workspace/chats?panel=agents&item=new", {
+      waitUntil: "networkidle",
+    });
+    await expect(page.getByTestId("studio-tab-instructions")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page
+      .getByLabel("Describe the agent in one sentence")
+      .fill("Every weekday morning, tell me what is waiting");
+    await page
+      .getByTestId("agent-draft-bar")
+      .getByRole("button", { name: "Draft" })
+      .click();
+    await expect(page.getByTestId("draft-note")).toContainText(
+      "Every tab is filled in for review",
+    );
+    // No "build it by chatting" page any more: it is made here.
+    await expect(sheet(page)).not.toContainText("build it by chatting");
+    await expect(page.getByTestId("studio-test-run")).toBeDisabled();
+    for (const tab of [
+      "instructions",
+      "overview",
+      "tools",
+      "autonomy",
+      "schedule",
+    ]) {
+      await page.getByTestId(`studio-tab-${tab}`).click();
+      await page.waitForTimeout(150);
+      await noLowContrast(page, `new ${tab}`);
+      await shot(page, `agent-studio-new-${tab}-${scheme}`);
+    }
+    await expect(page.getByTestId("schedule-suggested")).toContainText(
+      "Weekdays at 7:30 AM · America/New_York",
+    );
+    await page.getByTestId("studio-tab-overview").click();
+    await expect(page.getByTestId("overview-works-on")).toContainText(
+      "OmniHarness",
+    );
+    await page.getByTestId("studio-tab-autonomy").click();
+    await expect(page.getByTestId("grant-suggested-tasks")).toBeVisible();
+    await expect(
+      page.getByTestId("grant-tasks").locator("input"),
+    ).not.toBeChecked();
+  });
+
+  test(`${scheme}: saved as a version, with Undo, meets AA`, async ({
+    page,
+  }) => {
+    await inTheme(page, scheme);
+    await stubStudio(page);
+    await page.goto("/workspace/chats?panel=agents&item=evening-wrap-up", {
+      waitUntil: "networkidle",
+    });
+    await page.getByLabel("What it does, in one line").fill("Wraps up the day");
+    await page.getByTestId("studio-save").click();
+    await expect(page.getByTestId("studio-saved")).toContainText(
+      "Saved as version 4",
+    );
+    await expect(page.getByTestId("studio-undo")).toBeVisible();
+    await noLowContrast(page, "saved with undo");
+    await shot(page, `agent-studio-saved-undo-${scheme}`);
+  });
+
+  test(`${scheme}: + New skill from one sentence, each tab meets AA`, async ({
+    page,
+  }) => {
+    await inTheme(page, scheme);
+    await stubStudio(page);
+    await page.goto("/workspace/chats?panel=skills&item=new", {
+      waitUntil: "networkidle",
+    });
+    await page
+      .getByLabel("Describe the skill in one sentence")
+      .fill("How I want status reported");
+    await page
+      .getByTestId("skill-draft-bar")
+      .getByRole("button", { name: "Draft" })
+      .click();
+    await expect(page.getByTestId("studio-title")).toHaveText("Status report");
+    for (const tab of ["instructions", "details", "files", "test"]) {
+      await page.getByTestId(`studio-tab-${tab}`).click();
+      await page.waitForTimeout(150);
+      await noLowContrast(page, `new skill ${tab}`);
+      await shot(page, `skill-studio-new-${tab}-${scheme}`);
+    }
   });
 }
 

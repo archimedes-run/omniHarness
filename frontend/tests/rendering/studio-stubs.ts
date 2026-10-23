@@ -264,6 +264,9 @@ export async function stubStudio(
             instructions: "You are my morning brief.\n1. What is waiting.",
             tool_groups: ["web"],
             skills: ["cite-every-claim"],
+            projects: ["p1"],
+            autonomy: ["tasks"],
+            schedule: { cron: "30 7 * * 1-5", timezone: "America/New_York" },
           },
           skill: null,
           dropped: ["teleport"],
@@ -273,6 +276,7 @@ export async function stubStudio(
           model: "default",
           agent: null,
           skill: {
+            name: "Status report",
             description: "Use when someone asks where things stand.",
             body: "# Status\n\n- Moved",
           },

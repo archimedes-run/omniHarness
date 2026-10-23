@@ -502,8 +502,12 @@ test("palette commands navigate and open panels", async ({ page }) => {
     await page.getByRole("combobox").fill(name);
     await page.getByRole("option", { name }).click();
   };
+  // New agent opens Agent Studio's + New over this page (no page of its own).
   await run("New agent");
-  await expect(page).toHaveURL(/\/workspace\/agents\/new$/);
+  await expect(page).toHaveURL(/\/workspace\/chats\?panel=agents&item=new$/);
+  await expect(page.getByTestId("agent-studio")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet(page)).toHaveCount(0);
   await run("Connect Slack");
   await expect(page).toHaveURL(/\/workspace\/connections$/);
   await run("Open Settings");
