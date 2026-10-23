@@ -583,9 +583,12 @@ for (const width of [1440, 1280, 1024]) {
 test("with the sidebar collapsed the capsule is still on the main area's centre", async ({
   page,
   context,
+  baseURL,
 }) => {
+  // The cookie must be set for the origin the app is served on (baseURL), or
+  // the browser never sends it and the sidebar stays open.
   await context.addCookies([
-    { name: "sidebar_state", value: "false", url: "http://localhost:3000" },
+    { name: "sidebar_state", value: "false", url: baseURL! },
   ]);
   await page.setViewportSize({ width: 1280, height: 800 });
   await serve(page);

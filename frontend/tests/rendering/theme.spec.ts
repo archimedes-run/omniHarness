@@ -618,9 +618,9 @@ test("Inter for text and JetBrains Mono for code, shipped with the app", async (
       `${name} was not fetched`,
     ).toBe(true);
   }
-  const external = fontResponses.filter(
-    (r) => !r.url.startsWith("http://localhost"),
-  );
+  // "This app" is the page's own origin, never a literal host.
+  const app = new URL(page.url()).origin;
+  const external = fontResponses.filter((r) => new URL(r.url).origin !== app);
   expect(external, "a font was fetched from outside the app").toEqual([]);
   expect(fontResponses.filter((r) => r.status >= 400)).toEqual([]);
 });
@@ -652,9 +652,10 @@ test("a demo artifact loads Inter and JetBrains Mono from the app", async ({
   });
   expect(loaded).toEqual(expect.arrayContaining(["Inter", "JetBrains Mono"]));
   expect(fontResponses.length).toBeGreaterThan(0);
+  const app = new URL(page.url()).origin;
   expect(
     fontResponses.filter(
-      (r) => !r.url.startsWith("http://localhost") || r.status >= 400,
+      (r) => new URL(r.url).origin !== app || r.status >= 400,
     ),
   ).toEqual([]);
 });
