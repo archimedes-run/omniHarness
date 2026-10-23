@@ -121,8 +121,9 @@ ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter'
 #:
 #: `ledger_apply` answers with what it wrote ("Added T-1 …", a suggestion's
 #: plan, an Undo id), composed by the ledger service from the call's own
-#: arguments. `ledger_read` is NOT here: it returns stored text that content
-#: may have put there.
+#: arguments and ids, never a stored field (a project is named as the call
+#: named it, not by its stored name: review 5). `ledger_read` is NOT here: it
+#: returns stored text that content may have put there.
 TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"})
 
 #: Set on a tool result by the policy middleware at dispatch, and only when

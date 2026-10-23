@@ -22,6 +22,14 @@ from typing import Any
 
 from omniharness.persistence.ledger import LedgerRepository
 
+
+def _as_named(ref: Any, ref_names: dict[str, str]) -> str:
+    """A project as the call named it: the name its create_project gave it
+    (for an in-call ref), else the argument itself (a name or an id)."""
+    key = str(ref)
+    return ref_names.get(key, key)
+
+
 PROJECT_STATUSES = ("active", "paused", "done", "archived")
 TASK_STATUSES = ("todo", "doing", "blocked", "done", "dropped")
 OWNER_KINDS = {"me": "user", "user": "user", "agent": "agent", "session": "session", "workflow": "workflow"}
@@ -153,6 +161,12 @@ class LedgerService:
         done: list[str] = []
         refs: dict[str, str] = {}
         goal_refs: dict[str, str] = {}
+        # What each line calls a project: the name this call gave it, never
+        # the name as stored. A ledger_apply result is trusted as the
+        # harness's own words (lineage.TRUSTED_TOOL_RESULTS), so it carries
+        # only the call's own arguments and ids; a stored name is whatever a
+        # page or an email may have put there (review 5).
+        ref_names: dict[str, str] = {}
         for c in changes:
             op = c["op"]
             stamp = {"owner_id": user_id, "actor": actor, "pending_action_id": pending_action_id}
@@ -163,12 +177,14 @@ class LedgerService:
                 row = self.repo.create(s, "project", **stamp, name=_text(c, "name", limit=120, required=True), why=_text(c, "why", limit=2000), context=_text(c, "context", limit=8000), status=status)
                 if c.get("ref"):
                     refs[str(c["ref"])] = row["id"]
+                    ref_names[str(c["ref"])] = row["name"]
                 if thread_id:
                     # US1: the project links to the chat it was captured in.
                     self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="The chat it was captured in")
                 done.append(f"Created project “{row['name']}”.")
                 continue
             project = self._project(s, user_id, c.get("project"), refs)
+            named = _as_named(c.get("project"), ref_names)
             if op == "create_goal":
                 row = self.repo.create(
                     s,
@@ -181,7 +197,7 @@ class LedgerService:
                 )
                 if c.get("ref"):
                     goal_refs[str(c["ref"])] = row["id"]
-                done.append(f"Added goal “{row['title']}” to {project['name']}.")
+                done.append(f"Added goal “{row['title']}” to {named}.")
             elif op == "create_task":
                 status = c.get("status") or "todo"
                 if status not in TASK_STATUSES:
@@ -195,16 +211,16 @@ class LedgerService:
                     status=status,
                     due_date=_date(c.get("due_date"), "due_date"),
                     owner=_owner(c.get("owner")),
-                    goal_id=self._goal(s, project, c["goal"], goal_refs) if c.get("goal") else None,
+                    goal_id=self._goal(s, project, c["goal"], goal_refs, named) if c.get("goal") else None,
                     # Not the model's to set: it is not in the tool's
                     # contract and names paths evidence is matched on.
                     declared_files=[],
                 )
                 if thread_id and c.get("todo_ref"):
                     self.repo.link(s, owner_id=user_id, actor=actor, from_kind="task", from_id=row["id"], to_kind="thread", to_ref=thread_id, todo_ref=str(c["todo_ref"])[:300])
-                done.append(f"Added {row['short_id']} “{row['title']}” to {project['name']}.")
+                done.append(f"Added {row['short_id']} “{row['title']}” to {named}.")
             elif op == "update_task":
-                task = self._task(s, project, c.get("task"))
+                task = self._task(s, project, c.get("task"), named)
                 fields: dict[str, Any] = {}
                 if "title" in c:
                     fields["title"] = _text(c, "title", limit=300, required=True)
@@ -217,15 +233,15 @@ class LedgerService:
                 if "owner" in c:
                     fields["owner"] = _owner(c.get("owner"))
                 self.repo.update(s, "task", task["id"], **stamp, version=None, **fields)
-                done.append(f"Updated {task['short_id']} in {project['name']}.")
+                done.append(f"Updated {task['short_id']} in {named}.")
             elif op == "add_note":
                 self.repo.create(s, "note", **stamp, project_id=project["id"], decided=_text(c, "decided", limit=4000, required=True), why=_text(c, "why", limit=4000), thread_id=thread_id)
-                done.append(f"Recorded a decision in {project['name']}.")
+                done.append(f"Recorded a decision in {named}.")
             elif op == "link_thread":
                 if not thread_id:
                     raise LedgerError("link_thread: this conversation's id is not known here")
                 self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=project["id"], to_kind="thread", to_ref=thread_id, label=_text(c, "label", limit=300))
-                done.append(f"Attached this conversation to {project['name']}.")
+                done.append(f"Attached this conversation to {named}.")
         return done
 
     # ---- undo: a write the assistant made without a confirmation -----------
@@ -319,7 +335,7 @@ class LedgerService:
         raise LedgerError(f"there is no project {key!r}")
 
     @staticmethod
-    def _goal(s, project: dict, ref: Any, goal_refs: dict[str, str]) -> str:
+    def _goal(s, project: dict, ref: Any, goal_refs: dict[str, str], named: str) -> str:
         """A goal by in-plan ref, id, or exact title within the project."""
         from sqlalchemy import func, select
 
@@ -334,10 +350,10 @@ class LedgerService:
         matches = s.scalars(select(LedgerGoalRow).where(LedgerGoalRow.project_id == project["id"], func.lower(LedgerGoalRow.title) == key.lower())).all()
         if len(matches) == 1:
             return matches[0].id
-        raise LedgerError(f"{project['name']} has no goal {key!r}")
+        raise LedgerError(f"{named} has no goal {key!r}")
 
     @staticmethod
-    def _task(s, project: dict, ref: Any) -> dict:
+    def _task(s, project: dict, ref: Any, named: str) -> dict:
         from sqlalchemy import select
 
         from omniharness.persistence.ledger import LedgerTaskRow
@@ -346,7 +362,7 @@ class LedgerService:
         key = str(ref or "")
         row = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"], (LedgerTaskRow.short_id == key.upper()) | (LedgerTaskRow.id == key))).first()
         if row is None:
-            raise LedgerError(f"{project['name']} has no task {key!r}")
+            raise LedgerError(f"{named} has no task {key!r}")
         return to_dict(row)
 
     # ---- the UI: direct user edits ------------------------------------------
