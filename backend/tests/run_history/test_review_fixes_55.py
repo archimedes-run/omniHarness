@@ -610,7 +610,7 @@ def test_reading_the_key_during_rotations_never_fails(tmp_path) -> None:
     from app.run_history.crypto import StoreKey
 
     writer = StoreKey(tmp_path / "k" / "run_store.key", forbidden=[])
-    writer.key()
+    writer.bind("store-a")
     errors: list = []
     stop = threading.Event()
 
@@ -632,3 +632,29 @@ def test_reading_the_key_during_rotations_never_fails(tmp_path) -> None:
     for t in threads:
         t.join()
     assert not errors, errors[:3]
+
+
+def test_delete_all_in_one_data_dir_leaves_another_readable(tmp_path) -> None:
+    """Two data dirs share the key directory. "Delete run history" in B rotates
+    B's master AND the key file (re-wrapping A's master): A still reads, B's
+    old content does not."""
+    from app.run_history.crypto import StoreKey
+    from app.run_history.store import UNREADABLE
+
+    keys = tmp_path / "secrets"
+    a = RunHistory(tmp_path / "a", redact=lambda t: (t, True), key=StoreKey(keys / "run_store.key", forbidden=[]))
+    b = RunHistory(tmp_path / "b", redact=lambda t: (t, True), key=StoreKey(keys / "run_store.key", forbidden=[]))
+    ra = a.record(kind="automation", source_id="r", status="completed", body={"t": "A-CONTENT"})
+    rb = b.record(kind="automation", source_id="r", status="completed", body={"t": "B-CONTENT"})
+    import shutil
+
+    shutil.copytree(tmp_path / "b", tmp_path / "b-old")
+    old_file = (keys / "run_store.key").read_bytes()
+
+    b.delete_all()
+
+    assert (keys / "run_store.key").read_bytes() != old_file
+    assert a.get(ra)["body"] == {"t": "A-CONTENT"}, "another data dir's delete-all broke this history"
+    b_old = RunHistory(tmp_path / "b-old", redact=lambda t: (t, True), key=StoreKey(keys / "run_store.key", forbidden=[]))
+    assert b_old.get(rb)["body"] == {"withheld": UNREADABLE}
+    assert a.store_id != b.store_id
