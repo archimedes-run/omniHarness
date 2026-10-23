@@ -195,19 +195,125 @@ def test_PLAUSIBLE_apply_all_is_not_all_or_nothing(studio) -> None:
     assert not (_titles(studio) and failed_but_reported_executed), f"half-applied batch, failed card reported 'executed' and closed: {outcomes}, tasks {_titles(studio)}"
 
 
-def test_HOLDS_apply_all_racing_individual_confirms_writes_each_once(studio) -> None:
+def _two_cards_in_a_chat(studio, thread: str) -> list[str]:
+    """Two suggestion cards (A, B) proposed in a chat that EXISTS: a card
+    confirms only into a chat that exists, and one whose chat is gone is
+    declined by its button ("chat_deleted") but not by Apply all."""
     _launch(studio)
-    _agent([_fetch(), _call([_task("A")], "c1"), _call([_task("B")], "c2")]).invoke({"messages": [user_turn("summarise")]}, context=_ctx(studio, "t-race"))
-    ids = [c["id"] for c in _pending(studio)]
+    studio.client.post("/api/threads", json={"thread_id": thread})
+    _agent([_fetch(), _call([_task("A")], "c1"), _call([_task("B")], "c2")]).invoke({"messages": [user_turn("summarise")]}, context=_ctx(studio, thread))
+    cards = _pending(studio)
+    by_title = {c["arguments"]["changes"][0]["title"]: c["id"] for c in cards}
+    return [by_title["A"], by_title["B"]]
+
+
+def _executed(responses: list[dict]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for r in responses:
+        if r["outcome"] == "executed":
+            out[r["action_id"]] = out.get(r["action_id"], 0) + 1
+    return out
+
+
+def test_HOLDS_apply_all_racing_individual_confirms_writes_each_once(studio) -> None:
+    """Two Apply all clicks and four card buttons on the same two cards, at
+    once. ORDER-INDEPENDENT: every card is claimed by exactly one route and
+    the route that claims it runs it, so whatever the interleaving each card
+    is written once and exactly one response says "executed" for it.
+
+    It flaked (#123) because its chat did not exist: a button that reached a
+    card first declined it as "chat deleted", Apply all first wrote it."""
+    ids = _two_cards_in_a_chat(studio, "t-race")
 
     def go(i):
         if i % 3 == 0:
-            return studio.client.post("/api/confirmations/apply-all", json={"ids": ids}).status_code
-        return studio.client.post(f"/api/confirmations/{ids[i % 2]}/confirm", json={}).status_code
+            return studio.client.post("/api/confirmations/apply-all", json={"ids": ids}).json()["results"]
+        return [studio.client.post(f"/api/confirmations/{ids[i % 2]}/confirm", json={}).json()]
 
     with ThreadPoolExecutor(6) as pool:
-        list(pool.map(go, range(6)))
-    assert sorted(_titles(studio)) == ["A", "B"]
+        responses = [r for rs in pool.map(go, range(6)) for r in rs]
+    assert sorted(_titles(studio)) == ["A", "B"], responses
+    assert _executed(responses) == {ids[0]: 1, ids[1]: 1}, responses
+    assert _pending(studio) == []
+
+
+def test_HOLDS_apply_all_runs_a_card_whose_button_it_beat_when_another_card_is_taken(studio, monkeypatch) -> None:
+    """#123, a fixed interleaving (events, no timing):
+
+    1. B's button claims B (its run is held back until the end);
+    2. Apply all claims A;
+    3. A's button is pressed while Apply all holds A: told it is handled;
+    4. Apply all finds B taken.
+
+    A person confirmed A and was told another route has it, so Apply all must
+    run it. It used to give A back and write nothing: A never ran."""
+    import threading
+
+    import app.policy.confirm_flow as confirm_flow
+
+    a, b = _two_cards_in_a_chat(studio, "t-fixed")
+    real = confirm_flow.take_claim
+    b_claimed, a_ready, go_a, a_tried, apply_done = (threading.Event() for _ in range(5))
+    wait = 30
+
+    def take_claim(store, action_id, claimant):
+        if claimant == "apply-all":
+            if action_id == b:
+                go_a.set()  # step 3, while Apply all holds A
+                assert a_tried.wait(wait)
+            return real(store, action_id, claimant)
+        if action_id == b:
+            got = real(store, action_id, claimant)  # step 1
+            b_claimed.set()
+            assert apply_done.wait(wait)
+            return got
+        a_ready.set()
+        assert go_a.wait(wait)
+        try:
+            return real(store, action_id, claimant)
+        finally:
+            a_tried.set()
+
+    monkeypatch.setattr(confirm_flow, "take_claim", take_claim)
+    with ThreadPoolExecutor(2) as pool:
+        confirm_b = pool.submit(lambda: studio.client.post(f"/api/confirmations/{b}/confirm", json={}).json())
+        assert b_claimed.wait(wait)
+        confirm_a = pool.submit(lambda: studio.client.post(f"/api/confirmations/{a}/confirm", json={}).json())
+        assert a_ready.wait(wait)
+        try:
+            batch = studio.client.post("/api/confirmations/apply-all", json={"ids": [a, b]}).json()
+        finally:
+            apply_done.set()
+        responses = [*batch["results"], confirm_a.result(wait), confirm_b.result(wait)]
+
+    outcomes = {(r["action_id"], r["outcome"]) for r in batch["results"]}
+    assert confirm_a.result()["outcome"] == "already_resolved", responses
+    assert sorted(_titles(studio)) == ["A", "B"], f"a card the person confirmed never ran: {responses}"
+    assert outcomes == {(a, "executed"), (b, "already_resolved")} and batch["write_id"], responses
+    assert _executed(responses) == {a: 1, b: 1}, responses
+    assert _pending(studio) == []
+
+
+def test_HOLDS_apply_all_never_leaves_a_claim_held_when_the_batch_raises(studio, monkeypatch) -> None:
+    """#122 item 1: an exception other than BatchError resolved nothing and
+    gave nothing back, so every card sat claimed and open: never runnable,
+    never saying why. Now each is resolved FAILED (it is not known whether
+    the transaction committed, so reopening could write it twice)."""
+    from app.ledger.service import LedgerService
+
+    ids = _two_cards_in_a_chat(studio, "t-raise")
+
+    def boom(self, **kwargs):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(LedgerService, "apply_batch", boom)
+    client = studio.client
+    with pytest.raises(RuntimeError, match="database went away"):
+        client.post("/api/confirmations/apply-all", json={"ids": ids})
+    assert _pending(studio) == []
+    for card_id in ids:
+        assert client.post(f"/api/confirmations/{card_id}/confirm", json={}).json()["outcome"] == "already_resolved"
+    assert _titles(studio) == []
 
 
 def test_HOLDS_apply_all_refuses_a_declined_or_duplicate_id(studio) -> None:

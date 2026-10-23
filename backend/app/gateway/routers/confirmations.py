@@ -887,7 +887,17 @@ async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse
     every card is claimed, and all their changes are written in ONE ledger
     transaction under one write id, so one Undo reverts the batch. If any
     card cannot be applied, nothing is written, every claim is given back,
-    the cards stay open, and the failing card says why."""
+    the cards stay open, and the failing card says why.
+
+    A CARD ANOTHER ROUTE TAKES WHILE THIS CLAIMS (its own button, pressed at
+    the same moment) is that route's: it runs it, and this batch reports it
+    as handled there. The batch is then all or nothing over exactly the
+    cards it claimed (#123). It used to give every claim back and write
+    nothing, while a button pressed on a card it held had already been told
+    "another route confirmed that first": that card was confirmed by the
+    person and never ran. A claim this takes is never left held: the batch
+    either runs (EXECUTED), cannot run (claim given back, card open), or
+    ends unexpectedly (FAILED, so it is never run twice)."""
     import asyncio
 
     from app.gateway.authz import get_auth_context
@@ -927,38 +937,54 @@ async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse
         )
 
     claimed = []
-    for action in actions:
-        got = take_claim(middleware.pending, action.id, "apply-all")
-        if got is None:
-            for held in claimed:
-                middleware.pending.release_claim(held)
-            return ApplyAllResponse(
-                write_id=None,
-                results=[ResolveResponse(outcome="already_resolved" if a.id == action.id else "not_applied", action_id=a.id, message="Another route resolved a card in this group first, so nothing in it was applied.") for a in actions],
-            )
-        claimed.append(got)
+    taken = []
+    try:
+        for action in actions:
+            got = take_claim(middleware.pending, action.id, "apply-all")
+            (claimed if got is not None else taken).append(got or action)
+    except BaseException:
+        # Nothing has run: every claim taken so far goes back.
+        for held in claimed:
+            middleware.pending.release_claim(held)
+        raise
+    elsewhere = {a.id: ResolveResponse(outcome="already_resolved", action_id=a.id, message="Another route took this card first; it is handled there, not by this group.") for a in taken}
+    if not claimed:
+        return ApplyAllResponse(write_id=None, results=[elsewhere[a.id] for a in actions])
 
     write_id = new_write_id()
     batches = [(list((a.arguments or {}).get("changes") or []), a.thread_id) for a in claimed]
     try:
         done = await asyncio.to_thread(service.apply_batch, user_id=user_id, batches=batches, actor="assistant_confirmed", pending_action_id=write_id)
     except BatchError as exc:
+        # One transaction, rolled back: nothing was written, so the cards
+        # are open again exactly as before.
         for held in claimed:
             middleware.pending.release_claim(held)
         failed = claimed[exc.index]
-        results = [
-            ResolveResponse(outcome="failed", action_id=a.id, message=f"Not applied: {exc}", detail={"error": str(exc)})
+        by_id = {
+            a.id: ResolveResponse(outcome="failed", action_id=a.id, message=f"Not applied: {exc}", detail={"error": str(exc)})
             if a.id == failed.id
             else ResolveResponse(outcome="not_applied", action_id=a.id, message=f"Not applied: another card in this group ({failed.id}) could not be applied, so none was.")
             for a in claimed
-        ]
-        return ApplyAllResponse(write_id=None, results=results)
+        }
+        return ApplyAllResponse(write_id=None, results=[by_id.get(a.id) or elsewhere[a.id] for a in actions])
+    except BaseException as exc:
+        # NEVER LEFT CLAIMED (#122): it is not known whether the transaction
+        # committed, so the cards are not reopened (that could write them
+        # twice); each is resolved FAILED and says so, as a confirmed call
+        # that raises is (confirm_flow._apply). The type only in the log.
+        logger.error("apply-all: batch %s did not complete: %s", write_id, type(exc).__name__)
+        for held in claimed:
+            middleware.pending.resolve(held, Outcome.FAILED, "authorised, but the batch did not complete; check the project before asking again")
+        raise
 
-    results = []
+    results_by_id = {}
     for action, lines in zip(claimed, done, strict=True):
         action.confirmation = {"via": "apply-all", "thread_id": None, "user_id": user_id, "message_id": None, "write_id": write_id}
         middleware.pending.resolve(action, Outcome.EXECUTED)
-        if middleware.audit is not None:
+        results_by_id[action.id] = ResolveResponse(outcome="executed", action_id=action.id, message="Done.", detail={"result": safe_field(" ".join(lines))})
+    if middleware.audit is not None:
+        for action in claimed:
             middleware.audit.record_tier3(action=action, actor=middleware.actor, now=datetime.now(UTC))
-        results.append(ResolveResponse(outcome="executed", action_id=action.id, message="Done.", detail={"result": safe_field(" ".join(lines))}))
+    results = [results_by_id.get(a.id) or elsewhere[a.id] for a in actions]
     return ApplyAllResponse(write_id=write_id, results=results)
