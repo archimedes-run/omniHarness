@@ -257,19 +257,19 @@ def test_list_running_uses_single_batch_inspect_call(monkeypatch):
         result = MagicMock()
         if len(cmd) >= 2 and cmd[1] == "ps":
             result.returncode = 0
-            result.stdout = "omni-harness-sandbox-a\nomni-harness-sandbox-b\nomni-harness-sandbox-c\n"
+            result.stdout = "omni-harness-sandbox-0000000a\nomni-harness-sandbox-0000000b\nomni-harness-sandbox-0000000c\n"
             result.stderr = ""
             return result
         if len(cmd) >= 2 and cmd[1] == "inspect":
             inspect_call_count["count"] += 1
             # Expect all three names passed in a single call
-            assert cmd[2:] == ["omni-harness-sandbox-a", "omni-harness-sandbox-b", "omni-harness-sandbox-c"]
+            assert cmd[2:] == ["omni-harness-sandbox-0000000a", "omni-harness-sandbox-0000000b", "omni-harness-sandbox-0000000c"]
             result.returncode = 0
             result.stdout = json.dumps(
                 [
-                    _make_inspect_entry("omni-harness-sandbox-a", "2026-04-08T01:22:50Z", "8081"),
-                    _make_inspect_entry("omni-harness-sandbox-b", "2026-04-08T01:22:50Z", "8082"),
-                    _make_inspect_entry("omni-harness-sandbox-c", "2026-04-08T01:22:50Z", "8083"),
+                    _make_inspect_entry("omni-harness-sandbox-0000000a", "2026-04-08T01:22:50Z", "8081"),
+                    _make_inspect_entry("omni-harness-sandbox-0000000b", "2026-04-08T01:22:50Z", "8082"),
+                    _make_inspect_entry("omni-harness-sandbox-0000000c", "2026-04-08T01:22:50Z", "8083"),
                 ]
             )
             result.stderr = ""

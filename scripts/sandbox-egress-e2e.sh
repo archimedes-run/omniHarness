@@ -13,7 +13,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EGRESS_IMAGE=${EGRESS_IMAGE:-omni-harness-sandbox-egress:1}
-SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh3}
+SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh4}
 P=oh-e2e-$$
 NET_IN=$P-sbx NET_OUT=$P-out VOL=$P-ca EGRESS=$P-egress
 fail=0
@@ -120,4 +120,16 @@ print(out.stdout[-3:])
 EOF
 )
 check "gateway-derived key for B is accepted" 200 "$r"
+# A command longer than nginx's 60 s default still returns (it answered 504).
+cd "$ROOT/backend" && r=$(uv run --quiet python - "$P" <<'EOF'
+import json, subprocess, sys
+from omniharness.community.aio_sandbox.sandbox_auth import auth_headers
+name = f"{sys.argv[1]}-sandbox-b"
+key = auth_headers(name)["X-AIO-API-Key"]
+body = json.dumps({"command": "sleep 70; echo LONG-OK"})
+out = subprocess.run(["docker", "exec", f"{sys.argv[1]}-sandbox-a", "curl", "-s", "-m", "120", "--noproxy", "*", "-H", f"X-AIO-API-Key: {key}", "-H", "Content-Type: application/json", "-d", body, f"http://{name}:8080/v1/shell/exec"], capture_output=True, text=True)
+print("yes" if "LONG-OK" in out.stdout else "no: " + out.stdout[:120])
+EOF
+)
+check "a 70 s command returns" yes "$r"
 exit $fail
