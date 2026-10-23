@@ -2,7 +2,7 @@ install:
 	uv sync
 
 dev:
-	PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001 --reload
+	mkdir -p .omni-harness && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001 --reload --reload-exclude="$(CURDIR)/.omni-harness"
 
 gateway:
 	PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001
