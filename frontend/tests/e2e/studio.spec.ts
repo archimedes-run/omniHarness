@@ -17,7 +17,12 @@ test("a new agent is created from the panel with what the user typed", async ({
   await page.getByTestId("studio-new").click();
   await page.getByLabel("Agent name").fill("Evening digest");
   await page.getByLabel("What it does, in one line").fill("Sums up the day");
-  await expect(page.getByText("Saved as evening-digest")).toBeVisible();
+  // Nothing is saved yet, so the header must not claim it is (the footer
+  // says "Not saved" at the same time).
+  await expect(page.getByTestId("studio-id-note")).toHaveText(
+    "Will be saved as evening-digest",
+  );
+  await expect(page.getByText("Not saved")).toBeVisible();
   await page.getByTestId("studio-tab-instructions").click();
   await page.getByTestId("agent-instructions").fill("Say what moved today.");
   await page.getByTestId("studio-tab-tools").click();

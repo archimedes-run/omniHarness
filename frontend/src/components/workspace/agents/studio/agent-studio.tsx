@@ -467,8 +467,13 @@ function AgentEditor({
               className="text-muted-foreground placeholder:text-muted-foreground hover:border-border focus-visible:border-ring -mx-1.5 block w-full rounded-md border border-transparent bg-transparent px-1.5 text-[13px] outline-none"
             />
             {mode === "new" && slug ? (
-              <p className="text-muted-foreground mt-0.5 font-mono text-xs">
-                {c.idNote(slug)}
+              <p
+                className="text-muted-foreground mt-0.5 font-mono text-xs"
+                data-testid="studio-id-note"
+              >
+                {status.kind === "saved"
+                  ? c.idNote(slug)
+                  : c.idNoteUnsaved(slug)}
               </p>
             ) : null}
           </>
