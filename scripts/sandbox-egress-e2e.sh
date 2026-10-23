@@ -13,7 +13,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EGRESS_IMAGE=${EGRESS_IMAGE:-omni-harness-sandbox-egress:1}
-SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh2}
+SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh3}
 P=oh-e2e-$$
 NET_IN=$P-sbx NET_OUT=$P-out VOL=$P-ca EGRESS=$P-egress
 fail=0
@@ -88,7 +88,28 @@ for ext in json js css svg png woff2; do
   check "A -> B file download, &z=.$ext" 401 "$(code "--noproxy '*' '$D&z=.$ext'")"
 done
 check "A -> B /v1/sandbox?z=.json" 401 "$(code "--noproxy '*' 'http://$P-sandbox-b:8080/v1/sandbox?z=.json'")"
-ex "curl -s --noproxy '*' '$D&z=.json'" | grep -q SECRET-FROM-B && check "B's file never reaches A" yes no || check "B's file never reaches A" yes yes
+# The image's other ways around the key: a Host-routed port proxy on the same
+# listener, the absolute-form request line, a case-variant ping into the
+# header proxy. None may reach B's API: B's file never reaches A, and a
+# command never runs in B (it would create /tmp/pwned there).
+BB="http://$P-sandbox-b:8080"
+X='{"command":"touch /tmp/pwned; echo PWNED"}'
+for h in 8091-x 8081-x 8080-x 8092-x 3000-x; do
+  check "A -> B exec with Host: $h"        401 "$(code "--noproxy '*' -H 'Host: $h' -H 'Content-Type: application/json' -d '$X' $BB/v1/shell/exec")"
+  check "A -> B download with Host: $h"    401 "$(code "--noproxy '*' -H 'Host: $h' '$D'")"
+done
+check "A -> B absolute-form request line" 401 "$(code "--noproxy '*' --request-target 'http://8091-x/v1/file/download?path=/home/gem/secret.txt' $BB")"
+for ping in /V1/PING /v1/Ping /V1/ping; do
+  check "A -> B $ping + x-aio-proxy-port" 401 "$(code "--noproxy '*' -H 'x-aio-proxy-port: 8091' $BB$ping")"
+done
+check "GET /v1/ping stays open" 200 "$(code "--noproxy '*' $BB/v1/ping")"
+leak=no
+for h in "" "-H 'Host: 8091-x'" "-H 'Host: 8081-x'"; do
+  ex "curl -s --noproxy '*' $h '$D&z=.json'" | grep -q SECRET-FROM-B && leak=yes
+done
+check "B's file never reaches A" no "$leak"
+docker exec "$P-sandbox-b" test -e /tmp/pwned && ran=yes || ran=no
+check "no command from A ever ran in B" no "$ran"
 cd "$ROOT/backend" && r=$(uv run --quiet python - "$P" <<'EOF'
 import subprocess, sys
 from omniharness.community.aio_sandbox.sandbox_auth import auth_headers

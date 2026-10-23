@@ -301,3 +301,7 @@ def test_the_sandbox_image_requires_the_key_on_every_request_but_the_ping() -> N
     assert "sed -i '/@proxy_without_auth;/{/GET:\\/v1\\/ping\"/!d}' /opt/gem/nginx-server-with-auth.conf" in dockerfile
     assert "test \"$(grep -c '@proxy_without_auth;' /opt/gem/nginx-server-with-auth.conf)\" = 1" in dockerfile
     assert "grep -q 'default @proxy_with_auth;'" in dockerfile
+    # Round 3: no Host-routed port proxy on the public port; the ping is exact and case-sensitive.
+    assert ": > /opt/gem/nginx-server-port-proxy.conf.template" in dockerfile
+    assert "test ! -s /opt/gem/nginx-server-port-proxy.conf.template" in dockerfile
+    assert '"~^GET:/v1/ping$" @proxy_without_auth;' in dockerfile
