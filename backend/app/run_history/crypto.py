@@ -121,6 +121,7 @@ class StoreKey:
         # Re-entrant: a rotation checks for recent keys while holding it.
         self._lock = threading.RLock()
         self._cached: tuple[tuple[float, int], bytes] | None = None
+        self.store_id: str | None = None
         self._check_location()
 
     # -- files ----------------------------------------------------------------
@@ -187,13 +188,74 @@ class StoreKey:
         # deleted at each commit (no WAL holding old pages).
         conn.execute("PRAGMA secure_delete = ON")
         conn.execute("PRAGMA journal_mode = DELETE")
-        conn.execute("CREATE TABLE IF NOT EXISTS data_keys (key_id TEXT PRIMARY KEY, wrapped BLOB NOT NULL, created REAL NOT NULL DEFAULT 0)")
-        if "created" not in {r[1] for r in conn.execute("PRAGMA table_info(data_keys)")}:
-            conn.execute("ALTER TABLE data_keys ADD COLUMN created REAL NOT NULL DEFAULT 0")
+        conn.execute("CREATE TABLE IF NOT EXISTS data_keys (key_id TEXT PRIMARY KEY, wrapped BLOB NOT NULL, created REAL NOT NULL DEFAULT 0, store_id TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS store_masters (store_id TEXT PRIMARY KEY, wrapped BLOB NOT NULL)")
+        _add_columns(conn, "data_keys", {"created": "REAL NOT NULL DEFAULT 0", "store_id": "TEXT"})
         return conn
 
+    # -- the store this key serves -------------------------------------------------
+
+    def bind(self, store_id: str, *, own_ids: set[str] | None = None) -> None:
+        """Serve ONE run database (its `store_id`). Every data key belongs to
+        a store; this key only sees, destroys and rotates its own store's keys,
+        so another data dir sharing the key directory (another checkout, a
+        second OMNI_HARNESS_HOME) can never touch this history's keys. Each
+        store has its own master key (a row in the key store, wrapped by the
+        master key file). `own_ids`: run ids in this run database, to adopt
+        keys written before stores were scoped."""
+        self.store_id = store_id
+        self.key()  # creates the key directory and the key file on first use
+        c = self._db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            if c.execute("SELECT 1 FROM store_masters WHERE store_id = ?", (store_id,)).fetchone() is None:
+                with self._lock:
+                    file_key = self._master()
+                c.execute("INSERT INTO store_masters (store_id, wrapped) VALUES (?, ?)", (store_id, _seal(file_key, AESGCM.generate_key(bit_length=256), f"store|{store_id}")))
+            legacy = [r for r in c.execute("SELECT key_id, wrapped FROM data_keys WHERE store_id IS NULL") if own_ids and r[0] in own_ids]
+            if legacy:
+                with self._lock:
+                    file_key = self._master()
+                master = self._store_master(c)
+                for key_id, wrapped in legacy:
+                    dek = _open(file_key, wrapped, f"data-key|{key_id}")
+                    c.execute("UPDATE data_keys SET wrapped = ?, store_id = ? WHERE key_id = ?", (_seal(master, dek, f"data-key|{key_id}"), store_id, key_id))
+            c.execute("COMMIT")
+        except BaseException:
+            if c.in_transaction:
+                c.execute("ROLLBACK")
+            raise
+        finally:
+            c.close()
+
+    def _store_master(self, c: sqlite3.Connection) -> bytes:
+        """This store's master key, unwrapped with the key file. A rotation on
+        another worker may have re-wrapped it under a new file key: re-read."""
+        row = c.execute("SELECT wrapped FROM store_masters WHERE store_id = ?", (self._sid(),)).fetchone()
+        if row is None:
+            raise CannotDecrypt("this store has no master key (rotated away)")
+        for attempt in range(2):
+            with self._lock:
+                if attempt:
+                    self._cached = None
+                file_key = self._master()
+            try:
+                return _open(file_key, row[0], f"store|{self._sid()}")
+            except CannotDecrypt:
+                if attempt:
+                    raise
+                row = c.execute("SELECT wrapped FROM store_masters WHERE store_id = ?", (self._sid(),)).fetchone() or row
+        raise CannotDecrypt("unreachable")
+
+    def _sid(self) -> str:
+        sid = getattr(self, "store_id", None)
+        if not sid:
+            raise RuntimeError("StoreKey.bind(store_id) must be called before use")
+        return sid
+
     def key(self) -> bytes:
-        """The master key (created on first use). Also checks the key store."""
+        """The master key file's key (created on first use). Also checks the
+        key store."""
         with self._lock:
             master = self._master()
             with self._db():
@@ -203,19 +265,21 @@ class StoreKey:
     # -- per-run data keys -------------------------------------------------------
 
     def new_data_key(self, key_id: str) -> bytes:
-        """A new data key, wrapped and stored. The key store's WRITE lock is
-        taken BEFORE the master key is read, so a rotation (which holds that
-        lock from its check to its new master) is either wholly before this,
-        and the new master wraps the key, or wholly after, and sees it."""
+        """A new data key, wrapped by this store's master and stored. The key
+        store's WRITE lock is taken BEFORE any master is read, so a rotation
+        (which holds that lock from its check to its new masters) is either
+        wholly before this or wholly after."""
         dek = AESGCM.generate_key(bit_length=256)
         # The in-process lock is NOT held while waiting for the database lock
         # (another worker's rotation may hold that for a while).
         c = self._db()
         try:
             c.execute("BEGIN IMMEDIATE")
-            with self._lock:
-                master = self._master()
-            c.execute("INSERT INTO data_keys (key_id, wrapped, created) VALUES (?, ?, ?)", (key_id, _seal(master, dek, f"data-key|{key_id}"), time.time()))
+            master = self._store_master(c)
+            c.execute(
+                "INSERT INTO data_keys (key_id, wrapped, created, store_id) VALUES (?, ?, ?, ?)",
+                (key_id, _seal(master, dek, f"data-key|{key_id}"), time.time(), self._sid()),
+            )
             c.execute("COMMIT")
         except BaseException:
             if c.in_transaction:
@@ -226,50 +290,55 @@ class StoreKey:
         return dek
 
     def data_key(self, key_id: str) -> bytes:
-        with self._lock:
-            master = self._master()
-            with self._db() as c:
-                row = c.execute("SELECT wrapped FROM data_keys WHERE key_id = ?", (key_id,)).fetchone()
-        if row is None:
-            raise CannotDecrypt("no key for this run (deleted or expired)")
+        with self._db() as c:
+            row = c.execute("SELECT wrapped FROM data_keys WHERE key_id = ? AND store_id = ?", (key_id, self._sid())).fetchone()
+            if row is None:
+                raise CannotDecrypt("no key for this run (deleted or expired)")
+            master = self._store_master(c)
         return _open(master, row[0], f"data-key|{key_id}")
 
     def destroy(self, key_ids) -> None:
-        """Crypto-shred these runs: their wrapped data keys are deleted (and
-        zeroed in the key store file)."""
-        ids = [(k,) for k in key_ids]
+        """Crypto-shred these runs of THIS store: their wrapped data keys are
+        deleted (and zeroed in the key store file)."""
+        ids = [(k, self._sid()) for k in key_ids]
         if not ids:
             return
         with self._lock, self._db() as c:
-            c.executemany("DELETE FROM data_keys WHERE key_id = ?", ids)
+            c.executemany("DELETE FROM data_keys WHERE key_id = ? AND store_id = ?", ids)
 
     def key_ids(self, *, older_than: float | None = None) -> set[str]:
-        """Every key id; with `older_than` (seconds), only keys created at
-        least that long ago."""
+        """This store's key ids; with `older_than` (seconds), only keys created
+        at least that long ago."""
         with self._lock, self._db() as c:
             if older_than is None:
-                return {r[0] for r in c.execute("SELECT key_id FROM data_keys")}
-            return {r[0] for r in c.execute("SELECT key_id FROM data_keys WHERE created <= ?", (time.time() - older_than,))}
+                return {r[0] for r in c.execute("SELECT key_id FROM data_keys WHERE store_id = ?", (self._sid(),))}
+            return {r[0] for r in c.execute("SELECT key_id FROM data_keys WHERE store_id = ? AND created <= ?", (self._sid(), time.time() - older_than))}
 
     def has_recent_keys(self, within: float) -> bool:
-        """A key created in the last `within` seconds: a record may be in
-        flight on another worker (its key written, its row not yet committed)."""
+        """A key of this store created in the last `within` seconds: a record
+        may be in flight on another worker (key written, row not committed)."""
         with self._lock, self._db() as c:
-            return c.execute("SELECT 1 FROM data_keys WHERE created > ? LIMIT 1", (time.time() - within,)).fetchone() is not None
+            return c.execute("SELECT 1 FROM data_keys WHERE store_id = ? AND created > ? LIMIT 1", (self._sid(), time.time() - within)).fetchone() is not None
 
     def rotate(self) -> None:
-        """Destroy every data key and replace the master key (unconditional:
-        "Delete run history")."""
+        """Destroy this store's data keys and replace its master key
+        (unconditional: "Delete run history")."""
         self._rotate(unless_recent=None)
 
     def rotate_if_quiet(self, within: float) -> bool:
-        """Rotate only if no data key is younger than `within` seconds, the
-        check and the rotation in ONE key-store write transaction, so no
-        record can slip a key in between (new_data_key waits for the lock).
-        Returns whether it rotated."""
+        """Rotate only if no data key of this store is younger than `within`
+        seconds, the check and the rotation in ONE key-store write
+        transaction, so no record can slip a key in between (new_data_key waits
+        for the lock). Returns whether it rotated."""
         return self._rotate(unless_recent=within)
 
     def _rotate(self, *, unless_recent: float | None) -> bool:
+        """In one key-store write transaction: this store's data keys are
+        destroyed and its master replaced, AND the master key FILE is replaced
+        with every store's master re-wrapped under the new file key. So neither
+        an old copy of this run database nor an old copy of the key store opens
+        with the current key file. Other stores keep working: only the wrapping
+        of their masters changes."""
         with self._lock:
             c = self._db()
             try:
@@ -277,13 +346,22 @@ class StoreKey:
                 if unless_recent is not None and self.has_recent_keys(unless_recent):
                     c.execute("ROLLBACK")
                     return False
-                c.execute("DELETE FROM data_keys")
-                # The new master goes in by an atomic rename BEFORE the old
+                old_file_key = self._master()
+                c.execute("DELETE FROM data_keys WHERE store_id = ?", (self._sid(),))
+                new_file_key = AESGCM.generate_key(bit_length=256)
+                for sid, wrapped in c.execute("SELECT store_id, wrapped FROM store_masters").fetchall():
+                    store_master = AESGCM.generate_key(bit_length=256) if sid == self._sid() else _open(old_file_key, wrapped, f"store|{sid}")
+                    c.execute("UPDATE store_masters SET wrapped = ? WHERE store_id = ?", (_seal(new_file_key, store_master, f"store|{sid}"), sid))
+                # The new key file goes in by an atomic rename BEFORE the old
                 # one's bytes are overwritten (through a handle kept on the old
                 # inode), so a reader sees the old key or the new, never zeros.
                 tmp = self.path.with_name(f".{self.path.name}.new")
                 tmp.unlink(missing_ok=True)
-                self._write_new_master(tmp)
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(base64.b64encode(new_file_key))
+                    fh.flush()
+                    os.fsync(fh.fileno())
                 old = open(self.path, "r+b") if self.path.exists() else None
                 try:
                     os.replace(tmp, self.path)
@@ -305,7 +383,7 @@ class StoreKey:
                 c.close()
             with self._db() as v:
                 v.execute("VACUUM")
-        logger.info("run history: rotated its master key and destroyed every data key")
+        logger.info("run history: rotated this store's master key (and the key file); its data keys are destroyed")
         return True
 
     # -- sealing -------------------------------------------------------------------
@@ -318,3 +396,25 @@ class StoreKey:
         if not token.startswith(PREFIX):
             raise CannotDecrypt("not sealed")
         return _open(self.data_key(key_id), base64.b64decode(token[len(PREFIX) :]), aad)
+
+
+def _add_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    """Add missing columns, safely across workers: under a write lock, and a
+    "duplicate column" from a worker that won the race counts as done."""
+    if not set(columns) - {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in have:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise

@@ -59,7 +59,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.run_history.crypto import CannotDecrypt, StoreKey
+from app.run_history.crypto import CannotDecrypt, StoreKey, _add_columns
 
 logger = logging.getLogger(__name__)
 
@@ -409,13 +409,17 @@ class RunHistory:
             # A store created before owners were stored: add the column. Its
             # rows keep a NULL owner, which the ownership rule gives to the
             # owner account only (app/gateway/ownership.py).
-            if "owner_id" not in {r["name"] for r in c.execute("PRAGMA table_info(runs)")}:
-                c.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
-            ledger_cols = {r["name"] for r in c.execute("PRAGMA table_info(automation_threads)")}
-            if "delete_reason" not in ledger_cols:
-                c.execute("ALTER TABLE automation_threads ADD COLUMN delete_reason TEXT")
-            if "trim_pending" not in ledger_cols:
-                c.execute("ALTER TABLE automation_threads ADD COLUMN trim_pending INTEGER NOT NULL DEFAULT 0")
+            # Column migrations run under a write lock, and a "duplicate
+            # column" from another worker that won the race counts as done
+            # (4 workers open the store at once).
+            _add_columns(c, "runs", {"owner_id": "TEXT"})
+            _add_columns(c, "automation_threads", {"delete_reason": "TEXT", "trim_pending": "INTEGER NOT NULL DEFAULT 0"})
+            # This run database's own id. The key store is shared by every data
+            # dir of this user; each store sees and destroys only its own keys.
+            c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('store_id', ?)", (uuid.uuid4().hex,))
+            self.store_id = c.execute("SELECT value FROM settings WHERE key = 'store_id'").fetchone()[0]
+            own_ids = {r[0] for r in c.execute("SELECT id FROM runs")}
+        self.key.bind(self.store_id, own_ids=own_ids)
         self._clear_stale_tmp()
 
     def _clear_stale_tmp(self, older_than: float = 3600.0) -> None:
