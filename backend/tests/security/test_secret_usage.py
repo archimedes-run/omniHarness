@@ -68,6 +68,22 @@ def test_the_live_shaped_env_reports_exactly_the_five_dead_keys(tmp_path, monkey
         assert value not in caplog.text
 
 
+def test_in_the_container_image_vars_and_token_file_paths_are_not_reported(tmp_path, monkeypatch) -> None:
+    """#91: with no readable .env the process environment is read; only the
+    gateway's allowlisted keys count, so GPG_KEY and the watcher token path don't."""
+    from app.gateway import secret_usage
+
+    (tmp_path / "config.yaml").write_text(LIVE_SHAPED_CONFIG)
+    monkeypatch.setenv("OMNI_HARNESS_CONFIG_PATH", str(tmp_path / "config.yaml"))
+    monkeypatch.setattr(secret_usage, "_env_file_keys", set)
+    monkeypatch.setenv("GPG_KEY", "7169605F62C751356D054A26A821E680E5FA6305")
+    monkeypatch.setenv("OMNI_HARNESS_WATCHER_TOKEN_FILE", "/run/secrets/watcher.token")
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-unused")
+    unused = secret_usage.log_unused_secrets()
+    assert "GPG_KEY" not in unused and "OMNI_HARNESS_WATCHER_TOKEN_FILE" not in unused, unused
+    assert "TAVILY_API_KEY" in unused, "an allowlisted key that nothing uses is still reported"
+
+
 def test_a_reference_in_a_disabled_or_commented_entry_does_not_count() -> None:
     from app.gateway.secret_usage import unused_secret_keys
 

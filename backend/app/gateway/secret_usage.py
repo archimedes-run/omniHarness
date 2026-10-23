@@ -206,9 +206,10 @@ def log_unused_secrets() -> list[str]:
         extensions = _raw(ExtensionsConfig.resolve_config_path())
     except Exception:  # noqa: BLE001
         extensions = {}
-    # The .env's own keys when it is readable here; otherwise (a container
-    # given the file through env_file) the process environment.
-    present = _env_file_keys() or {k for k, v in os.environ.items() if v}
+    # The .env's own keys when it is readable here; otherwise (the container,
+    # given only its allowlisted keys) those keys: the image's own variables
+    # (GPG_KEY) and compose-fixed paths (*_TOKEN_FILE) are not .env secrets.
+    present = _env_file_keys() or {k for k, v in os.environ.items() if v and k in GATEWAY_ENV_KEYS}
     unused = unused_secret_keys(present, config, extensions)
     if unused:
         logger.info("env: %d secret key(s) present but unused: %s", len(unused), ", ".join(unused))

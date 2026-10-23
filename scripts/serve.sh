@@ -131,7 +131,8 @@ fi
 
 # Extra flags for uvicorn
 if $DEV_MODE && ! $DAEMON_MODE; then
-    GATEWAY_EXTRA_FLAGS="--reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude='*.pyc' --reload-exclude='__pycache__' --reload-exclude='sandbox/' --reload-exclude='.omni-harness/'"
+    GATEWAY_EXTRA_FLAGS="--reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude='*.pyc' --reload-exclude='__pycache__' --reload-exclude='sandbox/' --reload-exclude='$REPO_ROOT/backend/.omni-harness'"
+    mkdir -p "$REPO_ROOT/backend/.omni-harness"
 else
     GATEWAY_EXTRA_FLAGS=""
 fi
