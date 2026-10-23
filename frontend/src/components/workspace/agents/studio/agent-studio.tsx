@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -41,7 +42,7 @@ import {
   outlineButton,
   solidButton,
 } from "./studio-frame";
-import { readItemParam, writeItemParam } from "./url-item";
+import { ITEM_PARAM, readItemParam, writeItemParam } from "./url-item";
 import { VersionHistory } from "./version-history";
 
 type Selection =
@@ -131,6 +132,15 @@ export function AgentStudio() {
     }
   }, [selection]);
   useEffect(() => () => writeItemParam(null), []);
+  // "+ New agent" asked for from outside the panel (the palette, the chat
+  // bar's picker) while it is already open: the URL says `item=new`, and the
+  // panel follows it rather than staying on the agent it shows.
+  const itemParam = useSearchParams().get(ITEM_PARAM);
+  useEffect(() => {
+    if (itemParam === "new") {
+      setSelection((s) => (s?.kind === "new" ? s : { kind: "new" }));
+    }
+  }, [itemParam]);
 
   const selectedAgent =
     current.kind === "agent"

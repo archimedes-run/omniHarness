@@ -51,6 +51,35 @@ test("a new agent is created from the panel with what the user typed", async ({
   );
 });
 
+test("palette New agent switches an open Agents panel to the new-agent draft", async ({
+  page,
+}) => {
+  await stubStudio(page);
+  await page.goto("/workspace/chats?panel=agents&item=evening-wrap-up", {
+    waitUntil: "networkidle",
+  });
+  await expect(page.getByTestId("studio-item-evening-wrap-up")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByTestId("agent-draft-bar")).toHaveCount(0);
+
+  await page.keyboard.press("Control+k");
+  const palette = page.getByTestId("command-palette");
+  await expect(palette).toBeVisible();
+  await palette.getByRole("option", { name: "New agent" }).click();
+  await expect(palette).toHaveCount(0);
+
+  await expect(page).toHaveURL(/[?&]item=new(&|$)/);
+  // The panel follows the URL: the draft bar and an empty name, with the
+  // agent it showed no longer the current one.
+  await expect(page.getByTestId("agent-draft-bar")).toBeVisible();
+  await expect(page.getByTestId("studio-title")).toHaveValue("");
+  await expect(
+    page.getByTestId("studio-item-evening-wrap-up"),
+  ).not.toHaveAttribute("aria-current", "page");
+});
+
 test("editing an agent's projects and skills saves only on Save", async ({
   page,
 }) => {
