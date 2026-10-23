@@ -44,7 +44,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -385,7 +385,7 @@ def _token_like(v: str) -> bool:
     return sum(bool(re.search(p, v)) for p in (r"[a-z]", r"[A-Z]", r"\d")) >= 2
 
 
-def secret_values_in(tree: Any, *, env: dict[str, str] | None = None, all_values: bool = False, key: str = "") -> list[str]:
+def secret_values_in(tree: Any, *, env: Mapping[str, str] | None = None, all_values: bool = False, key: str = "") -> list[str]:
     """Secret values in a parsed config tree.
 
     A value under a secret-named key (`is_secret_key`) always counts, numbers
@@ -453,12 +453,12 @@ def yaml_secrets(path: Path) -> list[str]:
     import yaml
 
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    return secret_values_in(data, env=dict(os.environ))
+    return secret_values_in(data, env=os.environ)
 
 
 def json_secrets(path: Path) -> list[str]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return secret_values_in(data, env=dict(os.environ))
+    return secret_values_in(data, env=os.environ)
 
 
 def raw_file_secret(path: Path) -> list[str]:

@@ -217,3 +217,28 @@ def test_deleting_one_run_over_http_destroys_its_key(gateway) -> None:
     assert client.get(f"/api/run-history/runs/{gone}").status_code == 404
     assert gone not in h.key.key_ids() and kept in h.key.key_ids()
     assert client.delete(f"/api/run-history/runs/{gone}").status_code == 404
+
+
+def test_the_key_files_have_their_own_subdirectory_and_touch_nothing_else(tmp_path, monkeypatch) -> None:
+    """~/.omni-harness-secrets also holds watcher.token: the run store's files
+    live in run-store/, and creating, rotating and purging leave every other
+    file of the secrets dir as it was."""
+    from app.run_history.crypto import default_key_path
+
+    monkeypatch.delenv("OMNI_HARNESS_RUN_STORE_KEY_FILE")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    secrets_dir = tmp_path / ".omni-harness-secrets"
+    secrets_dir.mkdir(mode=0o700)
+    (secrets_dir / "watcher.token").write_text("FAKE-WATCHER-TOKEN")
+    os.chmod(secrets_dir / "watcher.token", 0o600)
+    before = {p.name: (p.read_bytes(), stat.S_IMODE(p.stat().st_mode)) for p in secrets_dir.iterdir()}
+
+    path = default_key_path()
+    assert path.parent == secrets_dir / "run-store"
+    h = RunHistory(tmp_path / "db", redact=lambda t: (t, True), key=StoreKey(path, forbidden=[]))
+    record(h, MARKER, started_at=datetime.now(UTC) - timedelta(days=40))
+    h.purge()
+    h.delete_all()
+
+    after = {p.name: (p.read_bytes(), stat.S_IMODE(p.stat().st_mode)) for p in secrets_dir.iterdir() if p.name != "run-store"}
+    assert after == before, "the run store touched another file of the secrets dir"

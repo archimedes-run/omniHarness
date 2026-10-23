@@ -11,7 +11,7 @@ status, sizes, owner. Redaction runs BEFORE encryption.
 TWO KEY FILES, both OUTSIDE the run database, the project tree, the gateway's
 data dir and every agent-reachable mount, in one 0700 directory:
   * the MASTER key, ``$OMNI_HARNESS_RUN_STORE_KEY_FILE``, else
-    ``~/.omni-harness-secrets/run_store.key`` (0600);
+    ``~/.omni-harness-secrets/run-store/run_store.key`` (0600), its own subdirectory, never beside another secret;
   * the KEY STORE beside it, ``run_store_keys.sqlite3`` (0600): each run's
     data key, WRAPPED by the master key, under the run's id.
 The run database holds only ciphertext; its rows name their key by run id.
@@ -71,7 +71,9 @@ def default_key_path() -> Path:
     configured = os.environ.get(KEY_FILE_ENV)
     if configured:
         return Path(configured).expanduser()
-    return Path(os.environ.get("HOME") or Path.home()) / ".omni-harness-secrets" / "run_store.key"
+    # Its own subdirectory of the per-user secrets dir: nothing the run store
+    # rotates or creates ever sits beside another secret (watcher.token).
+    return Path(os.environ.get("HOME") or Path.home()) / ".omni-harness-secrets" / "run-store" / "run_store.key"
 
 
 def forbidden_roots() -> list[Path]:
@@ -130,7 +132,7 @@ class StoreKey:
         resolved = self.path.expanduser().resolve().parent
         for root in self._forbidden:
             if resolved == root or root in resolved.parents:
-                raise KeyRefused(f"The run store key files must not be inside {root} (the project or the data dir, which agents can reach). Move them, e.g. to ~/.omni-harness-secrets/, and set {KEY_FILE_ENV}.")
+                raise KeyRefused(f"The run store key files must not be inside {root} (the project or the data dir, which agents can reach). Move them, e.g. to ~/.omni-harness-secrets/run-store/, and set {KEY_FILE_ENV}.")
 
     def _check_mode(self, path: Path) -> None:
         mode = stat.S_IMODE(path.stat().st_mode)

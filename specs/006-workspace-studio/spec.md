@@ -271,7 +271,7 @@ It also provides the create-from-chat hook that 005 Slice 5 uses.
 
 The run history (Automations history, 007 replay) keeps each automation run's full content locally. Rules:
 
-- **Encrypted at rest.** Each run's content is sealed with its own data key. The data keys are kept, wrapped by a master key, in a key store beside the master key file, outside the run database, the project, the data dir and every agent sandbox mount (`~/.omni-harness-secrets/`, 0700; files 0600). Deleting or expiring a run destroys its data key. "Delete run history", and a purge that empties the store, also rotate the master key.
+- **Encrypted at rest.** Each run's content is sealed with its own data key. The data keys are kept, wrapped by a master key, in a key store beside the master key file, outside the run database, the project, the data dir and every agent sandbox mount (`~/.omni-harness-secrets/run-store/`, its own subdirectory, 0700; files 0600). Deleting or expiring a run destroys its data key. "Delete run history", and a purge that empties the store, also rotate the master key.
 - **Backups.** No backup routine and no agent ever copies the key store or the master key file into the same backup as the run database.
 - **Retention covers the automations' conversations.** A live automation whose conversation holds content older than the retention starts a fresh conversation (it forgets earlier runs). A conversation the person wrote in within the retention is kept, trimmed to the retention.
 
