@@ -6,7 +6,10 @@ import { expect, type Page, type Route } from "@playwright/test";
  * the browser, so a test asserts what the gateway was asked to do.
  */
 export const THREAD = "11111111-2222-3333-4444-555555555555";
-const AGO = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+/** Five minutes before the request, not before this module loaded: a worker
+ * loads it once, and a test that runs minutes later must still read "5 minutes
+ * ago". */
+const ago = () => new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
 export type Model = {
   name: string;
@@ -45,7 +48,11 @@ const BASE_SOURCES: Src[] = [
     "GOOGLECALENDAR",
     false,
     "authorised-selected",
-    { last_success_at: AGO },
+    {
+      get last_success_at() {
+        return ago();
+      },
+    },
   ],
   ["connector:SLACK", "Slack", "SLACK", false, "not-authorised"],
 ];
@@ -222,8 +229,8 @@ export async function stub(
     status: "active",
     context: null,
     version: 1,
-    created_at: AGO,
-    updated_at: AGO,
+    created_at: ago(),
+    updated_at: ago(),
   };
   await page.route("**/api/ledger/threads/*/projects", (route) =>
     json(route, attached ? [{ link_id: "l1", project: PROJECT }] : []),
