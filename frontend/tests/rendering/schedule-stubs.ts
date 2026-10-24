@@ -28,14 +28,25 @@ const json = (route: Route, body: unknown, status = 200) =>
     body: JSON.stringify(body),
   });
 
-/** 18:00 in the browser's zone, two days on: what the engine would compute
- * for "0 18 * * *"-like schedules, close enough for the panels' wording. */
+/** The specs pin the browser to this zone (test.use timezoneId). */
+const BROWSER_ZONE = "America/New_York";
+
+/** hh:mm in the browser's zone, two days on: what the engine would compute
+ * for "0 18 * * *"-like schedules, close enough for the panels' wording.
+ * Built in BROWSER_ZONE, not the test process's zone (CI runs in UTC). */
 function nextAt(hhmm: string) {
-  const [h, m] = hhmm.split(":").map(Number);
-  const d = new Date();
-  d.setDate(d.getDate() + 2);
-  d.setHours(h!, m, 0, 0);
-  return d.toISOString();
+  const day = new Date(Date.now() + 2 * 86_400_000).toLocaleDateString(
+    "en-CA",
+    { timeZone: BROWSER_ZONE },
+  );
+  const offset = new Intl.DateTimeFormat("en-US", {
+    timeZone: BROWSER_ZONE,
+    timeZoneName: "longOffset",
+  })
+    .formatToParts(new Date(`${day}T12:00:00Z`))
+    .find((p) => p.type === "timeZoneName")!
+    .value.replace("GMT", "");
+  return new Date(`${day}T${hhmm}:00${offset || "Z"}`).toISOString();
 }
 
 export async function ruleFile(page: Page) {
