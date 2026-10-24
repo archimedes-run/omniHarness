@@ -110,6 +110,47 @@ class PolicyAuditLog:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
         return entry
 
+    def record_refused(
+        self,
+        *,
+        tool: str,
+        targets: list[str],
+        reason: str,
+        owner_id: str | None,
+        thread_id: str | None,
+        requester: str,
+        origin: str,
+        origin_source: str,
+        now: datetime | None = None,
+    ) -> dict:
+        """A plan refused BEFORE it became a card (it could not be applied),
+        when it was not the user's own request: content or an automation led
+        to it, so nobody may be reading the model's reply. Recorded where
+        Tier 3 history is read (GET /api/policy/audit), so the attempt stays
+        visible (FR-006); nothing was proposed, so there is nothing to
+        confirm."""
+        entry = {
+            "kind": "refused-plan",
+            "at": (now or datetime.now()).isoformat(),
+            "actor": self.actor,
+            "tier": 3,
+            "tool": tool,
+            "plan_as_stated": f"Refused before it was proposed: {reason}. Nothing was changed.",
+            "targets": list(targets),
+            "authorised_by": None,
+            "outcome": "refused",
+            "reason": reason,
+            "thread_id": thread_id,
+            "requester": requester,
+            "owner_id": owner_id,
+            "origin": origin,
+            "origin_source": origin_source,
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        return entry
+
     def entries(self) -> list[dict]:
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()

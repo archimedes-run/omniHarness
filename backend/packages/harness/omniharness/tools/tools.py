@@ -452,7 +452,7 @@ def fit_connectors_to_cap(tools: list[BaseTool], connector_names: set[str], cap:
     Unchanged when everything fits, or when there are no connector tools to
     move (the caller's cap check then decides, as before).
     """
-    from omniharness.tools.builtins.tool_search import DeferredToolRegistry, get_deferred_registry, set_deferred_registry
+    from omniharness.tools.builtins.tool_search import MAX_RESULTS, DeferredToolRegistry, get_deferred_registry, set_deferred_registry
     from omniharness.tools.builtins.tool_search import tool_search as tool_search_tool
 
     registry = get_deferred_registry()
@@ -465,7 +465,9 @@ def fit_connectors_to_cap(tools: list[BaseTool], connector_names: set[str], cap:
     if not movable:
         return tools
     has_search = any(t.name == tool_search_tool.name for t in offered)
-    room = budget - (len(offered) - len(movable)) - (1 if defer and not has_search else 0)
+    # Deferring keeps room for what tool_search promotes (MAX_RESULTS per
+    # search; the registry returns older promotions to deferred past it).
+    room = budget - (len(offered) - len(movable)) - ((1 if not has_search else 0) + MAX_RESULTS if defer else 0)
     toolkits: dict[str, list[BaseTool]] = {}
     for t in movable:
         toolkits.setdefault(_toolkit_of(t), []).append(t)
@@ -486,6 +488,9 @@ def fit_connectors_to_cap(tools: list[BaseTool], connector_names: set[str], cap:
         registry = DeferredToolRegistry()
     for t in overflow:
         registry.register(t)
+    # What stays offered, and the room left for promotions under the budget.
+    active = len(offered) - len(overflow) + (0 if has_search else 1)
+    registry.max_promoted = max(budget - active, 0)
     set_deferred_registry(registry)
     logger.info("Tool cap %d: deferred %d connector tool(s) of %s to tool_search", cap, len(overflow), ", ".join(moved))
     return tools if has_search else [*tools, tool_search_tool]

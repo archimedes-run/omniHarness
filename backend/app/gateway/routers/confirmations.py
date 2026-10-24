@@ -904,6 +904,13 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
         return ResolveResponse(outcome="already_resolved", action_id=action_id, message="Another route resolved that plan first.")
 
     arguments = body.arguments
+    if action.tool_name == "ledger_apply" and isinstance(arguments, dict):
+        # The edit is resolved afresh when it runs: a pin carried over from
+        # the original (or sent with the edit) could name a task the edited
+        # words no longer mean (app.ledger.service.PIN_KEY).
+        from app.ledger.service import strip_pins
+
+        arguments = {**arguments, "changes": strip_pins(arguments.get("changes"))}
     targets = list(middleware.resolve_targets(action.tool_name, arguments)) if middleware.resolve_targets else [f"{action.tool_name}({arguments})"]
     ruleset = middleware.loader.load()
     edited = PendingAction(

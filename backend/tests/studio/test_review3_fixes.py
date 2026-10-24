@@ -90,15 +90,17 @@ def _scheduled(studio, steps, firing):
 def _goes_bad_after_its_card(client) -> tuple[dict, callable]:
     """An update that is valid when proposed (a plan that could not be applied
     is refused before its card) and cannot be applied by the time it is
-    confirmed: its project is renamed in between."""
+    confirmed: the task it was pinned to is gone (removed in the ledger
+    directly; the UI has no task delete)."""
     other = client.post("/api/ledger/projects", json={"name": "Other"}).json()
-    assert client.post(f"/api/ledger/projects/{other['id']}/tasks", json={"title": "Old"}).status_code == 201
+    task = client.post(f"/api/ledger/projects/{other['id']}/tasks", json={"title": "Old"}).json()
 
-    def rename() -> None:
-        current = client.get(f"/api/ledger/projects/{other['id']}").json()["project"]
-        assert client.patch(f"/api/ledger/projects/{other['id']}", json={"version": current["version"], "name": "Renamed"}).status_code == 200
+    def remove() -> None:
+        repo = client.app.state.ledger_service.repo
+        with repo.transaction() as s:
+            assert repo.remove(s, "task", task["id"], owner_id=None, actor="user", version=None)
 
-    return {"op": "update_task", "project": "Other", "task": "T-1", "status": "done"}, rename
+    return {"op": "update_task", "project": "Other", "task": "T-1", "status": "done"}, remove
 
 
 def test_the_chat_ledger_step_and_home_show_a_hostile_title_safely(launch) -> None:
@@ -156,7 +158,7 @@ def test_apply_all_with_one_bad_card_writes_nothing_and_says_which(launch) -> No
     body = launch.client.post("/api/confirmations/apply-all", json={"ids": [good_card["id"], bad_card["id"]]}).json()
     assert body["write_id"] is None
     by_id = {r["action_id"]: r for r in body["results"]}
-    assert by_id[bad_card["id"]]["outcome"] == "failed" and "Other" in by_id[bad_card["id"]]["message"]
+    assert by_id[bad_card["id"]]["outcome"] == "failed" and "no longer exists" in by_id[bad_card["id"]]["message"]
     assert {r["outcome"] for r in body["results"]} == {"failed", "not_applied"}
     [project] = [p for p in launch.client.get("/api/ledger/projects").json() if p["name"] == "Launch"]
     assert launch.client.get(f"/api/ledger/projects/{project['id']}").json()["tasks"] == []
@@ -249,4 +251,4 @@ def test_a_confirmed_write_that_fails_is_reported_failed_not_executed(launch) ->
     [card] = [a for a in launch.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "ledger_apply"]
     launch.client.post("/api/threads", json={"thread_id": "t4"})  # a card confirms only into a chat that exists
     body = launch.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()
-    assert body["outcome"] == "failed" and "Other" in body["message"], body
+    assert body["outcome"] == "failed" and "no longer exists" in body["message"], body

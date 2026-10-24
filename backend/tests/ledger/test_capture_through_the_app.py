@@ -154,14 +154,16 @@ def test_a_confirmed_plan_that_fails_logs_the_ledgers_reason(gateway, caplog) ->
     exception's type."""
     import logging
 
-    assert gateway.client.post("/api/ledger/projects", json={"name": "Launch"}).status_code == 201
-    propose(gateway, changes=[{"op": "create_goal", "project": "Launch", "title": "Ship", "definition_of_done": "Shipped"}])
+    made = gateway.client.post("/api/ledger/projects", json={"name": "Launch"}).json()
+    task = gateway.client.post(f"/api/ledger/projects/{made['id']}/tasks", json={"title": "Ship"}).json()
+    propose(gateway, changes=[{"op": "update_task", "project": "Launch", "task": "Ship", "status": "done"}], said="I shipped it")
     [action] = pending(gateway)
-    [project] = gateway.client.get("/api/ledger/projects").json()
-    renamed = gateway.client.patch(f"/api/ledger/projects/{project['id']}", json={"version": project["version"], "name": "Renamed"})
-    assert renamed.status_code == 200, renamed.text
+    # The task it was pinned to is removed before the user confirms.
+    repo = gateway.client.app.state.ledger_service.repo
+    with repo.transaction() as s:
+        assert repo.remove(s, "task", task["id"], owner_id=None, actor="user", version=None)
     with caplog.at_level(logging.ERROR, logger="app.policy.confirm_flow"):
         resp = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={})
     assert resp.json()["outcome"] == "failed", resp.text
     [line] = [r.getMessage() for r in caplog.records if "did not complete" in r.getMessage()]
-    assert "RuntimeError" in line and "(ledger: there is no project 'Launch')" in line
+    assert "RuntimeError" in line and "(ledger: the task this was proposed for (T-1) no longer exists)" in line

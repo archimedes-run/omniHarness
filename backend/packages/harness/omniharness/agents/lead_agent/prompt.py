@@ -692,7 +692,11 @@ def get_deferred_tools_prompt_section(*, app_config: AppConfig | None = None) ->
     if not registry:
         return ""
 
-    names = "\n".join(e.name for e in registry.entries)
+    from omniharness.tools.builtins.tool_search import _model_name
+
+    # As the model will name them (a name over the provider's limit is bound
+    # under its alias: models.tool_name_boundary).
+    names = "\n".join(_model_name(e.name) for e in registry.entries)
     return f"<available-deferred-tools>\n{names}\n</available-deferred-tools>"
 
 

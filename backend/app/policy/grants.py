@@ -277,13 +277,20 @@ def canonical_text(value: Any) -> str:
     return " ".join(text.split())
 
 
-def change_signatures(arguments: dict[str, Any], resolve_project=None) -> set[tuple[str, ...]]:
+def change_signatures(arguments: dict[str, Any], resolve_project=None, resolve_task=None, *, trust_pins: bool = False) -> set[tuple[str, ...]]:
     """What a ledger_apply would do, canonicalised: one (op, project, task,
     title-or-note, status) per change, with the op's defaults filled in and
     the project resolved to its id when `resolve_project` can (a name and an
     id of one project are then the same). Two calls that share any signature
     are "the same write" for the declined-stays-declined rule. Best effort: a
-    paraphrase is a different write."""
+    paraphrase is a different write.
+
+    An update names its TASK by id when it can: the server's pin on a stated
+    plan (`trust_pins`, for a stored action only: a model's own pin is never
+    read), else `resolve_task(project, task)`, the ledger's own lookup. So a
+    task named by short id, by title, by part of its title or without its
+    project is one task, and a declined update of it stays declined however
+    it is named again."""
     changes = arguments.get("changes")
     if not isinstance(changes, list):
         return set()
@@ -294,6 +301,12 @@ def change_signatures(arguments: dict[str, Any], resolve_project=None) -> set[tu
         op = canonical_text(c.get("op")).replace(" ", "_")
         filled = {**_OP_DEFAULTS.get(op, {}), **{k: v for k, v in c.items() if v not in (None, "")}}
         project = filled.get("project")
+        if op == "update_task":
+            pin = c.get("_pin") if trust_pins and isinstance(c.get("_pin"), dict) else {}
+            task_id = pin.get("task_id") or (resolve_task(project, filled.get("task")) if (resolve_task is not None and filled.get("task")) else None)
+            if task_id:
+                out.add((op, "", f"task:{task_id}", canonical_text(filled.get("title")), canonical_text(filled.get("status"))))
+                continue
         resolved = resolve_project(project) if (resolve_project is not None and project) else None
         out.add((op, resolved or canonical_text(project), canonical_text(filled.get("task")), canonical_text(filled.get("title") or filled.get("decided")), canonical_text(filled.get("status"))))
     return out

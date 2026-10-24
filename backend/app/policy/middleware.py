@@ -104,6 +104,7 @@ class PolicyMiddleware(AgentMiddleware):
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
+            request = self._without_model_pins(request)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = handler(request)
             self._mark_trusted_ack(request, result)
@@ -139,6 +140,7 @@ class PolicyMiddleware(AgentMiddleware):
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
+            request = self._without_model_pins(request)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
             self._mark_trusted_ack(request, result)
@@ -226,9 +228,10 @@ class PolicyMiddleware(AgentMiddleware):
         # declined: the same write (same op, target and text, normalised) can
         # never run later as if the user had asked for it.
         resolve = self._project_resolver(request)
-        wanted = change_signatures(self._arguments(request), resolve)
+        resolve_task = self._task_resolver(request)
+        wanted = change_signatures(self._arguments(request), resolve, resolve_task)
         for declined in self.pending.declined_in_thread(self._thread_id(request), self._owner_id(request)):
-            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments, resolve):
+            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments, resolve, resolve_task, trust_pins=True):
                 logger.info("policy: %s matches a write declined earlier (%s); it waits on its card", decision.tool_name, declined.id)
                 return "This is a suggestion: you declined this earlier in this chat, so I did not do it. It runs only if you confirm it here."
         return None
@@ -245,6 +248,18 @@ class PolicyMiddleware(AgentMiddleware):
             return None
         user_id = self._user_id(self._runtime_context(request) or {})
         return lambda ref: lookup(user_id=user_id, project=str(ref))
+
+    def _task_resolver(self, request):
+        """Names a task by its id, through the ledger's own lookup (as
+        ledger_apply resolves it), so one task named by short id, title or
+        part of its title is one task. None outside the gateway."""
+        from omniharness.runtime.ledger.controller import get_ledger_controller
+
+        lookup = getattr(get_ledger_controller(), "task_id", None)
+        if lookup is None:
+            return None
+        user_id = self._user_id(self._runtime_context(request) or {})
+        return lambda project, task: lookup(user_id=user_id, project=str(project) if project not in (None, "") else None, task=str(task))
 
     @contextmanager
     def _reserved(self, grant, call: dict):
@@ -651,21 +666,28 @@ class PolicyMiddleware(AgentMiddleware):
         it is marked with what caused it, and an action not caused by the
         user's own latest message can only be confirmed with the card's button.
         """
-        invalid = self._invalid_ledger_plan(request)
-        if invalid is not None:
-            # A plan that could not be applied is never put on a card: the
-            # user would approve it and then see it fail. It goes back to the
-            # model as the tool's own result (nothing was proposed, nothing
-            # written), so it can correct the plan or ask the user.
-            logger.info("policy: %s plan refused before its card: %s", decision.tool_name, invalid)
-            return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {invalid}."))
-
         origin, origin_source, origin_via = self._origin(request)
+        arguments = self._arguments(request)
+        checked = self._check_ledger_plan(request)
+        if checked is not None:
+            invalid, arguments = checked
+            if invalid is not None:
+                # A plan that could not be applied is never put on a card: the
+                # user would approve it and then see it fail. It goes back to
+                # the model as the tool's own result (nothing was proposed,
+                # nothing written), so it can correct the plan or ask the user.
+                logger.info("policy: %s plan refused before its card: %s", decision.tool_name, invalid)
+                if origin != "user":
+                    # Not the user's own request (content, an automation):
+                    # nobody is watching the model's reply, so the attempt is
+                    # recorded where Tier 3 history is read (FR-006).
+                    self._record_refused_plan(request, decision, arguments, invalid, origin, origin_source)
+                return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {invalid}."))
+
         if origin != "user":
             logger.warning("policy: %s was suggested by %s %s (via %s); it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source, origin_via or "-")
 
         tool_name = decision.tool_name
-        arguments = self._arguments(request)
         targets = list(self.resolve_targets(tool_name, arguments)) if self.resolve_targets else [f"{tool_name}({arguments})"]
         ruleset = self.loader.load()
         now = self.now()
@@ -706,32 +728,98 @@ class PolicyMiddleware(AgentMiddleware):
             context = getattr(getattr(request, "runtime", None), "context", None)
             if isinstance(context, dict):
                 context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
-        return self._mark_trusted_ack(request, self._as_tool_result(request, action.plan_text))
+        return self._mark_trusted_ack(request, self._as_tool_result(request, self._model_plan_text(action, extra_note)))
 
-    def _invalid_ledger_plan(self, request) -> str | None:
-        """Why the ledger_apply plan this request would put on a card could
-        not be applied, or None (valid, not ledger_apply, or not checkable).
+    def _model_plan_text(self, action: PendingAction, extra_note: str = "") -> str:
+        """The plan as the MODEL is told it. For ledger_apply it is the card's
+        plan with each line rendered without stored text (no stored task or
+        project names, which content may have put there): the result is a
+        trusted acknowledgement (lineage.TRUSTED_TOOL_RESULTS). The card the
+        person reads keeps them (action.plan_text)."""
+        if action.tool_name != "ledger_apply":
+            return action.plan_text
+        from app.ledger.service import render
 
-        Only for the registered built-in, by object identity (as
-        _mark_trusted_ack): an outside tool named ledger_apply is never
-        validated through the ledger. The check writes nothing
-        (LedgerService.validate). A check that cannot run (no ledger, an
-        unexpected error) proposes the card as before: apply validates again.
-        """
-        from omniharness.runtime.ledger.controller import get_ledger_controller
+        lines = render((action.arguments or {}).get("changes"), stored=False)
+        text = self._plan_text(action.tool_name, lines or list(action.targets), action.requester, action.delegation_chain, action.id, action.arguments, origin_note=action.origin_note())
+        return f"{text}\n\n{extra_note}" if extra_note else text
+
+    def _record_refused_plan(self, request, decision, arguments: dict, reason: str, origin: str, origin_source: str) -> None:
+        if self.audit is None:
+            return
+        from app.ledger.service import render
+
+        try:
+            self.audit.record_refused(
+                tool=decision.tool_name,
+                targets=render((arguments or {}).get("changes")) if isinstance((arguments or {}).get("changes"), list) else [],
+                reason=reason,
+                owner_id=self._owner_id(request),
+                thread_id=self._thread_id(request),
+                requester=self._requester(request),
+                origin=origin,
+                origin_source=origin_source,
+                now=self.now(),
+            )
+        except Exception:  # noqa: BLE001 — the refusal stands whether or not it was recorded
+            logger.warning("policy: a refused %s plan could not be recorded", decision.tool_name, exc_info=True)
+
+    @staticmethod
+    def _is_ledger_apply(request) -> bool:
         from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
 
-        if getattr(request, "tool", None) is not ledger_apply_tool:
+        return getattr(request, "tool", None) is ledger_apply_tool
+
+    def _without_model_pins(self, request):
+        """The call with any pin (service.PIN_KEY) the MODEL wrote removed: a
+        pin is the server's record of what a confirmed plan resolved to, and a
+        call that runs now resolves its own names."""
+        if not self._is_ledger_apply(request):
+            return request
+        from app.ledger.service import strip_pins
+
+        call = getattr(request, "tool_call", None) or {}
+        args = dict(call.get("args") or {})
+        if "changes" not in args:
+            return request
+        args["changes"] = strip_pins(args["changes"])
+        return request.override(tool_call={**call, "args": args})
+
+    def _check_ledger_plan(self, request) -> tuple[str | None, dict] | None:
+        """For the registered built-in ledger_apply (by object identity, as
+        _mark_trusted_ack: an outside tool of that name is never resolved
+        through the ledger), check the plan this request would put on a card,
+        WITHOUT writing (LedgerService.validate).
+
+        None: not ledger_apply. Else (why it could not be applied or None, the
+        arguments to state): any pin the model wrote is removed, and when the
+        plan is valid each change is pinned (service.PIN_KEY) to what it
+        resolved to, so the card names the exact task and project and the
+        confirmed call acts on exactly those. A check that cannot run (no
+        ledger, an unexpected error) states the unpinned plan as before: apply
+        resolves and validates again.
+        """
+        if not self._is_ledger_apply(request):
             return None
-        validate = getattr(get_ledger_controller(), "validate", None)
-        if validate is None:
-            return None
+        from app.ledger.service import PIN_KEY, strip_pins
+
+        arguments = dict(self._arguments(request))
+        changes = strip_pins(arguments.get("changes"))
+        arguments["changes"] = changes
+        from omniharness.runtime.ledger.controller import get_ledger_controller
+
+        check = getattr(get_ledger_controller(), "check_plan", None)
+        if check is None:
+            return None, arguments
         context = self._runtime_context(request) or {}
         try:
-            return validate(user_id=self._user_id(context), changes=self._arguments(request).get("changes"), thread_id=context.get("thread_id"))
+            invalid, resolutions = check(user_id=self._user_id(context), changes=changes, thread_id=context.get("thread_id"))
         except Exception:  # noqa: BLE001 — advisory: the card is proposed as before
             logger.warning("policy: ledger_apply plan could not be checked before its card", exc_info=True)
-            return None
+            return None, arguments
+        if invalid is None and isinstance(changes, list) and len(resolutions) == len(changes):
+            arguments["changes"] = [{**c, PIN_KEY: r} if isinstance(c, dict) and r else c for c, r in zip(changes, resolutions, strict=True)]
+        return invalid, arguments
 
     @staticmethod
     def _mark_trusted_ack(request, result: Any) -> Any:

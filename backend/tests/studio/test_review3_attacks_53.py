@@ -186,13 +186,15 @@ def test_PLAUSIBLE_apply_all_is_not_all_or_nothing(studio) -> None:
     writes A and fails B, leaving a half-applied 'batch'."""
     _launch(studio)
     # Valid when proposed (an invalid plan is refused before its card), then
-    # unappliable: its project is renamed before Apply all.
+    # unappliable: the task it was pinned to is gone before Apply all.
     other = studio.client.post("/api/ledger/projects", json={"name": "Other"}).json()
     assert studio.client.post(f"/api/ledger/projects/{other['id']}/tasks", json={"title": "Old"}).status_code == 201
     bad = {"op": "update_task", "project": "Other", "task": "T-1", "status": "done"}
     _agent([_fetch(), _call([_task("A")], "c1"), _call([bad], "c2")]).invoke({"messages": [user_turn("summarise")]}, context=_ctx(studio, "t-aa"))
-    version = studio.client.get(f"/api/ledger/projects/{other['id']}").json()["project"]["version"]
-    assert studio.client.patch(f"/api/ledger/projects/{other['id']}", json={"version": version, "name": "Renamed"}).status_code == 200
+    repo = studio.client.app.state.ledger_service.repo
+    [old_task] = studio.client.get(f"/api/ledger/projects/{other['id']}").json()["tasks"]
+    with repo.transaction() as s:
+        assert repo.remove(s, "task", old_task["id"], owner_id=None, actor="user", version=None)
     cards = _pending(studio)
     assert len(cards) == 2
     body = studio.client.post("/api/confirmations/apply-all", json={"ids": [c["id"] for c in cards]}).json()

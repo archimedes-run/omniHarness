@@ -50,15 +50,42 @@ def _norm(text: Any) -> str:
     return " ".join(re.sub(r"[^\w\s]", " ", str(text or "").lower()).split())
 
 
+#: The shortest reference matched as a close title: "e" or "re" would match
+#: almost anything.
+_CLOSE_MIN = 3
+
+#: A short id however it is written: "T-3", "t3", "T 3", "t - 3".
+_SHORT_ID = re.compile(r"[Tt]\s*-?\s*(\d+)")
+
+#: Where the policy layer pins what a change resolved to when it was proposed
+#: (PolicyMiddleware, from `validate`'s resolutions): the task and project ids
+#: apply must use, and the short id and stored names the card shows. Set only
+#: by the server; a model's value is removed before a call runs or is stated.
+PIN_KEY = "_pin"
+
+
 def _close(key: str, title: str) -> bool:
-    """A close title: the (normalised) reference is part of the title, or every
-    word of it appears in the title."""
-    if not key:
+    """A close title: every word of the (normalised) reference is a WHOLE word
+    of the title, and the reference is at least _CLOSE_MIN characters. Never a
+    raw substring ("e" is not "Ship release")."""
+    if len(key.replace(" ", "")) < _CLOSE_MIN:
         return False
-    if key in title:
-        return True
     words = set(title.split())
     return all(word in words for word in key.split())
+
+
+def short_id_of(ref: Any) -> str | None:
+    """ "T-<n>" when `ref` is a short id in any spelling, else None."""
+    match = _SHORT_ID.fullmatch(str(ref or "").strip())
+    return f"T-{int(match.group(1))}" if match else None
+
+
+def strip_pins(changes: Any) -> Any:
+    """`changes` without any PIN_KEY: what a model (or an edit) sent is never
+    taken as a server pin."""
+    if not isinstance(changes, list):
+        return changes
+    return [{k: v for k, v in c.items() if k != PIN_KEY} if isinstance(c, dict) else c for c in changes]
 
 
 def _shapes_ok(changes: Any) -> None:
@@ -112,11 +139,21 @@ def _owner(value: Any) -> dict | None:
     return {"kind": kind, "ref": None}
 
 
-def render(changes: list[dict]) -> list[str]:
+def _shown(text: Any) -> str:
+    from app.gateway.display_safe import safe_field
+
+    return safe_field(text)
+
+
+def render(changes: list[dict], *, stored: bool = True) -> list[str]:
     """One plain line per change: what the confirmation card lists.
 
     A project or goal created earlier in the same plan is named by its name,
-    not by the plan-internal ref the model gave it ("p1").
+    not by the plan-internal ref the model gave it ("p1"). A pinned update
+    (PIN_KEY) names the task that will change by its short id and, with
+    `stored`, its stored title and project (display-safe). `stored=False` is
+    the model's copy of the plan: a plan stated to the model is the harness's
+    own words (lineage.TRUSTED_TOOL_RESULTS), so it carries no stored text.
     """
     names: dict[str, str] = {}
     for c in changes or []:
@@ -144,6 +181,16 @@ def render(changes: list[dict]) -> list[str]:
             lines.append(f"Add task “{c.get('title', '')}” to {c.get('project', '?')}{goal}{due}{owner}")
         elif op == "update_task":
             fields = ", ".join(f"{k} → {c[k]}" for k in ("title", "status", "due_date", "owner") if k in c)
+            pin = c.get(PIN_KEY) if isinstance(c.get(PIN_KEY), dict) else None
+            if pin and pin.get("short_id"):
+                # What will change, as resolved when it was proposed: the task's
+                # short id and (with `stored`) its title and project as stored.
+                if stored:
+                    lines.append(f"Change task {pin['short_id']} “{_shown(pin.get('title'))}” in “{_shown(pin.get('project_name'))}”: {fields or 'nothing'}")
+                else:
+                    where = f" in {c['project']}" if c.get("project") not in (None, "") else ""
+                    lines.append(f"Change task {pin['short_id']} (named {c.get('task', '?')}){where}: {fields or 'nothing'}")
+                continue
             where = f" in {c['project']}" if c.get("project") not in (None, "") else ""
             lines.append(f"Change task {c.get('task', '?')}{where}: {fields or 'nothing'}")
         elif op == "add_note":
@@ -167,7 +214,7 @@ class LedgerService:
         with self.repo.transaction() as s:
             return self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor=actor, pending_action_id=pending_action_id)
 
-    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> None:
+    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> list[dict]:
         """Check a plan the way `apply` would, WITHOUT writing anything.
 
         The whole plan is applied inside a transaction that is then rolled
@@ -178,14 +225,20 @@ class LedgerService:
         approve a change that cannot happen (it would fail after they said
         yes). A plan that validates can still fail at apply if the ledger
         changes in between; apply checks again.
+
+        Returns one resolution per change (what PIN_KEY carries): for an
+        existing project, its id and stored name; for update_task, also the
+        task's id, short id and stored title. Empty for a change that names
+        nothing existing (a new project, an in-plan ref).
         """
         _shapes_ok(changes)
+        resolutions: list[dict] = []
         try:
             with self.repo.transaction() as s:
-                self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor="assistant_confirmed", pending_action_id=None)
+                self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor="assistant_confirmed", pending_action_id=None, resolutions=resolutions)
                 raise _DryRun
         except _DryRun:
-            return
+            return resolutions
 
     def apply_batch(self, *, user_id: str, batches: list[tuple[list[dict], str | None]], actor: str, pending_action_id: str | None) -> list[list[str]]:
         """Apply several cards' changes ("Apply all") in ONE transaction: all
@@ -200,7 +253,7 @@ class LedgerService:
                     raise BatchError(index, str(exc)) from exc
         return out
 
-    def _apply_in(self, s, *, user_id: str, changes: list[dict], thread_id: str | None, actor: str, pending_action_id: str | None) -> list[str]:
+    def _apply_in(self, s, *, user_id: str, changes: list[dict], thread_id: str | None, actor: str, pending_action_id: str | None, resolutions: list[dict] | None = None) -> list[str]:
         _shapes_ok(changes)
         done: list[str] = []
         refs: dict[str, str] = {}
@@ -214,6 +267,10 @@ class LedgerService:
         for c in changes:
             op = c["op"]
             stamp = {"owner_id": user_id, "actor": actor, "pending_action_id": pending_action_id}
+            pin = c.get(PIN_KEY) if isinstance(c.get(PIN_KEY), dict) else {}
+            resolved: dict = {}
+            if resolutions is not None:
+                resolutions.append(resolved)
             if op == "create_project":
                 status = c.get("status") or "active"
                 if status not in PROJECT_STATUSES:
@@ -227,16 +284,27 @@ class LedgerService:
                     self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="The chat it was captured in")
                 done.append(f"Created project “{row['name']}”.")
                 continue
-            if op == "update_task" and c.get("project") in (None, ""):
+            task = None
+            if pin.get("task_id") and op == "update_task":
+                # Confirmed as resolved when proposed: exactly that task, or
+                # nothing (never whatever the words match now).
+                task = self._pinned_task(s, user_id, pin)
+                project = self._pinned_project(s, user_id, task["project_id"])
+                named = _as_named(c.get("project"), ref_names) if c.get("project") not in (None, "") else f"project {project['id']}"
+            elif pin.get("project_id"):
+                project = self._pinned_project(s, user_id, pin["project_id"])
+                named = _as_named(c.get("project"), ref_names)
+            elif op == "update_task" and c.get("project") in (None, ""):
                 # A task named without its project: found by exact title (or
                 # id) across the user's projects, only when exactly one matches.
                 task = self._task_anywhere(s, user_id, c.get("task"))
-                project = {"id": task["project_id"]}
-                named = "its project"
+                project = self._pinned_project(s, user_id, task["project_id"])
+                named = f"project {project['id']}"
             else:
                 project = self._project(s, user_id, c.get("project"), refs)
                 named = _as_named(c.get("project"), ref_names)
-                task = None
+            if str(c.get("project")) not in refs and project.get("id") not in refs.values():
+                resolved.update({"project_id": project["id"], "project_name": project.get("name")})
             if op == "create_goal":
                 row = self.repo.create(
                     s,
@@ -274,6 +342,7 @@ class LedgerService:
             elif op == "update_task":
                 if task is None:
                     task = self._task(s, project, c.get("task"), named)
+                resolved.update({"task_id": task["id"], "short_id": task["short_id"], "title": task["title"]})
                 fields: dict[str, Any] = {}
                 if "title" in c:
                     fields["title"] = _text(c, "title", limit=300, required=True)
@@ -433,11 +502,13 @@ class LedgerService:
         key = str(ref or "").strip()
         if not key:
             raise LedgerError("update_task: name the task (its title or short id)")
-        row = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"], (LedgerTaskRow.short_id == key.upper()) | (LedgerTaskRow.id == key))).first()
+        short = short_id_of(key)
+        row = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"], (LedgerTaskRow.short_id == (short or key.upper())) | (LedgerTaskRow.id == key))).first()
         if row is not None:
             return to_dict(row)
-        if re.fullmatch(r"[Tt]-\d+", key):
-            # A short id that is not there is not a title to guess from.
+        if short is not None:
+            # A short id (in any spelling) that is not there is not a title to
+            # guess from.
             raise LedgerError(f"{named} has no task {key!r}")
         tasks = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"]).order_by(LedgerTaskRow.created_at)).all()
         wanted = _norm(key)
@@ -448,6 +519,30 @@ class LedgerService:
                 ids = ", ".join(t.short_id for t in matches[:10])
                 raise LedgerError(f"the task {key!r} matches more than one task in {named} ({ids}); name it by its short id, or ask the user which one")
         raise LedgerError(f"{named} has no task {key!r}")
+
+    @staticmethod
+    def _pinned_project(s, user_id: str, project_id: str) -> dict:
+        from omniharness.persistence.ledger import LedgerProjectRow
+        from omniharness.persistence.ledger.sql import to_dict
+
+        row = s.get(LedgerProjectRow, str(project_id))
+        if row is None or row.owner_id != user_id:
+            raise LedgerError("the project this was proposed for no longer exists")
+        return to_dict(row)
+
+    @staticmethod
+    def _pinned_task(s, user_id: str, pin: dict) -> dict:
+        """The task a confirmed change was proposed for, by its pinned id: it
+        must still exist in one of the user's projects (and in the pinned
+        project, when one was pinned)."""
+        from omniharness.persistence.ledger import LedgerProjectRow, LedgerTaskRow
+        from omniharness.persistence.ledger.sql import to_dict
+
+        row = s.get(LedgerTaskRow, str(pin["task_id"]))
+        project = s.get(LedgerProjectRow, row.project_id) if row is not None else None
+        if row is None or project is None or project.owner_id != user_id or (pin.get("project_id") and row.project_id != pin["project_id"]):
+            raise LedgerError(f"the task this was proposed for ({pin.get('short_id') or 'a task'}) no longer exists")
+        return to_dict(row)
 
     @staticmethod
     def _task_anywhere(s, user_id: str, ref: Any) -> dict:

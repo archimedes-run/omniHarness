@@ -20,17 +20,34 @@ class GatewayLedgerController:
         except LedgerError:
             return None
 
-    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> str | None:
-        """Why this plan could not be applied, or None if it could. Writes
-        nothing (LedgerService.validate). The policy layer calls it before a
-        ledger_apply plan becomes a confirmation card (PolicyMiddleware.
-        _invalid_ledger_plan), so an invalid plan is refused to the model
-        instead of failing after the user approved it."""
+    def check_plan(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> tuple[str | None, list[dict]]:
+        """(why this plan could not be applied or None, what each change
+        resolved to). Writes nothing (LedgerService.validate). The policy
+        layer calls it before a ledger_apply plan becomes a confirmation card
+        (PolicyMiddleware._check_ledger_plan): an invalid plan is refused to
+        the model instead of failing after the user approved it, and a valid
+        one is pinned to what it resolved to (service.PIN_KEY)."""
         try:
-            self.service.validate(user_id=user_id, changes=changes, thread_id=thread_id)
+            return None, self.service.validate(user_id=user_id, changes=changes, thread_id=thread_id)
         except LedgerError as exc:
-            return str(exc)
-        return None
+            return str(exc), []
+
+    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> str | None:
+        """Why this plan could not be applied, or None (see check_plan)."""
+        return self.check_plan(user_id=user_id, changes=changes, thread_id=thread_id)[0]
+
+    def task_id(self, *, user_id: str, project: str | None, task: str) -> str | None:
+        """The id of the user's task this reference names (as ledger_apply
+        would resolve it), or None when it names none or more than one. The
+        declined-stays-declined rule compares tasks by it (grants.change_signatures)."""
+        try:
+            with self.service.repo.transaction() as s:
+                if project not in (None, ""):
+                    found = self.service._project(s, user_id, project, {})
+                    return self.service._task(s, found, task, str(project))["id"]
+                return self.service._task_anywhere(s, user_id, task)["id"]
+        except LedgerError:
+            return None
 
     def read(self, *, user_id: str, project: str | None) -> str:
         return self.service.read_text(user_id=user_id, project=project, today=date.today())

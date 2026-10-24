@@ -201,3 +201,36 @@ def test_a_subagent_gets_the_cap_and_no_deferral():
 def test_only_tools_that_cannot_be_moved_over_the_cap_still_raise():
     with pytest.raises(ToolCapExceededError):
         _run(selected_sources={"local:github"}, user_id="user-123", max_tools=2, connector_tools=_toolkit("GMAIL", 3))
+
+
+def test_tool_search_never_promotes_a_request_past_the_cap():
+    """Each search promotes up to five deferred tools; past the room left
+    under the cap, the oldest promoted tools go back to deferred, so the
+    request never grows past it however often the agent searches."""
+    from langchain_core.tools import StructuredTool
+
+    from omniharness.tools.builtins.tool_search import get_deferred_registry, tool_search
+    from omniharness.tools.source_tags import tag_source
+
+    def real(slug: str, n: int) -> list:
+        made = []
+        for i in range(n):
+            t = StructuredTool.from_function(func=lambda q="": q, name=f"connector-{slug.lower()}_{slug}_T{i}", description=f"{slug} tool {i}")
+            tag_source(t, f"connector:{slug}", "user-123")
+            made.append(t)
+        return made
+
+    connectors = [t for slug, n in _MANY.items() for t in real(slug, n)]
+    tools = _run(selected_sources={f"connector:{s}" for s in _MANY}, user_id="user-123", max_tools=128, connector_tools=connectors)
+    registry = get_deferred_registry()
+    assert registry.max_promoted is not None and registry.max_promoted >= 5
+    budget = 128 - tools_mod.CAP_HEADROOM
+    seen: set[str] = set()
+    for _ in range(25):
+        result = tool_search.invoke({"query": "+github"})
+        assert "connector-github_" in result
+        offered = [t.name for t in tools if t.name not in registry.deferred_names]
+        assert len(offered) <= budget, f"{len(offered)} offered after a search, over {budget}"
+        seen |= {n for n in offered if n.startswith("connector-github_")}
+    # The searches did reach new tools (older ones were returned to deferred).
+    assert len(seen) > registry.max_promoted

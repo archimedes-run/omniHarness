@@ -48,6 +48,9 @@ def _rule_names(prefix: str, *, tier: int | None = None) -> list[str]:
 
 #: A GitHub read (Tier 1): it runs without a card once fetched.
 GITHUB_READ = next(n for n in _rule_names("connector-github_", tier=1) if len(n) <= 64)
+#: A GitHub read whose name is over the provider's 64-character limit: the
+#: model sees (and calls) it by its alias (models.tool_name_boundary).
+GITHUB_LONG = next(n for n in _rule_names("connector-github_", tier=1) if len(n) > 64)
 
 
 #: The stand-in toolkits: Gmail, Calendar and Drive as the rules name them, and
@@ -56,7 +59,7 @@ TOOLKITS = {
     "GMAIL": _rule_names("connector-gmail_"),
     "GOOGLECALENDAR": _rule_names("connector-googlecalendar_"),
     "GOOGLEDRIVE": _rule_names("connector-googledrive_"),
-    "GITHUB": [GITHUB_READ, *[n for n in _rule_names("connector-github_") if n != GITHUB_READ][:149]],
+    "GITHUB": [GITHUB_READ, GITHUB_LONG, *[n for n in _rule_names("connector-github_") if n not in (GITHUB_READ, GITHUB_LONG)][:148]],
 }
 CALLS: list[tuple[str, dict]] = []
 
@@ -222,3 +225,29 @@ def test_a_lead_automation_is_not_seeded_with_the_owners_apps(studio, script, co
     assert script.bound, "the scheduled run never called the model"
     assert not _connector_tools(script.bound[0], "GMAIL")
     assert "connected_apps_switched_off" not in script.prompts[0]
+
+
+def test_a_deferred_tool_with_a_name_over_the_provider_limit_is_found_and_runs(studio, script, connectors) -> None:  # noqa: F811
+    """The prompt and tool_search name a long deferred tool by the alias the
+    model is bound to; selecting the alias promotes it, calling the alias runs
+    the tool under its full name."""
+    import json
+
+    from omniharness.models.tool_name_boundary import alias_for
+
+    alias = alias_for(GITHUB_LONG)
+    assert len(GITHUB_LONG) > 64 and len(alias) <= 64
+    connectors.connect(*TOOLKITS)
+    script.steps.extend(
+        [
+            AIMessage(content="", tool_calls=[{"name": "tool_search", "args": {"query": f"select:{alias}"}, "id": "s1"}]),
+            AIMessage(content="", tool_calls=[{"name": alias, "args": {"query": "y"}, "id": "g1"}]),
+        ]
+    )
+    tid = _chat(studio, text="look at my repo")
+    assert alias in script.prompts[0] and GITHUB_LONG not in script.prompts[0]
+    assert alias in script.bound[-1]
+    assert (GITHUB_LONG, {"query": "y"}) in CALLS, "the long-named deferred tool did not run"
+    history = studio.client.get(f"/api/threads/{tid}/state").json()
+    found = [m for m in history["values"]["messages"] if m.get("type") == "tool" and m.get("name") == "tool_search"]
+    assert found and json.loads(found[0]["content"])[0]["name"] == alias

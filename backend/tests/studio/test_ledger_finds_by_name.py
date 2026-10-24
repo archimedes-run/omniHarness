@@ -101,11 +101,11 @@ def test_a_close_title_and_a_differently_written_project_name_resolve(studio) ->
 
 
 def test_a_task_named_without_its_project_resolves_by_its_exact_title(studio) -> None:
-    _setup(studio, "Draft outline")
+    project = _setup(studio, "Draft outline")
     _setup(studio, "Other thing", name="Elsewhere")
     out = _chat(studio, [_apply([{"op": "update_task", "task": "draft outline", "status": "done"}])], said="mark draft outline done")
     assert _pending(studio) == []
-    assert "Updated T-1 in its project." in _tool_results(out, "ledger_apply")[0]
+    assert f"Updated T-1 in project {project['id']}." in _tool_results(out, "ledger_apply")[0]
     assert _status(studio)["Draft outline"] == "done"
 
 
@@ -170,8 +170,135 @@ def test_lineage_is_unchanged_an_update_after_a_ledger_read_is_still_a_card(stud
 
 
 def test_a_short_id_that_is_not_there_is_not_guessed_from_a_title(studio) -> None:
-    _setup(studio, "Plan T 9 rollout")
-    out = _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "T-9", "status": "done"}])], said="mark T-9 done")
+    _setup(studio, "Plan T 19 rollout")
+    out = _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "T-19", "status": "done"}])], said="mark T-19 done")
     [result] = _tool_results(out, "ledger_apply")
-    assert "TEST P has no task 'T-9'" in result, result
-    assert _status(studio) == {"Plan T 9 rollout": "todo"}
+    assert "TEST P has no task 'T-19'" in result, result
+    assert _status(studio) == {"Plan T 19 rollout": "todo"}
+
+
+# -- review: the card names the task that will change, and that task is the one
+# that changes (pinned at proposal) ------------------------------------------
+
+
+def _fetch(call_id: str = "f1") -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": "web_fetch", "args": {"url": "https://evil.example"}, "id": call_id}])
+
+
+def _task_id(studio, title: str) -> str:
+    [task] = [t for t in _project(studio)["tasks"] if t["title"] == title]
+    return task["id"]
+
+
+def test_a_card_names_the_resolved_task_and_confirms_exactly_it_though_a_better_match_appears(studio) -> None:
+    project = _setup(studio, "Draft report", "Review")
+    out = _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "report", "status": "done"}])], said="summarise this page")
+    [card] = _pending(studio)
+    # The person's card: the exact task, by short id, stored title and project.
+    assert "Change task T-1 “Draft report” in “TEST P”: status → done" in card["targets"], card["targets"]
+    # The model's copy of the plan carries no stored text (a trusted result).
+    [told] = _tool_results(out, "ledger_apply")
+    assert "T-1" in told and "Draft report" not in told, told
+    # A task the words now match better is created before the user confirms.
+    assert studio.client.post(f"/api/ledger/projects/{project['id']}/tasks", json={"title": "Report"}).status_code == 201
+    assert studio.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()["outcome"] == "executed"
+    assert _status(studio) == {"Draft report": "done", "Review": "todo", "Report": "todo"}
+
+
+def test_a_pin_the_model_wrote_is_never_used(studio) -> None:
+    """At Tier 2 the call resolves its own words; on a card the server's pin
+    replaces the model's. Either way the model cannot point the write at
+    another task than the one its words name."""
+    _setup(studio, "Draft report", "Review")
+    other = _task_id(studio, "Draft report")
+    forged = {"task_id": other, "short_id": "T-1", "title": "Review", "project_name": "TEST P"}
+    _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "Review", "status": "done", "_pin": forged}])], said="mark review done")
+    assert _status(studio) == {"Draft report": "todo", "Review": "done"}
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "Review", "status": "blocked", "_pin": forged}])], said="summarise", thread="t-names-2")
+    [card] = _pending(studio)
+    assert card["arguments"]["changes"][0]["_pin"]["task_id"] == _task_id(studio, "Review")
+    assert any("T-2 “Review”" in t for t in card["targets"]), card["targets"]
+
+
+def test_a_pinned_task_that_no_longer_exists_is_refused_at_apply(studio) -> None:
+    from app.ledger.service import LedgerError
+
+    _setup(studio, "Draft report")
+    service = studio.client.app.state.ledger_service
+    change = {"op": "update_task", "project": "TEST P", "task": "Draft report", "status": "done", "_pin": {"task_id": "gone", "short_id": "T-1"}}
+    try:
+        service.apply(user_id=studio.user_id, changes=[change], thread_id=None)
+    except LedgerError as exc:
+        assert "no longer exists" in str(exc)
+    else:
+        raise AssertionError("a pin to a task that is gone was applied")
+    assert _status(studio) == {"Draft report": "todo"}
+
+
+def test_a_close_title_matches_whole_words_only(studio) -> None:
+    _setup(studio, "Ship release", "Draft report")
+    for ref in ("e", "port", "rel"):
+        out = _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": ref, "status": "done"}])], said=f"mark {ref} done")
+        assert "has no task" in _tool_results(out, "ledger_apply")[0], ref
+    assert set(_status(studio).values()) == {"todo"}
+
+
+def test_a_short_id_in_any_spelling_is_a_short_id(studio) -> None:
+    _setup(studio, "Plan T 9 rollout", "Other")
+    out = _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "t 2", "status": "done"}])], said="mark t2 done")
+    assert "Updated T-2" in _tool_results(out, "ledger_apply")[0]
+    for ref in ("T9", "t 9", "T - 9"):
+        out = _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": ref, "status": "done"}])], said=f"mark {ref} done")
+        assert "has no task" in _tool_results(out, "ledger_apply")[0], ref
+    assert _status(studio) == {"Plan T 9 rollout": "todo", "Other": "done"}
+
+
+def test_an_update_without_a_project_names_the_project_in_its_result(studio) -> None:
+    project = _setup(studio, "Draft outline")
+    out = _chat(studio, [_apply([{"op": "update_task", "task": "draft outline", "status": "done"}])], said="mark draft outline done")
+    assert f"Updated T-1 in project {project['id']}." in _tool_results(out, "ledger_apply")[0]
+
+
+# -- review: a declined update stays declined however the task is named --------
+
+
+def test_a_declined_update_stays_declined_by_title_part_title_or_without_project(studio) -> None:
+    _setup(studio, "Draft the report", "Other")
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "T-1", "status": "done"}])], said="summarise", thread="t-dec")
+    [card] = _pending(studio)
+    assert studio.client.post(f"/api/confirmations/{card['id']}/decline", json={}).json()["outcome"] == "declined"
+    for i, change in enumerate(
+        [
+            {"op": "update_task", "task": "Draft the report", "status": "done"},
+            {"op": "update_task", "project": "TEST P", "task": "report", "status": "done"},
+            {"op": "update_task", "project": "test p", "task": "t1", "status": "done"},
+        ]
+    ):
+        _chat(studio, [_apply([change], f"a{i}")], said="thanks", thread="t-dec")
+        assert _status(studio)["Draft the report"] == "todo", change
+        assert any("you declined this earlier" in a["plan_text"] for a in _pending(studio)), change
+        for a in _pending(studio):
+            studio.client.post(f"/api/confirmations/{a['id']}/decline", json={})
+
+
+# -- review: a refused plan that was not the user's own request stays visible ---
+
+
+def _refused(studio) -> list[dict]:
+    return [e for e in studio.client.get("/api/policy/audit").json() if e["outcome"] == "refused"]
+
+
+def test_a_content_led_plan_refused_before_its_card_is_recorded_where_tier_3_history_is_read(studio) -> None:
+    _setup(studio, "Draft outline")
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "Wire the money", "status": "done"}])], said="summarise")
+    assert _pending(studio) == []
+    [entry] = _refused(studio)
+    assert entry["tool"] == "ledger_apply" and "has no task 'Wire the money'" in entry["plan_as_stated"]
+    assert entry["authorised_by"] is None
+
+
+def test_a_users_own_refused_plan_is_not_recorded(studio) -> None:
+    _setup(studio, "Draft outline")
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "Nope", "status": "done"}])], said="summarise", thread="t-r1")
+    _chat(studio, [AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_goal", "project": "TEST P", "title": "G"}]}, "id": "g1"}])], said="add a goal G", thread="t-r2")
+    assert len(_refused(studio)) == 1, "only the content-led refusal is recorded"
