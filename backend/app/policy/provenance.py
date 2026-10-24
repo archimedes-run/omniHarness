@@ -40,6 +40,11 @@ RULE_KEY = "trigger_rule_id"
 #: every attempt at it. Standing grants count a run's actions under it, so a
 #: retry continues the count (grants.GrantRunCounts).
 FIRING_KEY = "trigger_firing_id"
+#: Whose standing grants a scheduled run reads: the install OWNER's (the
+#: Autonomy tab stores them under the owner's id; a lead automation runs as the
+#: system user). Set by the gateway ONLY on the trigger engine's granted
+#: request (services.start_run); never taken from a request.
+GRANTS_OWNER_KEY = "grants_owner_id"
 
 #: The one value meaning "this turn was generated, not sent by a person".
 SYNTHETIC = "synthetic-trigger"
