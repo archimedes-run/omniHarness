@@ -55,6 +55,15 @@ markers = [
 
 [tool.uv]
 index-url = "https://pypi.org/simple"
+# composio-core (every release through 0.7.22) caps Pillow <11, which holds
+# Pillow on 10.4.0 and its critical advisories (Dependabot #215 #225 #240
+# #261, fixed in 13.0.0). Nothing here imports composio at runtime: the
+# gateway calls Composio's v3 REST API over httpx, and composio-core is kept
+# only for its action list (tests/policy/github_connector_policy.py), which
+# never touches PIL. Downgrading composio-core to 0.7.15 (no cap) would change
+# that action list, so the cap is overridden instead. Drop this once
+# composio-core allows Pillow >= 13.
+override-dependencies = ["pillow>=13.0.0"]
 
 [tool.uv.workspace]
 members = ["packages/harness", "packages/session_watcher"]
