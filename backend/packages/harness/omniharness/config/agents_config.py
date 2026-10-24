@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from omniharness.config.paths import get_paths
 from omniharness.runtime.user_context import get_effective_user_id, may_read_legacy_shared_data
@@ -35,6 +35,60 @@ def validate_agent_name(name: str | None) -> str | None:
     return name
 
 
+#: The avatars an agent may wear (Agent & Skill Studio, 006-G). The images
+#: live in the frontend (public/avatars/<id>.svg); this list is what the API
+#: accepts, so an avatar id can never name anything else.
+AGENT_AVATARS: tuple[str, ...] = (
+    "pip",
+    "blitz",
+    "lotus",
+    "zap",
+    "grumbo",
+    "dex",
+    "duchess",
+    "snooze",
+    "boost",
+    "merlo",
+    "barnacle",
+    "wub",
+    "basil",
+    "shade",
+    "blip",
+    "bolt",
+    "boo",
+    "mochi",
+    "croak",
+    "inky",
+)
+
+#: Integration id prefixes an agent's tool allowlist may name (006-G):
+#: ``local:<mcp server>``, ``connector:<TOOLKIT>`` and ``builtin:<group>``.
+INTEGRATION_PREFIXES: tuple[str, ...] = ("local:", "connector:", "builtin:")
+
+
+class AgentToolAccess(BaseModel):
+    """Which integrations and which individual tools an agent may use (006-G).
+
+    Absent (``AgentConfig.tools is None``): the agent keeps the tools it had
+    before this field existed (its ``tool_groups``), exactly. Present: it gets
+    the always-on core tools plus ONLY the tools named here, from integrations
+    named here; ``tool_groups`` no longer applies. Enforced where every run's
+    tools are assembled (omniharness.tools.tools.get_available_tools), never
+    in the UI. A tool keeps its policy tier whoever assigns it.
+    """
+
+    integrations: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+
+
+class AgentNotify(BaseModel):
+    """Delivery defaults for this agent's NEW schedules (006-G). Each schedule
+    keeps its own settings; these only fill the schedule editor."""
+
+    telegram: bool = True
+    home: bool = True
+
+
 class AgentConfig(BaseModel):
     """Configuration for a custom agent."""
 
@@ -52,6 +106,14 @@ class AgentConfig(BaseModel):
     display_name: str | None = None
     # Ledger project ids this agent works on. None and [] both mean none.
     projects: list[str] | None = None
+    # 006-G: the face it shows (one of AGENT_AVATARS); None shows a stable
+    # default picked from its name.
+    avatar: str | None = None
+    # 006-G: per-agent integrations and tools (AgentToolAccess). None keeps
+    # the pre-006-G behaviour (tool_groups) for agents saved before it.
+    tools: AgentToolAccess | None = None
+    # 006-G: delivery defaults for its new schedules.
+    notify: AgentNotify | None = None
 
 
 def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:
@@ -80,6 +142,23 @@ def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:
         return legacy_path
 
     return user_path
+
+
+def _readable_access(name: str, raw: Any) -> dict:
+    """The allowlist as stored, or an EMPTY one when it cannot be read: an
+    unreadable allowlist fails CLOSED (only the core tools), never open."""
+    if not isinstance(raw, dict):
+        logger.warning("agent %s has an unreadable tools allowlist; it gets no assignable tools until it is saved again", name)
+        return {"integrations": [], "tools": []}
+    out = {}
+    for key in ("integrations", "tools"):
+        value = raw.get(key)
+        if not isinstance(value, list):
+            if value is not None:
+                logger.warning("agent %s: tools.%s is not a list; read as empty", name, key)
+            value = []
+        out[key] = [v for v in value if isinstance(v, str)]
+    return out
 
 
 def load_agent_config(name: str | None, *, user_id: str | None = None) -> AgentConfig | None:
@@ -127,6 +206,14 @@ def load_agent_config(name: str | None, *, user_id: str | None = None) -> AgentC
     # Strip unknown fields before passing to Pydantic (e.g. legacy prompt_file)
     known_fields = set(AgentConfig.model_fields.keys())
     data = {k: v for k, v in data.items() if k in known_fields}
+    # A hand-edited avatar that is not one of ours is ignored, never an error
+    # that would hide the agent.
+    if data.get("avatar") not in AGENT_AVATARS:
+        data.pop("avatar", None)
+    if "tools" in data and data["tools"] is not None:
+        data["tools"] = _readable_access(name, data["tools"])
+    if "notify" in data and not isinstance(data["notify"], dict):
+        data.pop("notify")
 
     return AgentConfig(**data)
 

@@ -268,6 +268,14 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 4. **Subagent tool** (if enabled):
    - `task` - Delegate to subagent (description, prompt, subagent_type, max_turns)
 
+**Per-agent integrations and tools (006-G)** — `AgentConfig.tools` (`{integrations: [...], tools: [...]}`, integration ids `local:<mcp server>`, `connector:<TOOLKIT>`, `builtin:<config group>`, `builtin:ledger`, `builtin:workspace`):
+- Enforced in ONE place, `get_available_tools(tool_access=...)` → `omniharness/tools/agent_access.apply_tool_access`. Every run path passes the agent's own allowlist: the lead factory (chat, scheduled firings, confirmation rebuilds via `lead_agent_tools`), `task` delegates (run metadata `tool_access`, recorded on the subagent tool surface) and @-called agents (`called_agents.call_agent_tool`, from the called agent's config).
+- With an allowlist: `tool_groups` and the chat's source picker no longer apply; the agent's own MCP servers and connector toolkits load; the core tools (`present_files`, `ask_clarification`, `view_image`, `task`, `tool_search`, `update_agent`, `setup_agent`, `call_agent`, `write_todos`) stay; everything else must be named, and an unattributable tool is dropped (fails closed; an unreadable allowlist on disk is read as empty).
+- Without one (agents saved before 006-G, the lead agent): exactly the old behaviour.
+- The agent changing itself (`update_agent`, version source `proposal`) never changes `tools` (`config_versions._keep_tools`). Assigning a tool never changes its policy tier.
+- `GET /api/studio/tool-catalog` (`app/gateway/tool_catalog.py`, owner only) lists every integration and tool from the same assembly functions, each tool's tier from `app.policy.explain` (runtime floors included; `None` = no rule, never offered).
+- Also on `AgentConfig`: `avatar` (one of `AGENT_AVATARS`, validated by the API; a random one on create) and `notify` (delivery defaults for the agent's new schedules).
+
 **Community tools** (`packages/harness/omniharness/community/`):
 - `tavily/` - Web search (5 results default) and web fetch (4KB limit)
 - `jina_ai/` - Web fetch via Jina reader API with readability extraction

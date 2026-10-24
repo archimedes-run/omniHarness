@@ -152,6 +152,7 @@ def get_available_tools(
     selected_sources: set[str] | None = None,
     user_id: str | None = None,
     max_tools: int | None = None,
+    tool_access: object | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -163,11 +164,25 @@ def get_available_tools(
         include_mcp: Whether to include tools from MCP servers (default: True).
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
+        tool_access: An agent's per-tool allowlist (006-G, AgentConfig.tools),
+            or None. When given it REPLACES `groups` and `selected_sources`:
+            the agent's own integrations are loaded (its MCP servers, its
+            connector toolkits for `user_id`), and the final list keeps the
+            core tools plus only the tools it names
+            (omniharness.tools.agent_access.apply_tool_access).
 
     Returns:
         List of available tools.
     """
+    from omniharness.tools.agent_access import access_of, apply_tool_access, connector_toolkits, local_servers
+
     config = app_config or get_app_config()
+    access = access_of(tool_access)
+    if access is not None:
+        # The allowlist decides, per tool; the broad groups and the chat's
+        # source picker do not widen (or narrow) what the owner assigned.
+        groups = None
+        selected_sources = None
     tool_configs = [tool for tool in config.tools if groups is None or tool.group in groups]
 
     # Do not expose host bash by default when LocalSandboxProvider is active.
@@ -277,6 +292,14 @@ def get_available_tools(
                             filtered.append(t)
                     mcp_tools = filtered
 
+                # 006-G: an agent with an allowlist gets tools only from the
+                # MCP servers it names, attributed by server NAME (a tool whose
+                # server cannot be told is never attributable, so never kept).
+                allowed_local = local_servers(tool_access) if access is not None else None
+                if allowed_local is not None:
+                    server_names = list(enabled_servers.keys())
+                    mcp_tools = [t for t in mcp_tools if (src := _tool_source(t.name, server_names)) is not None and not src.lower().startswith(("connector-", "composio-")) and src in allowed_local]
+
                 # Feature 006: each tool carries its source, so the tool-call
                 # chokepoint can record when that source last worked.
                 from omniharness.tools.source_tags import tag_source
@@ -288,6 +311,10 @@ def get_available_tools(
                         tag_source(t, f"local:{server}")
 
                 mcp_tools = refuse_builtin_collisions(mcp_tools, "MCP", config)
+                if access is not None:
+                    # Before the deferred registry: tool_search only ever
+                    # finds the agent's OWN tools.
+                    mcp_tools = apply_tool_access(mcp_tools, tool_access, config=config)
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 
@@ -312,19 +339,17 @@ def get_available_tools(
     # connections, never from the shared config). Only when this thread
     # selected connector toolkits and we know the user.
     connector_tools: list[BaseTool] = []
-    if selected_sources and user_id:
+    if (selected_sources or access is not None) and user_id:
         try:
             from omniharness.tools.connector_tools import CONNECTOR_SLUGS, load_connector_tools
 
-            wanted_connectors = [sid.split(":", 1)[1].upper() for sid in selected_sources if sid.startswith("connector:") and sid.split(":", 1)[1].upper() in CONNECTOR_SLUGS]
+            if access is not None:
+                # 006-G: the agent's own toolkits, whatever the chat picked.
+                wanted_connectors = [slug for slug in connector_toolkits(tool_access) if slug in CONNECTOR_SLUGS]
+            else:
+                wanted_connectors = [sid.split(":", 1)[1].upper() for sid in selected_sources if sid.startswith("connector:") and sid.split(":", 1)[1].upper() in CONNECTOR_SLUGS]
             if wanted_connectors:
-                connector_tools = load_connector_tools(user_id, wanted_connectors)
-                # FR-012/FR-013: the SECOND assembly point. Gmail and Google
-                # Calendar exist as connector toolkits, and this path never
-                # touches mcp/tools.py — a deny applied only there would leave
-                # connector:GMAIL and its send tool fully exposed.
-                connector_tools = apply_connector_tool_surface(config, connector_tools)
-                connector_tools = refuse_builtin_collisions(connector_tools, "connector", config)
+                connector_tools = assemble_connector_tools(config, user_id, wanted_connectors, loader=load_connector_tools)
                 logger.info(f"Loaded {len(connector_tools)} live connector tool(s) for {len(wanted_connectors)} toolkit(s)")
         except Exception as e:
             logger.error(f"Failed to load connector tools: {e}")
@@ -347,12 +372,35 @@ def get_available_tools(
                 t.name,
             )
 
+    # 006-G: THE enforcement point for an agent's allowlist. Every run path
+    # (chat, @-call, delegation, a scheduled firing, a confirmation's rebuild)
+    # assembles its tools here; what the allowlist does not name is not offered.
+    if access is not None:
+        config_groups = {loaded.name: cfg.group for cfg, loaded in loaded_tools_raw if getattr(cfg, "group", None)}
+        unique_tools = apply_tool_access(unique_tools, tool_access, config=config, config_groups=config_groups)
+
     # Provider tool-array cap: fail with a structured error the API can turn
     # into "N / cap" rather than letting the provider return an opaque 400.
     if max_tools is not None and len(unique_tools) > max_tools:
         raise ToolCapExceededError(count=len(unique_tools), cap=max_tools)
 
     return unique_tools
+
+
+def assemble_connector_tools(config, user_id: str, toolkits: list[str], *, loader=None) -> list[BaseTool]:
+    """A user's live connector tools for `toolkits`, as a run gets them: loaded
+    per user, the configured tool surface applied, built-in collisions refused.
+    One function, two callers: get_available_tools and the Studio's tool
+    catalog (006-G), so the catalog never lists a tool a run would not get."""
+    if loader is None:
+        from omniharness.tools.connector_tools import load_connector_tools as loader
+    tools = loader(user_id, toolkits)
+    # FR-012/FR-013: the SECOND assembly point. Gmail and Google
+    # Calendar exist as connector toolkits, and this path never
+    # touches mcp/tools.py — a deny applied only there would leave
+    # connector:GMAIL and its send tool fully exposed.
+    tools = apply_connector_tool_surface(config, tools)
+    return refuse_builtin_collisions(tools, "connector", config)
 
 
 def apply_connector_tool_surface(config, connector_tools: list[BaseTool]) -> list[BaseTool]:

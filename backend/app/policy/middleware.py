@@ -171,14 +171,17 @@ class PolicyMiddleware(AgentMiddleware):
         """None: run as an ordinary Tier 2 call. A GrantedCall: run under a
         grant, its actions already reserved against the run's cap. A str: do
         not run; wait, with this note."""
-        from .grants import GRANT_CAP_PER_RUN, GrantedCall, action_count, covering_classes, governed_by_grants, granted_classes
+        from .grants import GRANT_CAP_PER_RUN, GrantedCall, action_count, covering_classes, governed_by_grants, granted_classes, has_tool_allowlist
         from .provenance import FIRING_KEY, is_synthetic_turn
 
         context = self._runtime_context(request) or {}
-        if not is_synthetic_turn(context) or not governed_by_grants(decision.tool_name):
+        if not is_synthetic_turn(context):
             return None
         agent = self._requester(request)
-        granted = granted_classes(self._grants_user_id(context), agent)
+        grants_user = self._grants_user_id(context)
+        if not governed_by_grants(decision.tool_name, allowlist_agent=has_tool_allowlist(grants_user, agent)):
+            return None
+        granted = granted_classes(grants_user, agent)
         arguments = self._arguments(request)
         used = covering_classes(decision, arguments, granted, self.loader.load()) if granted else None
         if used is None:
@@ -204,9 +207,9 @@ class PolicyMiddleware(AgentMiddleware):
         agent read caused (a tool result, an email, a page, a subagent's
         output; feature 003's lineage, FR-006) is a SUGGESTION: it is stated
         on a card and runs only if the user confirms it there. None: run it."""
-        from .grants import change_signatures, governed_by_grants
+        from .grants import change_signatures, chat_governed
 
-        if not governed_by_grants(decision.tool_name):
+        if not chat_governed(decision.tool_name):
             return None
         context = self._runtime_context(request) or {}
         if context.get("workflow_run_id"):

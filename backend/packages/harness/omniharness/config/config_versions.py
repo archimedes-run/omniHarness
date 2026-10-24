@@ -58,6 +58,12 @@ CONFIG_FILENAME = "config.yaml"
 #: other write, undo included, keeps the grants as they are now: undo restores
 #: content, and never silently brings back (or drops) a grant.
 AUTONOMY_KEY = "autonomy"
+#: The agent's per-tool allowlist (006-G, AgentConfig.tools). An agent
+#: changing ITSELF (source "proposal": the update_agent tool, between turns,
+#: possibly steered by content it read) never changes it: only the owner's own
+#: writes do (the agents API, undo). Content read in a run cannot widen, or
+#: narrow, which tools the agent gets.
+TOOLS_KEY = "tools"
 
 
 class StaleWriteError(Exception):
@@ -264,6 +270,19 @@ def _keep_autonomy(snapshot: dict | None, before: dict | None) -> dict | None:
     return {**snapshot, "config": config}
 
 
+def _keep_tools(snapshot: dict | None, before: dict | None) -> dict | None:
+    """`snapshot` with the tool allowlist it had in `before` (none if none)."""
+    if snapshot is None:
+        return None
+    config = dict(snapshot.get("config") or {})
+    current = ((before or {}).get("config") or {}).get(TOOLS_KEY)
+    if current is None:
+        config.pop(TOOLS_KEY, None)
+    else:
+        config[TOOLS_KEY] = current
+    return {**snapshot, "config": config}
+
+
 def _without_autonomy(snapshot: dict | None) -> dict | None:
     """An unversioned agent's state with no grants. Grants come only from the
     Autonomy action, written to the store; an `autonomy` key in a config.yaml
@@ -294,6 +313,8 @@ def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, sou
         before = versions[-1].snapshot if versions else _without_autonomy(_agent_on_disk(user_id, name))
         if not sets_autonomy:
             snapshot = _keep_autonomy(snapshot, before)
+        if source == "proposal":
+            snapshot = _keep_tools(snapshot, before)
         now = datetime.now(UTC).isoformat()
         if not versions and before is not None:
             # The state before versioning began, so the first edit can be undone.

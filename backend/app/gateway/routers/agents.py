@@ -2,15 +2,16 @@
 
 import logging
 import re
+import secrets
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.gateway.authz import permission_dependency
 from omniharness.config import config_versions
 from omniharness.config.agents_api_config import get_agents_api_config
-from omniharness.config.agents_config import AgentConfig, list_custom_agents, load_agent_config, load_agent_soul
+from omniharness.config.agents_config import AGENT_AVATARS, INTEGRATION_PREFIXES, AgentConfig, list_custom_agents, load_agent_config, load_agent_soul
 from omniharness.config.paths import get_paths
 from omniharness.runtime.user_context import get_effective_user_id
 
@@ -18,6 +19,47 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["agents"])
 
 AGENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
+
+
+_ID_TEXT = re.compile(r"^[A-Za-z0-9:._/@+-]{1,200}$")
+
+
+class AgentToolsField(BaseModel):
+    """An agent's integrations and individual tools (006-G). Shape-checked
+    here; which of them exist is decided at run time (a server that is down
+    or a toolkit since disconnected keeps the choice and offers nothing)."""
+
+    integrations: list[str] = Field(default_factory=list, max_length=200)
+    tools: list[str] = Field(default_factory=list, max_length=2000)
+
+    @field_validator("integrations")
+    @classmethod
+    def _integrations(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not _ID_TEXT.fullmatch(item) or not item.startswith(INTEGRATION_PREFIXES) or item.endswith(":"):
+                raise ValueError(f"{item!r} is not an integration id (local:<server>, connector:<TOOLKIT> or builtin:<group>)")
+        return sorted(set(value))
+
+    @field_validator("tools")
+    @classmethod
+    def _tools(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not _ID_TEXT.fullmatch(item):
+                raise ValueError(f"{item!r} is not a tool name")
+        return sorted(set(value))
+
+
+class AgentNotifyField(BaseModel):
+    """Delivery defaults for the agent's new schedules (006-G)."""
+
+    telegram: bool = True
+    home: bool = True
+
+
+def _check_avatar(value: str | None) -> str | None:
+    if value is not None and value not in AGENT_AVATARS:
+        raise ValueError(f"{value!r} is not one of the agent avatars")
+    return value
 
 
 class AgentResponse(BaseModel):
@@ -31,6 +73,9 @@ class AgentResponse(BaseModel):
     soul: str | None = Field(default=None, description="SOUL.md content")
     display_name: str | None = Field(default=None, description="Name shown to people; None shows the title-cased slug")
     projects: list[str] | None = Field(default=None, description="Ledger project ids this agent works on")
+    avatar: str | None = Field(default=None, description="Avatar id (one of the agent avatars); None shows a default picked from its name")
+    tools: AgentToolsField | None = Field(default=None, description="Per-agent integrations and tools; None keeps tool_groups")
+    notify: AgentNotifyField | None = Field(default=None, description="Delivery defaults for new schedules")
     version: int = Field(default=0, description="Current version in the versioned store (0: none yet); send it back as base_version")
 
 
@@ -51,7 +96,15 @@ class AgentCreateRequest(BaseModel):
     soul: str = Field(default="", description="SOUL.md content — agent personality and behavioral guardrails")
     display_name: str | None = Field(default=None, max_length=80, description="Name shown to people")
     projects: list[str] | None = Field(default=None, description="Ledger project ids this agent works on")
+    avatar: str | None = Field(default=None, description="Avatar id; a random one when omitted")
+    tools: AgentToolsField | None = Field(default=None, description="Per-agent integrations and tools; omitted keeps tool_groups")
+    notify: AgentNotifyField | None = Field(default=None, description="Delivery defaults for new schedules")
     source: Literal["manual", "draft"] = Field(default="manual", description="manual, or draft when a one-sentence draft filled it")
+
+    @field_validator("avatar")
+    @classmethod
+    def _avatar(cls, value: str | None) -> str | None:
+        return _check_avatar(value)
 
 
 class AgentUpdateRequest(BaseModel):
@@ -64,8 +117,16 @@ class AgentUpdateRequest(BaseModel):
     soul: str | None = Field(default=None, description="Updated SOUL.md content")
     display_name: str | None = Field(default=None, max_length=80, description="Updated name shown to people")
     projects: list[str] | None = Field(default=None, description="Updated ledger project ids")
+    avatar: str | None = Field(default=None, description="Updated avatar id")
+    tools: AgentToolsField | None = Field(default=None, description="Updated integrations and tools (null: back to tool_groups)")
+    notify: AgentNotifyField | None = Field(default=None, description="Updated delivery defaults for new schedules")
     base_version: int | None = Field(default=None, description="The version this edit was made from; refused when it is no longer current")
     source: Literal["manual", "draft"] = Field(default="manual", description="manual, or draft when a one-sentence draft filled it")
+
+    @field_validator("avatar")
+    @classmethod
+    def _avatar(cls, value: str | None) -> str | None:
+        return _check_avatar(value)
 
 
 class AgentUndoRequest(BaseModel):
@@ -133,6 +194,9 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
         soul=soul,
         display_name=agent_cfg.display_name,
         projects=agent_cfg.projects,
+        avatar=agent_cfg.avatar,
+        tools=AgentToolsField.model_construct(integrations=list(agent_cfg.tools.integrations), tools=list(agent_cfg.tools.tools)) if agent_cfg.tools is not None else None,
+        notify=AgentNotifyField(**agent_cfg.notify.model_dump()) if agent_cfg.notify is not None else None,
         version=config_versions.agent_version(user_id or get_effective_user_id(), agent_cfg.name),
     )
 
@@ -270,6 +334,12 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
         config_data["display_name"] = request.display_name.strip()
     if request.projects is not None:
         config_data["projects"] = request.projects
+    # 006-G: every new agent has a face; one at random unless it picked one.
+    config_data["avatar"] = request.avatar or secrets.choice(AGENT_AVATARS)
+    if request.tools is not None:
+        config_data["tools"] = request.tools.model_dump()
+    if request.notify is not None:
+        config_data["notify"] = request.notify.model_dump()
 
     try:
         # Through the versioned store: this is version 1 (or the next one, for
@@ -341,6 +411,18 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
                 config.pop(key, None)
             else:
                 config[key] = value if value is not None else ""
+    if "avatar" in fields_set:
+        if request.avatar:
+            config["avatar"] = request.avatar
+        else:
+            config.pop("avatar", None)
+    for key in ("tools", "notify"):
+        if key in fields_set:
+            value = getattr(request, key)
+            if value is None:
+                config.pop(key, None)
+            else:
+                config[key] = value.model_dump()
     if "display_name" in fields_set:
         if request.display_name and request.display_name.strip():
             config["display_name"] = request.display_name.strip()

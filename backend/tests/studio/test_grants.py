@@ -349,7 +349,9 @@ def test_a_tool_relabelled_irreversible_is_never_covered_even_if_granted_on_disk
     assert _tasks(studio) == []
     assert len(_pending(studio)) == 1
     view = studio.client.get("/api/studio/agents/wrap-up/autonomy").json()
-    assert {c["id"]: c["grantable"] for c in view["classes"]} == {"tasks": False, "notes": False, "archive": False}
+    # The ledger classes follow ledger_apply's label; "drafts" (006-G) is
+    # decided by its own tool's rule, which this relabel did not touch.
+    assert {c["id"]: c["grantable"] for c in view["classes"]} == {"tasks": False, "notes": False, "archive": False, "drafts": True}
 
 
 def test_the_lead_agent_can_hold_grants_for_todays_automations(studio) -> None:
@@ -431,7 +433,10 @@ def test_a_tool_moved_to_tier_3_can_no_longer_be_granted_and_always_asks(studio,
     assert len(_pending(studio)) == 1
     assert _uses(studio) == []
     view = studio.client.get("/api/studio/agents/wrap-up/autonomy").json()
-    assert not any(c["grantable"] for c in view["classes"])
+    # Every class whose tool was moved (the ledger ones); "drafts" (006-G)
+    # follows its own tool's rule, which was not moved.
+    ledger = [c for c in view["classes"] if c["id"] != "drafts"]
+    assert ledger and not any(c["grantable"] for c in ledger)
     assert "Tier 3 always asks you" in view["classes"][0]["not_grantable_reason"]
 
 

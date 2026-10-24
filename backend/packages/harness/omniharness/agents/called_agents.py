@@ -279,6 +279,7 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
             app_config=app_config,
             selected_sources=selected,
             user_id=surface.get("user_id"),
+            tool_access=surface.get("tool_access") if isinstance(surface.get("tool_access"), dict) else None,
         )
         chain = tuple(resume.get("delegation_chain") or ())
         origin = str(resume.get("origin") or "unknown")
@@ -348,17 +349,23 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
     config = called_agent_config(agent, user_id=user_id)
     if config is None:
         return f"{agent} is not available: no such agent."
+    from omniharness.tools.agent_access import access_dict
+
     try:
-        tool_groups = load_agent_config(agent, user_id=user_id).tool_groups  # type: ignore[union-attr]
+        agent_cfg = load_agent_config(agent, user_id=user_id)
+        tool_groups = agent_cfg.tool_groups  # type: ignore[union-attr]
+        # 006-G: the called agent's OWN per-tool allowlist.
+        tool_access = access_dict(agent_cfg.tools)  # type: ignore[union-attr]
     except (FileNotFoundError, ValueError, AttributeError):
         tool_groups = None
+        tool_access = None
     app_config = context.get("app_config")
     metadata = (getattr(runtime, "config", None) or {}).get("metadata", {}) or {}
     model_name = resolve_subagent_model_name(config, metadata.get("model_name"), app_config=app_config)
     raw = context.get("selected_sources")
     selected = sorted(raw) if isinstance(raw, (list, set, tuple)) else None
     # Its tools: the chat's selection, within the agent's own tool groups.
-    tools = subagent_base_tools(model_name=model_name, tool_groups=tool_groups, app_config=app_config, selected_sources=selected, user_id=user_id)
+    tools = subagent_base_tools(model_name=model_name, tool_groups=tool_groups, app_config=app_config, selected_sources=selected, user_id=user_id, tool_access=tool_access)
     state = getattr(runtime, "state", None) or {}
     executor = SubagentExecutor(
         config=config,
@@ -368,7 +375,7 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
         sandbox_state=state.get("sandbox"),
         thread_data=state.get("thread_data"),
         thread_id=context.get("thread_id"),
-        tool_surface=subagent_surface(subagent_type=agent, model_name=model_name, tool_groups=tool_groups, skills=config.skills, user_id=user_id, called_agent=True, selected_sources=selected),
+        tool_surface=subagent_surface(subagent_type=agent, model_name=model_name, tool_groups=tool_groups, skills=config.skills, user_id=user_id, called_agent=True, selected_sources=selected, tool_access=tool_access),
         user_id=user_id,
     )
     # Stop stops it: the run's cancellation sets the agent's cancel event, and
