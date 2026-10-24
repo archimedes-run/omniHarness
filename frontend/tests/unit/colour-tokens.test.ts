@@ -49,6 +49,32 @@ const exempt = (rel: string) =>
   Object.keys(EXEMPT_DIRS).some((d) => rel === d || rel.startsWith(`${d}/`));
 
 const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
+  "core/agents/avatars.ts": {
+    reason:
+      "each avatar's disc colour, the same one painted inside its SVG artwork (public/avatars): the face looks the same in both themes, like a photo",
+    literals: [
+      "#2C69AD",
+      "#C02B2B",
+      "#23826B",
+      "#8A46C8",
+      "#55657C",
+      "#8A6A00",
+      "#BE2E80",
+      "#4C5ED2",
+      "#C2470A",
+      "#7052DC",
+      "#136C93",
+      "#9A2FB0",
+      "#5E7A12",
+      "#2C7A44",
+      "#BA2E54",
+      "#9C5628",
+      "#4560CC",
+      "#2F7480",
+      "#B23E76",
+      "#0E6F7E",
+    ],
+  },
   "components/landing/sections/what-is-omniharness-section.tsx": {
     reason:
       "soft drop shadow, a slate tint at 8% or less, that reads in both themes",

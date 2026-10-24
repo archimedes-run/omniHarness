@@ -11,7 +11,9 @@ import type {
   CustomSkill,
   DraftResponse,
   SkillFiles,
+  SkillStudioRecord,
   StudioOptions,
+  ToolCatalog,
   Versions,
 } from "./types";
 
@@ -166,8 +168,55 @@ export const loadGrantUses = (name: string) =>
 
 /** Ask the model a few times whether this message makes it load the skill.
  * Each try is a model call; run only when the user presses Test. */
-export const testSkill = (name: string, message: string, tries = 3) =>
+export const testSkill = (
+  name: string,
+  message: string,
+  tries = 3,
+  save = false,
+) =>
   call<SkillTestResult>(`/api/skills/${encodeURIComponent(name)}/test`, {
     method: "POST",
-    body: JSON.stringify({ message, tries }),
+    body: JSON.stringify({ message, tries, save }),
   });
+
+/** Every integration and tool an agent could be given, each with its tier
+ * from the policy classifier (006-G). Owner only. */
+export const loadToolCatalog = () =>
+  call<ToolCatalog>("/api/studio/tool-catalog");
+
+const skillStudioPath = (name: string) =>
+  `/api/skills/custom/${encodeURIComponent(name)}/studio`;
+
+/** A skill's icon, colour and saved test results (006-G). */
+export const loadSkillStudio = (name: string) =>
+  call<SkillStudioRecord>(skillStudioPath(name));
+
+export const saveSkillAppearance = (
+  name: string,
+  icon: string | null,
+  color: number | null,
+) =>
+  call<SkillStudioRecord>(skillStudioPath(name), {
+    method: "PUT",
+    body: JSON.stringify({ icon, color }),
+  });
+
+export const removeSkillTest = (name: string, message: string) =>
+  call<SkillStudioRecord>(
+    `/api/skills/custom/${encodeURIComponent(name)}/tests?message=${encodeURIComponent(message)}`,
+    { method: "DELETE" },
+  );
+
+/** Remove one of a custom skill's files, as a new version (006-G). */
+export const removeSkillFile = (name: string, path: string) =>
+  call<SkillFiles>(
+    `/api/skills/custom/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  );
+
+/** The IM channels' state (Telegram's "Connected" pill on Notifications). */
+export const loadChannels = () =>
+  call<{
+    service_running: boolean;
+    channels: Record<string, { enabled?: boolean; running?: boolean }>;
+  }>("/api/channels/");

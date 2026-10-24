@@ -102,8 +102,10 @@ for (const route of ["/workspace/chats/new", "/workspace/home"])
  * Markers are literals only that panel's component contains.
  */
 const PANEL_MARKERS: Record<string, RegExp> = {
-  agents: /overview-works-on/,
-  skills: /skill-preview-toggle/,
+  // 006-G: Agents and Skills are one lazy module (the Studio); each marker is
+  // a literal only its own stepper contains.
+  agents: /agent-step-setup/,
+  skills: /skill-step-files/,
   automations: /every weekday at 9, brief me/,
   tasks: /Evidence is not set up yet/,
 };

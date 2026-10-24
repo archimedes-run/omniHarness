@@ -60,6 +60,10 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 - **`server/`** — Server-side code (better-auth, not yet active)
 - **`styles/`** — Global CSS with Tailwind v4 `@import` syntax and CSS variables for theming
 
+### Agent & Skill Studio (006-G)
+
+`src/components/workspace/studio/` is the Agents and Skills capsule panels: one lazy module (`shell/panels/studio-panel.tsx`, both panel ids), kept mounted when the person switches Agents | Skills. It draws its own header and close button (`SELF_CHROME_PANELS` in `shell/panels.ts`) and answers Esc / outside clicks first through `PanelProps.setCloseGuard`. Styles are `studio.css`, the approved board's CSS scoped under `.oh-studio` on Graphite tokens; join conditional class names with `cx()` from `parts.tsx` (the Tailwind Prettier plugin trims the leading space of a `" on"` fragment in a template). The agent stepper saves the agent (one version), then its grants, then its schedules (006-F routes); per-agent tools are `Agent.tools` (`core/studio/tool-select.ts`), enforced by the backend, never by the UI. Avatars are `core/agents/avatars.ts` + `public/avatars/*.svg`; every agent face goes through `chat-bar/agent-avatar.tsx`.
+
 ### Data Flow
 
 1. User input → thread hooks (`core/threads/hooks.ts`) → LangGraph SDK streaming

@@ -31,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { openNewAgentPanel } from "@/components/workspace/agents/studio/url-item";
+import { openNewAgentPanel } from "@/components/workspace/studio/url-item";
 import { useI18n } from "@/core/i18n/hooks";
 import { saveAppearance, type Appearance } from "@/core/preferences";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";

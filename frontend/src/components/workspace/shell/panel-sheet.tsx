@@ -5,7 +5,9 @@ import { XIcon } from "lucide-react";
 import {
   Component,
   createElement,
+  useCallback,
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type ReactNode,
@@ -17,7 +19,9 @@ import { useI18n } from "@/core/i18n/hooks";
 import {
   PANEL_ICONS,
   PANEL_LOADERS,
+  SELF_CHROME_PANELS,
   panelLabel,
+  type CloseGuard,
   type PanelId,
   type PanelProps,
 } from "./panels";
@@ -111,6 +115,17 @@ function SheetFor({
   const Icon = PANEL_ICONS[id];
   const Content = usePanelComponent(id);
   const label = panelLabel(t, id);
+  const selfChrome = SELF_CHROME_PANELS.has(id);
+  // A panel with unsaved work answers first (see PanelProps.setCloseGuard).
+  const guard = useRef<CloseGuard | null>(null);
+  const setCloseGuard = useCallback((next: CloseGuard | null) => {
+    guard.current = next;
+  }, []);
+  const guarded =
+    (reason: "escape" | "outside") =>
+    (event: { preventDefault: () => void }) => {
+      if (guard.current?.(reason)) event.preventDefault();
+    };
   const failed = (
     <p
       className="text-destructive p-6 text-sm"
@@ -136,6 +151,9 @@ function SheetFor({
           data-testid="panel-sheet"
           data-panel={id}
           aria-describedby={undefined}
+          onEscapeKeyDown={guarded("escape")}
+          onPointerDownOutside={guarded("outside")}
+          onInteractOutside={guarded("outside")}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             const target =
@@ -147,32 +165,54 @@ function SheetFor({
                 .querySelector<HTMLElement>(`[data-capsule="${id}"]`)
                 ?.focus();
           }}
-          className="bg-background text-foreground border-border data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 mx-auto flex max-w-[1240px] flex-col overflow-hidden duration-100 outline-none sm:inset-4 sm:rounded-xl sm:border sm:shadow-lg md:inset-6 md:top-[72px]"
+          className={
+            selfChrome
+              ? "bg-card text-foreground border-border data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 m-auto flex h-full w-full flex-col overflow-hidden duration-100 outline-none sm:h-[min(840px,calc(100dvh-48px))] sm:w-[min(1080px,calc(100vw-32px))] sm:rounded-[18px] sm:border sm:shadow-2xl md:top-16 md:h-[min(840px,calc(100dvh-88px))]"
+              : "bg-background text-foreground border-border data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 mx-auto flex max-w-[1240px] flex-col overflow-hidden duration-100 outline-none sm:inset-4 sm:rounded-xl sm:border sm:shadow-lg md:inset-6 md:top-[72px]"
+          }
         >
-          <div className="border-border flex shrink-0 items-center gap-3 border-b px-4 py-2 sm:px-5">
-            <Icon className="text-muted-foreground size-4" aria-hidden />
-            <DialogPrimitive.Title className="flex-1 text-[15px] font-semibold">
+          {selfChrome ? (
+            <DialogPrimitive.Title className="sr-only">
               {label}
             </DialogPrimitive.Title>
+          ) : null}
+          <div
+            className="border-border flex shrink-0 items-center gap-3 border-b px-4 py-2 sm:px-5"
+            hidden={selfChrome}
+          >
+            <Icon className="text-muted-foreground size-4" aria-hidden />
+            {selfChrome ? null : (
+              <DialogPrimitive.Title className="flex-1 text-[15px] font-semibold">
+                {label}
+              </DialogPrimitive.Title>
+            )}
             <DialogPrimitive.Close
               className="text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring flex size-11 items-center justify-center rounded-md outline-none focus-visible:ring-2 md:size-9"
               aria-label={t.shell.close}
-              data-testid="panel-close"
+              data-testid={selfChrome ? undefined : "panel-close"}
             >
               <XIcon className="size-4" />
             </DialogPrimitive.Close>
           </div>
           <div
-            className="min-h-0 flex-1 overflow-y-auto"
+            className={
+              selfChrome
+                ? "flex min-h-0 flex-1 flex-col"
+                : "min-h-0 flex-1 overflow-y-auto"
+            }
             data-testid="panel-body"
           >
             {Content === "failed" ? (
               failed
             ) : Content ? (
-              <PanelBoundary key={id} fallback={failed}>
+              <PanelBoundary key={selfChrome ? "studio" : id} fallback={failed}>
                 {/* The component comes from the module cache, the same one
                     on every render (not created here). */}
-                {createElement(Content, { onClose: closePanel })}
+                {createElement(Content, {
+                  onClose: closePanel,
+                  panel: id,
+                  setCloseGuard,
+                })}
               </PanelBoundary>
             ) : (
               <p

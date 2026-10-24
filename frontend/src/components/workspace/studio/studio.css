@@ -1,0 +1,2004 @@
+/*
+ * Agent & Skill Studio (006-G), ported from the approved design board
+ * (design-wizard/studio.css). Every rule is scoped under .oh-studio and uses
+ * only the app's Graphite tokens (globals.css), so both themes follow the app.
+ */
+.oh-studio {
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --shadow:
+    0 24px 64px -16px rgba(23, 24, 27, 0.28), 0 2px 6px rgba(23, 24, 27, 0.06);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.dark .oh-studio {
+  --shadow:
+    0 24px 64px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+.oh-studio button,
+.oh-studio input,
+.oh-studio textarea,
+.oh-studio select {
+  font: inherit;
+  color: inherit;
+}
+.oh-studio :focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.oh-studio a {
+  color: var(--primary);
+}
+.oh-studio .m-head {
+  padding: 18px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.oh-studio .m-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+}
+.oh-studio .m-title-ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--primary-subtle);
+  color: var(--foreground);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.oh-studio .m-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.oh-studio .m-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.oh-studio .grow {
+  flex: 1;
+  min-width: 0;
+}
+.oh-studio .eyebrow {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.oh-studio .owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px 0 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-size: 12px;
+  color: var(--foreground-2);
+  white-space: nowrap;
+}
+.oh-studio .owner .who {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  display: grid;
+  place-items: center;
+}
+.oh-studio .icon-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  flex: none;
+}
+.oh-studio .icon-btn:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.oh-studio .icon-btn.danger:hover {
+  color: var(--destructive);
+}
+.oh-studio .switcher {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  gap: 2px;
+}
+.oh-studio .switcher a {
+  padding: 4px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground-2);
+  text-decoration: none;
+}
+.oh-studio .switcher a[aria-current="page"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.oh-studio .m-body {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 24px;
+  scroll-padding-top: 16px;
+}
+.oh-studio .m-foot {
+  border-top: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+}
+.oh-studio .m-foot .hint {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+.oh-studio kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--foreground-2);
+}
+.oh-studio .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--foreground);
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.oh-studio .btn:hover {
+  background: var(--surface-raised);
+}
+.oh-studio .btn.solid {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+.oh-studio .btn.solid:hover {
+  background: color-mix(in srgb, var(--primary) 88%, var(--foreground));
+}
+.oh-studio .btn.ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--foreground-2);
+}
+.oh-studio .btn.ghost:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.oh-studio .btn.emph {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.oh-studio .btn.sm {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.oh-studio .btn[disabled],
+.oh-studio .btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.oh-studio .link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  font-weight: 500;
+  cursor: pointer;
+  font-size: 13px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.oh-studio .link:hover {
+  text-decoration: underline;
+}
+.oh-studio .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.oh-studio .label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oh-studio .help {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+.oh-studio .input,
+.oh-studio .textarea,
+.oh-studio .select {
+  width: 100%;
+  border: 1px solid var(--input);
+  background: var(--background);
+  border-radius: var(--r-md);
+  padding: 8px 11px;
+  font-size: 14px;
+  color: var(--foreground);
+}
+.oh-studio .input {
+  height: 38px;
+}
+.oh-studio .textarea {
+  resize: vertical;
+  line-height: 1.6;
+  min-height: 96px;
+}
+.oh-studio .input:focus,
+.oh-studio .textarea:focus,
+.oh-studio .select:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+  border-color: var(--ring);
+}
+.oh-studio .input::placeholder,
+.oh-studio .textarea::placeholder {
+  color: var(--muted-foreground);
+}
+.oh-studio .with-ico {
+  position: relative;
+}
+.oh-studio .with-ico svg {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+.oh-studio .with-ico .input {
+  padding-left: 34px;
+}
+.oh-studio .count {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.oh-studio .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.oh-studio .pill.good {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+.oh-studio .pill.warn {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+}
+.oh-studio .pill.bad {
+  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+}
+.oh-studio .pill.accent {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.oh-studio .pill.muted {
+  color: var(--muted-foreground);
+  border-color: var(--border-strong);
+}
+.oh-studio .pill .d {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.oh-studio .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--foreground-2);
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.oh-studio .chip.btnlike {
+  cursor: pointer;
+}
+.oh-studio .chip.btnlike:hover {
+  border-color: var(--border-strong);
+  color: var(--foreground);
+}
+.oh-studio .tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.oh-studio .tier.t1 {
+  color: var(--muted-foreground);
+  background: var(--surface-raised);
+}
+.oh-studio .tier.t2 {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.oh-studio .tier.t3 {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+}
+.oh-studio .drafted {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--primary);
+}
+.oh-studio .dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  display: inline-block;
+  flex: none;
+}
+.oh-studio .switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+}
+.oh-studio .switch::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  transition: transform 0.15s;
+}
+.oh-studio .switch[aria-checked="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.oh-studio .switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+  background: var(--background);
+}
+.oh-studio .switch[aria-checked="mixed"] {
+  background: color-mix(in srgb, var(--primary) 45%, var(--surface-raised));
+  border-color: var(--primary);
+}
+.oh-studio .switch[aria-checked="mixed"]::after {
+  transform: translateX(8px);
+  background: var(--background);
+}
+.oh-studio .switch[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.oh-studio .check {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--background);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--primary-foreground);
+}
+.oh-studio .check.on {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.oh-studio .av {
+  border-radius: 50%;
+  display: block;
+  flex: none;
+}
+.oh-studio .toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.oh-studio .toolbar .with-ico {
+  width: 280px;
+}
+.oh-studio .filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.oh-studio .filter {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: none;
+  font-size: 13px;
+  color: var(--foreground-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.oh-studio .filter .n {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.oh-studio .filter[aria-pressed="true"] {
+  background: var(--primary-subtle);
+  border-color: transparent;
+  color: var(--foreground);
+  font-weight: 500;
+}
+.oh-studio .filter[aria-pressed="true"] .n {
+  color: var(--foreground);
+}
+.oh-studio .cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.oh-studio .acard {
+  position: relative;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  color: inherit;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.oh-studio .acard:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.18);
+}
+.oh-studio .acard .top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.oh-studio .acard .nm {
+  font-weight: 600;
+  font-size: 14.5px;
+}
+.oh-studio .acard .pp {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 39px;
+}
+.oh-studio .acard .meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--foreground-2);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.oh-studio .acard .meta .sep {
+  color: var(--border-strong);
+}
+.oh-studio .acard.new {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--foreground-2);
+  min-height: 150px;
+  background: none;
+}
+.oh-studio .acard.new:hover {
+  border-color: var(--primary);
+  color: var(--foreground);
+}
+.oh-studio .acard.flash {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent);
+}
+.oh-studio .monos {
+  display: inline-flex;
+}
+.oh-studio .mono {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  border: 2px solid var(--card);
+  flex: none;
+}
+.oh-studio .monos .mono + .mono {
+  margin-left: -6px;
+}
+.oh-studio .mono.lg {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  font-size: 12px;
+  border: none;
+}
+.oh-studio .t-lead {
+  background: var(--sidebar-accent);
+  color: var(--foreground);
+}
+.oh-studio .t-0 {
+  background: var(--avatar-0);
+  color: var(--avatar-0-foreground);
+}
+.oh-studio .t-1 {
+  background: var(--avatar-1);
+  color: var(--avatar-1-foreground);
+}
+.oh-studio .t-2 {
+  background: var(--avatar-2);
+  color: var(--avatar-2-foreground);
+}
+.oh-studio .t-3 {
+  background: var(--avatar-3);
+  color: var(--avatar-3-foreground);
+}
+.oh-studio .t-4 {
+  background: var(--avatar-4);
+  color: var(--avatar-4-foreground);
+}
+.oh-studio .t-5 {
+  background: var(--avatar-5);
+  color: var(--avatar-5-foreground);
+}
+.oh-studio .t-6 {
+  background: var(--avatar-6);
+  color: var(--avatar-6-foreground);
+}
+.oh-studio .t-7 {
+  background: var(--avatar-7);
+  color: var(--avatar-7-foreground);
+}
+.oh-studio .empty-search {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.oh-studio .steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.oh-studio .step {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 0 0 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  border-radius: 6px;
+  width: 100%;
+}
+.oh-studio .step .bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  overflow: hidden;
+  position: relative;
+}
+.oh-studio .step .bar i {
+  position: absolute;
+  inset: 0;
+  background: var(--primary);
+  border-radius: inherit;
+}
+.oh-studio .step .lbl {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.oh-studio .step .num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1.5px solid var(--border-strong);
+  color: var(--muted-foreground);
+  flex: none;
+}
+.oh-studio .step.done .num {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+.oh-studio .step.current {
+  color: var(--foreground);
+}
+.oh-studio .step.current .num {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.oh-studio .step .sub {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.oh-studio .step:hover:not([aria-disabled="true"]) .lbl {
+  color: var(--foreground);
+}
+.oh-studio .step[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.7;
+}
+.oh-studio .head-id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.oh-studio .head-id .nm {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.oh-studio .unsaved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--warning);
+  font-weight: 500;
+}
+.oh-studio .crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px 4px 2px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+.oh-studio .crumb:hover {
+  color: var(--foreground);
+  background: var(--surface-raised);
+}
+.oh-studio .sec-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+.oh-studio .sec-sub {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 0 0 14px;
+}
+.oh-studio .panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.oh-studio .panel.raised {
+  background: var(--surface-raised);
+  border-color: transparent;
+}
+.oh-studio .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.oh-studio .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.oh-studio .wrap {
+  flex-wrap: wrap;
+}
+.oh-studio .s1 {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.oh-studio .avatar-card {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.oh-studio .avatar-card .big {
+  width: 112px;
+  height: 112px;
+}
+.oh-studio .avatar-card .who {
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.oh-studio .avatar-card .who b {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.oh-studio .av-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.oh-studio .av-opt {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+.oh-studio .av-opt img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+  transition: transform 0.12s;
+}
+.oh-studio .av-opt:hover img {
+  transform: scale(1.08);
+}
+.oh-studio .av-opt[aria-checked="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2.5px solid var(--primary);
+}
+.oh-studio .av-opt .ok {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--card);
+}
+.oh-studio .draft-box {
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary-subtle) 55%, var(--card));
+}
+.oh-studio .draft-box .row .input {
+  background: var(--card);
+}
+.oh-studio .draft-box.done {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success) 7%, var(--card));
+}
+.oh-studio .drafted-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--foreground-2);
+  margin-top: 12px;
+}
+.oh-studio .drafted-note svg {
+  color: var(--success);
+  flex: none;
+  margin-top: 1px;
+}
+.oh-studio .spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: oh-studio-spin 0.7s linear infinite;
+}
+@keyframes oh-studio-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.oh-studio .err {
+  font-size: 12.5px;
+  color: var(--destructive);
+}
+.oh-studio .editor {
+  border: 1px solid var(--input);
+  border-radius: var(--r-md);
+  background: var(--background);
+  overflow: hidden;
+}
+.oh-studio .editor:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+  border-color: var(--ring);
+}
+.oh-studio .editor .tb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.oh-studio .editor .tb button {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 7px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--foreground-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.oh-studio .editor .tb button:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.oh-studio .editor .tb .sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+.oh-studio .editor textarea {
+  border: none;
+  outline: none;
+  width: 100%;
+  background: transparent;
+  padding: 12px 14px;
+  resize: vertical;
+  line-height: 1.6;
+  min-height: 230px;
+  display: block;
+}
+.oh-studio .editor .ft {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.oh-studio .cfg-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.oh-studio .legend .filter .tier {
+  background: none;
+  padding: 0 2px;
+}
+.oh-studio .cfg {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.oh-studio .cfg:hover {
+  border-color: var(--border-strong);
+}
+.oh-studio .cfg .ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-raised);
+  color: var(--foreground-2);
+}
+.oh-studio .cfg .t {
+  font-weight: 600;
+  font-size: 14px;
+  display: block;
+}
+.oh-studio .cfg .c {
+  display: block;
+}
+.oh-studio .cfg .c {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.oh-studio .cfg[aria-selected="true"] {
+  background: var(--primary-subtle);
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.oh-studio .cfg[aria-selected="true"] .ico {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.oh-studio .cfg[aria-selected="true"] .c {
+  color: var(--foreground);
+}
+.oh-studio .cfg .corner {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.oh-studio .legend {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--foreground-2);
+}
+.oh-studio .legend span.item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.oh-studio .group-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 18px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.oh-studio .group-h .link {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12.5px;
+  margin-left: auto;
+}
+.oh-studio .int {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.oh-studio .int + .int {
+  margin-top: 8px;
+}
+.oh-studio .int.open {
+  border-color: var(--border-strong);
+}
+.oh-studio .int-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 8px;
+}
+.oh-studio .int-row .exp {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.oh-studio .int-row .exp:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.oh-studio .int-row .exp svg {
+  transition: transform 0.15s;
+}
+.oh-studio .int.open .int-row .exp svg {
+  transform: rotate(90deg);
+}
+.oh-studio .int-row .nm {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.oh-studio .int-row .ds {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.oh-studio .int-row .cnt {
+  font-size: 12.5px;
+  color: var(--foreground-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.oh-studio .src {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  padding: 0 6px;
+  border-radius: 5px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+}
+.oh-studio .tools {
+  border-top: 1px solid var(--border);
+  padding: 4px 14px 10px 56px;
+}
+.oh-studio .tool {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.oh-studio .tool:last-of-type {
+  border-bottom: none;
+}
+.oh-studio .tool .tl {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.oh-studio .tool .tid {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.oh-studio .tool .td {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.oh-studio .tool .wait {
+  font-size: 12px;
+  color: var(--warning);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+.oh-studio .tools .bulk {
+  display: flex;
+  gap: 14px;
+  padding: 8px 0 4px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  align-items: center;
+}
+.oh-studio .int-note {
+  font-size: 12.5px;
+  color: var(--foreground-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 2px;
+}
+
+.oh-studio .sk {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.oh-studio .sk + .sk {
+  margin-top: 8px;
+}
+.oh-studio .sk.on {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+}
+.oh-studio .glyph {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.oh-studio .glyph.lg {
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+}
+.oh-studio .sk .nm {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.oh-studio .sk .when {
+  font-size: 12.5px;
+  color: var(--foreground-2);
+}
+.oh-studio .sk .when b {
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.oh-studio .sk .by {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.oh-studio .grant {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  background: var(--card);
+  align-items: flex-start;
+}
+.oh-studio .grant + .grant {
+  margin-top: 8px;
+}
+.oh-studio .grant.on {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+  background: color-mix(in srgb, var(--primary-subtle) 40%, var(--card));
+}
+.oh-studio .grant .gt {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.oh-studio .grant .gd {
+  font-size: 13px;
+  color: var(--foreground-2);
+  margin-top: 2px;
+}
+.oh-studio .grant .gx {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+.oh-studio .grant[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.oh-studio .waits {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warning) 8%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border));
+}
+.oh-studio .waits .wh {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--foreground);
+}
+.oh-studio .waits .wh svg {
+  color: var(--warning);
+}
+.oh-studio .stepper-num {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--input);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--background);
+}
+.oh-studio .stepper-num button {
+  width: 32px;
+  height: 34px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--foreground-2);
+  font-size: 16px;
+}
+.oh-studio .stepper-num button:hover {
+  background: var(--surface-raised);
+}
+.oh-studio .stepper-num output {
+  min-width: 34px;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.oh-studio .two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.oh-studio .preview {
+  border-radius: 14px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.oh-studio .preview .bubble {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  max-width: 360px;
+  color: var(--foreground-2);
+}
+.oh-studio .preview .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.oh-studio .preview .fake-input {
+  width: 100%;
+  max-width: 380px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--input);
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  margin-top: 6px;
+}
+.oh-studio .sched {
+  display: flex;
+  gap: 14px;
+  padding: 14px 14px 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  align-items: flex-start;
+}
+.oh-studio .sched + .sched,
+.oh-studio .sched + .sched-ed,
+.oh-studio .sched-ed + .sched {
+  margin-top: 10px;
+}
+.oh-studio .sched .ck {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--primary-subtle);
+  color: var(--foreground);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.oh-studio .sched.off .ck {
+  background: var(--surface-raised);
+  color: var(--muted-foreground);
+}
+.oh-studio .sched .when {
+  font-weight: 600;
+  font-size: 14.5px;
+}
+.oh-studio .sched .task {
+  font-size: 13.5px;
+  color: var(--foreground-2);
+  margin-top: 2px;
+}
+.oh-studio .sched .chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.oh-studio .sched .acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.oh-studio .sched.off .when,
+.oh-studio .sched.off .task {
+  color: var(--muted-foreground);
+}
+.oh-studio .sched-ed {
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--card);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.oh-studio .seg {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.oh-studio .seg button {
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  background: var(--card);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground-2);
+}
+.oh-studio .seg button + button {
+  border-left: 1px solid var(--border-strong);
+}
+.oh-studio .seg button[aria-checked="true"] {
+  background: var(--primary-subtle);
+  color: var(--foreground);
+}
+.oh-studio .days {
+  display: flex;
+  gap: 6px;
+}
+.oh-studio .days button {
+  width: 40px;
+  height: 34px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground-2);
+}
+.oh-studio .days button[aria-pressed="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+.oh-studio .readout {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  font-size: 13px;
+}
+.oh-studio .readout b {
+  font-weight: 600;
+}
+.oh-studio .note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--foreground-2);
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+.oh-studio .note svg {
+  flex: none;
+  color: var(--muted-foreground);
+  margin-top: 2px;
+}
+.oh-studio .empty {
+  text-align: center;
+  padding: 36px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.oh-studio .empty .badge-wrap {
+  position: relative;
+}
+.oh-studio .empty .badge-wrap .ckb {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  display: grid;
+  place-items: center;
+  border: 3px solid var(--card);
+}
+.oh-studio .notif {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.oh-studio .notif:last-child {
+  border-bottom: none;
+}
+.oh-studio .notif .ni {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-raised);
+  color: var(--foreground-2);
+  flex: none;
+}
+.oh-studio .notif .nt {
+  font-weight: 500;
+  font-size: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.oh-studio .notif .nd {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.oh-studio .notif.disabled .nt,
+.oh-studio .notif.disabled .ni {
+  color: var(--muted-foreground);
+}
+.oh-studio .summary {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.oh-studio .summary .sh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--surface-raised);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--foreground-2);
+}
+.oh-studio .srow {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  gap: 16px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  align-items: start;
+}
+.oh-studio .srow .k {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.oh-studio .srow .v {
+  font-size: 13.5px;
+  color: var(--foreground);
+  min-width: 0;
+}
+.oh-studio .srow .v .sm {
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.oh-studio .srow .v .line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.oh-studio .srow .v .line + .line {
+  margin-top: 6px;
+}
+.oh-studio .srow.changed {
+  background: color-mix(in srgb, var(--warning) 5%, transparent);
+}
+.oh-studio .checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.oh-studio .checks .ci {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--foreground-2);
+}
+.oh-studio .checks .ci svg.okc {
+  color: var(--success);
+  flex: none;
+  margin-top: 1px;
+}
+.oh-studio .checks .ci svg.wc {
+  color: var(--warning);
+  flex: none;
+  margin-top: 1px;
+}
+.oh-studio .s4 {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 20px;
+  align-items: start;
+}
+.oh-studio .glyph-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  width: 100%;
+}
+.oh-studio .glyph-grid button {
+  aspect-ratio: 1;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+  color: var(--foreground-2);
+  display: grid;
+  place-items: center;
+}
+.oh-studio .glyph-grid button[aria-checked="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+  color: var(--foreground);
+  background: var(--primary-subtle);
+}
+.oh-studio .tints {
+  display: flex;
+  gap: 8px;
+}
+.oh-studio .tints button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.oh-studio .tints button[aria-checked="true"] {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.oh-studio .split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 300px;
+}
+.oh-studio .split textarea {
+  border-right: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  min-height: 320px;
+}
+.oh-studio .md {
+  padding: 12px 16px;
+  font-size: 13.5px;
+  color: var(--foreground-2);
+  line-height: 1.6;
+  overflow: auto;
+  max-height: 360px;
+}
+.oh-studio .md h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+  color: var(--foreground);
+}
+.oh-studio .md p {
+  margin: 0 0 8px;
+}
+.oh-studio .md ul,
+.oh-studio .md ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.oh-studio .md code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface-raised);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.oh-studio .md strong {
+  color: var(--foreground);
+}
+.oh-studio .drop {
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 14px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--foreground-2);
+  background: var(--background);
+  cursor: pointer;
+}
+.oh-studio .drop:hover,
+.oh-studio .drop.over {
+  border-color: var(--primary);
+  background: var(--primary-subtle);
+}
+.oh-studio .file {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+.oh-studio .file:first-child {
+  border-top: none;
+}
+.oh-studio .file .fi {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.oh-studio .file .fn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.oh-studio .file .fs {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.oh-studio .test {
+  display: grid;
+  grid-template-columns: 1fr auto 150px auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.oh-studio .test:first-child {
+  border-top: none;
+}
+.oh-studio .test .msg {
+  font-size: 13.5px;
+}
+.oh-studio .tries {
+  display: inline-flex;
+  gap: 4px;
+}
+.oh-studio .tries i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  display: inline-block;
+}
+.oh-studio .tries i.hit {
+  background: var(--success);
+  border-color: var(--success);
+}
+.oh-studio .test .why {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  color: var(--foreground-2);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: -4px;
+}
+.oh-studio .toast {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  background: var(--foreground);
+  color: var(--background);
+  border-radius: 10px;
+  padding: 9px 10px 9px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+.oh-studio .toast button {
+  background: none;
+  border: none;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 13px;
+}
+.oh-studio .confirm-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  border-top: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border));
+  font-size: 13.5px;
+}
+@media (max-width: 960px) {
+  .oh-studio .s1,
+  .oh-studio .s4,
+  .oh-studio .two {
+    grid-template-columns: 1fr;
+  }
+  .oh-studio .cfg-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .oh-studio .srow {
+    grid-template-columns: 1fr auto;
+  }
+  .oh-studio .srow .v {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+@media (max-width: 640px) {
+  .oh-studio .steps .lbl .txt,
+  .oh-studio .step .sub {
+    display: none;
+  }
+  .oh-studio .m-head,
+  .oh-studio .m-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .oh-studio .m-foot {
+    padding: 10px 16px;
+    flex-wrap: wrap;
+  }
+  .oh-studio .toolbar .with-ico {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oh-studio * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* 006-G additions beside the board's rules */
+.oh-studio .contents {
+  display: contents;
+}
+.oh-studio .switcher button {
+  padding: 4px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.oh-studio .switcher button[aria-current="page"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.oh-studio .tier.t0 {
+  color: var(--muted-foreground);
+  background: none;
+  border: 1px dashed var(--border-strong);
+}
+.oh-studio h3.sec-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+.oh-studio .glyph.lg svg {
+  width: 34px;
+  height: 34px;
+}
+.oh-studio .md h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.oh-studio .md ol {
+  list-style: decimal;
+}
+.oh-studio .md ul {
+  list-style: disc;
+}
+.oh-studio .btn[disabled]:not([aria-busy]) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.oh-studio .editor .tb button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.oh-studio a.btn {
+  color: var(--foreground);
+}
+@media (max-width: 640px) {
+  .oh-studio .btn,
+  .oh-studio .icon-btn,
+  .oh-studio .filter,
+  .oh-studio .crumb,
+  .oh-studio .chip.btnlike,
+  .oh-studio .step,
+  .oh-studio .switcher button {
+    min-height: 44px;
+  }
+  .oh-studio .icon-btn {
+    min-width: 44px;
+  }
+  .oh-studio .m-head-row {
+    flex-wrap: wrap;
+  }
+  .oh-studio .head-id .nm {
+    font-size: 16px;
+  }
+  .oh-studio .tool {
+    grid-template-columns: 1fr auto;
+  }
+  .oh-studio .test {
+    grid-template-columns: 1fr auto;
+  }
+  .oh-studio .file {
+    grid-template-columns: auto 1fr auto;
+  }
+}
+.oh-studio .cfg-cards {
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (max-width: 640px) {
+  .oh-studio .cfg-cards {
+    grid-template-columns: 1fr;
+  }
+  .oh-studio .with-ico {
+    width: 100% !important;
+  }
+  .oh-studio .s4,
+  .oh-studio .s1,
+  .oh-studio .two {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .oh-studio .srow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+.oh-studio .editor .tb button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.oh-studio .btn svg,
+.oh-studio .link svg,
+.oh-studio .chip svg,
+.oh-studio .pill svg,
+.oh-studio .tier svg {
+  flex: none;
+}
+.oh-studio .acard .meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.oh-studio .acard .meta > .grow {
+  display: block;
+}

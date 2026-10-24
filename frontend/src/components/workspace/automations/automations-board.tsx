@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AgentAvatar } from "@/components/workspace/chat-bar/agent-avatar";
+import { LEAD_AGENT_ID } from "@/core/agents/avatar";
 import { useAgents } from "@/core/agents/hooks";
 import type { Template } from "@/core/automations/api";
 import { useDeleteRule, useSetRuleEnabled } from "@/core/automations/hooks";
@@ -140,14 +142,17 @@ export function AutomationsBoard({
                     </span>
                     <span
                       className={cn(
-                        "block truncate text-xs",
+                        "flex items-center gap-1.5 truncate text-xs",
                         runsAs(rule.agent, known).missing
                           ? "text-destructive"
                           : "text-muted-foreground",
                       )}
                       data-testid="rule-runs-as"
                     >
-                      {runsAs(rule.agent, known).text}
+                      <AgentAvatar id={rule.agent ?? LEAD_AGENT_ID} size={16} />
+                      <span className="truncate">
+                        {runsAs(rule.agent, known).text}
+                      </span>
                     </span>
                   </span>
                   <span
@@ -294,14 +299,15 @@ function RuleDetail({
           <p className="text-muted-foreground text-[13px]">{headline(rule)}</p>
           <p
             className={cn(
-              "text-[13px]",
+              "flex items-center gap-2 text-[13px]",
               runsAs(rule.agent, known).missing
                 ? "text-destructive"
                 : "text-foreground-2",
             )}
             data-testid="rule-detail-runs-as"
           >
-            {runsAs(rule.agent, known).text}
+            <AgentAvatar id={rule.agent ?? LEAD_AGENT_ID} size={20} />
+            <span>{runsAs(rule.agent, known).text}</span>
           </p>
         </div>
         <span className="text-foreground-2 text-[13px]">
