@@ -574,6 +574,7 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
     from omniharness.agents.lead_agent.prompt import apply_prompt_template, get_enabled_skills_for_config
     from omniharness.config.agents_config import load_agent_config
     from omniharness.models import create_chat_model
+    from omniharness.models.tool_name_boundary import ToolNameBoundaryModel
     from omniharness.tools.tools import get_available_tools
 
     skill_name = skill_name.replace("\r\n", "").replace("\n", "")
@@ -606,7 +607,7 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
     system = apply_prompt_template(agent_name=agent_cfg.name if agent_cfg else None, available_skills=available, app_config=config, user_id=user_id)
     tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config, tool_access=agent_cfg.tools if agent_cfg else None)
     try:
-        model = create_chat_model(name=model_name, thinking_enabled=False, app_config=config).bind_tools(tools)
+        model = ToolNameBoundaryModel(create_chat_model(name=model_name, thinking_enabled=False, app_config=config)).bind_tools(tools)
     except Exception as exc:  # noqa: BLE001 — said, not hidden
         raise HTTPException(status_code=502, detail=f"The model could not be set up: {type(exc).__name__}: {exc}")
 

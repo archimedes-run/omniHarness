@@ -77,9 +77,15 @@ def _build_runtime_middlewares(
     """Build shared base middlewares for agent execution."""
     from omniharness.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
     from omniharness.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
+    from omniharness.agents.middlewares.tool_name_boundary_middleware import ToolNameBoundaryMiddleware
     from omniharness.sandbox.middleware import SandboxMiddleware
 
     middlewares: list[AgentMiddleware] = [
+        # Tool names reach the provider model-safe (<= 64 chars) and come back
+        # full before any other middleware sees the reply. Its position does
+        # not matter (it renames inside the model it hands the factory); first,
+        # so no model call of any agent can run without it.
+        ToolNameBoundaryMiddleware(),
         ThreadDataMiddleware(lazy_init=lazy_init),
         SandboxMiddleware(lazy_init=lazy_init),
     ]
@@ -87,7 +93,8 @@ def _build_runtime_middlewares(
     if include_uploads:
         from omniharness.agents.middlewares.uploads_middleware import UploadsMiddleware
 
-        middlewares.insert(1, UploadsMiddleware())
+        # Right after ThreadDataMiddleware.
+        middlewares.insert(2, UploadsMiddleware())
 
     if include_dangling_tool_call_patch:
         from omniharness.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
