@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import permission_dependency
@@ -470,7 +470,7 @@ async def update_user_profile(request: UserProfileUpdateRequest) -> UserProfileR
     summary="Delete Custom Agent",
     description="Delete a custom agent and all its files (config, SOUL.md, memory).",
 )
-async def delete_agent(name: str) -> None:
+async def delete_agent(name: str, request: Request) -> None:
     """Delete a custom agent.
 
     Args:
@@ -505,7 +505,14 @@ async def delete_agent(name: str) -> None:
 
     # Feature 006-F: its schedules stop with it (switched off, kept visible);
     # no rule fires as a deleted agent, and none is run as the lead instead.
-    from app.gateway.agent_schedules import on_agent_deleted
-    from omniharness.config.app_config import get_app_config
+    # The app's own config (never a reload here: loading the config file has
+    # side effects). Never fails the delete: the engine and the gateway each
+    # refuse a firing as a missing agent anyway.
+    app_config = getattr(request.app.state, "config", None)
+    if app_config is not None and getattr(app_config, "trigger_engine", None) is not None:
+        from app.gateway.agent_schedules import on_agent_deleted
 
-    await on_agent_deleted(get_app_config(), name, user_id)
+        try:
+            await on_agent_deleted(app_config, name, user_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("agent %s deleted; switching off its rules failed", name, exc_info=True)
