@@ -565,3 +565,38 @@ def test_flipping_the_telegram_toggle_maps_the_destination_faithfully(studio, de
     body = {"schedule": s["schedule"], "timezone": s["timezone"], "telegram": telegram, "show_on_home": True, "version": view["rules_version"]}
     assert c.put("/api/studio/agents/lead_agent/schedules/brief", json=body).status_code == 200
     assert json.loads((studio.tmp / "rules.json").read_text())["rules"][0]["destination"] == after
+
+
+@pytest.mark.parametrize("prompt", ["reply {", "}{", "a } b"])
+def test_a_prompt_with_a_lone_brace_is_refused_with_422_on_every_write_path(studio, prompt) -> None:
+    """Formatter().parse raised ValueError, which the write path turned into a
+    500 ("Could not read or write the rules file")."""
+    _rules_file(studio, [_cron("mine")])
+    _make_agent(studio)
+    c = studio.client
+    before = (studio.tmp / "rules.json").read_text()
+    version = _version(studio)
+    responses = [
+        c.post("/api/studio/agents/wrap-up/schedules", json={"schedule": "0 9 * * *", "timezone": "UTC", "prompt": prompt, "version": version}),
+        c.put("/api/studio/agents/lead_agent/schedules/mine", json={"schedule": "0 9 * * *", "timezone": "UTC", "prompt": prompt, "version": version}),
+        c.post("/api/automations/rules", json={"rule": _cron("new", prompt=prompt), "version": version}),
+        c.put("/api/automations/rules/mine", json={"rule": _cron("mine", prompt=prompt), "version": version}),
+    ]
+    assert [r.status_code for r in responses] == [422] * 4, [r.text for r in responses]
+    assert all("Use {{ and }}" in r.json()["detail"] for r in responses)
+    assert (studio.tmp / "rules.json").read_text() == before
+
+
+def test_a_hand_written_lone_brace_keeps_the_previous_rules(tmp_path) -> None:
+    import os
+
+    from app.trigger_engine.config import ConfigLoader
+
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps({"rules": [_cron("mine")]}))
+    loader = ConfigLoader(path=path)
+    assert [r.id for r in loader.load().rules] == ["mine"]
+    path.write_text(json.dumps({"rules": [_cron("mine", prompt="reply {")]}))
+    os.utime(path, (1, 1))
+    assert [r.id for r in loader.load().rules] == ["mine"]
+    assert "Use {{ and }}" in (loader.last_error or "")

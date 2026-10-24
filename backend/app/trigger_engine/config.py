@@ -114,8 +114,13 @@ class EngineConfig:
     refused: tuple[RefusedRule, ...] = ()
 
 
-def _template_fields(prompt: str) -> set[str]:
-    return {f for _, f, _, _ in Formatter().parse(prompt) if f}
+def _template_fields(rid: str, prompt: str) -> set[str]:
+    try:
+        return {f for _, f, _, _ in Formatter().parse(prompt) if f}
+    except ValueError as exc:
+        # A lone "{" or "}": refused at load and on write (422), never a
+        # parse error that surfaces as a 500 or fails every firing.
+        raise ConfigError(f"rule {rid!r}: the prompt has an unmatched brace ({exc}). Use {{{{ and }}}} for a literal {{ or }}.") from exc
 
 
 def _parse_rule(raw: dict, seen: set[str]) -> Rule:
@@ -141,7 +146,7 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
     prompt = raw.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ConfigError(f"rule {rid!r}: prompt is required")
-    unknown = _template_fields(prompt) - AVAILABLE_FIELDS[rtype]
+    unknown = _template_fields(rid, prompt) - AVAILABLE_FIELDS[rtype]
     if unknown:
         raise ConfigError(f"rule {rid!r}: prompt references {sorted(unknown)}, which a {rtype} event cannot supply. Available: {sorted(AVAILABLE_FIELDS[rtype])}")
 
