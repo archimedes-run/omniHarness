@@ -506,6 +506,8 @@ def _lead_metadata(inputs: _LeadInputs) -> dict:
 
 
 def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
+    from omniharness.runtime.user_context import memory_user_of
+
     cfg = _get_runtime_config(config)
     resolved_app_config = app_config
 
@@ -589,6 +591,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             agent_name=agent_name,
             available_skills=available_skills,
             app_config=resolved_app_config,
+            memory_user_id=memory_user_of(cfg),
         ),
         state_schema=ThreadState,
     )

@@ -168,3 +168,26 @@ def resolve_user_id(
         # rather than ripple a type change through every caller.
         return str(user.id)
     return value
+
+
+# ---------------------------------------------------------------------------
+# Whose long-term memory a run reads and writes
+# ---------------------------------------------------------------------------
+
+#: Run-context key, set ONLY by the gateway (app.gateway.services: it is in
+#: SERVER_OWNED_RUN_KEYS, so a request can never supply it): whose long-term
+#: memory a run injects and updates when that is not the run's user. A lead
+#: automation runs for the install owner (#133) but keeps the system user's
+#: memory, as before: what it reads from outside never becomes a "fact" in the
+#: owner's chats, and the owner's memory is never shown to it.
+MEMORY_USER_KEY: Final[str] = "memory_user_id"
+
+
+def memory_user_of(context) -> str | None:
+    """The run's memory user override (MEMORY_USER_KEY), or None."""
+    from collections.abc import Mapping
+
+    if not isinstance(context, Mapping):
+        return None
+    value = context.get(MEMORY_USER_KEY)
+    return value if isinstance(value, str) and value else None

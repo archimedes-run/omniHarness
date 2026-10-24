@@ -10,52 +10,24 @@ uses (`omniharness.models.create_chat_model`, as imported by each consumer).
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
-
-os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-key-studio-composition-min-32")
-EXAMPLE = Path(__file__).resolve().parents[3] / "config.example.yaml"
+from studio_app import configure_studio, fresh_app
 
 
 @pytest.fixture
 def studio(tmp_path, monkeypatch):
-    from app.gateway.auth.config import AuthConfig, set_auth_config
+    import app.gateway.deps as deps
     from omniharness.config.app_config import reset_app_config
     from omniharness.config.extensions_config import reset_extensions_config
 
-    config = yaml.safe_load(EXAMPLE.read_text())
-    config["database"] = {"backend": "sqlite", "sqlite_dir": str(tmp_path / "data")}
-    config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy")}
-    config["trigger_engine"] = {"enabled": False, "rules_path": str(tmp_path / "rules.json"), "state_dir": str(tmp_path / "triggers")}
-    config["agents_api"] = {"enabled": True}
-    config.setdefault("memory", {})["enabled"] = False
-    config.setdefault("skills", {})["path"] = str(tmp_path / "skills")
-    (tmp_path / "skills" / "public").mkdir(parents=True)
-    (tmp_path / "skills" / "custom").mkdir(parents=True)
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(config))
-    extensions = tmp_path / "extensions.json"
-    extensions.write_text('{"mcpServers": {}, "skills": {}}')
-    monkeypatch.setenv("OMNI_HARNESS_CONFIG_PATH", str(path))
-    monkeypatch.setenv("OMNI_HARNESS_EXTENSIONS_CONFIG_PATH", str(extensions))
-    monkeypatch.setenv("OMNI_HARNESS_HOME", str(tmp_path / "home"))
-    monkeypatch.chdir(tmp_path)
-    reset_app_config()
-    reset_extensions_config()
-    set_auth_config(AuthConfig(jwt_secret=os.environ["AUTH_JWT_SECRET"]))
-
-    import app.gateway.deps as deps
-    from app.gateway.app import create_app
-
+    configure_studio(tmp_path, monkeypatch)
     monkeypatch.setattr(deps, "_cached_local_provider", None)
     monkeypatch.setattr(deps, "_cached_repo", None)
 
-    with TestClient(create_app()) as client:
+    with TestClient(fresh_app()) as client:
         resp = client.post("/api/v1/auth/initialize", json={"email": "owner@example.com", "password": "Str0ng!Pass99"})
         assert resp.status_code in (200, 201), resp.text
         csrf = client.cookies.get("csrf_token")

@@ -225,6 +225,8 @@ FastAPI application on port 8001 with health check at `GET /health`. Set `GATEWA
 
 Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → Gateway.
 
+**Scheduled runs run for the install owner**: the trigger engine calls as the system user, but `services.start_run` runs every scheduled run (only on the engine's granted request) for the owner: a 006-F agent schedule via `_scheduled_agent_owner`, a lead automation via `_scheduled_lead_owner` (#133). Their ledger writes, confirmed cards, grant uses and thread files (`users/<owner>/threads/<id>/`) are the owner's; the thread record stays the system user's (the card rule, `ownership.card_thread_open_to`). With no accounts (auth off) a lead automation runs as the caller. A lead automation keeps the SYSTEM user's long-term memory (read and write), via the server-owned run-context key `memory_user_id` (`omniharness.runtime.user_context.MEMORY_USER_KEY`, in `SERVER_OWNED_RUN_KEYS`): outside content it reads never becomes a fact in the owner's chats, and the owner's memory is never injected into it. A thread record a scheduled run has to recreate is owned by the request principal (the system user), not the run user (`launch_agent_run_detached(thread_record_user_id=...)`). Startup migration `app/run_history/owner_migration.py` moves existing automation threads' files from `users/default/threads/` to the owner (idempotent, never overwrites, under the firing lock; report in `migrations/automation-threads-to-owner.jsonl` under the data dir).
+
 ### Sandbox System (`packages/harness/omniharness/sandbox/`)
 
 **Interface**: Abstract `Sandbox` with `execute_command`, `read_file`, `write_file`, `list_dir`

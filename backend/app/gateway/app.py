@@ -394,6 +394,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("Run history could not be opened; automations run without it")
             app.state.run_history = None
 
+        # #133: lead automations now run for the owner; their threads' files
+        # move from the system user to the owner, once, before the engine
+        # starts (app.run_history.owner_migration). Non-fatal, idempotent,
+        # never overwrites; retried at every startup.
+        try:
+            from app.run_history.owner_migration import migrate_automation_threads_to_owner
+
+            await migrate_automation_threads_to_owner(app)
+        except Exception:
+            logger.exception("Moving automation threads to the owner failed (non-fatal; retried at the next startup)")
+
         # Start the trigger engine, in exactly one worker.
         #
         # This is the call site whose absence made Feature 002 ship inert: the

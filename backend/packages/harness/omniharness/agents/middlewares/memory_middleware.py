@@ -11,7 +11,7 @@ from langgraph.runtime import Runtime
 from omniharness.agents.memory.message_processing import detect_correction, detect_reinforcement, filter_messages_for_memory
 from omniharness.agents.memory.queue import get_memory_queue
 from omniharness.config.memory_config import get_memory_config
-from omniharness.runtime.user_context import get_effective_user_id
+from omniharness.runtime.user_context import get_effective_user_id, memory_user_of
 
 if TYPE_CHECKING:
     from omniharness.config.memory_config import MemoryConfig
@@ -96,7 +96,7 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         # Capture user_id at enqueue time while the request context is still alive.
         # threading.Timer fires on a different thread where ContextVar values are not
         # propagated, so we must store user_id explicitly in ConversationContext.
-        user_id = get_effective_user_id()
+        user_id = memory_user_of(runtime.context) or get_effective_user_id()
         queue = get_memory_queue()
         queue.add(
             thread_id=thread_id,

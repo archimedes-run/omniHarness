@@ -740,10 +740,13 @@ def apply_prompt_template(
     available_skills: set[str] | None = None,
     app_config: AppConfig | None = None,
     user_id: str | None = None,
+    memory_user_id: str | None = None,
 ) -> str:
     # Get memory context. `user_id`: whose agent and memory; None reads the
     # effective user from context (a run); a request handler passes its own.
-    memory_context = _get_memory_context(agent_name, app_config=app_config, user_id=user_id)
+    # `memory_user_id`: whose memory only, when the run says so (the server-
+    # owned MEMORY_USER_KEY: a lead automation keeps the system user's memory).
+    memory_context = _get_memory_context(agent_name, app_config=app_config, user_id=memory_user_id or user_id)
 
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents
