@@ -350,12 +350,13 @@ test("an agent no automation runs says Not set up, and why", async ({
   );
   await expect(page.getByTestId("studio-active")).toHaveCount(0);
   await expect(page.getByTestId("recent-runs")).toContainText(
-    "No automation runs this agent yet",
+    "No schedule runs this agent yet",
   );
   await page.getByTestId("studio-tab-schedule").click();
   await expect(page.getByTestId("schedule-none")).toContainText(
-    "every automation runs as the lead agent",
+    "No schedule yet",
   );
+  await expect(page.getByTestId("schedule-add")).toBeEnabled();
 });
 
 test("a link to an agent that no longer exists says so", async ({ page }) => {

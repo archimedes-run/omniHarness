@@ -40,6 +40,14 @@ export interface AgentSchedule {
   next_run: string | null;
   held_until: string | null;
   error: string | null;
+  /** Display name of the rule; "" when it has none. */
+  name: string;
+  /** What the firing asks the agent. */
+  prompt: string;
+  /** Its result is sent to Telegram (the rule's destination is auto/remote). */
+  telegram: boolean;
+  /** Home lists its upcoming runs and results. */
+  show_on_home: boolean;
 }
 
 export interface AgentRuns {
@@ -49,6 +57,27 @@ export interface AgentRuns {
   rules_error: string | null;
   schedules: AgentSchedule[];
   recent: FiringView[];
+  /** The rule file version a schedule edit is based on (409 when stale). */
+  rules_version: string | null;
+  /** False when the engine runs the shipped rules, which are not edited. */
+  writable: boolean;
+}
+
+/** Mirrors ScheduleWrite in app/gateway/routers/studio.py (Feature 006-F). */
+export interface ScheduleWrite {
+  schedule: string;
+  timezone: string;
+  telegram: boolean;
+  show_on_home: boolean;
+  prompt?: string | null;
+  name?: string | null;
+  enabled?: boolean;
+  version: string;
+}
+
+export interface ScheduleWritten {
+  rule_id: string;
+  version: string;
 }
 
 /** One sentence fills every Agent Studio tab: these are SUGGESTIONS for

@@ -15,6 +15,7 @@ import type {
   RunView,
 } from "@/core/triggers/types";
 
+import type { RuleDoc } from "./api";
 import { DAY_NAMES, fromCron, matchText } from "./schedule";
 
 const WEEKDAYS = "1,2,3,4,5";
@@ -317,4 +318,44 @@ export function idFromName(name: string, taken: Iterable<string>): string {
   let id = base;
   for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
   return id;
+}
+
+/** Who an automation runs as (Feature 006-F): its `agent`, by the agent's
+ * display name (or its title-cased slug, as Agent Studio shows it), else the
+ * lead agent. An agent that no longer exists is said to be missing, never
+ * passed off as the lead. */
+export function runsAs(
+  agent: string | null | undefined,
+  agents: { name: string; display_name?: string | null }[] | undefined,
+): { text: string; missing: boolean } {
+  if (!agent) return { text: "Runs as the lead agent", missing: false };
+  const found = agents?.find((a) => a.name === agent);
+  const title =
+    found?.display_name?.trim() ??
+    (() => {
+      const words = agent.replace(/[-_]+/g, " ").trim();
+      return words.charAt(0).toUpperCase() + words.slice(1);
+    })();
+  if (agents && !found)
+    return { text: `Runs as ${title} (agent not found)`, missing: true };
+  return { text: `Runs as ${title}`, missing: false };
+}
+
+/** A rule as the edit form starts from it: every field the rule file holds,
+ * so a save never drops one it does not show. */
+export function ruleDocOf(rule: RuleView): RuleDoc {
+  return {
+    id: rule.id,
+    name: rule.name ?? "",
+    type: rule.type,
+    enabled: rule.enabled,
+    match: rule.match,
+    prompt: rule.prompt,
+    destination: rule.destination,
+    urgent: rule.urgent,
+    // Kept as they are: rebuilding the rule without them would silently turn
+    // an agent's automation into the lead's and put it back on Home.
+    ...(rule.agent ? { agent: rule.agent } : {}),
+    ...(rule.show_on_home === false ? { show_on_home: false } : {}),
+  };
 }

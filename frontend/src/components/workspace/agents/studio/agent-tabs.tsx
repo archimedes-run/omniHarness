@@ -10,7 +10,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useShell } from "@/components/workspace/shell/shell-context";
 import { describeSchedule, fromCron } from "@/core/automations/schedule";
 import { clock } from "@/core/automations/wording";
 import { useProjects } from "@/core/ledger/hooks";
@@ -20,14 +19,8 @@ import { useAgentRuns, useStudioOptions, type AgentDraft } from "@/core/studio";
 import { DoneOnItsOwn } from "./autonomy";
 import { useStudioCopy } from "./copy";
 import { DraftBar, DraftNote } from "./draft-bar";
-import { nextRunText, RecentRuns, ScheduleList } from "./runs";
-import {
-  TabPanel,
-  chipClass,
-  dashedChip,
-  outlineButton,
-  statCard,
-} from "./studio-frame";
+import { nextRunText, RecentRuns } from "./runs";
+import { TabPanel, chipClass, dashedChip, statCard } from "./studio-frame";
 
 export interface AgentForm {
   display_name: string;
@@ -346,60 +339,6 @@ export function ToolsTab({
         testId="agent-skills"
       />
       <DraftNote note={draftNote && !draftNote.bad ? draftNote : null} />
-    </TabPanel>
-  );
-}
-
-export function ScheduleTab({
-  isLead,
-  agentId,
-  suggested,
-}: {
-  isLead: boolean;
-  agentId: string | null;
-  /** A schedule the draft suggested. Shown, never created. */
-  suggested: AgentDraft["schedule"];
-}) {
-  const c = useStudioCopy().agents;
-  const { openPanel } = useShell();
-  return (
-    <TabPanel value="schedule" className="flex flex-col gap-3.5 outline-none">
-      {suggested ? (
-        <div
-          className="bg-card border-primary rounded-xl border px-4 py-3"
-          data-testid="schedule-suggested"
-        >
-          <p className="text-muted-foreground text-xs">{c.suggested}</p>
-          <p className="mt-0.5 font-medium">{draftedScheduleText(suggested)}</p>
-          <p className="text-muted-foreground mt-0.5 text-sm">
-            {c.suggestedScheduleHow}
-          </p>
-        </div>
-      ) : null}
-      <div className="bg-card border-border-strong flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3">
-        <div className="flex-[1_1_260px]">
-          {isLead ? (
-            <p className="text-foreground-2 mb-2">{c.scheduleLead}</p>
-          ) : null}
-          {agentId ? (
-            <ScheduleList agentId={agentId} />
-          ) : (
-            <>
-              <p className="font-medium">{c.scheduleNone}</p>
-              <p className="text-muted-foreground mt-0.5 text-sm">
-                {c.notSetUpWhy}
-              </p>
-            </>
-          )}
-        </div>
-        <button
-          type="button"
-          className={outlineButton}
-          onClick={() => openPanel("automations")}
-        >
-          {c.openAutomations}
-        </button>
-      </div>
     </TabPanel>
   );
 }

@@ -5,6 +5,8 @@ import type {
   AgentRuns,
   AutonomyView,
   GrantUse,
+  ScheduleWrite,
+  ScheduleWritten,
   SkillTestResult,
   CustomSkill,
   DraftResponse,
@@ -79,6 +81,33 @@ export const addSkillFile = (name: string, path: string, content: string) =>
 
 export const loadAgentRuns = (name: string) =>
   call<AgentRuns>(`/api/studio/agents/${encodeURIComponent(name)}/runs`);
+
+const schedulesPath = (name: string) =>
+  `/api/studio/agents/${encodeURIComponent(name)}/schedules`;
+
+/** A schedule IS a trigger rule that runs as this agent (Feature 006-F),
+ * written through the Automations write path; owner only. */
+export const createSchedule = (name: string, body: ScheduleWrite) =>
+  call<ScheduleWritten>(schedulesPath(name), {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateSchedule = (
+  name: string,
+  ruleId: string,
+  body: ScheduleWrite,
+) =>
+  call<ScheduleWritten>(
+    `${schedulesPath(name)}/${encodeURIComponent(ruleId)}`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+
+export const deleteSchedule = (name: string, ruleId: string, version: string) =>
+  call<ScheduleWritten>(
+    `${schedulesPath(name)}/${encodeURIComponent(ruleId)}?version=${encodeURIComponent(version)}`,
+    { method: "DELETE" },
+  );
 
 /** One sentence in, the large fields out, for review. Never saves. */
 export const draft = (
