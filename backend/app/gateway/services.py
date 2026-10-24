@@ -157,6 +157,8 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         # Feature 006: which firing a scheduled run is, for the standing-grant
         # cap (app/policy/grants.GrantRunCounts).
         "trigger_firing_id",
+        # Whose standing grants a scheduled run reads (the owner's).
+        "grants_owner_id",
     }
 )
 
@@ -179,6 +181,8 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 #:   that exact request (internal_auth.is_trigger_engine_request). The firing
 #:   id keys a scheduled run's standing-grant count (Feature 006), so a client
 #:   must not pick it;
+#: - ``grants_owner_id``: whose standing grants a scheduled run reads (the
+#:   install owner's), only on that same engine-granted request;
 #: - ``called_agent``: never from a request (set inside delegation only);
 #: - ``excluded_skills``: this thread's stored exclusions;
 #: - ``channel``: the IM channel, from the channel manager's header with the
@@ -191,6 +195,7 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
         "turn_provenance",
         "trigger_rule_id",
         "trigger_firing_id",
+        "grants_owner_id",
         "called_agent",
         "excluded_skills",
         "channel",
@@ -293,6 +298,7 @@ def apply_server_owned_context(
     agent_name: str | None,
     synthetic_rule_id: str | None,
     synthetic_firing_id: str | None = None,
+    grants_owner_id: str | None = None,
 ) -> None:
     """Drop every client-supplied server-owned key, then write the server's.
 
@@ -301,7 +307,7 @@ def apply_server_owned_context(
     edited in place. ``synthetic_rule_id`` is not None only for a request the
     trigger engine made (the caller checks the credential).
     """
-    from app.policy.provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY, SYNTHETIC
+    from app.policy.provenance import FIRING_KEY, GRANTS_OWNER_KEY, PROVENANCE_KEY, RULE_KEY, SYNTHETIC
 
     for key in [k for k in config if k not in _CLIENT_TOP_LEVEL_CONFIG_KEYS]:
         config.pop(key)
@@ -337,6 +343,9 @@ def apply_server_owned_context(
         marks = {PROVENANCE_KEY: SYNTHETIC, RULE_KEY: synthetic_rule_id}
         if synthetic_firing_id:
             marks[FIRING_KEY] = synthetic_firing_id
+        if grants_owner_id:
+            # A scheduled run only: grants apply nowhere else (policy middleware).
+            marks[GRANTS_OWNER_KEY] = grants_owner_id
         context.update(marks)
         if configurable is not None:
             configurable.update(marks)
@@ -820,6 +829,16 @@ async def start_run(
     run_as = None
     if synthetic_rule_id is not None and agent_name:
         user_id, run_as = await _scheduled_agent_owner(agent_name, user_id)
+    # A scheduled run reads the OWNER's standing grants: they are stored under
+    # the owner's id (the Autonomy tab), while a lead automation runs as the
+    # system user and so never found them. Only on the engine's granted
+    # request; an agent run already runs for the owner. Nothing in a request
+    # can name it (SERVER_OWNED_RUN_KEYS).
+    grants_owner_id = None
+    if synthetic_rule_id is not None:
+        from app.gateway.ownership import owner_user_id
+
+        grants_owner_id = user_id if run_as is not None else (await owner_user_id() or user_id)
 
     # Per-conversation tools: this thread's stored selection (namespaced source
     # ids, pinned enforced by the repo). A thread with no stored selection gets
@@ -845,6 +864,7 @@ async def start_run(
         agent_name=agent_name,
         synthetic_rule_id=synthetic_rule_id,
         synthetic_firing_id=synthetic_firing_id,
+        grants_owner_id=grants_owner_id,
     )
     channel = channel_of(request)
     if channel:

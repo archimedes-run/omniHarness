@@ -494,6 +494,17 @@ def install_continue_listener() -> None:
             logger.info("Released %d Continue(s) left unfinished by a stopped process", len(released))
 
 
+async def _result_may_post(thread_store: Any, thread_id: str, owner: str, install_owner: str | None) -> bool:
+    """The card's owner owns the thread, or it is a scheduled run's (system)
+    thread and the owner is the install owner (ownership.card_thread_open_to)."""
+    from app.gateway.ownership import card_thread_open_to
+
+    if await thread_store.check_access(thread_id, owner, require_existing=True):
+        return True
+    row = await thread_store.get(thread_id, user_id=None)
+    return row is not None and card_thread_open_to(row.get("user_id"), owner, install_owner)
+
+
 async def drain_waiting_posts(app: Any) -> int:
     """At gateway startup: post every confirmed result still waiting.
 
@@ -525,8 +536,11 @@ async def drain_waiting_posts(app: Any) -> int:
             # The chat was deleted: permanent. The result stays on the card.
             middleware.pending.set_post_state(action.id, "dropped")
             continue
-        owner = str(action.owner_id) if action.owner_id else await owner_user_id()
-        if thread_store is not None and (owner is None or not await thread_store.check_access(action.thread_id, owner, require_existing=True)):
+        # A scheduled run's thread is the system's: its card's result goes to
+        # the install owner (ownership.card_thread_open_to), as the card did.
+        install_owner = await owner_user_id()
+        owner = str(action.owner_id) if action.owner_id else install_owner
+        if thread_store is not None and (owner is None or not await _result_may_post(thread_store, action.thread_id, owner, install_owner)):
             logger.warning("a waiting result %s names a thread its owner does not own; not posted", action.id)
             continue
         message = report_message(action, None, content=action.post_content)
@@ -657,10 +671,11 @@ async def _chat_gone(request: Request, action: Any) -> str | None:
     RE-CHECKED AT CONFIRMATION (condition 3). A card whose chat was deleted
     still ran its call and then sat "waiting to post" into nothing (review of
     PR #58). The chat must exist (its row or its checkpoint) and be the
-    caller's.
+    caller's, or, for a scheduled run's chat (the system's), the caller must be
+    the install owner (ownership.card_thread_open_to).
     """
     from app.gateway.deps import get_checkpointer, get_thread_store
-    from app.gateway.ownership import require_thread_access
+    from app.gateway.ownership import require_card_thread_access
 
     if not action.thread_id:
         return None
@@ -669,7 +684,7 @@ async def _chat_gone(request: Request, action: Any) -> str | None:
         checkpoint = await get_checkpointer(request).aget_tuple({"configurable": {"thread_id": action.thread_id, "checkpoint_ns": ""}})
         if checkpoint is None:
             return "The chat this was proposed in has been deleted, so it was not run. Nothing has run."
-    await require_thread_access(request, action.thread_id)
+    await require_card_thread_access(request, action.thread_id)
     return None
 
 

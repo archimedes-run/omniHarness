@@ -24,7 +24,9 @@ THREADS are checked by :func:`require_thread_access` (behind
 ``@require_permission(..., owner_check=True)``), which keeps the thread store's
 existing, stricter rule: only ``threads_meta.user_id == caller`` (a missing row
 is allowed for reads only). The owner does not gain the system's threads there;
-that behaviour is unchanged from main.
+that behaviour is unchanged from main. One narrow exception, for CARDS only:
+the owner may answer a card stated on a system-owned thread (every scheduled
+run's thread), see :func:`card_thread_open_to`.
 
 ADOPTING THIS ON ANOTHER BRANCH (confirmations, grants/versions, run store):
 
@@ -340,6 +342,46 @@ async def require_thread_access(request: Request, thread_id: str, *, require_exi
     allowed = await thread_store.check_access(thread_id, caller, require_existing=require_existing)
     if not allowed:
         raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
+
+
+def card_thread_open_to(thread_owner: str | None, answerer: str | None, install_owner: str | None) -> bool:
+    """May ``answerer`` answer (or receive the result of) a card stated on a
+    thread owned by ``thread_owner``? The ONE rule for a card's thread.
+
+    - the thread's own owner may;
+    - the install OWNER may also answer a card on a thread the SYSTEM user owns:
+      the trigger engine creates every scheduled run's thread as the system
+      user (a lead automation, or a 006-F agent schedule), and nobody else can
+      ever answer those cards. This is :func:`can_access`'s rule for records,
+      applied to the card's thread only (threads themselves keep
+      :func:`require_thread_access`'s stricter rule everywhere else);
+    - nobody else. Another PERSON's thread stays theirs, owner or not.
+
+    Answering stays a person's act: the routes call :func:`require_person`
+    first, and a scheduled turn never answers (confirm_flow.turn_may_answer).
+    """
+    if answerer is None:
+        return False
+    if thread_owner is not None and str(thread_owner) == str(answerer):
+        return True
+    return thread_owner is not None and str(thread_owner) in SYSTEM_OWNERS and install_owner is not None and str(answerer) == str(install_owner)
+
+
+async def require_card_thread_access(request: Request, thread_id: str) -> None:
+    """Raise 404 unless the caller may answer a card stated on ``thread_id``
+    (:func:`card_thread_open_to`). For the confirmation routes only."""
+    from app.gateway.deps import get_thread_store
+
+    caller = principal_id(request)
+    thread_store = get_thread_store(request)
+    if await thread_store.check_access(thread_id, caller):
+        return
+    row = await thread_store.get(thread_id, user_id=None)
+    user = _request_user(request)
+    install_owner = await owner_user_id() if (row is not None and not is_internal(user)) else None
+    if row is not None and card_thread_open_to(row.get("user_id"), caller, install_owner):
+        return
+    raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
 
 
 #: How the live install was hand-disabled before ``disabled_at`` existed: the

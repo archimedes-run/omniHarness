@@ -178,7 +178,7 @@ class PolicyMiddleware(AgentMiddleware):
         if not is_synthetic_turn(context) or not governed_by_grants(decision.tool_name):
             return None
         agent = self._requester(request)
-        granted = granted_classes(self._user_id(context), agent)
+        granted = granted_classes(self._grants_user_id(context), agent)
         arguments = self._arguments(request)
         used = covering_classes(decision, arguments, granted, self.loader.load()) if granted else None
         if used is None:
@@ -273,7 +273,7 @@ class PolicyMiddleware(AgentMiddleware):
         if self.audit is not None:
             self.audit.record_grant_use(
                 agent=self._requester(request),
-                user_id=self._user_id(context),
+                user_id=self._grants_user_id(context),
                 tool=decision.tool_name,
                 classes=grant.classes,
                 targets=targets,
@@ -291,6 +291,15 @@ class PolicyMiddleware(AgentMiddleware):
         # it later sees what was done without them.
         self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets))
         logger.info("policy: %s ran %s on its own under a standing grant (%s; %d actions, %d in this run; origin %s)", self._requester(request), decision.tool_name, ", ".join(grant.classes), grant.actions, grant.total, origin)
+
+    @classmethod
+    def _grants_user_id(cls, context: dict) -> str:
+        """Whose standing grants this scheduled run reads: the install owner's
+        (services.start_run sets the key on the engine's granted request only;
+        a request can never supply it). Without it, the run's own user."""
+        from .provenance import GRANTS_OWNER_KEY
+
+        return str(context.get(GRANTS_OWNER_KEY) or cls._user_id(context))
 
     @staticmethod
     def _user_id(context: dict) -> str:
@@ -771,10 +780,10 @@ class PolicyMiddleware(AgentMiddleware):
 
     def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
         """The scheduled run's markers in this call's context, if any."""
-        from .provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY
+        from .provenance import FIRING_KEY, GRANTS_OWNER_KEY, PROVENANCE_KEY, RULE_KEY
 
         context = self._runtime_context(request) or {}
-        return tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY) if context.get(k))
+        return tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY, GRANTS_OWNER_KEY) if context.get(k))
 
     def _is_invited(self, request) -> bool:
         from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY

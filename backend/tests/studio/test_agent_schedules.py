@@ -353,9 +353,7 @@ def test_a_scheduled_agent_firing_cannot_confirm_a_card(studio, script) -> None:
     owner's, on the rule's own thread: ownership no longer stands between a
     later firing and that card. A later firing on that thread saying
     "yes <id>" still confirms nothing (a scheduled turn is not a person). The
-    owner can still act on the card (decline: confirming a card from an
-    automation's thread is refused for the lead's automations too, a separate
-    pre-existing limit, see the report)."""
+    owner can still act on the card (confirming it: test_scheduled_run_cards)."""
     _rules_file(studio)
     _make_agent(studio)
     engine = _engine(studio)
