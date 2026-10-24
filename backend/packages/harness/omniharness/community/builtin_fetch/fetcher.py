@@ -125,8 +125,15 @@ async def read_capped(response: httpx.Response, max_bytes: int) -> tuple[bytes, 
     return bytes(out), False
 
 
+#: Squid errors that are policy, not failure: an ACL denial, and a lookup that
+#: failed because the proxy's resolver dropped a private (rebinding) answer.
+#: Neither is ever retried elsewhere.
+_PROXY_REFUSALS = ("ERR_ACCESS_DENIED", "ERR_DNS_FAIL")
+
+
 def _proxy_denied(response: httpx.Response) -> bool:
-    return response.status_code == 403 and "ERR_ACCESS_DENIED" in response.headers.get("x-squid-error", "")
+    error = response.headers.get("x-squid-error", "")
+    return response.status_code in (403, 503) and any(code in error for code in _PROXY_REFUSALS)
 
 
 def _client(settings: FetchSettings, transport: httpx.AsyncBaseTransport | None) -> httpx.AsyncClient:
@@ -150,7 +157,7 @@ async def _fetch(url: str, settings: FetchSettings, transport: httpx.AsyncBaseTr
             await resolve_and_check(target, settings.extra_blocked)
             async with client.stream("GET", target.url) as response:
                 if _proxy_denied(response):
-                    raise FetchRefused(f"the egress proxy refused {target.host}: not a public destination")
+                    raise FetchRefused(f"the egress proxy refused {target.host}: not a public destination, or it does not resolve to one")
                 if response.status_code in REDIRECT_STATUSES:
                     location = response.headers.get("location")
                     if not location:
@@ -177,9 +184,11 @@ async def fetch(url: str, settings: FetchSettings, *, transport: httpx.AsyncBase
     except TimeoutError:
         raise FetchFailed(f"timed out after {settings.timeout:g} s") from None
     except httpx.ProxyError as exc:
-        # A CONNECT the proxy denied: "403 Forbidden".
-        if str(exc).startswith("403"):
-            raise FetchRefused("the egress proxy refused the destination: not a public address") from None
+        # A CONNECT the proxy denied ("403 Forbidden") or could not resolve
+        # ("503 ..."; the error page is not visible through httpx, and the
+        # resolver drops private answers): refusals, never retried elsewhere.
+        if str(exc).startswith(("403", "503")):
+            raise FetchRefused("the egress proxy refused the destination: not a public address, or it does not resolve to one") from None
         raise FetchFailed(f"the egress proxy failed: {exc}") from None
     except httpx.HTTPError as exc:
         raise FetchFailed(f"request failed: {type(exc).__name__}: {exc}") from None

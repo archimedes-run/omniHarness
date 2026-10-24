@@ -231,12 +231,28 @@ class TestCheckWebSearch:
 
 
 class TestCheckWebFetch:
-    def test_builtin_fetch_ok(self, tmp_path):
+    def test_builtin_fetch_ok_with_a_proxy(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OMNI_HARNESS_FETCH_EGRESS_PROXY", "http://omni-harness-fetch-egress:3128")
+        monkeypatch.delenv("JINA_API_KEY", raising=False)
         cfg = tmp_path / "config.yaml"
         cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n")
         result = doctor.check_web_fetch(cfg)
         assert result.status == "ok"
         assert "built-in" in result.detail
+
+    def test_builtin_fetch_warns_in_host_mode_without_a_proxy_or_jina_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OMNI_HARNESS_FETCH_EGRESS_PROXY", raising=False)
+        monkeypatch.delenv("JINA_API_KEY", raising=False)
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n")
+        result = doctor.check_web_fetch(cfg)
+        assert result.status == "warn"
+        assert "cannot fetch" in result.detail and "JINA_API_KEY" in result.fix
+        monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+        assert doctor.check_web_fetch(cfg).status == "ok"
+        monkeypatch.delenv("JINA_API_KEY")
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    proxy: http://proxy.example:3128\n")
+        assert doctor.check_web_fetch(cfg).status == "ok"
 
     def test_jina_always_ok(self, tmp_path):
         cfg = tmp_path / "config.yaml"

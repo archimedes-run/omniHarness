@@ -25,8 +25,8 @@ from dataclasses import dataclass
 
 from langchain.tools import tool
 
-from omniharness.community.builtin_fetch.extract import to_markdown
-from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, MAX_REDIRECTS_CAP, TIMEOUT_CAP, FetchSettings, fetch
+from omniharness.community.builtin_fetch.extract import to_markdown_bounded
+from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, MAX_REDIRECTS_CAP, TIMEOUT_CAP, FetchResult, FetchSettings, fetch
 from omniharness.community.builtin_fetch.guard import FetchFailed, FetchRefused, WebFetchError, check_url, parse_networks, resolve_and_check
 from omniharness.config import get_app_config
 
@@ -73,21 +73,27 @@ async def _jina(url: str, settings: FetchSettings) -> str:
     target = check_url(url, settings.extra_blocked)
     await resolve_and_check(target, settings.extra_blocked)
     from omniharness.community.jina_ai.jina_client import JinaClient
-    from omniharness.utils.readability import ReadabilityExtractor
 
+    loop = asyncio.get_running_loop()
+    start = loop.time()
     html = await JinaClient().crawl(target.url, return_format="html", timeout=int(settings.timeout))
     if isinstance(html, str) and html.startswith("Error:"):
         return html
-    article = await asyncio.to_thread(ReadabilityExtractor().extract_article, html)
-    return article.to_markdown()[:4096]
+    # The reader's HTML is as untrusted as any page: the same bounded extraction,
+    # within the same budget as the reader call.
+    page = FetchResult(url=target.url, status=200, content_type="text/html", charset="utf-8", body=str(html).encode("utf-8")[:MAX_BYTES_CAP], truncated=False)
+    return await to_markdown_bounded(page, settings.timeout - (loop.time() - start))
 
 
 async def fetch_markdown(url: str, config: WebFetchConfig) -> str:
     if config.provider == "jina":
         return await _jina(url, config.fetch)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
     try:
         result = await fetch(url, config.fetch)
-        return await asyncio.to_thread(to_markdown, result)
+        # Extraction runs in a killable child process, in what is left of the budget.
+        return await to_markdown_bounded(result, config.fetch.timeout - (loop.time() - start))
     except FetchRefused:
         raise
     except WebFetchError as exc:

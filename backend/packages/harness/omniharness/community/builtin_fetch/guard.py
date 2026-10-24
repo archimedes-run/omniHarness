@@ -130,7 +130,16 @@ def check_url(url: str, extra: Iterable[IPNetwork] = ()) -> Target:
         raise FetchRefused(f"only http and https URLs can be fetched, not {scheme or 'a URL without a scheme'}")
     if parts.username is not None or parts.password is not None or "@" in parts.netloc:
         raise FetchRefused("URLs with credentials cannot be fetched")
-    host = (parts.hostname or "").rstrip(".").lower()
+    host = (parts.hostname or "").lower()
+    if host and not host.isascii():
+        # IDNA first: it maps the ideographic/fullwidth dots (U+3002, U+FF0E,
+        # U+FF61) to ".", so the trailing-dot strip and every check below see
+        # the name as it will be resolved.
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise FetchRefused("the host name is not valid") from None
+    host = host.rstrip(".").lower()
     if not host:
         raise FetchRefused("the URL has no host")
     port = port if port is not None else DEFAULT_PORTS[scheme]
@@ -142,10 +151,6 @@ def check_url(url: str, extra: Iterable[IPNetwork] = ()) -> Target:
         if is_blocked_ip(literal, extra):
             raise FetchRefused(f"{host} is not a public address")
     else:
-        try:
-            host = host.encode("idna").decode("ascii")
-        except UnicodeError:
-            raise FetchRefused("the host name is not valid") from None
         if host in _INTERNAL_NAMES or host.endswith(_INTERNAL_SUFFIXES):
             raise FetchRefused(f"{host} is an internal name")
         if "." not in host:

@@ -405,6 +405,17 @@ class TestWriteConfigYaml:
 
 
 class TestSearchStep:
+    def test_the_built_in_fetcher_warns_about_host_mode(self, monkeypatch):
+        for name in ("print_header", "print_success", "print_info"):
+            monkeypatch.setattr(search_step, name, lambda *_args, **_kwargs: None)
+        warnings: list[str] = []
+        monkeypatch.setattr(search_step, "print_warning", lambda message: warnings.append(message))
+        choices = iter([0, 0])
+        monkeypatch.setattr(search_step, "ask_choice", lambda *_a, **_k: next(choices))
+        result = search_step.run_search_step()
+        assert result.fetch_provider is not None and result.fetch_provider.name == "builtin_fetch"
+        assert warnings and "host" in warnings[0] and "JINA_API_KEY" in warnings[0]
+
     def test_reuses_api_key_for_same_provider(self, monkeypatch):
         monkeypatch.setattr(search_step, "print_header", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(search_step, "print_success", lambda *_args, **_kwargs: None)

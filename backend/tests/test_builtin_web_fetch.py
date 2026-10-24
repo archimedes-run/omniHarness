@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import os
 from unittest.mock import MagicMock
 
 import httpx
@@ -128,6 +129,14 @@ def settings(**kwargs) -> FetchSettings:
         "http://example.com/\r\nHost: x",
         "",
         "http://" + "a" * 3000 + ".com/",
+        # Ideographic / fullwidth dots become a trailing "." after IDNA.
+        "http://localhost\u3002/",
+        "http://gateway\u3002/",
+        "http://omni-harness-gateway\uff0e/",
+        "http://metadata.google.internal\u3002/",
+        "http://169.254.169.254\uff0e/",
+        "http://2130706433\u3002/",
+        "http://127\uff610\uff610\uff611/",
     ],
 )
 def test_check_url_refuses(url: str) -> None:
@@ -402,6 +411,26 @@ async def test_a_proxy_denial_is_a_refusal(dns) -> None:
 
 
 @pytest.mark.anyio
+async def test_a_proxy_dns_failure_is_a_refusal(dns) -> None:
+    """The proxy's resolver drops private (rebinding) answers, so its lookup
+    failure is policy, not a failure that may be retried elsewhere."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, headers={"x-squid-error": "ERR_DNS_FAIL 0"}, stream=httpx.ByteStream(b"dns"))
+
+    with pytest.raises(FetchRefused):
+        await fetch("http://example.com/", settings(), transport=Recorder(handler).transport)
+
+    def connect_unresolved(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("503 Service Unavailable")
+
+    with pytest.raises(FetchRefused):
+        await fetch("https://example.com/", settings(), transport=Recorder(connect_unresolved).transport)
+    with pytest.raises(FetchFailed):
+        await fetch("http://example.com/", settings(), transport=Recorder(lambda r: httpx.Response(503)).transport)
+
+
+@pytest.mark.anyio
 async def test_http_errors_and_binary_content_are_failures(dns) -> None:
     with pytest.raises(FetchFailed, match="HTTP 500"):
         await fetch("https://example.com/", settings(), transport=Recorder(lambda r: httpx.Response(500)).transport)
@@ -494,6 +523,9 @@ async def test_a_refused_url_never_falls_back_to_jina(tool_env, monkeypatch) -> 
     tool_env["handler"] = lambda r: httpx.Response(302, headers={"location": "http://127.0.0.1/"})
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert result.startswith("Error:")
+    tool_env["handler"] = lambda r: httpx.Response(503, headers={"x-squid-error": "ERR_DNS_FAIL 0"})
+    result = await web_fetch_tool.ainvoke({"url": "http://example.com/"})
+    assert result.startswith("Error:")
     tool_env["extra"] = {"provider": "jina"}
     result = await web_fetch_tool.ainvoke({"url": "http://127.0.0.1/"})
     assert result.startswith("Error:")
@@ -542,3 +574,152 @@ def test_the_jina_key_counts_as_used_by_the_built_in_fetcher() -> None:
     config = {"tools": [{"name": "web_fetch", "use": "omniharness.community.builtin_fetch.tools:web_fetch_tool"}]}
     assert unused_secret_keys(["JINA_API_KEY"], config, {}) == []
     assert unused_secret_keys(["JINA_API_KEY"], {"tools": []}, {}) == ["JINA_API_KEY"]
+
+
+# ── extraction: a killable child process, inside the budget ─────────────────
+
+
+def _deep_page(depth: int) -> bytes:
+    return (b"<html><body>" + b"<div>" * depth + b"x")[: 2 * 1024 * 1024]
+
+
+def test_pathological_trees_are_detected_before_the_fallback() -> None:
+    from omniharness.community.builtin_fetch.extract import tree_too_complex
+
+    assert tree_too_complex(_deep_page(20_000))
+    assert tree_too_complex(b"<p>x</p>" * 200_000), "too many elements"
+    assert not tree_too_complex(HTML)
+    assert not tree_too_complex(b"<div><br><img src=x><p>a</p><br/></div>" * 1000)
+
+
+def test_a_pathological_tree_never_reaches_the_readability_fallback(monkeypatch) -> None:
+    from omniharness.community.builtin_fetch import extract
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+    from omniharness.utils import readability
+
+    called = []
+    monkeypatch.setattr(readability.ReadabilityExtractor, "extract_article", lambda self, html: called.append(1))
+    page = FetchResult(url="https://example.com/", status=200, content_type="text/html", charset=None, body=_deep_page(20_000), truncated=False)
+    assert extract.to_markdown(page) == extract.NO_CONTENT
+    assert called == []
+
+
+def _record_workers(monkeypatch) -> list:
+    from omniharness.community.builtin_fetch import extract
+
+    procs: list = []
+    real = extract.asyncio.create_subprocess_exec
+
+    async def recording(*args, **kwargs):
+        proc = await real(*args, **kwargs)
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(extract.asyncio, "create_subprocess_exec", recording)
+    return procs
+
+
+def _group_gone(pgid: int) -> bool:
+    import time
+
+    for _ in range(40):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("depth", [20_000, 420_000], ids=["depth-20k", "2mb"])
+async def test_a_deeply_nested_page_is_bounded_and_leaves_no_process(monkeypatch, depth: int) -> None:
+    from omniharness.community.builtin_fetch.extract import NO_CONTENT, to_markdown_bounded
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+
+    procs = _record_workers(monkeypatch)
+    page = FetchResult(url="https://example.com/", status=200, content_type="text/html", charset=None, body=_deep_page(depth), truncated=False)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    result = await to_markdown_bounded(page, 15.0)
+    assert loop.time() - start < 8.0, "a pathological page must be given up on quickly, not run to the deadline"
+    assert result == NO_CONTENT
+    assert procs and all(p.returncode is not None for p in procs)
+    assert all(_group_gone(p.pid) for p in procs), "a worker (or its node) outlived the call"
+
+
+_SPINNER = """
+import subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+open(sys.argv[1], "w").write(str(child.pid))
+time.sleep(60)
+"""
+
+
+def _pid_gone(pid: int) -> bool:
+    import time
+
+    for _ in range(60):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.anyio
+async def test_the_deadline_kills_the_worker_and_everything_it_started(tmp_path) -> None:
+    """A stand-in for a spinning node: the worker starts a child and both hang."""
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    pid_file = tmp_path / "child.pid"
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(FetchFailed, match="took longer"):
+        await run_bounded([sys.executable, "-c", _SPINNER, str(pid_file)], b"", 1.5)
+    assert loop.time() - start < 4.0
+    assert _pid_gone(int(pid_file.read_text())), "the worker's child survived the deadline"
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_tool_kills_the_worker_group(tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    pid_file = tmp_path / "child.pid"
+    task = asyncio.create_task(run_bounded([sys.executable, "-c", _SPINNER, str(pid_file)], b"", 30))
+    for _ in range(100):
+        if pid_file.exists() and pid_file.read_text():
+            break
+        await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _pid_gone(int(pid_file.read_text()))
+
+
+@pytest.mark.anyio
+async def test_extraction_gets_only_what_is_left_of_the_15_second_budget(tool_env, monkeypatch) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    budgets: list[float] = []
+
+    async def slow_page(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.5)
+        return page(request)
+
+    async def recording(result, timeout):
+        budgets.append(timeout)
+        return "# ok\n"
+
+    tool_env["handler"] = slow_page
+    tool_env["extra"] = {"timeout": 2}
+    monkeypatch.setattr(tools_module, "to_markdown_bounded", recording)
+    await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert budgets and budgets[0] <= 1.55, budgets
