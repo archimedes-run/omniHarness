@@ -294,6 +294,37 @@ async def write_custom_skill_file(skill_name: str, request: SkillFileWriteReques
     return await list_custom_skill_files(name, config)
 
 
+@router.delete("/skills/custom/{skill_name}/files", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], response_model=SkillFilesResponse, summary="Remove a File from a Custom Skill")
+async def delete_custom_skill_file(skill_name: str, path: str, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
+    """Skill Studio's remove (006-G): a new version without the file, so undo
+    brings it back. Never SKILL.md, never outside the skill's directory."""
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+        storage.ensure_custom_skill_is_editable(name)
+        target = storage.ensure_safe_support_path(name, path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{path} is not a file of '{name}'")
+    prev = target.read_text(encoding="utf-8", errors="replace")
+    try:
+        config_versions.write_skill(
+            name,
+            {path: None},
+            who="user:" + get_effective_user_id(),
+            owner_id=get_effective_user_id(),
+            source="manual",
+            extra={"action": "human_file_delete", "author": "human", "thread_id": None, "file_path": path, "prev_content": prev, "new_content": None, "scanner": {"decision": "allow", "reason": "Removal requested."}},
+            storage=storage,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await list_custom_skill_files(name, config)
+
+
 def _write_file_version(name: str, request: SkillFileWriteRequest, prev: str | None, scan, storage) -> None:
     config_versions.write_skill(
         name,

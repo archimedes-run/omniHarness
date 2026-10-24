@@ -192,3 +192,16 @@ def test_the_runs_view_says_the_engines_quiet_hours(studio) -> None:
     assert studio.client.post("/api/agents", json={"name": "wrap-up"}).status_code == 201
     quiet = studio.client.get("/api/studio/agents/wrap-up/runs").json()["quiet_hours"]
     assert quiet == {"enabled": True, "start": "22:00", "end": "07:00", "timezone": "America/New_York"}
+
+
+def test_a_skill_file_can_be_removed_as_a_new_version_and_nothing_else(studio, allow_scans) -> None:
+    _skill(studio, allow_scans)
+    c = studio.client
+    assert c.post("/api/skills/custom/status-format/files", json={"path": "references/example.md", "content": "# Example"}).status_code == 200
+    before = c.get("/api/skills/custom/status-format/versions").json()["current"]
+    resp = c.delete("/api/skills/custom/status-format/files", params={"path": "references/example.md"})
+    assert resp.status_code == 200 and resp.json()["files"] == [], resp.text
+    assert c.get("/api/skills/custom/status-format/versions").json()["current"] == before + 1
+    for bad in ("SKILL.md", "../other/SKILL.md", "references/../../x", "references/missing.md"):
+        assert c.delete("/api/skills/custom/status-format/files", params={"path": bad}).status_code in (400, 404), bad
+    assert c.get("/api/skills/custom/status-format").status_code == 200
