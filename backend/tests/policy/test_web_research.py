@@ -313,6 +313,103 @@ def test_a_research_turn_runs_every_lookup_without_a_card(gateway):
     assert _cards(gateway) == [], "a lookup in a turn that read nothing private asked for confirmation"
 
 
+class _Summarizer(_Fake):
+    pass
+
+
+def _summarize_early(monkeypatch):
+    """The production summarization middleware, in its place in the chain,
+    triggering after a few messages (live: ~15k tokens, which a research turn
+    of a handful of searches passes)."""
+    from omniharness.agents.middlewares.summarization_middleware import OmniHarnessSummarizationMiddleware
+
+    def build(**_):
+        return OmniHarnessSummarizationMiddleware(model=_Summarizer(messages=iter([AIMessage(content="Earlier: the person asked for restaurants.")] * 20)), trigger=("messages", 5), keep=("messages", 2), token_counter=len)
+
+    monkeypatch.setattr("omniharness.agents.lead_agent.agent._create_summarization_middleware", build)
+
+
+def _was_summarized() -> bool:
+    return any(name == "summary" for saw in LEAD_SAW for _kind, name, _content in saw)
+
+
+def test_a_research_turn_that_outgrows_the_context_still_runs_without_a_card(gateway, monkeypatch):
+    """Live 2026-10-24: the person's tagged message was summarized away mid-
+    research, the walk could not find the turn's start, and the next search
+    became a card. The summary now records the summarized part of the turn."""
+    _summarize_early(monkeypatch)
+    thread_id = _thread(gateway)
+    _say(gateway, thread_id, "find 5 great date-night restaurants in Philly with links", RESEARCH)
+    assert _was_summarized(), "the turn was never summarized; this test proves nothing"
+    assert SENT == ["search:date night restaurants philly", "fetch:https://food1.example/philly", "fetch:https://food2.example/philly", "fetch:https://food3.example/philly"]
+    assert _cards(gateway) == [], "a lookup after a summary of a clean turn asked for confirmation"
+
+
+def test_a_private_read_folded_into_a_summary_still_makes_outbound_calls_cards(gateway, monkeypatch):
+    _summarize_early(monkeypatch)
+    thread_id = _thread(gateway)
+    _say(
+        gateway,
+        thread_id,
+        "check my email, then find restaurants",
+        [
+            _step(_call("gmail_read_email", {"message_id": "m1"}, "p1")),
+            _step(_call("web_search", {"query": "date night philly"}, "s1")),
+            _step(_call("web_search", {"query": "date night philly 2"}, "s2")),
+            _step(_call("web_fetch", {"url": EXFIL}, "f1")),
+            AIMessage(content="I need your confirmation."),
+        ],
+    )
+    assert _was_summarized(), "the turn was never summarized; this test proves nothing"
+    assert RAN == ["gmail_read_email"]
+    assert SENT == [], f"an outbound call ran after a summarized private read: {SENT}"
+    assert {c["tool_name"] for c in _cards(gateway)} == {"web_search", "web_fetch"}
+
+
+def _walk(messages):
+    from app.policy.config import ConfigLoader
+    from app.policy.private_reads import private_reads_in_turn
+
+    return private_reads_in_turn(messages, ConfigLoader(RULES).load(notify=False))
+
+
+def _summary_message(record) -> object:
+    from langchain_core.messages import HumanMessage
+
+    from omniharness.agents.turns import TURN_SUMMARY_MARKER
+
+    return HumanMessage(content="Here is a summary", name="summary", additional_kwargs={TURN_SUMMARY_MARKER: record})
+
+
+def test_a_summary_record_is_judged_like_the_results_it_replaced():
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    from omniharness.agents.turns import mark_user_turn, summarized_turn
+
+    person = mark_user_turn(HumanMessage(content="find restaurants", id="turn-1"))
+    clean = summarized_turn([person, _step(_call("web_search", {"query": "q"}, "s1")), ToolMessage(content="r", tool_call_id="s1")])
+    assert clean == {"turn_key": "turn-1", "tools": ["web_search"], "start_found": True}
+    assert _walk([_summary_message(clean)]).private is False
+    assert _walk([_summary_message(clean)]).turn_key == "turn-1"
+    # A private read folded in, or after the summary, counts.
+    private = summarized_turn([person, _step(_call("gmail_read_email", {}, "p1")), ToolMessage(content="r", tool_call_id="p1")])
+    assert _walk([_summary_message(private)]).private is True
+    assert _walk([_summary_message(clean), _step(_call("ledger_read", {}, "l1")), ToolMessage(content="r", tool_call_id="l1", name="ledger_read")]).private is True
+    # A result whose tool cannot be told counts.
+    nameless = summarized_turn([person, ToolMessage(content="r", tool_call_id="ghost")])
+    assert _walk([_summary_message(nameless)]).private is True
+    # A second summary of the same turn carries the first one forward.
+    again = summarized_turn([_summary_message(private), _step(_call("web_search", {"query": "q"}, "s2")), ToolMessage(content="r", tool_call_id="s2")])
+    assert again["start_found"] is True and again["tools"] == ["gmail_read_email", "web_search"]
+    assert _walk([_summary_message(again)]).private is True
+    # The turn's start was never seen, or the record is malformed: private.
+    assert summarized_turn([_step(_call("web_search", {"query": "q"}, "s3")), ToolMessage(content="r", tool_call_id="s3")])["start_found"] is False
+    for bad in ({"turn_key": "t", "tools": ["web_search"], "start_found": False}, {"turn_key": "t", "tools": "web_search", "start_found": True}, "yes", None, {"tools": [], "start_found": "true"}):
+        assert _walk([_summary_message(bad)]).private is True, bad
+    # A summary without a record (an older one, or none) is walked past: no start, private.
+    assert _walk([HumanMessage(content="Here is a summary", name="summary")]).private is True
+
+
 @pytest.mark.parametrize("reader", ["gmail_read_email", "ledger_read", "filesystem_read_file", "acme-mcp_lookup"])
 def test_after_a_private_read_every_outbound_call_is_a_card(gateway, reader):
     thread_id = _thread(gateway)
