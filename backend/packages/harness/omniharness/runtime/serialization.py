@@ -58,10 +58,15 @@ def serialize_channel_values(channel_values: dict[str, Any]) -> dict[str, Any]:
 
 def serialize_messages_tuple(obj: Any) -> Any:
     """Serialize a messages-mode tuple ``(chunk, metadata)``."""
+    # A streamed chunk comes straight from the provider, before the tool-name
+    # boundary maps the reply back: show the full tool name, never the alias
+    # (omniharness.models.tool_name_boundary).
+    from omniharness.models.tool_name_boundary import display_name, rename_serialized_message
+
     if isinstance(obj, tuple) and len(obj) == 2:
         chunk, metadata = obj
-        return [serialize_lc_object(chunk), metadata if isinstance(metadata, dict) else {}]
-    return serialize_lc_object(obj)
+        return [rename_serialized_message(serialize_lc_object(chunk), display_name), metadata if isinstance(metadata, dict) else {}]
+    return rename_serialized_message(serialize_lc_object(obj), display_name)
 
 
 def serialize(obj: Any, *, mode: str = "") -> Any:

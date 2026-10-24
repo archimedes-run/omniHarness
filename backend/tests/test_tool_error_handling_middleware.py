@@ -145,7 +145,11 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     from omniharness.agents.middlewares.tool_source_health_middleware import ToolSourceHealthMiddleware
 
     # Feature 007: search results reach every agent compact.
-    assert len(middlewares) == 9
+    assert len(middlewares) == 10
+    # Every agent's model calls go through the tool-name boundary.
+    from omniharness.agents.middlewares.tool_name_boundary_middleware import ToolNameBoundaryMiddleware
+
+    assert isinstance(middlewares[0], ToolNameBoundaryMiddleware)
     assert sum(isinstance(m, SearchResultsMiddleware) for m in middlewares) == 1
     assert isinstance(middlewares[-1], RefuseToolCalls)
     # Feature 006: tool-source health sits between the error handler and the gate.

@@ -218,10 +218,14 @@ class RunJournal(BaseCallbackHandler):
                 self._seen_llm_starts.add(rid)
 
             # Trace event: llm_response (OpenAI completion format)
+            # The provider's raw reply carries tool-name aliases; run history
+            # shows the full names (omniharness.models.tool_name_boundary).
+            from omniharness.models.tool_name_boundary import display_name, rename_serialized_message
+
             self._put(
                 event_type="llm.ai.response",
                 category="message",
-                content=message.model_dump(),
+                content=rename_serialized_message(message.model_dump(), display_name),
                 metadata={
                     "caller": caller,
                     "usage": usage_dict,
