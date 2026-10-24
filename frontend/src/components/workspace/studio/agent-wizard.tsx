@@ -326,10 +326,15 @@ export function AgentWizard({
     if (!isNew && !anyDirty(form, orig)) return true;
     setSaving(true);
     setSaveError(null);
+    // A new agent always saves a list, even before the catalog arrives: with
+    // no list the server would give it every tool while the review step says
+    // what the ticks say. An existing agent keeps its tools until a tick moves.
     const tools =
-      catalog && form.selection && form.toolsTouched
+      catalog && form.selection && (form.toolsTouched || isNew)
         ? allowlistOf(form.selection, catalog, agent?.tools ?? null)
-        : null;
+        : isNew
+          ? { integrations: [], tools: [] }
+          : null;
     let name = id ?? "";
     let savedAgent = false;
     try {

@@ -160,6 +160,29 @@ test("a new agent made through all four steps saves its avatar, Gmail tools, a s
   ).toBeVisible();
 });
 
+test("a new agent saved before the tool catalog arrives gets no tools, as the review step says, never every tool", async ({
+  page,
+}) => {
+  const seen = await stubStudio(page);
+  // The catalog starts MCP and Composio and can be slow, or fail: it never
+  // answers here. Routes added later win over the stub's.
+  await page.route("**/api/studio/tool-catalog", () => {
+    /* never fulfilled */
+  });
+  await openAgents(page);
+  await page.getByTestId("agents-new").click();
+  await page.getByTestId("agent-name").fill("Quick note taker");
+  await page.keyboard.press("ControlOrMeta+s");
+
+  await expect.poll(() => seen.agentWrites.length).toBe(1);
+  const [write] = seen.agentWrites;
+  expect(write!.method).toBe("POST");
+  expect(
+    (write!.body as { tools?: unknown }).tools,
+    "with no list the server gives a new agent every tool",
+  ).toEqual({ integrations: [], tools: [] });
+});
+
 test("one sentence drafts every step for review: grants unticked, the schedule made only on Create, Undo draft restores", async ({
   page,
 }) => {
