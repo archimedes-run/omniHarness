@@ -689,7 +689,9 @@ def get_deferred_tools_prompt_section(*, app_config: AppConfig | None = None) ->
     # A registry exists when tool_search deferred MCP tools, or when connector
     # toolkits past the model's tool cap were deferred whatever the setting
     # (tools.fit_connectors_to_cap): either way the agent must see the names.
-    if not registry:
+    if not registry or registry.max_promoted == 0:
+        # Nothing deferred, or no room to load any of it under the model's
+        # tool cap: deferred tools are not advertised.
         return ""
 
     from omniharness.tools.builtins.tool_search import _model_name

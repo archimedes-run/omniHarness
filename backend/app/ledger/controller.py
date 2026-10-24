@@ -36,18 +36,22 @@ class GatewayLedgerController:
         """Why this plan could not be applied, or None (see check_plan)."""
         return self.check_plan(user_id=user_id, changes=changes, thread_id=thread_id)[0]
 
-    def task_id(self, *, user_id: str, project: str | None, task: str) -> str | None:
-        """The id of the user's task this reference names (as ledger_apply
-        would resolve it), or None when it names none or more than one. The
-        declined-stays-declined rule compares tasks by it (grants.change_signatures)."""
+    def task(self, *, user_id: str, project: str | None, task: str) -> dict | None:
+        """The user's task this reference names, as ledger_apply would resolve
+        it (by id, short id, title or close title; without a project, by id or
+        exact title), with its current values; None when it names none or
+        more than one. The declined-stays-declined rule compares updates by
+        it (grants.change_summaries)."""
         try:
             with self.service.repo.transaction() as s:
                 if project not in (None, ""):
                     found = self.service._project(s, user_id, project, {})
-                    return self.service._task(s, found, task, str(project))["id"]
-                return self.service._task_anywhere(s, user_id, task)["id"]
+                    row = self.service._task(s, found, task, str(project))
+                else:
+                    row = self.service._task_anywhere(s, user_id, task)
         except LedgerError:
             return None
+        return {k: row.get(k) for k in ("id", "title", "status", "due_date", "owner")}
 
     def read(self, *, user_id: str, project: str | None) -> str:
         return self.service.read_text(user_id=user_id, project=project, today=date.today())

@@ -234,3 +234,66 @@ def test_tool_search_never_promotes_a_request_past_the_cap():
         seen |= {n for n in offered if n.startswith("connector-github_")}
     # The searches did reach new tools (older ones were returned to deferred).
     assert len(seen) > registry.max_promoted
+
+
+def test_refused_entries_never_take_a_place_in_the_tier_3_window():
+    from app.policy.inspect import recent_tier3
+
+    real = [{"at": f"2026-01-01T00:{i:02d}:00", "tool": "x", "outcome": "executed", "plan_as_stated": "p", "targets": []} for i in range(60)]
+    refused = [{"kind": "refused-plan", "at": f"2026-01-02T00:{i:02d}:00", "tool": "ledger_apply", "outcome": "refused", "plan_as_stated": "r", "targets": []} for i in range(30)]
+    rows = recent_tier3(real + refused)
+    assert sum(r.outcome == "executed" for r in rows) == 50
+    assert sum(r.outcome == "refused" for r in rows) == 20
+
+
+def test_a_search_never_returns_a_tool_this_step_is_calling_to_deferred():
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import StructuredTool
+
+    from omniharness.tools.builtins.tool_search import DeferredToolRegistry, set_deferred_registry, tool_search
+
+    registry = DeferredToolRegistry(max_promoted=5)
+    for i in range(20):
+        registry.register(StructuredTool.from_function(func=lambda q="": q, name=f"gh_T{i:02d}", description="github tool"))
+    set_deferred_registry(registry)
+    tool_search.invoke({"query": "select:" + ",".join(f"gh_T{i:02d}" for i in range(5))})
+    assert registry.promoted_names == {f"gh_T{i:02d}" for i in range(5)}
+    # This step calls T00 and T01 alongside a new search: they stay promoted.
+    state = {"messages": [AIMessage(content="", tool_calls=[{"name": "gh_T00", "args": {}, "id": "a"}, {"name": "gh_T01", "args": {}, "id": "b"}, {"name": "tool_search", "args": {}, "id": "c"}])]}
+    tool_search.func(query="+gh_T1", runtime=SimpleNamespace(state=state))
+    assert {"gh_T00", "gh_T01"} <= registry.promoted_names
+    assert len(registry.promoted_names) <= 5
+
+
+def test_with_no_room_under_the_cap_deferred_tools_are_not_offered():
+    from langchain_core.tools import StructuredTool
+
+    from omniharness.agents.lead_agent.prompt import get_deferred_tools_prompt_section
+    from omniharness.tools.builtins.tool_search import DeferredToolRegistry, set_deferred_registry, tool_search
+
+    registry = DeferredToolRegistry(max_promoted=0)
+    registry.register(StructuredTool.from_function(func=lambda q="": q, name="gh_T00", description="github tool"))
+    set_deferred_registry(registry)
+    assert get_deferred_tools_prompt_section() == ""
+    assert "No more tools can be loaded" in tool_search.invoke({"query": "select:gh_T00"})
+    assert registry.promoted_names == set()
+
+
+def test_a_restated_ledger_plan_carries_no_stored_titles():
+    from datetime import UTC, datetime, timedelta
+
+    from app.policy.confirm import restate
+    from app.policy.middleware import PolicyMiddleware
+    from app.policy.models import PendingAction, Tier
+
+    change = {"op": "update_task", "project": "Launch", "task": "report", "status": "done", "_pin": {"task_id": "t1", "short_id": "T-3", "title": "SECRET STORED TITLE", "project_id": "p1", "project_name": "STORED PROJECT"}}
+    from app.ledger.service import render
+
+    targets = render([change])
+    assert "SECRET STORED TITLE" in targets[0]
+    action = PendingAction(plan_text="", tool_name="ledger_apply", arguments={"changes": [change]}, targets=targets, tier_at_statement=Tier.TIER_3, expires_at=datetime.now(UTC) + timedelta(hours=1))
+    action.plan_text = PolicyMiddleware._plan_text("ledger_apply", targets, action_id=action.id, arguments=action.arguments)
+    text = restate(action)
+    assert "T-3" in text and "SECRET STORED TITLE" not in text and "STORED PROJECT" not in text

@@ -26,6 +26,16 @@ from .models import PendingAction
 logger = logging.getLogger(__name__)
 
 
+#: How much of a refused plan is recorded (PolicyAuditLog.record_refused).
+REFUSED_LINES = 20
+REFUSED_CHARS = 300
+
+
+def _clip(text: object) -> str:
+    text = str(text if text is not None else "")
+    return text if len(text) <= REFUSED_CHARS else text[: REFUSED_CHARS - 1] + "…"
+
+
 @dataclass
 class PolicyAuditLog:
     """Append-only, one JSON object per line — the same shape and file
@@ -121,22 +131,32 @@ class PolicyAuditLog:
         requester: str,
         origin: str,
         origin_source: str,
+        turn_key: str = "",
         now: datetime | None = None,
-    ) -> dict:
+    ) -> dict | None:
         """A plan refused BEFORE it became a card (it could not be applied),
         when it was not the user's own request: content or an automation led
         to it, so nobody may be reading the model's reply. Recorded where
         Tier 3 history is read (GET /api/policy/audit), so the attempt stays
         visible (FR-006); nothing was proposed, so there is nothing to
-        confirm."""
+        confirm.
+
+        Bounded: at most REFUSED_LINES targets of REFUSED_CHARS characters,
+        the reason likewise, and ONE entry per thread and turn (`turn_key`):
+        a model retrying a bad plan in a loop records it once. Returns None
+        when this turn's refusal was already recorded."""
+        if thread_id and any(e.get("kind") == "refused-plan" and e.get("thread_id") == thread_id and e.get("turn_key") == turn_key for e in self.entries()):
+            return None
+        reason = _clip(reason)
         entry = {
             "kind": "refused-plan",
+            "turn_key": turn_key,
             "at": (now or datetime.now()).isoformat(),
             "actor": self.actor,
             "tier": 3,
             "tool": tool,
             "plan_as_stated": f"Refused before it was proposed: {reason}. Nothing was changed.",
-            "targets": list(targets),
+            "targets": [_clip(t) for t in list(targets)[:REFUSED_LINES]],
             "authorised_by": None,
             "outcome": "refused",
             "reason": reason,

@@ -277,24 +277,26 @@ def canonical_text(value: Any) -> str:
     return " ".join(text.split())
 
 
-def change_signatures(arguments: dict[str, Any], resolve_project=None, resolve_task=None, *, trust_pins: bool = False) -> set[tuple[str, ...]]:
-    """What a ledger_apply would do, canonicalised: one (op, project, task,
-    title-or-note, status) per change, with the op's defaults filled in and
-    the project resolved to its id when `resolve_project` can (a name and an
-    id of one project are then the same). Two calls that share any signature
-    are "the same write" for the declined-stays-declined rule. Best effort: a
-    paraphrase is a different write.
+_UPDATE_FIELDS = ("title", "status", "due_date", "owner")
 
-    An update names its TASK by id when it can: the server's pin on a stated
-    plan (`trust_pins`, for a stored action only: a model's own pin is never
-    read), else `resolve_task(project, task)`, the ledger's own lookup. So a
-    task named by short id, by title, by part of its title or without its
-    project is one task, and a declined update of it stays declined however
-    it is named again."""
+
+def change_summaries(arguments: dict[str, Any], resolve_project=None, resolve_task=None, *, trust_pins: bool = False) -> list[tuple[str, str, dict[str, str], dict[str, str] | None]]:
+    """What a ledger_apply would do, canonicalised, one entry per change:
+    (op, target, fields it sets, the target's current values or None).
+
+    The target of an update is its TASK, by id when it can be told: the
+    server's pin on a stated plan (`trust_pins`, for a stored action only: a
+    model's own pin is never read), else `resolve_task(project, task)`, the
+    ledger's own lookup, which also gives the task's current values. So a task
+    named by short id, by title, by part of its title or without its project
+    is one task. Other changes are targeted by project (resolved to its id
+    when `resolve_project` can) and task text, and set their title or note and
+    status (with the op's defaults filled in). Best effort: a paraphrase of a
+    note is a different write."""
     changes = arguments.get("changes")
     if not isinstance(changes, list):
-        return set()
-    out = set()
+        return []
+    out: list[tuple[str, str, dict[str, str], dict[str, str] | None]] = []
     for c in changes:
         if not isinstance(c, dict):
             continue
@@ -303,13 +305,38 @@ def change_signatures(arguments: dict[str, Any], resolve_project=None, resolve_t
         project = filled.get("project")
         if op == "update_task":
             pin = c.get("_pin") if trust_pins and isinstance(c.get("_pin"), dict) else {}
-            task_id = pin.get("task_id") or (resolve_task(project, filled.get("task")) if (resolve_task is not None and filled.get("task")) else None)
-            if task_id:
-                out.add((op, "", f"task:{task_id}", canonical_text(filled.get("title")), canonical_text(filled.get("status"))))
+            current = None
+            target = None
+            if pin.get("task_id"):
+                target = f"task:{pin['task_id']}"
+                current = resolve_task(None, pin["task_id"]) if resolve_task is not None else None
+            elif resolve_task is not None and filled.get("task"):
+                current = resolve_task(project, filled.get("task"))
+                target = f"task:{current['id']}" if current else None
+            if target:
+                now = {k: canonical_text(current.get(k)) for k in _UPDATE_FIELDS} if current else None
+                out.append((op, target, {k: canonical_text(filled[k]) for k in _UPDATE_FIELDS if k in filled}, now))
                 continue
         resolved = resolve_project(project) if (resolve_project is not None and project) else None
-        out.add((op, resolved or canonical_text(project), canonical_text(filled.get("task")), canonical_text(filled.get("title") or filled.get("decided")), canonical_text(filled.get("status"))))
+        target = f"{resolved or canonical_text(project)}|{canonical_text(filled.get('task'))}"
+        out.append((op, target, {"text": canonical_text(filled.get("title") or filled.get("decided")), "status": canonical_text(filled.get("status"))}, None))
     return out
+
+
+def repeats_declined(wanted: list, declined: list) -> bool:
+    """Does any change of a new call repeat a change the user declined? Same
+    op and target, and it sets every field the declined change CHANGED to the
+    same value (fields the declined change set to what they already were are
+    not part of what was declined; extra fields in the new call do not make it
+    a different write: it still does what was declined)."""
+    for op, target, fields, _ in wanted:
+        for d_op, d_target, d_fields, d_now in declined:
+            if op != d_op or target != d_target:
+                continue
+            changed = {k: v for k, v in d_fields.items() if not (d_now and d_now.get(k) == v)} or d_fields
+            if all(fields.get(k) == v for k, v in changed.items()):
+                return True
+    return False
 
 
 def governed_by_grants(tool_name: str, *, allowlist_agent: bool = False) -> bool:

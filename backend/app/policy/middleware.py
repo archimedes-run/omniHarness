@@ -90,6 +90,9 @@ class PolicyMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         from omniharness.agents.invitation import inviting_turn
 
+        # Whatever tier it gets, a call runs without any pin its model wrote
+        # (a pin is the server's: _check_ledger_plan).
+        request = self._without_model_pins(request)
         decision = self._classify(request)
         if decision.refused:
             return self._refuse_unruled(request, decision)
@@ -104,7 +107,6 @@ class PolicyMiddleware(AgentMiddleware):
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            request = self._without_model_pins(request)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = handler(request)
             self._mark_trusted_ack(request, result)
@@ -126,6 +128,7 @@ class PolicyMiddleware(AgentMiddleware):
         # call's provenance, not as the user (omniharness.agents.invitation).
         from omniharness.agents.invitation import inviting_turn
 
+        request = self._without_model_pins(request)
         decision = self._classify(request)
         if decision.refused:
             return self._refuse_unruled(request, decision)
@@ -140,7 +143,6 @@ class PolicyMiddleware(AgentMiddleware):
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
                 return self._require_confirmation(request, decision, extra_note=grant)
-            request = self._without_model_pins(request)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
             self._mark_trusted_ack(request, result)
@@ -210,7 +212,7 @@ class PolicyMiddleware(AgentMiddleware):
         agent read caused (a tool result, an email, a page, a subagent's
         output; feature 003's lineage, FR-006) is a SUGGESTION: it is stated
         on a card and runs only if the user confirms it there. None: run it."""
-        from .grants import change_signatures, chat_governed
+        from .grants import change_summaries, chat_governed, repeats_declined
 
         if not chat_governed(decision.tool_name):
             return None
@@ -229,9 +231,9 @@ class PolicyMiddleware(AgentMiddleware):
         # never run later as if the user had asked for it.
         resolve = self._project_resolver(request)
         resolve_task = self._task_resolver(request)
-        wanted = change_signatures(self._arguments(request), resolve, resolve_task)
+        wanted = change_summaries(self._arguments(request), resolve, resolve_task)
         for declined in self.pending.declined_in_thread(self._thread_id(request), self._owner_id(request)):
-            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments, resolve, resolve_task, trust_pins=True):
+            if declined.tool_name == decision.tool_name and repeats_declined(wanted, change_summaries(declined.arguments, resolve, resolve_task, trust_pins=True)):
                 logger.info("policy: %s matches a write declined earlier (%s); it waits on its card", decision.tool_name, declined.id)
                 return "This is a suggestion: you declined this earlier in this chat, so I did not do it. It runs only if you confirm it here."
         return None
@@ -250,12 +252,12 @@ class PolicyMiddleware(AgentMiddleware):
         return lambda ref: lookup(user_id=user_id, project=str(ref))
 
     def _task_resolver(self, request):
-        """Names a task by its id, through the ledger's own lookup (as
-        ledger_apply resolves it), so one task named by short id, title or
-        part of its title is one task. None outside the gateway."""
+        """A task as the ledger's own lookup resolves it (as ledger_apply
+        would): its id and current values, so one task named by short id,
+        title or part of its title is one task. None outside the gateway."""
         from omniharness.runtime.ledger.controller import get_ledger_controller
 
-        lookup = getattr(get_ledger_controller(), "task_id", None)
+        lookup = getattr(get_ledger_controller(), "task", None)
         if lookup is None:
             return None
         user_id = self._user_id(self._runtime_context(request) or {})
@@ -728,21 +730,29 @@ class PolicyMiddleware(AgentMiddleware):
             context = getattr(getattr(request, "runtime", None), "context", None)
             if isinstance(context, dict):
                 context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
-        return self._mark_trusted_ack(request, self._as_tool_result(request, self._model_plan_text(action, extra_note)))
+        return self._mark_trusted_ack(request, self._as_tool_result(request, self._model_plan_text(action)))
 
-    def _model_plan_text(self, action: PendingAction, extra_note: str = "") -> str:
-        """The plan as the MODEL is told it. For ledger_apply it is the card's
-        plan with each line rendered without stored text (no stored task or
-        project names, which content may have put there): the result is a
-        trusted acknowledgement (lineage.TRUSTED_TOOL_RESULTS). The card the
-        person reads keeps them (action.plan_text)."""
-        if action.tool_name != "ledger_apply":
-            return action.plan_text
-        from app.ledger.service import render
+    def _model_plan_text(self, action: PendingAction) -> str:
+        """The plan as the MODEL is told it: for ledger_apply, the card's plan
+        with each line rendered without stored text (confirm.model_safe_plan),
+        since the result is a trusted acknowledgement
+        (lineage.TRUSTED_TOOL_RESULTS). The card the person reads keeps them
+        (action.plan_text, which already carries `extra_note`)."""
+        from .confirm import model_safe_plan
 
-        lines = render((action.arguments or {}).get("changes"), stored=False)
-        text = self._plan_text(action.tool_name, lines or list(action.targets), action.requester, action.delegation_chain, action.id, action.arguments, origin_note=action.origin_note())
-        return f"{text}\n\n{extra_note}" if extra_note else text
+        return model_safe_plan(action)[0]
+
+    @staticmethod
+    def _turn_key(request) -> str:
+        """This turn: the id (or position) of the latest human message."""
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages") if isinstance(state, dict) else None
+        for index in range(len(messages or []) - 1, -1, -1):
+            message = messages[index]
+            if getattr(message, "type", None) == "human" or (isinstance(message, dict) and message.get("type") == "human"):
+                ident = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
+                return str(ident or f"#{index}")
+        return ""
 
     def _record_refused_plan(self, request, decision, arguments: dict, reason: str, origin: str, origin_source: str) -> None:
         if self.audit is None:
@@ -759,6 +769,7 @@ class PolicyMiddleware(AgentMiddleware):
                 requester=self._requester(request),
                 origin=origin,
                 origin_source=origin_source,
+                turn_key=self._turn_key(request),
                 now=self.now(),
             )
         except Exception:  # noqa: BLE001 — the refusal stands whether or not it was recorded

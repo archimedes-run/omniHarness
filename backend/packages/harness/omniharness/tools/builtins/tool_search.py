@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from langchain.tools import BaseTool
+from langchain.tools import BaseTool, ToolRuntime
 from langchain_core.tools import tool
 from langchain_core.utils.function_calling import convert_to_openai_function
 
@@ -59,7 +59,7 @@ class DeferredToolRegistry:
             )
         )
 
-    def promote(self, names: set[str]) -> None:
+    def promote(self, names: set[str], protect: set[str] | None = None) -> None:
         """Remove tools from the deferred registry so they pass through the filter.
 
         Called after tool_search returns a tool's schema — the LLM now knows
@@ -74,10 +74,20 @@ class DeferredToolRegistry:
         if moving:
             logger.debug(f"Promoted {len(moving)} tool(s) from deferred to active: {names}")
         if self.max_promoted is not None:
+            # Oldest first, never one the current step is calling (`protect`):
+            # it is in use, and the model has just been told it can call it.
+            keep = set(protect or ()) | set(names)
             while len(self._promoted) > self.max_promoted:
-                oldest = self._promoted.pop(0)
-                self._entries.append(oldest)
-                logger.debug(f"Returned {oldest.name} to deferred: at most {self.max_promoted} promoted tools are active")
+                evictable = next((e for e in self._promoted if e.name not in keep), None)
+                if evictable is None:
+                    break
+                self._promoted.remove(evictable)
+                self._entries.append(evictable)
+                logger.debug(f"Returned {evictable.name} to deferred: at most {self.max_promoted} promoted tools are active")
+
+    @property
+    def promoted_names(self) -> set[str]:
+        return {e.name for e in self._promoted}
 
     def search(self, query: str) -> list[BaseTool]:
         """Search deferred tools by regex pattern against name + description.
@@ -184,8 +194,19 @@ def reset_deferred_registry() -> None:
 # ── Tool ──
 
 
+def _current_step_calls(runtime: ToolRuntime | None) -> set[str]:
+    """Names of the tools the model's latest message calls (this step)."""
+    state = getattr(runtime, "state", None) if runtime is not None else None
+    messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
+    for message in reversed(list(messages or [])):
+        calls = getattr(message, "tool_calls", None) if not isinstance(message, dict) else message.get("tool_calls")
+        if getattr(message, "type", None) == "ai" or (isinstance(message, dict) and message.get("type") == "ai"):
+            return {str(c.get("name")) for c in calls or [] if isinstance(c, dict)}
+    return set()
+
+
 @tool
-def tool_search(query: str) -> str:
+def tool_search(query: str, runtime: ToolRuntime = None) -> str:
     """Fetches full schema definitions for deferred tools so they can be called.
 
     Deferred tools appear by name in <available-deferred-tools> in the system
@@ -210,10 +231,17 @@ def tool_search(query: str) -> str:
     if not registry:
         return "No deferred tools available."
 
+    in_use = _current_step_calls(runtime) & registry.promoted_names
+    limit = MAX_RESULTS
+    if registry.max_promoted is not None:
+        # Room under the model's tool cap, less the promoted tools this step
+        # is calling (they are never returned to deferred under it).
+        limit = min(MAX_RESULTS, registry.max_promoted - len(in_use))
+        if limit <= 0:
+            return "No more tools can be loaded in this request: it is at the model's tool limit. Use the tools already loaded, or ask the user to switch off an app in this chat's tool menu."
     matched_tools = registry.search(query)
     if not matched_tools:
         return f"No tools found matching: {query}"
-    limit = MAX_RESULTS if registry.max_promoted is None else max(1, min(MAX_RESULTS, registry.max_promoted))
     matched_tools = matched_tools[:limit]
 
     # Use LangChain's built-in serialization to produce OpenAI function format.
@@ -228,6 +256,6 @@ def tool_search(query: str) -> str:
 
     # Promote matched tools so the DeferredToolFilterMiddleware stops filtering
     # them from bind_tools — the LLM now has the full schema and can invoke them.
-    registry.promote({t.name for t in matched_tools})
+    registry.promote({t.name for t in matched_tools}, protect=in_use)
 
     return json.dumps(tool_defs, indent=2, ensure_ascii=False)

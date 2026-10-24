@@ -291,6 +291,40 @@ def _user_id(ctx) -> str:
     return str(user.id) if user is not None and getattr(user, "id", None) else "default"
 
 
+def _same_target(a: Any, b: Any) -> bool:
+    """Two changes name the same thing: same op, task and project."""
+    return isinstance(a, dict) and isinstance(b, dict) and all(a.get(k) == b.get(k) for k in ("op", "task", "project"))
+
+
+def _pin_edited_ledger_plan(action: Any, arguments: dict) -> tuple[str | None, dict]:
+    """The edited ledger plan, pinned (app.ledger.service.PIN_KEY) as a stated
+    plan is: a change whose op, task and project are the original's keeps the
+    original's pin (the server's, never one sent with the edit); any other
+    change is resolved now, and the plan is checked without writing. Returns
+    (why it could not be applied or None, the arguments to state)."""
+    from app.ledger.service import PIN_KEY, strip_pins
+    from omniharness.runtime.ledger.controller import get_ledger_controller
+
+    changes = strip_pins(arguments.get("changes"))
+    if not isinstance(changes, list):
+        return None, {**arguments, "changes": changes}
+    original = (action.arguments or {}).get("changes") or []
+    carried = []
+    for index, change in enumerate(changes):
+        before = original[index] if index < len(original) else None
+        pin = before.get(PIN_KEY) if isinstance(before, dict) else None
+        carried.append({**change, PIN_KEY: pin} if pin and _same_target(change, before) else change)
+    check = getattr(get_ledger_controller(), "check_plan", None)
+    if check is None or not action.owner_id:
+        return None, {**arguments, "changes": carried}
+    invalid, resolutions = check(user_id=str(action.owner_id or ""), changes=carried, thread_id=action.thread_id)
+    if invalid is not None:
+        return invalid, arguments
+    if len(resolutions) == len(carried):
+        carried = [c if not isinstance(c, dict) or c.get(PIN_KEY) or not r else {**c, PIN_KEY: r} for c, r in zip(carried, resolutions, strict=True)]
+    return None, {**arguments, "changes": carried}
+
+
 async def _thread_owner(request: Request, thread_id: str) -> str | None:
     """Who owns the chat (threads_meta.user_id), or None when unknown."""
     store = getattr(request.app.state, "thread_store", None)
@@ -899,18 +933,17 @@ async def edit_and_confirm(action_id: str, body: EditRequest, request: Request) 
     if action.thread_id and action.surface and await _thread_running(request, action.thread_id):
         # Checked BEFORE the original is superseded, so a refused edit leaves it as it was.
         return ResolveResponse(outcome=THREAD_BUSY, action_id=action_id, message="This chat is still replying. Nothing has run and the plan is unchanged. Try again when the reply has finished.")
+    arguments = body.arguments
+    if action.tool_name == "ledger_apply" and isinstance(arguments, dict):
+        # Checked BEFORE the original is superseded: an edit that could not be
+        # applied leaves the original open.
+        invalid, arguments = _pin_edited_ledger_plan(action, arguments)
+        if invalid is not None:
+            return ResolveResponse(outcome="invalid_plan", action_id=action_id, message=f"That edit could not be applied, so nothing was changed and the plan is as it was: {invalid}.")
     claimed = take_claim(middleware.pending, action_id, "edit")
     if claimed is None:
         return ResolveResponse(outcome="already_resolved", action_id=action_id, message="Another route resolved that plan first.")
 
-    arguments = body.arguments
-    if action.tool_name == "ledger_apply" and isinstance(arguments, dict):
-        # The edit is resolved afresh when it runs: a pin carried over from
-        # the original (or sent with the edit) could name a task the edited
-        # words no longer mean (app.ledger.service.PIN_KEY).
-        from app.ledger.service import strip_pins
-
-        arguments = {**arguments, "changes": strip_pins(arguments.get("changes"))}
     targets = list(middleware.resolve_targets(action.tool_name, arguments)) if middleware.resolve_targets else [f"{action.tool_name}({arguments})"]
     ruleset = middleware.loader.load()
     edited = PendingAction(

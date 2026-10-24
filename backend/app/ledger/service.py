@@ -258,6 +258,11 @@ class LedgerService:
         done: list[str] = []
         refs: dict[str, str] = {}
         goal_refs: dict[str, str] = {}
+        # Rows this run created. They exist only in this transaction (and in
+        # `validate`'s, which is rolled back), so they are never resolutions to
+        # pin: a later change naming one resolves it by name at apply, in the
+        # same transaction that creates it again.
+        created: set[str] = set()
         # What each line calls a project: the name this call gave it, never
         # the name as stored. A ledger_apply result is trusted as the
         # harness's own words (lineage.TRUSTED_TOOL_RESULTS), so it carries
@@ -276,6 +281,7 @@ class LedgerService:
                 if status not in PROJECT_STATUSES:
                     raise LedgerError(f"project status {status!r} is not one of {', '.join(PROJECT_STATUSES)}")
                 row = self.repo.create(s, "project", **stamp, name=_text(c, "name", limit=120, required=True), why=_text(c, "why", limit=2000), context=_text(c, "context", limit=8000), status=status)
+                created.add(row["id"])
                 if c.get("ref"):
                     refs[str(c["ref"])] = row["id"]
                     ref_names[str(c["ref"])] = row["name"]
@@ -303,7 +309,7 @@ class LedgerService:
             else:
                 project = self._project(s, user_id, c.get("project"), refs)
                 named = _as_named(c.get("project"), ref_names)
-            if str(c.get("project")) not in refs and project.get("id") not in refs.values():
+            if project["id"] not in created:
                 resolved.update({"project_id": project["id"], "project_name": project.get("name")})
             if op == "create_goal":
                 row = self.repo.create(
@@ -336,13 +342,15 @@ class LedgerService:
                     # contract and names paths evidence is matched on.
                     declared_files=[],
                 )
+                created.add(row["id"])
                 if thread_id and c.get("todo_ref"):
                     self.repo.link(s, owner_id=user_id, actor=actor, from_kind="task", from_id=row["id"], to_kind="thread", to_ref=thread_id, todo_ref=str(c["todo_ref"])[:300])
                 done.append(f"Added {row['short_id']} “{row['title']}” to {named}.")
             elif op == "update_task":
                 if task is None:
                     task = self._task(s, project, c.get("task"), named)
-                resolved.update({"task_id": task["id"], "short_id": task["short_id"], "title": task["title"]})
+                if task["id"] not in created:
+                    resolved.update({"task_id": task["id"], "short_id": task["short_id"], "title": task["title"]})
                 fields: dict[str, Any] = {}
                 if "title" in c:
                     fields["title"] = _text(c, "title", limit=300, required=True)

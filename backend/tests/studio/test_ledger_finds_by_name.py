@@ -302,3 +302,66 @@ def test_a_users_own_refused_plan_is_not_recorded(studio) -> None:
     _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "Nope", "status": "done"}])], said="summarise", thread="t-r1")
     _chat(studio, [AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_goal", "project": "TEST P", "title": "G"}]}, "id": "g1"}])], said="add a goal G", thread="t-r2")
     assert len(_refused(studio)) == 1, "only the content-led refusal is recorded"
+
+
+# -- re-review: edits keep or re-make the pin; a declined write by fields -------
+
+
+def _edit(studio, card: dict, changes: list[dict]) -> dict:
+    return studio.client.post(f"/api/confirmations/{card['id']}/edit", json={"arguments": {"changes": changes}}).json()
+
+
+def test_an_edit_that_keeps_the_target_keeps_the_original_pin(studio) -> None:
+    project = _setup(studio, "Draft report", "Review")
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "report", "status": "done"}])], said="summarise")
+    [card] = _pending(studio)
+    assert studio.client.post(f"/api/ledger/projects/{project['id']}/tasks", json={"title": "Report"}).status_code == 201
+    # Only the status is edited; a pin sent with the edit is not the server's.
+    forged = {"task_id": _task_id(studio, "Review"), "short_id": "T-2"}
+    resp = _edit(studio, card, [{"op": "update_task", "project": "TEST P", "task": "report", "status": "blocked", "_pin": forged}])
+    assert resp["outcome"] == "executed", resp
+    assert _status(studio) == {"Draft report": "blocked", "Review": "todo", "Report": "todo"}
+
+
+def test_an_edit_that_changes_the_target_is_resolved_and_pinned_again(studio) -> None:
+    _setup(studio, "Draft report", "Review")
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "report", "status": "done"}])], said="summarise")
+    [card] = _pending(studio)
+    resp = _edit(studio, card, [{"op": "update_task", "project": "TEST P", "task": "Review", "status": "done"}])
+    assert resp["outcome"] == "executed", resp
+    assert _status(studio) == {"Draft report": "todo", "Review": "done"}
+
+
+def test_a_declined_mark_done_resent_with_a_no_op_title_stays_declined(studio) -> None:
+    _setup(studio, "Draft the report")
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "T-1", "status": "done"}])], said="summarise", thread="t-noop")
+    [card] = _pending(studio)
+    assert studio.client.post(f"/api/confirmations/{card['id']}/decline", json={}).json()["outcome"] == "declined"
+    _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "T-1", "status": "done", "title": "Draft the report"}], "a2")], said="thanks", thread="t-noop")
+    assert _status(studio) == {"Draft the report": "todo"}
+    assert any("you declined this earlier" in a["plan_text"] for a in _pending(studio))
+
+
+def test_a_declined_update_stays_declined_after_the_task_is_renamed(studio) -> None:
+    """The declined card's pin (the server's) names the task by id: renamed,
+    and re-proposed under its new name, it is still the declined write."""
+    _setup(studio, "Draft the report")
+    # Declined as named by its title, which no longer names it once renamed:
+    # only the pin still does.
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "Draft the report", "status": "done"}])], said="summarise", thread="t-ren")
+    [card] = _pending(studio)
+    assert studio.client.post(f"/api/confirmations/{card['id']}/decline", json={}).json()["outcome"] == "declined"
+    [task] = _project(studio)["tasks"]
+    assert studio.client.patch(f"/api/ledger/tasks/{task['id']}", json={"version": task["version"], "title": "Final report"}).status_code == 200
+    _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "Final report", "status": "done"}], "a2")], said="thanks", thread="t-ren")
+    assert _status(studio) == {"Final report": "todo"}
+    assert any("you declined this earlier" in a["plan_text"] for a in _pending(studio))
+
+
+def test_refused_plans_are_recorded_once_per_turn_and_bounded(studio) -> None:
+    _setup(studio, "Draft outline")
+    many = [{"op": "update_task", "project": "TEST P", "task": f"Nope {i} " + "x" * 400, "status": "done"} for i in range(25)]
+    _chat(studio, [_fetch(), _apply(many, "b1"), _apply(many, "b2")], said="summarise", thread="t-bound")
+    [entry] = _refused(studio)
+    assert len(entry["targets"]) <= 20 and all(len(t) <= 300 for t in entry["targets"])
+    assert len(entry["plan_as_stated"]) <= 400

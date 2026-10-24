@@ -182,20 +182,41 @@ def self_verdict_id(line: str) -> str | None:
     return ids[0] if words in _CONFIRM_FORMS or words in _DECLINE_FORMS else None
 
 
+def model_safe_plan(action: PendingAction) -> tuple[str, list[str]]:
+    """The plan and its items as the MODEL may read them. A ledger_apply card
+    names stored task and project titles (the person checks them there); the
+    chat's own messages are read back by the model, so they name each change
+    without stored text (app.ledger.service.render, stored=False). Each card
+    line is replaced by its stored-free counterpart; nothing else changes."""
+    targets = list(action.targets)
+    plan = action.plan_text
+    if action.tool_name != "ledger_apply":
+        return plan, targets
+    from app.ledger.service import render
+
+    safe = render((action.arguments or {}).get("changes"), stored=False)
+    if len(safe) != len(targets):
+        return plan, targets
+    for stored_line, safe_line in zip(targets, safe, strict=True):
+        plan = plan.replace(f"  - {stored_line}", f"  - {safe_line}")
+    return plan, safe
+
+
 def restate(action: PendingAction) -> str:
     """FR-035. The plan IN FULL, not a nudge.
 
     The user is being asked to authorise specific items; a reply of "please
     confirm" asks them to authorise something they can no longer see.
     """
+    plan, targets = model_safe_plan(action)
     lines = [
         "I did not recognise that as a yes or a no, so nothing has happened. Here is the plan again in full:",
         "",
-        action.plan_text,
+        plan,
         "",
-        f"It affects exactly these {len(action.targets)} item(s):",
+        f"It affects exactly these {len(targets)} item(s):",
     ]
-    lines += [f"  - {target}" for target in action.targets]
+    lines += [f"  - {target}" for target in targets]
     how = f'Reply "yes {action.id}" to go ahead, or "no {action.id}" to cancel.'
     if not action.confirmable_by_typing:
         how = f'It was {action.origin_reason()}, so only the Confirm button on its card can approve it. Reply "no {action.id}" to cancel.'

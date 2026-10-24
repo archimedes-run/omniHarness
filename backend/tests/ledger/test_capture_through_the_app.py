@@ -136,16 +136,18 @@ def test_a_plan_sent_as_text_is_refused_before_its_card(gateway) -> None:
     assert "must be a list" in str(result.content)
 
 
-def test_an_invalid_edited_plan_writes_nothing_at_all(gateway) -> None:
-    """All or nothing at apply, still: a plan edited on its card into one that
-    cannot be applied (the third change names a project that does not exist)
-    fails, and its first two changes are not written either."""
+def test_an_invalid_edited_plan_is_refused_and_the_original_stays_open(gateway) -> None:
+    """A plan edited on its card into one that cannot be applied (the third
+    change names a project that does not exist) is checked before the
+    original is superseded: nothing is written, and the original plan is
+    still there to confirm or edit again."""
     propose(gateway)
     [action] = pending(gateway)
     edited = [CHANGES[0], {k: v for k, v in CHANGES[2].items() if k != "goal"}, {"op": "create_task", "project": "Nope", "title": "x"}]
     resp = gateway.client.post(f"/api/confirmations/{action['id']}/edit", json={"arguments": {"changes": edited}})
-    assert resp.json()["outcome"] == "failed", resp.text
+    assert resp.json()["outcome"] == "invalid_plan" and "there is no project 'Nope'" in resp.json()["message"], resp.text
     assert gateway.client.get("/api/ledger/projects").json() == [], resp.text
+    assert [a["id"] for a in pending(gateway)] == [action["id"]]
 
 
 def test_a_confirmed_plan_that_fails_logs_the_ledgers_reason(gateway, caplog) -> None:
@@ -167,3 +169,40 @@ def test_a_confirmed_plan_that_fails_logs_the_ledgers_reason(gateway, caplog) ->
     assert resp.json()["outcome"] == "failed", resp.text
     [line] = [r.getMessage() for r in caplog.records if "did not complete" in r.getMessage()]
     assert "RuntimeError" in line and "(ledger: the task this was proposed for (T-1) no longer exists)" in line
+
+
+# -- re-review: changes naming rows the plan itself creates are never pinned ----
+
+
+def _confirm_only_card(gateway) -> dict:
+    [action] = pending(gateway)
+    resp = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={})
+    assert resp.json()["outcome"] == "executed", resp.text
+    return action
+
+
+def _project_named(gateway, name: str) -> dict:
+    [project] = [p for p in gateway.client.get("/api/ledger/projects").json() if p["name"] == name]
+    return gateway.client.get(f"/api/ledger/projects/{project['id']}").json()
+
+
+def test_a_task_in_a_project_the_plan_creates_by_name_applies_after_confirm(gateway) -> None:
+    propose(gateway, changes=[{"op": "create_project", "name": "Alpha"}, {"op": "create_task", "project": "Alpha", "title": "First"}])
+    action = _confirm_only_card(gateway)
+    assert "_pin" not in action["arguments"]["changes"][1], "a pin to a row that only existed in the check"
+    assert [t["title"] for t in _project_named(gateway, "Alpha")["tasks"]] == ["First"]
+
+
+def test_an_update_of_a_task_the_plan_creates_applies_after_confirm(gateway) -> None:
+    assert gateway.client.post("/api/ledger/projects", json={"name": "TEST P"}).status_code == 201
+    propose(gateway, changes=[{"op": "create_task", "project": "TEST P", "title": "Newtask"}, {"op": "update_task", "project": "TEST P", "task": "Newtask", "status": "done"}])
+    action = _confirm_only_card(gateway)
+    assert "task_id" not in (action["arguments"]["changes"][1].get("_pin") or {})
+    assert [(t["title"], t["status"]) for t in _project_named(gateway, "TEST P")["tasks"]] == [("Newtask", "done")]
+
+
+def test_linking_a_project_the_plan_creates_applies_after_confirm(gateway) -> None:
+    propose(gateway, changes=[{"op": "create_project", "name": "Beta"}, {"op": "link_thread", "project": "Beta"}])
+    _confirm_only_card(gateway)
+    links = _project_named(gateway, "Beta")["links"]
+    assert ("thread", "thread-1") in [(link["to_kind"], link["to_ref"]) for link in links]
