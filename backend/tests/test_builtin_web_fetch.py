@@ -769,6 +769,7 @@ async def test_waiting_for_a_worker_slot_counts_against_the_deadline(monkeypatch
         await run_bounded([sys.executable, "-c", "print('late')"], b"", 0.3)
     assert loop.time() - start < 1.0
     assert len(procs) == 4, "no process may start once the deadline has passed"
+    assert _limit_state() == (4, 0), "the timed-out waiter must not stay queued"
     await asyncio.gather(*sleepers)
 
 
@@ -867,4 +868,124 @@ def test_attribute_floods_and_huge_tags_skip_the_fallback() -> None:
     assert tree_too_complex(b"<html><body><div " + b"a=1 " * 200_000 + b">x</div></body></html>")
     assert tree_too_complex(b"<p " + b"x" * 40_000 + b">x</p>")
     assert tree_too_complex(b"".join(b"<p a=1 b=2 c=3>x</p>" for _ in range(40_000)))
+    # Bare attributes (no "=") count too: 30 tags of 5000, each under the tag-size cap.
+    assert tree_too_complex(b"".join(b"<p " + b"a " * 5000 + b">x</p>" for _ in range(30)))
     assert not tree_too_complex(b'<a href="/x" class="y" id="z">link</a>' * 1000)
+
+
+# ── the process-wide worker limit: no leaked slot, loop or directory ────────
+
+
+def _limit_state():
+    from omniharness.community.builtin_fetch import extract
+
+    limit = extract._limit()
+    return limit.active, len(limit.waiters)
+
+
+@pytest.mark.anyio
+async def test_a_failed_temp_dir_never_leaks_a_slot(monkeypatch) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch import extract
+
+    def no_space(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(extract.tempfile, "mkdtemp", no_space)
+    for _ in range(6):
+        with pytest.raises(FetchFailed, match="could not prepare"):
+            await extract.run_bounded([sys.executable, "-c", "pass"], b"", 5)
+    assert _limit_state() == (0, 0)
+
+
+@pytest.mark.anyio
+async def test_a_second_cancellation_while_reaping_still_cleans_up(monkeypatch, tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch import extract
+
+    procs = _record_workers(monkeypatch)
+    dirs: list[str] = []
+    real_mkdtemp = extract.tempfile.mkdtemp
+    monkeypatch.setattr(extract.tempfile, "mkdtemp", lambda **kw: dirs.append(real_mkdtemp(**kw)) or dirs[-1])
+    task = asyncio.create_task(extract.run_bounded([sys.executable, "-c", "import time; time.sleep(30)"], b"", 30))
+    while not procs:
+        await asyncio.sleep(0.02)
+    proc = procs[0]
+    real_wait = proc.wait
+
+    async def slow_wait():
+        await asyncio.sleep(5)
+        return await real_wait()
+
+    proc.wait = slow_wait
+    task.cancel()
+    await asyncio.sleep(0.1)  # now inside the finally, reaping slowly
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _limit_state() == (0, 0), "the slot leaked"
+    assert dirs and not os.path.exists(dirs[0]), "the temp dir leaked"
+    await real_wait()
+
+
+def test_short_lived_loops_under_contention_leave_nothing_behind() -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    async def burst():
+        # 10 jobs of 0.5 s for 4 slots and a 0.7 s deadline: some time out while queued.
+        jobs = [run_bounded([sys.executable, "-c", "import time; time.sleep(0.5)"], b"", 0.7) for _ in range(10)]
+        results = await asyncio.gather(*jobs, return_exceptions=True)
+        assert all(r == b"" or isinstance(r, FetchFailed) for r in results), results
+
+    for _ in range(5):
+        asyncio.run(burst())
+    assert _limit_state() == (0, 0)
+
+
+def test_the_limit_is_four_per_process_across_event_loops(tmp_path) -> None:
+    import sys
+    import threading
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    log = tmp_path / "intervals"
+
+    def loop_thread():
+        async def main():
+            await asyncio.gather(*(run_bounded([sys.executable, "-c", _INTERVAL, str(log)], b"", 15) for _ in range(5)))
+
+        asyncio.run(main())
+
+    threads = [threading.Thread(target=loop_thread) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    intervals = [tuple(map(float, line.split())) for line in log.read_text().splitlines()]
+    assert len(intervals) == 10
+    peak = max(sum(1 for a, b in intervals if a <= t < b) for t, _ in intervals)
+    assert peak <= 4, f"{peak} workers ran at once across two event loops"
+    assert _limit_state() == (0, 0)
+
+
+_EXITS_LEAVING_A_CHILD = """
+import subprocess, sys
+# Like readabilipy's node: its own stdout/stderr, so the worker's pipe closes when the worker exits.
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+open(sys.argv[1], "w").write(str(child.pid))
+"""
+
+
+@pytest.mark.anyio
+async def test_a_child_of_a_worker_that_exited_on_its_own_is_killed(tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    pid_file = tmp_path / "child.pid"
+    await run_bounded([sys.executable, "-c", _EXITS_LEAVING_A_CHILD, str(pid_file)], b"", 10)
+    assert _pid_gone(int(pid_file.read_text())), "a node-like child outlived its worker"

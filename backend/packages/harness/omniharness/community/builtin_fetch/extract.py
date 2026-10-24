@@ -24,7 +24,8 @@ import shutil
 import signal
 import sys
 import tempfile
-import weakref
+import threading
+from collections import deque
 
 from omniharness.community.builtin_fetch.fetcher import FetchResult
 from omniharness.community.builtin_fetch.guard import FetchFailed
@@ -72,7 +73,7 @@ def tree_too_complex(body: bytes, max_depth: int = MAX_FALLBACK_DEPTH, max_eleme
         elements += 1
         if elements > max_elements or len(inner) > MAX_TAG_BYTES:
             return True
-        attributes += inner.count(b"=") if inner else 0
+        attributes += len(_ATTRIBUTE.findall(inner)) if inner else 0
         if attributes > MAX_FALLBACK_ATTRIBUTES:
             return True
         if not self_closing and name not in _VOID:
@@ -157,14 +158,65 @@ def _kill_group(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
-_SLOTS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+class WorkerLimit:
+    """At most ``size`` workers per PROCESS, whatever event loop asks.
+
+    A lock-guarded counter; a waiter parks an asyncio future of its own loop
+    and a release hands the slot straight to the oldest live waiter. A waiter
+    that times out or is cancelled removes itself; if a slot was handed to it
+    in the meantime it gives it back, so no slot and no loop is ever held.
+    """
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self.active = 0
+        self.waiters: deque[tuple[asyncio.AbstractEventLoop, asyncio.Future]] = deque()
+        self._lock = threading.Lock()
+
+    async def acquire(self, timeout: float) -> None:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self.active < self.size:
+                self.active += 1
+                return
+            future: asyncio.Future = loop.create_future()
+            entry = (loop, future)
+            self.waiters.append(entry)
+        try:
+            async with asyncio.timeout(timeout):
+                await future
+        except BaseException:
+            with self._lock:
+                if entry in self.waiters:
+                    self.waiters.remove(entry)
+                    raise
+            # The slot was handed over: keep it only if it actually arrived.
+            if future.done() and not future.cancelled():
+                self.release()
+            raise
+
+    def release(self) -> None:
+        with self._lock:
+            while self.waiters:
+                loop, future = self.waiters.popleft()
+                if loop.is_closed():
+                    continue
+                loop.call_soon_threadsafe(self._grant, future)
+                return
+            self.active -= 1
+
+    def _grant(self, future: asyncio.Future) -> None:
+        if future.done():  # cancelled before the slot arrived: pass it on
+            self.release()
+        else:
+            future.set_result(None)
 
 
-def _slots() -> asyncio.Semaphore:
-    loop = asyncio.get_running_loop()
-    if loop not in _SLOTS:
-        _SLOTS[loop] = asyncio.Semaphore(MAX_WORKERS)
-    return _SLOTS[loop]
+_LIMIT = WorkerLimit(MAX_WORKERS)
+
+
+def _limit() -> WorkerLimit:
+    return _LIMIT
 
 
 def worker_env(tmpdir: str) -> dict[str, str]:
@@ -190,15 +242,18 @@ async def run_bounded(argv: list[str], payload: bytes, timeout: float) -> bytes:
         raise FetchFailed("timed out before the page could be read")
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
-    slots = _slots()
+    limit = _limit()
     try:
-        async with asyncio.timeout(timeout):
-            await slots.acquire()
+        await limit.acquire(timeout)
     except TimeoutError:
         raise FetchFailed("timed out waiting to read the page") from None
-    tmpdir = tempfile.mkdtemp(prefix="omni-extract-")
+    tmpdir: str | None = None
     proc = None
     try:
+        try:
+            tmpdir = tempfile.mkdtemp(prefix="omni-extract-")
+        except OSError as exc:
+            raise FetchFailed(f"could not prepare to read the page: {exc.strerror or exc}") from None
         remaining = deadline - loop.time()
         if remaining <= 0:
             raise FetchFailed("timed out waiting to read the page")
@@ -217,11 +272,21 @@ async def run_bounded(argv: list[str], payload: bytes, timeout: float) -> bytes:
         except TimeoutError:
             raise FetchFailed(f"reading the page took longer than the {timeout:.1f} s left") from None
     finally:
-        if proc is not None and proc.returncode is None:
-            _kill_group(proc)
-            await proc.wait()
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        slots.release()
+        # Nested so that a second cancellation while reaping still removes the
+        # directory and frees the slot.
+        try:
+            if proc is not None:
+                # Always, even after a clean exit: a child (node) of a worker
+                # that died on its own (SIGXCPU, alarm) must not outlive it.
+                _kill_group(proc)
+                if proc.returncode is None:
+                    await proc.wait()
+        finally:
+            try:
+                if tmpdir is not None:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+            finally:
+                limit.release()
     if proc.returncode != 0:
         raise FetchFailed("the page could not be read")
     return out
