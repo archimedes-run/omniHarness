@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -38,6 +39,36 @@ OPS = ("create_project", "create_goal", "create_task", "update_task", "add_note"
 
 class LedgerError(ValueError):
     """A change that cannot be applied, said in words the user can act on."""
+
+
+class _DryRun(Exception):
+    """Raised inside `validate`'s transaction so it rolls back: nothing written."""
+
+
+def _norm(text: Any) -> str:
+    """A title as matched: case, punctuation, quotes and spacing ignored."""
+    return " ".join(re.sub(r"[^\w\s]", " ", str(text or "").lower()).split())
+
+
+def _close(key: str, title: str) -> bool:
+    """A close title: the (normalised) reference is part of the title, or every
+    word of it appears in the title."""
+    if not key:
+        return False
+    if key in title:
+        return True
+    words = set(title.split())
+    return all(word in words for word in key.split())
+
+
+def _shapes_ok(changes: Any) -> None:
+    if isinstance(changes, str):
+        raise LedgerError("`changes` must be a list of change objects, not text")
+    if not isinstance(changes, list) or not changes:
+        raise LedgerError("there are no changes to apply")
+    for change in changes:
+        if not isinstance(change, dict) or change.get("op") not in OPS:
+            raise LedgerError(f"unknown change {change!r}; ops are {', '.join(OPS)}")
 
 
 class BatchError(LedgerError):
@@ -113,7 +144,8 @@ def render(changes: list[dict]) -> list[str]:
             lines.append(f"Add task “{c.get('title', '')}” to {c.get('project', '?')}{goal}{due}{owner}")
         elif op == "update_task":
             fields = ", ".join(f"{k} → {c[k]}" for k in ("title", "status", "due_date", "owner") if k in c)
-            lines.append(f"Change task {c.get('task', '?')} in {c.get('project', '?')}: {fields or 'nothing'}")
+            where = f" in {c['project']}" if c.get("project") not in (None, "") else ""
+            lines.append(f"Change task {c.get('task', '?')}{where}: {fields or 'nothing'}")
         elif op == "add_note":
             why = f" (why: {c['why']})" if c.get("why") else ""
             lines.append(f"Record decision in {c.get('project', '?')}: {c.get('decided', '')}{why}")
@@ -131,13 +163,29 @@ class LedgerService:
     # ---- chat: confirmed changes -------------------------------------------
 
     def apply(self, *, user_id: str, changes: list[dict], thread_id: str | None, actor: str = "assistant_confirmed", pending_action_id: str | None = None) -> list[str]:
-        if not isinstance(changes, list) or not changes:
-            raise LedgerError("there are no changes to apply")
-        for change in changes:
-            if not isinstance(change, dict) or change.get("op") not in OPS:
-                raise LedgerError(f"unknown change {change!r}; ops are {', '.join(OPS)}")
+        _shapes_ok(changes)
         with self.repo.transaction() as s:
             return self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor=actor, pending_action_id=pending_action_id)
+
+    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> None:
+        """Check a plan the way `apply` would, WITHOUT writing anything.
+
+        The whole plan is applied inside a transaction that is then rolled
+        back, so every check `apply` makes (names that resolve, required
+        fields, dates, statuses, in-plan refs) is made here, by the same code.
+        Raises LedgerError when the plan could not be applied. Used before a
+        plan is put on a confirmation card, so the user is never asked to
+        approve a change that cannot happen (it would fail after they said
+        yes). A plan that validates can still fail at apply if the ledger
+        changes in between; apply checks again.
+        """
+        _shapes_ok(changes)
+        try:
+            with self.repo.transaction() as s:
+                self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor="assistant_confirmed", pending_action_id=None)
+                raise _DryRun
+        except _DryRun:
+            return
 
     def apply_batch(self, *, user_id: str, batches: list[tuple[list[dict], str | None]], actor: str, pending_action_id: str | None) -> list[list[str]]:
         """Apply several cards' changes ("Apply all") in ONE transaction: all
@@ -153,11 +201,7 @@ class LedgerService:
         return out
 
     def _apply_in(self, s, *, user_id: str, changes: list[dict], thread_id: str | None, actor: str, pending_action_id: str | None) -> list[str]:
-        if not isinstance(changes, list) or not changes:
-            raise LedgerError("there are no changes to apply")
-        for change in changes:
-            if not isinstance(change, dict) or change.get("op") not in OPS:
-                raise LedgerError(f"unknown change {change!r}; ops are {', '.join(OPS)}")
+        _shapes_ok(changes)
         done: list[str] = []
         refs: dict[str, str] = {}
         goal_refs: dict[str, str] = {}
@@ -183,8 +227,16 @@ class LedgerService:
                     self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="The chat it was captured in")
                 done.append(f"Created project “{row['name']}”.")
                 continue
-            project = self._project(s, user_id, c.get("project"), refs)
-            named = _as_named(c.get("project"), ref_names)
+            if op == "update_task" and c.get("project") in (None, ""):
+                # A task named without its project: found by exact title (or
+                # id) across the user's projects, only when exactly one matches.
+                task = self._task_anywhere(s, user_id, c.get("task"))
+                project = {"id": task["project_id"]}
+                named = "its project"
+            else:
+                project = self._project(s, user_id, c.get("project"), refs)
+                named = _as_named(c.get("project"), ref_names)
+                task = None
             if op == "create_goal":
                 row = self.repo.create(
                     s,
@@ -220,7 +272,8 @@ class LedgerService:
                     self.repo.link(s, owner_id=user_id, actor=actor, from_kind="task", from_id=row["id"], to_kind="thread", to_ref=thread_id, todo_ref=str(c["todo_ref"])[:300])
                 done.append(f"Added {row['short_id']} “{row['title']}” to {named}.")
             elif op == "update_task":
-                task = self._task(s, project, c.get("task"), named)
+                if task is None:
+                    task = self._task(s, project, c.get("task"), named)
                 fields: dict[str, Any] = {}
                 if "title" in c:
                     fields["title"] = _text(c, "title", limit=300, required=True)
@@ -328,6 +381,13 @@ class LedgerService:
         if row is not None and row.owner_id == user_id:
             return to_dict(row)
         matches = s.scalars(select(LedgerProjectRow).where(LedgerProjectRow.owner_id == user_id, func.lower(LedgerProjectRow.name) == key.lower())).all()
+        if not matches:
+            # The same name written differently ("test-p" for "TEST P"): case,
+            # punctuation and spacing ignored. Never a partial name: a task
+            # must not land in a project the user did not name.
+            wanted = _norm(key)
+            owned = s.scalars(select(LedgerProjectRow).where(LedgerProjectRow.owner_id == user_id)).all()
+            matches = [row for row in owned if wanted and _norm(row.name) == wanted]
         if len(matches) == 1:
             return to_dict(matches[0])
         if len(matches) > 1:
@@ -354,16 +414,66 @@ class LedgerService:
 
     @staticmethod
     def _task(s, project: dict, ref: Any, named: str) -> dict:
+        """A task of `project`, as the call named it: its id or short id
+        (T-3), its title (case, punctuation and spacing ignored), or a close
+        title (part of it, or all of its words) when exactly one task matches.
+
+        No guessing: a reference that matches more than one task, at the
+        first level that matches anything, is refused, as is one that matches
+        none. The error names candidates by short id only, never by their
+        stored titles: a ledger_apply result is trusted as the harness's own
+        words (lineage.TRUSTED_TOOL_RESULTS), and a stored title is whatever
+        content may have put there (review 5).
+        """
         from sqlalchemy import select
 
         from omniharness.persistence.ledger import LedgerTaskRow
         from omniharness.persistence.ledger.sql import to_dict
 
-        key = str(ref or "")
+        key = str(ref or "").strip()
+        if not key:
+            raise LedgerError("update_task: name the task (its title or short id)")
         row = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"], (LedgerTaskRow.short_id == key.upper()) | (LedgerTaskRow.id == key))).first()
-        if row is None:
+        if row is not None:
+            return to_dict(row)
+        if re.fullmatch(r"[Tt]-\d+", key):
+            # A short id that is not there is not a title to guess from.
             raise LedgerError(f"{named} has no task {key!r}")
-        return to_dict(row)
+        tasks = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"]).order_by(LedgerTaskRow.created_at)).all()
+        wanted = _norm(key)
+        for matches in ([t for t in tasks if wanted and _norm(t.title) == wanted], [t for t in tasks if _close(wanted, _norm(t.title))]):
+            if len(matches) == 1:
+                return to_dict(matches[0])
+            if len(matches) > 1:
+                ids = ", ".join(t.short_id for t in matches[:10])
+                raise LedgerError(f"the task {key!r} matches more than one task in {named} ({ids}); name it by its short id, or ask the user which one")
+        raise LedgerError(f"{named} has no task {key!r}")
+
+    @staticmethod
+    def _task_anywhere(s, user_id: str, ref: Any) -> dict:
+        """A task named WITHOUT its project: by id, or by exact title (case,
+        punctuation and spacing ignored) when exactly one of the user's tasks
+        has it. A close title or a short id is not enough here (every project
+        has a T-1); the error says to name the project."""
+        from sqlalchemy import select
+
+        from omniharness.persistence.ledger import LedgerProjectRow, LedgerTaskRow
+        from omniharness.persistence.ledger.sql import to_dict
+
+        key = str(ref or "").strip()
+        if not key:
+            raise LedgerError("update_task: name the task (its title or short id) and its project")
+        mine = select(LedgerTaskRow).join(LedgerProjectRow, LedgerTaskRow.project_id == LedgerProjectRow.id).where(LedgerProjectRow.owner_id == user_id)
+        row = s.scalars(mine.where(LedgerTaskRow.id == key)).first()
+        if row is not None:
+            return to_dict(row)
+        wanted = _norm(key)
+        matches = [t for t in s.scalars(mine).all() if wanted and _norm(t.title) == wanted]
+        if len(matches) == 1:
+            return to_dict(matches[0])
+        if len(matches) > 1:
+            raise LedgerError(f"more than one task is called {key!r} across projects; name the project too, or ask the user which one")
+        raise LedgerError(f"no task is called {key!r}; name its project too (a close title is matched within a named project)")
 
     # ---- the UI: direct user edits ------------------------------------------
 

@@ -291,6 +291,20 @@ def _user_id(ctx) -> str:
     return str(user.id) if user is not None and getattr(user, "id", None) else "default"
 
 
+async def _thread_owner(request: Request, thread_id: str) -> str | None:
+    """Who owns the chat (threads_meta.user_id), or None when unknown."""
+    store = getattr(request.app.state, "thread_store", None)
+    if store is None:
+        return None
+    try:
+        record = await store.get(thread_id, user_id=None)
+    except Exception:  # noqa: BLE001 — unknown owner: the chat is not seeded
+        logger.warning("thread owner could not be read for a confirmation", exc_info=True)
+        return None
+    owner = (record or {}).get("user_id")
+    return str(owner) if owner else None
+
+
 async def _runner(request: Request, thread_id: str | None, user_id: str):
     """Rebuild the tool surface this action's THREAD was using."""
     from omniharness.config import get_app_config
@@ -299,10 +313,13 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
     sources: set[str] = set()
     current: list[str] | None = None
     if thread_id:
-        # Annotated because the dependency is generic; without it mypy cannot
-        # infer the repo's type and the whole function goes unchecked.
-        selection: Any = get_thread_tool_selection_repo(request)
-        current = list(await selection.get_sources(thread_id=thread_id))
+        from app.gateway.tool_selection import thread_sources
+
+        get_thread_tool_selection_repo(request)
+        # The chat's selection as its runs see it: a chat that never stored
+        # one starts with its OWNER's connected apps (not the confirmer's: on
+        # a scheduled run's chat, owned by the system user, that is none).
+        current = list(await thread_sources(request.app.state, thread_id, owner_id=await _thread_owner(request, thread_id)))
         sources = set(current)
 
     from app.policy.surface_run import SurfaceSnapshot

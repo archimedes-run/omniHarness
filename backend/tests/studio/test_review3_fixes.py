@@ -87,6 +87,20 @@ def _scheduled(studio, steps, firing):
 # -- the sanitiser on every render path ----------------------------------------
 
 
+def _goes_bad_after_its_card(client) -> tuple[dict, callable]:
+    """An update that is valid when proposed (a plan that could not be applied
+    is refused before its card) and cannot be applied by the time it is
+    confirmed: its project is renamed in between."""
+    other = client.post("/api/ledger/projects", json={"name": "Other"}).json()
+    assert client.post(f"/api/ledger/projects/{other['id']}/tasks", json={"title": "Old"}).status_code == 201
+
+    def rename() -> None:
+        current = client.get(f"/api/ledger/projects/{other['id']}").json()["project"]
+        assert client.patch(f"/api/ledger/projects/{other['id']}", json={"version": current["version"], "name": "Renamed"}).status_code == 200
+
+    return {"op": "update_task", "project": "Other", "task": "T-1", "status": "done"}, rename
+
+
 def test_the_chat_ledger_step_and_home_show_a_hostile_title_safely(launch) -> None:
     out = _agent([_call([_task(EVIL)])]).invoke({"messages": [user_turn("add it")]}, context={"thread_id": "t1", "user_id": launch.user_id})
     [result] = [str(m.content) for m in out["messages"] if getattr(m, "type", "") == "tool"]
@@ -131,8 +145,9 @@ def test_the_run_summary_grant_uses_and_telegram_footer_show_it_safely(launch) -
 
 
 def test_apply_all_with_one_bad_card_writes_nothing_and_says_which(launch) -> None:
-    bad = {"op": "update_task", "project": "Launch", "task": "T-99", "status": "done"}
+    bad, go_bad = _goes_bad_after_its_card(launch.client)
     _agent([_read(), _call([_task("A")], "c1"), _call([bad], "c2")]).invoke({"messages": [user_turn("check mail")]}, context={"thread_id": "t3", "user_id": launch.user_id})
+    go_bad()
     cards = [a for a in launch.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "ledger_apply"]
     assert len(cards) == 2
     bad_card = next(c for c in cards if c["arguments"]["changes"][0]["op"] == "update_task")
@@ -141,9 +156,9 @@ def test_apply_all_with_one_bad_card_writes_nothing_and_says_which(launch) -> No
     body = launch.client.post("/api/confirmations/apply-all", json={"ids": [good_card["id"], bad_card["id"]]}).json()
     assert body["write_id"] is None
     by_id = {r["action_id"]: r for r in body["results"]}
-    assert by_id[bad_card["id"]]["outcome"] == "failed" and "T-99" in by_id[bad_card["id"]]["message"]
+    assert by_id[bad_card["id"]]["outcome"] == "failed" and "Other" in by_id[bad_card["id"]]["message"]
     assert {r["outcome"] for r in body["results"]} == {"failed", "not_applied"}
-    [project] = launch.client.get("/api/ledger/projects").json()
+    [project] = [p for p in launch.client.get("/api/ledger/projects").json() if p["name"] == "Launch"]
     assert launch.client.get(f"/api/ledger/projects/{project['id']}").json()["tasks"] == []
     still = [a["id"] for a in launch.client.get("/api/confirmations").json()["actions"]]
     assert all(c["id"] in still for c in cards), "a card closed though nothing was applied"
@@ -228,9 +243,10 @@ def test_output_named_ledger_apply_is_trusted_only_from_the_registered_builtin(l
 
 
 def test_a_confirmed_write_that_fails_is_reported_failed_not_executed(launch) -> None:
-    bad = {"op": "update_task", "project": "Launch", "task": "T-99", "status": "done"}
+    bad, go_bad = _goes_bad_after_its_card(launch.client)
     _agent([_read(), _call([bad], "c1")]).invoke({"messages": [user_turn("check mail")]}, context={"thread_id": "t4", "user_id": launch.user_id})
+    go_bad()
     [card] = [a for a in launch.client.get("/api/confirmations").json()["actions"] if a["tool_name"] == "ledger_apply"]
     launch.client.post("/api/threads", json={"thread_id": "t4"})  # a card confirms only into a chat that exists
     body = launch.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()
-    assert body["outcome"] == "failed" and "T-99" in body["message"], body
+    assert body["outcome"] == "failed" and "Other" in body["message"], body

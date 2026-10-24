@@ -53,8 +53,11 @@ async def describe_for_request(request: Request, thread_id: str | None) -> ToolS
 
     selected: set[str] | None = None
     if thread_id:
+        from app.gateway.tool_selection import thread_sources
+
         selection = getattr(request.app.state, "thread_tool_selection_repo", None)
-        selected = set(await selection.get_sources(thread_id=thread_id)) if selection is not None else set()
+        # The route checked the caller owns the chat (require_thread_access).
+        selected = set(await thread_sources(request.app.state, thread_id, owner_id=user_id)) if selection is not None else set()
 
     # Feature 006: what the tool-call chokepoint observed. Unreadable is not
     # "never worked": it is left out, and each source reads as not yet seen.

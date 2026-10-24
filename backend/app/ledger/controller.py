@@ -20,6 +20,18 @@ class GatewayLedgerController:
         except LedgerError:
             return None
 
+    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> str | None:
+        """Why this plan could not be applied, or None if it could. Writes
+        nothing (LedgerService.validate). The policy layer calls it before a
+        ledger_apply plan becomes a confirmation card (PolicyMiddleware.
+        _invalid_ledger_plan), so an invalid plan is refused to the model
+        instead of failing after the user approved it."""
+        try:
+            self.service.validate(user_id=user_id, changes=changes, thread_id=thread_id)
+        except LedgerError as exc:
+            return str(exc)
+        return None
+
     def read(self, *, user_id: str, project: str | None) -> str:
         return self.service.read_text(user_id=user_id, project=project, today=date.today())
 

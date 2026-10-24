@@ -149,7 +149,7 @@ def test_tier_3_always_asks_even_in_a_scheduled_run_holding_every_grant(studio) 
     _setup(studio, ["tasks", "notes", "archive"])
     calls = [
         _call([{"op": "create_project", "name": "Exfil"}], "c1"),
-        _call([{"op": "create_goal", "project": "Launch", "title": "G"}], "c2"),
+        _call([{"op": "create_goal", "project": "Launch", "title": "G", "definition_of_done": "Done"}], "c2"),
         _call([{"op": "link_thread", "project": "Launch"}], "c3"),
         _call([_task("Mixed"), {"op": "create_project", "name": "Also"}], "c4"),
     ]

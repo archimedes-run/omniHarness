@@ -185,14 +185,22 @@ def test_PLAUSIBLE_apply_all_is_not_all_or_nothing(studio) -> None:
     """Card A (valid) + card B (update of a task that does not exist): Apply all
     writes A and fails B, leaving a half-applied 'batch'."""
     _launch(studio)
-    bad = {"op": "update_task", "project": "Launch", "task": "T-99", "status": "done"}
+    # Valid when proposed (an invalid plan is refused before its card), then
+    # unappliable: its project is renamed before Apply all.
+    other = studio.client.post("/api/ledger/projects", json={"name": "Other"}).json()
+    assert studio.client.post(f"/api/ledger/projects/{other['id']}/tasks", json={"title": "Old"}).status_code == 201
+    bad = {"op": "update_task", "project": "Other", "task": "T-1", "status": "done"}
     _agent([_fetch(), _call([_task("A")], "c1"), _call([bad], "c2")]).invoke({"messages": [user_turn("summarise")]}, context=_ctx(studio, "t-aa"))
+    version = studio.client.get(f"/api/ledger/projects/{other['id']}").json()["project"]["version"]
+    assert studio.client.patch(f"/api/ledger/projects/{other['id']}", json={"version": version, "name": "Renamed"}).status_code == 200
     cards = _pending(studio)
     assert len(cards) == 2
     body = studio.client.post("/api/confirmations/apply-all", json={"ids": [c["id"] for c in cards]}).json()
     outcomes = [r["outcome"] for r in body["results"]]
     failed_but_reported_executed = [r for r in body["results"] if r["outcome"] == "executed" and "Nothing was changed" in str(r["detail"])]
-    assert not (_titles(studio) and failed_but_reported_executed), f"half-applied batch, failed card reported 'executed' and closed: {outcomes}, tasks {_titles(studio)}"
+    [launch] = [p for p in studio.client.get("/api/ledger/projects").json() if p["name"] == "Launch"]
+    titles = [t["title"] for t in studio.client.get(f"/api/ledger/projects/{launch['id']}").json()["tasks"]]
+    assert not (titles and failed_but_reported_executed), f"half-applied batch, failed card reported 'executed' and closed: {outcomes}, tasks {titles}"
 
 
 def _two_cards_in_a_chat(studio, thread: str) -> list[str]:

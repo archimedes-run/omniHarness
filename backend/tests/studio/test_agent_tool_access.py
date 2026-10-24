@@ -297,7 +297,11 @@ def test_an_agent_saved_before_006g_keeps_exactly_its_old_tools(gw) -> None:
     from omniharness.tools.tools import get_available_tools
 
     _make(gw, "legacy", tool_groups=["web", "file:read"])
-    _say(gw, _thread(gw), "hello", agent="legacy")
+    tid = _thread(gw)
+    # This chat stores a selection with no connector in it (a new chat would
+    # start with the user's connected apps on: app.gateway.tool_selection).
+    assert gw.client.put(f"/api/threads/{tid}/tools", json={"sources": []}).status_code == 200
+    _say(gw, tid, "hello", agent="legacy")
     offered = _offered(gw.lead)
     # What main assembles for it: its groups, the pinned MCP server, no
     # connector (none selected in this chat), plus update_agent.

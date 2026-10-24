@@ -651,6 +651,15 @@ class PolicyMiddleware(AgentMiddleware):
         it is marked with what caused it, and an action not caused by the
         user's own latest message can only be confirmed with the card's button.
         """
+        invalid = self._invalid_ledger_plan(request)
+        if invalid is not None:
+            # A plan that could not be applied is never put on a card: the
+            # user would approve it and then see it fail. It goes back to the
+            # model as the tool's own result (nothing was proposed, nothing
+            # written), so it can correct the plan or ask the user.
+            logger.info("policy: %s plan refused before its card: %s", decision.tool_name, invalid)
+            return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {invalid}."))
+
         origin, origin_source, origin_via = self._origin(request)
         if origin != "user":
             logger.warning("policy: %s was suggested by %s %s (via %s); it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source, origin_via or "-")
@@ -698,6 +707,31 @@ class PolicyMiddleware(AgentMiddleware):
             if isinstance(context, dict):
                 context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
         return self._mark_trusted_ack(request, self._as_tool_result(request, action.plan_text))
+
+    def _invalid_ledger_plan(self, request) -> str | None:
+        """Why the ledger_apply plan this request would put on a card could
+        not be applied, or None (valid, not ledger_apply, or not checkable).
+
+        Only for the registered built-in, by object identity (as
+        _mark_trusted_ack): an outside tool named ledger_apply is never
+        validated through the ledger. The check writes nothing
+        (LedgerService.validate). A check that cannot run (no ledger, an
+        unexpected error) proposes the card as before: apply validates again.
+        """
+        from omniharness.runtime.ledger.controller import get_ledger_controller
+        from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
+
+        if getattr(request, "tool", None) is not ledger_apply_tool:
+            return None
+        validate = getattr(get_ledger_controller(), "validate", None)
+        if validate is None:
+            return None
+        context = self._runtime_context(request) or {}
+        try:
+            return validate(user_id=self._user_id(context), changes=self._arguments(request).get("changes"), thread_id=context.get("thread_id"))
+        except Exception:  # noqa: BLE001 — advisory: the card is proposed as before
+            logger.warning("policy: ledger_apply plan could not be checked before its card", exc_info=True)
+            return None
 
     @staticmethod
     def _mark_trusted_ack(request, result: Any) -> Any:

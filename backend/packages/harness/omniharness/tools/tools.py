@@ -160,6 +160,7 @@ def get_available_tools(
     user_id: str | None = None,
     max_tools: int | None = None,
     tool_access: object | None = None,
+    defer_overflow: bool = True,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -177,6 +178,15 @@ def get_available_tools(
             connector toolkits for `user_id`), and the final list keeps the
             core tools plus only the tools it names
             (omniharness.tools.agent_access.apply_tool_access).
+        max_tools: The model's tool-array cap, or None for no cap. Connector
+            tools that would take the request past it are DEFERRED (or, with
+            `defer_overflow=False`, left out): see fit_connectors_to_cap.
+            ToolCapExceededError only when the tools that cannot be moved
+            exceed it on their own.
+        defer_overflow: True for an agent that installs the
+            DeferredToolFilterMiddleware (the lead): overflow connector
+            toolkits are reached through tool_search. False for one that does
+            not (a delegated subagent): overflow toolkits are left out.
 
     Returns:
         List of available tools.
@@ -386,12 +396,99 @@ def get_available_tools(
         config_groups = {loaded.name: cfg.group for cfg, loaded in loaded_tools_raw if getattr(cfg, "group", None)}
         unique_tools = apply_tool_access(unique_tools, tool_access, config=config, config_groups=config_groups)
 
-    # Provider tool-array cap: fail with a structured error the API can turn
-    # into "N / cap" rather than letting the provider return an opaque 400.
-    if max_tools is not None and len(unique_tools) > max_tools:
-        raise ToolCapExceededError(count=len(unique_tools), cap=max_tools)
+    # Provider tool-array cap. A new chat starts with every connected app
+    # switched on (app.gateway.tool_selection), which can be more connector
+    # tools than a request may carry: those past the cap are deferred to
+    # tool_search (or left out) rather than failing the run.
+    if max_tools is not None:
+        connector_names = {t.name for t in connector_tools}
+        unique_tools = fit_connectors_to_cap(unique_tools, connector_names, max_tools, defer=defer_overflow)
+        # Fail with a structured error the API can turn into "N / cap" rather
+        # than letting the provider return an opaque 400. Counted as the model
+        # receives them: a deferred tool's schema is not sent.
+        offered = offered_tool_count(unique_tools)
+        if offered > max_tools:
+            raise ToolCapExceededError(count=offered, cap=max_tools)
 
     return unique_tools
+
+
+#: Room left under the cap for the tools an agent adds after assembly
+#: (update_agent, call_agent, write_todos in plan mode): connector tools are
+#: fitted under `cap - CAP_HEADROOM`, so those never push a request over.
+CAP_HEADROOM = 4
+
+
+def offered_tool_count(tools: list[BaseTool]) -> int:
+    """How many of `tools` the model receives: deferred ones are not sent."""
+    from omniharness.tools.builtins.tool_search import get_deferred_registry
+
+    registry = get_deferred_registry()
+    deferred = registry.deferred_names if registry else set()
+    return sum(1 for t in tools if t.name not in deferred)
+
+
+def _toolkit_of(tool: BaseTool) -> str:
+    from omniharness.tools.source_tags import source_of
+
+    tagged = source_of(tool)
+    if tagged and tagged[0].startswith("connector:"):
+        return tagged[0]
+    name = tool.name
+    return name.split("_", 1)[0] if name.startswith("connector-") else name
+
+
+def fit_connectors_to_cap(tools: list[BaseTool], connector_names: set[str], cap: int, *, defer: bool = True) -> list[BaseTool]:
+    """Keep the tools the model receives within `cap - CAP_HEADROOM` by moving
+    whole connector toolkits out of the request, in the order they were
+    selected; never a built-in, config or local MCP tool.
+
+    `defer=True` (an agent with the DeferredToolFilterMiddleware): each moved
+    toolkit is registered as deferred and `tool_search` is added, so the agent
+    still reaches every tool by name; the system prompt lists them
+    (prompt.get_deferred_tools_prompt_section). `defer=False`: the moved
+    toolkits are left out of this agent's list, and that is logged.
+
+    Unchanged when everything fits, or when there are no connector tools to
+    move (the caller's cap check then decides, as before).
+    """
+    from omniharness.tools.builtins.tool_search import DeferredToolRegistry, get_deferred_registry, set_deferred_registry
+    from omniharness.tools.builtins.tool_search import tool_search as tool_search_tool
+
+    registry = get_deferred_registry()
+    deferred = registry.deferred_names if registry else set()
+    offered = [t for t in tools if t.name not in deferred]
+    budget = max(cap - CAP_HEADROOM, 0)
+    if len(offered) <= budget:
+        return tools
+    movable = [t for t in offered if t.name in connector_names]
+    if not movable:
+        return tools
+    has_search = any(t.name == tool_search_tool.name for t in offered)
+    room = budget - (len(offered) - len(movable)) - (1 if defer and not has_search else 0)
+    toolkits: dict[str, list[BaseTool]] = {}
+    for t in movable:
+        toolkits.setdefault(_toolkit_of(t), []).append(t)
+    overflow: list[BaseTool] = []
+    for group in toolkits.values():
+        if len(group) <= room:
+            room -= len(group)
+        else:
+            overflow.extend(group)
+    if not overflow:
+        return tools
+    moved = sorted({_toolkit_of(t) for t in overflow})
+    if not defer:
+        names = {t.name for t in overflow}
+        logger.warning("Tool cap %d: left out %d connector tool(s) of %s for this agent", cap, len(overflow), ", ".join(moved))
+        return [t for t in tools if t.name not in names]
+    if registry is None:
+        registry = DeferredToolRegistry()
+    for t in overflow:
+        registry.register(t)
+    set_deferred_registry(registry)
+    logger.info("Tool cap %d: deferred %d connector tool(s) of %s to tool_search", cap, len(overflow), ", ".join(moved))
+    return tools if has_search else [*tools, tool_search_tool]
 
 
 def assemble_connector_tools(config, user_id: str, toolkits: list[str], *, loader=None) -> list[BaseTool]:

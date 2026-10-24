@@ -42,7 +42,7 @@ def propose(gateway, changes=CHANGES, said: str = "I'm launching the beta by Dec
     # chat does not exist (deleted) is refused at confirmation.
     created = gateway.client.post("/api/threads", json={"thread_id": "thread-1"})
     assert created.status_code in (200, 409), created.text
-    agent.invoke({"messages": [HumanMessage(content=said)]}, config={"configurable": {"thread_id": "thread-1"}}, context={"thread_id": "thread-1", "user_id": gateway.user_id})
+    return agent.invoke({"messages": [HumanMessage(content=said)]}, config={"configurable": {"thread_id": "thread-1"}}, context={"thread_id": "thread-1", "user_id": gateway.user_id})
 
 
 def pending(gateway) -> list[dict]:
@@ -105,9 +105,63 @@ def test_a_declined_plan_writes_nothing(gateway) -> None:
     assert gateway.client.get("/api/ledger/projects").json() == []
 
 
-def test_an_invalid_plan_writes_nothing_at_all(gateway) -> None:
-    """All or nothing: the third change names a project that does not exist."""
-    propose(gateway, changes=[CHANGES[0], CHANGES[2], {"op": "create_task", "project": "Nope", "title": "x"}])
+def test_an_invalid_plan_is_refused_before_its_card_and_writes_nothing(gateway) -> None:
+    """A plan that could not be applied is never put on a card (the user would
+    approve it and then see it fail): the third change names a project that
+    does not exist, so the model is told why, and nothing is proposed or
+    written."""
+    out = propose(gateway, changes=[CHANGES[0], CHANGES[3], {"op": "create_task", "project": "Nope", "title": "x"}])
+    assert pending(gateway) == [], "an invalid plan became a card"
+    assert gateway.client.get("/api/ledger/projects").json() == []
+    [result] = [m for m in out["messages"] if getattr(m, "type", "") == "tool"]
+    assert "Nothing was proposed or changed" in str(result.content) and "there is no project 'Nope'" in str(result.content)
+    # The refusal is the harness's own words about the call (as a plan is), so
+    # it does not taint the turn: the model's corrected plan is not a
+    # "suggestion".
+    from app.policy.lineage import TRUSTED_ACK_MARKER
+
+    assert result.additional_kwargs.get(TRUSTED_ACK_MARKER) is True
+
+
+def test_a_plan_sent_as_text_is_refused_before_its_card(gateway) -> None:
+    """`changes` as a JSON string, not a list: the predicate cannot see its ops
+    (so it is Tier 3, fail-safe) and the tool's schema would reject it after
+    the user approved. It is refused to the model instead, with no card."""
+    import json
+
+    out = propose(gateway, changes=json.dumps(CHANGES))
+    assert pending(gateway) == []
+    assert gateway.client.get("/api/ledger/projects").json() == []
+    [result] = [m for m in out["messages"] if getattr(m, "type", "") == "tool"]
+    assert "must be a list" in str(result.content)
+
+
+def test_an_invalid_edited_plan_writes_nothing_at_all(gateway) -> None:
+    """All or nothing at apply, still: a plan edited on its card into one that
+    cannot be applied (the third change names a project that does not exist)
+    fails, and its first two changes are not written either."""
+    propose(gateway)
     [action] = pending(gateway)
-    resp = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={})
+    edited = [CHANGES[0], {k: v for k, v in CHANGES[2].items() if k != "goal"}, {"op": "create_task", "project": "Nope", "title": "x"}]
+    resp = gateway.client.post(f"/api/confirmations/{action['id']}/edit", json={"arguments": {"changes": edited}})
+    assert resp.json()["outcome"] == "failed", resp.text
     assert gateway.client.get("/api/ledger/projects").json() == [], resp.text
+
+
+def test_a_confirmed_plan_that_fails_logs_the_ledgers_reason(gateway, caplog) -> None:
+    """A plan valid when proposed can still fail at apply (the ledger changed
+    in between). The log says why, in the ledger's own words, not only the
+    exception's type."""
+    import logging
+
+    assert gateway.client.post("/api/ledger/projects", json={"name": "Launch"}).status_code == 201
+    propose(gateway, changes=[{"op": "create_goal", "project": "Launch", "title": "Ship", "definition_of_done": "Shipped"}])
+    [action] = pending(gateway)
+    [project] = gateway.client.get("/api/ledger/projects").json()
+    renamed = gateway.client.patch(f"/api/ledger/projects/{project['id']}", json={"version": project["version"], "name": "Renamed"})
+    assert renamed.status_code == 200, renamed.text
+    with caplog.at_level(logging.ERROR, logger="app.policy.confirm_flow"):
+        resp = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={})
+    assert resp.json()["outcome"] == "failed", resp.text
+    [line] = [r.getMessage() for r in caplog.records if "did not complete" in r.getMessage()]
+    assert "RuntimeError" in line and "(ledger: there is no project 'Launch')" in line
