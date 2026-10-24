@@ -23,6 +23,8 @@ const RENDER_PATHS: Record<string, string> = {
     "the run summary page: targets and source labels",
   "components/workspace/home/moved-card.tsx": "Home: what moved today",
   "core/notification/hooks.ts": "notifications: a chat's title and reply",
+  "core/tools/search-results.ts":
+    "chat: a search step's results (title, site, snippet; search-result-list.tsx renders them)",
 };
 
 const NOTED: Record<string, string> = {

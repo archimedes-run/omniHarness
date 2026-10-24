@@ -72,3 +72,51 @@ export function originLabel(action: PendingAction): string | null {
   }
   return "I could not tell what suggested this";
 }
+
+/** One entry of a confirmation list: a card of its own, or a turn's group of
+ *  outbound calls shown as ONE card (Feature 007). */
+export type CardEntry =
+  | { kind: "single"; action: PendingAction }
+  | { kind: "group"; group: string; actions: PendingAction[] };
+
+/** Groups a turn's outbound cards (two or more sharing `group`) into one
+ *  entry, at the place its first card was; every other card stays its own. */
+export function groupOutbound(actions: PendingAction[]): CardEntry[] {
+  const counts = new Map<string, number>();
+  for (const action of actions) {
+    if (action.outbound && action.group) {
+      counts.set(action.group, (counts.get(action.group) ?? 0) + 1);
+    }
+  }
+  const entries: CardEntry[] = [];
+  const groups = new Map<string, PendingAction[]>();
+  for (const action of actions) {
+    const key = action.outbound && action.group ? action.group : null;
+    if (key && (counts.get(key) ?? 0) > 1) {
+      const members = groups.get(key);
+      if (members) {
+        members.push(action);
+      } else {
+        const fresh = [action];
+        groups.set(key, fresh);
+        entries.push({ kind: "group", group: key, actions: fresh });
+      }
+    } else {
+      entries.push({ kind: "single", action });
+    }
+  }
+  return entries;
+}
+
+/** What an outbound call looks up, for its row: the query or URL argument
+ *  (already made safe by loadPending), else its first argument. */
+export function outboundSubject(action: PendingAction): string {
+  const args = action.arguments_display ?? {};
+  return (
+    args.url ??
+    args.query ??
+    Object.values(args)[0] ??
+    action.targets[0] ??
+    action.tool_name
+  );
+}

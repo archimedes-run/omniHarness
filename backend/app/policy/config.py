@@ -184,16 +184,25 @@ class ConfigLoader:
                 after_content = raw_exception.get("after_content", False)
                 if not isinstance(after_content, bool):
                     raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has after_content {after_content!r}; expected true or false.')
-                if after_content and (raw_exception.get("when") or unless):
-                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" combines `after_content` with `when`/`unless`. Write them as separate exceptions: each raises on its own condition.')
-                if not (raw_exception.get("when") or unless or after_content):
-                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has neither `when`, `unless` nor `after_content`, so it can never apply.')
-                exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier, unless=unless, after_content=after_content))
+                after_private_read = raw_exception.get("after_private_read", False)
+                if not isinstance(after_private_read, bool):
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has after_private_read {after_private_read!r}; expected true or false.')
+                if after_content and after_private_read:
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" combines `after_content` with `after_private_read`. Write them as separate exceptions: each raises on its own condition.')
+                for flag, on in (("after_content", after_content), ("after_private_read", after_private_read)):
+                    if on and (raw_exception.get("when") or unless):
+                        raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" combines `{flag}` with `when`/`unless`. Write them as separate exceptions: each raises on its own condition.')
+                if not (raw_exception.get("when") or unless or after_content or after_private_read):
+                    raise PolicyConfigError(f'{self.path}:{index}: exception on pattern "{pattern}" has neither `when`, `unless`, `after_content` nor `after_private_read`, so it can never apply.')
+                exceptions.append(RuleException(when=raw_exception.get("when") or {}, tier=exception_tier, unless=unless, after_content=after_content, after_private_read=after_private_read))
 
             reversible = raw.get("reversible")
             if reversible is not None and not isinstance(reversible, bool):
                 raise PolicyConfigError(f'{self.path}: rules[{index}] (pattern "{pattern}") has reversible {reversible!r}; expected true or false')
-            rules.append(ClassificationRule(pattern=pattern, tier=tier, exceptions=tuple(exceptions), source_file=str(self.path), source_line=index, reversible=reversible))
+            reads_private = raw.get("reads_private")
+            if reads_private is not None and not isinstance(reads_private, bool):
+                raise PolicyConfigError(f'{self.path}: rules[{index}] (pattern "{pattern}") has reads_private {reads_private!r}; expected true or false')
+            rules.append(ClassificationRule(pattern=pattern, tier=tier, exceptions=tuple(exceptions), source_file=str(self.path), source_line=index, reversible=reversible, reads_private=reads_private))
 
         confirmation = policy.get("confirmation") or {}
         return RuleSet(

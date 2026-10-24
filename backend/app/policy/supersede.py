@@ -67,7 +67,9 @@ def supersede_unneeded(store: PendingStore, ruleset: RuleSet, now: datetime) -> 
     for action in store.open_actions(now):
         # Classified as it was stated: an action content led to stays judged
         # after content, or a rules reload would wave every one of them away.
-        decision = classify(action.tool_name, action.arguments, ruleset, after_content=action.origin != "user")
+        # Likewise an outbound call stated after a private read stays judged
+        # after one (recorded with the action, private_reads.py).
+        decision = classify(action.tool_name, action.arguments, ruleset, after_content=action.origin != "user", private_read=action.private_read)
         if not decision.refused and decision.tier >= min(action.tier_at_statement, Tier.TIER_3):
             continue
         # Claimed first, through the same one-shot claim confirmation uses, so

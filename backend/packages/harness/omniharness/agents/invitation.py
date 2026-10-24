@@ -57,6 +57,12 @@ STOPPED_AT_KEY = "stopped_at"
 #: proposes, so "Continue <agent>" re-enters that delegation's history.
 DELEGATION_KEY = "delegation_key"
 
+#: Whether the inviting turn had read the person's private data (the policy
+#: layer's private_reads). The invited agent starts in that turn: an outbound
+#: call it makes is judged as if it had read that data itself. Absent counts as
+#: True (can't tell).
+INVITED_PRIVATE_KEY = "invited_private_read"
+
 #: No inviting turn was marked: can't-tell, which fails toward card-only.
 UNKNOWN = "unknown"
 
@@ -76,6 +82,10 @@ class TurnOrigin:
     #: firing), so an agent invited during a scheduled run is in that run too.
     #: Filled and read by the policy layer; the harness only carries them.
     run_markers: tuple[tuple[str, str], ...] = ()
+    #: The inviting turn had read the person's private data. None means
+    #: nobody said, which counts as True (fails toward a card for outbound
+    #: calls, never toward running them freely).
+    private_read: bool | None = None
 
 
 _INVITING: ContextVar[TurnOrigin | None] = ContextVar("omniharness_inviting_turn", default=None)
@@ -111,6 +121,7 @@ def invited_agent_context(inviting: TurnOrigin | None, invited_name: str) -> dic
         INVITED_VIA_KEY: inviting.via or chain[-1],
         INVITED_AGENT_KEY: invited_name,
         DELEGATION_CHAIN_KEY: [*chain, invited_name],
+        INVITED_PRIVATE_KEY: inviting.private_read is not False,
     }
 
 

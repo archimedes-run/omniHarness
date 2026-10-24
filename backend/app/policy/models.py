@@ -78,7 +78,21 @@ class RuleException:
     #: combined with `when`/`unless` (refused at load).
     after_content: bool = False
 
-    def matches(self, arguments: dict[str, Any], *, after_content: bool = False) -> bool:
+    #: Applies once a tool that reads the person's PRIVATE data (mail,
+    #: calendar, files, the ledger, any MCP server or connector, any tool with
+    #: no rule: `reads_private`, app/policy/private_reads.py) returned data
+    #: earlier in this turn, including through a delegate or across a
+    #: confirmation's resume. For OUTBOUND tools (web_search, web_fetch,
+    #: image_search): exfiltration needs private data AND a channel out, so a
+    #: lookup in a turn that read nothing private runs freely, however much
+    #: untrusted web content it read (owner decision 2026-10-24, replacing
+    #: `after_content` on those tools). Never combined with `when`/`unless`
+    #: or `after_content` (refused at load).
+    after_private_read: bool = False
+
+    def matches(self, arguments: dict[str, Any], *, after_content: bool = False, private_read: bool = False) -> bool:
+        if self.after_private_read:
+            return private_read
         if self.after_content:
             return after_content
         args = arguments or {}
@@ -129,6 +143,12 @@ class ClassificationRule:
     #: 006): only a reversible tool may be covered by a standing grant. None
     #: (unlabelled) counts as irreversible.
     reversible: bool | None = None
+    #: Does a call to this tool return the person's PRIVATE data (their mail,
+    #: calendar, files, notes, ledger, a connector's or MCP server's data)?
+    #: None (unlabelled) counts as YES: only a rule that says `false` (the
+    #: public web tools and pure utilities) is not a private read. A tool no
+    #: rule names counts as a private read too (app/policy/private_reads.py).
+    reads_private: bool | None = None
 
     def describe(self) -> str:
         where = f" ({self.source_file}:{self.source_line})" if self.source_line else ""
@@ -229,6 +249,18 @@ class PendingAction:
     #: trigger_firing_id) when it was stated in one, as (key, value) pairs:
     #: an agent a confirmed `task` invites is then still in that run.
     run_markers: tuple[tuple[str, str], ...] = ()
+    #: A tool that reads the person's private data had returned data in the
+    #: turn this was stated in (private_reads.py). Server-side, recorded at
+    #: statement: a resume after the confirmation, a confirmed delegation and
+    #: a rules reload all judge from it. True when unknown (an older record).
+    private_read: bool = True
+    #: An outbound call (its rule escalates after a private read): such cards
+    #: from one turn are shown as one group with "Apply all", and once none of
+    #: them is open the lead resumes the turn with their results.
+    outbound: bool = False
+    #: The turn it was stated in: the id of the message that started it
+    #: ("" when unknown). Groups a turn's outbound cards.
+    group_key: str = ""
 
     @property
     def confirmable_by_typing(self) -> bool:

@@ -74,12 +74,18 @@ export async function editAndConfirm(
   return response.json() as Promise<ResolveResult>;
 }
 
-/** "Apply all" on a group of suggestion cards: each is confirmed by this
- *  click, and every write carries one write id, so one Undo reverts them. */
-export async function applyAll(ids: string[]): Promise<{
+export interface ApplyAllResult {
   write_id: string | null;
   results: ResolveResult[];
-}> {
+  /** A group of outbound calls: the run in which the lead carries on with
+   *  their results, when one was started. */
+  resume_run_id?: string | null;
+}
+
+/** "Apply all" on a group of cards: each is confirmed by this click. For
+ *  ledger suggestions every write carries one write id, so one Undo reverts
+ *  them; for a turn's outbound calls each runs once and the lead resumes. */
+export async function applyAll(ids: string[]): Promise<ApplyAllResult> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/confirmations/apply-all`,
     {
@@ -94,8 +100,11 @@ export async function applyAll(ids: string[]): Promise<{
     };
     throw new Error(body.detail ?? `HTTP ${response.status}`);
   }
-  return response.json() as Promise<{
-    write_id: string | null;
-    results: ResolveResult[];
-  }>;
+  return response.json() as Promise<ApplyAllResult>;
+}
+
+/** The run a confirmation started for the lead to carry on in, if any. */
+export function resumeRunId(detail: Record<string, unknown> | undefined) {
+  const id = detail?.resume_run_id;
+  return typeof id === "string" && id ? id : null;
 }

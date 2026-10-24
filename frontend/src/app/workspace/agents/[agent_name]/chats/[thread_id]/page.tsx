@@ -117,6 +117,9 @@ export default function AgentChatPage() {
         { text: `Continue ${agent}.`, files: [] },
         { agent_name, continue_action: actionId },
       ),
+    // The lead carrying on after a turn's outbound calls were answered: a run
+    // the server started (Feature 007), joined so it streams into the chat.
+    (runId) => void thread.joinStream(runId),
   );
 
   const messageListPaddingBottom = showFollowups

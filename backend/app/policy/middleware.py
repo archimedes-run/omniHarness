@@ -36,6 +36,7 @@ from .limits import describe_expiry
 from .lineage import initiation_origin
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
+from .private_reads import TurnPrivacy, is_outbound, private_reads_in_turn
 from .provenance import DISCLOSED, GRANTED, executed_as, new_write_id
 from .targets import source_argument
 
@@ -594,7 +595,42 @@ class PolicyMiddleware(AgentMiddleware):
         # provenance + invitation): anything but the user's own message means
         # content, an automation, or an unknown cause led to this call.
         after_content = self._origin(request)[0] != "user"
-        return classify(self._tool_name(request), self._arguments(request), self.loader.load(), after_content=after_content)
+        ruleset = self.loader.load()
+        name = self._tool_name(request)
+        # Outbound tools (an `after_private_read` exception) escalate only once
+        # a private read happened in this turn (private_reads.py). Walked only
+        # for them: no other rule reads it.
+        private_read = is_outbound(name, ruleset) and self._private_read(request, ruleset).private
+        return classify(name, self._arguments(request), ruleset, after_content=after_content, private_read=private_read)
+
+    def _private_read(self, request, ruleset=None) -> TurnPrivacy:
+        """Did a tool that reads the person's private data return data in
+        this turn? From the run's own messages (private_reads.py), ORed with
+        what the walk cannot see, each server-owned and each "private" when
+        absent: an automation's turn; for an invited agent, its inviting
+        turn; for a run resumed after a confirmation, the confirmed calls'
+        turn. Nothing a request carries can clear it."""
+        from omniharness.agents.called_agents import RESUME_ACTION_KEY
+        from omniharness.agents.invitation import INVITED_PRIVATE_KEY
+
+        from .provenance import is_synthetic_turn
+
+        ruleset = ruleset if ruleset is not None else self.loader.load()
+        context = self._runtime_context(request) or {}
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages") if isinstance(state, dict) else None
+        walked = private_reads_in_turn(messages, ruleset)
+        inherited: list[str] = []
+        if is_synthetic_turn(context):
+            inherited.append("an automation's turn")
+        if self._is_invited(request) and context.get(INVITED_PRIVATE_KEY, True) is not False:
+            inherited.append("the turn that invited this agent")
+        resume = context.get(RESUME_ACTION_KEY)
+        if isinstance(resume, dict) and resume.get("private_read", True) is not False:
+            inherited.append("the turn the confirmed calls came from")
+        if not inherited:
+            return walked
+        return TurnPrivacy(private=True, sources=(*inherited, *walked.sources), turn_key=walked.turn_key)
 
     @staticmethod
     def _tool_name(request) -> str:
@@ -624,6 +660,10 @@ class PolicyMiddleware(AgentMiddleware):
         targets = list(self.resolve_targets(tool_name, arguments)) if self.resolve_targets else [f"{tool_name}({arguments})"]
         ruleset = self.loader.load()
         now = self.now()
+        # Recorded with the action (server-side), so a resume after it is
+        # confirmed, or a rules reload judging it again, sees the turn it was
+        # stated in, not whatever the thread holds later.
+        privacy = self._private_read(request, ruleset)
 
         action = PendingAction(
             plan_text="",
@@ -642,6 +682,9 @@ class PolicyMiddleware(AgentMiddleware):
             surface=self._surface(request),
             delegation_key=self._delegation_key(request),
             run_markers=self._run_markers(request),
+            private_read=privacy.private,
+            outbound=is_outbound(tool_name, ruleset),
+            group_key=privacy.turn_key,
         )
         action.plan_text = self._plan_text_for(action)
         if extra_note:
@@ -768,18 +811,20 @@ class PolicyMiddleware(AgentMiddleware):
             return "user", "", ""
         return inherited, context.get(INVITED_SOURCE_KEY) or "", context.get(INVITED_VIA_KEY) or ""
 
-    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...], run_markers: tuple[tuple[str, str], ...] = ()) -> Any:
+    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...], run_markers: tuple[tuple[str, str], ...] = (), private_read: bool = True) -> Any:
         """The mark an agent invited during this call starts from."""
         from omniharness.agents.invitation import TurnOrigin
 
-        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via, run_markers=run_markers)
+        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via, run_markers=run_markers, private_read=private_read)
 
     def _inviting_for(self, request) -> Any:
         origin, source, via = self._origin(request)
         # An agent invited during a scheduled run is in that run: it gets the
         # run's markers, so its grant-governed Tier 2 calls need a grant and
         # count against the same cap (never treated as a chat with you).
-        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), self._run_markers(request))
+        # It also starts from this turn's private reads: a delegate of a turn
+        # that read the person's mail is in a turn that read their mail.
+        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), self._run_markers(request), private_read=self._private_read(request).private)
 
     def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
         """The scheduled run's markers in this call's context, if any."""
@@ -885,12 +930,17 @@ class PolicyMiddleware(AgentMiddleware):
 
         # A confirmed `task` from a scheduled run invites its agent INTO that
         # run: the markers stated with the action travel on (review round 2).
-        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain, tuple(action.run_markers))), confirming(action):
+        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain, tuple(action.run_markers), private_read=action.private_read)), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
-        from .surface_run import observed_result, result_report
+        from omniharness.tools.search_results import compact_tool_output
 
-        # What "Continue <agent>" hands the agent as observed context.
-        action.result_excerpt = observed_result(result)
+        from .surface_run import RESUME_EXCERPT, observed_result, result_report
+
+        # A search's result, compact, as any agent reads one (Feature 007).
+        result = compact_tool_output(action.tool_name, result)
+        # What "Continue <agent>", or the lead resuming after a group of
+        # outbound calls, hands the agent as observed context.
+        action.result_excerpt = observed_result(result, limit=RESUME_EXCERPT)
         if getattr(run_tool, "posts_result", False) and action.thread_id and action.surface:
             # THE SAME WRITE AS EXECUTED. A card's result is posted into its
             # chat afterwards; recording "waiting" only then left a crash

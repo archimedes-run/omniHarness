@@ -24,7 +24,6 @@ import {
 } from "@/components/ai-elements/chain-of-thought";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Button } from "@/components/ui/button";
-import { defangHost } from "@/core/display/defang";
 import { useI18n } from "@/core/i18n/hooks";
 import { formatTokenCount } from "@/core/messages/usage";
 import type { TokenDebugStep } from "@/core/messages/usage-model";
@@ -33,6 +32,7 @@ import {
   findToolCallResult,
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
+import { parseSearchResults } from "@/core/tools/search-results";
 import { extractTitleFromMarkdown } from "@/core/utils/markdown";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
@@ -40,9 +40,9 @@ import { cn } from "@/lib/utils";
 import { useArtifacts } from "../artifacts";
 import { FlipDisplay } from "../flip-display";
 import { LedgerWriteStep } from "../ledger/ledger-write-step";
-import { Tooltip } from "../tooltip";
 
 import { MarkdownContent } from "./markdown-content";
+import { SearchResultList } from "./search-result-list";
 
 export function MessageGroup({
   className,
@@ -444,72 +444,23 @@ function ToolCall({
       fallback
     );
 
-  if (name === "web_search") {
-    let label: React.ReactNode = t.toolCalls.searchForRelatedInfo;
+  if (name === "web_search" || name === "image_search") {
+    let label: React.ReactNode =
+      name === "web_search"
+        ? t.toolCalls.searchForRelatedInfo
+        : t.toolCalls.searchForRelatedImages;
     if (typeof args.query === "string") {
-      label = t.toolCalls.searchOnWebFor(args.query);
+      label =
+        name === "web_search"
+          ? t.toolCalls.searchOnWebFor(args.query)
+          : t.toolCalls.searchForRelatedImagesFor(args.query);
     }
-    const searchResults = Array.isArray(result)
-      ? (result as Array<{ title: string; url: string }>)
-      : undefined;
+    // A tidy list (title as a link, site, a line of snippet), never the raw
+    // JSON, and nothing fetched from it: no image, no preview.
+    const items = parseSearchResults(result);
     return (
       <ChainOfThoughtStep label={resolveLabel(label)} icon={SearchIcon}>
-        {searchResults && (
-          <ChainOfThoughtSearchResults>
-            {searchResults.map((item, index) => (
-              <ChainOfThoughtSearchResult key={`${item.url}-${index}`}>
-                <a href={item.url} target="_blank" rel="noopener noreferrer">
-                  {item.title}
-                </a>
-              </ChainOfThoughtSearchResult>
-            ))}
-          </ChainOfThoughtSearchResults>
-        )}
-      </ChainOfThoughtStep>
-    );
-  } else if (name === "image_search") {
-    let label: React.ReactNode = t.toolCalls.searchForRelatedImages;
-    if (typeof args.query === "string") {
-      label = t.toolCalls.searchForRelatedImagesFor(args.query);
-    }
-    const results = (
-      result as {
-        results: {
-          source_url: string;
-          thumbnail_url: string;
-          image_url: string;
-          title: string;
-        }[];
-      }
-    )?.results;
-    return (
-      <ChainOfThoughtStep label={resolveLabel(label)} icon={SearchIcon}>
-        {Array.isArray(results) && (
-          <ChainOfThoughtSearchResults>
-            {Array.isArray(results) &&
-              results.map((item, index) => (
-                <Tooltip
-                  key={`${item.image_url}-${index}`}
-                  content={item.title}
-                >
-                  <a
-                    className="size-24 overflow-hidden rounded-lg object-cover"
-                    href={item.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer nofollow"
-                    referrerPolicy="no-referrer"
-                  >
-                    {/* A search result's thumbnail is on another site: shown
-                        as its host, not fetched (zero-click exfiltration fix;
-                        the CSP's img-src blocks it too). */}
-                    <div className="bg-accent text-muted-foreground flex size-24 items-center justify-center p-1 text-center text-xs break-all">
-                      {defangHost(item.thumbnail_url) || item.title}
-                    </div>
-                  </a>
-                </Tooltip>
-              ))}
-          </ChainOfThoughtSearchResults>
-        )}
+        {items && <SearchResultList items={items} />}
       </ChainOfThoughtStep>
     );
   } else if (name === "web_fetch") {

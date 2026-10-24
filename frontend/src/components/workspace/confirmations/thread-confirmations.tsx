@@ -24,6 +24,7 @@ export function useThreadConfirmations(
   enabled: boolean,
   running = false,
   onContinue?: (agent: string, actionId: string) => void,
+  onResumed?: (runId: string) => void,
 ) {
   const { pending } = usePendingConfirmations();
   // A run that just finished may have stated a plan: read the pending set
@@ -78,11 +79,12 @@ export function useThreadConfirmations(
             only={here}
             quietWhenEmpty
             onContinue={onContinue}
+            onResumed={onResumed}
           />
         </div>
       );
     },
-    [anchored, enabled, messages, onContinue, threadId],
+    [anchored, enabled, messages, onContinue, onResumed, threadId],
   );
 
   const footer = enabled ? (
@@ -91,6 +93,7 @@ export function useThreadConfirmations(
       exclude={anchored}
       quietWhenEmpty
       onContinue={onContinue}
+      onResumed={onResumed}
     />
   ) : null;
 

