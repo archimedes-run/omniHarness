@@ -122,8 +122,14 @@ async def delete_thread_everywhere(app, thread_id: str) -> None:
     if preview is not None:
         await preview.stop_thread_sessions(thread_id=thread_id)
 
+    # The thread record's owner (the system user, for every automation
+    # thread), and the install OWNER: a scheduled run runs for the owner
+    # (006-F agent schedules, and lead automations since #133), so its files
+    # are under the owner's directory.
+    from app.gateway.ownership import owner_user_id
+
     paths = get_paths()
-    for user_id in {owner, "default", None}:
+    for user_id in {owner, "default", await owner_user_id(), None}:
         paths.delete_thread_dir(thread_id, user_id=user_id)
 
     checkpointer = getattr(state, "checkpointer", None)

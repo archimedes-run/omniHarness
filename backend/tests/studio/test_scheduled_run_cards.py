@@ -13,10 +13,11 @@ Two pre-existing faults, fixed here:
    worked). The install owner may now answer it; nobody else may, a scheduled
    turn still never answers anything, and it runs once.
 2. The owner's Autonomy grants for the lead are stored under the owner's id,
-   but a lead automation runs as the system user, so they never applied. A
+   but a lead automation ran as the system user, so they never applied. A
    scheduled lead run now reads the OWNER's grants (only on the engine's
    granted request); Tier 3 still always waits, and no request can choose
-   whose grants a run reads.
+   whose grants a run reads. (Since #133 a lead automation runs for the
+   owner, so its writes land in the owner's ledger: test_lead_automations_owner.)
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from test_agent_schedules import _cycle, _grant, _make_agent, _pending, _rules_f
 MARS = AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {"changes": [{"op": "create_project", "name": "Mars"}]}, "id": "p1"}])
 
 
-def _engine(studio, *, tamper=None):
+def _engine(studio, *, tamper=None, note: bool = False):
     """build_loop calling this app in-process (test_agent_schedules._engine),
     with an optional `tamper(body)` applied to a run's body BEFORE it is signed:
     what the engine sends, byte for byte, is what the grant is bound to."""
@@ -63,6 +64,9 @@ def _engine(studio, *, tamper=None):
         exchange_state=lambda tid: {"status": "idle"},
         remote=None,
         agent_exists=owner_agent_exists(lambda coro: client.portal.call(lambda: coro)),
+        # `note`: the run history is told of each thread the engine creates,
+        # as production wires it (build_production_loop's note_thread).
+        note_thread=(lambda rule_id, thread_id: client.app.state.run_history.note_thread(thread_id, rule_id)) if note else None,
     )
     return SimpleNamespace(loop=loop, calls=calls, runs=lambda: [c for c in calls if c[1].endswith("/runs/wait")])
 
@@ -79,10 +83,11 @@ def _system_projects() -> list[str]:
 
 
 def _ran(studio, agent: str = "lead_agent") -> int:
-    """How many "Mars" projects exist, in the owner's ledger AND the system's:
-    a lead automation runs as the system user, so its confirmed call acts in
-    the system's ledger (pre-existing, see the report); a 006-F agent schedule
-    runs for the owner, so in the owner's. Counted in both, it ran once or not."""
+    """How many "Mars" projects exist, in the owner's ledger AND the system's.
+    Every scheduled run (a lead automation since #133, a 006-F agent schedule)
+    runs for the owner, so a confirmed call acts in the owner's ledger; counted
+    in both, it ran once or not at all (and test_lead_automations_owner proves
+    it is the owner's)."""
     return _system_projects().count("Mars") + _projects(studio.client).count("Mars")
 
 
@@ -279,26 +284,22 @@ def test_a_waiting_result_of_an_agent_schedules_card_is_posted_at_startup(studio
 # -- BUG 2: the owner's lead grants reach a scheduled lead run ----------------
 
 
-def _system_ledger_project(name: str = "Launch") -> None:
-    """Where a lead automation's ledger calls land: the run's user is the
-    system user (pre-existing; see the report). Seeded so a granted write
-    succeeds; whether it RUNS is what these tests are about."""
+def _owner_ledger_project(studio, name: str = "Launch") -> None:
+    """Where a lead automation's ledger calls land: the OWNER's ledger (#133:
+    it runs for the owner). Seeded so a granted write succeeds; whether it
+    RUNS is what these tests are about."""
+    assert studio.client.post("/api/ledger/projects", json={"name": name}).status_code == 201
+
+
+def _owner_tasks(studio) -> list[str]:
     from omniharness.runtime.ledger.controller import get_ledger_controller
-    from omniharness.runtime.user_context import DEFAULT_USER_ID
 
-    get_ledger_controller().service.apply(user_id=DEFAULT_USER_ID, changes=[{"op": "create_project", "name": name}], thread_id=None, actor="user")
-
-
-def _system_tasks() -> list[str]:
-    from omniharness.runtime.ledger.controller import get_ledger_controller
-    from omniharness.runtime.user_context import DEFAULT_USER_ID
-
-    return [line for line in get_ledger_controller().read(user_id=DEFAULT_USER_ID, project="Launch").splitlines() if "Draft" in line or "Wire" in line]
+    return [line for line in get_ledger_controller().read(user_id=studio.user_id, project="Launch").splitlines() if "Draft" in line or "Wire" in line]
 
 
 def test_the_owners_lead_grant_applies_to_a_scheduled_lead_run(studio, script) -> None:  # noqa: F811
     _rules_file(studio)
-    _system_ledger_project()
+    _owner_ledger_project(studio)
     _grant(studio, "lead_agent", ["tasks"])
     engine = _engine(studio)
     written = _schedule(studio, agent="lead_agent")
@@ -307,7 +308,7 @@ def test_the_owners_lead_grant_applies_to_a_scheduled_lead_run(studio, script) -
     _cycle(engine)
 
     assert _pending(studio) == [], "the owner's lead grant did not reach the scheduled lead run"
-    assert any("Draft the release notes" in t for t in _system_tasks())
+    assert any("Draft the release notes" in t for t in _owner_tasks(studio))
     [use] = studio.client.get("/api/studio/agents/lead_agent/grant-uses").json()
     assert (use["rule_id"], use["classes"]) == (written["rule_id"], ["tasks"])
 
@@ -315,17 +316,17 @@ def test_the_owners_lead_grant_applies_to_a_scheduled_lead_run(studio, script) -
 def test_without_the_owners_grant_a_scheduled_lead_run_waits(studio, script) -> None:  # noqa: F811
     """The control for the test above: same run, no grant, it waits."""
     _rules_file(studio)
-    _system_ledger_project()
+    _owner_ledger_project(studio)
     engine = _engine(studio)
     _schedule(studio, agent="lead_agent")
     script.steps.append(_task_call("Draft the release notes"))
     _cycle(engine)
-    assert len(_pending(studio)) == 1 and _system_tasks() == []
+    assert len(_pending(studio)) == 1 and _owner_tasks(studio) == []
 
 
 def test_tier_3_still_waits_in_a_scheduled_lead_run_with_every_grant(studio, script) -> None:  # noqa: F811
     _rules_file(studio)
-    _system_ledger_project()
+    _owner_ledger_project(studio)
     _grant(studio, "lead_agent", ["tasks", "notes", "archive"])
     engine = _engine(studio)
     _schedule(studio, agent="lead_agent")
@@ -334,7 +335,7 @@ def test_tier_3_still_waits_in_a_scheduled_lead_run_with_every_grant(studio, scr
     _cycle(engine)
 
     # The control: the grant is live in this run (the routine write ran)...
-    assert any("Draft the release notes" in t for t in _system_tasks()), "the grant did not apply: the Tier 3 check below would pass for the wrong reason"
+    assert any("Draft the release notes" in t for t in _owner_tasks(studio)), "the grant did not apply: the Tier 3 check below would pass for the wrong reason"
     # ...and the new project still waits for the person.
     [waiting] = _pending(studio)
     assert waiting["arguments"]["changes"][0]["op"] == "create_project"
@@ -349,7 +350,7 @@ def test_a_scheduled_run_cannot_choose_whose_grants_it_reads(studio, script, mon
     lead run whose (engine-signed) body names the second account as the grants'
     owner, in every container a run body has, still reads the OWNER's: it waits."""
     _rules_file(studio)
-    _system_ledger_project()
+    _owner_ledger_project(studio)
     other = _second_account(studio, monkeypatch)
     version = other.client.get("/api/studio/agents/lead_agent/autonomy").json()["version"]
     assert other.client.put("/api/studio/agents/lead_agent/autonomy", json={"granted": ["tasks"], "base_version": version}).status_code == 200
@@ -367,7 +368,7 @@ def test_a_scheduled_run_cannot_choose_whose_grants_it_reads(studio, script, mon
     _cycle(engine)
 
     assert engine.runs(), "no run happened"
-    assert _system_tasks() == [], "a run body chose whose grants the run read"
+    assert _owner_tasks(studio) == [], "a run body chose whose grants the run read"
     assert len(_pending(studio)) == 1
 
 

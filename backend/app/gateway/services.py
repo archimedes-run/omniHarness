@@ -268,6 +268,21 @@ async def _scheduled_agent_owner(agent_name: str, caller_id: str | None) -> tupl
     return owner, SimpleNamespace(id=owner, system_role="user")
 
 
+async def _scheduled_lead_owner(caller_id: str | None) -> tuple[str | None, Any]:
+    """Who a scheduled run of the lead agent runs for (#133): the install's
+    owner, as an agent schedule does (:func:`_scheduled_agent_owner`). With no
+    owner (no accounts: auth off) it runs as the caller, as before, and no
+    user is switched."""
+    from types import SimpleNamespace
+
+    from app.gateway.ownership import owner_user_id
+
+    owner = await owner_user_id()
+    if owner is None:
+        return caller_id, None
+    return owner, SimpleNamespace(id=owner, system_role="user")
+
+
 def _client_firing_id(body: Any) -> str | None:
     """The trigger_firing_id a request claims (read only for the trigger engine)."""
     cfg = getattr(body, "config", None) or {}
@@ -680,9 +695,14 @@ async def launch_agent_run_detached(
         UnsupportedStrategyError: when the strategy is not implemented.
     """
     # Upsert thread metadata so the thread appears in /threads/search.
+    # The thread's record whoever owns it (user_id=None): access to this
+    # thread was decided before any run starts (start_run's
+    # require_thread_access), and a scheduled run runs for the owner on a
+    # thread the system user owns (#133), so the caller's own view would
+    # miss the row and try to create it again.
     if run_ctx.thread_store is not None:
         try:
-            existing = await run_ctx.thread_store.get(thread_id)
+            existing = await run_ctx.thread_store.get(thread_id, user_id=None)
             if existing is None:
                 await run_ctx.thread_store.create(
                     thread_id,
@@ -691,7 +711,7 @@ async def launch_agent_run_detached(
                     metadata=metadata,
                 )
             else:
-                await run_ctx.thread_store.update_status(thread_id, "running")
+                await run_ctx.thread_store.update_status(thread_id, "running", user_id=None)
         except Exception:
             logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
@@ -843,11 +863,17 @@ async def start_run(
     run_as = None
     if synthetic_rule_id is not None and agent_name:
         user_id, run_as = await _scheduled_agent_owner(agent_name, user_id)
+    elif synthetic_rule_id is not None:
+        # #133: a scheduled run of the LEAD (a lead automation) runs for the
+        # owner too, the same way: its ledger writes, confirmed calls, files
+        # and grant uses are the owner's, so the owner sees them and a
+        # grant-run undo finds them. The thread itself stays the system's
+        # (the engine creates it), so the card rule for it is unchanged.
+        user_id, run_as = await _scheduled_lead_owner(user_id)
     # A scheduled run reads the OWNER's standing grants: they are stored under
-    # the owner's id (the Autonomy tab), while a lead automation runs as the
-    # system user and so never found them. Only on the engine's granted
-    # request; an agent run already runs for the owner. Nothing in a request
-    # can name it (SERVER_OWNED_RUN_KEYS).
+    # the owner's id (the Autonomy tab). Only on the engine's granted request;
+    # a scheduled run runs for the owner (above), so they are the run user's.
+    # Nothing in a request can name it (SERVER_OWNED_RUN_KEYS).
     grants_owner_id = None
     if synthetic_rule_id is not None:
         from app.gateway.ownership import owner_user_id
