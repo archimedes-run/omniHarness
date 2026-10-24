@@ -14,6 +14,7 @@ import {
   type ComponentProps,
   type KeyboardEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 
 import {
@@ -122,7 +123,7 @@ export function InputBox({
   chosenAgent,
   onChooseAgent,
   onContextChange,
-  onFollowupsVisibilityChange,
+  followupsContainer,
   onSubmit,
   onStop,
   ...props
@@ -147,7 +148,12 @@ export function InputBox({
   chosenAgent?: string | null;
   onChooseAgent?: (name: string | null) => void;
   onContextChange?: (context: BarContext) => void;
-  onFollowupsVisibilityChange?: (visible: boolean) => void;
+  /**
+   * Where the suggested follow-ups render: the slot under the last message
+   * (MessageList's `followupsSlotRef`), so they sit in the conversation's
+   * flow instead of floating over it. Without one they render above the bar.
+   */
+  followupsContainer?: HTMLElement | null;
   onSubmit?: (message: PromptInputMessage) => void;
   onStop?: () => void;
 }) {
@@ -615,16 +621,47 @@ export function InputBox({
     !followupsHidden &&
     (followupsLoading || followups.length > 0);
 
-  const followupsVisibilityChangeRef = useRef(onFollowupsVisibilityChange);
-  useEffect(() => {
-    followupsVisibilityChangeRef.current = onFollowupsVisibilityChange;
-  }, [onFollowupsVisibilityChange]);
-  useEffect(() => {
-    followupsVisibilityChangeRef.current?.(showFollowups);
-  }, [showFollowups]);
-  useEffect(() => {
-    return () => followupsVisibilityChangeRef.current?.(false);
-  }, []);
+  const followupsNode = showFollowups ? (
+    <div
+      className={cn(
+        "flex items-center pb-2",
+        followupsContainer ? "justify-start" : "justify-center",
+      )}
+      data-testid="followups"
+    >
+      <div className="flex items-center gap-2">
+        {followupsLoading ? (
+          <div className="text-muted-foreground bg-background/80 rounded-full border px-4 py-2 text-xs backdrop-blur-sm">
+            {t.inputBox.followupLoading}
+          </div>
+        ) : (
+          <Suggestions className="min-h-16 w-fit items-start">
+            {followups.map((s) => (
+              <Suggestion
+                key={s}
+                suggestion={s}
+                onClick={() => handleFollowupClick(s)}
+              />
+            ))}
+            <Button
+              aria-label={t.common.close}
+              className="text-muted-foreground cursor-pointer rounded-full px-3 text-xs font-normal"
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => setFollowupsHidden(true)}
+            >
+              <XIcon className="size-4" />
+            </Button>
+          </Suggestions>
+        )}
+      </div>
+    </div>
+  ) : null;
+  const followupsView =
+    followupsNode && followupsContainer
+      ? createPortal(followupsNode, followupsContainer)
+      : followupsNode;
 
   const menuOpen = !!trigger;
   const chipIntegrations = selectedIntegrations(integrations.rows);
@@ -648,37 +685,7 @@ export function InputBox({
       {isWelcomeMode && searchParams.get("mode") !== "skill" && (
         <WelcomeSuggestions />
       )}
-      {showFollowups && (
-        <div className="flex items-center justify-center pb-2">
-          <div className="flex items-center gap-2">
-            {followupsLoading ? (
-              <div className="text-muted-foreground bg-background/80 rounded-full border px-4 py-2 text-xs backdrop-blur-sm">
-                {t.inputBox.followupLoading}
-              </div>
-            ) : (
-              <Suggestions className="min-h-16 w-fit items-start">
-                {followups.map((s) => (
-                  <Suggestion
-                    key={s}
-                    suggestion={s}
-                    onClick={() => handleFollowupClick(s)}
-                  />
-                ))}
-                <Button
-                  aria-label={t.common.close}
-                  className="text-muted-foreground cursor-pointer rounded-full px-3 text-xs font-normal"
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  onClick={() => setFollowupsHidden(true)}
-                >
-                  <XIcon className="size-4" />
-                </Button>
-              </Suggestions>
-            )}
-          </div>
-        </div>
-      )}
+      {followupsView}
       <div className="relative" data-testid="chat-bar">
         {menuOpen && (
           <SuggestMenu

@@ -33,6 +33,7 @@ import type { AgentThreadState } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
+import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 import { CopyButton } from "../copy-button";
 import { StreamingIndicator } from "../streaming-indicator";
 
@@ -47,12 +48,13 @@ import {
 import { MessageListSkeleton } from "./skeleton";
 import { SubtaskCard } from "./subtask-card";
 
-/** Clear space under the last message, so it can scroll above the chat bar.
- * The bar is about 200 px tall since it gained its context chips row (it
- * floats over the thread); 160 left the bottom of the last item, such as an
- * approval card's buttons, under it with no way to scroll it into view. */
-export const MESSAGE_LIST_DEFAULT_PADDING_BOTTOM = 232;
-export const MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM = 80;
+/** Clear space under the last message, so it can scroll above the chat bar,
+ * which floats over the bottom of the thread. It follows the bar's measured
+ * height (`--composer-inset`, set by `useComposerInset` on the page), so the
+ * last message stays fully visible when the bar's chips wrap or its textarea
+ * grows. The 16 px is the bar's `-translate-y-4` lift; the 24 px is a gap.
+ * 200 px is only the value before the first measurement. */
+export const MESSAGE_LIST_BOTTOM_SPACER = `calc(var(${COMPOSER_INSET_VAR}, 200px) + 40px)`;
 
 const LOAD_MORE_HISTORY_THROTTLE_MS = 1200;
 
@@ -165,18 +167,17 @@ export function MessageList({
   className,
   threadId,
   thread,
-  paddingBottom = MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
   tokenUsageInlineMode = "off",
   hasMoreHistory,
   loadMoreHistory,
   isHistoryLoading,
   footer,
   afterGroup,
+  followupsSlotRef,
 }: {
   className?: string;
   threadId: string;
   thread: BaseStream<AgentThreadState>;
-  paddingBottom?: number;
   tokenUsageInlineMode?: TokenUsageInlineMode;
   hasMoreHistory?: boolean;
   loadMoreHistory?: () => void;
@@ -187,6 +188,9 @@ export function MessageList({
   /** Rendered after each group of messages: where a confirmation raised in
    * that group appears, at the point it was raised. */
   afterGroup?: (messages: Message[]) => React.ReactNode;
+  /** Where the chat bar puts its suggested follow-ups: under the last
+   * message, in the conversation's flow, so they never cover it. */
+  followupsSlotRef?: (element: HTMLDivElement | null) => void;
 }) {
   const { t } = useI18n();
   const updateSubtask = useUpdateSubtask();
@@ -526,7 +530,19 @@ export function MessageList({
         ))}
         {thread.isLoading && <StreamingIndicator className="my-4" />}
         {footer}
-        <div style={{ height: `${paddingBottom}px` }} />
+        {followupsSlotRef && (
+          <div
+            ref={followupsSlotRef}
+            className="empty:hidden"
+            data-testid="followups-slot"
+          />
+        )}
+        <div
+          aria-hidden="true"
+          data-testid="message-list-spacer"
+          className="shrink-0"
+          style={{ height: MESSAGE_LIST_BOTTOM_SPACER }}
+        />
       </ConversationContent>
     </Conversation>
   );

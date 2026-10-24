@@ -19,8 +19,27 @@ export async function loadArtifactContent({
   }
   const url = urlOfArtifact({ filepath: enhancedFilepath, threadId, isMock });
   const response = await fetch(url);
+  if (!response.ok) {
+    // An error page is not the file: never show its body as the content.
+    throw new Error(`Artifact ${enhancedFilepath}: HTTP ${response.status}`);
+  }
   const text = await response.text();
   return { content: text, url };
+}
+
+/**
+ * The sandbox path a `write-file:` step wrote, when the artifacts route can
+ * serve it (`/mnt/user-data/...`); null for anything else.
+ */
+export function writeFileSandboxPath(urlString: string): string | null {
+  try {
+    const path = decodeURIComponent(new URL(urlString).pathname);
+    return path.startsWith("/mnt/user-data/") && !path.includes("/../")
+      ? path
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function loadArtifactContentFromToolCall({
@@ -40,7 +59,8 @@ export function loadArtifactContentFromToolCall({
         (toolCall) => toolCall.id === toolCallId,
       );
       if (toolCall) {
-        return toolCall.args.content;
+        const content: unknown = toolCall.args.content;
+        return typeof content === "string" ? content : undefined;
       }
     }
   }

@@ -16,7 +16,11 @@ import {
   restartPreviewSession,
   stopPreviewSession,
 } from "./api";
-import { loadArtifactContent, loadArtifactContentFromToolCall } from "./loader";
+import {
+  loadArtifactContent,
+  loadArtifactContentFromToolCall,
+  writeFileSandboxPath,
+} from "./loader";
 
 export function useArtifactContent({
   filepath,
@@ -31,25 +35,45 @@ export function useArtifactContent({
     return filepath.startsWith("write-file:");
   }, [filepath]);
   const { thread, isMock } = useThread();
-  const content = useMemo(() => {
+  const toolCallContent = useMemo(() => {
     if (isWriteFile) {
       return loadArtifactContentFromToolCall({ url: filepath, thread });
     }
-    return null;
+    return undefined;
   }, [filepath, isWriteFile, thread]);
+  // A write_file step names a message of the live stream. A called-in agent's
+  // or subagent's steps stream into the chat but are not in the thread's
+  // saved messages, so once the run ends that message is gone and its
+  // `content` with it. The file itself was written: read it from the sandbox
+  // through the artifacts route, as for any other file.
+  const writtenPath = useMemo(
+    () => (isWriteFile ? writeFileSandboxPath(filepath) : null),
+    [filepath, isWriteFile],
+  );
+  const readWrittenFile =
+    isWriteFile && typeof toolCallContent !== "string" && writtenPath !== null;
+  const fetchPath = isWriteFile ? (writtenPath ?? filepath) : filepath;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["artifact", filepath, threadId, isMock],
+    queryKey: ["artifact", fetchPath, threadId, isMock],
     queryFn: () => {
-      return loadArtifactContent({ filepath, threadId, isMock });
+      return loadArtifactContent({ filepath: fetchPath, threadId, isMock });
     },
-    enabled,
+    enabled: isWriteFile ? readWrittenFile : enabled,
     // Cache artifact content for 5 minutes to avoid repeated fetches (especially for .skill ZIP extraction)
     staleTime: 5 * 60 * 1000,
   });
+  if (isWriteFile && typeof toolCallContent === "string") {
+    return {
+      content: toolCallContent,
+      url: undefined,
+      isLoading: false,
+      error,
+    };
+  }
   return {
-    content: isWriteFile ? content : data?.content,
-    url: isWriteFile ? undefined : data?.url,
+    content: data?.content,
+    url: data?.url,
     isLoading,
     error,
   };
