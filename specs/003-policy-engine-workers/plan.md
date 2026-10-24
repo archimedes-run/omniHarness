@@ -94,6 +94,10 @@ The system records what each Tier 2 call actually did, checks the reply for a di
 
 VP-008 measured that a subagent suspends and never resumes. The fix is to give the subagent agent a checkpointer, as the run worker already does for the lead agent. It lands first because everything in FR-031 rests on it and its failure is invisible.
 
+### D6 — Web research: outbound tools escalate after a private read (Feature 007, 2026-10-24)
+
+`web_search`, `web_fetch` and `image_search` send an agent-chosen query or URL off the machine. They are Tier 1 unless a tool that reads the person's private data returned data earlier in the same turn (an `after_private_read` exception), when they become Tier 3 cards. Untrusted web content alone no longer escalates them: exfiltration needs private data and a channel out, and a research request used to turn into a card per lookup after its first search. Which tools are private reads is in the rules file (`reads_private: false` marks the public ones; anything else, and any tool with no rule, is private); the flag is tracked by the policy middleware from the run's own messages plus server-owned facts (an automation's turn, a delegate's inviting turn, a resumed turn), never from a request. A turn's held outbound calls are one card with Apply all and a decline per call, and once none is open the lead resumes the turn with their results as tool results. Search results reach the model and the chat compact (title, link, one line of snippet). Reasoning and remaining risks: `specs/007-agent-improvement/tier-changes.md`.
+
 ## Project Structure
 
 ### Documentation (this feature)

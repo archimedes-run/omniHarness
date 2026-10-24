@@ -44,7 +44,7 @@ def confirming_action() -> PendingAction | None:
 
 def proposer_context(action: PendingAction, app_config: Any = None) -> dict:
     """The runtime context the proposing agent had, for running its call."""
-    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_AGENT_KEY, INVITED_ORIGIN_KEY, INVITED_SOURCE_KEY, INVITED_VIA_KEY
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_AGENT_KEY, INVITED_ORIGIN_KEY, INVITED_PRIVATE_KEY, INVITED_SOURCE_KEY, INVITED_VIA_KEY
     from omniharness.agents.tool_surface import LEAD, TOOL_SURFACE_KEY
 
     surface = action.surface
@@ -61,6 +61,7 @@ def proposer_context(action: PendingAction, app_config: Any = None) -> dict:
                 INVITED_AGENT_KEY: action.requester,
                 DELEGATION_CHAIN_KEY: chain,
                 TOOL_SURFACE_KEY: dict(surface),
+                INVITED_PRIVATE_KEY: action.private_read,
             }
         )
         if surface.get("user_id"):
@@ -251,6 +252,10 @@ def run_on_surface(
 #: How much of a tool's result the thread shows. The full result went to the
 #: tool's own record; the thread needs enough to see what happened.
 RESULT_EXCERPT = 600
+#: How much of it an agent resumed after the confirmation is handed (the
+#: action's `result_excerpt`): enough to carry on the task with, e.g. a page's
+#: text or a compact list of search results. Redacted the same way.
+RESUME_EXCERPT = 4000
 
 _STOPPED = __import__("re").compile(r"\[[^\[\]]*stopped and is waiting for the user to confirm[^\[\]]*\]")
 
@@ -270,16 +275,16 @@ def _redacted(text: str) -> str | None:
     return None if withheld else shown
 
 
-def observed_result(result: Any) -> str:
+def observed_result(result: Any, *, limit: int = RESULT_EXCERPT) -> str:
     """A confirmed call's result as the thread shows it: REDACTED FIRST, then
-    cut to RESULT_EXCERPT, then redacted again at the cut. Cutting first left
-    a secret's prefix the redactor no longer recognised (review of PR #58).
-    "Withheld" when redaction fails. Never the raw result."""
+    cut to `limit` (RESULT_EXCERPT), then redacted again at the cut. Cutting
+    first left a secret's prefix the redactor no longer recognised (review of
+    PR #58). "Withheld" when redaction fails. Never the raw result."""
     text = "" if result is None else str(result)
     whole = _redacted(text)
     if whole is None:
         return WITHHELD_RESULT
-    cut = whole[:RESULT_EXCERPT] + ("…" if len(whole) > RESULT_EXCERPT else "")
+    cut = whole[:limit] + ("…" if len(whole) > limit else "")
     again = _redacted(cut)
     if again is None:
         return WITHHELD_RESULT
@@ -301,7 +306,10 @@ def result_report(action: PendingAction, result: Any) -> str:
     the redactor last, so nothing composed from the raw result skips it.
     """
     text = "" if result is None else str(result)
-    shown = observed_result(result)
+    # Search results read as a short list (title, site, a line of snippet),
+    # never as their JSON.
+    listed = search_results_text(action.tool_name, text)
+    shown = observed_result(listed if listed is not None else result)
     # A delegate's "stopped and is waiting" line is never cut off by the excerpt.
     for notice in _STOPPED.findall(text):
         if notice not in shown:
@@ -313,6 +321,33 @@ def result_report(action: PendingAction, result: Any) -> str:
         composed = f"Done. I ran **{action.tool_name}** after you confirmed it.\n\n{OBSERVED_LABEL}:\n{shown}"
     final = _redacted(composed)
     return final if final is not None else f"Done. **{action.tool_name}** ran after you confirmed it. {WITHHELD_RESULT}"
+
+
+def search_results_text(tool_name: str, text: str) -> str | None:
+    """Compact search results (omniharness.tools.search_results) as numbered
+    plain lines: "1. Title (site): snippet". None when `text` is not search
+    results. Plain text: the site is a host name, never a link."""
+    import json
+    from urllib.parse import urlparse
+
+    from omniharness.tools.search_results import compact_search_result
+
+    compact = compact_search_result(tool_name, text)
+    if compact is None:
+        return None
+    results = json.loads(compact).get("results") or []
+    if not results:
+        return "No results."
+    lines = []
+    for number, item in enumerate(results, start=1):
+        host = urlparse(item.get("url") or "").hostname or ""
+        line = f"{number}. {item.get('title') or host or 'Untitled'}"
+        if host:
+            line += f" ({host})"
+        if item.get("snippet"):
+            line += f": {item['snippet']}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def report_message(action: PendingAction, result: Any, *, content: str | None = None) -> Any:

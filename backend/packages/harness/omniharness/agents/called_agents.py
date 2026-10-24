@@ -289,6 +289,9 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
             source=str(resume.get("origin_source") or resume.get("tool_name") or ""),
             chain=chain[:-1] or ("lead_agent",),
             via=str(resume.get("origin_via") or ""),
+            # The turn it stopped in: a record that does not say counts as
+            # having read private data (outbound calls then ask).
+            private_read=resume.get("private_read") is not False,
         )
         state = getattr(runtime, "state", None) or {}
         with inviting_turn(inviter):

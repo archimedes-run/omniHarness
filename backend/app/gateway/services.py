@@ -411,6 +411,7 @@ SERVER_OWNED_CONTEXT_KEYS: frozenset[str] = frozenset(
         "invited_origin_source",
         "invited_via",
         "invited_agent",
+        "invited_private_read",
         "delegation_chain",
         "called_agent",
         "delegation_key",
@@ -533,6 +534,9 @@ async def _continue_confirmed_agent(request: Request, thread_id: str, body: Any,
         "delegation_chain": list(action.delegation_chain),
         "result_excerpt": action.result_excerpt,
         "arguments": dict(action.arguments),
+        # The turn the action was stated in had read private data: the agent
+        # re-enters that turn, so its outbound calls are judged as in it.
+        "private_read": action.private_read,
     }
 
 
@@ -725,6 +729,8 @@ async def start_run(
     body: Any,
     thread_id: str,
     request: Request,
+    *,
+    server_resume: tuple[list[Any], dict[str, Any]] | None = None,
 ) -> RunRecord:
     """Create a RunRecord and launch the background agent task.
 
@@ -737,6 +743,13 @@ async def start_run(
         Target thread.
     request : Request
         FastAPI request — used to retrieve singletons from ``app.state``.
+    server_resume : (messages, resume record), optional
+        ONLY from the server (app.gateway.resume, after a group of confirmed
+        outbound calls): the run's input is these server-built messages (the
+        confirmed calls and their results, as tool results: never a user
+        turn) instead of the body's, and the record is set as the run's
+        ``resume_action`` context, after every client key was stripped.
+        No route passes it.
     """
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
@@ -890,6 +903,18 @@ async def start_run(
     # "Continue <agent>" on a confirmed card: the agent that stopped re-enters
     # its own delegation (after the mention: an explicit Continue wins).
     await _continue_confirmed_agent(request, thread_id, body, config)
+
+    if server_resume is not None:
+        # The lead resuming its turn after its outbound calls were confirmed
+        # (app.gateway.resume). Server-built input; the record is server-owned
+        # (RESUME_ACTION_KEY is stripped from every request above).
+        from omniharness.agents.called_agents import RESUME_ACTION_KEY
+
+        resume_messages, resume_record = server_resume
+        graph_input = {"messages": list(resume_messages)}
+        ctx_dict = config.setdefault("context", {})
+        if isinstance(ctx_dict, dict):
+            ctx_dict[RESUME_ACTION_KEY] = dict(resume_record)
 
     # Feature 006: skills removed from this conversation (the chat bar's ×).
     # Always the server's stored value (the client's was dropped above).

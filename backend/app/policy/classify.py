@@ -35,7 +35,7 @@ from .runtime_floors import runtime_floor
 UNKNOWN_TOOL_TIER = Tier.TIER_3
 
 
-def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet, *, after_content: bool = False) -> PolicyDecision:
+def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet, *, after_content: bool = False, private_read: bool = False) -> PolicyDecision:
     """Classify one call.
 
     THE ONE code path for this. `explain.py` calls it too rather than
@@ -45,6 +45,10 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet,
     `after_content`: the call was led to by something other than the user's
     own message (content the agent read, an automation's turn, or a cause
     nobody could tell). Only `after_content` exceptions read it.
+
+    `private_read`: a tool that reads the person's private data returned data
+    earlier in this turn (app/policy/private_reads.py). Only
+    `after_private_read` exceptions (the outbound tools) read it.
     """
     best: tuple[Tier, ClassificationRule | None, RuleException | None] = (UNKNOWN_TOOL_TIER, None, None)
     matched = False
@@ -54,7 +58,7 @@ def classify(tool_name: str, arguments: dict[str, Any] | None, ruleset: RuleSet,
         matched = True
         tier, raised_by = rule.tier, None
         for exception in rule.exceptions:
-            if exception.matches(arguments or {}, after_content=after_content) and exception.tier > tier:
+            if exception.matches(arguments or {}, after_content=after_content, private_read=private_read) and exception.tier > tier:
                 tier, raised_by = exception.tier, exception
         # Highest tier wins on overlap — same direction as FR-037.
         if best[1] is None or tier > best[0]:

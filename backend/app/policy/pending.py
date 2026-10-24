@@ -65,6 +65,9 @@ def _to_dict(action: PendingAction) -> dict:
         "post_attempts": action.post_attempts,
         "continued": action.continued,
         "run_markers": [list(pair) for pair in action.run_markers],
+        "private_read": action.private_read,
+        "outbound": action.outbound,
+        "group_key": action.group_key,
     }
 
 
@@ -95,6 +98,11 @@ def _from_dict(raw: dict) -> PendingAction:
         post_attempts=int(raw.get("post_attempts") or 0),
         continued=bool(raw.get("continued")),
         run_markers=tuple((str(k), str(v)) for k, v in (raw.get("run_markers") or ())),
+        # A record without it predates it: judged as if the turn had read
+        # private data (the strict side), never as a clean one.
+        private_read=raw.get("private_read") is not False,
+        outbound=bool(raw.get("outbound")),
+        group_key=str(raw.get("group_key") or ""),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
@@ -316,6 +324,17 @@ class PendingStore:
         self._claim_path(action.id).unlink(missing_ok=True)
         action.claimed_by = None
         return self.save(action)
+
+    def in_thread(self, thread_id: str | None) -> list[PendingAction]:
+        """Every action stated in this thread, open or resolved."""
+        if not thread_id:
+            return []
+        out = []
+        for path in sorted(self.directory.glob("*.json")):
+            action = self.get(path.stem)
+            if action and action.thread_id == thread_id:
+                out.append(action)
+        return out
 
     def declined_in_thread(self, thread_id: str | None, owner_id: str | None) -> list[PendingAction]:
         """Actions this owner DECLINED in this thread (005 FR-009 Amendment 1:

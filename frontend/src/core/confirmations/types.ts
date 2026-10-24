@@ -63,6 +63,12 @@ export interface PendingAction {
   /** A routine ledger write waiting as a suggestion: it can be applied with
    *  others in one undoable batch ("Apply all"). Never true for Tier 3. */
   suggestion?: boolean;
+  /** An outbound call (web_search, web_fetch, image_search) the lead asked
+   *  about because its turn had read private data. Such cards from one turn
+   *  share `group` and are shown as ONE card with "Apply all". */
+  outbound?: boolean;
+  /** The turn the card was stated in (opaque); "" when it has no group. */
+  group?: string;
 }
 
 /** A confirmed action that ran, whose result is not yet in its chat (the

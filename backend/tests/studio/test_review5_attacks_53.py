@@ -6,8 +6,8 @@ store) never go live, not even after an unrelated versioned edit.
 C: a ledger_apply result is trusted as the harness's own words, so it
 carries only the call's own arguments and ids, never a stored field: text
 planted in a project's stored name never reaches the model untainted, and a
-web_fetch after the model learned that name (a ledger_read: content) is a
-Tier 3 card (#89).
+web_fetch after the model learned that name (a ledger_read: content, and a
+private read since 2026-10-24) is a Tier 3 card (#89).
 """
 
 from __future__ import annotations
@@ -116,9 +116,13 @@ def test_web_fetch_after_the_stored_name_was_read_is_a_card(studio) -> None:
     assert "web_fetch" in _pending_tools(studio), "web_fetch ran at Tier 1 after stored text reached the model"
 
 
-def test_control_an_untrusted_result_still_taints_the_turn(studio) -> None:
+def test_control_a_public_web_result_alone_no_longer_makes_the_next_lookup_a_card(studio) -> None:
+    """Owner decision 2026-10-24 (Feature 007): an outbound call escalates
+    after a PRIVATE read (the ledger_read above), not after any untrusted
+    result. A page read in a turn that read nothing private does not make the
+    next lookup a card: there is nothing of the person's in it to leak."""
     c = studio.client
     assert c.post("/api/ledger/projects", json={"name": PLANTED}).status_code == 201
     assert c.post("/api/agents", json={"name": "wrap-up", "soul": "s"}).status_code == 201
     _run(studio, [_fetch("r1", "https://example.com/x"), _fetch("f1")], scheduled=False, first="look up x")
-    assert "web_fetch" in _pending_tools(studio)
+    assert "web_fetch" not in _pending_tools(studio)

@@ -82,6 +82,12 @@ class PendingActionResponse(BaseModel):
     #: A routine ledger write waiting as a suggestion (005 FR-009 Amendment
     #: 1): it may be applied with others through "Apply all". Tier 3 is never.
     suggestion: bool = False
+    #: An outbound call the lead asked about because its turn had read
+    #: private data (Feature 007): such cards from one turn share `group`
+    #: and are shown as ONE card with "Apply all" and a decline per call.
+    outbound: bool = False
+    #: The turn the card was stated in (opaque); "" when it has no group.
+    group: str = ""
 
 
 class AwaitingPost(BaseModel):
@@ -596,6 +602,8 @@ def _view(action, threshold: int) -> PendingActionResponse:
         owner_id=action.owner_id,
         arguments_display=_arguments_for_display(action.arguments),
         suggestion=_is_suggestion(action),
+        outbound=_is_outbound_card(action),
+        group=_group_id(action) if _is_outbound_card(action) else "",
     )
 
 
@@ -603,6 +611,21 @@ def _is_suggestion(action) -> bool:
     from app.policy.models import Tier
 
     return action.tool_name in EDITABLE_TOOLS and action.tier_at_statement is Tier.TIER_2
+
+
+def _is_outbound_card(action) -> bool:
+    """A lead's outbound call held for confirmation (Feature 007): may be
+    applied with the rest of its turn's through "Apply all"."""
+    from app.gateway.resume import _is_lead_outbound
+
+    return _is_lead_outbound(action)
+
+
+def _group_id(action) -> str:
+    """An opaque id for the card's turn (never the message id itself)."""
+    import hashlib
+
+    return hashlib.sha256(f"{action.thread_id}:{action.group_key or action.id}".encode()).hexdigest()[:16]
 
 
 #: How long a result that could not be posted stays listed (after its card's expiry).
@@ -703,7 +726,12 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
         # A decline is a claim and a file write; it takes the claim like a
         # confirmation, so one that arrives while the call runs says so.
         result = flow.explicit(action_id, confirm=False, run_tool=_declines_run_nothing, answered={"via": via, "thread_id": None, "user_id": _user_id(get_auth_context(request)), "message_id": None})
-        return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=for_display(result.message)[0], detail=_response_detail(result.detail))
+        detail = _response_detail(result.detail)
+        if result.outcome == "declined":
+            # Declining the LAST open card of a turn's outbound group lets the
+            # lead carry on with what the others returned (Feature 007).
+            await _resume_into(request, [action_id], detail)
+        return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=for_display(result.message)[0], detail=detail)
 
     ctx = get_auth_context(request)
     user_id = _user_id(ctx)
@@ -749,7 +777,7 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # A client that disconnects cancels only its wait: the confirmed call keeps
     # its slot until the pool thread finishes, and its result is still posted.
     work = asyncio.get_running_loop().create_task(
-        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via),
+        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via, request=request),
     )
     _CONFIRMING.add(work)
     work.add_done_callback(_CONFIRMING.discard)
@@ -760,7 +788,9 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
 _CONFIRMING: set[asyncio.Task] = set()
 
 
-async def _confirm_and_post(middleware: Any, flow: Any, action: Any, action_id: str, run_tool: Any, typed_count: int | None, user_id: str, checkpointer: Any, run_manager: Any, via: str = "button") -> ResolveResponse:
+async def _confirm_and_post(
+    middleware: Any, flow: Any, action: Any, action_id: str, run_tool: Any, typed_count: int | None, user_id: str, checkpointer: Any, run_manager: Any, via: str = "button", *, request: Request | None = None
+) -> ResolveResponse:
     try:
         # No targets passed: the flow re-checks them itself (FR-029).
         # OFF THE EVENT LOOP AND OFF THE DEFAULT POOL: a confirmed delegation
@@ -774,21 +804,45 @@ async def _confirm_and_post(middleware: Any, flow: Any, action: Any, action_id: 
     detail = _response_detail(result.detail)
     message = for_display(result.message)[0]
     if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
-        from app.policy.surface_run import report_message
-
-        # The report as recorded with EXECUTED (already redacted).
-        stored = middleware.pending.get(action_id)
-        report = report_message(action, result.detail.get("result"), content=stored.post_content if stored and stored.post_content else None)
-        message = str(report.content)
-        detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
-        # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
-        # written and read back; every other state says what happened.
-        posted = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=action, message=report)
-        detail["posted_to_thread"] = posted == "written"
-        detail["post_queued"] = posted == "queued"
-        detail["post_state"] = posted
-        message += _POST_NOTES.get(posted, "")
+        message = await _post_executed(middleware, action, action_id, result, detail, checkpointer, run_manager)
+    if request is not None:
+        # The last open card of a turn's outbound group: the lead carries on
+        # with the results (Feature 007). Any other card: nothing more.
+        await _resume_into(request, [action_id], detail)
     return ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=message, detail=detail)
+
+
+async def _post_executed(middleware: Any, action: Any, action_id: str, result: Any, detail: dict[str, Any], checkpointer: Any, run_manager: Any) -> str:
+    """Post a confirmed call's report into its chat; the card's message."""
+    from app.policy.surface_run import report_message
+
+    # The report as recorded with EXECUTED (already redacted).
+    stored = middleware.pending.get(action_id)
+    report = report_message(action, result.detail.get("result"), content=stored.post_content if stored and stored.post_content else None)
+    message = str(report.content)
+    detail["continue_agent"] = report.additional_kwargs["confirmation"]["continue_agent"]
+    # FAILING SOURCES ARE VISIBLE: "posted" only when the thread was
+    # written and read back; every other state says what happened.
+    posted = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=action, message=report)
+    detail["posted_to_thread"] = posted == "written"
+    detail["post_queued"] = posted == "queued"
+    detail["post_state"] = posted
+    return message + _POST_NOTES.get(posted, "")
+
+
+async def _resume_into(request: Request, action_ids: list[str], detail: dict[str, Any]) -> str | None:
+    """Resume the lead's turn if these answers closed its outbound group
+    (app.gateway.resume); the run id goes in `detail` for the chat to join."""
+    from app.gateway.resume import resume_after_confirm
+
+    try:
+        run_id = await resume_after_confirm(request, action_ids)
+    except Exception:  # noqa: BLE001 - the confirmation stands; the resume is logged
+        logger.exception("resume after a confirmation failed to start")
+        return None
+    if run_id:
+        detail["resume_run_id"] = run_id
+    return run_id
 
 
 _POST_NOTES = {
@@ -890,6 +944,9 @@ class ApplyAllResponse(BaseModel):
     #: this batch made. None when nothing was written.
     write_id: str | None
     results: list[ResolveResponse]
+    #: A group of outbound calls (Feature 007): the run in which the lead
+    #: carries on with their results, when one was started.
+    resume_run_id: str | None = None
 
 
 @router.post("/apply-all", response_model=ApplyAllResponse)
@@ -922,10 +979,7 @@ async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse
     from app.policy.models import Outcome
     from app.policy.provenance import new_write_id
 
-    _, middleware, _ = _policy(request)
-    service = getattr(request.app.state, "ledger_service", None)
-    if service is None:
-        raise HTTPException(status_code=503, detail="the project ledger needs a database")
+    _, middleware, flow = _policy(request)
     user_id = _user_id(get_auth_context(request))
     now = datetime.now(UTC)
     actions = []
@@ -934,9 +988,17 @@ async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse
         if action is None:
             raise HTTPException(status_code=404, detail=f"Confirmation {action_id} not found")
         await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
-        if not _is_suggestion(action):
-            raise HTTPException(status_code=422, detail=f"{action_id} ({action.tool_name}) is not a routine ledger suggestion; confirm it on its own card")
         actions.append(action)
+    if all(_is_outbound_card(a) for a in actions):
+        # A turn's outbound calls (Feature 007): each confirmed by this click
+        # through the ONE confirmation path, in one batch.
+        return await _apply_all_outbound(request, middleware, flow, actions, user_id, now)
+    for action in actions:
+        if not _is_suggestion(action):
+            raise HTTPException(status_code=422, detail=f"{action.id} ({action.tool_name}) is not a routine ledger suggestion; confirm it on its own card")
+    service = getattr(request.app.state, "ledger_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="the project ledger needs a database")
     closed = [a for a in actions if a.outcome is not None or a.is_expired(now)]
     if closed:
         # Nothing is applied when any card is no longer open: the group is
@@ -1003,3 +1065,87 @@ async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse
             middleware.audit.record_tier3(action=action, actor=middleware.actor, now=datetime.now(UTC))
     results = [results_by_id.get(a.id) or elsewhere[a.id] for a in actions]
     return ApplyAllResponse(write_id=write_id, results=results)
+
+
+async def _apply_all_outbound(request: Request, middleware: Any, flow: Any, actions: list[Any], user_id: str, now: datetime) -> ApplyAllResponse:
+    """ "Apply all" on a turn's group of outbound calls (Feature 007).
+
+    NOT all or nothing (they are independent lookups): the batch CLAIMS WHAT
+    IT CAN. Each card goes through `flow.explicit`, the one confirmation path
+    and its one claim site (take_claim): a card declined or confirmed
+    elsewhere meanwhile is that route's ("already_resolved"); a call that
+    raises is resolved FAILED and says so; the rest run, each exactly once.
+    The batch runs in ONE confirmation slot, OFF THE EVENT LOOP (the
+    confirmation pool), as one detached task, so a client that disconnects
+    does not stop it. Each result is posted into the chat as a single
+    confirmation's is, and then the lead resumes the turn once.
+    """
+    from app.gateway.ownership import require_person
+
+    require_person(request)
+    threads = {a.thread_id for a in actions}
+    if len(threads) != 1:
+        raise HTTPException(status_code=422, detail="Apply all takes the cards of one chat")
+    thread_id = next(iter(threads))
+    results: dict[str, ResolveResponse] = {}
+    open_ = []
+    for action in actions:
+        if action.outcome is not None or action.is_expired(now):
+            results[action.id] = ResolveResponse(outcome="already_resolved", action_id=action.id, message="That call is no longer waiting, so it was not run again.")
+        else:
+            open_.append(action)
+    ordered = lambda: [results[a.id] for a in actions]  # noqa: E731
+    if not open_:
+        return ApplyAllResponse(write_id=None, results=ordered())
+
+    gone = await _chat_gone(request, open_[0])
+    if gone:
+        from app.policy.confirm_flow import take_claim
+        from app.policy.models import Outcome
+
+        for action in open_:
+            claimed = take_claim(middleware.pending, action.id, "chat-deleted")
+            if claimed is not None:
+                middleware.pending.resolve(claimed, Outcome.DECLINED, gone)
+            results[action.id] = ResolveResponse(outcome=CHAT_DELETED, action_id=action.id, message=gone)
+        return ApplyAllResponse(write_id=None, results=ordered())
+    if thread_id and await _thread_running(request, thread_id):
+        for action in open_:
+            results[action.id] = ResolveResponse(outcome=THREAD_BUSY, action_id=action.id, message="This chat is still replying. Nothing has run. Apply again when the reply has finished.")
+        return ApplyAllResponse(write_id=None, results=ordered())
+    if not _SLOTS.take(user_id):
+        for action in open_:
+            results[action.id] = ResolveResponse(outcome=CONFIRM_BUSY, action_id=action.id, message=CONFIRM_BUSY_MESSAGE)
+        return ApplyAllResponse(write_id=None, results=ordered())
+
+    from app.gateway.deps import get_checkpointer, get_run_manager
+
+    try:
+        run_tool = await _runner(request, thread_id, user_id)
+        checkpointer, run_manager = get_checkpointer(request), get_run_manager(request)
+    except BaseException:
+        _SLOTS.give_back(user_id)
+        raise
+
+    def batch() -> list[Any]:
+        answered = {"via": "apply-all", "thread_id": None, "user_id": user_id, "message_id": None}
+        return [flow.explicit(action.id, confirm=True, run_tool=run_tool, answered=answered) for action in open_]
+
+    async def work() -> ApplyAllResponse:
+        try:
+            outcomes = await _off_the_request_pool(batch)
+        finally:
+            _SLOTS.give_back(user_id)
+        for action, result in zip(open_, outcomes, strict=True):
+            detail = _response_detail(result.detail)
+            message = for_display(result.message)[0]
+            if result.outcome == "executed" and action.thread_id and action.surface:
+                message = await _post_executed(middleware, action, action.id, result, detail, checkpointer, run_manager)
+            results[action.id] = ResolveResponse(outcome=result.outcome, action_id=result.action_id, message=message, detail=detail)
+        resumed = await _resume_into(request, [a.id for a in open_], {})
+        return ApplyAllResponse(write_id=None, results=ordered(), resume_run_id=resumed)
+
+    task = asyncio.get_running_loop().create_task(work())
+    _CONFIRMING.add(task)
+    task.add_done_callback(_CONFIRMING.discard)
+    return await asyncio.shield(task)

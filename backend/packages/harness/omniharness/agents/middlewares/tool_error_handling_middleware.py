@@ -119,6 +119,12 @@ def _build_runtime_middlewares(
         provider = provider_cls(**provider_kwargs)
         middlewares.append(GuardrailMiddleware(provider, fail_closed=guardrails_config.fail_closed, passport=guardrails_config.passport))
 
+    # Feature 007: search results reach the model compact (title, url, one
+    # line of snippet), whichever provider answered.
+    from omniharness.agents.middlewares.search_results_middleware import SearchResultsMiddleware
+
+    middlewares.append(SearchResultsMiddleware())
+
     from omniharness.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 
     middlewares.append(SandboxAuditMiddleware())
