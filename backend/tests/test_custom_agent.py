@@ -520,20 +520,27 @@ class TestAgentsAPI:
     def test_update_agent_soul(self, agent_client):
         agent_client.post("/api/agents", json={"name": "update-me", "soul": "original"})
 
-        response = agent_client.put("/api/agents/update-me", json={"soul": "updated"})
+        response = agent_client.put("/api/agents/update-me", json={"soul": "updated", "base_version": 1})
         assert response.status_code == 200
         assert response.json()["soul"] == "updated"
 
     def test_update_agent_description(self, agent_client):
         agent_client.post("/api/agents", json={"name": "desc-agent", "description": "old desc", "soul": "p"})
 
-        response = agent_client.put("/api/agents/desc-agent", json={"description": "new desc"})
+        response = agent_client.put("/api/agents/desc-agent", json={"description": "new desc", "base_version": 1})
         assert response.status_code == 200
         assert response.json()["description"] == "new desc"
 
     def test_update_missing_agent_404(self, agent_client):
         response = agent_client.put("/api/agents/ghost-agent", json={"soul": "new"})
         assert response.status_code == 404
+
+    def test_an_update_without_base_version_is_refused(self, agent_client):
+        """Review round 2: an edit must name the version it was made from."""
+        agent_client.post("/api/agents", json={"name": "blind", "soul": "p", "description": "kept"})
+        response = agent_client.put("/api/agents/blind", json={"description": "overwrite"})
+        assert response.status_code == 428
+        assert agent_client.get("/api/agents/blind").json()["description"] == "kept"
 
     def test_delete_agent(self, agent_client):
         agent_client.post("/api/agents", json={"name": "del-me", "soul": "bye"})

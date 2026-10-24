@@ -12,6 +12,7 @@ from langgraph.typing import ContextT
 
 from omniharness.agents.lead_agent.prompt import refresh_skills_system_prompt_cache_async
 from omniharness.agents.thread_state import ThreadState
+from omniharness.config import config_versions
 from omniharness.mcp.tools import _make_sync_tool_wrapper
 from omniharness.skills.security_scanner import scan_skill_content
 from omniharness.skills.storage import get_or_new_skill_storage
@@ -60,6 +61,16 @@ async def _scan_or_raise(content: str, *, executable: bool, location: str) -> di
     return {"decision": result.decision, "reason": result.reason}
 
 
+def _versioned(storage: SkillStorage, name: str, changes: dict[str, str | None] | None, record: dict[str, Any]) -> None:
+    """Every skill write is a version in the one store (config_versions): the
+    agent's change is a proposal it applied, undoable from Skill Studio."""
+    from omniharness.runtime.user_context import get_effective_user_id
+
+    # The skill belongs to the account whose run made it (the first owner
+    # recorded counts; later writes do not change it).
+    config_versions.write_skill(name, changes, who="agent", source="proposal", extra=record, storage=storage, owner_id=get_effective_user_id())
+
+
 async def _to_thread(func, /, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
@@ -98,12 +109,7 @@ async def _skill_manage_impl(
                 raise ValueError("content is required for create.")
             await _to_thread(skill_storage.validate_skill_markdown_content, name, content)
             scan = await _scan_or_raise(content, executable=False, location=f"{name}/{SKILL_MD_FILE}")
-            await _to_thread(skill_storage.write_custom_skill, name, SKILL_MD_FILE, content)
-            await _to_thread(
-                skill_storage.append_history,
-                name,
-                _history_record(action="create", file_path=SKILL_MD_FILE, prev_content=None, new_content=content, thread_id=thread_id, scanner=scan),
-            )
+            await _to_thread(_versioned, skill_storage, name, {SKILL_MD_FILE: content}, _history_record(action="create", file_path=SKILL_MD_FILE, prev_content=None, new_content=content, thread_id=thread_id, scanner=scan))
             await refresh_skills_system_prompt_cache_async()
             return f"Created custom skill '{name}'."
 
@@ -115,12 +121,7 @@ async def _skill_manage_impl(
             scan = await _scan_or_raise(content, executable=False, location=f"{name}/{SKILL_MD_FILE}")
             skill_file = skill_storage.get_custom_skill_file(name)
             prev_content = await _to_thread(skill_file.read_text, encoding="utf-8")
-            await _to_thread(skill_storage.write_custom_skill, name, SKILL_MD_FILE, content)
-            await _to_thread(
-                skill_storage.append_history,
-                name,
-                _history_record(action="edit", file_path=SKILL_MD_FILE, prev_content=prev_content, new_content=content, thread_id=thread_id, scanner=scan),
-            )
+            await _to_thread(_versioned, skill_storage, name, {SKILL_MD_FILE: content}, _history_record(action="edit", file_path=SKILL_MD_FILE, prev_content=prev_content, new_content=content, thread_id=thread_id, scanner=scan))
             await refresh_skills_system_prompt_cache_async()
             return f"Updated custom skill '{name}'."
 
@@ -139,23 +140,22 @@ async def _skill_manage_impl(
             new_content = prev_content.replace(find, replace, replacement_count)
             await _to_thread(skill_storage.validate_skill_markdown_content, name, new_content)
             scan = await _scan_or_raise(new_content, executable=False, location=f"{name}/{SKILL_MD_FILE}")
-            await _to_thread(skill_storage.write_custom_skill, name, SKILL_MD_FILE, new_content)
-            await _to_thread(
-                skill_storage.append_history,
-                name,
-                _history_record(action="patch", file_path=SKILL_MD_FILE, prev_content=prev_content, new_content=new_content, thread_id=thread_id, scanner=scan),
-            )
+            await _to_thread(_versioned, skill_storage, name, {SKILL_MD_FILE: new_content}, _history_record(action="patch", file_path=SKILL_MD_FILE, prev_content=prev_content, new_content=new_content, thread_id=thread_id, scanner=scan))
             await refresh_skills_system_prompt_cache_async()
             return f"Patched custom skill '{name}' ({replacement_count} replacement(s) applied, {occurrences} match(es) found)."
 
         if action == "delete":
+            await _to_thread(skill_storage.ensure_custom_skill_is_editable, name)
+            prev = await _to_thread(skill_storage.read_custom_skill, name)
             await _to_thread(
-                skill_storage.delete_custom_skill,
+                _versioned,
+                skill_storage,
                 name,
-                history_meta=_history_record(
+                None,
+                _history_record(
                     action="delete",
                     file_path=SKILL_MD_FILE,
-                    prev_content=None,
+                    prev_content=prev,
                     new_content=None,
                     thread_id=thread_id,
                     scanner={"decision": "allow", "reason": "Deletion requested."},
@@ -173,12 +173,7 @@ async def _skill_manage_impl(
             prev_content = await _to_thread(target.read_text, encoding="utf-8") if exists else None
             executable = "scripts/" in path or path.startswith("scripts/")
             scan = await _scan_or_raise(content, executable=executable, location=f"{name}/{path}")
-            await _to_thread(skill_storage.write_custom_skill, name, path, content)
-            await _to_thread(
-                skill_storage.append_history,
-                name,
-                _history_record(action="write_file", file_path=path, prev_content=prev_content, new_content=content, thread_id=thread_id, scanner=scan),
-            )
+            await _to_thread(_versioned, skill_storage, name, {path: content}, _history_record(action="write_file", file_path=path, prev_content=prev_content, new_content=content, thread_id=thread_id, scanner=scan))
             return f"Wrote '{path}' for custom skill '{name}'."
 
         if action == "remove_file":
@@ -189,10 +184,11 @@ async def _skill_manage_impl(
             if not await _to_thread(target.exists):
                 raise FileNotFoundError(f"Supporting file '{path}' not found for skill '{name}'.")
             prev_content = await _to_thread(target.read_text, encoding="utf-8")
-            await _to_thread(target.unlink)
             await _to_thread(
-                skill_storage.append_history,
+                _versioned,
+                skill_storage,
                 name,
+                {path: None},
                 _history_record(action="remove_file", file_path=path, prev_content=prev_content, new_content=None, thread_id=thread_id, scanner={"decision": "allow", "reason": "Deletion requested."}),
             )
             return f"Removed '{path}' from custom skill '{name}'."

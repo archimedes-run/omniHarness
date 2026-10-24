@@ -125,6 +125,10 @@ class ClassificationRule:
     exceptions: tuple[RuleException, ...] = ()
     source_file: str = ""
     source_line: int | None = None
+    #: Can the user undo what this call does? Separate from the tier (Feature
+    #: 006): only a reversible tool may be covered by a standing grant. None
+    #: (unlabelled) counts as irreversible.
+    reversible: bool | None = None
 
     def describe(self) -> str:
         where = f" ({self.source_file}:{self.source_line})" if self.source_line else ""
@@ -221,6 +225,10 @@ class PendingAction:
     #: action. Only then is Continue spent; a refused, failed or crashed one
     #: can be pressed again.
     continued: bool = False
+    #: The scheduled run's markers (turn_provenance, trigger_rule_id,
+    #: trigger_firing_id) when it was stated in one, as (key, value) pairs:
+    #: an agent a confirmed `task` invites is then still in that run.
+    run_markers: tuple[tuple[str, str], ...] = ()
 
     @property
     def confirmable_by_typing(self) -> bool:

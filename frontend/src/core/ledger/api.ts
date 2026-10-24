@@ -116,3 +116,25 @@ export const promoteTodos = (body: {
   project_id: string;
   titles: string[];
 }) => call<Task[]>("/tasks/promote", send("POST", body));
+
+/** Undo a ledger write the assistant made without asking (005 FR-009
+ * Amendment 1): its disclosure names the write id. */
+export const undoWrite = (writeId: string) =>
+  call<{ write_id: string; undone: string[] }>(
+    `/writes/${encodeURIComponent(writeId)}/undo`,
+    send("POST"),
+  );
+
+const UNDO_MARK = /\s*\[undo (w-[0-9a-f]+)\]\s*$/;
+
+/** A ledger_apply result's text and, when it was a write made without
+ * asking, the id its Undo reverts. */
+export function parseLedgerResult(result: string): {
+  text: string;
+  writeId: string | null;
+} {
+  const match = UNDO_MARK.exec(result);
+  return match
+    ? { text: result.replace(UNDO_MARK, ""), writeId: match[1] ?? null }
+    : { text: result, writeId: null };
+}

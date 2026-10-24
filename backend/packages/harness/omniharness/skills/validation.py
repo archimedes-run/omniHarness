@@ -11,6 +11,38 @@ import yaml
 from omniharness.skills.parser import parse_allowed_tools
 from omniharness.skills.types import SKILL_MD_FILE
 
+# Size limits for a custom skill (review round 2, 2026-10-20). Every version
+# stores the skill's whole text (config_versions), and SKILL.md's description
+# is shown to the model on every run, so both are kept small:
+#   SKILL.md      at most 64 KiB (UTF-8 bytes)
+#   files         at most 50 per skill, SKILL.md included
+#   total         at most 2 MiB across the skill's files
+MAX_SKILL_MD_BYTES = 64 * 1024
+MAX_SKILL_FILES = 50
+MAX_SKILL_TOTAL_BYTES = 2 * 1024 * 1024
+
+
+class SkillLimitError(ValueError):
+    """A skill over its size or file-count limits, in words the user can act on."""
+
+
+def check_skill_limits(name: str, sizes: dict[str, int]) -> None:
+    """Refuse a skill whose files ({relative path: bytes}) break a limit."""
+    if len(sizes) > MAX_SKILL_FILES:
+        raise SkillLimitError(f"skill '{name}' would have {len(sizes)} files; a skill may have at most {MAX_SKILL_FILES}, {SKILL_MD_FILE} included")
+    skill_md = sizes.get(SKILL_MD_FILE, 0)
+    if skill_md > MAX_SKILL_MD_BYTES:
+        raise SkillLimitError(f"{SKILL_MD_FILE} of skill '{name}' is {skill_md:,} bytes; it may be at most {MAX_SKILL_MD_BYTES:,} (64 KiB). Move detail into references/ files.")
+    total = sum(sizes.values())
+    if total > MAX_SKILL_TOTAL_BYTES:
+        raise SkillLimitError(f"skill '{name}' would hold {total:,} bytes; a skill may hold at most {MAX_SKILL_TOTAL_BYTES:,} (2 MiB)")
+
+
+def skill_dir_sizes(skill_dir: Path) -> dict[str, int]:
+    """{relative path: bytes} for every file under a skill directory."""
+    return {path.relative_to(skill_dir).as_posix(): path.stat().st_size for path in skill_dir.rglob("*") if path.is_file()}
+
+
 # Allowed properties in SKILL.md frontmatter
 ALLOWED_FRONTMATTER_PROPERTIES = {"name", "description", "license", "allowed-tools", "metadata", "compatibility", "version", "author"}
 

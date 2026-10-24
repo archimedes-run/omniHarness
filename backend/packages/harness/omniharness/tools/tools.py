@@ -91,6 +91,46 @@ SUBAGENT_TOOLS = [
 ]
 
 
+def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
+    """Every built-in tool this process can offer, by canonical name
+    (tools.names.canonical_tool_name): the in-process tools, whether or not
+    this agent gets them, and the tools config.yaml loads. The registry
+    decides built-in identity; a tool's NAME never does (review round 3)."""
+    from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
+    from omniharness.tools.builtins.tool_search import tool_search
+    from omniharness.tools.names import canonical_tool_name
+    from omniharness.tools.skill_manage_tool import skill_manage_tool
+
+    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, preview_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
+    registry: dict[str, object] = {canonical_tool_name(getattr(t, "name", "")): t for t in objects}
+    cfg = config
+    if cfg is None:
+        try:
+            cfg = get_app_config()
+        except Exception:  # noqa: BLE001 — no config: the in-process tools alone
+            cfg = None
+    for tool_cfg in getattr(cfg, "tools", None) or []:
+        registry.setdefault(canonical_tool_name(tool_cfg.name), f"config:{tool_cfg.use}")
+    return registry
+
+
+def refuse_builtin_collisions(tools: list[BaseTool], source: str, config: AppConfig | None = None) -> list[BaseTool]:
+    """Refuse, at load, any MCP / connector / built tool whose name (in any
+    spelling: case, hyphen or underscore) is a built-in's. It is dropped and
+    logged, never offered: it can neither shadow the built-in nor pass as it
+    (a built-in's output may be trusted; an outside tool's never is)."""
+    from omniharness.tools.names import canonical_tool_name
+
+    builtins = builtin_tool_registry(config)
+    kept: list[BaseTool] = []
+    for tool in tools:
+        if canonical_tool_name(tool.name) in builtins:
+            logger.error("refused %s tool %r: its name collides with the built-in tool %r", source, tool.name, canonical_tool_name(tool.name))
+            continue
+        kept.append(tool)
+    return kept
+
+
 def _is_host_bash_tool(tool: object) -> bool:
     """Return True if the tool config represents a host-bash execution surface."""
     group = getattr(tool, "group", None)
@@ -247,6 +287,7 @@ def get_available_tools(
                     if server and not server.lower().startswith(("connector-", "composio-")):
                         tag_source(t, f"local:{server}")
 
+                mcp_tools = refuse_builtin_collisions(mcp_tools, "MCP", config)
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 
@@ -283,6 +324,7 @@ def get_available_tools(
                 # touches mcp/tools.py — a deny applied only there would leave
                 # connector:GMAIL and its send tool fully exposed.
                 connector_tools = apply_connector_tool_surface(config, connector_tools)
+                connector_tools = refuse_builtin_collisions(connector_tools, "connector", config)
                 logger.info(f"Loaded {len(connector_tools)} live connector tool(s) for {len(wanted_connectors)} toolkit(s)")
         except Exception as e:
             logger.error(f"Failed to load connector tools: {e}")

@@ -23,6 +23,7 @@ from app.gateway.routers import (
     channels,
     composio,
     confirmations,
+    drafts,
     feedback,
     home,
     inbox,
@@ -39,6 +40,7 @@ from app.gateway.routers import (
     runs,
     sessions,
     skills,
+    studio,
     suggestions,
     thread_participants,
     thread_runs,
@@ -663,6 +665,11 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
+
+    # Agent and Skill Studio (Feature 006 Phase 3): /api/studio, and
+    # one-sentence drafts at /api/drafts (never saves).
+    app.include_router(studio.router)
+    app.include_router(drafts.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)

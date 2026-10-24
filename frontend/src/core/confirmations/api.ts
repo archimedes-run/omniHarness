@@ -1,11 +1,35 @@
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
+import { safeField, safeLines } from "@/core/display/safe";
 
 import type { PendingList, ResolveResult } from "./types";
 
 export async function loadPending(): Promise<PendingList> {
   const response = await fetch(`${getBackendBaseURL()}/api/confirmations`);
-  return response.json() as Promise<PendingList>;
+  const list = (await response.json()) as PendingList;
+  // Every card (chat, Home's "Waiting on you") reads these fields from here:
+  // made safe to display once, in this one place (core/display/safe).
+  return {
+    ...list,
+    actions: (list.actions ?? []).map((action) => ({
+      ...action,
+      plan_text: safeLines(action.plan_text),
+      targets: (action.targets ?? []).map((t) => safeField(t)),
+      origin_label:
+        action.origin_label == null
+          ? action.origin_label
+          : safeField(action.origin_label),
+      arguments_display:
+        action.arguments_display == null
+          ? action.arguments_display
+          : Object.fromEntries(
+              Object.entries(action.arguments_display).map(([k, v]) => [
+                k,
+                safeField(v),
+              ]),
+            ),
+    })),
+  };
 }
 
 async function resolve(
@@ -48,4 +72,30 @@ export async function editAndConfirm(
     },
   );
   return response.json() as Promise<ResolveResult>;
+}
+
+/** "Apply all" on a group of suggestion cards: each is confirmed by this
+ *  click, and every write carries one write id, so one Undo reverts them. */
+export async function applyAll(ids: string[]): Promise<{
+  write_id: string | null;
+  results: ResolveResult[];
+}> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/confirmations/apply-all`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    },
+  );
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      detail?: string;
+    };
+    throw new Error(body.detail ?? `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<{
+    write_id: string | null;
+    results: ResolveResult[];
+  }>;
 }

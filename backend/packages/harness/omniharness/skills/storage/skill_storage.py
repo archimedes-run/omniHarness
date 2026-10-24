@@ -87,6 +87,10 @@ class SkillStorage(ABC):
             raise ValueError("Supporting file path must be relative.")
         if any(part in {"..", ""} for part in relative.parts):
             raise ValueError("Supporting file path must not contain parent-directory traversal.")
+        if any(part.startswith(".") for part in relative.parts):
+            # A dot-file is hidden from versions and lists, so it would also
+            # slip past the skill's size and file-count limits.
+            raise ValueError("Supporting file names must not start with a dot.")
         top_level = relative.parts[0] if relative.parts else ""
         if top_level not in _ALLOWED_SUPPORT_SUBDIRS:
             raise ValueError(f"Supporting files must live under one of: {', '.join(sorted(_ALLOWED_SUPPORT_SUBDIRS))}.")

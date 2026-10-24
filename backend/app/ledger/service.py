@@ -1,9 +1,12 @@
 """The Project Ledger's rules (Feature 005, slice 2).
 
-- A task's status is changed only by the user, or by a ledger_apply the user
-  confirmed (FR-013). Nothing else calls `set_status`.
+- A task's status is changed only by the user, or by a ledger_apply the policy
+  layer let through (FR-013): confirmed, or since Feature 006 a routine task
+  or note change at Tier 2. Nothing else calls `set_status`.
 - Every change says who made it (FR-007): `user` from the UI,
-  `assistant_confirmed` from a confirmed ledger_apply.
+  `assistant_confirmed` from a confirmed ledger_apply, `assistant_disclosed`
+  from a Tier 2 one the reply disclosed, `assistant_granted` from one a
+  standing grant let run in a scheduled run.
 - A confirmed ledger_apply is validated in full before anything is written,
   then written in one transaction: all of it, or none of it.
 - What the confirmation card lists is produced by `render`, from the same
@@ -19,6 +22,14 @@ from typing import Any
 
 from omniharness.persistence.ledger import LedgerRepository
 
+
+def _as_named(ref: Any, ref_names: dict[str, str]) -> str:
+    """A project as the call named it: the name its create_project gave it
+    (for an in-call ref), else the argument itself (a name or an id)."""
+    key = str(ref)
+    return ref_names.get(key, key)
+
+
 PROJECT_STATUSES = ("active", "paused", "done", "archived")
 TASK_STATUSES = ("todo", "doing", "blocked", "done", "dropped")
 OWNER_KINDS = {"me": "user", "user": "user", "agent": "agent", "session": "session", "workflow": "workflow"}
@@ -27,6 +38,14 @@ OPS = ("create_project", "create_goal", "create_task", "update_task", "add_note"
 
 class LedgerError(ValueError):
     """A change that cannot be applied, said in words the user can act on."""
+
+
+class BatchError(LedgerError):
+    """One card of an "Apply all" batch could not be applied; nothing was."""
+
+    def __init__(self, index: int, reason: str):
+        super().__init__(reason)
+        self.index = index
 
 
 def _date(value: Any, field: str) -> date | None:
@@ -117,82 +136,184 @@ class LedgerService:
         for change in changes:
             if not isinstance(change, dict) or change.get("op") not in OPS:
                 raise LedgerError(f"unknown change {change!r}; ops are {', '.join(OPS)}")
+        with self.repo.transaction() as s:
+            return self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor=actor, pending_action_id=pending_action_id)
+
+    def apply_batch(self, *, user_id: str, batches: list[tuple[list[dict], str | None]], actor: str, pending_action_id: str | None) -> list[list[str]]:
+        """Apply several cards' changes ("Apply all") in ONE transaction: all
+        of them or none. A card that cannot be applied raises BatchError
+        naming it, and nothing at all is written."""
+        out: list[list[str]] = []
+        with self.repo.transaction() as s:
+            for index, (changes, thread_id) in enumerate(batches):
+                try:
+                    out.append(self._apply_in(s, user_id=user_id, changes=changes, thread_id=thread_id, actor=actor, pending_action_id=pending_action_id))
+                except LedgerError as exc:
+                    raise BatchError(index, str(exc)) from exc
+        return out
+
+    def _apply_in(self, s, *, user_id: str, changes: list[dict], thread_id: str | None, actor: str, pending_action_id: str | None) -> list[str]:
+        if not isinstance(changes, list) or not changes:
+            raise LedgerError("there are no changes to apply")
+        for change in changes:
+            if not isinstance(change, dict) or change.get("op") not in OPS:
+                raise LedgerError(f"unknown change {change!r}; ops are {', '.join(OPS)}")
         done: list[str] = []
         refs: dict[str, str] = {}
         goal_refs: dict[str, str] = {}
-        with self.repo.transaction() as s:
-            for c in changes:
-                op = c["op"]
-                stamp = {"owner_id": user_id, "actor": actor, "pending_action_id": pending_action_id}
-                if op == "create_project":
-                    status = c.get("status") or "active"
-                    if status not in PROJECT_STATUSES:
-                        raise LedgerError(f"project status {status!r} is not one of {', '.join(PROJECT_STATUSES)}")
-                    row = self.repo.create(s, "project", **stamp, name=_text(c, "name", limit=120, required=True), why=_text(c, "why", limit=2000), context=_text(c, "context", limit=8000), status=status)
-                    if c.get("ref"):
-                        refs[str(c["ref"])] = row["id"]
-                    if thread_id:
-                        # US1: the project links to the chat it was captured in.
-                        self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="The chat it was captured in")
-                    done.append(f"Created project “{row['name']}”.")
-                    continue
-                project = self._project(s, user_id, c.get("project"), refs)
-                if op == "create_goal":
-                    row = self.repo.create(
-                        s,
-                        "goal",
-                        **stamp,
-                        project_id=project["id"],
-                        title=_text(c, "title", limit=200, required=True),
-                        definition_of_done=_text(c, "definition_of_done", limit=4000, required=True),
-                        target_date=_date(c.get("target_date"), "target_date"),
-                    )
-                    if c.get("ref"):
-                        goal_refs[str(c["ref"])] = row["id"]
-                    done.append(f"Added goal “{row['title']}” to {project['name']}.")
-                elif op == "create_task":
-                    status = c.get("status") or "todo"
-                    if status not in TASK_STATUSES:
-                        raise LedgerError(f"task status {status!r} is not one of {', '.join(TASK_STATUSES)}")
-                    row = self.repo.create(
-                        s,
-                        "task",
-                        **stamp,
-                        project_id=project["id"],
-                        title=_text(c, "title", limit=300, required=True),
-                        status=status,
-                        due_date=_date(c.get("due_date"), "due_date"),
-                        owner=_owner(c.get("owner")),
-                        goal_id=self._goal(s, project, c["goal"], goal_refs) if c.get("goal") else None,
-                        declared_files=list(c.get("declared_files") or []),
-                    )
-                    if thread_id and c.get("todo_ref"):
-                        self.repo.link(s, owner_id=user_id, actor=actor, from_kind="task", from_id=row["id"], to_kind="thread", to_ref=thread_id, todo_ref=str(c["todo_ref"])[:300])
-                    done.append(f"Added {row['short_id']} “{row['title']}” to {project['name']}.")
-                elif op == "update_task":
-                    task = self._task(s, project, c.get("task"))
-                    fields: dict[str, Any] = {}
-                    if "title" in c:
-                        fields["title"] = _text(c, "title", limit=300, required=True)
-                    if "status" in c:
-                        if c["status"] not in TASK_STATUSES:
-                            raise LedgerError(f"task status {c['status']!r} is not one of {', '.join(TASK_STATUSES)}")
-                        fields["status"] = c["status"]
-                    if "due_date" in c:
-                        fields["due_date"] = _date(c.get("due_date"), "due_date")
-                    if "owner" in c:
-                        fields["owner"] = _owner(c.get("owner"))
-                    self.repo.update(s, "task", task["id"], **stamp, version=None, **fields)
-                    done.append(f"Updated {task['short_id']} in {project['name']}.")
-                elif op == "add_note":
-                    self.repo.create(s, "note", **stamp, project_id=project["id"], decided=_text(c, "decided", limit=4000, required=True), why=_text(c, "why", limit=4000), thread_id=thread_id)
-                    done.append(f"Recorded a decision in {project['name']}.")
-                elif op == "link_thread":
-                    if not thread_id:
-                        raise LedgerError("link_thread: this conversation's id is not known here")
-                    self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=project["id"], to_kind="thread", to_ref=thread_id, label=_text(c, "label", limit=300))
-                    done.append(f"Attached this conversation to {project['name']}.")
+        # What each line calls a project: the name this call gave it, never
+        # the name as stored. A ledger_apply result is trusted as the
+        # harness's own words (lineage.TRUSTED_TOOL_RESULTS), so it carries
+        # only the call's own arguments and ids; a stored name is whatever a
+        # page or an email may have put there (review 5).
+        ref_names: dict[str, str] = {}
+        for c in changes:
+            op = c["op"]
+            stamp = {"owner_id": user_id, "actor": actor, "pending_action_id": pending_action_id}
+            if op == "create_project":
+                status = c.get("status") or "active"
+                if status not in PROJECT_STATUSES:
+                    raise LedgerError(f"project status {status!r} is not one of {', '.join(PROJECT_STATUSES)}")
+                row = self.repo.create(s, "project", **stamp, name=_text(c, "name", limit=120, required=True), why=_text(c, "why", limit=2000), context=_text(c, "context", limit=8000), status=status)
+                if c.get("ref"):
+                    refs[str(c["ref"])] = row["id"]
+                    ref_names[str(c["ref"])] = row["name"]
+                if thread_id:
+                    # US1: the project links to the chat it was captured in.
+                    self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=row["id"], to_kind="thread", to_ref=thread_id, label="The chat it was captured in")
+                done.append(f"Created project “{row['name']}”.")
+                continue
+            project = self._project(s, user_id, c.get("project"), refs)
+            named = _as_named(c.get("project"), ref_names)
+            if op == "create_goal":
+                row = self.repo.create(
+                    s,
+                    "goal",
+                    **stamp,
+                    project_id=project["id"],
+                    title=_text(c, "title", limit=200, required=True),
+                    definition_of_done=_text(c, "definition_of_done", limit=4000, required=True),
+                    target_date=_date(c.get("target_date"), "target_date"),
+                )
+                if c.get("ref"):
+                    goal_refs[str(c["ref"])] = row["id"]
+                done.append(f"Added goal “{row['title']}” to {named}.")
+            elif op == "create_task":
+                status = c.get("status") or "todo"
+                if status not in TASK_STATUSES:
+                    raise LedgerError(f"task status {status!r} is not one of {', '.join(TASK_STATUSES)}")
+                row = self.repo.create(
+                    s,
+                    "task",
+                    **stamp,
+                    project_id=project["id"],
+                    title=_text(c, "title", limit=300, required=True),
+                    status=status,
+                    due_date=_date(c.get("due_date"), "due_date"),
+                    owner=_owner(c.get("owner")),
+                    goal_id=self._goal(s, project, c["goal"], goal_refs, named) if c.get("goal") else None,
+                    # Not the model's to set: it is not in the tool's
+                    # contract and names paths evidence is matched on.
+                    declared_files=[],
+                )
+                if thread_id and c.get("todo_ref"):
+                    self.repo.link(s, owner_id=user_id, actor=actor, from_kind="task", from_id=row["id"], to_kind="thread", to_ref=thread_id, todo_ref=str(c["todo_ref"])[:300])
+                done.append(f"Added {row['short_id']} “{row['title']}” to {named}.")
+            elif op == "update_task":
+                task = self._task(s, project, c.get("task"), named)
+                fields: dict[str, Any] = {}
+                if "title" in c:
+                    fields["title"] = _text(c, "title", limit=300, required=True)
+                if "status" in c:
+                    if c["status"] not in TASK_STATUSES:
+                        raise LedgerError(f"task status {c['status']!r} is not one of {', '.join(TASK_STATUSES)}")
+                    fields["status"] = c["status"]
+                if "due_date" in c:
+                    fields["due_date"] = _date(c.get("due_date"), "due_date")
+                if "owner" in c:
+                    fields["owner"] = _owner(c.get("owner"))
+                self.repo.update(s, "task", task["id"], **stamp, version=None, **fields)
+                done.append(f"Updated {task['short_id']} in {named}.")
+            elif op == "add_note":
+                self.repo.create(s, "note", **stamp, project_id=project["id"], decided=_text(c, "decided", limit=4000, required=True), why=_text(c, "why", limit=4000), thread_id=thread_id)
+                done.append(f"Recorded a decision in {named}.")
+            elif op == "link_thread":
+                if not thread_id:
+                    raise LedgerError("link_thread: this conversation's id is not known here")
+                self.repo.link(s, owner_id=user_id, actor=actor, from_kind="project", from_id=project["id"], to_kind="thread", to_ref=thread_id, label=_text(c, "label", limit=300))
+                done.append(f"Attached this conversation to {named}.")
         return done
+
+    # ---- undo: a write the assistant made without a confirmation -----------
+
+    #: Who may have made a write that Undo reverts: the assistant at Tier 2
+    #: (disclosed in its reply), under a standing grant, or a confirmed
+    #: "Apply all" batch. Only changes carrying a "w-" write id are reachable,
+    #: so a plan confirmed on its own card is not.
+    UNDOABLE_ACTORS = ("assistant_disclosed", "assistant_granted", "assistant_confirmed")
+
+    def undo_write(self, *, user_id: str, write_id: str) -> list[str]:
+        """Revert every change one assistant write made, newest first, in one
+        transaction. Refused, with nothing changed, when the write is not
+        this user's, was already undone, or anything it touched has changed
+        since (so Undo never overwrites a later edit)."""
+        return self.undo_writes(user_id=user_id, write_ids=[write_id])
+
+    def write_undone(self, *, user_id: str, write_id: str) -> bool:
+        with self.repo.transaction() as s:
+            return bool(self.repo.changes_caused_by(s, user_id, f"undo:{write_id}"))
+
+    def undo_writes(self, *, user_id: str, write_ids: list[str]) -> list[str]:
+        """Undo several writes together ("Undo all for this run"), newest
+        first, ALL OR NOTHING in one transaction: if any one cannot be undone,
+        none is."""
+        from omniharness.persistence.ledger.sql import StaleWrite
+
+        done: list[str] = []
+        with self.repo.transaction() as s:
+            for write_id in reversed(list(dict.fromkeys(write_ids))):
+                if not isinstance(write_id, str) or not write_id.startswith("w-"):
+                    raise LookupError(f"no write {write_id!r}")
+                changes = self.repo.changes_caused_by(s, user_id, write_id)
+                if not changes or any(c["actor"] not in self.UNDOABLE_ACTORS for c in changes):
+                    raise LookupError(f"no write {write_id!r}")
+                if self.repo.changes_caused_by(s, user_id, f"undo:{write_id}"):
+                    raise LedgerError("this was already undone")
+                try:
+                    self._undo_in(s, user_id, write_id, changes, done)
+                except StaleWrite as exc:
+                    raise LedgerError("something it changed has been edited since, so it was not undone; change it back by hand") from exc
+        return done
+
+    def _undo_in(self, s, user_id: str, write_id: str, changes: list[dict], done: list[str]) -> None:
+        stamp = {"owner_id": user_id, "actor": "user", "pending_action_id": f"undo:{write_id}"}
+        # Per entity the write touched: what it was BEFORE the write (its
+        # first change's `before`; None if the write created it) and what
+        # the write LEFT (its last change's `after`). Only the latter is
+        # checked against the row now, so an entity touched twice in one
+        # write (or created and then updated) undoes cleanly, and a later
+        # edit by anyone still refuses the whole undo.
+        entities: dict[tuple[str, str], dict] = {}
+        for change in changes:
+            key = (change["entity"], change["entity_id"])
+            slot = entities.setdefault(key, {"before": change["before"], "after": change["after"]})
+            slot["after"] = change["after"]
+        for (entity, entity_id), slot in reversed(list(entities.items())):
+            before, after = slot["before"], slot["after"]
+            version = (after or {}).get("version")
+            if after is None:
+                raise LedgerError(f"the {entity} it touched is gone")
+            if before is None:  # it was created: remove it
+                if not self.repo.remove(s, entity, entity_id, version=version, **stamp):
+                    raise LedgerError(f"the {entity} it created is already gone")
+                done.append(f"Removed the {entity} “{after.get('title') or after.get('decided') or after.get('name') or entity}”.")
+            else:  # it was changed: put the fields back
+                fields = {k: before[k] for k in after if k in before and before[k] != after[k] and k not in ("version", "updated_at", "created_at", "done_at")}
+                if "due_date" in fields and isinstance(fields["due_date"], str):
+                    fields["due_date"] = date.fromisoformat(fields["due_date"])
+                if self.repo.update(s, entity, entity_id, version=version, **stamp, **fields) is None:
+                    raise LedgerError(f"the {entity} it changed is gone")
+                done.append(f"Put back {after.get('short_id') or entity} as it was.")
 
     def _project(self, s, user_id: str, ref: Any, refs: dict[str, str]) -> dict:
         from sqlalchemy import func, select
@@ -214,7 +335,7 @@ class LedgerService:
         raise LedgerError(f"there is no project {key!r}")
 
     @staticmethod
-    def _goal(s, project: dict, ref: Any, goal_refs: dict[str, str]) -> str:
+    def _goal(s, project: dict, ref: Any, goal_refs: dict[str, str], named: str) -> str:
         """A goal by in-plan ref, id, or exact title within the project."""
         from sqlalchemy import func, select
 
@@ -229,10 +350,10 @@ class LedgerService:
         matches = s.scalars(select(LedgerGoalRow).where(LedgerGoalRow.project_id == project["id"], func.lower(LedgerGoalRow.title) == key.lower())).all()
         if len(matches) == 1:
             return matches[0].id
-        raise LedgerError(f"{project['name']} has no goal {key!r}")
+        raise LedgerError(f"{named} has no goal {key!r}")
 
     @staticmethod
-    def _task(s, project: dict, ref: Any) -> dict:
+    def _task(s, project: dict, ref: Any, named: str) -> dict:
         from sqlalchemy import select
 
         from omniharness.persistence.ledger import LedgerTaskRow
@@ -241,7 +362,7 @@ class LedgerService:
         key = str(ref or "")
         row = s.scalars(select(LedgerTaskRow).where(LedgerTaskRow.project_id == project["id"], (LedgerTaskRow.short_id == key.upper()) | (LedgerTaskRow.id == key))).first()
         if row is None:
-            raise LedgerError(f"{project['name']} has no task {key!r}")
+            raise LedgerError(f"{named} has no task {key!r}")
         return to_dict(row)
 
     # ---- the UI: direct user edits ------------------------------------------

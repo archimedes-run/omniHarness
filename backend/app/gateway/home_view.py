@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
+from app.gateway.display_safe import provider_link, safe_field
 from app.gateway.home_sources import CalendarView, Known, SourceItem, SourceState
 from app.gateway.inbox_view import describe_alerts
 from app.trigger_engine.models import Rule, TriggerType
@@ -120,7 +121,7 @@ class MovedView(BaseModel):
 Outside = tuple[list[SourceItem] | None, SourceState]
 
 _TASK_STATUS = {"done": "Task done", "doing": "Task started", "blocked": "Task blocked", "dropped": "Task dropped", "todo": "Task reopened"}
-_BY = {"user": "you", "assistant_confirmed": "the assistant, confirmed by you"}
+_BY = {"user": "you", "assistant_confirmed": "the assistant, confirmed by you", "assistant_disclosed": "the assistant, and it told you", "assistant_granted": "the assistant on its own, under a standing grant"}
 
 
 def _short(text: str, n: int = 120) -> str:
@@ -161,7 +162,7 @@ def describe_change(change: dict, project_names: dict[str, str]) -> MovedItem | 
         text = f"{kind} linked to {project}" if before is None else f"{kind} unlinked from {project}"
     else:
         return None
-    return MovedItem(at=str(change.get("at", "")), source="ledger", text=text, by=_BY.get(change.get("actor", ""), None), project_id=project_id)
+    return MovedItem(at=str(change.get("at", "")), source="ledger", text=safe_field(text), by=_BY.get(change.get("actor", ""), None), project_id=project_id)
 
 
 def _when(at: str) -> datetime:
@@ -191,6 +192,7 @@ def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str],
         sources[name] = state
         for it in found or []:
             if _when(it.at) >= since:
-                items.append(MovedItem(at=it.at, source=it.source, text=it.text, known=it.known, url=it.url))
+                # Live only if it is provably the provider's own link.
+                items.append(MovedItem(at=it.at, source=it.source, text=safe_field(it.text), known=it.known, url=provider_link(it.source, it.url)))
     items.sort(key=lambda i: _when(i.at), reverse=True)
     return MovedView(items=items[:MOVED_LIMIT], sources=sources)

@@ -14,6 +14,7 @@ overwrite each other silently.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -78,11 +79,17 @@ def _new_id() -> str:
 class LedgerRepository:
     def __init__(self, engine: Engine) -> None:
         self._sf = sessionmaker(engine, expire_on_commit=False)
+        # One write transaction at a time in this process. A task's short id
+        # is read from its project's counter and written back; `with_for_update`
+        # does nothing on SQLite, so two concurrent applies (parallel
+        # ledger_apply calls in one model step, now that routine ledger writes
+        # run at Tier 2) both read T-2 and the second fails its unique check.
+        self._write_lock = threading.Lock()
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:
         """One unit of work: a confirmed ledger_apply is all or nothing."""
-        with self._sf() as session, session.begin():
+        with self._write_lock, self._sf() as session, session.begin():
             yield session
 
     # ---- writes (inside a transaction) -------------------------------------
@@ -140,6 +147,25 @@ class LedgerRepository:
         self._record(s, owner_id, "link", link_id, actor, None, to_dict(row), None)
         s.execute(delete(LedgerLinkRow).where(LedgerLinkRow.id == link_id))
         return True
+
+    def remove(self, s: Session, entity: str, entity_id: str, *, owner_id: str | None, actor: str, version: int | None, pending_action_id: str | None = None) -> bool:
+        """Delete a row (undoing its creation), recorded like any change.
+        `version`: refused (StaleWrite) when the row moved on since."""
+        row = s.get(_ROWS[entity], entity_id, with_for_update=True)
+        if row is None:
+            return False
+        before = to_dict(row)
+        if version is not None and getattr(row, "version", version) != version:
+            raise StaleWrite(before)
+        self._record(s, owner_id, entity, entity_id, actor, pending_action_id, before, None)
+        s.delete(row)
+        s.flush()
+        return True
+
+    def changes_caused_by(self, s: Session, owner_id: str | None, cause: str) -> list[dict]:
+        """The changes one write recorded (its `pending_action_id` cause), oldest first."""
+        rows = s.scalars(select(LedgerChangeRow).where(LedgerChangeRow.owner_id == owner_id, LedgerChangeRow.pending_action_id == cause).order_by(LedgerChangeRow.id))
+        return [to_dict(r) for r in rows]
 
     @staticmethod
     def _record(s: Session, owner_id, entity, entity_id, actor, pending_action_id, before, after) -> None:

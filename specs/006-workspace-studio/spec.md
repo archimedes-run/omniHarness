@@ -98,10 +98,12 @@ The panel has tabs: Overview, Instructions, Tools and skills, Autonomy, Schedule
 
 Irreversible actions always wait, and appear in Home → Waiting on you.
 
+**Tiers decide first; Tier 3 always asks (review round 2, 2026-10-20; recorded as Amendment 1 to 005 FR-009, specs/005-project-ledger/spec.md v1.1: in chat a routine write runs and is disclosed with Undo only when it follows from the user's own message; one caused by content is a suggestion card).** The grantable ops are Tier 2 (run, then disclose): creating or updating a task (dropping one included) and adding a note. A grant never skips a confirmation. It only changes how those grant-governed Tier 2 calls behave in a scheduled run: there, one runs only when a granted class covers every change in it and the run's cap has room; otherwise it waits on Home → Waiting on you. In chat a grant changes nothing (Tier 2 runs and the reply says so). Everything Tier 3 (a new project or goal, linking a chat, anything irreversible or unclassified) asks every time, in chat and in scheduled runs, grant or not. Undo restores an agent's content only; its grants change only through the Autonomy tab's own Save.
+
 **Acceptance Scenarios**:
 
-1. **Given** a standing grant, **When** the same action is proposed in a chat run, **Then** the grant does not apply.
-2. **Given** a grant, **When** a tool classified as irreversible is called in a scheduled run, **Then** the grant never covers it.
+1. **Given** a standing grant, **When** the same action is proposed in a chat run, **Then** the grant does not apply: it runs as Tier 2 and the reply discloses it.
+2. **Given** a grant, **When** a tool classified as irreversible, or any Tier 3 call, is made in a scheduled run, **Then** the grant never covers it and it asks.
 3. **Given** a grant is revoked, **When** the next call is made, **Then** the grant no longer applies.
 4. **Given** a grant is used, **When** the audit log is read, **Then** that use is recorded. The grant is visible on Overview.
 5. **Given** Draft is pressed, **When** the draft returns, **Then** nothing is saved until Save.
@@ -234,7 +236,7 @@ It also provides the create-from-chat hook that 005 Slice 5 uses.
 
 - **FR-201** Multi-agent: participants are stored per thread, and the lead agent is the default. "@Name" runs that agent with the thread's context. Its effective tools are the intersection of the chat's selection and the agent's own. Replies are labelled with the agent's name and avatar. Tier 3 actions use the same card and the same policy.
 - **FR-301** Agent fields: display name, avatar, projects, schedule, autonomy. "Draft from one sentence" has one backend endpoint per field type. It returns text and never saves.
-- **FR-302** Standing grants live in the 003 policy layer. Each is scoped to one agent, one action class and scheduled runs only. Each use is audited. A grant is revocable, effective from the next call, and never covers an irreversible action class.
+- **FR-302** Standing grants live in the 003 policy layer. Each is scoped to one agent, one action class and scheduled runs only. Each use is audited. A grant is revocable, effective from the next call, and never covers an irreversible action class. A grant only ever covers a reversible Tier 2 call; Tier 3 always asks (review round 2). The per-run cap counts ACTIONS, not calls (a ledger_apply with N changes is N), is reserved atomically before the call runs, and is stored durably per firing, so a retry of the same firing continues its count. Undo never changes grants.
 - **FR-303** Skill Test calls the runtime's own skill-selection path, never a copy of it.
 - **FR-401** The Tasks panel reads and writes the 005 ledger only. Break down is proposed by the agent and confirmed by the user through the existing confirmation path.
 - **FR-402** Automations History states each firing's outcome in words, with the engine's recorded reason verbatim.
@@ -289,7 +291,7 @@ Accepted known limits:
 2. **Display name**: optional, set in Account. When unset it falls back to the part of the email before "@". The user is asked once, on their first Home visit.
 3. **"Reported" everywhere**: 005's UI wording changes from "claimed" to "reported". Internal enum names may stay.
 4. **Projects** are reached through the Tasks panel, the chat-bar Project chip, the Home block and ⌘K. A project view keeps its own linkable URL.
-5. **Reversible/irreversible label**: each tool carries one, separate from its tier. Standing grants only ever cover reversible actions, and a sabotage proves an irreversible tool cannot be granted.
+5. **Reversible/irreversible label**: each tool carries one, separate from its tier. Standing grants only ever cover reversible actions, and a sabotage proves an irreversible tool cannot be granted. Revised in review round 2: the grantable ledger ops are Tier 2, not Tier 3, so a grant never skips a confirmation.
 6. **Skill Test**:
    - runs only on a button press;
    - uses the same model the runtime would;
@@ -302,7 +304,7 @@ Accepted known limits:
 
 11. **Standing grants and content origin (Phase 3)**:
     - Standing grants, which only ever cover reversible actions, DO apply in scheduled runs even when the run's origin is "derived from content".
-    - They are capped per run: at most 20 granted reversible actions by default. Above that the run pauses and appears on Home → "Waiting on you".
+    - They are capped per run: at most 20 granted reversible actions by default, counted per action (one ledger_apply with N changes is N), reserved before the call runs so parallel calls cannot overshoot, and kept per firing so a retry continues the count. Above that the run pauses and appears on Home → "Waiting on you".
     - Every granted action is listed in the run's history with its origin.
     - Required tests: the cap pauses the run at action 21, a content-derived scheduled run still uses its grant, and a chat run never does. Each has a sabotage.
 

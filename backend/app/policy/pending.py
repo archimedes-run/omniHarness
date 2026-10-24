@@ -64,6 +64,7 @@ def _to_dict(action: PendingAction) -> dict:
         "post_content": action.post_content,
         "post_attempts": action.post_attempts,
         "continued": action.continued,
+        "run_markers": [list(pair) for pair in action.run_markers],
     }
 
 
@@ -93,6 +94,7 @@ def _from_dict(raw: dict) -> PendingAction:
         post_content=raw.get("post_content") or "",
         post_attempts=int(raw.get("post_attempts") or 0),
         continued=bool(raw.get("continued")),
+        run_markers=tuple((str(k), str(v)) for k, v in (raw.get("run_markers") or ())),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):
@@ -306,6 +308,26 @@ class PendingStore:
         action.claimed_by = claimant
         self.save(action)
         return action
+
+    def release_claim(self, action: PendingAction) -> PendingAction:
+        """Give back a claim taken for an all-or-nothing batch that did not
+        run ("Apply all" with a card that failed): the action is open again,
+        unresolved, exactly as before the claim."""
+        self._claim_path(action.id).unlink(missing_ok=True)
+        action.claimed_by = None
+        return self.save(action)
+
+    def declined_in_thread(self, thread_id: str | None, owner_id: str | None) -> list[PendingAction]:
+        """Actions this owner DECLINED in this thread (005 FR-009 Amendment 1:
+        a declined suggestion stays declined in that chat)."""
+        if not thread_id:
+            return []
+        out = []
+        for path in sorted(self.directory.glob("*.json")):
+            action = self.get(path.stem)
+            if action and action.outcome is Outcome.DECLINED and action.thread_id == thread_id and (action.owner_id or None) == (owner_id or None):
+                out.append(action)
+        return out
 
     def resolve(self, action: PendingAction, outcome: Outcome, reason: str = "") -> PendingAction:
         action.resolve(outcome, reason)

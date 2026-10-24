@@ -7,64 +7,29 @@ initial creation handshake.
 
 The tool writes back to ``{base_dir}/users/{user_id}/agents/{agent_name}/{config.yaml,SOUL.md}``
 so an agent created by one user is never visible to (or mutable by) another.
-Writes are staged into temp files first; both files are renamed into place only
-after both temp files are successfully written, so a partial failure cannot leave
-config.yaml updated while SOUL.md still holds stale content.
+Writes go through the versioned store (omniharness.config.config_versions):
+each update is a new version, source "proposal", undoable, and both files are
+staged before either is replaced, so a partial failure cannot leave config.yaml
+updated while SOUL.md still holds stale content.
 """
 
 from __future__ import annotations
 
 import logging
-import tempfile
-from pathlib import Path
 from typing import Any
 
-import yaml
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 from langgraph.types import Command
 
+from omniharness.config import config_versions
 from omniharness.config.agents_config import load_agent_config, validate_agent_name
 from omniharness.config.app_config import get_app_config
 from omniharness.config.paths import get_paths
 from omniharness.runtime.user_context import get_effective_user_id
 
 logger = logging.getLogger(__name__)
-
-
-def _stage_temp(path: Path, text: str) -> Path:
-    """Write ``text`` into a sibling temp file and return its path.
-
-    The caller is responsible for ``Path.replace``-ing the temp into the target
-    once every staged file is ready, or for unlinking it on failure.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = tempfile.NamedTemporaryFile(
-        mode="w",
-        dir=path.parent,
-        suffix=".tmp",
-        delete=False,
-        encoding="utf-8",
-    )
-    try:
-        fd.write(text)
-        fd.flush()
-        fd.close()
-        return Path(fd.name)
-    except BaseException:
-        fd.close()
-        Path(fd.name).unlink(missing_ok=True)
-        raise
-
-
-def _cleanup_temps(temps: list[Path]) -> None:
-    """Best-effort removal of staged temp files."""
-    for tmp in temps:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            logger.debug("Failed to clean up temp file %s", tmp, exc_info=True)
 
 
 @tool
@@ -145,85 +110,42 @@ def update_agent(
 
     updated_fields: list[str] = []
 
+    # Start from the config on record, every key kept (display name, projects,
+    # autonomy, anything added later); only what was passed changes. The
+    # version is read with it and sent back as base_version, so an edit made
+    # by someone else in between (the user in Agent Studio) is never
+    # overwritten: the write is refused instead.
+    current_snapshot, read_version = config_versions.current_agent_state(user_id, agent_name)
+    current = current_snapshot or {}
+    config_data: dict[str, Any] = dict(current.get("config") or {})
     # Force the on-disk ``name`` to match the directory we are writing into,
     # even if ``existing_cfg.name`` had drifted (e.g. from manual yaml edits).
-    config_data: dict[str, Any] = {"name": agent_name}
-    new_description = description if description is not None else existing_cfg.description
-    config_data["description"] = new_description
+    config_data["name"] = agent_name
+    config_data["description"] = description if description is not None else existing_cfg.description
     if description is not None and description != existing_cfg.description:
         updated_fields.append("description")
+    for key, passed in (("model", model), ("tool_groups", tool_groups), ("skills", skills)):
+        existing = getattr(existing_cfg, key)
+        value = passed if passed is not None else existing
+        if value is not None:
+            config_data[key] = value
+        if passed is not None and passed != existing:
+            updated_fields.append(key)
+    if soul is not None:
+        updated_fields.append("soul")
 
-    new_model = model if model is not None else existing_cfg.model
-    if new_model is not None:
-        config_data["model"] = new_model
-    if model is not None and model != existing_cfg.model:
-        updated_fields.append("model")
-
-    new_tool_groups = tool_groups if tool_groups is not None else existing_cfg.tool_groups
-    if new_tool_groups is not None:
-        config_data["tool_groups"] = new_tool_groups
-    if tool_groups is not None and tool_groups != existing_cfg.tool_groups:
-        updated_fields.append("tool_groups")
-
-    new_skills = skills if skills is not None else existing_cfg.skills
-    if new_skills is not None:
-        config_data["skills"] = new_skills
-    if skills is not None and skills != existing_cfg.skills:
-        updated_fields.append("skills")
-
-    config_changed = bool({"description", "model", "tool_groups", "skills"} & set(updated_fields))
-
-    # Stage every file we intend to rewrite into a temp sibling. Only after
-    # *all* temp files exist do we rename them into place — so a failure on
-    # SOUL.md cannot leave config.yaml already replaced.
-    pending: list[tuple[Path, Path]] = []
-    staged_temps: list[Path] = []
-
-    try:
-        agent_dir.mkdir(parents=True, exist_ok=True)
-
-        if config_changed:
-            yaml_text = yaml.dump(config_data, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            config_target = agent_dir / "config.yaml"
-            config_tmp = _stage_temp(config_target, yaml_text)
-            staged_temps.append(config_tmp)
-            pending.append((config_tmp, config_target))
-
-        if soul is not None:
-            soul_target = agent_dir / "SOUL.md"
-            soul_tmp = _stage_temp(soul_target, soul)
-            staged_temps.append(soul_tmp)
-            pending.append((soul_tmp, soul_target))
-            updated_fields.append("soul")
-
-        # Commit phase. ``Path.replace`` is atomic per file on POSIX/NTFS and
-        # the staging step above means any earlier failure has already been
-        # reported. The remaining failure mode is a crash *between* two
-        # ``replace`` calls, which is reported via the partial-write error
-        # branch below so the caller knows which files are now on disk.
-        committed: list[Path] = []
+    if updated_fields or config_data.get("name") != (current.get("config") or {}).get("name"):
+        new_soul = soul if soul is not None else (current.get("soul") or "")
         try:
-            for tmp, target in pending:
-                tmp.replace(target)
-                committed.append(target)
+            # Through the versioned store: the agent changing itself is a
+            # proposal it applied, recorded as such and undoable.
+            config_versions.write_agent(user_id, agent_name, {"config": config_data, "soul": new_soul}, who=f"agent:{agent_name}", source="proposal", base_version=read_version)
+        except config_versions.StaleWriteError as e:
+            logger.info("[update_agent] Refused a stale update to agent '%s' (user=%s): %s", agent_name, user_id, e)
+            return _err(f"Agent '{agent_name}' was changed by someone else while you were updating it, so nothing was saved ({e}). Read the current setup again and redo the change on top of it.")
         except Exception as e:
-            _cleanup_temps([t for t, _ in pending if t not in committed])
-            if committed:
-                logger.error(
-                    "[update_agent] Partial write for agent '%s' (user=%s): committed=%s, failed during rename: %s",
-                    agent_name,
-                    user_id,
-                    [p.name for p in committed],
-                    e,
-                    exc_info=True,
-                )
-                return _err(f"Partial update for agent '{agent_name}': {[p.name for p in committed]} were updated, but the rest failed ({e}). Re-run update_agent to retry the remaining fields.")
-            raise
-
-    except Exception as e:
-        _cleanup_temps(staged_temps)
-        logger.error("[update_agent] Failed to update agent '%s' (user=%s): %s", agent_name, user_id, e, exc_info=True)
-        return _err(f"Failed to update agent '{agent_name}': {e}")
+            logger.error("[update_agent] Failed to update agent '%s' (user=%s): %s", agent_name, user_id, e, exc_info=True)
+            return _err(f"Failed to update agent '{agent_name}': {e}")
 
     if not updated_fields:
         return Command(update={"messages": [ToolMessage(content=f"No changes applied to agent '{agent_name}'. The provided values matched the existing config.", tool_call_id=tool_call_id)]})

@@ -28,6 +28,7 @@ if the user had spoken, and that is exactly what this prevents.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from omniharness.agents.turns import USER_TURN_MARKER, mark_user_turn  # noqa: F401 (re-exported)
@@ -112,48 +113,75 @@ ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
 ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter's origin applies
 
 
+#: Tool results the harness itself produced, which therefore cannot carry
+#: anyone else's words: write acknowledgements and receipts (user decision
+#: 2026-10-20). Anything not listed (mail, web, files, list cells, stored
+#: runs, MCP reads, a subagent's or a called agent's output, and every tool
+#: added later) is UNTRUSTED by default.
+#:
+#: `ledger_apply` answers with what it wrote ("Added T-1 …", a suggestion's
+#: plan, an Undo id), composed by the ledger service from the call's own
+#: arguments and ids, never a stored field (a project is named as the call
+#: named it, not by its stored name: review 5). `ledger_read` is NOT here: it
+#: returns stored text that content may have put there.
+TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"})
+
+#: Set on a tool result by the policy middleware at dispatch, and only when
+#: the tool that ran IS the registered built-in object (middleware.
+#: _mark_trusted_ack): trust follows the tool's identity, never its name, so
+#: an MCP tool calling itself ledger_apply (refused at load anyway: tools.
+#: refuse_builtin_collisions) or a hand-made message naming it is untrusted.
+TRUSTED_ACK_MARKER = "omniharness_trusted_ack"
+
+
+def tool_result_is_trusted(message: Any, name: str | None = None) -> bool:
+    """THE one trust decision for a tool result: a harness-internal
+    acknowledgement from the registered built-in (marker) of a kind listed in
+    TRUSTED_TOOL_RESULTS. Everything else is untrusted."""
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    marked = isinstance(kwargs, dict) and kwargs.get(TRUSTED_ACK_MARKER) is True
+    return bool(marked and name and name in TRUSTED_TOOL_RESULTS)
+
+
 def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) -> tuple[str, str]:
     """FR-006. Which turn caused the call being dispatched, and its source.
 
     Content the agent READ may SUGGEST an action but can never confirm it or
-    originate it silently. So the question is not "is the last message a tool
-    result" — at dispatch the last message is ALWAYS the AI message making the
-    call, which is why that check never fired (reported 2026-10-19). Walk back
-    past the AI message(s) of this step; the first other message is the cause:
+    originate it silently. So the question is: did UNTRUSTED content enter
+    this turn before the call? Walk back from the call to the turn's start
+    (the user's message), past the AI messages of each step:
 
-      a genuine user turn  -> ("user", "")
-      tool result(s)       -> ("content", "<the tool(s) that produced them>")
-      anything else        -> ("unknown", "")   fails toward card-only
+      any untrusted tool result on the way  -> ("content", "<those tools>")
+      only trusted ones (the harness's own
+        write acknowledgements), then the
+        user's message                       -> ("user", "")
+      anything else first                    -> ("unknown", "")  fails toward card-only
 
-    A trigger-injected turn is a HumanMessage by shape, so `synthetic` (from
-    runtime context, provenance.is_synthetic_turn) is consulted first.
+    Trust is decided in one place (tool_result_is_trusted, default untrusted).
+    Once untrusted content is in the turn, every later call in it is tainted,
+    whatever came after. A trigger-injected turn is a HumanMessage by shape,
+    so `synthetic` (from runtime context, provenance.is_synthetic_turn) is
+    consulted first.
     """
     if synthetic:
         return ORIGIN_AUTOMATION, ""
     items = list(messages or [])
+    untrusted: list[str] = []
     for index in range(len(items) - 1, -1, -1):
         message = items[index]
         if _message_type(message) == "ai" and not is_tool_result(message):
             continue
         if is_tool_result(message):
-            return ORIGIN_CONTENT, _content_source(items, index)
+            name = _tool_name_of(items, message)
+            if not tool_result_is_trusted(message, name) and name not in untrusted:
+                untrusted.insert(0, name)
+            continue
         if is_invitation(message):
-            return ORIGIN_INVITATION, ""
+            return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_INVITATION, "")
         if is_user_turn(message):
-            return ORIGIN_USER, ""
-        return ORIGIN_UNKNOWN, ""
-    return ORIGIN_UNKNOWN, ""
-
-
-def _content_source(items: list[Any], index: int) -> str:
-    """The tool(s) whose results sit at the end of the read, in call order."""
-    names: list[str] = []
-    while index >= 0 and is_tool_result(items[index]):
-        name = _tool_name_of(items, items[index])
-        if name not in names:
-            names.insert(0, name)
-        index -= 1
-    return ", ".join(names)
+            return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_USER, "")
+        return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
+    return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
 
 
 def _tool_name_of(items: list[Any], result: Any) -> str:
@@ -167,3 +195,121 @@ def _tool_name_of(items: list[Any], result: Any) -> str:
             if call.get("id") == call_id and call.get("name"):
                 return str(call["name"])
     return "a tool result"
+
+
+# -- where a granted write came from, for the run summary --------------------
+
+_SUBJECT = re.compile(r"^\s*subject\s*:\s*(.+)$", re.I | re.M)
+_HTML_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_TITLE_LINE = re.compile(r"^\s*title\s*:\s*(.+)$", re.I | re.M)
+_HEADING = re.compile(r"^\s*#\s+(.+)$", re.M)
+_LABEL_LIMIT = 80
+
+
+def _family(tool_name: str) -> str:
+    name = tool_name.lower()
+    if "mail" in name:
+        return "email"
+    if any(word in name for word in ("fetch", "web", "browse", "crawl", "page", "search")):
+        return "page"
+    if "file" in name:
+        return "file"
+    return f"tool {tool_name}"
+
+
+def _call_args(items: list[Any], result: Any) -> dict:
+    call_id = result.get("tool_call_id") if isinstance(result, dict) else getattr(result, "tool_call_id", None)
+    for message in items:
+        calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+        for call in calls or []:
+            if call.get("id") == call_id:
+                return call.get("args") or {}
+    return {}
+
+
+def _descriptor(family: str, text: str, args: dict) -> str | None:
+    """A short name for the content: an email's subject, a page's title (or
+    its host). Never the body."""
+    if family == "email":
+        match = _SUBJECT.search(text)
+        return match.group(1) if match else None
+    if family == "page":
+        for pattern in (_HTML_TITLE, _TITLE_LINE, _HEADING):
+            match = pattern.search(text)
+            if match:
+                return match.group(1)
+        url = str(args.get("url") or "")
+        if url:
+            from urllib.parse import urlparse
+
+            return urlparse(url).netloc or None
+        return None
+    if family == "file":
+        path = str(args.get("path") or args.get("file_path") or "")
+        return path.rsplit("/", 1)[-1] or None
+    return None
+
+
+def source_label(messages: list[Any] | None) -> str:
+    """What a write in a scheduled run came from, for its run summary:
+    "from: email “<subject>”", "from: page “<title>”", or "from: the
+    schedule's own prompt" when no untrusted content entered the turn. The
+    nearest untrusted tool result before the call is named (one classifier:
+    tool_result_is_trusted); its descriptor is cut short and redacted for the
+    widest channel (Telegram), "Withheld" if redaction fails. Never the body."""
+    from session_watcher.redaction import Channel, RedactionError, redact
+
+    items = list(messages or [])
+    for index in range(len(items) - 1, -1, -1):
+        message = items[index]
+        if is_tool_result(message):
+            name = _tool_name_of(items, message)
+            if tool_result_is_trusted(message, name):
+                continue
+            family = _family(name)
+            content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+            text = content if isinstance(content, str) else " ".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in (content or []))
+            descriptor = _descriptor(family, text, _call_args(items, message))
+            if not descriptor:
+                what = {"email": "subject", "page": "title", "file": "name"}.get(family, "name")
+                return f"from: {family} ({what} not found)"
+            short = " ".join(descriptor.split())
+            short = short[:_LABEL_LIMIT] + ("…" if len(short) > _LABEL_LIMIT else "")
+            try:
+                short = redact(short, Channel.REMOTE)
+            except RedactionError:
+                short = "Withheld"
+            return f"from: {family} “{short}”"
+        if is_user_turn(message) or (_message_type(message) in USER_ORIGINS):
+            quoted = _event_label(message)
+            if quoted:
+                return quoted
+            break
+    return "from: the schedule's own prompt"
+
+
+_EVENT_QUOTE = re.compile(r"⟦(\w+) (\w+): ([^⟧]*)⟧")
+_EVENT_FAMILY = {"calendar": "calendar event", "watcher": "session", "completion": "session"}
+_TITLE_FIELDS = ("summary", "title", "subject", "name", "project")
+
+
+def _event_label(message: Any) -> str | None:
+    """A scheduled turn whose prompt quotes event text (trigger_engine.compose
+    render_prompt) is not the schedule's own words: name the event."""
+    from session_watcher.redaction import Channel, RedactionError, redact
+
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    text = content if isinstance(content, str) else " ".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in (content or []))
+    quotes = _EVENT_QUOTE.findall(text)
+    if not quotes:
+        return None
+    kind = quotes[0][0]
+    by_field = {field: value for _, field, value in quotes}
+    title = next((by_field[f] for f in _TITLE_FIELDS if by_field.get(f)), quotes[0][2])
+    short = " ".join(title.split())
+    short = short[:_LABEL_LIMIT] + ("…" if len(short) > _LABEL_LIMIT else "")
+    try:
+        short = redact(short, Channel.REMOTE)
+    except RedactionError:
+        short = "Withheld"
+    return f"from: {_EVENT_FAMILY.get(kind, 'event' if kind == 'event' else kind + ' event')} “{short}”"

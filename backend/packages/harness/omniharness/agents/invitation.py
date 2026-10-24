@@ -71,6 +71,11 @@ class TurnOrigin:
     chain: tuple[str, ...] = ()
     #: Who the content originally reached through, for nested invitations.
     via: str = ""
+    #: Run markers the invitee's runtime context starts with, as (key, value)
+    #: pairs: the inviting run's own (a scheduled run's provenance, rule and
+    #: firing), so an agent invited during a scheduled run is in that run too.
+    #: Filled and read by the policy layer; the harness only carries them.
+    run_markers: tuple[tuple[str, str], ...] = ()
 
 
 _INVITING: ContextVar[TurnOrigin | None] = ContextVar("omniharness_inviting_turn", default=None)
@@ -100,6 +105,7 @@ def invited_agent_context(inviting: TurnOrigin | None, invited_name: str) -> dic
         inviting = TurnOrigin(origin=UNKNOWN)
     chain = tuple(inviting.chain) or ("lead_agent",)
     return {
+        **dict(inviting.run_markers),
         INVITED_ORIGIN_KEY: inviting.origin or UNKNOWN,
         INVITED_SOURCE_KEY: inviting.source,
         INVITED_VIA_KEY: inviting.via or chain[-1],

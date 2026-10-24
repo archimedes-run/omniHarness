@@ -29,9 +29,17 @@ DO NOT assume this works. Read it, and test it from inside a middleware.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 #: Set by Feature 002's injector. Structural — a message body cannot reach it.
 PROVENANCE_KEY = "turn_provenance"
 RULE_KEY = "trigger_rule_id"
+#: Which firing of the rule this run is: the event's fingerprint, the same for
+#: every attempt at it. Standing grants count a run's actions under it, so a
+#: retry continues the count (grants.GrantRunCounts).
+FIRING_KEY = "trigger_firing_id"
 
 #: The one value meaning "this turn was generated, not sent by a person".
 SYNTHETIC = "synthetic-trigger"
@@ -48,3 +56,55 @@ def is_synthetic_turn(runtime_context: dict | None) -> bool:
     if not runtime_context:
         return False
     return runtime_context.get(PROVENANCE_KEY) == SYNTHETIC
+
+
+# -- how a write was authorised, for the record it leaves ---------------------
+#
+# A ledger row says who made each change (Feature 005, FR-007). Since Feature
+# 006 a routine ledger write can run at Tier 2 (disclosed in the reply) or
+# under a standing grant in a scheduled run, so "the assistant, confirmed by
+# you" is no longer true of every assistant write. The policy middleware sets
+# this around the handler it runs; the confirmation route runs tools outside
+# it, so the default is the confirmed case.
+
+CONFIRMED = "confirmed"
+DISCLOSED = "disclosed"
+GRANTED = "granted"
+
+_executed_as: ContextVar[tuple[str, str | None, dict]] = ContextVar("policy_executed_as", default=(CONFIRMED, None, {}))
+
+
+@contextmanager
+def executed_as(how: str, write_id: str | None = None) -> Iterator[dict]:
+    """`write_id` names a write made without a confirmation (Tier 2, or a
+    standing grant), so its Undo can find and revert it. Yields the call's
+    state: {"committed": True} once the tool's write is durable (see
+    mark_committed), which is how the grant cap knows not to give back a
+    reservation for a write that happened."""
+    state: dict = {"committed": False, "write_id": write_id}
+    token = _executed_as.set((how, write_id, state))
+    try:
+        yield state
+    finally:
+        _executed_as.reset(token)
+
+
+def current_execution() -> str:
+    """confirmed, disclosed (Tier 2) or granted (a standing grant)."""
+    return _executed_as.get()[0]
+
+
+def current_write_id() -> str | None:
+    """The write id of an unconfirmed write in progress, else None."""
+    return _executed_as.get()[1]
+
+
+def mark_committed() -> None:
+    """Called by a tool once its write is committed."""
+    _executed_as.get()[2]["committed"] = True
+
+
+def new_write_id() -> str:
+    import uuid
+
+    return f"w-{uuid.uuid4().hex[:16]}"

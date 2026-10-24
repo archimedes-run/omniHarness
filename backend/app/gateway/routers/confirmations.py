@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_thread_tool_selection_repo
 from app.gateway.display_redaction import all_for_display, for_display
+from app.gateway.display_safe import safe_field, safe_lines
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,9 @@ class PendingActionResponse(BaseModel):
     #: as text that passed redaction ("Withheld" where it did not). Display
     #: only: a confirmation runs the STORED arguments, never these.
     arguments_display: dict[str, str] | None = None
+    #: A routine ledger write waiting as a suggestion (005 FR-009 Amendment
+    #: 1): it may be applied with others through "Apply all". Tier 3 is never.
+    suggestion: bool = False
 
 
 class AwaitingPost(BaseModel):
@@ -549,6 +553,10 @@ def _view(action, threshold: int) -> PendingActionResponse:
     # The plan names what it acts on, often in the words of an email or a page.
     plan_text, plan_withheld = for_display(action.plan_text)
     targets, targets_withheld = all_for_display(list(action.targets))
+    # The plan's line structure is the server's; every line, and every
+    # target, is made safe to show (display_safe: no line breaks, bidi or
+    # live links from content).
+    plan_text, targets = safe_lines(plan_text), [safe_field(t) for t in targets]
     arguments = None
     if action.tool_name in EDITABLE_TOOLS:
         _, args_withheld = for_display(json.dumps(action.arguments, default=str))
@@ -568,12 +576,19 @@ def _view(action, threshold: int) -> PendingActionResponse:
         arguments=arguments,
         origin=action.origin,
         origin_source=action.origin_source,
-        origin_label=action.origin_label(),
+        origin_label=safe_field(action.origin_label()),
         origin_via=action.origin_via,
         confirmable_by_typing=action.confirmable_by_typing,
         owner_id=action.owner_id,
         arguments_display=_arguments_for_display(action.arguments),
+        suggestion=_is_suggestion(action),
     )
+
+
+def _is_suggestion(action) -> bool:
+    from app.policy.models import Tier
+
+    return action.tool_name in EDITABLE_TOOLS and action.tier_at_statement is Tier.TIER_2
 
 
 #: How long a result that could not be posted stays listed (after its card's expiry).
@@ -849,3 +864,127 @@ async def decline(action_id: str, body: ResolveRequest, request: Request) -> Res
     hesitant user toward the dangerous answer.
     """
     return await _resolve(request, action_id, confirm=False, body=body)
+
+
+class ApplyAllRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=50, description="The suggestion cards to apply together")
+
+
+class ApplyAllResponse(BaseModel):
+    #: One Undo (POST /api/ledger/writes/{write_id}/undo) reverts every write
+    #: this batch made. None when nothing was written.
+    write_id: str | None
+    results: list[ResolveResponse]
+
+
+@router.post("/apply-all", response_model=ApplyAllResponse)
+@require_permission("threads", "write")
+async def apply_all(body: ApplyAllRequest, request: Request) -> ApplyAllResponse:
+    """ "Apply all" on a group of suggestion cards (005 FR-009 Amendment 1).
+
+    ALL OR NOTHING: every card is checked (routine ledger suggestions only;
+    Tier 3, any other tool, or a card no longer open is refused, untouched),
+    every card is claimed, and all their changes are written in ONE ledger
+    transaction under one write id, so one Undo reverts the batch. If any
+    card cannot be applied, nothing is written, every claim is given back,
+    the cards stay open, and the failing card says why.
+
+    A CARD ANOTHER ROUTE TAKES WHILE THIS CLAIMS (its own button, pressed at
+    the same moment) is that route's: it runs it, and this batch reports it
+    as handled there. The batch is then all or nothing over exactly the
+    cards it claimed (#123). It used to give every claim back and write
+    nothing, while a button pressed on a card it held had already been told
+    "another route confirmed that first": that card was confirmed by the
+    person and never ran. A claim this takes is never left held: the batch
+    either runs (EXECUTED), cannot run (claim given back, card open), or
+    ends unexpectedly (FAILED, so it is never run twice)."""
+    import asyncio
+
+    from app.gateway.authz import get_auth_context
+    from app.gateway.ownership import require_access
+    from app.ledger.service import BatchError
+    from app.policy.confirm_flow import take_claim
+    from app.policy.models import Outcome
+    from app.policy.provenance import new_write_id
+
+    _, middleware, _ = _policy(request)
+    service = getattr(request.app.state, "ledger_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="the project ledger needs a database")
+    user_id = _user_id(get_auth_context(request))
+    now = datetime.now(UTC)
+    actions = []
+    for action_id in dict.fromkeys(body.ids):
+        action = middleware.pending.get(action_id)
+        if action is None:
+            raise HTTPException(status_code=404, detail=f"Confirmation {action_id} not found")
+        await require_access(request, action.owner_id, what="Confirmation", ident=action_id)
+        if not _is_suggestion(action):
+            raise HTTPException(status_code=422, detail=f"{action_id} ({action.tool_name}) is not a routine ledger suggestion; confirm it on its own card")
+        actions.append(action)
+    closed = [a for a in actions if a.outcome is not None or a.is_expired(now)]
+    if closed:
+        # Nothing is applied when any card is no longer open: the group is
+        # all or nothing, and each card says what happened.
+        return ApplyAllResponse(
+            write_id=None,
+            results=[
+                ResolveResponse(outcome="already_resolved", action_id=a.id, message="That card is no longer open, so nothing in this group was applied.")
+                if a in closed
+                else ResolveResponse(outcome="not_applied", action_id=a.id, message="Not applied: another card in this group is no longer open, so none was.")
+                for a in actions
+            ],
+        )
+
+    claimed = []
+    taken = []
+    try:
+        for action in actions:
+            got = take_claim(middleware.pending, action.id, "apply-all")
+            (claimed if got is not None else taken).append(got or action)
+    except BaseException:
+        # Nothing has run: every claim taken so far goes back.
+        for held in claimed:
+            middleware.pending.release_claim(held)
+        raise
+    elsewhere = {a.id: ResolveResponse(outcome="already_resolved", action_id=a.id, message="Another route took this card first; it is handled there, not by this group.") for a in taken}
+    if not claimed:
+        return ApplyAllResponse(write_id=None, results=[elsewhere[a.id] for a in actions])
+
+    write_id = new_write_id()
+    batches = [(list((a.arguments or {}).get("changes") or []), a.thread_id) for a in claimed]
+    try:
+        done = await asyncio.to_thread(service.apply_batch, user_id=user_id, batches=batches, actor="assistant_confirmed", pending_action_id=write_id)
+    except BatchError as exc:
+        # One transaction, rolled back: nothing was written, so the cards
+        # are open again exactly as before.
+        for held in claimed:
+            middleware.pending.release_claim(held)
+        failed = claimed[exc.index]
+        by_id = {
+            a.id: ResolveResponse(outcome="failed", action_id=a.id, message=f"Not applied: {exc}", detail={"error": str(exc)})
+            if a.id == failed.id
+            else ResolveResponse(outcome="not_applied", action_id=a.id, message=f"Not applied: another card in this group ({failed.id}) could not be applied, so none was.")
+            for a in claimed
+        }
+        return ApplyAllResponse(write_id=None, results=[by_id.get(a.id) or elsewhere[a.id] for a in actions])
+    except BaseException as exc:
+        # NEVER LEFT CLAIMED (#122): it is not known whether the transaction
+        # committed, so the cards are not reopened (that could write them
+        # twice); each is resolved FAILED and says so, as a confirmed call
+        # that raises is (confirm_flow._apply). The type only in the log.
+        logger.error("apply-all: batch %s did not complete: %s", write_id, type(exc).__name__)
+        for held in claimed:
+            middleware.pending.resolve(held, Outcome.FAILED, "authorised, but the batch did not complete; check the project before asking again")
+        raise
+
+    results_by_id = {}
+    for action, lines in zip(claimed, done, strict=True):
+        action.confirmation = {"via": "apply-all", "thread_id": None, "user_id": user_id, "message_id": None, "write_id": write_id}
+        middleware.pending.resolve(action, Outcome.EXECUTED)
+        results_by_id[action.id] = ResolveResponse(outcome="executed", action_id=action.id, message="Done.", detail={"result": safe_field(" ".join(lines))})
+    if middleware.audit is not None:
+        for action in claimed:
+            middleware.audit.record_tier3(action=action, actor=middleware.actor, now=datetime.now(UTC))
+    results = [results_by_id.get(a.id) or elsewhere[a.id] for a in actions]
+    return ApplyAllResponse(write_id=write_id, results=results)

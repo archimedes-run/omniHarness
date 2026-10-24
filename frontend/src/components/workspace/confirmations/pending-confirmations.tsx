@@ -10,6 +10,7 @@ import {
 } from "@/core/confirmations/hooks";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
 
+import { ApplyAllBar } from "./apply-all-bar";
 import { PendingActionCard } from "./pending-action-card";
 
 /**
@@ -128,6 +129,8 @@ export function PendingConfirmations({
           Nothing is waiting for your confirmation.
         </p>
       )}
+
+      <ApplyAllBar actions={actions} />
 
       {shown.map((action) => (
         <PendingActionCard

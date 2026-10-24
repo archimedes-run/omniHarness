@@ -23,6 +23,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from app.gateway.watcher_client import WatcherClient
 from app.trigger_engine.audit import AuditLog
@@ -225,6 +226,7 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         # Feature 006 run history: every automation run's full content,
         # redacted, kept locally (app/run_history).
         record_run=record_run,
+        run_footer=_run_footer(config),
     )
 
     return TriggerLoop(
@@ -238,6 +240,52 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         presence=PresenceSignal(),
         now=lambda: datetime.now(UTC),
     )
+
+
+def _run_footer(config: AppConfig):
+    """What a firing did on its own (Feature 006), for the end of its message:
+    each granted write with what it came from, and a LINK to its run summary
+    on the web page, where "Undo all for this run" is. Nothing in the channel
+    acts; the redactor still runs over the whole message before delivery."""
+    from app.policy.audit import PolicyAuditLog
+
+    state_dir = getattr(getattr(config, "policy", None), "state_dir", None)
+
+    def footer(firing_id: str) -> str:
+        if not state_dir:
+            return ""  # no policy layer, so no standing grants
+        audit_path = Path(state_dir) / "audit.jsonl"
+        try:
+            entries = [e for e in PolicyAuditLog(path=audit_path, actor="default").entries() if e.get("kind") == "grant-use" and e.get("firing_id") == firing_id]
+        except Exception:  # noqa: BLE001 — a summary that cannot be read is said, not hidden
+            logger.warning("trigger engine: could not read what firing %s did on its own", firing_id, exc_info=True)
+            return "This run may have changed your projects on its own; I could not read what it did. Check Agent Studio."
+        if not entries:
+            return ""
+        from app.gateway.display_safe import safe_field
+
+        # Every content line is ONE line (safe_field strips line breaks and
+        # bidi controls and defangs links) and starts with "- ", inside
+        # quotes, so content can neither start a line of its own nor look like
+        # the link line. The link is the only live one, built here, last, on
+        # its own fixed line.
+        lines = ["Done on its own in this run (standing grants):"]
+        for entry in entries:
+            what = safe_field("; ".join(entry.get("targets") or []) or entry.get("tool", ""))
+            source = safe_field(entry.get("source_label") or "")
+            lines.append(f"- “{what}”" + (f" ({source})" if source else ""))
+        lines.append(f"Review or undo them all: {_web_base_url()}/workspace/runs/{quote(firing_id, safe='')}")
+        return "\n".join(lines)
+
+    return footer
+
+
+def _web_base_url() -> str:
+    """The web UI's address: the first allowed CORS origin (the frontend)."""
+    from app.gateway.config import get_gateway_config
+
+    origins = get_gateway_config().cors_origins or ["http://localhost:3000"]
+    return origins[0].rstrip("/")
 
 
 #: One gateway call, including a whole agent turn for runs/wait.

@@ -123,8 +123,12 @@ class LedgerChangeRow(Base):
     owner_id: Mapped[str | None] = mapped_column(String(64))
     entity: Mapped[str] = mapped_column(String(16), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    # user | assistant_confirmed
+    # user | assistant_confirmed | assistant_disclosed (Tier 2) | assistant_granted (standing grant)
     actor: Mapped[str] = mapped_column(String(24), nullable=False)
+    #: What caused it: the confirmed pending action's id, or for a write the
+    #: assistant made without a confirmation (Tier 2 / a standing grant) its
+    #: write id "w-…", which Undo reverts by; an undo's own changes carry
+    #: "undo:w-…".
     pending_action_id: Mapped[str | None] = mapped_column(String(64))
     before: Mapped[dict | None] = mapped_column(JSON)
     after: Mapped[dict | None] = mapped_column(JSON)

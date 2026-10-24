@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -30,10 +31,12 @@ from langchain.agents.middleware import AgentMiddleware
 from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
+from .grants import GrantedCall
 from .limits import describe_expiry
 from .lineage import initiation_origin
 from .models import Outcome, PendingAction, Tier, default_expiry
 from .pending import PendingStore, targets_still_match
+from .provenance import DISCLOSED, GRANTED, executed_as, new_write_id
 from .targets import source_argument
 
 logger = logging.getLogger(__name__)
@@ -74,6 +77,9 @@ class PolicyMiddleware(AgentMiddleware):
     audit: Any = None
     actor: str = "default"
     now: Any = _now
+    #: Granted actions per scheduled run, durable and reserved atomically
+    #: (grants.GrantRunCounts). None: no grant can be used (fails closed).
+    grant_runs: Any = None
 
     def __post_init__(self) -> None:
         super().__init__()
@@ -92,15 +98,25 @@ class PolicyMiddleware(AgentMiddleware):
                 return handler(request)
 
         if decision.tier is Tier.TIER_2:
-            with inviting_turn(self._inviting_for(request)):
+            grant = self._scheduled_hold(request, decision)
+            if grant is None:
+                grant = self._chat_suggestion(request, decision)
+            if isinstance(grant, str):
+                return self._require_confirmation(request, decision, extra_note=grant)
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = handler(request)
-            self.ledger.record(
-                tool_name=decision.tool_name,
-                arguments=self._arguments(request),
-                result=result,
-            )
+            self._mark_trusted_ack(request, result)
+            if grant:
+                self._record_grant_use(request, decision, grant, call.get("write_id"))
+            else:
+                self.ledger.record(
+                    tool_name=decision.tool_name,
+                    arguments=self._arguments(request),
+                    result=result,
+                )
             return result
 
+        # Tier 3 always asks: a standing grant never skips a confirmation.
         return self._require_confirmation(request, decision)
 
     async def awrap_tool_call(self, request, handler):
@@ -117,8 +133,17 @@ class PolicyMiddleware(AgentMiddleware):
                 return await handler(request)
 
         if decision.tier is Tier.TIER_2:
-            with inviting_turn(self._inviting_for(request)):
+            grant = self._scheduled_hold(request, decision)
+            if grant is None:
+                grant = self._chat_suggestion(request, decision)
+            if isinstance(grant, str):
+                return self._require_confirmation(request, decision, extra_note=grant)
+            with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
+            self._mark_trusted_ack(request, result)
+            if grant:
+                self._record_grant_use(request, decision, grant, call.get("write_id"))
+                return result
             # PASS THE TARGETS WHEN THEY WERE GENUINELY RESOLVED, and not
             # otherwise. `covered()` requires the reply to name every target,
             # so handing it the fallback — a repr of the whole call — makes
@@ -131,7 +156,147 @@ class PolicyMiddleware(AgentMiddleware):
             self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
             return result
 
+        # Tier 3 always asks: a standing grant never skips a confirmation.
         return self._require_confirmation(request, decision)
+
+    # -- standing grants (Feature 006, app/policy/grants.py) ----------------
+    #
+    # Checked HERE, on the Tier 2 path, so no caller can skip it. Tier 3 never
+    # reaches it: it always asks. In a scheduled run nobody reads the reply as
+    # it happens, so a grant-governed Tier 2 call (the routine ledger ops)
+    # runs only under the agent's standing grant and within the run's cap;
+    # otherwise it waits like a proposal. In chat a grant changes nothing.
+
+    def _scheduled_hold(self, request, decision) -> GrantedCall | str | None:
+        """None: run as an ordinary Tier 2 call. A GrantedCall: run under a
+        grant, its actions already reserved against the run's cap. A str: do
+        not run; wait, with this note."""
+        from .grants import GRANT_CAP_PER_RUN, GrantedCall, action_count, covering_classes, governed_by_grants, granted_classes
+        from .provenance import FIRING_KEY, is_synthetic_turn
+
+        context = self._runtime_context(request) or {}
+        if not is_synthetic_turn(context) or not governed_by_grants(decision.tool_name):
+            return None
+        agent = self._requester(request)
+        granted = granted_classes(self._user_id(context), agent)
+        arguments = self._arguments(request)
+        used = covering_classes(decision, arguments, granted, self.loader.load()) if granted else None
+        if used is None:
+            return f"Nobody is there to ask in a scheduled run, and none of {agent}'s standing grants covers this, so it waits for you."
+        run_key = str(context.get(FIRING_KEY) or "")
+        if not run_key or self.grant_runs is None:
+            logger.warning("policy: %s's standing grant covers %s, but the run's granted actions cannot be counted (firing id %r); it waits", agent, decision.tool_name, run_key)
+            return "This scheduled run's granted actions can't be counted, so nothing runs on its own under a standing grant; this waits for you."
+        actions = action_count(arguments)
+        # Reserved HERE, before the call runs, in one atomic write: parallel
+        # calls in the same step cannot take the run past the cap.
+        total = self.grant_runs.reserve(run_key, actions, GRANT_CAP_PER_RUN)
+        if total is None:
+            done = self.grant_runs.used(run_key)
+            logger.warning("policy: %s's standing grant covers %s (%d actions), but this run already took %d of %d; it waits", agent, decision.tool_name, actions, done, GRANT_CAP_PER_RUN)
+            return f"This run already did {done} of the {GRANT_CAP_PER_RUN} things one run may do on its own under {agent}'s standing grants, and this call would do {actions} more, so it waits for you."
+        return GrantedCall(classes=used, actions=actions, total=total, run_key=run_key)
+
+    def _chat_suggestion(self, request, decision) -> str | None:
+        """In chat, a routine ledger write (grant-governed Tier 2) runs on its
+        own ONLY when it follows from the user's own message in this turn
+        (005 FR-009 amendment, user decision 2026-10-20). One that content the
+        agent read caused (a tool result, an email, a page, a subagent's
+        output; feature 003's lineage, FR-006) is a SUGGESTION: it is stated
+        on a card and runs only if the user confirms it there. None: run it."""
+        from .grants import change_signatures, governed_by_grants
+
+        if not governed_by_grants(decision.tool_name):
+            return None
+        context = self._runtime_context(request) or {}
+        if context.get("workflow_run_id"):
+            # A workflow run is unattended like a scheduled one, but has no
+            # grants or cap of its own: a routine write waits for the user.
+            return "This workflow runs without you watching, so I did not make this change; it runs only if you confirm it here."
+        origin, source, via = self._origin(request)
+        if origin != "user":
+            logger.info("policy: %s was suggested by %s (%s); it waits on its card", decision.tool_name, origin, source or via or "-")
+            return "This is a suggestion: it came from something I read, not from your message, so I did not do it. It runs only if you confirm it here."
+        # Per turn (user decision 2026-10-20): content an EARLIER turn read does
+        # not taint this one. But a write the user declined in this chat stays
+        # declined: the same write (same op, target and text, normalised) can
+        # never run later as if the user had asked for it.
+        resolve = self._project_resolver(request)
+        wanted = change_signatures(self._arguments(request), resolve)
+        for declined in self.pending.declined_in_thread(self._thread_id(request), self._owner_id(request)):
+            if declined.tool_name == decision.tool_name and wanted & change_signatures(declined.arguments, resolve):
+                logger.info("policy: %s matches a write declined earlier (%s); it waits on its card", decision.tool_name, declined.id)
+                return "This is a suggestion: you declined this earlier in this chat, so I did not do it. It runs only if you confirm it here."
+        return None
+
+    def _project_resolver(self, request):
+        """Names a project by its id, through the ledger's own lookup, so a
+        project named by name and by id is one project. None outside the
+        gateway (no ledger)."""
+        from omniharness.runtime.ledger.controller import get_ledger_controller
+
+        controller = get_ledger_controller()
+        lookup = getattr(controller, "project_id", None)
+        if lookup is None:
+            return None
+        user_id = self._user_id(self._runtime_context(request) or {})
+        return lambda ref: lookup(user_id=user_id, project=str(ref))
+
+    @contextmanager
+    def _reserved(self, grant, call: dict):
+        """Give a granted call's reservation back ONLY when the call
+        demonstrably did not write: its write never committed (the ledger
+        tool marks the commit, provenance.mark_committed), and it returned or
+        raised an ordinary exception. A cancellation (or anything else not an
+        Exception) may land after the commit, so it keeps the reservation:
+        the count may run high, never low."""
+        try:
+            yield
+        except Exception:
+            if grant and not call.get("committed"):
+                self.grant_runs.release(grant.run_key, grant.actions)
+            raise
+        if grant and not call.get("committed"):
+            self.grant_runs.release(grant.run_key, grant.actions)
+
+    def _record_grant_use(self, request, decision, grant: GrantedCall, write_id: str | None = None) -> None:
+        from .lineage import initiation_origin, source_label
+
+        context = self._runtime_context(request) or {}
+        arguments = self._arguments(request)
+        targets = list(self.resolve_targets(decision.tool_name, arguments)) if self.resolve_targets else [f"{decision.tool_name}({arguments})"]
+        # What caused it, for the run's history: the schedule's own turn, or
+        # content the agent read on the way (which still uses the grant).
+        state = getattr(request, "state", None) or {}
+        cause, source = initiation_origin(state.get("messages") if isinstance(state, dict) else None, synthetic=False)
+        origin = "automation" if cause == "user" else cause
+        if self.audit is not None:
+            self.audit.record_grant_use(
+                agent=self._requester(request),
+                user_id=self._user_id(context),
+                tool=decision.tool_name,
+                classes=grant.classes,
+                targets=targets,
+                thread_id=context.get("thread_id"),
+                rule_id=context.get("trigger_rule_id"),
+                origin=origin,
+                origin_source=source,
+                count_in_run=grant.total,
+                firing_id=grant.run_key,
+                write_id=write_id,
+                source_label=source_label(state.get("messages") if isinstance(state, dict) else None),
+                now=self.now(),
+            )
+        # Disclosed in the run's reply like a Tier 2 write: the person reading
+        # it later sees what was done without them.
+        self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets))
+        logger.info("policy: %s ran %s on its own under a standing grant (%s; %d actions, %d in this run; origin %s)", self._requester(request), decision.tool_name, ", ".join(grant.classes), grant.actions, grant.total, origin)
+
+    @staticmethod
+    def _user_id(context: dict) -> str:
+        from omniharness.runtime.user_context import get_effective_user_id
+
+        return str(context.get("user_id") or get_effective_user_id())
 
     # -- internals ---------------------------------------------------------
 
@@ -429,7 +594,7 @@ class PolicyMiddleware(AgentMiddleware):
         call = getattr(request, "tool_call", None) or {}
         return call.get("args") or {}
 
-    def _require_confirmation(self, request, decision):
+    def _require_confirmation(self, request, decision, extra_note: str = ""):
         """Tier 3: state the plan, record it durably, and do not execute.
 
         FR-006, GLOBALLY: content the agent READ may SUGGEST an action but can
@@ -464,8 +629,11 @@ class PolicyMiddleware(AgentMiddleware):
             owner_id=self._owner_id(request),
             surface=self._surface(request),
             delegation_key=self._delegation_key(request),
+            run_markers=self._run_markers(request),
         )
         action.plan_text = self._plan_text_for(action)
+        if extra_note:
+            action.plan_text = f"{action.plan_text}\n\n{extra_note}"
         self.pending.save(action)
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
         if self._is_invited(request):
@@ -474,7 +642,25 @@ class PolicyMiddleware(AgentMiddleware):
             context = getattr(getattr(request, "runtime", None), "context", None)
             if isinstance(context, dict):
                 context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
-        return self._as_tool_result(request, action.plan_text)
+        return self._mark_trusted_ack(request, self._as_tool_result(request, action.plan_text))
+
+    @staticmethod
+    def _mark_trusted_ack(request, result: Any) -> Any:
+        """Mark a tool result as the harness's own acknowledgement when, and
+        only when, the tool dispatched IS a registered built-in whose results
+        are trusted (lineage.TRUSTED_TOOL_RESULTS), by object identity: an
+        outside tool with the same name is never marked."""
+        from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
+
+        from .lineage import TRUSTED_ACK_MARKER
+
+        if getattr(request, "tool", None) is not ledger_apply_tool:
+            return result
+        messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
+        for message in messages:
+            if getattr(message, "type", None) == "tool" and isinstance(getattr(message, "additional_kwargs", None), dict):
+                message.additional_kwargs[TRUSTED_ACK_MARKER] = True
+        return result
 
     @staticmethod
     def _as_tool_result(request, text: str) -> Any:
@@ -570,15 +756,25 @@ class PolicyMiddleware(AgentMiddleware):
             return "user", "", ""
         return inherited, context.get(INVITED_SOURCE_KEY) or "", context.get(INVITED_VIA_KEY) or ""
 
-    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...]) -> Any:
+    def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...], run_markers: tuple[tuple[str, str], ...] = ()) -> Any:
         """The mark an agent invited during this call starts from."""
         from omniharness.agents.invitation import TurnOrigin
 
-        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via)
+        return TurnOrigin(origin=origin, source=source, chain=tuple(chain) or (requester,), via=via, run_markers=run_markers)
 
     def _inviting_for(self, request) -> Any:
         origin, source, via = self._origin(request)
-        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request))
+        # An agent invited during a scheduled run is in that run: it gets the
+        # run's markers, so its grant-governed Tier 2 calls need a grant and
+        # count against the same cap (never treated as a chat with you).
+        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), self._run_markers(request))
+
+    def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
+        """The scheduled run's markers in this call's context, if any."""
+        from .provenance import FIRING_KEY, PROVENANCE_KEY, RULE_KEY
+
+        context = self._runtime_context(request) or {}
+        return tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY) if context.get(k))
 
     def _is_invited(self, request) -> bool:
         from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
@@ -675,7 +871,9 @@ class PolicyMiddleware(AgentMiddleware):
 
         from .surface_run import confirming
 
-        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain)), confirming(action):
+        # A confirmed `task` from a scheduled run invites its agent INTO that
+        # run: the markers stated with the action travel on (review round 2).
+        with inviting_turn(self._inviting(action.origin, action.origin_source, action.origin_via, action.requester, action.delegation_chain, tuple(action.run_markers))), confirming(action):
             result = run_tool(action.tool_name, action.arguments)
         from .surface_run import observed_result, result_report
 
