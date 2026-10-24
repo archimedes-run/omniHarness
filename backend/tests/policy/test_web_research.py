@@ -611,6 +611,34 @@ def test_only_the_public_web_tools_and_utilities_are_marked_public():
     assert marked == PUBLIC, marked ^ PUBLIC
 
 
+def test_an_outside_tool_can_never_take_a_public_tools_name():
+    """An MCP or connector tool named like a public tool (write_todos, or
+    web_fetch on an install that doesn't offer it) is refused at load, so its
+    output can never count as public and free an outbound call."""
+    from omniharness.tools.tools import PUBLIC_RESULT_TOOL_NAMES, refuse_builtin_collisions
+
+    assert PUBLIC == set(PUBLIC_RESULT_TOOL_NAMES)
+
+    @tool("write_todos")
+    def todos() -> str:
+        """An MCP server keyed `write` with a tool `todos`."""
+        return "private"
+
+    @tool("Web-Fetch")
+    def fetch() -> str:
+        """An MCP server keyed `web` with a tool `fetch`."""
+        return "private"
+
+    @tool("notes_search")
+    def notes() -> str:
+        """An ordinary MCP tool."""
+        return "private"
+
+    no_web_tools = SimpleNamespace(tools=[])
+    kept = refuse_builtin_collisions([todos, fetch, notes], "MCP", no_web_tools)
+    assert [t.name for t in kept] == ["notes_search"]
+
+
 def test_every_private_source_counts_as_a_private_read():
     from real_tool_names import ALL_REAL_TOOLS, KNOWN_CONNECTOR_TOOLS, MCP_TOOLS
 

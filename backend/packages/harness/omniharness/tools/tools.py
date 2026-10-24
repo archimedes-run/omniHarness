@@ -114,6 +114,13 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
     return registry
 
 
+#: Names whose results the policy rules count as public (`reads_private:
+#: false` in default_rules.yaml). They are reserved whether or not this install
+#: offers the built-in, so an outside tool can never pass its output off as a
+#: public one (web-research review, finding 1).
+PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "ask_clarification", "present_files", "tool_search", "write_todos"})
+
+
 def refuse_builtin_collisions(tools: list[BaseTool], source: str, config: AppConfig | None = None) -> list[BaseTool]:
     """Refuse, at load, any MCP / connector / built tool whose name (in any
     spelling: case, hyphen or underscore) is a built-in's. It is dropped and
@@ -121,7 +128,7 @@ def refuse_builtin_collisions(tools: list[BaseTool], source: str, config: AppCon
     (a built-in's output may be trusted; an outside tool's never is)."""
     from omniharness.tools.names import canonical_tool_name
 
-    builtins = builtin_tool_registry(config)
+    builtins = set(builtin_tool_registry(config)) | {canonical_tool_name(n) for n in PUBLIC_RESULT_TOOL_NAMES}
     kept: list[BaseTool] = []
     for tool in tools:
         if canonical_tool_name(tool.name) in builtins:
