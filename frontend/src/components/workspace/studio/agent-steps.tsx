@@ -178,6 +178,11 @@ export function AgentSetupStep({
   const [picker, setPicker] = useState(false);
   const meta = avatarMeta(form.avatar);
   const grid = useRef<HTMLDivElement>(null);
+  // A new agent starts where one sentence drafts it.
+  const sentence = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (isNew) sentence.current?.focus();
+  }, [isNew]);
   const md = useMarkdownTools(form.instructions, (v) =>
     patch({ instructions: v }),
   );
@@ -312,6 +317,7 @@ export function AgentSetupStep({
             <div className="row" style={{ marginTop: 8 }}>
               <input
                 id="f-sentence"
+                ref={sentence}
                 className="input"
                 placeholder={c.describePlaceholder}
                 value={form.sentence}

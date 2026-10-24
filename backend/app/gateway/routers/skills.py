@@ -294,7 +294,7 @@ async def write_custom_skill_file(skill_name: str, request: SkillFileWriteReques
     return await list_custom_skill_files(name, config)
 
 
-@router.delete("/skills/custom/{skill_name}/files", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], response_model=SkillFilesResponse, summary="Remove a File from a Custom Skill")
+@router.delete("/skills/custom/{skill_name}/files", dependencies=[Depends(permission_dependency("threads", "delete")), Depends(_own_custom_skill)], response_model=SkillFilesResponse, summary="Remove a File from a Custom Skill")
 async def delete_custom_skill_file(skill_name: str, path: str, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
     """Skill Studio's remove (006-G): a new version without the file, so undo
     brings it back. Never SKILL.md, never outside the skill's directory."""
@@ -693,7 +693,7 @@ async def put_skill_studio(skill_name: str, request: SkillStudioUpdate, config: 
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@router.delete("/skills/custom/{skill_name}/tests", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], summary="Remove one saved test message")
+@router.delete("/skills/custom/{skill_name}/tests", dependencies=[Depends(permission_dependency("threads", "delete")), Depends(_own_custom_skill)], summary="Remove one saved test message")
 async def delete_skill_test(skill_name: str, message: str, config: AppConfig = Depends(get_config)) -> dict:
     from app.gateway import skill_studio_store as store
 
