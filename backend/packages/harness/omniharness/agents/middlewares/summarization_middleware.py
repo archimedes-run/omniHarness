@@ -138,7 +138,7 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._partition_with_skill_rescue(messages, cutoff_index)
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = self._create_summary(messages_to_summarize)
-        new_messages = self._build_new_messages(summary)
+        new_messages = self._mark_turn(self._build_new_messages(summary), messages_to_summarize)
 
         return {
             "messages": [
@@ -163,7 +163,7 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._partition_with_skill_rescue(messages, cutoff_index)
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = await self._acreate_summary(messages_to_summarize)
-        new_messages = self._build_new_messages(summary)
+        new_messages = self._mark_turn(self._build_new_messages(summary), messages_to_summarize)
 
         return {
             "messages": [
@@ -179,6 +179,18 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         And this message will be ignored to display in the frontend, but still can be used as context for the model.
         """
         return [HumanMessage(content=f"Here is a summary of the conversation to date:\n\n{summary}", name="summary")]
+
+    @staticmethod
+    def _mark_turn(new_messages: list[HumanMessage], messages_to_summarize: list[AnyMessage]) -> list[HumanMessage]:
+        """Record on the summary what the summarized part of the current turn
+        was (turns.TURN_SUMMARY_MARKER), so a turn that outgrows the context
+        is still judged by its own reads, not failed as unknown."""
+        from omniharness.agents.turns import TURN_SUMMARY_MARKER, summarized_turn
+
+        if new_messages:
+            first = new_messages[0]
+            first.additional_kwargs = {**(first.additional_kwargs or {}), TURN_SUMMARY_MARKER: summarized_turn(list(messages_to_summarize))}
+        return new_messages
 
     def _partition_with_skill_rescue(
         self,

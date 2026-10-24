@@ -102,17 +102,57 @@ class TurnPrivacy:
     turn_key: str = ""
 
 
+_NO_SUMMARY = object()
+
+
+def _turn_summary(message: Any) -> Any:
+    """The summarized-turn record on a summary message (turns.TURN_SUMMARY_MARKER),
+    or _NO_SUMMARY for any other message."""
+    from omniharness.agents.turns import TURN_SUMMARY_MARKER
+
+    if _message_type(message) != "human":
+        return _NO_SUMMARY
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    if not isinstance(kwargs, dict) or TURN_SUMMARY_MARKER not in kwargs:
+        return _NO_SUMMARY
+    return kwargs[TURN_SUMMARY_MARKER]
+
+
+def _from_summary(record: Any, sources: list[str], ruleset: RuleSet) -> TurnPrivacy:
+    """Finish the walk at a summary that folded in the start of this turn:
+    its recorded tools are judged like results still in the history. A
+    malformed record, or one whose turn start was never seen, is private."""
+    tools = record.get("tools") if isinstance(record, dict) else None
+    if not isinstance(tools, list) or record.get("start_found") is not True:
+        return TurnPrivacy(private=True, sources=(*sources, UNKNOWN_START))
+    folded: list[str] = []
+    for name in tools:
+        label = name if isinstance(name, str) and name else "a tool result"
+        if reads_private(name if isinstance(name, str) else None, ruleset) and label not in folded and label not in sources:
+            folded.append(label)
+    found = (*folded, *sources)
+    return TurnPrivacy(private=bool(found), sources=found, turn_key=str(record.get("turn_key") or ""))
+
+
 def private_reads_in_turn(messages: list[Any] | None, ruleset: RuleSet) -> TurnPrivacy:
     """Walk back from the call to the start of its turn.
 
     Every tool result on the way is judged by `reads_private`. Messages that
     are neither the person's turn nor an invitation (our own middlewares'
-    injected human messages: a viewed image, a to-do reminder, a summary) are
-    walked past, never treated as the start. A walk that never finds the start
-    cannot rule a private read out, so it counts as one.
+    injected human messages: a viewed image, a to-do reminder) are walked
+    past, never treated as the start. A summary that folded in the turn's
+    start ends the walk with its recorded tools (turns.TURN_SUMMARY_MARKER).
+    A walk that never finds the start cannot rule a private read out, so it
+    counts as one.
     """
+    from omniharness.agents.turns import is_untagged_input
+
     items = list(messages or [])
     sources: list[str] = []
+    # An input message that is not the person's (a relayed channel message)
+    # starts a turn of its own: a summary of an earlier turn says nothing
+    # about it.
+    crossed_untagged = False
     for index in range(len(items) - 1, -1, -1):
         message = items[index]
         if is_tool_result(message):
@@ -122,6 +162,13 @@ def private_reads_in_turn(messages: list[Any] | None, ruleset: RuleSet) -> TurnP
             continue
         if _message_type(message) == "ai":
             continue
+        summary = _turn_summary(message)
+        if summary is not _NO_SUMMARY:
+            if crossed_untagged:
+                return TurnPrivacy(private=True, sources=(*sources, UNKNOWN_START))
+            return _from_summary(summary, sources, ruleset)
+        if is_untagged_input(message):
+            crossed_untagged = True
         if is_user_turn(message) or is_invitation(message):
             key = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
             return TurnPrivacy(private=bool(sources), sources=tuple(sources), turn_key=str(key or ""))
