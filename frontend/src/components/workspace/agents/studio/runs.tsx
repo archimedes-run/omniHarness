@@ -1,6 +1,5 @@
 "use client";
 
-import { describeSchedule } from "@/core/automations/schedule";
 import { useAgentRuns, type AgentRuns } from "@/core/studio";
 import { OUTCOME_LABEL } from "@/core/triggers/logic";
 import { cn } from "@/lib/utils";
@@ -104,55 +103,5 @@ export function RecentRuns({ agentId }: { agentId: string }) {
         ))
       )}
     </div>
-  );
-}
-
-export function ScheduleList({ agentId }: { agentId: string }) {
-  const c = useStudioCopy().agents;
-  const { runs, error } = useAgentRuns(agentId);
-  if (error || !runs || runs.not_set_up_reason || runs.rules_error) {
-    return (
-      <div data-testid="schedule-none">
-        <p className="font-medium">{c.scheduleNone}</p>
-        <p className="text-muted-foreground mt-0.5 text-sm">
-          {error
-            ? c.runsUnreadable(String(error.message))
-            : runs?.rules_error
-              ? c.rulesUnreadable
-              : runs
-                ? c.notSetUpWhy
-                : "…"}
-        </p>
-      </div>
-    );
-  }
-  return (
-    <ul className="flex flex-col gap-2" data-testid="schedule-list">
-      {!runs.engine_enabled ? (
-        <li className="text-warning text-sm">{c.engineOff}</li>
-      ) : null}
-      {runs.schedules.map((s) => (
-        <li key={s.rule_id} data-testid="schedule-row">
-          <span className="font-medium">
-            {describeSchedule(s.schedule, s.timezone)}
-          </span>
-          <span className="text-muted-foreground font-mono text-xs">{` · ${s.rule_id}`}</span>
-          <div className="text-muted-foreground text-sm">
-            {!s.enabled
-              ? c.scheduleOff
-              : s.error
-                ? c.runsUnreadable(s.error)
-                : s.next_run
-                  ? `${c.nextAt(formatWhen(s.next_run, c))}${
-                      s.held_until
-                        ? ` (${c.heldQuiet(formatWhen(s.held_until, c))})`
-                        : ""
-                    }`
-                  : c.noSchedule}
-            {s.timezone_named ? "" : ` · ${c.utcNote(s.timezone)}`}
-          </div>
-        </li>
-      ))}
-    </ul>
   );
 }

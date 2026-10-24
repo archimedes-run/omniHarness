@@ -12,6 +12,10 @@ export interface RuleDoc {
   prompt: string;
   destination: string;
   urgent?: boolean;
+  /** Feature 006-F: the custom agent it runs as; absent is the lead. */
+  agent?: string | null;
+  /** Feature 006-F: whether Home shows its upcoming runs and results. */
+  show_on_home?: boolean;
 }
 
 export interface Template {

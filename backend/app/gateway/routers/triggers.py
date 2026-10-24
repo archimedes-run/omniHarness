@@ -83,7 +83,7 @@ def _engine_state(app_state):
     # Quiet hours as the file says them; None when no version of it was ever
     # read (an unreadable file must not show the built-in defaults as yours).
     quiet = config.quiet_hours if config.rules or loader.last_error is None else None
-    return rules, evaluated, audit, loader.last_error, rules_path, bool(getattr(cfg, "rules_path", "")), quiet
+    return rules, evaluated, audit, loader.last_error, rules_path, bool(getattr(cfg, "rules_path", "")), quiet, config.refused
 
 
 @router.get("/rules", response_model=RulesView)
@@ -92,7 +92,7 @@ async def trigger_rules(request: Request) -> RulesView:
     """T051. Every loaded rule, and whether it is evaluating, firing, or neither."""
     from app.gateway.automations_store import version_of
 
-    rules, evaluated, audit, error, path, configured, quiet = _engine_state(request.app.state)
+    rules, evaluated, audit, error, path, configured, quiet, refused = _engine_state(request.app.state)
     try:
         version = version_of(path.read_bytes())
     except OSError:
@@ -108,6 +108,7 @@ async def trigger_rules(request: Request) -> RulesView:
         writable=configured and version is not None,
         not_writable_reason=reason,
         quiet_hours=quiet,
+        refused=refused,
     )
 
 
@@ -115,7 +116,7 @@ async def trigger_rules(request: Request) -> RulesView:
 @require_permission("threads", "read")
 async def trigger_firings(request: Request) -> FiringsView:
     """T051. The chronological firing log, newest first, reasons verbatim."""
-    _, _, audit, _, _, _, _ = _engine_state(request.app.state)
+    _, _, audit, _, _, _, _, _ = _engine_state(request.app.state)
     return describe_firings(audit)
 
 
@@ -125,7 +126,7 @@ async def trigger_runs(rule_id: str, request: Request) -> RunsView:
     """Feature 006. One automation's runs, each worded from its audit records
     (delivered, held then delivered, delivered with others, failed, or not
     settled yet), newest first."""
-    _, _, audit, _, _, _, _ = _engine_state(request.app.state)
+    _, _, audit, _, _, _, _, _ = _engine_state(request.app.state)
     history = getattr(request.app.state, "run_history", None)
     stored = None
     if history is not None:

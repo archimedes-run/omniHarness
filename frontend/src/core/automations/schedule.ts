@@ -90,3 +90,56 @@ export function describeSchedule(expr: string, timezone?: string): string {
 export function matchText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
+
+/** The Schedule editor's presets (Agent Studio, Feature 006-F). */
+export type Preset = "daily" | "weekdays" | "weekly" | "custom";
+
+export interface PresetSchedule {
+  preset: Preset;
+  /** "HH:MM", 24-hour; daily, weekdays and weekly. */
+  time: string;
+  /** Weekly only. */
+  day: Day;
+  /** Custom only: the raw expression. */
+  cron: string;
+}
+
+/** Which preset a cron is, so editing never rewrites a schedule it cannot
+ * show: anything other than every day, weekdays or one day a week at one
+ * time is Custom, with its expression kept verbatim. */
+export function presetOf(expr: string): PresetSchedule {
+  const simple = fromCron(expr);
+  const base = { time: simple?.time ?? "09:00", day: 1 as Day, cron: expr };
+  if (!simple) return { ...base, preset: "custom" };
+  const d = simple.days.join();
+  if (simple.days.length === 7) return { ...base, preset: "daily" };
+  if (d === WEEKDAYS.join()) return { ...base, preset: "weekdays" };
+  if (simple.days.length === 1)
+    return { ...base, preset: "weekly", day: simple.days[0]! };
+  return { ...base, preset: "custom" };
+}
+
+export function presetCron(p: PresetSchedule): string {
+  if (p.preset === "custom") return p.cron.trim();
+  const days =
+    p.preset === "daily" ? ALL : p.preset === "weekdays" ? WEEKDAYS : [p.day];
+  return toCron({ time: p.time, days });
+}
+
+/** The viewer's IANA zone, the default for a new schedule. */
+export function browserZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+/** Every IANA zone this browser knows, for the zone picker. */
+export function allZones(): string[] {
+  try {
+    return Intl.supportedValuesOf("timeZone");
+  } catch {
+    return ["UTC", "America/New_York", "Europe/London"];
+  }
+}

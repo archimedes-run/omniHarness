@@ -204,6 +204,8 @@ export async function stubStudio(
         engine_enabled: true,
         not_set_up_reason: "none-name-this-agent",
         rules_error: null,
+        rules_version: "v1",
+        writable: true,
         schedules: [],
         recent: [],
       });
@@ -213,6 +215,8 @@ export async function stubStudio(
       engine_enabled: true,
       not_set_up_reason: null,
       rules_error: null,
+      rules_version: "v1",
+      writable: true,
       schedules: [
         {
           rule_id: "evening-wrap",
@@ -223,6 +227,10 @@ export async function stubStudio(
           next_run: next,
           held_until: null,
           error: null,
+          name: "Evening wrap-up",
+          prompt: "Wrap up my day as of {scheduled_at}.",
+          telegram: true,
+          show_on_home: true,
         },
       ],
       recent: [

@@ -45,11 +45,13 @@ rules:
 |---|---|---|
 | `id` | yes | Unique. Duplicates are a **load-time error** (FR-006) — it is the thread-map key. |
 | `type` | yes | `cron` / `watcher` / `completion`. `calendar` is reserved and rejected with "not implemented". |
-| `match` | yes | Type-specific. Validated per type at load. |
-| `prompt` | yes | Template. Referencing a field the type cannot supply is a **load-time error**, not a render-time surprise. |
+| `match` | yes | Type-specific. Validated per type at load. A cron `match.schedule` written through Studio or Automations must be a standard five-field cron (minute hour day month weekday); a seconds field is refused (422), since `* * * * * *` would fire every second. |
+| `prompt` | yes | Template. Referencing a field the type cannot supply is a **load-time error**, not a render-time surprise, as is an unmatched `{` or `}` (write `{{` / `}}` for a literal brace). |
 | `destination` | no | `remote` / `quiet` / `auto`. Default `auto`. `local` reserved. |
 | `urgent` | no | Default `false`. Must be set explicitly; there is no implicit escalation (FR-014). |
 | `enabled` | no | Default `true`. |
+| `agent` | no | Feature 006-F. A custom agent's name (`[a-z0-9-]+`): the firing runs AS that agent (its instructions, tools, skills and standing grants). Absent (or `lead_agent`, any case): the lead agent. A malformed name refuses **that rule only**: it is not loaded and is reported (Automations, `rule_errors`), while every other rule loads and runs; a write that brings one in is refused (422). A rule naming an agent that does not exist is refused when written and FAILED when it fires; it is never run as the lead in its place. |
+| `show_on_home` | no | Feature 006-F. Default `true`. `false` keeps the rule's upcoming runs and delivered results off Home. Must be a boolean; any other value refuses that rule only, as for `agent`. |
 
 ## Guarantees
 

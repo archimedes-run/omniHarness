@@ -55,23 +55,38 @@ def read_rules(path: Path) -> RulesFile:
     return RulesFile(path=path, doc=json.loads(data), version=version_of(data))
 
 
-def validate(doc: dict, supported_types) -> None:
-    """The engine's own checks. Raises RulesEditError(422) with its message."""
+def validate(doc: dict, supported_types, before: dict | None = None) -> None:
+    """The engine's own checks. Raises RulesEditError(422) with its message.
+
+    A rule the engine would refuse on its own (config.RuleRefused: a bad
+    `agent` or `show_on_home`) is refused here too, unless it is exactly as it
+    already is in `before`: a hand-written rule the engine already reports as
+    not loaded must not block every other edit to the file."""
     try:
         cfg = parse(doc)
         check_sources(cfg, supported_types)
     except ConfigError as exc:
         raise RulesEditError(str(exc), 422) from exc
+    if cfg.refused:
+        unchanged = {r.get("id"): r for r in (before or {}).get("rules") or [] if isinstance(r, dict)}
+        for refused in cfg.refused:
+            mine = next((r for r in doc.get("rules") or [] if isinstance(r, dict) and str(r.get("id")) == refused.id), None)
+            if mine is None or unchanged.get(mine.get("id")) != mine:
+                raise RulesEditError(refused.error, 422)
 
 
 def write_rules(path: Path, doc: dict, *, expected_version: str, supported_types, writable: bool) -> str:
     """Validate, then atomically replace the file. Returns the new version."""
     if not writable:
         raise RulesEditError("No rules file is configured, so the engine is running the shipped defaults, which are not edited in place. Set trigger_engine.rules_path in config.yaml to a file of your own (copy the defaults to start).", 409)
-    current = version_of(path.read_bytes())
-    if current != expected_version:
+    data = path.read_bytes()
+    if version_of(data) != expected_version:
         raise RulesEditError("The rules file changed since this page loaded it (edited elsewhere?). Reload to see the current rules, then make the change again.", 409)
-    validate(doc, supported_types)
+    try:
+        before = json.loads(data)
+    except ValueError:
+        before = None
+    validate(doc, supported_types, before if isinstance(before, dict) else None)
     data = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode()
     mode = path.stat().st_mode & 0o777
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")

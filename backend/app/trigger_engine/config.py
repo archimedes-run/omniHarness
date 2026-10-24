@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -47,9 +48,61 @@ DEFAULTS = {
 #: A rule's display name, as long as a list row can show.
 NAME_MAX = 80
 
+#: Feature 006-F. What an agent name may be once normalised: the gateway's own
+#: rule (services._normalise_agent_name), so a name the engine accepts is one
+#: the gateway resolves to the same agent.
+AGENT_NAME = re.compile(r"[a-z0-9-]+")
+#: The lead agent. A rule for it names no agent; naming it (any case) is the
+#: same thing, so a file written before Feature 006-F (whose docs said to write
+#: `agent:`) keeps running as it did.
+LEAD_AGENT = "lead_agent"
+
+
+def parse_agent(rid: str, raw) -> str | None:
+    """A rule's `agent`, normalised, or None for the lead. Raises RuleRefused:
+    a bad name refuses that one rule, never the file (main ignored the key)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise RuleRefused(f"rule {rid!r}: agent must be a custom agent's name; leave it out to run as the lead agent")
+    name = raw.strip().lower()
+    if name == LEAD_AGENT:
+        return None
+    if not AGENT_NAME.fullmatch(name):
+        raise RuleRefused(f"rule {rid!r}: agent {raw!r} is not an agent name (letters, digits and hyphens)")
+    return name
+
+
+def standard_cron_problem(schedule) -> str | None:
+    """Why `schedule` is not a standard five-field cron, in words, or None.
+
+    For WRITES only (Studio schedules, Automations): croniter also accepts a
+    sixth (seconds) field, so `* * * * * *` would fire every second. The
+    loader keeps accepting what croniter does, so no rule file that loads
+    today stops loading."""
+    from croniter import croniter
+
+    text = str(schedule or "").strip()
+    if len(text.split()) != 5 or not croniter.is_valid(text):
+        return f"{schedule!r} is not a valid cron schedule: five fields, minute hour day month weekday (e.g. '0 18 * * 1-5')."
+    return None
+
 
 class ConfigError(ValueError):
     """The configuration is invalid. The previous one stays in effect."""
+
+
+class RuleRefused(ConfigError):
+    """One rule is invalid in a way that refuses only it (Feature 006-F's
+    `agent` and `show_on_home`, keys a file written before them may carry
+    with any value): every other rule loads, and this one is reported in
+    EngineConfig.refused. A write that introduces one is still refused."""
+
+
+@dataclass(frozen=True)
+class RefusedRule:
+    id: str
+    error: str
 
 
 @dataclass(frozen=True)
@@ -72,10 +125,17 @@ class EngineConfig:
     queued_turn_max_wait: timedelta = timedelta(seconds=DEFAULTS["queued_turn_max_wait_seconds"])
     held_schedule_max_wait: timedelta = timedelta(seconds=DEFAULTS["held_schedule_max_wait_seconds"])
     fingerprint_retention: timedelta = timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"])
+    #: Rules not loaded, each with why (RuleRefused); the others run.
+    refused: tuple[RefusedRule, ...] = ()
 
 
-def _template_fields(prompt: str) -> set[str]:
-    return {f for _, f, _, _ in Formatter().parse(prompt) if f}
+def _template_fields(rid: str, prompt: str) -> set[str]:
+    try:
+        return {f for _, f, _, _ in Formatter().parse(prompt) if f}
+    except ValueError as exc:
+        # A lone "{" or "}": refused at load and on write (422), never a
+        # parse error that surfaces as a 500 or fails every firing.
+        raise ConfigError(f"rule {rid!r}: the prompt has an unmatched brace ({exc}). Use {{{{ and }}}} for a literal {{ or }}.") from exc
 
 
 def _parse_rule(raw: dict, seen: set[str]) -> Rule:
@@ -101,7 +161,7 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
     prompt = raw.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ConfigError(f"rule {rid!r}: prompt is required")
-    unknown = _template_fields(prompt) - AVAILABLE_FIELDS[rtype]
+    unknown = _template_fields(rid, prompt) - AVAILABLE_FIELDS[rtype]
     if unknown:
         raise ConfigError(f"rule {rid!r}: prompt references {sorted(unknown)}, which a {rtype} event cannot supply. Available: {sorted(AVAILABLE_FIELDS[rtype])}")
 
@@ -138,6 +198,10 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
     except ValueError as exc:
         raise ConfigError(f"rule {rid!r}: unknown destination {raw.get('destination')!r}") from exc
 
+    # Last, after every check that refuses the whole file: these refuse only
+    # this rule (RuleRefused).
+    agent = parse_agent(rid, raw.get("agent"))
+    show_on_home = _flag(rid, raw, "show_on_home", default=True)
     return Rule(
         id=rid,
         type=rtype,
@@ -147,7 +211,16 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         urgent=bool(raw.get("urgent", False)),
         enabled=bool(raw.get("enabled", True)),
         name=name.strip(),
+        agent=agent,
+        show_on_home=show_on_home,
     )
+
+
+def _flag(rid: str, raw: dict, key: str, *, default: bool) -> bool:
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise RuleRefused(f"rule {rid!r}: {key} must be true or false")
+    return value
 
 
 def parse(doc: dict) -> EngineConfig:
@@ -155,7 +228,14 @@ def parse(doc: dict) -> EngineConfig:
     if not isinstance(raw_rules, list):
         raise ConfigError("`rules` must be a list")
     seen: set[str] = set()
-    rules = tuple(_parse_rule(r, seen) for r in raw_rules)
+    parsed: list[Rule] = []
+    refused: list[RefusedRule] = []
+    for raw in raw_rules:
+        try:
+            parsed.append(_parse_rule(raw, seen))
+        except RuleRefused as exc:
+            refused.append(RefusedRule(id=str(raw.get("id")), error=str(exc)))
+    rules = tuple(parsed)
 
     qh_raw = doc.get("quiet_hours") or {}
     qh = QuietHours(
@@ -180,6 +260,7 @@ def parse(doc: dict) -> EngineConfig:
         queued_turn_max_wait=secs("queued_turn_max_wait_seconds"),
         held_schedule_max_wait=secs("held_schedule_max_wait_seconds"),
         fingerprint_retention=timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"]),
+        refused=tuple(refused),
     )
 
 
@@ -254,6 +335,8 @@ class ConfigLoader:
             return self.config
         self._config, self._mtime, self.last_error = cfg, mtime, None
         logger.info("rule config loaded: %d rule(s)", len(cfg.rules))
+        for refused in cfg.refused:
+            logger.error("rule %s NOT loaded (the other rules run): %s", refused.id, refused.error)
         from .scheduler import DEFAULT_TIMEZONE
 
         for rule in cfg.rules:

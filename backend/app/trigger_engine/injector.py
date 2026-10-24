@@ -108,8 +108,13 @@ class TurnInjector:
         rec = self.put(f"/api/threads/{thread_id}/tools", {"sources": sources})
         return rec.get("sources", [])
 
-    def inject(self, thread_id: str, rule_id: str, prompt: str, firing_id: str | None = None) -> str:
-        """Inject the turn and return the assistant's reply text."""
+    def inject(self, thread_id: str, rule_id: str, prompt: str, firing_id: str | None = None, agent: str | None = None) -> str:
+        """Inject the turn and return the assistant's reply text.
+
+        `agent` (Feature 006-F): the custom agent the rule runs as. It goes in
+        `assistant_id`, the field the gateway reads a caller's agent choice
+        from and turns into the server-owned `agent_name`; nothing else may
+        name it. None: the lead agent."""
         # The markers go in `configurable` and `metadata` ONLY — deliberately.
         #
         # They must also reach `config["context"]`, because that is the sole
@@ -124,7 +129,7 @@ class TurnInjector:
 
         marker = sign_turn_id(uuid.uuid4().hex, thread_id)
         payload = {
-            "assistant_id": self.assistant_id,
+            "assistant_id": agent or self.assistant_id,
             # The id marks where THIS turn starts in the thread runs/wait
             # returns, so the run history keeps only this turn's messages.
             "input": {"messages": [{"role": "human", "content": prompt, "id": marker}]},

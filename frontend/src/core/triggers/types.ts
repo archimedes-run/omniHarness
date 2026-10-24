@@ -39,6 +39,10 @@ export interface RuleView {
   held_for_quiet_hours?: boolean;
   /** Zone to show its times in: the rule's own, else the user's. */
   timezone?: string;
+  /** Feature 006-F: the custom agent it runs as; null is the lead. */
+  agent?: string | null;
+  /** Feature 006-F: whether Home shows its upcoming runs and results. */
+  show_on_home?: boolean;
 }
 
 export interface QuietHoursView {
@@ -52,6 +56,9 @@ export interface RulesView {
   engine_enabled: boolean;
   rules: RuleView[];
   rules_error: string | null;
+  /** Rules in the file that were not loaded, each with why; the others run
+   * (Feature 006-F: a bad `agent` or `show_on_home` refuses only its rule). */
+  rule_errors?: { id: string; error: string }[];
   /** Hash of the rule file; an edit names it, and is refused if stale. */
   version: string | null;
   writable: boolean;

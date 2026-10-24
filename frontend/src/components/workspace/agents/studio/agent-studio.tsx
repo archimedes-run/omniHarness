@@ -27,13 +27,13 @@ import { cn } from "@/lib/utils";
 import {
   InstructionsTab,
   OverviewTab,
-  ScheduleTab,
   ToolsTab,
   type AgentForm,
 } from "./agent-tabs";
 import { AutonomyTab } from "./autonomy";
 import { useStudioCopy } from "./copy";
 import { hasActiveSchedule } from "./runs";
+import { ScheduleTab } from "./schedule-tab";
 import {
   RailItem,
   RailNew,
@@ -114,6 +114,13 @@ export function AgentStudio() {
     if (item === "new") return { kind: "new" };
     return item ? { kind: "agent", name: item } : null;
   });
+  // A schedule a new agent's draft suggested stays a suggestion on the saved
+  // agent's Schedule tab, where one press sets it up (Feature 006-F). Never
+  // created on its own.
+  const [carried, setCarried] = useState<{
+    name: string;
+    schedule: AgentDraft["schedule"];
+  } | null>(null);
 
   // Until the user picks, the first custom agent (or the lead agent).
   const current: Selection =
@@ -210,7 +217,15 @@ export function AgentStudio() {
         key={selectionKey(current)}
         mode={current.kind}
         agent={selectedAgent}
-        onCreated={(name) => setSelection({ kind: "agent", name })}
+        carriedSchedule={
+          current.kind === "agent" && carried?.name === current.name
+            ? carried.schedule
+            : null
+        }
+        onCreated={(name, schedule) => {
+          setCarried(schedule ? { name, schedule } : null);
+          setSelection({ kind: "agent", name });
+        }}
       />
     );
   }
@@ -236,11 +251,14 @@ function formFrom(agent: Agent | null): AgentForm {
 function AgentEditor({
   mode,
   agent,
+  carriedSchedule = null,
   onCreated,
 }: {
   mode: "lead" | "agent" | "new";
   agent: Agent | null;
-  onCreated: (name: string) => void;
+  /** A schedule this agent's draft suggested before it was saved. */
+  carriedSchedule?: AgentDraft["schedule"];
+  onCreated: (name: string, schedule: AgentDraft["schedule"]) => void;
 }) {
   const c = useStudioCopy().agents;
   const [tab, setTab] = useState<AgentTab>(
@@ -287,7 +305,9 @@ function AgentEditor({
   const [suggested, setSuggested] = useState<{
     autonomy: string[];
     schedule: AgentDraft["schedule"];
-  } | null>(null);
+  } | null>(
+    carriedSchedule ? { autonomy: [], schedule: carriedSchedule } : null,
+  );
   const create = useCreateAgent();
   const { runs } = useAgentRuns(
     mode === "new" ? null : (agent?.name ?? LEAD_AGENT_ID),
@@ -397,7 +417,7 @@ function AgentEditor({
         void queryClient.invalidateQueries({ queryKey: ["agents"] });
         void queryClient.invalidateQueries({ queryKey: ["studio"] });
         setStatus({ kind: "saved", version: null, undoTo: null });
-        onCreated(created.name);
+        onCreated(created.name, suggested?.schedule ?? null);
         return;
       }
       // Each write names the version it was made from; the store refuses a

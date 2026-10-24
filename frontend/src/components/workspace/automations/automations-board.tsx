@@ -9,14 +9,17 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { RuleDoc, Template } from "@/core/automations/api";
+import { useAgents } from "@/core/agents/hooks";
+import type { Template } from "@/core/automations/api";
 import { useDeleteRule, useSetRuleEnabled } from "@/core/automations/hooks";
 import {
   headline,
   nextRunText,
   quietHoursText,
   ruleName,
+  ruleDocOf,
   ruleZone,
+  runsAs,
   runWords,
   shortSchedule,
   when,
@@ -59,6 +62,10 @@ export function AutomationsBoard({
 }) {
   const { view, isLoading, error } = useTriggerRules();
   const rules = useMemo(() => view?.rules ?? [], [view]);
+  // Who each automation runs as (Feature 006-F). Unreadable agents leave the
+  // names as slugs, never "missing".
+  const { agents, error: agentsError } = useAgents();
+  const known = agentsError ? undefined : agents;
   // Nothing chosen: the first automation, as the board opens on one.
   const current: AutomationSelection =
     selection ?? (rules[0] ? { kind: "rule", id: rules[0].id } : null);
@@ -131,6 +138,17 @@ export function AutomationsBoard({
                     <span className="text-muted-foreground block truncate text-xs">
                       {shortSchedule(rule)}
                     </span>
+                    <span
+                      className={cn(
+                        "block truncate text-xs",
+                        runsAs(rule.agent, known).missing
+                          ? "text-destructive"
+                          : "text-muted-foreground",
+                      )}
+                      data-testid="rule-runs-as"
+                    >
+                      {runsAs(rule.agent, known).text}
+                    </span>
                   </span>
                   <span
                     role="img"
@@ -169,6 +187,7 @@ export function AutomationsBoard({
         {current?.kind === "rule" && view && (
           <RuleDetail
             key={current.id}
+            known={known}
             view={view}
             rule={rules.find((r) => r.id === current.id)}
             ruleId={current.id}
@@ -207,6 +226,24 @@ function Notices({ view, error }: { view?: RulesView; error: Error | null }) {
           </AlertDescription>
         </Alert>
       )}
+      {view?.rule_errors && view.rule_errors.length > 0 && (
+        <Alert variant="destructive" data-testid="rule-errors">
+          <AlertTitle>
+            {view.rule_errors.length === 1
+              ? "One rule was not loaded"
+              : `${view.rule_errors.length} rules were not loaded`}
+          </AlertTitle>
+          <AlertDescription>
+            The other rules are loaded and running. Fix these in the rule file
+            to run them:
+            <ul className="list-disc pl-5">
+              {view.rule_errors.map((e) => (
+                <li key={e.id}>{e.error}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
       {view && !view.writable && view.not_writable_reason && (
         <Alert data-testid="not-writable">
           <AlertTitle>These rules cannot be edited here</AlertTitle>
@@ -218,11 +255,13 @@ function Notices({ view, error }: { view?: RulesView; error: Error | null }) {
 }
 
 function RuleDetail({
+  known,
   view,
   rule,
   ruleId,
   onDeleted,
 }: {
+  known: { name: string; display_name?: string | null }[] | undefined;
   view: RulesView;
   rule: RuleView | undefined;
   ruleId: string;
@@ -253,6 +292,17 @@ function RuleDetail({
         <div className="min-w-0 flex-[1_1_260px]">
           <h2 className="text-lg font-semibold">{name}</h2>
           <p className="text-muted-foreground text-[13px]">{headline(rule)}</p>
+          <p
+            className={cn(
+              "text-[13px]",
+              runsAs(rule.agent, known).missing
+                ? "text-destructive"
+                : "text-foreground-2",
+            )}
+            data-testid="rule-detail-runs-as"
+          >
+            {runsAs(rule.agent, known).text}
+          </p>
         </div>
         <span className="text-foreground-2 text-[13px]">
           {rule.enabled ? "On" : "Off"}
@@ -302,7 +352,7 @@ function RuleDetail({
               version={view.version}
               writable={view.writable}
               quietHours={view.quiet_hours}
-              initial={toDoc(rule)}
+              initial={ruleDocOf(rule)}
             />
             {view.writable && (
               <DeleteRule id={rule.id} view={view} onDeleted={onDeleted} />
@@ -362,19 +412,6 @@ function DeleteRule({
       )}
     </section>
   );
-}
-
-function toDoc(rule: RuleView): RuleDoc {
-  return {
-    id: rule.id,
-    name: rule.name ?? "",
-    type: rule.type,
-    enabled: rule.enabled,
-    match: rule.match,
-    prompt: rule.prompt,
-    destination: rule.destination,
-    urgent: rule.urgent,
-  };
 }
 
 function Card({ label, children }: { label: string; children: string }) {

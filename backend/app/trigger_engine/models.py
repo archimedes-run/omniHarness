@@ -59,6 +59,13 @@ class Rule:
     #: What the person called it ("Morning brief"). Display only: the id stays
     #: the key (thread map, audit log), so a rename never moves its history.
     name: str = ""
+    #: Feature 006-F: the custom agent this rule's firings run AS (its
+    #: instructions, tools, skills and grants). None: the lead agent. Checked
+    #: before every firing (RuleRunner.agent_exists): a missing agent fails the
+    #: firing, it is never run as the lead in its place.
+    agent: str | None = None
+    #: Feature 006-F: whether Home lists this rule's upcoming runs and results.
+    show_on_home: bool = True
 
 
 @dataclass(frozen=True)

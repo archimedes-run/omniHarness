@@ -2,8 +2,8 @@
 
 What the Agents panel needs beside the agents API: the tool groups an agent
 may be limited to, the model a run would use, and an agent's schedule and
-recent runs from the trigger engine. Read only; the agent itself is written
-through /api/agents.
+recent runs from the trigger engine. The agent itself is written through
+/api/agents; its schedules (Feature 006-F) through the Automations write path.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from app.gateway.agent_runs_view import AgentRunsView, describe_agent_runs
 from app.gateway.authz import permission_dependency, require_permission
 from app.gateway.deps import get_config
 from app.gateway.display_safe import safe_field
+from app.gateway.ownership import require_owner_account
 from omniharness.config.app_config import AppConfig
 
 router = APIRouter(prefix="/api/studio", tags=["studio"])
@@ -33,28 +34,177 @@ async def studio_options(config: AppConfig = Depends(get_config)) -> StudioOptio
     )
 
 
-@router.get("/agents/{name}/runs", response_model=AgentRunsView, summary="An agent's schedule and recent runs")
+def _agent_key(name: str) -> str:
+    return name if name == "lead_agent" else name.strip().lower()
+
+
+@router.get("/agents/{name}/runs", response_model=AgentRunsView, dependencies=[Depends(require_owner_account)], summary="An agent's schedule and recent runs")
 @require_permission("threads", "read")
 async def agent_runs(name: str, request: Request) -> AgentRunsView:
-    """From the trigger engine's own files: its rules, quiet hours and audit log."""
+    """From the trigger engine's own files: its rules, quiet hours and audit
+    log. Install-wide records, so the owner account only (like Automations)."""
     from pathlib import Path
 
+    from app.gateway.automations_store import read_rules
     from app.gateway.trigger_engine_wiring import _quiet_hours, _resolve_rules_path
     from app.trigger_engine.audit import AuditLog
     from app.trigger_engine.config import ConfigLoader
 
     cfg = request.app.state.config.trigger_engine
-    loader = ConfigLoader(path=_resolve_rules_path(cfg))
+    path = _resolve_rules_path(cfg)
+    loader = ConfigLoader(path=path)
     engine_config = loader.load()
     audit = AuditLog(path=Path(cfg.state_dir) / "audit.jsonl", actor=cfg.actor).entries()
-    return describe_agent_runs(
-        agent=name.strip().lower(),
+    view = describe_agent_runs(
+        agent=_agent_key(name),
         rules=list(engine_config.rules),
         quiet_hours=_quiet_hours(engine_config),
         audit=audit,
         engine_enabled=cfg.enabled,
         rules_error=loader.last_error,
     )
+    try:
+        view.rules_version = read_rules(path).version
+    except (OSError, ValueError):
+        view.rules_version = None
+    view.writable = bool(getattr(cfg, "rules_path", "")) and view.rules_version is not None
+    return view
+
+
+# -- per-agent schedules (Feature 006-F) -------------------------------------
+#
+# A schedule IS a cron trigger rule naming the agent. Written through the
+# Automations write path (automations.edit_rules: the engine's own parser,
+# atomic, refused on a stale version), so the rule file stays the engine's
+# source of truth and its hot reload applies the change with no restart.
+
+
+class ScheduleWrite(BaseModel):
+    schedule: str = Field(..., description="Cron: minute hour day month weekday")
+    timezone: str = Field(..., description="IANA time zone, e.g. America/New_York")
+    telegram: bool = Field(True, description="Send the result to Telegram (the existing channel delivery)")
+    show_on_home: bool = Field(True, description="Show its upcoming runs and results on Home")
+    prompt: str | None = Field(None, max_length=4000, description="What the firing asks the agent; a default when empty")
+    name: str | None = Field(None, max_length=80, description="Display name")
+    enabled: bool = True
+    version: str = Field(..., description="The rule file version (AgentRunsView.rules_version) this edit was based on")
+
+
+class ScheduleWritten(BaseModel):
+    rule_id: str
+    version: str
+
+
+async def _schedule_agent(name: str) -> str:
+    """The agent a schedule is for: the lead, or a custom agent that exists
+    for the owner (404 otherwise: a schedule never names a missing agent)."""
+    from app.gateway.agent_schedules import agent_exists
+
+    agent = _agent_key(name)
+    if agent == "lead_agent":
+        return agent
+    if not agent or not all(ch.isalnum() or ch == "-" for ch in agent):
+        raise HTTPException(status_code=422, detail=f"{name!r} is not an agent name")
+    if not await agent_exists(agent):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent}' not found")
+    return agent
+
+
+def _write_schedule(request: Request, change, version: str | None) -> str:
+    from app.gateway.automations_store import RulesEditError
+    from app.gateway.routers.automations import edit_rules
+
+    try:
+        return edit_rules(request.app.state.config, change, version)
+    except RulesEditError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+def _check_schedule(body: ScheduleWrite) -> None:
+    from app.gateway.agent_schedules import schedule_problem
+
+    problem = schedule_problem(body.schedule, body.timezone)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+
+
+def _owned_rule(doc: dict, agent: str, rule_id: str) -> dict:
+    """The rule `rule_id` if it is this agent's schedule; 404 otherwise, so a
+    schedule edit can never reach another agent's rule or the lead's."""
+    from app.gateway.automations_store import RulesEditError
+
+    rule = next((r for r in doc.get("rules") or [] if r.get("id") == rule_id), None)
+    named = rule.get("agent") if rule else None
+    owner = named.strip().lower() if isinstance(named, str) and named.strip() else "lead_agent"
+    if rule is None or owner != agent or rule.get("type") != "cron":
+        raise RulesEditError(f"{agent} has no schedule {rule_id!r}.", 404)
+    return rule
+
+
+@router.post("/agents/{name}/schedules", response_model=ScheduleWritten, status_code=201, dependencies=[Depends(require_owner_account)], summary="Give an agent a schedule (a cron rule that runs as it)")
+@require_permission("threads", "write")
+async def create_schedule(name: str, body: ScheduleWrite, request: Request) -> ScheduleWritten:
+    from app.gateway.agent_schedules import schedule_rule, schedule_rule_id
+    from app.gateway.automations_store import with_rule
+
+    agent = await _schedule_agent(name)
+    _check_schedule(body)
+    made: dict[str, str] = {}
+
+    def change(doc: dict) -> dict:
+        rule_id = schedule_rule_id(agent, {r.get("id") for r in doc.get("rules") or []})
+        made["id"] = rule_id
+        rule = schedule_rule(rule_id=rule_id, agent=agent, schedule=body.schedule, timezone=body.timezone, telegram=body.telegram, show_on_home=body.show_on_home, prompt=body.prompt, name=body.name, enabled=body.enabled)
+        return with_rule(doc, rule, replace=None)
+
+    version = _write_schedule(request, change, body.version)
+    return ScheduleWritten(rule_id=made["id"], version=version)
+
+
+@router.put("/agents/{name}/schedules/{rule_id}", response_model=ScheduleWritten, dependencies=[Depends(require_owner_account)], summary="Change one of an agent's schedules")
+@require_permission("threads", "write")
+async def update_schedule(name: str, rule_id: str, body: ScheduleWrite, request: Request) -> ScheduleWritten:
+    from app.gateway.agent_schedules import keep_destination, schedule_rule
+    from app.gateway.automations_store import with_rule
+
+    agent = await _schedule_agent(name)
+    _check_schedule(body)
+
+    def change(doc: dict) -> dict:
+        current = _owned_rule(doc, agent, rule_id)
+        rule = schedule_rule(
+            rule_id=rule_id,
+            agent=agent,
+            schedule=body.schedule,
+            timezone=body.timezone,
+            telegram=body.telegram,
+            show_on_home=body.show_on_home,
+            prompt=body.prompt or current.get("prompt"),
+            name=body.name if body.name is not None else current.get("name"),
+            enabled=body.enabled,
+        )
+        # The Telegram toggle is two-valued and destination is four: keep the
+        # rule's own destination (remote stays remote, local stays local)
+        # unless this edit actually flips the toggle.
+        rule["destination"] = keep_destination(current.get("destination", "auto"), body.telegram)
+        # Keep what this editor does not edit (urgent, comments, future keys).
+        return with_rule(doc, {**current, **rule}, replace=rule_id)
+
+    return ScheduleWritten(rule_id=rule_id, version=_write_schedule(request, change, body.version))
+
+
+@router.delete("/agents/{name}/schedules/{rule_id}", response_model=ScheduleWritten, dependencies=[Depends(require_owner_account)], summary="Delete one of an agent's schedules")
+@require_permission("threads", "delete")
+async def delete_schedule(name: str, rule_id: str, version: str, request: Request) -> ScheduleWritten:
+    from app.gateway.automations_store import without_rule
+
+    agent = _agent_key(name)
+
+    def change(doc: dict) -> dict:
+        _owned_rule(doc, agent, rule_id)
+        return without_rule(doc, rule_id)
+
+    return ScheduleWritten(rule_id=rule_id, version=_write_schedule(request, change, version))
 
 
 # -- autonomy: standing grants (app/policy/grants.py) ------------------------

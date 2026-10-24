@@ -241,6 +241,27 @@ def _normalise_agent_name(raw: str) -> str:
     return normalized
 
 
+async def _scheduled_agent_owner(agent_name: str, caller_id: str | None) -> tuple[str, Any]:
+    """Whose agent a scheduled run names, and that it exists (Feature 006-F).
+
+    The install's owner (the rules file is the owner's), or, with no owner
+    (no accounts: auth off), the caller. Raises 422 when the agent does not
+    exist for them: a rule naming a deleted agent is never run as the lead.
+    """
+    from types import SimpleNamespace
+
+    from app.gateway.ownership import owner_user_id
+    from omniharness.config.agents_config import load_agent_config
+    from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+    owner = await owner_user_id() or caller_id or DEFAULT_USER_ID
+    try:
+        load_agent_config(agent_name, user_id=owner)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"the agent {agent_name!r} does not exist, so this scheduled run was refused; it is never run as the lead agent in its place") from exc
+    return owner, SimpleNamespace(id=owner, system_role="user")
+
+
 def _client_firing_id(body: Any) -> str | None:
     """The trigger_firing_id a request claims (read only for the trigger engine)."""
     cfg = getattr(body, "config", None) or {}
@@ -792,6 +813,14 @@ async def start_run(
     # The authenticated user, as AuthMiddleware decided (cookie or internal).
     user_id = await get_current_user(request)
 
+    # Feature 006-F: a scheduled run AS a custom agent runs for the install's
+    # owner, whose agent it is (agents live per user; the engine calls as the
+    # system user). Only on the engine's granted request; a missing agent is
+    # refused here, before any graph is built, never run as the lead instead.
+    run_as = None
+    if synthetic_rule_id is not None and agent_name:
+        user_id, run_as = await _scheduled_agent_owner(agent_name, user_id)
+
     # Per-conversation tools: this thread's stored selection (namespaced source
     # ids, pinned enforced by the repo). A thread with no stored selection gets
     # pinned defaults inside the repo. If it cannot be read the key is absent
@@ -856,6 +885,12 @@ async def start_run(
 
     _mirror_runtime_visible_keys(config)
 
+    # The run task copies the current context when it is created: a scheduled
+    # agent run carries the owner as its current user, so the agent's config,
+    # skills and grants resolve in the owner's directory.
+    from omniharness.runtime.user_context import reset_current_user, set_current_user
+
+    as_owner = set_current_user(run_as) if run_as is not None else None
     try:
         record = await launch_agent_run_detached(
             bridge=bridge,
@@ -880,6 +915,9 @@ async def start_run(
     except UnsupportedStrategyError as exc:
         _release_continue_if_held(config)
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    finally:
+        if as_owner is not None:
+            reset_current_user(as_owner)
 
     # Title sync is handled by worker.py's finally block which reads the
     # title from the checkpoint and calls thread_store.update_display_name
