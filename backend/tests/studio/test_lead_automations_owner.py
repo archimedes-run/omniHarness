@@ -340,3 +340,190 @@ def test_a_lead_automations_thread_record_is_still_kept_up_to_date(studio, scrip
     assert row["display_name"] == "A title", row
     assert row["status"] == "idle", row
     assert not [r for r in caplog.records if "Failed to upsert thread_meta" in r.getMessage()]
+
+
+# -- long-term memory stays as on main: the system user's -----------------------
+
+OWNER_FACT = "OWNER-PRIVATE-FACT-91ab: the owner's salary negotiation is on Friday"
+LEARNED = "LEARNED-FACT-5d2e: something the run read"
+
+
+@pytest.fixture
+def memory_studio(tmp_path, monkeypatch):
+    """`studio` with long-term memory ON (the default in a real install), the
+    owner signed in, and the memory updater's model scripted to learn LEARNED
+    from whatever conversation it is given."""
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from studio_app import configure_studio, fresh_app
+
+    import app.gateway.deps as deps
+    import omniharness.agents.memory.updater as updater
+    from omniharness.agents.memory.queue import get_memory_queue, reset_memory_queue
+    from omniharness.config.app_config import reset_app_config
+    from omniharness.config.extensions_config import reset_extensions_config
+
+    configure_studio(tmp_path, monkeypatch, memory=True)
+    monkeypatch.setattr(deps, "_cached_local_provider", None)
+    monkeypatch.setattr(deps, "_cached_repo", None)
+    learned = json.dumps({"newFacts": [{"content": LEARNED, "category": "context", "confidence": 0.9}]})
+    monkeypatch.setattr(updater, "create_chat_model", lambda *a, **k: GenericFakeChatModel(messages=iter([AIMessage(content=learned)] * 5)))
+    reset_memory_queue()
+    with TestClient(fresh_app()) as client:
+        assert client.post("/api/v1/auth/initialize", json={"email": "owner@example.com", "password": "Str0ng!Pass99"}).status_code in (200, 201)
+        if client.cookies.get("csrf_token"):
+            client.headers["X-CSRF-Token"] = client.cookies.get("csrf_token")
+        studio = _studio_of(client, tmp_path)
+        from omniharness.agents.memory.updater import create_memory_fact
+
+        create_memory_fact(OWNER_FACT, confidence=0.9, user_id=studio.user_id)
+        studio.flush = get_memory_queue().flush
+        yield studio
+    get_memory_queue().clear()
+    reset_memory_queue()
+    reset_app_config()
+    reset_extensions_config()
+
+
+def _memory_facts(user_id: str) -> list[str]:
+    from omniharness.agents.memory.updater import reload_memory_data
+
+    return [f.get("content") for f in reload_memory_data(user_id=user_id).get("facts", [])]
+
+
+def _owner_chat(studio) -> None:
+    c = studio.client
+    tid = c.post("/api/threads", json={}).json()["thread_id"]
+    body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "What is on this week?"}]}}
+    resp = c.post(f"/api/threads/{tid}/runs/wait", json=body)
+    assert resp.status_code == 200, resp.text
+
+
+def test_a_lead_automation_never_sees_the_owners_memory(memory_studio, script) -> None:  # noqa: F811
+    studio = memory_studio
+    _rules_file(studio)
+    engine = _engine(studio)
+    _schedule(studio, agent="lead_agent")
+    _cycle(engine)
+
+    assert engine.runs() and script.prompts, "the automation did not run"
+    assert not any(OWNER_FACT in p for p in script.prompts), "the owner's memory was put in an automation's prompt"
+
+    # The control: the owner's own chat does see it.
+    script.prompts.clear()
+    _owner_chat(studio)
+    assert any(OWNER_FACT in p for p in script.prompts), "the owner's chat did not see the owner's memory: the check above proves nothing"
+
+
+def test_a_lead_automation_never_writes_the_owners_memory(memory_studio, script) -> None:  # noqa: F811
+    from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+    studio = memory_studio
+    _rules_file(studio)
+    engine = _engine(studio)
+    _schedule(studio, agent="lead_agent")
+    _cycle(engine)
+    studio.flush()
+
+    assert LEARNED not in _memory_facts(studio.user_id), "an automation's conversation became a fact in the owner's memory"
+    assert LEARNED in _memory_facts(DEFAULT_USER_ID), "the automation's memory did not go to the system user, as on main"
+
+
+def test_the_owners_own_chat_still_writes_the_owners_memory(memory_studio, script) -> None:  # noqa: F811
+    studio = memory_studio
+    _owner_chat(studio)
+    studio.flush()
+    assert LEARNED in _memory_facts(studio.user_id)
+
+
+def test_a_request_cannot_choose_whose_memory_a_run_uses(memory_studio, script) -> None:  # noqa: F811
+    """The memory override is server-owned: an owner's chat naming the system
+    user's memory in every container still reads and writes the owner's."""
+    from omniharness.runtime.user_context import DEFAULT_USER_ID, MEMORY_USER_KEY
+
+    studio = memory_studio
+    c = studio.client
+    tid = c.post("/api/threads", json={}).json()["thread_id"]
+    forged = {MEMORY_USER_KEY: DEFAULT_USER_ID}
+    body = {"assistant_id": "lead_agent", "input": {"messages": [{"role": "human", "content": "hello"}]}, "context": dict(forged), "metadata": dict(forged), "config": {"configurable": {"thread_id": tid, **forged}}}
+    assert c.post(f"/api/threads/{tid}/runs/wait", json=body).status_code == 200
+    studio.flush()
+    assert any(OWNER_FACT in p for p in script.prompts)
+    assert LEARNED in _memory_facts(studio.user_id) and LEARNED not in _memory_facts(DEFAULT_USER_ID)
+
+
+# -- a lost thread record is recreated as the system's ------------------------
+
+
+def test_a_scheduled_run_that_recreates_a_lost_thread_record_makes_it_the_systems(studio, script) -> None:  # noqa: F811
+    """delete_thread_everywhere can delete a thread's record and then refuse
+    (ThreadsBusy), leaving the rule mapped to it. A run that then recreates
+    the record (the stateless /api/runs route allows a thread with no record;
+    the thread routes refuse one) makes it the REQUEST principal's (the
+    system user's, for the engine), never the run user's (the owner, since
+    #133): otherwise every later firing on that thread would be refused."""
+    from app.gateway.trigger_engine_wiring import engine_request_headers
+    from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+    _rules_file(studio)
+    engine = _engine(studio)
+    rule_id = _schedule(studio, agent="lead_agent")["rule_id"]
+    _cycle(engine)
+    tid = _thread_of(engine)
+    store = studio.client.app.state.thread_store
+    studio.client.portal.call(lambda: store.delete(tid, user_id=None))
+
+    # A scheduled run on the thread, by the engine's credential, on the route
+    # that accepts a thread with no record.
+    body = {
+        "assistant_id": "lead_agent",
+        "input": {"messages": [{"role": "human", "content": "Again."}]},
+        "config": {"configurable": {"thread_id": tid, "turn_provenance": "synthetic-trigger", "trigger_rule_id": rule_id, "trigger_firing_id": "fire-2"}},
+        "metadata": {"turn_provenance": "synthetic-trigger", "trigger_rule_id": rule_id, "trigger_firing_id": "fire-2"},
+    }
+    content = json.dumps(body).encode()
+    resp = studio.client.post("/api/runs/wait", content=content, headers=engine_request_headers("POST", "/api/runs/wait", content))
+    assert resp.status_code == 200, resp.text
+    row = studio.client.portal.call(lambda: store.get(tid, user_id=None))
+    assert row is not None and row["user_id"] == DEFAULT_USER_ID, row
+
+    # The engine's next firing on that thread still runs.
+    engine.loop.runner.injector.inject(tid, rule_id, "Once more.", firing_id="fire-3")
+    assert len([c for c in engine.calls if c[1] == f"/api/threads/{tid}/runs/wait"]) == 2
+
+
+# -- the migration's record-owner filter, through a restart ---------------------
+
+
+def test_an_automation_thread_whose_record_names_a_person_is_not_moved(restartable, script) -> None:  # noqa: F811
+    """An automation-ledgered thread whose record names a PERSON (not the
+    system user) keeps its files where they are: the migration only moves
+    threads the system user owns."""
+    from sqlalchemy import update
+
+    from omniharness.persistence.engine import get_session_factory
+    from omniharness.persistence.thread_meta.model import ThreadMetaRow
+
+    old = _old_layout_thread(restartable, script)
+    client = restartable.start()
+    try:
+        person = _studio_of(client, restartable.tmp).user_id
+
+        async def give_to_person():
+            async with get_session_factory()() as session:
+                await session.execute(update(ThreadMetaRow).where(ThreadMetaRow.thread_id == old.tid).values(user_id=person))
+                await session.commit()
+
+        client.portal.call(give_to_person)
+        # This startup already moved it (the record still named the system
+        # user then): put the old layout back for the next one.
+        if old.owner_dir.exists():
+            import shutil
+
+            shutil.move(str(old.owner_dir), str(old.system_dir))
+    finally:
+        client.__exit__(None, None, None)
+
+    client = restartable.start()
+    client.__exit__(None, None, None)
+    assert (old.system_dir / "user-data" / "outputs" / "report.md").read_text() == SECRET, "moved a thread whose record names a person"
+    assert not old.owner_dir.exists()

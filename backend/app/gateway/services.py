@@ -187,7 +187,10 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 #: - ``called_agent``: never from a request (set inside delegation only);
 #: - ``excluded_skills``: this thread's stored exclusions;
 #: - ``channel``: the IM channel, from the channel manager's header with the
-#:   internal token only (internal_auth.channel_of).
+#:   internal token only (internal_auth.channel_of);
+#: - ``memory_user_id`` (omniharness.runtime.user_context.MEMORY_USER_KEY):
+#:   whose long-term memory a run reads and writes when not its user's; set
+#:   only for a lead automation (the system user's, as before #133).
 SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
     {
         "user_id",
@@ -200,6 +203,7 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
         "called_agent",
         "excluded_skills",
         "channel",
+        "memory_user_id",
     }
 )
 
@@ -315,6 +319,7 @@ def apply_server_owned_context(
     synthetic_rule_id: str | None,
     synthetic_firing_id: str | None = None,
     grants_owner_id: str | None = None,
+    memory_user_id: str | None = None,
 ) -> None:
     """Drop every client-supplied server-owned key, then write the server's.
 
@@ -349,6 +354,10 @@ def apply_server_owned_context(
 
     if user_id:
         context["user_id"] = user_id
+    if memory_user_id and synthetic_rule_id is not None:
+        from omniharness.runtime.user_context import MEMORY_USER_KEY
+
+        context[MEMORY_USER_KEY] = memory_user_id
     if selected_sources is not None:
         context["selected_sources"] = list(selected_sources)
     if agent_name:
@@ -673,6 +682,7 @@ async def launch_agent_run_detached(
     run_config: dict,
     assistant_id: str | None = None,
     user_id: str | None = None,
+    thread_record_user_id: str | None = None,
     metadata: dict | None = None,
     multitask_strategy: str = "reject",
     on_disconnect: DisconnectMode = DisconnectMode.continue_,
@@ -689,6 +699,11 @@ async def launch_agent_run_detached(
 
     Callers are responsible for HTTP-specific concerns (error → HTTP mapping,
     reading user auth from cookies).
+
+    ``thread_record_user_id``: who owns the thread's record if this run has
+    to create it: the request's principal, which differs from ``user_id`` for
+    a scheduled run (it runs for the owner on the system user's thread, #133).
+    Defaults to ``user_id``.
 
     Raises:
         ConflictError: when multitask_strategy="reject" and thread has an active run.
@@ -707,7 +722,7 @@ async def launch_agent_run_detached(
                 await run_ctx.thread_store.create(
                     thread_id,
                     assistant_id=assistant_id,
-                    user_id=user_id,
+                    user_id=thread_record_user_id or user_id,
                     metadata=metadata,
                 )
             else:
@@ -861,6 +876,10 @@ async def start_run(
     # system user). Only on the engine's granted request; a missing agent is
     # refused here, before any graph is built, never run as the lead instead.
     run_as = None
+    # The request's own principal (the system user, for the engine): it keeps
+    # owning the thread's record, and a lead automation's memory (below).
+    principal_user_id = user_id
+    memory_user_id = None
     if synthetic_rule_id is not None and agent_name:
         user_id, run_as = await _scheduled_agent_owner(agent_name, user_id)
     elif synthetic_rule_id is not None:
@@ -870,6 +889,10 @@ async def start_run(
         # grant-run undo finds them. The thread itself stays the system's
         # (the engine creates it), so the card rule for it is unchanged.
         user_id, run_as = await _scheduled_lead_owner(user_id)
+        # Its long-term memory stays the system user's, as before: what an
+        # automation reads from outside never becomes a "fact" in the owner's
+        # chats, and the owner's memory is never put in front of it.
+        memory_user_id = principal_user_id
     # A scheduled run reads the OWNER's standing grants: they are stored under
     # the owner's id (the Autonomy tab). Only on the engine's granted request;
     # a scheduled run runs for the owner (above), so they are the run user's.
@@ -905,6 +928,7 @@ async def start_run(
         synthetic_rule_id=synthetic_rule_id,
         synthetic_firing_id=synthetic_firing_id,
         grants_owner_id=grants_owner_id,
+        memory_user_id=memory_user_id,
     )
     channel = channel_of(request)
     if channel:
@@ -973,6 +997,7 @@ async def start_run(
             run_config=config,
             assistant_id=body.assistant_id,
             user_id=user_id,
+            thread_record_user_id=principal_user_id,
             metadata=run_metadata,
             multitask_strategy=body.multitask_strategy,
             on_disconnect=disconnect,

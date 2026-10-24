@@ -14,7 +14,7 @@ os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-key-studio-composition-min
 EXAMPLE = Path(__file__).resolve().parents[3] / "config.example.yaml"
 
 
-def configure_studio(tmp_path, monkeypatch) -> None:
+def configure_studio(tmp_path, monkeypatch, *, memory: bool = False) -> None:
     """The temporary config, database, home and skills directory `studio`
     runs on. Separate so a test can start the gateway more than once on the
     same data (a restart: see test_lead_automations_owner.py)."""
@@ -28,6 +28,10 @@ def configure_studio(tmp_path, monkeypatch) -> None:
     config["trigger_engine"] = {"enabled": False, "rules_path": str(tmp_path / "rules.json"), "state_dir": str(tmp_path / "triggers")}
     config["agents_api"] = {"enabled": True}
     config.setdefault("memory", {})["enabled"] = False
+    if memory:
+        # Long-term memory ON, per user (users/<id>/memory.json under the
+        # temporary home); updates only when a test flushes the queue.
+        config["memory"] = {"enabled": True, "injection_enabled": True, "storage_path": "", "debounce_seconds": 300, "fact_confidence_threshold": 0.5}
     config.setdefault("skills", {})["path"] = str(tmp_path / "skills")
     (tmp_path / "skills" / "public").mkdir(parents=True)
     (tmp_path / "skills" / "custom").mkdir(parents=True)
