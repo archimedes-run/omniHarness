@@ -436,3 +436,16 @@ test("the lead agent keeps its fixed tools and instructions; its grants are stil
   });
   expect(seen.agentWrites).toEqual([]);
 });
+
+test("History restores an earlier version as a new one", async ({ page }) => {
+  const seen = await stubStudio(page);
+  await openAgents(page, "evening-wrap-up");
+  await page.getByTestId("agent-name").fill("Evening digest");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => seen.agentWrites.length).toBe(1);
+  await page.getByTestId("studio-history").click();
+  await page.getByTestId("studio-version").filter({ hasText: "v1" }).click();
+  await expect.poll(() => seen.undos.length).toBe(1);
+  expect(seen.undos[0]!.body).toEqual({ to_version: 1, base_version: 2 });
+  await expect(page.getByTestId("agent-name")).toHaveValue("Evening wrap-up");
+});

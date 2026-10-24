@@ -55,6 +55,7 @@ import { agentTitle } from "./agents-list";
 import { useStudioCopy } from "./copy";
 import { Av, StatusPill } from "./parts";
 import { useStudio } from "./studio";
+import { VersionHistory } from "./version-history";
 import {
   FootLeft,
   NextButton,
@@ -678,6 +679,22 @@ export function AgentWizard({
         }
         footer={footer}
         testId="agent-wizard"
+        history={
+          isNew || isLead || !id ? null : (
+            <VersionHistory
+              kind="agent"
+              name={id}
+              onRestored={() =>
+                void queryClient
+                  .invalidateQueries({ queryKey: ["agents"] })
+                  .then(() => {
+                    setOrig(null);
+                    setForm(null);
+                  })
+              }
+            />
+          )
+        }
       >
         {body}
       </WizardShell>

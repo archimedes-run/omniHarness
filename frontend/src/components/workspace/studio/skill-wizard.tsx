@@ -58,6 +58,7 @@ import {
 } from "./parts";
 import { skillTitle, usersOf } from "./skills-list";
 import { useStudio } from "./studio";
+import { VersionHistory } from "./version-history";
 import {
   FootLeft,
   NextButton,
@@ -1069,6 +1070,22 @@ export function SkillWizard({
         }
         footer={footer}
         testId="skill-wizard"
+        history={
+          isNew || readOnly || !id ? null : (
+            <VersionHistory
+              kind="skill"
+              name={id}
+              onRestored={() =>
+                void Promise.all([
+                  queryClient.invalidateQueries({ queryKey: ["skills"] }),
+                ]).then(() => {
+                  setOrig(null);
+                  setForm(null);
+                })
+              }
+            />
+          )
+        }
       >
         {stepBody}
       </WizardShell>

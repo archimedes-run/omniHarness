@@ -45,6 +45,7 @@ export function WizardShell({
   children,
   footer,
   testId,
+  history,
 }: {
   kind: string;
   backLabel: string;
@@ -70,6 +71,8 @@ export function WizardShell({
   children: ReactNode;
   footer: ReactNode;
   testId: string;
+  /** The version history button, for a saved item. */
+  history?: ReactNode;
 }) {
   const c = useStudioCopy();
   const body = useRef<HTMLDivElement>(null);
@@ -92,6 +95,7 @@ export function WizardShell({
           </button>
           <span className="eyebrow">{c.eyebrow(isNew, kind, step)}</span>
           <span className="grow" />
+          {history}
           <span className="owner" title={c.ownerTitle(kind)}>
             <span className="who">
               <UserIcon size={12} aria-hidden />

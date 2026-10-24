@@ -407,10 +407,20 @@ export async function stubStudio(
   });
   await page.route("**/api/agents/*/versions", (route) => {
     const name = decodeURIComponent(route.request().url().split("/").at(-2)!);
+    const versions = store.get(name)?.versions ?? [];
     return json(route, {
       name,
-      current: store.get(name)?.versions.length ?? 0,
-      versions: [],
+      current: versions.length,
+      versions: versions
+        .map((_, i) => ({
+          version: i + 1,
+          at: "2026-10-20T10:00:00Z",
+          who: "user:u1",
+          source: i === 0 ? "existing" : "manual",
+          changed: i === 0 ? [] : ["config.display_name"],
+          deleted: false,
+        }))
+        .reverse(),
     });
   });
   await page.route("**/api/agents/*/undo", (route) => {
