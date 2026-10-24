@@ -85,6 +85,7 @@ def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True,
     never the user's turn.
     """
     from app.policy.lineage import user_turn as tagged
+    from omniharness.agents.turns import mark_untagged_input as untagged
 
     if raw_input is None:
         return {}
@@ -117,13 +118,13 @@ def normalize_input(raw_input: dict[str, Any] | None, *, user_turn: bool = True,
                     # keeping it would let a caller rewrite an earlier message.
                     msg_id = msg.get("id") if keep_id is not None and keep_id(msg.get("id")) else None
                     kw = {"id": msg_id} if msg_id else {}
-                    converted.append(tagged(content, **kw) if user_turn else HumanMessage(content=content, **kw))
+                    converted.append(tagged(content, **kw) if user_turn else untagged(HumanMessage(content=content, **kw)))
                 else:
                     # TODO: handle other message types (system, ai, tool)
-                    converted.append(HumanMessage(content=content))
+                    converted.append(untagged(HumanMessage(content=content)))
             else:
                 # Not from JSON: never trusted as a user turn.
-                converted.append(HumanMessage(content=getattr(msg, "content", str(msg))))
+                converted.append(untagged(HumanMessage(content=getattr(msg, "content", str(msg)))))
         return {**raw_input, "messages": converted}
     return raw_input
 

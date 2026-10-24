@@ -44,6 +44,23 @@ def mark_user_turn(message: Any) -> Any:
 #: record counts as a private read.
 TURN_SUMMARY_MARKER = "omniharness_turn_summary"
 
+#: On a run's input message that is NOT the person's turn (a relayed channel
+#: message from someone else, a non-JSON message; services.normalize_input).
+#: It starts a turn of its own, so neither the private-read walk nor a
+#: summary record may carry an earlier turn's verdict across it.
+UNTAGGED_INPUT_MARKER = "omniharness_untagged_input"
+
+
+def mark_untagged_input(message: Any) -> Any:
+    kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+    kwargs[UNTAGGED_INPUT_MARKER] = True
+    message.additional_kwargs = kwargs
+    return message
+
+
+def is_untagged_input(message: Any) -> bool:
+    return _type(message) == "human" and _kwargs(message).get(UNTAGGED_INPUT_MARKER) is True
+
 
 def _kwargs(message: Any) -> dict:
     kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
@@ -87,6 +104,8 @@ def summarized_turn(messages: list[Any]) -> dict[str, Any]:
         if kwargs.get(USER_TURN_MARKER) is True or kwargs.get(INVITATION_MARKER) is True:
             key = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
             return {"turn_key": str(key or ""), "tools": tools, "start_found": True}
+        if kwargs.get(UNTAGGED_INPUT_MARKER) is True:
+            return {"turn_key": "", "tools": tools, "start_found": False}
         if TURN_SUMMARY_MARKER in kwargs:
             earlier = kwargs[TURN_SUMMARY_MARKER]
             prior = earlier.get("tools") if isinstance(earlier, dict) else None

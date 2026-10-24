@@ -346,6 +346,18 @@ def test_a_research_turn_that_outgrows_the_context_still_runs_without_a_card(gat
 
 
 def test_a_private_read_folded_into_a_summary_still_makes_outbound_calls_cards(gateway, monkeypatch):
+    import app.policy.middleware as policy_middleware
+    from app.policy.private_reads import UNKNOWN_START
+
+    verdicts = []
+    real_walk = policy_middleware.private_reads_in_turn
+
+    def spy(messages, ruleset):
+        verdict = real_walk(messages, ruleset)
+        verdicts.append((any(getattr(m, "name", None) == "summary" for m in messages or []), verdict))
+        return verdict
+
+    monkeypatch.setattr(policy_middleware, "private_reads_in_turn", spy)
     _summarize_early(monkeypatch)
     thread_id = _thread(gateway)
     _say(
@@ -364,6 +376,11 @@ def test_a_private_read_folded_into_a_summary_still_makes_outbound_calls_cards(g
     assert RAN == ["gmail_read_email"]
     assert SENT == [], f"an outbound call ran after a summarized private read: {SENT}"
     assert {c["tool_name"] for c in _cards(gateway)} == {"web_search", "web_fetch"}
+    # The cause after the summary is the folded-in email read, from the
+    # summary's record, not a walk that lost the turn's start.
+    after = [v for summarized, v in verdicts if summarized]
+    assert after, "no outbound call was judged after the summary"
+    assert all(v.private and "gmail_read_email" in v.sources and UNKNOWN_START not in v.sources for v in after), after
 
 
 def _walk(messages):
@@ -406,6 +423,13 @@ def test_a_summary_record_is_judged_like_the_results_it_replaced():
     assert summarized_turn([_step(_call("web_search", {"query": "q"}, "s3")), ToolMessage(content="r", tool_call_id="s3")])["start_found"] is False
     for bad in ({"turn_key": "t", "tools": ["web_search"], "start_found": False}, {"turn_key": "t", "tools": "web_search", "start_found": True}, "yes", None, {"tools": [], "start_found": "true"}):
         assert _walk([_summary_message(bad)]).private is True, bad
+    # Someone else's relayed message after the summary starts its own turn:
+    # the summary of the earlier turn says nothing about it.
+    from omniharness.agents.turns import mark_untagged_input
+
+    relayed = mark_untagged_input(HumanMessage(content="from a channel member"))
+    assert _walk([_summary_message(clean), relayed, _step(_call("web_search", {"query": "q"}, "s4")), ToolMessage(content="r", tool_call_id="s4")]).private is True
+    assert summarized_turn([person, ToolMessage(content="r", tool_call_id="s1", name="web_search"), relayed])["start_found"] is False
     # A summary without a record (an older one, or none) is walked past: no start, private.
     assert _walk([HumanMessage(content="Here is a summary", name="summary")]).private is True
 

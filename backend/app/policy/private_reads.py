@@ -145,8 +145,14 @@ def private_reads_in_turn(messages: list[Any] | None, ruleset: RuleSet) -> TurnP
     A walk that never finds the start cannot rule a private read out, so it
     counts as one.
     """
+    from omniharness.agents.turns import is_untagged_input
+
     items = list(messages or [])
     sources: list[str] = []
+    # An input message that is not the person's (a relayed channel message)
+    # starts a turn of its own: a summary of an earlier turn says nothing
+    # about it.
+    crossed_untagged = False
     for index in range(len(items) - 1, -1, -1):
         message = items[index]
         if is_tool_result(message):
@@ -158,7 +164,11 @@ def private_reads_in_turn(messages: list[Any] | None, ruleset: RuleSet) -> TurnP
             continue
         summary = _turn_summary(message)
         if summary is not _NO_SUMMARY:
+            if crossed_untagged:
+                return TurnPrivacy(private=True, sources=(*sources, UNKNOWN_START))
             return _from_summary(summary, sources, ruleset)
+        if is_untagged_input(message):
+            crossed_untagged = True
         if is_user_turn(message) or is_invitation(message):
             key = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
             return TurnPrivacy(private=bool(sources), sources=tuple(sources), turn_key=str(key or ""))
