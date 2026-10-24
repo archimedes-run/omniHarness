@@ -115,10 +115,7 @@ export function ScheduleTab({
   };
 
   return (
-    <TabPanel
-      value="schedule"
-      className="flex flex-col gap-3.5 outline-none"
-    >
+    <TabPanel value="schedule" className="flex flex-col gap-3.5 outline-none">
       {isLead ? (
         <p className="text-foreground-2 m-0">{c.scheduleLead}</p>
       ) : null}
