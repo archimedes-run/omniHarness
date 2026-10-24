@@ -50,18 +50,35 @@ export function nextRunAt(runs: AgentRuns | undefined): Date | null {
   return times[0] ?? null;
 }
 
+export interface RunLineWords {
+  notScheduled: string;
+  whenYouAsk: string;
+  paused: string;
+  noUpcoming: string;
+  firstRun: (when: string) => string;
+}
+
+const ENGLISH: RunLineWords = {
+  notScheduled: "Not scheduled",
+  whenYouAsk: "When you ask",
+  paused: "Paused",
+  noUpcoming: "No upcoming run",
+  firstRun: (when) => `First run ${when}`,
+};
+
 /** The card's clock line. */
 export function nextRunLine(
   status: AgentStatus | null,
   runs: AgentRuns | undefined,
   now: Date = new Date(),
+  words: RunLineWords = ENGLISH,
 ): string {
   if (status === null) return "…";
-  if (status === "draft") return "Not scheduled";
-  if (status === "ondemand") return "When you ask";
-  if (status === "paused") return "Paused";
+  if (status === "draft") return words.notScheduled;
+  if (status === "ondemand") return words.whenYouAsk;
+  if (status === "paused") return words.paused;
   const next = nextRunAt(runs);
-  if (!next) return "No upcoming run";
+  if (!next) return words.noUpcoming;
   const when = runShort(next, now);
-  return status === "scheduled" ? `First run ${when}` : when;
+  return status === "scheduled" ? words.firstRun(when) : when;
 }

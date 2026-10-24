@@ -268,6 +268,28 @@ const MONO: Record<string, [string, string]> = {
   "local:googlecalendar": ["31", "0"],
 };
 
+const KNOWN_NAMES: Record<string, string> = {
+  "connector:GMAIL": "Gmail",
+  "connector:GITHUB": "GitHub",
+  "connector:GOOGLECALENDAR": "Google Calendar",
+  "connector:GOOGLEDRIVE": "Google Drive",
+  "connector:SLACK": "Slack",
+  "connector:NOTION": "Notion",
+  "connector:LINEAR": "Linear",
+  "connector:OUTLOOK": "Outlook",
+  "builtin:web": "Web",
+  "builtin:ledger": "Tasks and notes",
+  "builtin:file:read": "Read files",
+  "builtin:file:write": "Write files",
+  "builtin:bash": "Shell",
+  "builtin:workspace": "Workspace",
+};
+
+/** An integration's name from its id (local servers are named by their id). */
+export function integrationName(id: string): string {
+  return KNOWN_NAMES[id] ?? id.split(":").slice(1).join(":");
+}
+
 export function monoFor(
   i: Pick<CatalogIntegration, "id" | "name">,
 ): [string, string] {

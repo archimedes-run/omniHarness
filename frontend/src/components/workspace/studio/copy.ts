@@ -86,6 +86,13 @@ const enUS = {
     lead: "Lead agent",
     leadPurpose:
       "Answers in every chat and runs automations with no agent named.",
+    runLine: {
+      notScheduled: "Not scheduled",
+      whenYouAsk: "When you ask",
+      paused: "Paused",
+      noUpcoming: "No upcoming run",
+      firstRun: (when: string) => `First run ${when}`,
+    },
   },
 
   agent: {
@@ -563,6 +570,13 @@ const zhCN: StudioCopy = {
     disabled: "此安装已关闭自定义智能体（agents_api.enabled）。",
     lead: "主智能体",
     leadPurpose: "在每个对话中回答，并运行未指定智能体的自动化。",
+    runLine: {
+      notScheduled: "未排期",
+      whenYouAsk: "在你需要时",
+      paused: "已暂停",
+      noUpcoming: "没有即将运行的任务",
+      firstRun: (when) => `首次运行 ${when}`,
+    },
   },
   agent: {
     kind: "智能体",
