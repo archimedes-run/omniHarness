@@ -222,6 +222,7 @@ gateway container
 | `OMNI_HARNESS_WATCHER_TOKEN_FILE` | `~/.omni-harness-secrets/watcher.token` (compose: `/run/secrets/watcher.token`, mounted read-only) | The session-watcher's REQUIRED shared token. Created on first start by `scripts/ensure-watcher-token.sh` (run by `make daily`, deploy.sh, docker.sh, serve.sh); the gateway sends it to the `session-watcher` MCP server automatically. Nothing to put in `.env` or `extensions_config.json` |
 | `OMNI_HARNESS_HOST_SKILLS_PATH` | `$OMNI_HARNESS_ROOT/skills` | Host path for skills directory mount |
 | `SANDBOX_IMAGE` | `ghcr.io/archimedes-run/omni-harness-sandbox:latest` | Sandbox container image; override for mirrors or custom builds |
+| `OMNI_HARNESS_FETCH_EGRESS_PROXY` | `http://omni-harness-fetch-egress:3128` (set by compose) | The fetch egress proxy the built-in `web_fetch` goes through. Unset (a gateway on the host, no proxy): `web_fetch` fetches nothing (see [Web fetch](#web-fetch)) |
 
 ### 4. Management commands
 
@@ -350,6 +351,24 @@ sandbox:
 ```
 
 See [Configuration Guide](../backend/docs/CONFIGURATION.md#sandbox) for all options including idle timeout, replica count, and Kubernetes provisioner setup.
+
+### Web fetch
+
+The `web_fetch` tool is built in (`omniharness.community.builtin_fetch.tools:web_fetch_tool`, the default in `config.example.yaml`). It GETs the page and extracts readable markdown with [trafilatura](https://github.com/adbar/trafilatura); its output is untrusted web content and is tagged and gated exactly as before (the tool name is unchanged).
+
+Every fetch goes through the **fetch egress proxy**, a Squid in its own container (`omni-harness-fetch-egress`, config in `docker/fetch-egress/`, started by docker compose on the gateway's network only; sandboxes cannot reach it). It allows the public internet only:
+
+- plain `http` to port 80 and `CONNECT` to port 443; GET/HEAD only;
+- destinations are checked by the address Squid itself resolves and connects to: loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16, including cloud metadata), CGNAT (100.64/10), 0/8, multicast, reserved, IPv6 loopback/ULA/link-local, and the compose networks the proxy is attached to are refused;
+- its resolver (dnsmasq, `stop-dns-rebind`) drops private answers, so a name that resolves to a private address, or flips to one (DNS rebinding), gets no address;
+- `localhost`, single-label names (Docker service names such as `gateway`) and internal suffixes (`.internal`, `.local`, ...) are refused before any lookup;
+- Squid never follows redirects: the gateway follows them itself, at most 5, and every hop is checked again and sent through the proxy again.
+
+The gateway checks each URL first as well (scheme, port, credentials, internal names, and the resolved addresses), ignores `HTTP(S)_PROXY` from the environment, and stops at 2 MB of body and 15 s per fetch. With no proxy configured, nothing is fetched.
+
+Options on the `web_fetch` tool entry (all optional): `proxy`, `timeout` (at most 15), `max_bytes` (at most 2 MB), `max_redirects` (at most 5), `blocked_networks` (extra CIDRs to refuse), `provider` (`builtin` or `jina`), `jina_fallback` (default true). The Jina reader is used only when `JINA_API_KEY` is set: as a fallback when the built-in fetch fails (network error, HTTP error, unsupported content such as PDF; never for a refused URL), or always with `provider: jina`. With no key it is never called.
+
+`scripts/fetch-egress-e2e.sh` (or `OMNI_FETCH_EGRESS_E2E=1 uv run pytest tests/security/test_fetch_egress.py`) runs the proxy in throwaway containers and checks the refusals end to end; it needs Docker, the network and the locally built `omni-harness-sandbox-egress:1` image.
 
 ### MCP Servers
 

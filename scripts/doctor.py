@@ -468,7 +468,7 @@ def check_web_tool(config_path: Path, *, tool_name: str, label: str) -> CheckRes
 
         free_providers = {
             "web_search": {"ddg_search": "DuckDuckGo (no key needed)"},
-            "web_fetch": {"jina_ai": "Jina AI Reader (no key needed)"},
+            "web_fetch": {"builtin_fetch": "built-in fetcher (through the fetch egress proxy)", "jina_ai": "Jina AI Reader (no key needed)"},
         }
         key_providers = {
             "web_search": {

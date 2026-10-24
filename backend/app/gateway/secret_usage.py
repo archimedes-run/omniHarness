@@ -68,7 +68,7 @@ IMPLICIT_ENV_READS: dict[str, tuple[str, Predicate]] = {
     "CLAUDE_CODE_OAUTH_TOKEN": ("a model on omniharness.models.claude_provider", _model_uses("claude_provider")),
     "ANTHROPIC_AUTH_TOKEN": ("a model on omniharness.models.claude_provider", _model_uses("claude_provider")),
     "CLAUDE_CODE_CREDENTIALS_PATH": ("a model on omniharness.models.claude_provider", _model_uses("claude_provider")),
-    "JINA_API_KEY": ("the jina_ai web_fetch tool", _tool_uses("jina_ai")),
+    "JINA_API_KEY": ("the jina_ai web_fetch tool, or the built-in one's optional Jina fallback", lambda c, e: _tool_uses("jina_ai")(c, e) or _tool_uses("builtin_fetch")(c, e)),
     "SERPER_API_KEY": ("the serper web_search tool", _tool_uses("serper")),
     "TAVILY_API_KEY": ("a tavily tool (the client reads it implicitly)", _tool_uses("tavily")),
     "FIRECRAWL_API_KEY": ("a firecrawl tool (the client reads it implicitly)", _tool_uses("firecrawl")),

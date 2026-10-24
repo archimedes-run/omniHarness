@@ -107,19 +107,36 @@ tools:
   #   max_results: 5
   #   # api_key: $FIRECRAWL_API_KEY
 
-  # Web fetch tool (uses Exa)
+  # Web fetch tool (built in, the default). GETs the page through the fetch
+  # egress proxy (docker/fetch-egress: public internet only, ports 80/443, every
+  # redirect hop re-checked) and extracts readable markdown with trafilatura.
+  # Hard caps: 2 MB body, 15 s per fetch, 5 redirects; the options below can
+  # lower them, never raise them. With no proxy configured nothing is fetched.
   # NOTE: Only one web_fetch provider can be active at a time.
-  # Comment out the Jina AI web_fetch entry below before enabling this one.
+  - name: web_fetch
+    group: web
+    use: omniharness.community.builtin_fetch.tools:web_fetch_tool
+    timeout: 15
+    # proxy: http://omni-harness-fetch-egress:3128  # default: $OMNI_HARNESS_FETCH_EGRESS_PROXY (set by docker compose)
+    # max_bytes: 2097152
+    # max_redirects: 5
+    # blocked_networks: []     # extra CIDRs to refuse, on top of the built-in private/reserved list
+    # provider: builtin        # or: jina (needs JINA_API_KEY; never called without it)
+    # jina_fallback: true      # with JINA_API_KEY set, Jina retries a URL the built-in fetch FAILED on
+    #                          # (network error, HTTP error, unsupported type); never a refused URL
+
+  # Web fetch tool (uses Exa)
   # - name: web_fetch
   #   group: web
   #   use: omniharness.community.exa.tools:web_fetch_tool
   #   # api_key: $EXA_API_KEY
 
-  # Web fetch tool (uses Jina AI reader)
-  - name: web_fetch
-    group: web
-    use: omniharness.community.jina_ai.tools:web_fetch_tool
-    timeout: 10
+  # Web fetch tool (uses the Jina AI reader directly, no egress proxy or guard
+  # in the gateway; the built-in fetcher above can use Jina as a fallback instead)
+  # - name: web_fetch
+  #   group: web
+  #   use: omniharness.community.jina_ai.tools:web_fetch_tool
+  #   timeout: 10
 
   # Web fetch tool (uses Firecrawl, requires FIRECRAWL_API_KEY)
   # - name: web_fetch

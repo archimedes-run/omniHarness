@@ -231,6 +231,13 @@ class TestCheckWebSearch:
 
 
 class TestCheckWebFetch:
+    def test_builtin_fetch_ok(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n")
+        result = doctor.check_web_fetch(cfg)
+        assert result.status == "ok"
+        assert "built-in" in result.detail
+
     def test_jina_always_ok(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.jina_ai.tools:web_fetch_tool\n")

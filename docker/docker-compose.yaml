@@ -188,6 +188,8 @@ services:
       # Sandbox egress (registries only); the CA volume the sandboxes mount read-only.
       - OMNI_HARNESS_SANDBOX_EGRESS_PROXY=http://omni-harness-egress:3128
       - OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME=omni-harness-sandbox-egress-ca
+      # web_fetch goes out ONLY through the fetch egress proxy (public internet only).
+      - OMNI_HARNESS_FETCH_EGRESS_PROXY=http://omni-harness-fetch-egress:3128
       # Logs: daily append-only files, 30 days kept (app/gateway/log_files.py).
       - GATEWAY_LOG_FILE=/app/logs/gateway.log
       # Real client IP: forwarded headers are trusted from nginx's fixed address only.
@@ -294,6 +296,30 @@ services:
     networks:
       - omni-harness
       - omni-harness-sandboxes
+    restart: unless-stopped
+
+  # The gateway's web_fetch goes out through here and nowhere else: public
+  # internet only, plain http to 80, CONNECT to 443, every destination checked
+  # by the address Squid resolves (docker/fetch-egress). The sandbox-egress
+  # image (the same pinned Squid and dnsmasq) with its own config, in its own
+  # container; the sandbox egress rules are untouched. Only on the gateway's
+  # network, never the sandboxes': it publishes no port.
+  fetch-egress:
+    build:
+      context: ./sandbox-egress
+      args:
+        SQUID_VERSION: 6.12-r0
+        DNSMASQ_VERSION: 2.91-r1
+        OPENSSL_VERSION: 3.5.9-r0
+    image: omni-harness-sandbox-egress:1
+    container_name: omni-harness-fetch-egress
+    entrypoint: ["/bin/sh", "/opt/fetch/entrypoint.sh"]
+    volumes:
+      - ./fetch-egress:/opt/fetch:ro
+    tmpfs:
+      - /run/fetch
+    networks:
+      - omni-harness
     restart: unless-stopped
 
 volumes:
