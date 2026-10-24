@@ -66,7 +66,8 @@ class ToolNameCollisionError(RuntimeError):
 
 
 def is_model_safe(name: str) -> bool:
-    return bool(MODEL_SAFE_TOOL_NAME.match(name or ""))
+    # fullmatch: with match, "$" also matches before a trailing newline.
+    return bool(MODEL_SAFE_TOOL_NAME.fullmatch(name or ""))
 
 
 def alias_for(name: str, digest_length: int = _DIGEST_LENGTHS[0]) -> str:

@@ -113,6 +113,15 @@ def test_no_collision_free_alias_fails_closed(monkeypatch):
         aliases.add([alias_for(LIVE)])  # a history name equal to an alias already minted
 
 
+def test_a_name_with_a_trailing_newline_is_not_model_safe():
+    from omniharness.models.tool_name_boundary import alias_for, is_model_safe
+
+    assert not is_model_safe("web_fetch\n")
+    assert not is_model_safe("a" * 64 + "\n")
+    alias = alias_for("web_fetch\n")
+    assert alias != "web_fetch\n" and is_model_safe(alias) and len(alias) <= 64
+
+
 def test_a_name_the_request_did_not_alias_is_not_rewritten():
     """Only this request's aliases map back: a made-up name is left for the policy to refuse."""
     aliases = ToolNameAliases([LIVE, "web_fetch"])
