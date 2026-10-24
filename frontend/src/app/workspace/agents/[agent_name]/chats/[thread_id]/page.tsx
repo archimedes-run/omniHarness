@@ -8,17 +8,17 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { AgentWelcome } from "@/components/workspace/agent-welcome";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
-import { ChatBox, useThreadChat } from "@/components/workspace/chats";
+import {
+  ChatBox,
+  useComposerInset,
+  useThreadChat,
+} from "@/components/workspace/chats";
 import { useThreadConfirmations } from "@/components/workspace/confirmations/thread-confirmations";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
 import { PromoteTodos } from "@/components/workspace/ledger/promote-todos";
 import { ThreadProjects } from "@/components/workspace/ledger/thread-projects";
-import {
-  MessageList,
-  MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
-  MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM,
-} from "@/components/workspace/messages";
+import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
 import { ParticipantsStack } from "@/components/workspace/messages/participants-stack";
 import { ThreadTitle } from "@/components/workspace/thread-title";
@@ -37,7 +37,12 @@ import { cn } from "@/lib/utils";
 
 export default function AgentChatPage() {
   const { t } = useI18n();
-  const [showFollowups, setShowFollowups] = useState(false);
+  // The follow-ups render in the thread, under the last message; the chat
+  // bar's measured height is the thread's clear space at the bottom.
+  const [followupsSlot, setFollowupsSlot] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const { hostRef: mainRef, composerRef } = useComposerInset();
   const router = useRouter();
 
   const { agent_name } = useParams<{
@@ -122,10 +127,6 @@ export default function AgentChatPage() {
     (runId) => void thread.joinStream(runId),
   );
 
-  const messageListPaddingBottom = showFollowups
-    ? MESSAGE_LIST_DEFAULT_PADDING_BOTTOM +
-      MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM
-    : undefined;
   const tokenUsageInlineMode = tokenUsageEnabled
     ? localSettings.tokenUsage.inlineMode
     : "off";
@@ -191,13 +192,13 @@ export default function AgentChatPage() {
             </div>
           </header>
 
-          <main className="flex min-h-0 max-w-full grow flex-col">
+          <main ref={mainRef} className="flex min-h-0 max-w-full grow flex-col">
             <div className="flex size-full justify-center">
               <MessageList
                 className={cn("size-full", !isNewThread && "pt-10")}
                 threadId={threadId}
                 thread={thread}
-                paddingBottom={messageListPaddingBottom}
+                followupsSlotRef={setFollowupsSlot}
                 hasMoreHistory={hasMoreHistory}
                 loadMoreHistory={loadMoreHistory}
                 isHistoryLoading={isHistoryLoading}
@@ -208,7 +209,11 @@ export default function AgentChatPage() {
             </div>
 
             <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
-              <div className="relative w-full max-w-[816px]">
+              <div
+                ref={composerRef}
+                className="relative w-full max-w-[816px]"
+                data-testid="composer"
+              >
                 <div className="absolute -top-4 right-0 left-0 z-0">
                   <div className="absolute right-0 bottom-0 left-0">
                     <TodoList
@@ -249,7 +254,7 @@ export default function AgentChatPage() {
                   }
                   disabled={env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"}
                   onContextChange={(context) => setSettings("context", context)}
-                  onFollowupsVisibilityChange={setShowFollowups}
+                  followupsContainer={followupsSlot}
                   onSubmit={handleSubmit}
                   onStop={handleStop}
                 />
