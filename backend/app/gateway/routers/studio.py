@@ -164,7 +164,7 @@ async def create_schedule(name: str, body: ScheduleWrite, request: Request) -> S
 @router.put("/agents/{name}/schedules/{rule_id}", response_model=ScheduleWritten, dependencies=[Depends(require_owner_account)], summary="Change one of an agent's schedules")
 @require_permission("threads", "write")
 async def update_schedule(name: str, rule_id: str, body: ScheduleWrite, request: Request) -> ScheduleWritten:
-    from app.gateway.agent_schedules import schedule_rule
+    from app.gateway.agent_schedules import keep_destination, schedule_rule
     from app.gateway.automations_store import with_rule
 
     agent = await _schedule_agent(name)
@@ -183,6 +183,10 @@ async def update_schedule(name: str, rule_id: str, body: ScheduleWrite, request:
             name=body.name if body.name is not None else current.get("name"),
             enabled=body.enabled,
         )
+        # The Telegram toggle is two-valued and destination is four: keep the
+        # rule's own destination (remote stays remote, local stays local)
+        # unless this edit actually flips the toggle.
+        rule["destination"] = keep_destination(current.get("destination", "auto"), body.telegram)
         # Keep what this editor does not edit (urgent, comments, future keys).
         return with_rule(doc, {**current, **rule}, replace=rule_id)
 

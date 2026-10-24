@@ -539,3 +539,29 @@ def test_automations_shows_the_refused_rule_and_still_writes_the_others(studio) 
     resp = c.put("/api/automations/rules/other", json={"rule": _cron("other", agent="Still_Bad", enabled=False), "version": version})
     assert resp.status_code == 422 and "not an agent name" in resp.json()["detail"]
     assert [r["id"] for r in json.loads((studio.tmp / "rules.json").read_text())["rules"]] == ["mine", "other"]
+
+
+@pytest.mark.parametrize("dest", ["remote", "local", "auto", "quiet"])
+def test_a_schedule_edit_that_leaves_telegram_alone_keeps_the_destination(studio, dest) -> None:
+    """Changing only show_on_home on the lead's Schedule tab must not rewrite
+    the automation's delivery (remote became auto, local became quiet)."""
+    _rules_file(studio, [{"id": "brief", "type": "cron", "enabled": True, "match": {"schedule": "0 8 * * *", "timezone": "UTC"}, "prompt": "Brief at {scheduled_at}", "destination": dest}])
+    c = studio.client
+    view = c.get("/api/studio/agents/lead_agent/runs").json()
+    [s] = view["schedules"]
+    body = {"schedule": s["schedule"], "timezone": s["timezone"], "telegram": s["telegram"], "show_on_home": False, "enabled": s["enabled"], "version": view["rules_version"]}
+    assert c.put("/api/studio/agents/lead_agent/schedules/brief", json=body).status_code == 200
+    rule = json.loads((studio.tmp / "rules.json").read_text())["rules"][0]
+    assert (rule["destination"], rule["show_on_home"]) == (dest, False)
+
+
+@pytest.mark.parametrize(("dest", "telegram", "after"), [("local", True, "auto"), ("quiet", True, "auto"), ("auto", False, "quiet"), ("remote", False, "quiet")])
+def test_flipping_the_telegram_toggle_maps_the_destination_faithfully(studio, dest, telegram, after) -> None:
+    _rules_file(studio, [{"id": "brief", "type": "cron", "enabled": True, "match": {"schedule": "0 8 * * *", "timezone": "UTC"}, "prompt": "Brief at {scheduled_at}", "destination": dest}])
+    c = studio.client
+    view = c.get("/api/studio/agents/lead_agent/runs").json()
+    [s] = view["schedules"]
+    assert s["telegram"] is not telegram, "the toggle did not change: this would pass for the wrong reason"
+    body = {"schedule": s["schedule"], "timezone": s["timezone"], "telegram": telegram, "show_on_home": True, "version": view["rules_version"]}
+    assert c.put("/api/studio/agents/lead_agent/schedules/brief", json=body).status_code == 200
+    assert json.loads((studio.tmp / "rules.json").read_text())["rules"][0]["destination"] == after

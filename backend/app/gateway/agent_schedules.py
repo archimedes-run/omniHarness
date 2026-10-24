@@ -61,6 +61,18 @@ def sends_to_telegram(destination: str) -> bool:
     return destination in ("auto", "remote")
 
 
+def keep_destination(current, telegram: bool) -> str:
+    """The destination after an edit whose Telegram toggle reads `telegram`.
+    Unchanged toggle: the rule's destination as it is, whatever it is (a
+    "remote" or "local" rule is not rewritten by an edit to another field).
+    Turned on (from quiet or local): "auto". Turned off (from auto or
+    remote): "quiet"."""
+    current = str(current)
+    if telegram == sends_to_telegram(current):
+        return current
+    return delivery_destination(telegram)
+
+
 def schedule_rule_id(agent: str, taken: set[str]) -> str:
     """A free rule id for a new schedule: "<agent>-schedule", then -2, -3..."""
     base = f"{re.sub(r'[^a-z0-9-]', '-', agent.lower()).strip('-') or 'agent'}-schedule"
