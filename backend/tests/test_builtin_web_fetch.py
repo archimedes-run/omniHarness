@@ -424,7 +424,8 @@ async def test_a_proxy_dns_failure_is_a_refusal(dns) -> None:
     def connect_unresolved(request: httpx.Request) -> httpx.Response:
         raise httpx.ProxyError("503 Service Unavailable")
 
-    with pytest.raises(FetchRefused):
+    # Fail closed, but say nothing untrue about a public site that is simply down.
+    with pytest.raises(FetchRefused, match="could not be fetched through the egress proxy"):
         await fetch("https://example.com/", settings(), transport=Recorder(connect_unresolved).transport)
     with pytest.raises(FetchFailed):
         await fetch("http://example.com/", settings(), transport=Recorder(lambda r: httpx.Response(503)).transport)
@@ -698,9 +699,12 @@ async def test_cancelling_the_tool_kills_the_worker_group(tmp_path) -> None:
         if pid_file.exists() and pid_file.read_text():
             break
         await asyncio.sleep(0.05)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert loop.time() - start < 4.0, "cancelling must kill the group at once, not wait for it"
     assert _pid_gone(int(pid_file.read_text()))
 
 
@@ -723,3 +727,144 @@ async def test_extraction_gets_only_what_is_left_of_the_15_second_budget(tool_en
     monkeypatch.setattr(tools_module, "to_markdown_bounded", recording)
     await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert budgets and budgets[0] <= 1.55, budgets
+
+
+# ── extraction workers: how many, what they see, what they leave ────────────
+
+_INTERVAL = """
+import sys, time
+start = time.monotonic()
+time.sleep(0.4)
+open(sys.argv[1], "a").write(f"{start} {time.monotonic()}\\n")
+"""
+
+
+@pytest.mark.anyio
+async def test_at_most_four_extraction_workers_run_at_once(tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import MAX_WORKERS, run_bounded
+
+    log = tmp_path / "intervals"
+    await asyncio.gather(*(run_bounded([sys.executable, "-c", _INTERVAL, str(log)], b"", 15) for _ in range(10)))
+    intervals = [tuple(map(float, line.split())) for line in log.read_text().splitlines()]
+    assert len(intervals) == 10
+    peak = max(sum(1 for a, b in intervals if a <= t < b) for t, _ in intervals)
+    assert MAX_WORKERS == 4 and peak <= 4, f"{peak} workers ran at once"
+
+
+@pytest.mark.anyio
+async def test_waiting_for_a_worker_slot_counts_against_the_deadline(monkeypatch) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    procs = _record_workers(monkeypatch)
+    sleepers = [asyncio.create_task(run_bounded([sys.executable, "-c", "import time; time.sleep(3)"], b"", 10)) for _ in range(4)]
+    while len(procs) < 4:
+        await asyncio.sleep(0.02)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(FetchFailed, match="waiting"):
+        await run_bounded([sys.executable, "-c", "print('late')"], b"", 0.3)
+    assert loop.time() - start < 1.0
+    assert len(procs) == 4, "no process may start once the deadline has passed"
+    await asyncio.gather(*sleepers)
+
+
+@pytest.mark.anyio
+async def test_the_worker_sees_no_gateway_secrets(monkeypatch) -> None:
+    import json
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    for name in ("JINA_API_KEY", "OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "AUTH_JWT_SECRET", "OPENAI_API_KEY", "SOME_SERVICE_TOKEN"):
+        monkeypatch.setenv(name, "test-not-a-real-secret")
+    out = await run_bounded([sys.executable, "-c", "import json, os; print(json.dumps(dict(os.environ)))"], b"", 10)
+    env = json.loads(out)
+    assert set(env) - {"__CF_USER_TEXT_ENCODING"} <= {"PATH", "LANG", "LC_ALL", "TMPDIR", "HOME", "NODE_OPTIONS"}, sorted(env)
+    assert "test-not-a-real-secret" not in out.decode()
+    assert env["HOME"] == env["TMPDIR"] and "omni-extract-" in env["TMPDIR"]
+
+
+@pytest.mark.anyio
+async def test_the_worker_temp_dir_is_removed_after_a_normal_run(tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    script = "import os, tempfile; d = tempfile.gettempdir(); open(os.path.join(d, 'page.html'), 'w').write('x'); print(d)"
+    out = await run_bounded([sys.executable, "-c", script], b"", 10)
+    workdir = out.decode().strip()
+    assert "omni-extract-" in workdir
+    assert not os.path.exists(workdir)
+
+
+_NODE_LEAVES_A_FILE = """
+const fs = require("fs"), os = require("os"), path = require("path");
+fs.writeFileSync(path.join(os.tmpdir(), "readabilipy-page.html"), "<html>attacker</html>");
+fs.writeFileSync(process.argv[1], os.tmpdir());
+setInterval(() => {}, 1000);
+"""
+
+
+@pytest.mark.anyio
+async def test_a_killed_node_leaves_no_files_behind(tmp_path) -> None:
+    """Readability's node writes the page to a temp file and deletes it only
+    when it returns; killed, it cannot, so the whole private TMPDIR goes."""
+    import shutil as _shutil
+
+    from omniharness.community.builtin_fetch.extract import run_bounded
+
+    node = _shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    record = tmp_path / "node-tmpdir"
+    with pytest.raises(FetchFailed, match="took longer"):
+        await run_bounded([node, "-e", _NODE_LEAVES_A_FILE, str(record)], b"", 2.0)
+    node_tmp = record.read_text()
+    assert "omni-extract-" in node_tmp, "node must write into the private TMPDIR"
+    assert not os.path.exists(node_tmp), "the killed node's files were left behind"
+
+
+def test_the_worker_kills_itself_at_its_own_deadline() -> None:
+    """A worker that outlives its gateway (crash, reload) still dies."""
+    import signal as _signal
+    import subprocess
+    import sys
+
+    from omniharness.community.builtin_fetch.extract import WORKER_MODULE
+
+    proc = subprocess.Popen([sys.executable, "-I", "-m", WORKER_MODULE, "1"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, start_new_session=True)
+    try:
+        # stdin is never closed: the worker blocks reading it until its alarm fires.
+        assert proc.wait(timeout=8) == -_signal.SIGKILL
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, _signal.SIGKILL)
+            proc.wait()
+
+
+def test_the_worker_cpu_limit_stops_a_spinning_child() -> None:
+    import signal as _signal
+    import subprocess
+    import sys
+
+    script = "from omniharness.community.builtin_fetch.extract_worker import limit_resources\nlimit_resources(1)\nwhile True: pass\n"
+    proc = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+    try:
+        assert proc.wait(timeout=10) in (-_signal.SIGXCPU, -_signal.SIGKILL)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, _signal.SIGKILL)
+            proc.wait()
+
+
+def test_attribute_floods_and_huge_tags_skip_the_fallback() -> None:
+    from omniharness.community.builtin_fetch.extract import tree_too_complex
+
+    assert tree_too_complex(b"<html><body><div " + b"a=1 " * 200_000 + b">x</div></body></html>")
+    assert tree_too_complex(b"<p " + b"x" * 40_000 + b">x</p>")
+    assert tree_too_complex(b"".join(b"<p a=1 b=2 c=3>x</p>" for _ in range(40_000)))
+    assert not tree_too_complex(b'<a href="/x" class="y" id="z">link</a>' * 1000)

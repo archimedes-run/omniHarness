@@ -187,8 +187,10 @@ async def fetch(url: str, settings: FetchSettings, *, transport: httpx.AsyncBase
         # A CONNECT the proxy denied ("403 Forbidden") or could not resolve
         # ("503 ..."; the error page is not visible through httpx, and the
         # resolver drops private answers): refusals, never retried elsewhere.
-        if str(exc).startswith(("403", "503")):
-            raise FetchRefused("the egress proxy refused the destination: not a public address, or it does not resolve to one") from None
+        if str(exc).startswith("403"):
+            raise FetchRefused("the egress proxy refused the destination: not a public address") from None
+        if str(exc).startswith("503"):
+            raise FetchRefused("the page could not be fetched through the egress proxy") from None
         raise FetchFailed(f"the egress proxy failed: {exc}") from None
     except httpx.HTTPError as exc:
         raise FetchFailed(f"request failed: {type(exc).__name__}: {exc}") from None
