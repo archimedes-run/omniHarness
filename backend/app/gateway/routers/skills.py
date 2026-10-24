@@ -294,6 +294,37 @@ async def write_custom_skill_file(skill_name: str, request: SkillFileWriteReques
     return await list_custom_skill_files(name, config)
 
 
+@router.delete("/skills/custom/{skill_name}/files", dependencies=[Depends(permission_dependency("threads", "delete")), Depends(_own_custom_skill)], response_model=SkillFilesResponse, summary="Remove a File from a Custom Skill")
+async def delete_custom_skill_file(skill_name: str, path: str, config: AppConfig = Depends(get_config)) -> SkillFilesResponse:
+    """Skill Studio's remove (006-G): a new version without the file, so undo
+    brings it back. Never SKILL.md, never outside the skill's directory."""
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+        storage.ensure_custom_skill_is_editable(name)
+        target = storage.ensure_safe_support_path(name, path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{path} is not a file of '{name}'")
+    prev = target.read_text(encoding="utf-8", errors="replace")
+    try:
+        config_versions.write_skill(
+            name,
+            {path: None},
+            who="user:" + get_effective_user_id(),
+            owner_id=get_effective_user_id(),
+            source="manual",
+            extra={"action": "human_file_delete", "author": "human", "thread_id": None, "file_path": path, "prev_content": prev, "new_content": None, "scanner": {"decision": "allow", "reason": "Removal requested."}},
+            storage=storage,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await list_custom_skill_files(name, config)
+
+
 def _write_file_version(name: str, request: SkillFileWriteRequest, prev: str | None, scan, storage) -> None:
     config_versions.write_skill(
         name,
@@ -504,6 +535,7 @@ async def undo_custom_skill(skill_name: str, request: SkillUndoRequest, config: 
 class SkillTestRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2_000, description="A message a user might send")
     tries: int = Field(3, ge=1, le=3, description="How many times to ask the model (each is a model call)")
+    save: bool = Field(False, description="Keep what was observed with the skill (Skill Studio's Test step, 006-G)")
     agent_name: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9-]+$", description="Test as this agent (its skills, model and instructions); default the lead agent")
 
 
@@ -525,7 +557,9 @@ class SkillTestResponse(BaseModel):
 
 @router.post("/skills/{skill_name}/test", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], response_model=SkillTestResponse, summary="Test whether a message makes the model load this skill")
 async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConfig = Depends(get_config)) -> SkillTestResponse:
-    """Runs ONLY when asked (a button press), and never writes.
+    """Runs ONLY when asked (a button press), and never writes the skill.
+    With `save` (Skill Studio, 006-G) what it observed is kept in the Studio's
+    record beside the skill (app.gateway.skill_studio_store), nothing else.
 
     There is no selection function to call: at runtime the model reads each
     skill's description in the lead prompt's <skill_system> and opens a
@@ -563,12 +597,14 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
     model_name = _resolve_model_name(agent_cfg.model if agent_cfg else None, app_config=config)
     if not listed:
         # A run's prompt never shows it, so no model call could load it.
-        return SkillTestResponse(skill=skill.name, model=model_name, listed=False, tries=[], loaded=0, total=0)
+        unlisted = SkillTestResponse(skill=skill.name, model=model_name, listed=False, tries=[], loaded=0, total=0)
+        _keep_result(request, unlisted)
+        return unlisted
 
     container = config.skills.container_path
     paths = {s.get_container_file_path(container): s.name for s in skills}
     system = apply_prompt_template(agent_name=agent_cfg.name if agent_cfg else None, available_skills=available, app_config=config, user_id=user_id)
-    tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config)
+    tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config, tool_access=agent_cfg.tools if agent_cfg else None)
     try:
         model = create_chat_model(name=model_name, thinking_enabled=False, app_config=config).bind_tools(tools)
     except Exception as exc:  # noqa: BLE001 — said, not hidden
@@ -590,7 +626,78 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
             if name and name not in opened:
                 opened.append(name)
         tries.append(SkillTestTry(loaded=skill.name in opened, other_skills=[n for n in opened if n != skill.name]))
-    return SkillTestResponse(skill=skill.name, model=model_name, listed=True, tries=tries, loaded=sum(t.loaded for t in tries), total=len(tries))
+    result = SkillTestResponse(skill=skill.name, model=model_name, listed=True, tries=tries, loaded=sum(t.loaded for t in tries), total=len(tries))
+    _keep_result(request, result)
+    return result
+
+
+def _keep_result(request: SkillTestRequest, result: "SkillTestResponse") -> None:
+    """006-G: owner decision 7, test results are saved with the skill. Only
+    what this route OBSERVED is written, never a client's claim."""
+    if not request.save:
+        return
+    from app.gateway import skill_studio_store as store
+
+    try:
+        store.save_test(
+            result.skill,
+            store.SavedTest(
+                message=request.message,
+                at=store.now(),
+                model=result.model,
+                listed=result.listed,
+                loaded=result.loaded,
+                total=result.total,
+                tries=[store.SavedTry(**t.model_dump()) for t in result.tries],
+            ),
+        )
+    except (OSError, ValueError) as exc:
+        logger.warning("skill test result for %s not kept: %s", result.skill, exc)
+
+
+# -- Skill Studio's record beside a skill (006-G) ----------------------------
+
+
+class SkillStudioUpdate(BaseModel):
+    icon: str | None = Field(None, description="One of the Studio's skill icons")
+    color: int | None = Field(None, ge=0, le=7, description="One of the eight avatar colours")
+
+
+def _studio_name(skill_name: str, config: AppConfig, *, custom_only: bool) -> str:
+    storage = get_or_new_skill_storage(app_config=config)
+    try:
+        name = storage.validate_skill_name(skill_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    exists = storage.custom_skill_exists(name) or (not custom_only and storage.public_skill_exists(name))
+    if not exists:
+        raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    return name
+
+
+@router.get("/skills/custom/{skill_name}/studio", dependencies=[Depends(permission_dependency("threads", "read")), Depends(_own_custom_skill)], summary="A skill's icon, colour and saved tests")
+async def get_skill_studio(skill_name: str, config: AppConfig = Depends(get_config)) -> dict:
+    from app.gateway import skill_studio_store as store
+
+    return store.read(_studio_name(skill_name, config, custom_only=False)).model_dump()
+
+
+@router.put("/skills/custom/{skill_name}/studio", dependencies=[Depends(permission_dependency("threads", "write")), Depends(_own_custom_skill)], summary="Set a custom skill's icon and colour")
+async def put_skill_studio(skill_name: str, request: SkillStudioUpdate, config: AppConfig = Depends(get_config)) -> dict:
+    from app.gateway import skill_studio_store as store
+
+    name = _studio_name(skill_name, config, custom_only=True)
+    try:
+        return store.set_appearance(name, request.icon, request.color).model_dump()
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.delete("/skills/custom/{skill_name}/tests", dependencies=[Depends(permission_dependency("threads", "delete")), Depends(_own_custom_skill)], summary="Remove one saved test message")
+async def delete_skill_test(skill_name: str, message: str, config: AppConfig = Depends(get_config)) -> dict:
+    from app.gateway import skill_studio_store as store
+
+    return store.remove_test(_studio_name(skill_name, config, custom_only=False), message).model_dump()
 
 
 @router.get(

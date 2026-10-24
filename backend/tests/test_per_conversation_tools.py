@@ -21,6 +21,8 @@ class _FakeTool:
     def __init__(self, name: str) -> None:
         self.name = name
         self.group = None
+        # Real tools carry metadata (the source tag is written there).
+        self.metadata = None
 
 
 def _fake_app_config():
@@ -35,6 +37,11 @@ def _fake_app_config():
 
 class _FakeExtConfig:
     """Enabled servers: two pinned + one extra local + one connector-* (stale)."""
+
+    #: A real ExtensionsConfig always has this map (the connector tool surface
+    #: reads it); without it the surface check raised and, before 006-G, the
+    #: unfiltered connector tools were kept anyway (now nothing is: closed).
+    mcp_servers: dict = {}
 
     def get_enabled_mcp_servers(self):
         return {"filesystem": object(), "postgres": object(), "github": object(), "composio-gmail": object()}

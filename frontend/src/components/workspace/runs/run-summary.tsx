@@ -80,6 +80,9 @@ export function RunSummaryView({ firingId }: { firingId: string }) {
             <span className="text-muted-foreground text-sm">
               {safeField(write.source_label)}
               {write.undone ? " · undone" : ""}
+              {write.undoable === false
+                ? " · a saved draft: open your mailbox to send or delete it"
+                : ""}
             </span>
           </li>
         ))}
@@ -90,7 +93,11 @@ export function RunSummaryView({ firingId }: { firingId: string }) {
             className="text-muted-foreground text-sm"
             data-testid="all-undone"
           >
-            Everything this run did has been undone.
+            {data.writes.every((w) => w.undoable !== false)
+              ? "Everything this run did has been undone."
+              : data.writes.some((w) => w.undoable !== false)
+                ? "Everything Undo can reach has been undone; drafts wait in your mailbox."
+                : "Nothing here is undone from OmniHarness: drafts wait in your mailbox."}
           </span>
         ) : (
           <Button

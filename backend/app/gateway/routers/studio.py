@@ -16,6 +16,7 @@ from app.gateway.authz import permission_dependency, require_permission
 from app.gateway.deps import get_config
 from app.gateway.display_safe import safe_field
 from app.gateway.ownership import require_owner_account
+from app.gateway.tool_catalog import ToolCatalog
 from omniharness.config.app_config import AppConfig
 
 router = APIRouter(prefix="/api/studio", tags=["studio"])
@@ -32,6 +33,19 @@ async def studio_options(config: AppConfig = Depends(get_config)) -> StudioOptio
         tool_groups=[group.name for group in config.tool_groups],
         default_model=config.models[0].name if config.models else None,
     )
+
+
+@router.get("/tool-catalog", response_model=ToolCatalog, dependencies=[Depends(require_owner_account)], summary="Every integration and tool an agent could be given, each with its policy tier (006-G)")
+@require_permission("threads", "read")
+async def tool_catalog(request: Request) -> ToolCatalog:
+    """Agent Studio's Configuration -> Integrations. Read only. Tiers come
+    from the policy classifier (app.gateway.tool_catalog)."""
+    from app.gateway.authz import get_auth_context
+    from app.gateway.tool_catalog import build_tool_catalog
+
+    auth = get_auth_context(request)
+    user_id = str(auth.user.id) if auth is not None and auth.user is not None else None
+    return await build_tool_catalog(request, request.app.state.config, user_id)
 
 
 def _agent_key(name: str) -> str:
@@ -68,6 +82,11 @@ async def agent_runs(name: str, request: Request) -> AgentRunsView:
     except (OSError, ValueError):
         view.rules_version = None
     view.writable = bool(getattr(cfg, "rules_path", "")) and view.rules_version is not None
+    quiet = getattr(engine_config, "quiet_hours", None)
+    if quiet is not None:
+        from app.gateway.agent_runs_view import QuietHoursInfo
+
+        view.quiet_hours = QuietHoursInfo(enabled=bool(quiet.enabled), start=str(quiet.start), end=str(quiet.end), timezone=str(quiet.timezone))
     return view
 
 
@@ -362,6 +381,9 @@ class RunWrite(BaseModel):
     source_label: str = Field("", description='What the write came from, in words: "from: email “…”", "from: page “…”" (redacted; never the body)')
     write_id: str | None
     undone: bool
+    #: False for a granted action the ledger did not make (an email draft,
+    #: 006-G): it is listed, and deleted where it was saved, not undone here.
+    undoable: bool = True
 
 
 class RunSummary(BaseModel):
@@ -392,7 +414,8 @@ def _run_summary(request: Request, config: AppConfig, firing_id: str) -> RunSumm
     writes = []
     for e in sorted(mine, key=lambda e: e.get("at", "")):
         write_id = e.get("write_id")
-        undone = bool(service is not None and write_id and service.write_undone(user_id=user_id, write_id=write_id))
+        undoable = e.get("tool") == "ledger_apply"
+        undone = bool(undoable and service is not None and write_id and service.write_undone(user_id=user_id, write_id=write_id))
         writes.append(
             RunWrite(
                 at=e.get("at", ""),
@@ -402,9 +425,10 @@ def _run_summary(request: Request, config: AppConfig, firing_id: str) -> RunSumm
                 source_label=safe_field(e.get("source_label") or ""),
                 write_id=write_id,
                 undone=undone,
+                undoable=undoable,
             )
         )
-    return RunSummary(firing_id=firing_id, rule_id=mine[0].get("rule_id"), agent=mine[0].get("agent") or "", writes=writes, all_undone=all(w.undone for w in writes))
+    return RunSummary(firing_id=firing_id, rule_id=mine[0].get("rule_id"), agent=mine[0].get("agent") or "", writes=writes, all_undone=all(w.undone for w in writes if w.undoable))
 
 
 @router.get("/runs/{firing_id}", dependencies=[Depends(permission_dependency("threads", "read"))], response_model=RunSummary, summary="What a scheduled run did on its own, each with what it came from")
@@ -426,7 +450,7 @@ async def undo_run(firing_id: str, request: Request, config: AppConfig = Depends
     service = getattr(request.app.state, "ledger_service", None)
     if service is None:
         raise HTTPException(status_code=503, detail="the project ledger needs a database")
-    pending = [w.write_id for w in summary.writes if w.write_id and not w.undone]
+    pending = [w.write_id for w in summary.writes if w.undoable and w.write_id and not w.undone]
     if not pending:
         raise HTTPException(status_code=409, detail="everything this run did is already undone")
     from omniharness.runtime.user_context import get_effective_user_id

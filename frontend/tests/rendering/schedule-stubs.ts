@@ -19,6 +19,10 @@ export interface ScheduleRule {
   destination: string;
   show_on_home: boolean;
   enabled: boolean;
+  /** What the firing asks (006-G Studio); a default when absent. */
+  prompt?: string;
+  /** It has run before (the Agents list then says Active). */
+  fired?: boolean;
 }
 
 const json = (route: Route, body: unknown, status = 200) =>
@@ -82,11 +86,17 @@ export async function ruleFile(page: Page) {
         held_until: null,
         error: null,
         name: "",
-        prompt: "It is {scheduled_at}. Do your scheduled run now.",
+        prompt: r.prompt ?? "It is {scheduled_at}. Do your scheduled run now.",
         telegram: r.destination !== "quiet",
         show_on_home: r.show_on_home,
       })),
-      recent: [],
+      recent: mine.some((r) => r.fired) ? [{ firing_id: "f1" }] : [],
+      quiet_hours: {
+        enabled: true,
+        start: "22:00",
+        end: "07:00",
+        timezone: "America/New_York",
+      },
     });
   });
 
@@ -101,6 +111,7 @@ export async function ruleFile(page: Page) {
       telegram: boolean;
       show_on_home: boolean;
       enabled?: boolean;
+      prompt?: string | null;
       version: string;
     } | null;
     const version =
@@ -130,6 +141,7 @@ export async function ruleFile(page: Page) {
         destination: body!.telegram ? "auto" : "quiet",
         show_on_home: body!.show_on_home,
         enabled: body!.enabled ?? true,
+        prompt: body!.prompt ?? undefined,
       };
       state.rules = ruleId
         ? state.rules.map((r) => (r.id === ruleId ? rule : r))

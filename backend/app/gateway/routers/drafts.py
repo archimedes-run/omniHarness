@@ -72,6 +72,10 @@ class AgentDraft(BaseModel):
     autonomy: list[str] = Field(default_factory=list)
     #: When it should run, if the sentence says (Schedule). Suggested only.
     schedule: DraftSchedule | None = None
+    #: Integration ids it needs (006-G), only from what this install has
+    #: connected. The panel ticks their tools that do not ask first for
+    #: review; a tool that asks first, and every grant, stays unticked.
+    integrations: list[str] = Field(default_factory=list)
 
 
 class SkillDraft(BaseModel):
@@ -99,8 +103,9 @@ Return ONLY a JSON object with these keys:
   "skills": skills it should load every run, chosen ONLY from: {skills},
   "projects": names of the projects it works on, chosen ONLY from: {projects},
   "autonomy": what it could do on its own when it runs on a schedule, chosen ONLY from: {classes},
-  "schedule": if the sentence says when it should run, {{"cron": a 5-field cron expression such as "0 18 * * 1-5", "timezone": an IANA zone only if the sentence names one, else null}}; otherwise null.
-Never invent a tool group, skill, project or action. Use [] when none fit."""
+  "schedule": if the sentence says when it should run, {{"cron": a 5-field cron expression such as "0 18 * * 1-5", "timezone": an IANA zone only if the sentence names one, else null}}; otherwise null,
+  "integrations": the ids of the apps, servers and built-in tools it needs, chosen ONLY from: {integrations}.
+Never invent a tool group, skill, project, action or integration. Use [] when none fit."""
 
 SKILL_PROMPT = """You draft an agent skill (a SKILL.md) from the user's one sentence.
 Return ONLY a JSON object with these keys:
@@ -220,7 +225,11 @@ async def draft(kind: DraftKind, request: DraftRequest, http_request: Request, c
         model_name = _agent_model(request.agent_name, config, user_id)
         projects = _own_projects(http_request, user_id)
         classes = _grantable_classes(config)
+        from app.gateway.tool_catalog import integration_choices
+
+        integrations = await integration_choices(http_request, config, user_id)
         system = AGENT_PROMPT.format(
+            integrations=", ".join(f"{iid} ({name})" for iid, name in integrations) or "(none)",
             groups=", ".join(groups) or "(none)",
             skills=", ".join(skills) or "(none)",
             projects=json.dumps([p["name"] for p in projects], ensure_ascii=False) if projects else "(none)",
@@ -240,6 +249,9 @@ async def draft(kind: DraftKind, request: DraftRequest, http_request: Request, c
         allowed = {cid for cid, _ in classes}
         autonomy = [c for c in dict.fromkeys(_names(data.get("autonomy"))) if c in allowed]
         dropped += [c for c in _names(data.get("autonomy")) if c not in allowed]
+        known_integrations = {iid for iid, _ in integrations}
+        picked_integrations = [i for i in dict.fromkeys(_names(data.get("integrations"))) if i in known_integrations]
+        dropped += [i for i in _names(data.get("integrations")) if i not in known_integrations]
         schedule, bad_schedule = _schedule(data.get("schedule"))
         if bad_schedule:
             dropped.append(bad_schedule)
@@ -252,6 +264,7 @@ async def draft(kind: DraftKind, request: DraftRequest, http_request: Request, c
             projects=project_ids,
             autonomy=autonomy,
             schedule=schedule,
+            integrations=picked_integrations,
         )
         if not result.instructions:
             raise HTTPException(status_code=502, detail="The model returned no instructions. Try again or rephrase.")

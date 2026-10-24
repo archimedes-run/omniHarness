@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import * as api from "./api";
 import type { ScheduleWrite } from "./types";
@@ -38,6 +43,37 @@ export function useAgentRuns(name: string | null) {
     refetchInterval: 60_000,
   });
   return { runs: data, error, isLoading };
+}
+
+/** Every agent's schedules and recent runs at once (the Agents list's status
+ * pills and next runs). Shares its cache with useAgentRuns. */
+export function useAgentsRuns(names: string[]) {
+  return useQueries({
+    queries: names.map((name) => ({
+      queryKey: ["studio", "runs", name],
+      queryFn: () => api.loadAgentRuns(name),
+      refetchInterval: 60_000,
+    })),
+  });
+}
+
+export function useToolCatalog(enabled = true) {
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["studio", "tool-catalog"],
+    queryFn: api.loadToolCatalog,
+    enabled,
+    staleTime: 60_000,
+  });
+  return { catalog: data, error, isLoading };
+}
+
+export function useSkillStudio(name: string | null) {
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["skills", "studio", name],
+    queryFn: () => api.loadSkillStudio(name!),
+    enabled: !!name,
+  });
+  return { record: data, error, isLoading };
 }
 
 export function useAutonomy(name: string | null) {

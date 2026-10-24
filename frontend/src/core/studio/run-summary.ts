@@ -12,6 +12,9 @@ export interface RunWrite {
   source_label: string;
   write_id: string | null;
   undone: boolean;
+  /** 006-G: false for a granted action the ledger did not make (an email
+   * draft): listed, never undone here. Absent from older gateways: true. */
+  undoable?: boolean;
 }
 
 export interface RunSummary {

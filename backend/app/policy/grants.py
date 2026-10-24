@@ -57,7 +57,21 @@ class ActionClass:
     label: str
     #: What it allows, in plain words, shown beside the checkbox.
     allows: str
+    #: The tool whose rule decides whether the class may be granted at all.
     tool: str
+    #: Other tools the class covers (the same capability under another
+    #: source's name), each re-checked against its own rule at dispatch.
+    also: tuple[str, ...] = ()
+    #: A call to one of its tools is ONE whole action (no `changes` list).
+    whole_call: bool = False
+    #: Governs an agent's scheduled calls only when the agent was set up with
+    #: a per-tool allowlist (006-G). An agent saved before 006-G keeps exactly
+    #: the behaviour it had on main for these tools.
+    allowlist_agents_only: bool = False
+
+    @property
+    def tools(self) -> tuple[str, ...]:
+        return (self.tool, *self.also)
 
     def covers(self, change: dict) -> bool:
         op = change.get("op")
@@ -75,6 +89,17 @@ ACTION_CLASSES: tuple[ActionClass, ...] = (
     ActionClass("tasks", "Create and update tasks", "Add tasks to your projects, and change a task's title, due date or status. It never drops a task.", "ledger_apply"),
     ActionClass("notes", "Add notes and decisions", "Write a note or a decision into a project. You can edit or remove it later.", "ledger_apply"),
     ActionClass("archive", "Archive stale tasks", "Mark a task dropped, which hides it from the lists. Changing its status brings it back.", "ledger_apply"),
+    # Owner decision (006-G): saving a draft is reversible and sends nothing;
+    # the person sends it. Never covers sending: GMAIL_SEND_EMAIL is Tier 3.
+    ActionClass(
+        "drafts",
+        "Draft emails (never sends)",
+        "Save email drafts in your mailbox for you to read and send. It never sends one.",
+        "connector-gmail_GMAIL_CREATE_EMAIL_DRAFT",
+        also=("gmail_create_draft", "gmail_draft_email"),
+        whole_call=True,
+        allowlist_agents_only=True,
+    ),
 )
 BY_ID = {c.id: c for c in ACTION_CLASSES}
 
@@ -112,9 +137,12 @@ def covering_classes(decision: PolicyDecision, arguments: dict[str, Any], grante
     rule = decision.deciding_rule
     if decision.tier is not Tier.TIER_2 or rule is None or rule.reversible is not True or decision.raised_by is not None:
         return None
-    usable = [BY_ID[c] for c in granted if c in BY_ID and BY_ID[c].tool == decision.tool_name and grantable(c, ruleset)[0]]
+    usable = [BY_ID[c] for c in granted if c in BY_ID and decision.tool_name in BY_ID[c].tools and grantable(c, ruleset)[0]]
     if not usable:
         return None
+    whole = next((c for c in usable if c.whole_call), None)
+    if whole is not None:
+        return [whole.id]
     changes = arguments.get("changes")
     if not isinstance(changes, list) or not changes:
         return None
@@ -271,10 +299,26 @@ def change_signatures(arguments: dict[str, Any], resolve_project=None) -> set[tu
     return out
 
 
-def governed_by_grants(tool_name: str) -> bool:
+def governed_by_grants(tool_name: str, *, allowlist_agent: bool = False) -> bool:
     """A tool some action class names: in a scheduled run, its Tier 2 calls
-    run only under a grant."""
-    return any(c.tool == tool_name for c in ACTION_CLASSES)
+    run only under a grant. A class marked `allowlist_agents_only` governs
+    only an agent set up with a per-tool allowlist (`allowlist_agent`)."""
+    return any(tool_name in c.tools and (allowlist_agent or not c.allowlist_agents_only) for c in ACTION_CLASSES)
+
+
+def chat_governed(tool_name: str) -> bool:
+    """The routine ledger writes whose content-caused calls are suggestions in
+    chat (005 FR-009 amendment). Unchanged by 006-G: drafting stays as it was."""
+    return any(tool_name in c.tools and not c.allowlist_agents_only for c in ACTION_CLASSES)
+
+
+def has_tool_allowlist(user_id: str, agent: str) -> bool:
+    """Whether the agent's CURRENT version carries a per-tool allowlist (006-G)."""
+    try:
+        snapshot = config_versions.current_agent_snapshot(user_id, agent) if agent and agent != config_versions.LEAD_AGENT else None
+    except (ValueError, OSError):
+        return False
+    return isinstance(((snapshot or {}).get("config") or {}).get(config_versions.TOOLS_KEY), dict)
 
 
 def always_waits(ruleset: RuleSet) -> list[str]:

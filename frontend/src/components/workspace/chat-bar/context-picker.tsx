@@ -17,7 +17,7 @@ import {
 import { BrandLogo, resolveBrand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { openNewAgentPanel } from "@/components/workspace/agents/studio/url-item";
+import { openNewAgentPanel } from "@/components/workspace/studio/url-item";
 import type { Agent } from "@/core/agents/types";
 import type { Project } from "@/core/ledger/types";
 import { connectComposioToolkit } from "@/core/mcp/connect";

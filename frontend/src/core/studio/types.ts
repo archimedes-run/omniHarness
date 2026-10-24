@@ -61,6 +61,72 @@ export interface AgentRuns {
   rules_version: string | null;
   /** False when the engine runs the shipped rules, which are not edited. */
   writable: boolean;
+  /** 006-G: the engine's quiet hours, when the rules file could be read. */
+  quiet_hours?: QuietHoursInfo | null;
+}
+
+export interface QuietHoursInfo {
+  enabled: boolean;
+  /** "HH:MM", in `timezone`. */
+  start: string;
+  end: string;
+  timezone: string;
+}
+
+/** Mirrors app/gateway/tool_catalog.py (006-G). */
+export type Tier = 1 | 2 | 3;
+
+export interface CatalogTool {
+  /** The name it is offered as: what an agent's allowlist stores. */
+  name: string;
+  /** Without its source prefix, for display. */
+  short: string;
+  label: string;
+  description: string;
+  /** From the policy classifier; null: no rule names it (never offered). */
+  tier: Tier | null;
+  /** Shown while the row is collapsed. */
+  common: boolean;
+}
+
+export type IntegrationKind = "app" | "mcp" | "custom" | "builtin";
+export type IntegrationStatus =
+  | "connected"
+  | "not_connected"
+  | "unreachable"
+  | "disabled"
+  | "not_loaded";
+
+export interface CatalogIntegration {
+  id: string;
+  name: string;
+  kind: IntegrationKind;
+  status: IntegrationStatus;
+  detail: string;
+  tools: CatalogTool[];
+}
+
+export interface ToolCatalog {
+  integrations: CatalogIntegration[];
+  rules_error: string | null;
+  connectors_available: boolean;
+}
+
+/** Mirrors app/gateway/skill_studio_store.py (006-G). */
+export interface SavedSkillTest {
+  message: string;
+  at: string;
+  model: string;
+  listed: boolean;
+  loaded: number;
+  total: number;
+  tries: { loaded: boolean; other_skills: string[]; error: string | null }[];
+}
+
+export interface SkillStudioRecord {
+  icon: string | null;
+  color: number | null;
+  tests: SavedSkillTest[];
 }
 
 /** Mirrors ScheduleWrite in app/gateway/routers/studio.py (Feature 006-F). */
@@ -95,6 +161,8 @@ export interface AgentDraft {
   autonomy?: string[];
   /** When it should run, if the sentence said (Schedule). */
   schedule?: { cron: string; timezone: string | null } | null;
+  /** 006-G: integration ids it needs, from what this install has. */
+  integrations?: string[];
 }
 
 /** Mirrors app/gateway/routers/drafts.py. A draft is never saved. */

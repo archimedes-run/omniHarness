@@ -146,9 +146,16 @@ for (const scheme of ["dark", "light"] as const) {
       const headers = page.getByTestId("agent-header");
       await expect(headers.filter({ hasText: "Researcher" })).toHaveCount(2);
       await expect(headers.filter({ hasText: "Lead agent" })).toHaveCount(1);
-      // The avatar takes the agent's own colour class (src/core/agents/avatar.ts).
-      const avatar = headers.first().locator("span[aria-hidden]").first();
-      await expect(avatar).toHaveClass(/bg-avatar-\d/);
+      // The avatar is the agent's face (006-G, src/core/agents/avatars.ts):
+      // one of the shipped images, the lead always Merlo.
+      const researcher = headers.filter({ hasText: "Researcher" }).first();
+      await expect(researcher.locator("img[data-avatar]")).toHaveAttribute(
+        "src",
+        /^\/avatars\/[a-z]+\.svg$/,
+      );
+      await expect(
+        headers.filter({ hasText: "Lead agent" }).locator("img[data-avatar]"),
+      ).toHaveAttribute("src", "/avatars/merlo.svg");
 
       const handoff = page.getByTestId("handoff");
       await expect(handoff).toHaveCount(1);

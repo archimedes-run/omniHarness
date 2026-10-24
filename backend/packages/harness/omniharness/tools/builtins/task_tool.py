@@ -55,12 +55,17 @@ def subagent_base_tools(
     app_config: "AppConfig | None",
     selected_sources: list[str] | None = None,
     user_id: str | None = None,
+    tool_access: dict | None = None,
 ) -> list:
     """The tools a delegated subagent starts from, before its own filters.
 
     One function, two callers: the `task` tool, and the confirmation of a Tier 3
     call that subagent proposed (omniharness.agents.tool_surface), which must
     run against this list and not the lead's.
+
+    ``tool_access``: the per-tool allowlist (006-G) of the agent whose tools
+    these are: the delegating agent's, or the @-called agent's own. A delegate
+    never gets a tool its agent was not given.
     """
     # Lazy import to avoid circular dependency
     from omniharness.tools import get_available_tools
@@ -71,6 +76,9 @@ def subagent_base_tools(
         # A delegate gets no tool the chat does not have: the chat's selection
         # applies to it as to the lead (Feature 006, plan.md Phase 2).
         kwargs["selected_sources"] = set(selected_sources)
+        kwargs["user_id"] = user_id
+    if tool_access is not None:
+        kwargs["tool_access"] = tool_access
         kwargs["user_id"] = user_id
     if app_config is not None:
         kwargs["app_config"] = app_config
@@ -192,6 +200,9 @@ async def task_tool(
 
     # Inherit parent agent's tool_groups so subagents respect the same restrictions
     parent_tool_groups = metadata.get("tool_groups")
+    # 006-G: and its per-tool allowlist, from the lead's own config (run
+    # metadata written by the lead factory, never a client value).
+    parent_tool_access = metadata.get("tool_access") if isinstance(metadata.get("tool_access"), dict) else None
     resolved_app_config = runtime_app_config
     if config.model == "inherit" and parent_model is None and resolved_app_config is None:
         resolved_app_config = get_app_config()
@@ -200,7 +211,7 @@ async def task_tool(
     user_id = runtime.context.get("user_id") if (runtime is not None and runtime.context) else None
     raw_selection = runtime.context.get("selected_sources") if (runtime is not None and runtime.context) else None
     selected_sources = sorted(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
-    tools = subagent_base_tools(model_name=effective_model, tool_groups=parent_tool_groups, app_config=resolved_app_config, selected_sources=selected_sources, user_id=user_id)
+    tools = subagent_base_tools(model_name=effective_model, tool_groups=parent_tool_groups, app_config=resolved_app_config, selected_sources=selected_sources, user_id=user_id, tool_access=parent_tool_access)
 
     from omniharness.agents.tool_surface import subagent_surface
 
@@ -223,6 +234,7 @@ async def task_tool(
             max_turns=max_turns,
             user_id=user_id,
             selected_sources=selected_sources,
+            tool_access=parent_tool_access,
         ),
         "user_id": user_id,
     }

@@ -28,13 +28,31 @@ export function isPanelId(value: string | null | undefined): value is PanelId {
 
 export interface PanelProps {
   onClose: () => void;
+  /** Which panel the sheet shows (the Studio serves both agents and skills). */
+  panel: PanelId;
+  /**
+   * A panel with work in progress registers a guard; Esc, a click outside and
+   * the close button ask it first. It returns true when it handled the close
+   * itself (an unsaved-changes prompt, an inner editor closing).
+   */
+  setCloseGuard: (guard: CloseGuard | null) => void;
 }
+
+export type CloseGuard = (reason: "escape" | "outside") => boolean;
+
+/** Panels that draw their own header, close button and scrolling (the
+ * Agent & Skill Studio, 006-G). They share one component, kept mounted when
+ * the person switches between them. */
+export const SELF_CHROME_PANELS: ReadonlySet<PanelId> = new Set([
+  "agents",
+  "skills",
+]);
 
 type Loader = () => Promise<{ default: ComponentType<PanelProps> }>;
 
 export const PANEL_LOADERS: Record<PanelId, Loader> = {
-  agents: () => import("./panels/agents-panel"),
-  skills: () => import("./panels/skills-panel"),
+  agents: () => import("./panels/studio-panel"),
+  skills: () => import("./panels/studio-panel"),
   automations: () => import("./panels/automations-panel"),
   tasks: () => import("./panels/tasks-panel"),
 };

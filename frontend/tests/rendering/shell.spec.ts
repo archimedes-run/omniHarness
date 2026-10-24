@@ -505,7 +505,11 @@ test("palette commands navigate and open panels", async ({ page }) => {
   // New agent opens Agent Studio's + New over this page (no page of its own).
   await run("New agent");
   await expect(page).toHaveURL(/\/workspace\/chats\?panel=agents&item=new$/);
-  await expect(page.getByTestId("agent-studio")).toBeVisible();
+  await expect(page.getByTestId("agent-step-setup")).toBeVisible();
+  // Esc in the stepper goes back to the Agents list (006-G: nothing typed,
+  // so it does not ask); a second Esc closes the panel.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("agents-list")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(sheet(page)).toHaveCount(0);
   await run("Connect Slack");

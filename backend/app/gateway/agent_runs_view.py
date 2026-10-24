@@ -40,6 +40,16 @@ class AgentSchedule(BaseModel):
     show_on_home: bool = Field(True, description="Home lists its upcoming runs and results")
 
 
+class QuietHoursInfo(BaseModel):
+    """The engine's quiet hours, as the rules file sets them (006-G: the
+    Schedule step says when a run's Telegram message is held)."""
+
+    enabled: bool
+    start: str
+    end: str
+    timezone: str
+
+
 class AgentRunsView(BaseModel):
     agent: str
     engine_enabled: bool
@@ -52,6 +62,7 @@ class AgentRunsView(BaseModel):
     rules_version: str | None = None
     #: False when the engine runs the shipped defaults, which are not edited.
     writable: bool = False
+    quiet_hours: QuietHoursInfo | None = None
 
 
 def rule_agent(rule) -> str:

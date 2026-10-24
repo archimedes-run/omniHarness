@@ -458,7 +458,11 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
     selected_sources = set(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
     run_user_id = cfg.get("user_id")
     model_config = app_config.get_model_config(inputs.model_name)
-    max_tools = resolve_model_tool_cap(model_config) if (selected_sources is not None and model_config is not None) else None
+    # 006-G: an agent's own per-tool allowlist, read from ITS config (never
+    # from the run's context, which a client or a page could influence).
+    tool_access = inputs.agent_config.tools if inputs.agent_config else None
+    capped = selected_sources is not None or tool_access is not None
+    max_tools = resolve_model_tool_cap(model_config) if (capped and model_config is not None) else None
 
     tools = get_available_tools(
         model_name=inputs.model_name,
@@ -468,6 +472,7 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
         selected_sources=selected_sources,
         user_id=run_user_id,
         max_tools=max_tools,
+        tool_access=tool_access,
     )
     return filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include)
 
@@ -487,11 +492,15 @@ def lead_run_metadata(cfg: dict, *, app_config: AppConfig | None = None) -> dict
 
 
 def _lead_metadata(inputs: _LeadInputs) -> dict:
+    from omniharness.tools.agent_access import access_dict
+
     return {
         "agent_name": inputs.agent_name or "default",
         "model_name": inputs.model_name or "default",
         "subagent_enabled": inputs.subagent_enabled,
         "tool_groups": inputs.agent_config.tool_groups if inputs.agent_config else None,
+        # 006-G: a delegate of this agent inherits its allowlist (task_tool).
+        "tool_access": access_dict(inputs.agent_config.tools) if inputs.agent_config else None,
         "available_skills": sorted(inputs.available_skills) if inputs.available_skills is not None else None,
     }
 
