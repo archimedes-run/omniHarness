@@ -52,27 +52,42 @@ NAME_MAX = 80
 #: rule (services._normalise_agent_name), so a name the engine accepts is one
 #: the gateway resolves to the same agent.
 AGENT_NAME = re.compile(r"[a-z0-9-]+")
-#: The lead agent is a rule WITHOUT `agent`; naming it is refused, so there is
-#: one way to say "the lead" and a typo can never fall back to it.
+#: The lead agent. A rule for it names no agent; naming it (any case) is the
+#: same thing, so a file written before Feature 006-F (whose docs said to write
+#: `agent:`) keeps running as it did.
 LEAD_AGENT = "lead_agent"
 
 
 def parse_agent(rid: str, raw) -> str | None:
-    """A rule's `agent`, normalised, or None for the lead. Raises ConfigError."""
+    """A rule's `agent`, normalised, or None for the lead. Raises RuleRefused:
+    a bad name refuses that one rule, never the file (main ignored the key)."""
     if raw is None:
         return None
     if not isinstance(raw, str) or not raw.strip():
-        raise ConfigError(f"rule {rid!r}: agent must be a custom agent's name; leave it out to run as the lead agent")
-    if raw.strip() == LEAD_AGENT:
-        raise ConfigError(f"rule {rid!r}: leave agent out to run as the lead agent (it is not named)")
+        raise RuleRefused(f"rule {rid!r}: agent must be a custom agent's name; leave it out to run as the lead agent")
     name = raw.strip().lower()
+    if name == LEAD_AGENT:
+        return None
     if not AGENT_NAME.fullmatch(name):
-        raise ConfigError(f"rule {rid!r}: agent {raw!r} is not an agent name (letters, digits and hyphens)")
+        raise RuleRefused(f"rule {rid!r}: agent {raw!r} is not an agent name (letters, digits and hyphens)")
     return name
 
 
 class ConfigError(ValueError):
     """The configuration is invalid. The previous one stays in effect."""
+
+
+class RuleRefused(ConfigError):
+    """One rule is invalid in a way that refuses only it (Feature 006-F's
+    `agent` and `show_on_home`, keys a file written before them may carry
+    with any value): every other rule loads, and this one is reported in
+    EngineConfig.refused. A write that introduces one is still refused."""
+
+
+@dataclass(frozen=True)
+class RefusedRule:
+    id: str
+    error: str
 
 
 @dataclass(frozen=True)
@@ -95,6 +110,8 @@ class EngineConfig:
     queued_turn_max_wait: timedelta = timedelta(seconds=DEFAULTS["queued_turn_max_wait_seconds"])
     held_schedule_max_wait: timedelta = timedelta(seconds=DEFAULTS["held_schedule_max_wait_seconds"])
     fingerprint_retention: timedelta = timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"])
+    #: Rules not loaded, each with why (RuleRefused); the others run.
+    refused: tuple[RefusedRule, ...] = ()
 
 
 def _template_fields(prompt: str) -> set[str]:
@@ -161,6 +178,10 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
     except ValueError as exc:
         raise ConfigError(f"rule {rid!r}: unknown destination {raw.get('destination')!r}") from exc
 
+    # Last, after every check that refuses the whole file: these refuse only
+    # this rule (RuleRefused).
+    agent = parse_agent(rid, raw.get("agent"))
+    show_on_home = _flag(rid, raw, "show_on_home", default=True)
     return Rule(
         id=rid,
         type=rtype,
@@ -170,15 +191,15 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         urgent=bool(raw.get("urgent", False)),
         enabled=bool(raw.get("enabled", True)),
         name=name.strip(),
-        agent=parse_agent(rid, raw.get("agent")),
-        show_on_home=_flag(rid, raw, "show_on_home", default=True),
+        agent=agent,
+        show_on_home=show_on_home,
     )
 
 
 def _flag(rid: str, raw: dict, key: str, *, default: bool) -> bool:
     value = raw.get(key, default)
     if not isinstance(value, bool):
-        raise ConfigError(f"rule {rid!r}: {key} must be true or false")
+        raise RuleRefused(f"rule {rid!r}: {key} must be true or false")
     return value
 
 
@@ -187,7 +208,14 @@ def parse(doc: dict) -> EngineConfig:
     if not isinstance(raw_rules, list):
         raise ConfigError("`rules` must be a list")
     seen: set[str] = set()
-    rules = tuple(_parse_rule(r, seen) for r in raw_rules)
+    parsed: list[Rule] = []
+    refused: list[RefusedRule] = []
+    for raw in raw_rules:
+        try:
+            parsed.append(_parse_rule(raw, seen))
+        except RuleRefused as exc:
+            refused.append(RefusedRule(id=str(raw.get("id")), error=str(exc)))
+    rules = tuple(parsed)
 
     qh_raw = doc.get("quiet_hours") or {}
     qh = QuietHours(
@@ -212,6 +240,7 @@ def parse(doc: dict) -> EngineConfig:
         queued_turn_max_wait=secs("queued_turn_max_wait_seconds"),
         held_schedule_max_wait=secs("held_schedule_max_wait_seconds"),
         fingerprint_retention=timedelta(seconds=DEFAULTS["fingerprint_retention_seconds"]),
+        refused=tuple(refused),
     )
 
 
@@ -286,6 +315,8 @@ class ConfigLoader:
             return self.config
         self._config, self._mtime, self.last_error = cfg, mtime, None
         logger.info("rule config loaded: %d rule(s)", len(cfg.rules))
+        for refused in cfg.refused:
+            logger.error("rule %s NOT loaded (the other rules run): %s", refused.id, refused.error)
         from .scheduler import DEFAULT_TIMEZONE
 
         for rule in cfg.rules:

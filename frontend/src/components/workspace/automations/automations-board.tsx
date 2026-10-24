@@ -226,6 +226,24 @@ function Notices({ view, error }: { view?: RulesView; error: Error | null }) {
           </AlertDescription>
         </Alert>
       )}
+      {view?.rule_errors && view.rule_errors.length > 0 && (
+        <Alert variant="destructive" data-testid="rule-errors">
+          <AlertTitle>
+            {view.rule_errors.length === 1
+              ? "One rule was not loaded"
+              : `${view.rule_errors.length} rules were not loaded`}
+          </AlertTitle>
+          <AlertDescription>
+            The other rules are loaded and running. Fix these in the rule file
+            to run them:
+            <ul className="list-disc pl-5">
+              {view.rule_errors.map((e) => (
+                <li key={e.id}>{e.error}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
       {view && !view.writable && view.not_writable_reason && (
         <Alert data-testid="not-writable">
           <AlertTitle>These rules cannot be edited here</AlertTitle>

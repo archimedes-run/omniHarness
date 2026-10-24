@@ -337,9 +337,12 @@ def test_a_rule_naming_a_missing_agent_is_refused_when_written(studio) -> None:
     resp = studio.client.post("/api/automations/rules", json={"rule": _hand_written_rule("nobody"), "version": version})
     assert resp.status_code == 422 and "no agent called 'nobody'" in resp.json()["detail"]
     assert studio.client.post("/api/studio/agents/nobody/schedules", json={"schedule": "0 9 * * *", "timezone": "UTC", "version": version}).status_code == 404
+    # Naming the lead is the lead (a file written before 006-F may say so).
     lead_named = {**_hand_written_rule("x"), "agent": "lead_agent"}
     resp = studio.client.post("/api/automations/rules", json={"rule": lead_named, "version": version})
-    assert resp.status_code == 422 and "leave agent out" in resp.json()["detail"]
+    assert resp.status_code == 201, resp.text
+    [rule] = studio.client.get("/api/triggers/rules").json()["rules"]
+    assert (rule["id"], rule["agent"]) == ("orphan", None)
 
 
 # -- a scheduled agent firing cannot confirm a card --------------------------
@@ -476,3 +479,63 @@ def test_home_leaves_out_a_rule_switched_off_home() -> None:
     audit = [{"rule_id": rid, "event_id": f"e-{rid}", "outcome": "delivered", "at": at, "thread_id": None} for rid in ("on-home", "off-home")]
     moved = describe_moved(changes=[], project_names={}, audit=audit, since=now - timedelta(hours=1), now=now, automations="ok", hidden_rules=frozenset({"off-home"}))
     assert [i.text for i in moved.items if i.source == "automation"] == ["On home delivered"]
+
+
+# -- review fixes (PR #125) ---------------------------------------------------
+
+
+def _cron(rid: str, **extra) -> dict:
+    return {"id": rid, "type": "cron", "match": {"schedule": "0 8 * * *", "timezone": "UTC"}, "prompt": "hi", "destination": "quiet", **extra}
+
+
+@pytest.mark.parametrize(
+    ("bad", "says"),
+    [({"agent": "Evening_Wrap"}, "not an agent name"), ({"agent": 7}, "agent must be"), ({"show_on_home": "no"}, "show_on_home must be true or false")],
+)
+def test_one_rules_bad_agent_or_show_on_home_refuses_only_that_rule(tmp_path, bad, says) -> None:
+    """Main ignored `agent` and unknown keys, so a file carrying them loaded.
+    A bad value now refuses that ONE rule, reported; every other rule runs."""
+    from app.trigger_engine.config import ConfigLoader
+
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps({"rules": [_cron("mine"), _cron("other", **bad), _cron("third")]}))
+    loader = ConfigLoader(path=path)
+    cfg = loader.load()
+    assert [r.id for r in cfg.rules] == ["mine", "third"]
+    assert loader.last_error is None
+    [refused] = cfg.refused
+    assert refused.id == "other" and says in refused.error
+
+
+@pytest.mark.parametrize("named", ["lead_agent", "Lead_Agent", " lead_agent "])
+def test_a_rule_naming_lead_agent_loads_as_a_lead_rule(tmp_path, named) -> None:
+    from app.trigger_engine.config import ConfigLoader
+
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps({"rules": [_cron("mine"), _cron("other", agent=named)]}))
+    cfg = ConfigLoader(path=path).load()
+    assert [(r.id, r.agent) for r in cfg.rules] == [("mine", None), ("other", None)]
+    assert cfg.refused == ()
+
+
+def test_automations_shows_the_refused_rule_and_still_writes_the_others(studio) -> None:
+    """Through the app: the good rules are listed, the bad one is reported in
+    rule_errors (not rules_error: the file WAS accepted), an edit to a good
+    rule is not blocked by the hand-written bad one, and a write that brings
+    in a bad value is still refused with 422."""
+    _rules_file(studio, [_cron("mine"), _cron("other", agent="Evening_Wrap")])
+    c = studio.client
+    view = c.get("/api/triggers/rules").json()
+    assert [r["id"] for r in view["rules"]] == ["mine"]
+    assert view["rules_error"] is None
+    assert [(e["id"], "not an agent name" in e["error"]) for e in view["rule_errors"]] == [("other", True)]
+
+    resp = c.put("/api/automations/rules/mine", json={"rule": _cron("mine", name="Mine"), "version": view["version"]})
+    assert resp.status_code == 200, resp.text
+
+    version = resp.json()["version"]
+    resp = c.post("/api/automations/rules", json={"rule": _cron("new", show_on_home="yes"), "version": version})
+    assert resp.status_code == 422 and "show_on_home must be true or false" in resp.json()["detail"]
+    resp = c.put("/api/automations/rules/other", json={"rule": _cron("other", agent="Still_Bad", enabled=False), "version": version})
+    assert resp.status_code == 422 and "not an agent name" in resp.json()["detail"]
+    assert [r["id"] for r in json.loads((studio.tmp / "rules.json").read_text())["rules"]] == ["mine", "other"]

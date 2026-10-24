@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.trigger_engine.scheduler import DEFAULT_TIMEZONE
 
@@ -146,10 +146,19 @@ class RunsView(BaseModel):
     runs: list[RunView]
 
 
+class RuleErrorView(BaseModel):
+    id: str
+    error: str
+
+
 class RulesView(BaseModel):
     engine_enabled: bool
     rules: list[RuleView]
     rules_error: str | None = None
+    #: Rules in the file the engine did not load, each with why (Feature
+    #: 006-F: a bad `agent` or `show_on_home` refuses only that rule; the
+    #: others are loaded and run).
+    rule_errors: list[RuleErrorView] = Field(default_factory=list)
     #: Hash of the rule file's bytes. An edit names the version it was based
     #: on, and is refused if the file changed since (no clobbered hand edits).
     version: str | None = None
@@ -178,6 +187,7 @@ def describe_rules(
     not_writable_reason: str | None = None,
     quiet_hours=None,
     now: datetime | None = None,
+    refused=(),
 ) -> RulesView:
     """Pure. `evaluated` maps rule id -> last evaluated ISO time (absent: no record)."""
     now = now or datetime.now(UTC)
@@ -222,7 +232,8 @@ def describe_rules(
     qh = None
     if quiet_hours is not None:
         qh = QuietHoursView(enabled=quiet_hours.enabled, start=quiet_hours.start, end=quiet_hours.end, timezone=quiet_hours.timezone)
-    return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error, version=version, writable=writable, not_writable_reason=not_writable_reason, quiet_hours=qh)
+    errors = [RuleErrorView(id=r.id, error=r.error) for r in refused]
+    return RulesView(engine_enabled=engine_enabled, rules=out, rules_error=rules_error, rule_errors=errors, version=version, writable=writable, not_writable_reason=not_writable_reason, quiet_hours=qh)
 
 
 def next_run(rule, *, now: datetime, engine_enabled: bool, quiet_hours=None) -> dict:

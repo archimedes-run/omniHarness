@@ -56,6 +56,9 @@ export interface RulesView {
   engine_enabled: boolean;
   rules: RuleView[];
   rules_error: string | null;
+  /** Rules in the file that were not loaded, each with why; the others run
+   * (Feature 006-F: a bad `agent` or `show_on_home` refuses only its rule). */
+  rule_errors?: { id: string; error: string }[];
   /** Hash of the rule file; an edit names it, and is refused if stale. */
   version: string | null;
   writable: boolean;

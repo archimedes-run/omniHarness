@@ -50,8 +50,8 @@ rules:
 | `destination` | no | `remote` / `quiet` / `auto`. Default `auto`. `local` reserved. |
 | `urgent` | no | Default `false`. Must be set explicitly; there is no implicit escalation (FR-014). |
 | `enabled` | no | Default `true`. |
-| `agent` | no | Feature 006-F. A custom agent's name (`[a-z0-9-]+`): the firing runs AS that agent (its instructions, tools, skills and standing grants). Absent: the lead agent. `lead_agent` and malformed names are **load-time errors**. A rule naming an agent that does not exist is refused when written and FAILED when it fires; it is never run as the lead in its place. |
-| `show_on_home` | no | Feature 006-F. Default `true`. `false` keeps the rule's upcoming runs and delivered results off Home. Must be a boolean. |
+| `agent` | no | Feature 006-F. A custom agent's name (`[a-z0-9-]+`): the firing runs AS that agent (its instructions, tools, skills and standing grants). Absent (or `lead_agent`, any case): the lead agent. A malformed name refuses **that rule only**: it is not loaded and is reported (Automations, `rule_errors`), while every other rule loads and runs; a write that brings one in is refused (422). A rule naming an agent that does not exist is refused when written and FAILED when it fires; it is never run as the lead in its place. |
+| `show_on_home` | no | Feature 006-F. Default `true`. `false` keeps the rule's upcoming runs and delivered results off Home. Must be a boolean; any other value refuses that rule only, as for `agent`. |
 
 ## Guarantees
 

@@ -88,8 +88,8 @@ async def _require_agent(rule: dict) -> None:
     from app.gateway.agent_schedules import agent_exists
 
     name = rule.get("agent")
-    # "lead_agent" is the engine parser's to refuse ("leave agent out").
-    if rule.get("enabled", True) and isinstance(name, str) and name.strip() not in ("", "lead_agent") and not await agent_exists(name):
+    # "lead_agent" (any case) is the lead: the engine parser reads it so.
+    if rule.get("enabled", True) and isinstance(name, str) and name.strip().lower() not in ("", "lead_agent") and not await agent_exists(name):
         raise HTTPException(status_code=422, detail=f"There is no agent called {name.strip().lower()!r}. A rule runs only as an agent that exists, never as the lead agent in its place.")
 
 
