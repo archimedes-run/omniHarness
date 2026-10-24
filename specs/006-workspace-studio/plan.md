@@ -226,6 +226,41 @@ Found while building, and fixed: an invited agent's own policy layer read its fi
   - **Copy**: the Gmail catalog text is fixed to say "draft".
 - **Settings** (`components/workspace/settings/*`): the Memory, Safety, Activity log (including Inbox's alert history), Notifications, Account (with display name), Appearance and About sections share one layout. The Tools and Skills sections redirect.
 
+## Per-agent schedules (006-F)
+
+An automation can run **as a named custom agent**: that agent's instructions, tool groups, skills and standing grants, never the lead's. Today every firing is a turn injected as `lead_agent`; this adds an optional `agent` to a rule, and a Schedule editor on the agent's Studio tab. Spec: FR-310 to FR-317.
+
+### What runs as whom
+
+- **The rule names the agent.** `agent: "<name>"` (normalised `[a-z0-9-]+`) on a trigger rule; absent means the lead. The parser refuses `lead_agent` as a value (omit it instead) and any malformed name, so a typo is a load error, never a run as the lead.
+- **The firing is the agent's turn.** The injector sends `assistant_id: <agent>`; the gateway's existing `apply_server_owned_context` turns that into the server-owned `agent_name`, and `make_lead_agent` builds the run from that agent's config (SOUL, `tool_groups`, `skills`, model). No second execution path: it is the same factory chat uses for `@agent`.
+- **Whose agent.** Agents are per user (`users/<id>/agents/<name>`), and the engine calls the gateway as the internal principal (`DEFAULT_USER_ID`). An agent-named scheduled run therefore runs **for the install's owner** (`ownership.owner_user_id()`, the same owner the rules file belongs to): the run's server-set `user_id` and the run's current user are the owner, so the agent's config, skills and grants resolve in the owner's directory. Lead-agent automations are unchanged (they still run as the system user). Decided only for a request carrying the engine's single-use trigger grant; a client cannot reach it.
+- **A missing agent never runs as the lead.** Three independent checks: (1) the Studio and Automations write paths refuse a rule naming an agent that does not exist (422, with the reason); (2) the engine's runner checks the agent before injecting and settles the firing as FAILED with "agent 'x' no longer exists; not run as the lead in its place" (no retries, audited, shown in Recent runs); (3) the gateway refuses an engine run naming a missing agent (422) before any graph is built. Deleting an agent disables every rule naming it (kept, so the history and the name stay visible; re-enabling is refused until the agent exists again). Agents cannot be renamed (the API has no rename; the name keys the directory, versions and grants), so a "rename" is a delete (rules disabled) plus a create.
+
+### Grants, tiers, provenance (Articles II, III, XIII)
+
+- **Only the agent's own grants.** The policy middleware already reads grants for the run's `agent_name` from the versioned store (`grants.granted_classes(user, agent)`). With the agent and owner set server-side, a firing uses exactly that agent's Autonomy grants: never the lead's, never another agent's. An agent with no grants asks for every grant-governed write (it waits on Home); Tier 1 runs; Tier 3 always waits as a card. Granted writes keep their source labels; Undo all per firing is unchanged (keyed by the firing id).
+- **Still a scheduled (non-person) run.** Provenance (`turn_provenance=synthetic-trigger`, rule id, firing id) is set only from the engine's single-use trigger grant, exactly as for the lead. A scheduled turn can never confirm or decline a card (`confirm.recognise`, `answerable_by_typed_reply`). Content the run reads (an email) cannot widen grants or switch agent: the agent is fixed by the rule file, the grants by the versioned store, and both reach the run only through server-owned context.
+
+### Schedule CRUD from Studio (owner only)
+
+- `POST /api/studio/agents/{name}/schedules`, `PUT …/schedules/{rule_id}`, `DELETE …/schedules/{rule_id}?version=`. Owner account only (`require_owner_account`, like Automations). Body: `schedule` (cron), `timezone` (IANA), `telegram` and `show_on_home` (delivery), optional `prompt` and `name`, and the rule file `version` the page read.
+- **The rule file stays the engine's source of truth.** Every write goes through the Automations write path (`automations.edit_rules` → `automations_store.write_rules`: validated by the engine's own parser, atomic, refused on a stale version); the engine hot-reloads on mtime, so a change takes effect at the next evaluation with no restart. `write_rules` is still called from the automations router module only (gate `test_only_the_automations_router_writes_the_rule_file` unchanged).
+- Cron is validated with `croniter`, the zone with `zoneinfo` (both already in the engine parser); the route also says which field is wrong. Quiet hours are the engine's, inherited, not per schedule.
+- A PUT or DELETE for a rule that is not this agent's is a 404: a schedule edit can never move a rule to another agent or to the lead.
+- **Delivery.** "Send the result to Telegram" maps to `destination: auto` (Telegram when away, the existing channel delivery) and off to `quiet`. "Show it on Home" is a new rule flag `show_on_home` (default true): off hides the rule's upcoming runs and its delivered results from Home. Both are rule fields, so politeness applies to agent firings exactly as to any other: quiet hours first, then mid-exchange, then coalescing (Article VII; the runner is unchanged).
+
+### Studio and Automations UI
+
+- Agent → Schedule tab (board: Agent-Studio.dc.html, Schedule and alerts): each of the agent's schedules as a row ("Weekdays at 18:00 · America/New_York") with Edit; the editor has presets (Every day at, Weekdays at, Weekly on, Custom cron), a time zone defaulting to the viewer's, the Telegram and Home toggles, Save and Delete. A drafted schedule ("Suggested by the draft") becomes a real one with one click ("Set up this schedule"), the person's own action. Overview "Next run" and "Recent runs" read the agent's own rules and firings (`GET /api/studio/agents/{name}/runs`).
+- The Automations list and detail say which agent each automation runs as ("Runs as Evening wrap-up" / "Runs as the lead agent"); the edit form keeps a rule's `agent` and `show_on_home` (it used to rebuild the rule from a fixed field list, which would have silently turned an agent's rule into the lead's).
+
+### Tests (Articles XI, XII)
+
+- Through `create_app()` and real HTTP (the `studio` fixture), with the engine firing a rule in-process: `build_loop` with its gateway verbs bound to the same app, carrying the engine's real internal headers and single-use trigger grant (`trigger_engine_wiring.engine_request_headers`), and the real lead-agent factory with a scripted model.
+- Gates, each sabotage-checked: a firing runs with the agent's tools (a tool only the lead has is not bound); grants are the agent's (another agent's or the lead's grant does not apply; the agent's own does); a rule naming a deleted agent never runs as the lead (runner and gateway each refuse); a scheduled agent firing cannot confirm a card; schedule CRUD is owner-only, validates cron and zone, and takes effect without a restart; deleting an agent disables its rules; Home hides a rule with `show_on_home: false`.
+- Playwright (mocked API in the real response shapes; no backend in e2e): set a schedule → Overview shows Next run → Automations shows "Runs as"; turn a drafted schedule into a real one; delete the schedule.
+
 ## Project Structure
 
 ```text

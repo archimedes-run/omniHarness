@@ -502,3 +502,10 @@ async def delete_agent(name: str) -> None:
     except Exception as e:
         logger.error(f"Failed to delete agent '{name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete agent: {str(e)}")
+
+    # Feature 006-F: its schedules stop with it (switched off, kept visible);
+    # no rule fires as a deleted agent, and none is run as the lead instead.
+    from app.gateway.agent_schedules import on_agent_deleted
+    from omniharness.config.app_config import get_app_config
+
+    await on_agent_deleted(get_app_config(), name, user_id)

@@ -77,7 +77,7 @@ def held_until(rule: Rule, at: datetime, quiet: QuietHours | None) -> datetime |
 def describe_upcoming(rules: list[Rule], *, now: datetime, engine_enabled: bool, rules_error: str | None, quiet: QuietHours | None = None, limit: int = UPCOMING_LIMIT) -> UpcomingView:
     runs: list[tuple[datetime, UpcomingRun]] = []
     for rule in rules:
-        if not rule.enabled or rule.type is not TriggerType.CRON:
+        if not rule.enabled or rule.type is not TriggerType.CRON or not getattr(rule, "show_on_home", True):
             continue
         schedule = str(rule.match.get("schedule", ""))
         tz = rule.match.get("timezone") or None
@@ -173,9 +173,21 @@ def _when(at: str) -> datetime:
     return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
-def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str], audit: list[dict] | None, since: datetime, now: datetime, automations: SourceState, outside: dict[str, Outside] | None = None) -> MovedView:
+def describe_moved(
+    *,
+    changes: list[dict] | None,
+    project_names: dict[str, str],
+    audit: list[dict] | None,
+    since: datetime,
+    now: datetime,
+    automations: SourceState,
+    outside: dict[str, Outside] | None = None,
+    hidden_rules: frozenset[str] = frozenset(),
+) -> MovedView:
     """`changes` / `audit` None means that source could not be read.
-    `outside`: per source name, its items (None when unread) and its state."""
+    `outside`: per source name, its items (None when unread) and its state.
+    `hidden_rules`: rules whose results are not shown on Home (show_on_home
+    false, Feature 006-F)."""
     items: list[MovedItem] = []
     for change in changes or []:
         item = describe_change(change, project_names)
@@ -183,7 +195,7 @@ def describe_moved(*, changes: list[dict] | None, project_names: dict[str, str],
             items.append(item)
     if audit is not None:
         for alert in describe_alerts(audit, now=now).alerts:
-            if alert.state != "delivered":
+            if alert.state != "delivered" or alert.rule_id in hidden_rules:
                 continue
             if _when(alert.at) >= since:
                 items.append(MovedItem(at=alert.at, source="automation", text=f"{rule_title(alert.rule_id)} delivered", thread_id=alert.thread_id))

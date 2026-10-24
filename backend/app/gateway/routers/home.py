@@ -128,6 +128,7 @@ async def today(request: Request, since: datetime = Query(..., description="The 
     cfg = request.app.state.config.trigger_engine
     audit: list[dict] | None = None
     automations: SourceState = "off"
+    hidden: frozenset[str] = frozenset()
     if cfg.enabled:
         from app.trigger_engine.audit import AuditLog
 
@@ -136,5 +137,7 @@ async def today(request: Request, since: datetime = Query(..., description="The 
             automations = "ok"
         except Exception:  # noqa: BLE001
             audit, automations = None, "unavailable"
+        # A rule switched off Home (show_on_home: false) shows no results here.
+        hidden = frozenset(r.id for r in _rules(cfg)[0] if not getattr(r, "show_on_home", True))
     sessions, github = await asyncio.gather(session_items(since), github_items(request.app.state, user_id, since))
-    return describe_moved(changes=changes, project_names=names, audit=audit, since=since, now=now, automations=automations, outside={"sessions": sessions, "github": github})
+    return describe_moved(changes=changes, project_names=names, audit=audit, since=since, now=now, automations=automations, outside={"sessions": sessions, "github": github}, hidden_rules=hidden)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -46,6 +47,28 @@ DEFAULTS = {
 
 #: A rule's display name, as long as a list row can show.
 NAME_MAX = 80
+
+#: Feature 006-F. What an agent name may be once normalised: the gateway's own
+#: rule (services._normalise_agent_name), so a name the engine accepts is one
+#: the gateway resolves to the same agent.
+AGENT_NAME = re.compile(r"[a-z0-9-]+")
+#: The lead agent is a rule WITHOUT `agent`; naming it is refused, so there is
+#: one way to say "the lead" and a typo can never fall back to it.
+LEAD_AGENT = "lead_agent"
+
+
+def parse_agent(rid: str, raw) -> str | None:
+    """A rule's `agent`, normalised, or None for the lead. Raises ConfigError."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError(f"rule {rid!r}: agent must be a custom agent's name; leave it out to run as the lead agent")
+    if raw.strip() == LEAD_AGENT:
+        raise ConfigError(f"rule {rid!r}: leave agent out to run as the lead agent (it is not named)")
+    name = raw.strip().lower()
+    if not AGENT_NAME.fullmatch(name):
+        raise ConfigError(f"rule {rid!r}: agent {raw!r} is not an agent name (letters, digits and hyphens)")
+    return name
 
 
 class ConfigError(ValueError):
@@ -147,7 +170,16 @@ def _parse_rule(raw: dict, seen: set[str]) -> Rule:
         urgent=bool(raw.get("urgent", False)),
         enabled=bool(raw.get("enabled", True)),
         name=name.strip(),
+        agent=parse_agent(rid, raw.get("agent")),
+        show_on_home=_flag(rid, raw, "show_on_home", default=True),
     )
+
+
+def _flag(rid: str, raw: dict, key: str, *, default: bool) -> bool:
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"rule {rid!r}: {key} must be true or false")
+    return value
 
 
 def parse(doc: dict) -> EngineConfig:

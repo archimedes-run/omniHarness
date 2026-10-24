@@ -158,3 +158,18 @@ def test_project_summaries_carry_the_next_due_date(gateway) -> None:
     gateway.client.post(f"/api/ledger/projects/{project['id']}/tasks", json={"title": "a", "due_date": "2026-10-23"})
     summary = next(p for p in gateway.client.get("/api/ledger/projects").json() if p["id"] == project["id"])
     assert summary["next_due"] == "2026-10-23"
+
+
+def test_a_rule_switched_off_home_is_not_listed_there(gateway, engine) -> None:
+    """Feature 006-F: "Show it on Home" off (show_on_home: false) keeps the
+    rule's next run and its delivered results off Home, through the routes."""
+    doc = json.loads(engine.rules.read_text())
+    doc["rules"][0]["show_on_home"] = False
+    engine.rules.write_text(json.dumps(doc))
+    engine.log.record(_firing("morning-briefing", "m1", Outcome.DELIVERED), NOW - timedelta(minutes=5))
+    engine.log.record(_firing("weekly-review", "w1", Outcome.DELIVERED), NOW - timedelta(minutes=4))
+
+    upcoming = [r["rule_id"] for r in gateway.client.get("/api/home/upcoming").json()["runs"]]
+    assert upcoming == ["weekly-review"]
+    texts = [i["text"] for i in gateway.client.get("/api/home/today", params={"since": (NOW - timedelta(hours=1)).isoformat()}).json()["items"]]
+    assert "Weekly review delivered" in texts and "Morning briefing delivered" not in texts

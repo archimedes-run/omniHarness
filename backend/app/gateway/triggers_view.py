@@ -73,6 +73,10 @@ class RuleView(BaseModel):
     held_for_quiet_hours: bool = False
     #: The zone to show its times in: the rule's own, else the user's.
     timezone: str = "America/New_York"
+    #: Feature 006-F: the custom agent its firings run as; None is the lead.
+    agent: str | None = None
+    #: Feature 006-F: whether Home shows its upcoming runs and results.
+    show_on_home: bool = True
 
 
 class QuietHoursView(BaseModel):
@@ -210,6 +214,8 @@ def describe_rules(
                 last_fired_at=last.get("at") if last else None,
                 last_outcome=last.get("outcome") if last else None,
                 timezone=(rule.match.get("timezone") if isinstance(rule.match, dict) else None) or USER_TIMEZONE,
+                agent=getattr(rule, "agent", None),
+                show_on_home=getattr(rule, "show_on_home", True),
                 **next_run(rule, now=now, engine_enabled=engine_enabled, quiet_hours=quiet_hours),
             )
         )

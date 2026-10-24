@@ -85,6 +85,11 @@ class RuleRunner:
     #: per injected turn, succeeded or failed, with a plain dict. Optional, and
     #: never allowed to break a firing.
     record_run: Callable[[dict], None] | None = None
+    #: Feature 006-F: does this custom agent exist (for the install's owner)?
+    #: Asked before every firing of a rule that names one. A rule naming a
+    #: missing agent is FAILED with that reason and never run as the lead in
+    #: its place. None skips the check (the gateway still refuses the run).
+    agent_exists: Callable[[str], bool] | None = None
     worker: Executor = field(default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="trigger-engine"))
 
     async def offload(self, fn: Callable, *args):
@@ -121,6 +126,15 @@ class RuleRunner:
                 continue  # FR-017: already fired for this event
 
             firing = Firing(rule_id=rule.id, event=event, prompt=render_prompt(rule, event))
+            if rule.agent and self._agent_missing(rule.agent):
+                # Settled at once, not retried: retrying cannot make the agent
+                # exist, and three FAILED lines per instant say nothing more.
+                self.fingerprints.record(key, now)
+                firing.resolve(Outcome.FAILED, f"the agent {rule.agent!r} no longer exists, so this automation did not run; it is never run as the lead agent in its place. Point it at an existing agent or delete it.")
+                self.audit.record(firing, now)
+                logger.error("rule %s: agent %s does not exist; not run", rule.id, rule.agent)
+                fired.append(firing)
+                continue
             started = datetime.now(UTC)
             raw = ""
             # Every firing starts with no turn: one that fails before injecting
@@ -140,7 +154,7 @@ class RuleRunner:
                         self.injector.configure_tools(firing.thread_id, list(self.default_tools))
                     # The fingerprint names this firing for every attempt at it,
                     # so a retry continues the run's granted-action count.
-                    raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt, firing_id=key)
+                    raw = self.injector.inject(firing.thread_id, rule.id, firing.prompt, firing_id=key, agent=rule.agent)
                     if not raw.strip() and rule.type is not TriggerType.WATCHER:
                         # A watcher alert still says something without a reply (its
                         # header names the session); anything else would arrive as
@@ -168,6 +182,15 @@ class RuleRunner:
             self._route(rule, firing, now)
             fired.append(firing)
         return fired
+
+    def _agent_missing(self, agent: str) -> bool:
+        if self.agent_exists is None:
+            return False
+        try:
+            return not self.agent_exists(agent)
+        except Exception:  # noqa: BLE001 — cannot tell is not "it exists"
+            logger.warning("could not tell whether agent %s exists; not running its rule", agent, exc_info=True)
+            return True
 
     def _firing_lock(self):
         lock = getattr(self.threads, "firing_lock", None)

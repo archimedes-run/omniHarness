@@ -3,10 +3,10 @@
 Read only, and pure: the router hands in the rules, the engine's quiet hours
 and its audit log, read from the same files the engine writes.
 
-WHICH RULES ARE AN AGENT'S. A trigger rule has no agent field today: every
-firing is a turn injected as the lead agent (`injector.DEFAULT_ASSISTANT_ID`).
-So every rule is the lead agent's, and a custom agent has none until a rule
-names it (`agent:` on the rule or in its match). That is stated, not guessed.
+WHICH RULES ARE AN AGENT'S. Exactly those whose `agent` names it (Feature
+006-F: the firing runs AS that agent); a rule naming none is the lead agent's.
+A name inside `match` is not read: the engine does not run a rule as it, so
+the view must not claim it does.
 
 NEXT RUN, the way the engine computes it: `scheduler.next_due` in the rule's own
 zone, or the engine clock's (UTC) when the rule names none. The instant is the
@@ -34,6 +34,10 @@ class AgentSchedule(BaseModel):
     next_run: str | None = Field(..., description="ISO instant; None when disabled or the expression cannot be evaluated")
     held_until: str | None = Field(None, description="When the next run falls in quiet hours: when it is released")
     error: str | None = None
+    name: str = Field("", description="The rule's display name")
+    prompt: str = Field("", description="What the firing asks the agent")
+    telegram: bool = Field(True, description="Its result is sent to Telegram (destination auto or remote)")
+    show_on_home: bool = Field(True, description="Home lists its upcoming runs and results")
 
 
 class AgentRunsView(BaseModel):
@@ -44,10 +48,14 @@ class AgentRunsView(BaseModel):
     rules_error: str | None = None
     schedules: list[AgentSchedule]
     recent: list[FiringView]
+    #: The rule file's version, sent back with a schedule edit (409 when stale).
+    rules_version: str | None = None
+    #: False when the engine runs the shipped defaults, which are not edited.
+    writable: bool = False
 
 
 def rule_agent(rule) -> str:
-    named = getattr(rule, "agent", None) or (rule.match or {}).get("agent")
+    named = getattr(rule, "agent", None)
     return str(named).strip().lower() if named else LEAD_AGENT
 
 
@@ -63,7 +71,20 @@ def describe_agent_runs(*, agent: str, rules: list, quiet_hours, audit: list[dic
             continue
         expr = str((rule.match or {}).get("schedule") or "")
         zone = (rule.match or {}).get("timezone")
-        item = AgentSchedule(rule_id=rule.id, schedule=expr, timezone=zone or DEFAULT_TIMEZONE, timezone_named=bool(zone), enabled=rule.enabled, next_run=None)
+        from app.gateway.agent_schedules import sends_to_telegram
+
+        item = AgentSchedule(
+            rule_id=rule.id,
+            schedule=expr,
+            timezone=zone or DEFAULT_TIMEZONE,
+            timezone_named=bool(zone),
+            enabled=rule.enabled,
+            next_run=None,
+            name=getattr(rule, "name", "") or "",
+            prompt=rule.prompt,
+            telegram=sends_to_telegram(str(rule.destination)),
+            show_on_home=getattr(rule, "show_on_home", True),
+        )
         if rule.enabled:
             try:
                 due = next_due(expr, now, zone)

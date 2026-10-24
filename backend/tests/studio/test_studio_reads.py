@@ -61,14 +61,19 @@ def test_a_custom_agent_has_no_schedule_until_a_rule_names_it(studio) -> None:
 
 
 def test_a_rule_that_names_the_agent_is_its_own(studio) -> None:
+    """Feature 006-F: the rule's own `agent` decides, the field the engine
+    runs it as. A name inside `match` is not read: the engine never ran a rule
+    as it, so the view no longer claims it does."""
     named = json.loads(json.dumps(RULES))
-    named["rules"][0]["match"]["agent"] = "evening-wrap-up"
+    named["rules"][0]["agent"] = "evening-wrap-up"
+    named["rules"][1]["match"]["agent"] = "evening-wrap-up"
     (studio.tmp / "rules.json").write_text(json.dumps(named))
     (studio.tmp / "triggers").mkdir(exist_ok=True)
     body = studio.client.get("/api/studio/agents/evening-wrap-up/runs").json()
     assert [s["rule_id"] for s in body["schedules"]] == ["evening-wrap"]
     lead = studio.client.get("/api/studio/agents/lead_agent/runs").json()
     assert "evening-wrap" not in {s["rule_id"] for s in lead["schedules"]}
+    assert named["rules"][1]["id"] in {s["rule_id"] for s in lead["schedules"]}
 
 
 def test_studio_options_name_the_configured_tool_groups_and_model(studio) -> None:

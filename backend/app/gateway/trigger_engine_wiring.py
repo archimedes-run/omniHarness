@@ -154,7 +154,7 @@ def _quiet_hours(engine_config) -> EnforcedQuietHours:
     )
 
 
-def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state, remote, record_run=None, note_thread=None) -> TriggerLoop:
+def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fetch_sessions, exchange_state, remote, record_run=None, note_thread=None, agent_exists=None) -> TriggerLoop:
     """Construct the engine. Raises on misconfiguration — the caller decides
     whether that is fatal (it is not; see lifespan.start)."""
     cfg = config.trigger_engine
@@ -227,6 +227,9 @@ def build_loop(config: AppConfig, *, gateway_post, gateway_put, gateway_get, fet
         # redacted, kept locally (app/run_history).
         record_run=record_run,
         run_footer=_run_footer(config),
+        # Feature 006-F: a rule naming a missing agent fails, never runs as
+        # the lead (the gateway refuses such a run too).
+        agent_exists=agent_exists,
     )
 
     return TriggerLoop(
@@ -320,23 +323,9 @@ def _gateway_call(method: str):
 
         import httpx
 
-        from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
-        from app.gateway.internal_auth import TRIGGER_GRANT_HEADER_NAME, create_internal_auth_headers, issue_trigger_grant
-
         url = f"{_gateway_base_url()}{path}"
-        # The gateway's CSRF middleware checks every POST/PUT, internal calls
-        # included, and answered the engine's 403 'CSRF token missing' — so no
-        # rule could ever create its thread. Found in the live end-to-end check.
-        # Same double-submit pair the channel manager sends (channels/manager.py).
-        csrf = generate_csrf_token()
-        headers = {**create_internal_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
         content = json.dumps(body).encode() if body is not None else b""
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        if path.endswith("/runs/wait"):
-            # A scheduled run: a single-use grant bound to these exact bytes
-            # (internal_auth.issue_trigger_grant). Nothing else may mark one.
-            headers[TRIGGER_GRANT_HEADER_NAME] = issue_trigger_grant(method, path, content)
+        headers = engine_request_headers(method, path, content)
         with httpx.Client(timeout=GATEWAY_CALL_TIMEOUT_SECONDS) as client:
             resp = client.request(method, url, content=content or None, headers=headers)
             if resp.is_error:
@@ -344,6 +333,52 @@ def _gateway_call(method: str):
             return resp.json() if resp.content else {}
 
     return _call
+
+
+def engine_request_headers(method: str, path: str, content: bytes) -> dict[str, str]:
+    """The headers every engine call to its own gateway carries: the internal
+    token, the CSRF pair, and for a run a single-use trigger grant bound to
+    these exact bytes. Production's `_gateway_call` sends exactly these; the
+    in-process tests send them too, so a test run is the engine's own."""
+    from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
+    from app.gateway.internal_auth import TRIGGER_GRANT_HEADER_NAME, create_internal_auth_headers, issue_trigger_grant
+
+    # The gateway's CSRF middleware checks every POST/PUT, internal calls
+    # included, and answered the engine's 403 'CSRF token missing' — so no
+    # rule could ever create its thread. Found in the live end-to-end check.
+    # Same double-submit pair the channel manager sends (channels/manager.py).
+    csrf = generate_csrf_token()
+    headers = {**create_internal_auth_headers(), CSRF_HEADER_NAME: csrf, "Cookie": f"{CSRF_COOKIE_NAME}={csrf}"}
+    if content:
+        headers["Content-Type"] = "application/json"
+    if path.endswith("/runs/wait"):
+        # A scheduled run: a single-use grant bound to these exact bytes
+        # (internal_auth.issue_trigger_grant). Nothing else may mark one.
+        headers[TRIGGER_GRANT_HEADER_NAME] = issue_trigger_grant(method, path, content)
+    return headers
+
+
+def owner_agent_exists(on_gateway_loop):
+    """Does a custom agent exist for the install's owner (Feature 006-F)?
+
+    Runs on the engine's worker thread; the owner lookup is a database read
+    owned by the gateway's loop, so `on_gateway_loop(coroutine)` runs it there
+    and returns its result. The same resolution the gateway uses for the run
+    itself (services._scheduled_agent_owner)."""
+
+    def _exists(agent: str) -> bool:
+        from app.gateway.ownership import owner_user_id
+        from omniharness.config.agents_config import load_agent_config
+        from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+        owner = on_gateway_loop(owner_user_id()) or DEFAULT_USER_ID
+        try:
+            load_agent_config(agent, user_id=owner)
+        except (FileNotFoundError, ValueError):
+            return False
+        return True
+
+    return _exists
 
 
 class GatewayCallFailed(RuntimeError):
@@ -452,7 +487,13 @@ def build_production_loop(config: AppConfig, *, run_store, run_history=None) -> 
         remote=_remote_destination(config, asyncio.get_running_loop()),
         record_run=_run_recorder(run_history),
         note_thread=(lambda rule_id, thread_id: run_history.note_thread(thread_id, rule_id)) if run_history is not None else None,
+        agent_exists=owner_agent_exists(_on_loop(asyncio.get_running_loop())),
     )
+
+
+def _on_loop(main_loop: asyncio.AbstractEventLoop):
+    """Run a coroutine on the gateway's loop from the engine's worker thread."""
+    return lambda coro: asyncio.run_coroutine_threadsafe(coro, main_loop).result(timeout=10)
 
 
 def _run_recorder(run_history):

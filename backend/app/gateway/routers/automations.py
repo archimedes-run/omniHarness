@@ -55,16 +55,42 @@ def _target(request: Request):
     return _resolve_rules_path(cfg), bool(getattr(cfg, "rules_path", "")), SUPPORTED_SOURCE_TYPES
 
 
-def _apply(request: Request, change, version: str) -> WriteResult:
-    path, writable, supported = _target(request)
+def edit_rules(app_config, change, version: str | None) -> str:
+    """THE rule-file write path, for this router and for Agent Studio's
+    schedules (Feature 006-F): read, apply `change` to the document, validate
+    with the engine's parser, write atomically. `version` is the one the
+    caller read (refused with 409 when stale); None means "the file as it is
+    now" (the agent-delete hook, which has no page). Raises RulesEditError."""
+    from app.gateway.trigger_engine_wiring import SUPPORTED_SOURCE_TYPES, _resolve_rules_path
+
+    cfg = app_config.trigger_engine
+    path, writable = _resolve_rules_path(cfg), bool(getattr(cfg, "rules_path", ""))
     try:
         current = read_rules(path)
         doc = change(current.doc)
-        return WriteResult(version=write_rules(path, doc, expected_version=version, supported_types=supported, writable=writable))
+        return write_rules(path, doc, expected_version=current.version if version is None else version, supported_types=SUPPORTED_SOURCE_TYPES, writable=writable)
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, RulesEditError):
+            raise
+        raise RulesEditError(f"Could not read or write the rules file: {exc}", 500) from exc
+
+
+def _apply(request: Request, change, version: str) -> WriteResult:
+    try:
+        return WriteResult(version=edit_rules(request.app.state.config, change, version))
     except RulesEditError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail=f"Could not read or write the rules file: {exc}") from exc
+
+
+async def _require_agent(rule: dict) -> None:
+    """A rule may name only an agent that exists (Feature 006-F): one naming a
+    missing agent would never run, and is never run as the lead instead."""
+    from app.gateway.agent_schedules import agent_exists
+
+    name = rule.get("agent")
+    # "lead_agent" is the engine parser's to refuse ("leave agent out").
+    if rule.get("enabled", True) and isinstance(name, str) and name.strip() not in ("", "lead_agent") and not await agent_exists(name):
+        raise HTTPException(status_code=422, detail=f"There is no agent called {name.strip().lower()!r}. A rule runs only as an agent that exists, never as the lead agent in its place.")
 
 
 @router.get("/templates", response_model=list[Template])
@@ -76,6 +102,7 @@ async def templates(request: Request) -> list[Template]:
 @router.post("/rules", response_model=WriteResult, status_code=201)
 @require_permission("threads", "write")
 async def create_rule(body: RuleWrite, request: Request) -> WriteResult:
+    await _require_agent(body.rule)
     return _apply(request, lambda doc: with_rule(doc, body.rule, replace=None), body.version)
 
 
@@ -84,12 +111,22 @@ async def create_rule(body: RuleWrite, request: Request) -> WriteResult:
 async def replace_rule(rule_id: str, body: RuleWrite, request: Request) -> WriteResult:
     if body.rule.get("id") != rule_id:
         raise HTTPException(status_code=422, detail="A rule's id cannot be changed: it keys the rule's conversation thread. Create a new automation instead.")
+    await _require_agent(body.rule)
     return _apply(request, lambda doc: with_rule(doc, body.rule, replace=rule_id), body.version)
 
 
 @router.patch("/rules/{rule_id}/enabled", response_model=WriteResult)
 @require_permission("threads", "write")
 async def set_enabled(rule_id: str, body: EnabledWrite, request: Request) -> WriteResult:
+    if body.enabled:
+        path, _, _ = _target(request)
+        try:
+            named = next((r for r in read_rules(path).doc.get("rules") or [] if r.get("id") == rule_id), None)
+        except (OSError, ValueError):
+            named = None
+        if named is not None:
+            await _require_agent({**named, "enabled": True})
+
     def change(doc: dict) -> dict:
         rules = doc.get("rules") or []
         current = next((r for r in rules if r.get("id") == rule_id), None)
