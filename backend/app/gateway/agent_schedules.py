@@ -105,10 +105,11 @@ def schedule_rule(*, rule_id: str, agent: str, schedule: str, timezone: str, tel
 def schedule_problem(schedule: str, timezone: str) -> str | None:
     """Why a schedule cannot be saved, in words, or None. The engine's parser
     checks both again on write; this names the field."""
-    from croniter import croniter
+    from app.trigger_engine.config import standard_cron_problem
 
-    if not schedule.strip() or not croniter.is_valid(schedule.strip()):
-        return f"{schedule!r} is not a valid cron schedule (minute hour day month weekday, e.g. '0 18 * * 1-5')."
+    problem = standard_cron_problem(schedule)
+    if problem:
+        return problem
     try:
         from zoneinfo import ZoneInfo
 

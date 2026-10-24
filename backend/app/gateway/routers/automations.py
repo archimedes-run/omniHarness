@@ -82,6 +82,22 @@ def _apply(request: Request, change, version: str) -> WriteResult:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+def _require_standard_cron(rule: dict) -> None:
+    """A cron rule written here has a five-field schedule (croniter would also
+    take a seconds field, and `* * * * * *` fires every second). The engine's
+    loader is unchanged, so hand-written rules load as before."""
+    from app.trigger_engine.config import standard_cron_problem
+
+    match = rule.get("match")
+    schedule = match.get("schedule") if isinstance(match, dict) else None
+    # Only the field count is checked here; a malformed five-field schedule is
+    # the engine parser's to refuse, in its own words.
+    if rule.get("type") == "cron" and schedule and len(str(schedule).split()) != 5:
+        problem = standard_cron_problem(schedule)
+        if problem:
+            raise HTTPException(status_code=422, detail=f"rule {rule.get('id')!r}: match.schedule {problem}")
+
+
 async def _require_agent(rule: dict) -> None:
     """A rule may name only an agent that exists (Feature 006-F): one naming a
     missing agent would never run, and is never run as the lead instead."""
@@ -102,6 +118,7 @@ async def templates(request: Request) -> list[Template]:
 @router.post("/rules", response_model=WriteResult, status_code=201)
 @require_permission("threads", "write")
 async def create_rule(body: RuleWrite, request: Request) -> WriteResult:
+    _require_standard_cron(body.rule)
     await _require_agent(body.rule)
     return _apply(request, lambda doc: with_rule(doc, body.rule, replace=None), body.version)
 
@@ -111,6 +128,7 @@ async def create_rule(body: RuleWrite, request: Request) -> WriteResult:
 async def replace_rule(rule_id: str, body: RuleWrite, request: Request) -> WriteResult:
     if body.rule.get("id") != rule_id:
         raise HTTPException(status_code=422, detail="A rule's id cannot be changed: it keys the rule's conversation thread. Create a new automation instead.")
+    _require_standard_cron(body.rule)
     await _require_agent(body.rule)
     return _apply(request, lambda doc: with_rule(doc, body.rule, replace=rule_id), body.version)
 

@@ -600,3 +600,28 @@ def test_a_hand_written_lone_brace_keeps_the_previous_rules(tmp_path) -> None:
     os.utime(path, (1, 1))
     assert [r.id for r in loader.load().rules] == ["mine"]
     assert "Use {{ and }}" in (loader.last_error or "")
+
+
+@pytest.mark.parametrize("schedule", ["* * * * * *", "0 0 9 * * *", "* * * *", "@daily"])
+def test_only_a_five_field_cron_is_written(studio, schedule) -> None:
+    """croniter.is_valid also takes a seconds field: `* * * * * *` would fire
+    every second. Studio and Automations writes take five fields only."""
+    _rules_file(studio, [_cron("mine")])
+    _make_agent(studio)
+    c = studio.client
+    before = (studio.tmp / "rules.json").read_text()
+    # Each write names the file's version as it is then, so one accepted
+    # write cannot hide the next behind a 409.
+    responses = [
+        c.post("/api/studio/agents/wrap-up/schedules", json={"schedule": schedule, "timezone": "UTC", "version": _version(studio)}),
+        c.put("/api/studio/agents/lead_agent/schedules/mine", json={"schedule": schedule, "timezone": "UTC", "version": _version(studio)}),
+        c.post("/api/automations/rules", json={"rule": _cron("new", match={"schedule": schedule, "timezone": "UTC"}), "version": _version(studio)}),
+        c.put("/api/automations/rules/mine", json={"rule": _cron("mine", match={"schedule": schedule, "timezone": "UTC"}), "version": _version(studio)}),
+    ]
+    assert [r.status_code for r in responses] == [422] * 4, [r.text for r in responses]
+    assert all("five fields" in r.json()["detail"] for r in responses)
+    assert (studio.tmp / "rules.json").read_text() == before
+
+    # The control: the same writes with five fields are accepted.
+    assert c.put("/api/automations/rules/mine", json={"rule": _cron("mine", match={"schedule": "*/5 9-17 * * 1-5", "timezone": "UTC"}), "version": _version(studio)}).status_code == 200
+    assert c.put("/api/studio/agents/lead_agent/schedules/mine", json={"schedule": "0 9 * * *", "timezone": "UTC", "version": _version(studio)}).status_code == 200

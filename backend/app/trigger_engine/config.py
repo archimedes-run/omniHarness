@@ -73,6 +73,21 @@ def parse_agent(rid: str, raw) -> str | None:
     return name
 
 
+def standard_cron_problem(schedule) -> str | None:
+    """Why `schedule` is not a standard five-field cron, in words, or None.
+
+    For WRITES only (Studio schedules, Automations): croniter also accepts a
+    sixth (seconds) field, so `* * * * * *` would fire every second. The
+    loader keeps accepting what croniter does, so no rule file that loads
+    today stops loading."""
+    from croniter import croniter
+
+    text = str(schedule or "").strip()
+    if len(text.split()) != 5 or not croniter.is_valid(text):
+        return f"{schedule!r} is not a valid cron schedule: five fields, minute hour day month weekday (e.g. '0 18 * * 1-5')."
+    return None
+
+
 class ConfigError(ValueError):
     """The configuration is invalid. The previous one stays in effect."""
 

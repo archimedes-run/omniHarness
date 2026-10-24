@@ -45,8 +45,8 @@ rules:
 |---|---|---|
 | `id` | yes | Unique. Duplicates are a **load-time error** (FR-006) — it is the thread-map key. |
 | `type` | yes | `cron` / `watcher` / `completion`. `calendar` is reserved and rejected with "not implemented". |
-| `match` | yes | Type-specific. Validated per type at load. |
-| `prompt` | yes | Template. Referencing a field the type cannot supply is a **load-time error**, not a render-time surprise. |
+| `match` | yes | Type-specific. Validated per type at load. A cron `match.schedule` written through Studio or Automations must be a standard five-field cron (minute hour day month weekday); a seconds field is refused (422), since `* * * * * *` would fire every second. |
+| `prompt` | yes | Template. Referencing a field the type cannot supply is a **load-time error**, not a render-time surprise, as is an unmatched `{` or `}` (write `{{` / `}}` for a literal brace). |
 | `destination` | no | `remote` / `quiet` / `auto`. Default `auto`. `local` reserved. |
 | `urgent` | no | Default `false`. Must be set explicitly; there is no implicit escalation (FR-014). |
 | `enabled` | no | Default `true`. |
