@@ -128,6 +128,12 @@ describe("labels", () => {
     expect(html).not.toContain("gооgle");
   });
 
+  it("a citation label in agent text keeps its badge, which names the real host", () => {
+    const html = render("see [citation:good.example](https://evil.example/c)");
+    expect(html).toContain("evil[.]example");
+    expect(html).not.toContain(">https://evil.example/c</button>");
+  });
+
   it("a citation badge never names another host than the link opens", () => {
     const badge = (label: string, href: string) =>
       renderToStaticMarkup(createElement(Link, { href }, label));
