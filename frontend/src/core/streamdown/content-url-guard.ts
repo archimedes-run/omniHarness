@@ -13,6 +13,11 @@ import {
   isHttpUrl,
   isLocalImageUrl,
 } from "@/core/display/defang";
+import {
+  INVISIBLE,
+  labelMisleads,
+  truthfulUrl,
+} from "@/core/display/link-label";
 
 /**
  * The last rehype step of every markdown renderer (components/ai-elements/
@@ -161,48 +166,9 @@ function stripAttributes(el: Element) {
   }
 }
 
-/** Control and format characters (bidi overrides, zero-width…): out of
- *  every outside link's label, so it reads as what it opens. */
-const INVISIBLE = /[\p{Cc}\p{Cf}]/gu;
-
 function stripInvisible(node: ElementContent) {
   if (node.type === "text") node.value = node.value.replace(INVISIBLE, "");
   else if (node.type === "element") node.children.forEach(stripInvisible);
-}
-
-/** A hostname, compared without a leading "www.". */
-function bareHost(host: string): string {
-  return host.toLowerCase().replace(/^www\./, "");
-}
-
-/** File names read as domains by shape ("report.pdf"); not treated as one. */
-const FILE_EXT =
-  /\.(pdf|md|txt|png|jpe?g|gif|svg|html?|csv|json|ya?ml|docx?|xlsx?|pptx?|py|[jt]sx?)$/i;
-
-/** The host a label NAMES when it reads as a URL or a domain, else null. */
-function labelHost(label: string): string | null {
-  const text = label.trim();
-  if (/\s/.test(text)) return null;
-  try {
-    if (/^https?:\/\//i.test(text)) return new URL(text).hostname;
-    const domain = /^([a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,24})(\/\S*)?$/i.exec(
-      text,
-    );
-    if (domain && !FILE_EXT.test(domain[1]!))
-      return new URL(`http://${domain[1]}`).hostname;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-/** The URL as it reads truthfully: no user info ("good.com@evil.com" goes
- *  to evil.com), no invisible characters. */
-function truthfulUrl(url: URL): string {
-  return `${url.protocol}//${url.host}${url.pathname}${url.search}${url.hash}`.replace(
-    INVISIBLE,
-    "",
-  );
 }
 
 /**
@@ -217,32 +183,35 @@ function truthfulUrl(url: URL): string {
  * characters. A link to any scheme but http(s) is inert text.
  */
 function guardLink(el: Element) {
-  const href = asString(el.properties.href);
-  if (!href || isAppUrl(href)) return;
-  if (/^\s*(mailto|tel):/i.test(href)) return; // these fetch nothing
+  const raw = asString(el.properties.href);
+  if (!raw || isAppUrl(raw)) return;
+  if (/^\s*(mailto|tel):/i.test(raw)) return; // these fetch nothing
   delete el.properties.href;
   delete el.properties.target;
-  if (!isHttpUrl(href)) {
+  if (!isHttpUrl(raw)) {
     el.tagName = "span";
     el.properties.dataInertLink = "";
     return;
   }
-  el.properties.dataExternalHref = href;
-  const url = new URL(href);
+  // The URL as the browser resolves it on its own ("https:host/p" is
+  // https://host/p), which is what the button opens.
+  const url = new URL(raw);
+  el.properties.dataExternalHref = url.href;
+  // Invisible characters go FIRST, so the label is judged as it reads.
+  el.children.forEach(stripInvisible);
   const label = textOf(el);
-  const named = labelHost(label);
-  if (
-    url.username ||
-    url.password ||
-    (named !== null && bareHost(named) !== bareHost(url.hostname))
-  ) {
+  if (labelMisleads(label, url)) {
     el.children = [{ type: "text", value: truthfulUrl(url) }];
     return;
   }
-  if (label.trim() === href.trim()) {
-    el.children = [{ type: "text", value: href.trim() }];
+  if (label.trim() === raw.trim()) {
+    // A bare URL reads as itself; one written without "//" ("https:host/p")
+    // reads as the URL the browser makes of it.
+    const shown = /^https?:\/\//i.test(raw.trim())
+      ? raw.trim()
+      : truthfulUrl(url);
+    el.children = [{ type: "text", value: shown }];
   }
-  el.children.forEach(stripInvisible);
 }
 
 function guardChildren(parent: Root | Element) {

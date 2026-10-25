@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { defangHost, isHttpUrl } from "@/core/display/defang";
+import { INVISIBLE, labelMisleads } from "@/core/display/link-label";
 import { cn } from "@/lib/utils";
 
 /**
@@ -58,7 +59,11 @@ export function ExternalLink({
             variant="secondary"
             className="hover:bg-secondary/80 mx-0.5 gap-1 rounded-full px-2 py-0.5 text-xs font-normal"
           >
-            {citation[1] && citation[1] !== "Source" ? citation[1] : host}
+            {citation[1] &&
+            citation[1] !== "Source" &&
+            !labelMisleads(citation[1], new URL(href))
+              ? citation[1].replace(INVISIBLE, "")
+              : host}
             <ExternalLinkIcon className="size-3" />
           </Badge>
         </button>
