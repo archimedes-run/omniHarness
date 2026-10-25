@@ -243,6 +243,17 @@ policy:
     - pattern: "bash"
       tier: 2
       reversible: false
+    # A coding job (spec 009, Slice 1): OpenCode works inside the thread's
+    # CONTAINER sandbox (offered only there, with a runtime floor like bash's).
+    # It runs, then is disclosed: its effects are the thread's own folders,
+    # its network the registries proxy, its model calls the gateway's LLM
+    # proxy under a per-job token and budget; no key enters the sandbox.
+    # Not reversible (it writes files and spends model budget). Its result is
+    # the person's workspace content and the worker's words: a private read,
+    # and untrusted.
+    - pattern: "code_job"
+      tier: 2
+      reversible: false
     # Creates or edits a skill: changes what the assistant does in every later
     # conversation, not only this one.
     - pattern: "skill_manage"

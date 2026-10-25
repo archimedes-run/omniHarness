@@ -6,6 +6,9 @@ under the default seccomp profile (#99), and gives it no way out but the
 registries proxy. Anywhere else (a provisioner sandbox, no egress proxy
 configured) none of that holds, so bash asks first: Tier 3. A floor only
 raises a tier, never lowers it.
+
+`code_job` (spec 009) has the same floor: it is offered only in the hardened
+sandbox, and if it were ever reached anywhere else it asks first.
 """
 
 from __future__ import annotations
@@ -35,6 +38,6 @@ def bash_runs_in_the_hardened_sandbox() -> bool:
 
 
 def runtime_floor(canonical_name: str) -> Tier | None:
-    if canonical_name == "bash" and not bash_runs_in_the_hardened_sandbox():
+    if canonical_name in ("bash", "code_job") and not bash_runs_in_the_hardened_sandbox():
         return Tier.TIER_3
     return None

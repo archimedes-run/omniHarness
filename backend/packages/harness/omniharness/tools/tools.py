@@ -7,7 +7,7 @@ from omniharness.config.app_config import AppConfig
 from omniharness.persistence.thread_tool_selection.sql import PINNED_SOURCES
 from omniharness.reflection import resolve_variable
 from omniharness.sandbox.security import is_host_bash_allowed
-from omniharness.tools.builtins import ask_clarification_tool, mcp_build_tool, present_file_tool, preview_tool, task_tool, view_image_tool
+from omniharness.tools.builtins import ask_clarification_tool, code_job_tool, mcp_build_tool, present_file_tool, preview_tool, task_tool, view_image_tool
 from omniharness.tools.builtins.tool_search import reset_deferred_registry
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
     from omniharness.tools.names import canonical_tool_name
     from omniharness.tools.skill_manage_tool import skill_manage_tool
 
-    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, preview_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
+    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, preview_tool, code_job_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
     registry: dict[str, object] = {canonical_tool_name(getattr(t, "name", "")): t for t in objects}
     cfg = config
     if cfg is None:
@@ -236,6 +236,15 @@ def get_available_tools(
 
     if get_preview_controller() is not None:
         builtin_tools.append(preview_tool)
+
+    # Add code_job only when a CodeJobController is registered (gateway mode)
+    # AND it can run here: the hardened container sandbox, the LLM proxy and
+    # a model it can serve (spec 009 FR-011). Otherwise it is not offered.
+    from omniharness.code_jobs import get_code_job_controller
+
+    code_jobs = get_code_job_controller()
+    if code_jobs is not None and code_jobs.unavailable_reason() is None:
+        builtin_tools.append(code_job_tool)
 
     # Add mcp_build tool only when an MCPBuildController is registered (gateway mode).
     from omniharness.runtime.mcp.controller import get_mcp_build_controller
@@ -601,7 +610,7 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
             names.append(resolve_variable(cfg.use, BaseTool).name)
         except Exception:  # noqa: BLE001 — a config tool that cannot load is never offered
             logger.warning("tool %r (%s) could not be loaded, so it is not offered", cfg.name, cfg.use)
-    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, skill_manage_tool, setup_agent, update_agent)]
+    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, code_job_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, skill_manage_tool, setup_agent, update_agent)]
     names += [t.name for t in TodoMiddleware().tools]
     names += [t.name for t in (loaded_mcp_tools() or [])]
     return list(dict.fromkeys(names))

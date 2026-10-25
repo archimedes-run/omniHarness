@@ -18,6 +18,9 @@ interface AssistantClarificationGroup extends GenericMessageGroup<"assistant:cla
 
 interface AssistantSubagentGroup extends GenericMessageGroup<"assistant:subagent"> {}
 
+/** A coding job (spec 009): shown as its own card, never folded into the steps. */
+interface AssistantCodeJobGroup extends GenericMessageGroup<"assistant:code-job"> {}
+
 /** The lead handing a turn to an agent the user called in (`call_agent`). */
 interface AssistantHandoffGroup extends GenericMessageGroup<"assistant:handoff"> {}
 
@@ -28,6 +31,7 @@ export type MessageGroup =
   | AssistantPresentFilesGroup
   | AssistantClarificationGroup
   | AssistantSubagentGroup
+  | AssistantCodeJobGroup
   | AssistantHandoffGroup;
 
 export function getMessageGroups(messages: Message[]): MessageGroup[] {
@@ -105,6 +109,12 @@ export function getMessageGroups(messages: Message[]): MessageGroup[] {
         groups.push({
           id: message.id,
           type: "assistant:present-files",
+          messages: [message],
+        });
+      } else if (hasCodeJob(message)) {
+        groups.push({
+          id: message.id,
+          type: "assistant:code-job",
           messages: [message],
         });
       } else if (hasSubagent(message)) {
@@ -369,6 +379,12 @@ export function extractPresentFilesFromMessage(message: Message) {
 export function isHandoff(message: AIMessage) {
   const calls = message.tool_calls ?? [];
   return calls.length > 0 && calls.every((call) => call.name === "call_agent");
+}
+
+export function hasCodeJob(message: AIMessage) {
+  return (message.tool_calls ?? []).some(
+    (toolCall) => toolCall.name === "code_job",
+  );
 }
 
 export function hasSubagent(message: AIMessage) {

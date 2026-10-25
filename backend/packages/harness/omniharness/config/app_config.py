@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from omniharness.config.agents_api_config import AgentsApiConfig, load_agents_api_config_from_dict
 from omniharness.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
+from omniharness.config.code_jobs_config import CodeJobsConfig
 from omniharness.config.database_config import DatabaseConfig
 from omniharness.config.extensions_config import ExtensionsConfig
 from omniharness.config.guardrails_config import GuardrailsConfig, load_guardrails_config_from_dict
@@ -131,6 +132,7 @@ class AppConfig(BaseModel):
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig, description="Guardrail middleware configuration")
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig, description="LLM circuit breaker configuration")
     loop_detection: LoopDetectionConfig = Field(default_factory=LoopDetectionConfig, description="Loop detection middleware configuration")
+    code_jobs: CodeJobsConfig = Field(default_factory=CodeJobsConfig, description="Coding jobs: OpenCode in the container sandbox (spec 009)")
     model_config = ConfigDict(extra="allow")
 
     @model_validator(mode="before")
