@@ -85,6 +85,12 @@ MIGRATIONS = {
             ('src.tools.', 'omniharness.tools.'),
         ],
     },
+    10: {
+        'description': 'Run journals (the chat history of summarized chats) persist in the database',
+        'replacements': [
+            ('run_events:\n  backend: memory', 'run_events:\n  backend: auto'),
+        ],
+    },
     # Future migrations go here:
     # 2: {
     #     'description': '...',

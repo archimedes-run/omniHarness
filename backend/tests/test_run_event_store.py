@@ -373,6 +373,27 @@ class TestDbRunEventStore:
         assert seqs == list(range(1, 51))
         await close_engine()
 
+    @pytest.mark.anyio
+    async def test_content_that_is_not_text_or_a_dict_is_stored(self, tmp_path):
+        """A chain's outputs can be a list. The driver could not bind it, the
+        whole batch was refused, and the journal kept none of its messages."""
+        from omniharness.persistence.engine import close_engine, get_session_factory, init_engine
+        from omniharness.runtime.events.store.db import DbRunEventStore
+
+        url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+        await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+        s = DbRunEventStore(get_session_factory())
+        await s.put_batch(
+            [
+                {"thread_id": "t1", "run_id": "r1", "event_type": "run.end", "category": "outputs", "content": [{"a": 1}, "b"]},
+                {"thread_id": "t1", "run_id": "r1", "event_type": "trace", "category": "trace", "content": ["x", 2]},
+                {"thread_id": "t1", "run_id": "r1", "event_type": "llm.human.input", "category": "message", "content": {"type": "human", "content": "hi"}},
+            ]
+        )
+        events = await s.list_events("t1", "r1")
+        assert [e["content"] for e in events] == [[{"a": 1}, "b"], ["x", 2], {"type": "human", "content": "hi"}]
+        await close_engine()
+
 
 # -- Factory tests --
 
@@ -430,6 +451,31 @@ class TestMakeRunEventStore:
         store = make_run_event_store(config)
         assert type(store).__name__ == "MemoryRunEventStore"
         await close_engine()
+
+    @pytest.mark.anyio
+    async def test_auto_backend_uses_the_database_when_there_is_one(self, tmp_path):
+        """The run journal is the chat's display history once a conversation
+        is summarized; in memory it was lost on every gateway restart."""
+        from unittest.mock import MagicMock
+
+        from omniharness.persistence.engine import close_engine, init_engine
+        from omniharness.runtime.events.store import make_run_event_store
+
+        config = MagicMock()
+        config.backend = "auto"
+        config.max_trace_content = 10240
+        await init_engine("memory")
+        assert type(make_run_event_store(config)).__name__ == "MemoryRunEventStore"
+        await close_engine()
+        url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+        await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+        assert type(make_run_event_store(config)).__name__ == "DbRunEventStore"
+        await close_engine()
+
+    def test_the_default_backend_is_auto(self):
+        from omniharness.config.run_events_config import RunEventsConfig
+
+        assert RunEventsConfig().backend == "auto"
 
     @pytest.mark.anyio
     async def test_jsonl_backend(self):

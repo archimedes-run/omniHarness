@@ -131,3 +131,40 @@ async def test_create_defaults(manager: RunManager):
     assert record.kwargs == {}
     assert record.multitask_strategy == "reject"
     assert record.assistant_id is None
+
+
+@pytest.mark.anyio
+async def test_list_history_reads_the_store_oldest_first_with_this_process_on_top():
+    """GET /threads/{id}/runs (the chat's display history) listed only this
+    process's runs, so a restart (or another worker) listed none (D1-f)."""
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+
+    store = MemoryRunStore()
+    for n, status in ((1, "success"), (2, "error")):
+        await store.put(f"old-{n}", thread_id="t", status=status, created_at=f"2026-01-0{n}T00:00:00+00:00")
+    await store.put("elsewhere", thread_id="other", status="success", created_at="2026-01-03T00:00:00+00:00")
+    manager = RunManager(store=store)  # a fresh process: nothing in memory
+    assert await manager.list_by_thread("t") == []
+    assert [(r.run_id, r.status) for r in await manager.list_history("t")] == [("old-1", RunStatus.success), ("old-2", RunStatus.error)]
+
+    live = await manager.create("t")
+    await manager.cancel(live.run_id)  # in memory only: interrupted, the store still says pending
+    history = await manager.list_history("t")
+    assert [r.run_id for r in history] == ["old-1", "old-2", live.run_id]
+    assert history[-1].status == RunStatus.interrupted
+    assert [r.run_id for r in await manager.list_history("t", limit=2)] == ["old-2", live.run_id]
+
+
+@pytest.mark.anyio
+async def test_list_history_without_a_readable_store_lists_this_process():
+    class Broken:
+        async def list_by_thread(self, *a, **k):
+            raise RuntimeError("db down")
+
+        async def put(self, *a, **k):
+            return None
+
+    manager = RunManager(store=Broken())
+    record = await manager.create("t")
+    assert [r.run_id for r in await manager.list_history("t")] == [record.run_id]
+    assert [r.run_id for r in await RunManager().list_history("t")] == []

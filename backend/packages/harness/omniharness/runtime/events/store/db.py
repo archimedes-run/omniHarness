@@ -46,7 +46,7 @@ class DbRunEventStore(RunEventStore):
 
     def _truncate_trace(self, category: str, content: str | dict, metadata: dict | None) -> tuple[str | dict, dict]:
         if category == "trace":
-            text = json.dumps(content, default=str, ensure_ascii=False) if isinstance(content, dict) else content
+            text = content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)
             encoded = text.encode("utf-8")
             if len(encoded) > self._max_trace_content:
                 # Truncate by bytes, then decode back (may cut a multi-byte char, so use errors="ignore")
@@ -82,7 +82,9 @@ class DbRunEventStore(RunEventStore):
         the initial ``human_message`` event (once per run).
         """
         content, metadata = self._truncate_trace(category, content, metadata)
-        if isinstance(content, dict):
+        # Anything but text is stored as JSON: a chain's outputs can be a
+        # list, which the driver cannot bind (the whole batch was refused).
+        if not isinstance(content, str):
             db_content = json.dumps(content, default=str, ensure_ascii=False)
             metadata = {**(metadata or {}), "content_is_dict": True}
         else:
@@ -129,7 +131,7 @@ class DbRunEventStore(RunEventStore):
                     category = e.get("category", "trace")
                     metadata = e.get("metadata")
                     content, metadata = self._truncate_trace(category, content, metadata)
-                    if isinstance(content, dict):
+                    if not isinstance(content, str):
                         db_content = json.dumps(content, default=str, ensure_ascii=False)
                         metadata = {**(metadata or {}), "content_is_dict": True}
                     else:

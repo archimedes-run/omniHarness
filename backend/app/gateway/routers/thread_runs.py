@@ -149,9 +149,11 @@ async def wait_run(thread_id: str, body: RunCreateRequest, request: Request) -> 
 @router.get("/{thread_id}/runs", response_model=list[RunResponse])
 @require_permission("runs", "read", owner_check=True)
 async def list_runs(thread_id: str, request: Request) -> list[RunResponse]:
-    """List all runs for a thread."""
+    """List a thread's runs, oldest first, including those of earlier
+    gateway processes (read from the run store): the chat reads its display
+    history from each run's journal, and lost it on every restart."""
     run_mgr = get_run_manager(request)
-    records = await run_mgr.list_by_thread(thread_id)
+    records = await run_mgr.list_history(thread_id)
     return [_record_to_response(r) for r in records]
 
 

@@ -238,6 +238,42 @@ class RunManager:
             # us deterministic newest-first results even when timestamps tie.
             return [r for r in self._runs.values() if r.thread_id == thread_id]
 
+    async def list_history(self, thread_id: str, *, limit: int = 1000) -> list[RunRecord]:
+        """Every run of a thread this gateway recorded, oldest first.
+
+        `list_by_thread` sees only this process's runs since it started, so
+        after a restart (or on another worker) a thread listed no runs, and the
+        chat, which reads its display history from each run's journal, fell
+        back to the summarized thread state: the person's older messages
+        vanished (dogfooding D1-f). This reads the run store and lays this
+        process's records over it (theirs is the live status, e.g. a run just
+        cancelled). Runs only this process knows (a store write that failed,
+        or no store) follow, in creation order. Not filtered by user: the
+        caller has checked who owns the thread, as for `list_by_thread`.
+
+        At most `limit` runs, the newest ones.
+        """
+        live = await self.list_by_thread(thread_id)
+        if self._store is None:
+            return live[-limit:]
+        try:
+            rows = await self._store.list_by_thread(thread_id, user_id=None, limit=limit)
+        except Exception:
+            logger.warning("Could not read runs of thread %s from the run store; listing this process's only", thread_id, exc_info=True)
+            return live[-limit:]
+        by_id = {r.run_id: r for r in live}
+        out: list[RunRecord] = []
+        seen: set[str] = set()
+        # The store answers newest first; the chat reads the list oldest first.
+        for row in reversed(rows or []):
+            run_id = row.get("run_id")
+            if not run_id or run_id in seen or row.get("thread_id") not in (None, thread_id):
+                continue
+            seen.add(run_id)
+            out.append(by_id.get(run_id) or _record_from_row(row))
+        out.extend(r for r in live if r.run_id not in seen)
+        return out[-limit:]
+
     async def set_status(self, run_id: str, status: RunStatus, *, error: str | None = None) -> None:
         """Transition a run to a new status."""
         async with self._lock:
@@ -354,6 +390,27 @@ class RunManager:
         async with self._lock:
             self._runs.pop(run_id, None)
         logger.debug("Run record %s cleaned up", run_id)
+
+
+def _record_from_row(row: dict) -> RunRecord:
+    """A run record from a run-store row (a run this process does not hold)."""
+    try:
+        status = RunStatus(str(row.get("status")))
+    except ValueError:
+        status = RunStatus.error
+    return RunRecord(
+        run_id=str(row["run_id"]),
+        thread_id=str(row.get("thread_id") or ""),
+        assistant_id=row.get("assistant_id"),
+        status=status,
+        on_disconnect=DisconnectMode.cancel,
+        multitask_strategy=str(row.get("multitask_strategy") or "reject"),
+        metadata=dict(row.get("metadata") or {}),
+        kwargs=dict(row.get("kwargs") or {}),
+        created_at=str(row.get("created_at") or ""),
+        updated_at=str(row.get("updated_at") or row.get("created_at") or ""),
+        error=row.get("error"),
+    )
 
 
 class ConflictError(Exception):

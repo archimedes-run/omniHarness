@@ -3,6 +3,9 @@
 Controls where run events (messages + execution traces) are persisted.
 
 Backends:
+- auto (default): the gateway's SQL database (as `db`) when it has one,
+  otherwise memory. The run journal is the chat's display history once a
+  conversation is summarized; in memory it was lost on every gateway restart.
 - memory: In-memory storage, data lost on restart. Suitable for
   development and testing.
 - db: SQL database via SQLAlchemy ORM. Provides full query capability.
@@ -19,9 +22,9 @@ from pydantic import BaseModel, Field
 
 
 class RunEventsConfig(BaseModel):
-    backend: Literal["memory", "db", "jsonl"] = Field(
-        default="memory",
-        description="Storage backend for run events. 'memory' for development (no persistence), 'db' for production (SQL queries), 'jsonl' for lightweight single-node persistence.",
+    backend: Literal["auto", "memory", "db", "jsonl"] = Field(
+        default="auto",
+        description="Storage backend for run events. 'auto' (default): the SQL database when there is one, else memory. 'memory': no persistence. 'db': SQL. 'jsonl': single-node files.",
     )
     max_trace_content: int = Field(
         default=10240,
