@@ -313,7 +313,10 @@ def _pin_edited_ledger_plan(action: Any, arguments: dict) -> tuple[str | None, d
     for index, change in enumerate(changes):
         before = original[index] if index < len(original) else None
         pin = before.get(PIN_KEY) if isinstance(before, dict) else None
-        carried.append({**change, PIN_KEY: pin} if pin and _same_target(change, before) else change)
+        # An in-plan target (a row the plan itself creates) is resolved again:
+        # the edit may have removed the change that creates it.
+        in_plan = isinstance(pin, dict) and (pin.get("in_plan_task") or pin.get("in_plan_project"))
+        carried.append({**change, PIN_KEY: pin} if pin and not in_plan and _same_target(change, before) else change)
     check = getattr(get_ledger_controller(), "check_plan", None)
     if check is None or not action.owner_id:
         return None, {**arguments, "changes": carried}

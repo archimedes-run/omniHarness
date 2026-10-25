@@ -343,3 +343,24 @@ def test_the_inviting_turn_hands_its_turn_to_the_agent_it_invites(monkeypatch):
     lead = SimpleNamespace(runtime=SimpleNamespace(context={"run_id": "r-9", "thread_id": "t"}), state={"messages": []})
     context = invited_agent_context(middleware._inviting_for(lead), "researcher")
     assert context[PolicyMiddleware.TURN_KEY] == "run:r-9"
+
+
+def test_a_refusal_whose_write_failed_can_still_be_recorded_later_in_the_turn(tmp_path, monkeypatch):
+    import pytest
+
+    from app.policy.audit import PolicyAuditLog
+
+    log = PolicyAuditLog(path=tmp_path / "audit.jsonl", actor="default")
+    common = {"tool": "ledger_apply", "targets": ["x"], "reason": "r", "owner_id": "u", "requester": "lead_agent", "origin": "content", "origin_source": "web_fetch"}
+    # Seed this file's index first (a successful record), so only the write fails.
+    assert log.record_refused(thread_id="t8", turn_key="run:8", **common) is not None
+    real_open = type(log.path).open
+
+    def failing_open(self, *a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(type(log.path), "open", failing_open)
+    with pytest.raises(OSError):
+        log.record_refused(thread_id="t9", turn_key="run:9", **common)
+    monkeypatch.setattr(type(log.path), "open", real_open)
+    assert log.record_refused(thread_id="t9", turn_key="run:9", **common) is not None, "the failed write swallowed the turn's refusal"

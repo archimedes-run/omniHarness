@@ -291,7 +291,7 @@ def _update_field(key: str, value: Any) -> str:
     try:
         if key == "owner":
             owner = _owner(value)
-            return f"owner:{owner['kind']}:{owner.get('ref') or ''}" if owner else "owner:none"
+            return f"owner:{owner['kind']}:{canonical_text(owner.get('ref') or '')}" if owner else "owner:none"
         if key == "due_date":
             day = _date(value, "due_date")
             return day.isoformat() if day else "none"

@@ -415,3 +415,11 @@ def test_a_declined_owner_me_resent_as_user_is_still_declined(studio) -> None:
 def test_a_declined_due_date_in_another_spelling_is_still_declined(studio) -> None:
     _owned_task(studio)
     assert _declined_then_resent(studio, "t-o4", {"due_date": "2026-12-01"}, {"due_date": "20261201"})
+
+
+def test_a_declined_owner_ref_respelled_is_still_declined(studio) -> None:
+    """The owner's ref is compared as text apply would treat alike: case,
+    spacing or an invisible character does not make a declined change new."""
+    _owned_task(studio)
+    declined = {"owner": {"kind": "agent", "ref": "researcher"}}
+    assert _declined_then_resent(studio, "t-o5", declined, {"owner": {"kind": "agent", "ref": " Researcher\u200b"}})

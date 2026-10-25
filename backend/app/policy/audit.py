@@ -71,6 +71,13 @@ def _first_refusal(path: Path, key: str) -> bool:
         return True
 
 
+def _forget_refusal(path: Path, key: str) -> None:
+    with _SEEN_LOCK:
+        seen = _SEEN.get(str(path))
+        if seen is not None:
+            seen.pop(key, None)
+
+
 def _clip(text: object) -> str:
     text = str(text if text is not None else "")
     return text if len(text) <= REFUSED_CHARS else text[: REFUSED_CHARS - 1] + "…"
@@ -208,9 +215,16 @@ class PolicyAuditLog:
             "origin": origin,
             "origin_source": origin_source,
         }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        except Exception:
+            # Not written: the turn's refusal is not recorded yet, so a later
+            # one in the same turn may still record it.
+            if turn_key:
+                _forget_refusal(self.path, key)
+            raise
         return entry
 
     def entries(self) -> list[dict]:
