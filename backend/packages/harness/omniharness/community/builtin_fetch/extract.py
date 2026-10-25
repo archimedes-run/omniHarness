@@ -201,7 +201,10 @@ class WorkerLimit:
                 loop, future = self.waiters.popleft()
                 if loop.is_closed():
                     continue
-                loop.call_soon_threadsafe(self._grant, future)
+                try:
+                    loop.call_soon_threadsafe(self._grant, future)
+                except RuntimeError:  # the loop closed in between: next waiter
+                    continue
                 return
             self.active -= 1
 
@@ -249,6 +252,7 @@ async def run_bounded(argv: list[str], payload: bytes, timeout: float) -> bytes:
         raise FetchFailed("timed out waiting to read the page") from None
     tmpdir: str | None = None
     proc = None
+    clean_exit = False
     try:
         try:
             tmpdir = tempfile.mkdtemp(prefix="omni-extract-")
@@ -271,13 +275,17 @@ async def run_bounded(argv: list[str], payload: bytes, timeout: float) -> bytes:
                 out, _ = await proc.communicate(payload)
         except TimeoutError:
             raise FetchFailed(f"reading the page took longer than the {timeout:.1f} s left") from None
+        clean_exit = proc.returncode == 0
     finally:
         # Nested so that a second cancellation while reaping still removes the
         # directory and frees the slot.
         try:
-            if proc is not None:
-                # Always, even after a clean exit: a child (node) of a worker
-                # that died on its own (SIGXCPU, alarm) must not outlive it.
+            if proc is not None and not clean_exit:
+                # Timeout, cancellation, or a worker that died on its own
+                # (SIGXCPU, alarm, crash): kill the group so no child (node)
+                # outlives it. After a clean exit readability has already
+                # waited for node, and not signalling a reaped PID's group
+                # keeps the PID-reuse window shut.
                 _kill_group(proc)
                 if proc.returncode is None:
                     await proc.wait()

@@ -9,6 +9,7 @@ process group, so it cannot outlive a gateway that went away.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import resource
@@ -44,8 +45,13 @@ def main() -> int:
     limit_resources(seconds)
     logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
     result = decode_result(sys.stdin.buffer.read())
-    sys.stdout.buffer.write(to_markdown(result).encode("utf-8"))
-    sys.stdout.buffer.flush()
+    out = sys.stdout.buffer
+    # readabilipy prints node's stderr with print(): only the result may reach
+    # the real stdout, everything else goes to stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        text = to_markdown(result)
+    out.write(text.encode("utf-8"))
+    out.flush()
     return 0
 
 

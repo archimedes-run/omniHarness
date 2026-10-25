@@ -977,15 +977,168 @@ import subprocess, sys
 # Like readabilipy's node: its own stdout/stderr, so the worker's pipe closes when the worker exits.
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 open(sys.argv[1], "w").write(str(child.pid))
+sys.exit(int(sys.argv[2]))
 """
 
 
 @pytest.mark.anyio
-async def test_a_child_of_a_worker_that_exited_on_its_own_is_killed(tmp_path) -> None:
+async def test_a_child_of_a_worker_that_died_on_its_own_is_killed(tmp_path) -> None:
+    """A worker that exits non-zero (SIGXCPU, alarm, crash) leaves no child."""
     import sys
 
     from omniharness.community.builtin_fetch.extract import run_bounded
 
     pid_file = tmp_path / "child.pid"
-    await run_bounded([sys.executable, "-c", _EXITS_LEAVING_A_CHILD, str(pid_file)], b"", 10)
+    with pytest.raises(FetchFailed, match="could not be read"):
+        await run_bounded([sys.executable, "-c", _EXITS_LEAVING_A_CHILD, str(pid_file), "1"], b"", 10)
     assert _pid_gone(int(pid_file.read_text())), "a node-like child outlived its worker"
+
+
+@pytest.mark.anyio
+async def test_a_clean_exit_does_not_signal_the_reaped_group(tmp_path, monkeypatch) -> None:
+    """After a clean exit (readability already waited for node) the reaped
+    PID's group is not signalled, which keeps the PID-reuse window shut."""
+    import sys
+
+    from omniharness.community.builtin_fetch import extract
+
+    kills: list[int] = []
+    monkeypatch.setattr(extract, "_kill_group", lambda proc: kills.append(proc.pid))
+    assert await extract.run_bounded([sys.executable, "-c", "print('ok', end='')"], b"", 10) == b"ok"
+    assert kills == []
+    with pytest.raises(FetchFailed):
+        await extract.run_bounded([sys.executable, "-c", "raise SystemExit(3)"], b"", 10)
+    assert len(kills) == 1
+
+
+# ── WorkerLimit hand-offs, driven directly ──────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_a_slot_handed_to_a_waiter_cancelled_first_is_passed_on() -> None:
+    """release() pops the waiter and schedules the hand-off; the waiter is
+    cancelled before it runs: the hand-off must give the slot back."""
+    from omniharness.community.builtin_fetch.extract import WorkerLimit
+
+    limit = WorkerLimit(4)
+    for _ in range(4):
+        await limit.acquire(1)
+    waiter = asyncio.create_task(limit.acquire(5))
+    await asyncio.sleep(0)
+    assert (limit.active, len(limit.waiters)) == (4, 1)
+    limit.release()  # hand-off scheduled, not yet run
+    waiter.cancel()  # its future is cancelled before the hand-off runs
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    await asyncio.sleep(0)
+    assert (limit.active, len(limit.waiters)) == (3, 0), "the slot was lost"
+
+
+@pytest.mark.anyio
+async def test_a_slot_that_reached_a_waiter_cancelled_before_resuming_is_returned() -> None:
+    """The hand-off ran (the future has its result), then the waiter is
+    cancelled before it resumes: the waiter must give the slot back."""
+    from omniharness.community.builtin_fetch.extract import WorkerLimit
+
+    limit = WorkerLimit(4)
+    for _ in range(4):
+        await limit.acquire(1)
+    waiter = asyncio.create_task(limit.acquire(5))
+    await asyncio.sleep(0)
+    limit.release()
+    await asyncio.sleep(0)  # the hand-off runs and sets the result
+    assert not waiter.done()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert (limit.active, len(limit.waiters)) == (3, 0), "the slot was kept by a cancelled waiter"
+
+
+def test_a_waiter_whose_loop_closed_in_between_is_skipped() -> None:
+    from omniharness.community.builtin_fetch.extract import WorkerLimit
+
+    class ClosingLoop:
+        def is_closed(self) -> bool:
+            return False
+
+        def call_soon_threadsafe(self, *args):
+            raise RuntimeError("Event loop is closed")
+
+    limit = WorkerLimit(4)
+    limit.active = 4
+    limit.waiters.append((ClosingLoop(), None))
+    limit.release()
+    assert (limit.active, len(limit.waiters)) == (3, 0)
+
+
+def test_worker_limit_stress_across_loops_with_timeouts_and_cancels() -> None:
+    import random
+    import threading
+
+    from omniharness.community.builtin_fetch.extract import WorkerLimit
+
+    limit = WorkerLimit(4)
+    lock = threading.Lock()
+    state = {"inside": 0, "peak": 0}
+
+    async def job(rng: random.Random) -> None:
+        try:
+            await limit.acquire(rng.uniform(0.005, 0.08))
+        except TimeoutError:
+            return
+        try:
+            with lock:
+                state["inside"] += 1
+                state["peak"] = max(state["peak"], state["inside"])
+            await asyncio.sleep(rng.uniform(0, 0.02))
+        finally:
+            with lock:
+                state["inside"] -= 1
+            limit.release()
+
+    async def loop_body(seed: int) -> None:
+        rng = random.Random(seed)
+        tasks = [asyncio.create_task(job(rng)) for _ in range(25)]
+        for task in rng.sample(tasks, 8):
+            asyncio.get_running_loop().call_later(rng.uniform(0, 0.05), task.cancel)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def thread_body(n: int) -> None:
+        for i in range(3):
+            asyncio.run(loop_body(n * 100 + i))
+
+    threads = [threading.Thread(target=thread_body, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert state["peak"] <= 4
+    assert (limit.active, len(limit.waiters)) == (0, 0)
+
+
+def test_only_the_result_reaches_the_worker_stdout(monkeypatch) -> None:
+    """readabilipy prints node's stderr with print(); that must not end up in the page text."""
+    import io
+    import sys
+
+    from omniharness.community.builtin_fetch import extract_worker
+    from omniharness.community.builtin_fetch.extract import encode_result
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+
+    def noisy(result):
+        print("node: some warning")
+        return "# real page"
+
+    page = FetchResult(url="https://example.com/", status=200, content_type="text/html", charset=None, body=HTML, truncated=False)
+    stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+    stderr = io.StringIO()
+    monkeypatch.setattr(extract_worker, "to_markdown", noisy)
+    monkeypatch.setattr(extract_worker, "arm_deadline", lambda seconds: None)
+    monkeypatch.setattr(extract_worker, "limit_resources", lambda seconds: None)
+    monkeypatch.setattr(sys, "argv", ["worker", "5"])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(encode_result(page))))
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+    assert extract_worker.main() == 0
+    assert stdout.buffer.getvalue() == b"# real page"
+    assert "node: some warning" in stderr.getvalue()
