@@ -25,6 +25,8 @@ const RENDER_PATHS: Record<string, string> = {
   "core/notification/hooks.ts": "notifications: a chat's title and reply",
   "components/workspace/confirmations/pending-action-card.tsx":
     "a confirmed card's result line (the tool's result, whose links stay real for the model); its other fields come from loadPending, made safe",
+  "components/workspace/code-jobs/code-job-card.tsx":
+    "chat: a coding job's title, commands, file paths, outputs and the worker's words",
   "core/tools/search-results.ts":
     "chat: a search step's results (title, site, snippet; search-result-list.tsx renders them)",
 };

@@ -14,7 +14,7 @@ export default function SessionsPage() {
     <PageColumn width="narrow">
       <PageHeader
         title="Coding sessions"
-        description="What your Claude Code and Codex sessions are doing, as the session watcher sees them, with each agent's own task list."
+        description="What your Claude Code and Codex sessions, and the OpenCode coding jobs in your chats, are doing, as the session watcher sees them, with each agent's own task list."
       />
 
       {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}

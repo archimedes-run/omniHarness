@@ -318,6 +318,29 @@ sandbox:
 #   provisioner_url: http://provisioner:8002
 
 # ============================================================================
+# Coding jobs (spec 009): OpenCode in the container sandbox
+# ============================================================================
+# The `code_job` tool hands a coding task to OpenCode running INSIDE the
+# thread's container sandbox (never on the host). It is offered only with the
+# container sandbox above (AioSandboxProvider + the registries proxy), and only
+# when the worker's model can be served through the gateway's LLM proxy (an
+# OpenAI-compatible or Anthropic model). The sandbox gets NO provider key: the
+# worker calls a gateway proxy on the sandbox network with a per-job token,
+# and the gateway injects the key. Every value below is a ceiling the gateway
+# enforces. All optional; the defaults are shown.
+# code_jobs:
+#   enabled: true
+#   model: null                 # a name under `models:`; default: the lead's model
+#   budget_usd: 1.0             # per job
+#   monthly_cap_usd: 20.0       # all jobs in a calendar month (UTC)
+#   wall_seconds: 1800          # a job is stopped after this long
+#   verify_timeout_seconds: 600 # the gateway's own build check
+#   rate_per_minute: 60         # model calls per sandbox
+#   proxy_port: 8790            # on the sandbox network only
+#   prices:                     # US$ per million tokens, overriding the built-in table
+#     gpt-5: {input: 1.25, cached_input: 0.125, output: 10.0}
+
+# ============================================================================
 # Subagents Configuration
 # ============================================================================
 # Configure timeouts for subagent execution

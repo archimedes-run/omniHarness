@@ -13,7 +13,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EGRESS_IMAGE=${EGRESS_IMAGE:-omni-harness-sandbox-egress:1}
-SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh4}
+SANDBOX_IMAGE=${SANDBOX_IMAGE:-omni-harness-sandbox:1.11.0-oh5}
 P=oh-e2e-$$
 NET_IN=$P-sbx NET_OUT=$P-out VOL=$P-ca EGRESS=$P-egress
 fail=0

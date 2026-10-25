@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
 import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
+import { CodeJobCard } from "../code-jobs/code-job-card";
 import { CopyButton } from "../copy-button";
 import { StreamingIndicator } from "../streaming-indicator";
 
@@ -380,6 +381,44 @@ export function MessageList({
           {group.messages.flatMap(handoffsOf).map((handoff, index) => (
             <HandoffLine key={`${groupKey}-${index}`} handoff={handoff} />
           ))}
+        </div>
+      );
+    } else if (group.type === "assistant:code-job") {
+      const cards: React.ReactNode[] = [];
+      for (const message of group.messages) {
+        if (message.type !== "ai") continue;
+        for (const toolCall of message.tool_calls ?? []) {
+          if (toolCall.name !== "code_job" || !toolCall.id) continue;
+          const resultMessage = group.messages.find(
+            (m) => m.type === "tool" && m.tool_call_id === toolCall.id,
+          );
+          cards.push(
+            <CodeJobCard
+              key={`code-job-${toolCall.id}`}
+              threadId={threadId}
+              toolCallId={toolCall.id}
+              title={
+                typeof toolCall.args?.goal === "string"
+                  ? toolCall.args.goal
+                  : undefined
+              }
+              resultText={
+                resultMessage
+                  ? extractTextFromMessage(resultMessage)
+                  : undefined
+              }
+            />,
+          );
+        }
+      }
+      return (
+        <div key={groupKey} className="relative z-1 flex flex-col gap-2">
+          {cards}
+          {renderTokenUsage({
+            messages: group.messages,
+            turnUsageMessages,
+            isLoading: isStreamingGroup,
+          })}
         </div>
       );
     } else if (group.type === "assistant:subagent") {

@@ -14,7 +14,7 @@ Integration ids (the same ids the tool catalog shows):
   ``connector:<TOOLKIT>`` a connected Composio toolkit (Gmail, GitHub, ...)
   ``builtin:<group>``     a config.yaml tool group (web, file:read, bash, ...)
   ``builtin:ledger``      Tasks and notes (the Project Ledger tools)
-  ``builtin:workspace``   previews, MCP building and skill editing
+  ``builtin:workspace``   previews, coding jobs, MCP building and skill editing
 
 The CORE tools are not assignable: every agent keeps them, because they are how
 a run talks to the user (present_files, ask_clarification), hands work on
@@ -59,6 +59,7 @@ BUILTIN_INTEGRATION_OF: Mapping[str, str] = {
     "ledger_read": LEDGER_INTEGRATION,
     "ledger_apply": LEDGER_INTEGRATION,
     "preview": WORKSPACE_INTEGRATION,
+    "code_job": WORKSPACE_INTEGRATION,
     "mcp_build": WORKSPACE_INTEGRATION,
     "skill_manage": WORKSPACE_INTEGRATION,
 }

@@ -634,6 +634,12 @@ class AioSandboxProvider(SandboxProvider):
                 self._last_activity[sandbox_id] = time.time()
             return sandbox
 
+    def info(self, sandbox_id: str) -> SandboxInfo | None:
+        """The container behind an acquired sandbox (its name keys the coding
+        job token to that one container, spec 009)."""
+        with self._lock:
+            return self._sandbox_infos.get(sandbox_id)
+
     def release(self, sandbox_id: str) -> None:
         """Release a sandbox from active use into the warm pool.
 
