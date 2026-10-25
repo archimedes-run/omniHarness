@@ -290,8 +290,13 @@ def _build_middlewares(
     if model_config is not None and model_config.supports_vision:
         middlewares.append(ViewImageMiddleware())
 
-    # Add DeferredToolFilterMiddleware to hide deferred tool schemas from model binding
-    if resolved_app_config.tool_search.enabled:
+    # Add DeferredToolFilterMiddleware to hide deferred tool schemas from model
+    # binding: when tool_search is on, and whenever this run's tool assembly
+    # deferred anything (connector toolkits past the model's tool cap,
+    # tools.fit_connectors_to_cap). The tools are assembled before this runs.
+    from omniharness.tools.builtins.tool_search import get_deferred_registry
+
+    if resolved_app_config.tool_search.enabled or get_deferred_registry():
         from omniharness.agents.middlewares.deferred_tool_filter_middleware import DeferredToolFilterMiddleware
 
         middlewares.append(DeferredToolFilterMiddleware())
@@ -592,6 +597,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             available_skills=available_skills,
             app_config=resolved_app_config,
             memory_user_id=memory_user_of(cfg),
+            connectors_off=cfg.get("connectors_off"),
         ),
         state_schema=ThreadState,
     )

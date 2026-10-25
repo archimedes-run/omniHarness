@@ -34,15 +34,24 @@ class ThreadToolSelectionRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
 
-    async def get_sources(self, *, thread_id: str) -> list[str]:
-        """Return the thread's selected namespaced source ids (pinned always included).
-
-        A thread with no stored row still gets the pinned defaults.
-        """
+    async def get_stored_sources(self, *, thread_id: str) -> list[str] | None:
+        """The thread's STORED selection (pinned included), or None when the
+        thread has never stored one: a new chat, whose default is decided by
+        the caller (app.gateway.tool_selection.thread_sources)."""
         async with self._sf() as session:
             row = await session.get(ThreadToolSelectionRow, thread_id)
-            stored = list(row.sources) if row and isinstance(row.sources, list) else []
-            return _enforce_pinned(stored)
+            if row is None:
+                return None
+            return _enforce_pinned(list(row.sources) if isinstance(row.sources, list) else [])
+
+    async def get_sources(self, *, thread_id: str, default_sources: list[str] | None = None) -> list[str]:
+        """Return the thread's selected namespaced source ids (pinned always included).
+
+        A thread with no stored row gets ``default_sources`` (a new chat's
+        starting selection), and always the pinned defaults.
+        """
+        stored = await self.get_stored_sources(thread_id=thread_id)
+        return stored if stored is not None else _enforce_pinned(list(default_sources or []))
 
     async def set_sources(self, *, thread_id: str, user_id: str, sources: list[str]) -> list[str]:
         """Persist the thread's selection. Pinned defaults are enforced server-side.

@@ -2,7 +2,25 @@
  *  browser. The countdown and the threshold rule are the two places a bug
  *  would be invisible in review and obvious to a user. */
 
-import type { PendingAction } from "./types";
+import type { PendingAction, ResolveOutcome, ResolveResult } from "./types";
+
+/** Refusals that can still be fixed: nothing ran and the card keeps its
+ *  buttons (and an open edit stays open). "The source was removed from the
+ *  chat" is answered by adding it back; an invalid edit by correcting it. */
+export const STILL_OPEN_OUTCOMES: readonly ResolveOutcome[] = [
+  "unrecognised",
+  "threshold_not_met",
+  "tool_unavailable",
+  "thread_busy",
+  "confirm_busy",
+  "invalid_plan",
+];
+
+/** Once it has run, been declined or been resolved elsewhere, nothing is left
+ *  to press: the result says what happened. */
+export function isSettled(result: ResolveResult | undefined): boolean {
+  return result != null && !STILL_OPEN_OUTCOMES.includes(result.outcome);
+}
 
 /** Milliseconds until expiry; negative once it has passed. */
 export function msRemaining(expiresAt: string, now: Date): number {

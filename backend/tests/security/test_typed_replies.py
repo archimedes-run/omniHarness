@@ -282,7 +282,8 @@ def test_an_edit_is_recorded_as_an_edit(sec, monkeypatch) -> None:
             plan_text="Apply 1 change", tool_name="ledger_apply", arguments={"changes": []}, targets=["ledger"], tier_at_statement=Tier.TIER_3, expires_at=datetime.now(UTC) + timedelta(minutes=10), thread_id=None, owner_id=sec.owner_id
         )
     )
-    resp = sec.owner.post(f"/api/confirmations/{original.id}/edit", json={"arguments": {"changes": []}})
+    # A plan that could be applied: an edit is checked before it is stated.
+    resp = sec.owner.post(f"/api/confirmations/{original.id}/edit", json={"arguments": {"changes": [{"op": "create_project", "name": "Edited"}]}})
     assert resp.status_code == 200, resp.text
     edited = _store().get(resp.json()["action_id"])
     assert edited.confirmation["via"] == "edit" and edited.confirmation["user_id"] == sec.owner_id

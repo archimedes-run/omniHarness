@@ -114,9 +114,19 @@ def tier_check(tool: str, arguments: dict[str, Any] | None, ruleset: RuleSet) ->
     )
 
 
+#: Refused plans shown with the Tier 3 history, at most (they never take a
+#: place of a real entry in its window: see recent_tier3).
+REFUSED_SHOWN = 20
+
+
 def recent_tier3(entries: list[dict], *, limit: int = 50) -> list[Tier3Execution]:
+    newest = sorted(entries, key=lambda e: e.get("at", ""), reverse=True)
+    # The window counts real entries only: refused plans (nothing proposed,
+    # nothing run) are shown beside them, never instead of them.
+    real = [e for e in newest if e.get("kind") != "refused-plan"][:limit]
+    refused = [e for e in newest if e.get("kind") == "refused-plan"][:REFUSED_SHOWN]
     out = []
-    for e in sorted(entries, key=lambda e: e.get("at", ""), reverse=True)[:limit]:
+    for e in sorted(real + refused, key=lambda e: e.get("at", ""), reverse=True):
         out.append(
             Tier3Execution(
                 at=e.get("at", ""),

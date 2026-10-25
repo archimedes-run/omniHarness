@@ -5,7 +5,7 @@ import logging
 import threading
 from datetime import datetime
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from omniharness.config.agents_config import load_agent_soul
 from omniharness.skills.storage import get_or_new_skill_storage
@@ -680,28 +680,25 @@ def get_deferred_tools_prompt_section(*, app_config: AppConfig | None = None) ->
 
     Lists only deferred tool names so the agent knows what exists
     and can use tool_search to load them.
-    Returns empty string when tool_search is disabled or no tools are deferred.
+    Returns empty string when no tools are deferred. `app_config` is kept
+    for callers; whether anything is deferred is the registry's to say.
     """
     from omniharness.tools.builtins.tool_search import get_deferred_registry
 
-    if app_config is None:
-        try:
-            from omniharness.config import get_app_config
-
-            config = get_app_config()
-        except Exception:
-            return ""
-    else:
-        config = app_config
-
-    if not config.tool_search.enabled:
-        return ""
-
     registry = get_deferred_registry()
-    if not registry:
+    # A registry exists when tool_search deferred MCP tools, or when connector
+    # toolkits past the model's tool cap were deferred whatever the setting
+    # (tools.fit_connectors_to_cap): either way the agent must see the names.
+    if not registry or registry.max_promoted == 0:
+        # Nothing deferred, or no room to load any of it under the model's
+        # tool cap: deferred tools are not advertised.
         return ""
 
-    names = "\n".join(e.name for e in registry.entries)
+    from omniharness.tools.builtins.tool_search import _model_name
+
+    # As the model will name them (a name over the provider's limit is bound
+    # under its alias: models.tool_name_boundary).
+    names = "\n".join(_model_name(e.name) for e in registry.entries)
     return f"<available-deferred-tools>\n{names}\n</available-deferred-tools>"
 
 
@@ -732,6 +729,30 @@ def _build_custom_mounts_section(*, app_config: AppConfig | None = None) -> str:
     return f"\n**Custom Mounted Directories:**\n{mounts_list}\n- If the user needs files outside `/mnt/user-data`, use these absolute container paths directly when they match the requested directory"
 
 
+def connectors_off_section(slugs: Any) -> str:
+    """One line naming the user's connected apps that this chat has switched
+    off (the server-owned run key `connectors_off`), or "" when there are none.
+
+    Without it an agent asked about the calendar in a chat where Calendar is
+    off sees no calendar tool and asks the user to "authorize" an app that is
+    already connected. Only catalog toolkits are named, by their display name.
+    """
+    from omniharness.tools.connector_tools import CONNECTOR_TOOLKITS
+
+    if not isinstance(slugs, (list, tuple, set)):
+        return ""
+    wanted = {str(slug).upper() for slug in slugs}
+    names = [tk["name"] for tk in CONNECTOR_TOOLKITS if tk["slug"] in wanted]
+    if not names:
+        return ""
+    return (
+        f"\n<connected_apps_switched_off>\nThe user has connected {', '.join(names)}, but switched "
+        f"{'it' if len(names) == 1 else 'them'} off in this chat, so those tools are not available here. If a request "
+        "needs one, ask the user to switch it on in this chat's tool menu; do not ask them to connect or authorize it."
+        "\n</connected_apps_switched_off>\n"
+    )
+
+
 def apply_prompt_template(
     subagent_enabled: bool = False,
     max_concurrent_subagents: int = 3,
@@ -741,6 +762,7 @@ def apply_prompt_template(
     app_config: AppConfig | None = None,
     user_id: str | None = None,
     memory_user_id: str | None = None,
+    connectors_off: list[str] | None = None,
 ) -> str:
     # Get memory context. `user_id`: whose agent and memory; None reads the
     # effective user from context (a run); a request handler passes its own.
@@ -792,4 +814,4 @@ def apply_prompt_template(
         custom_mounts_section=custom_mounts_section,
     )
 
-    return prompt + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"
+    return prompt + connectors_off_section(connectors_off) + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"

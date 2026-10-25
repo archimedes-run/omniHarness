@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+import { lowContrastText } from "./contrast-probe";
+
 /**
  * Feature 005 slice 2: Projects, the Project view, the ledger card in chat,
  * attaching a chat and promoting its to-dos.
@@ -268,6 +270,7 @@ async function chat(
   {
     todos = [] as { content: string; status: string }[],
     actions = [] as unknown[],
+    postResponse = undefined as Record<string, unknown> | undefined,
   } = {},
 ) {
   const writes: Write[] = [];
@@ -302,6 +305,7 @@ async function chat(
         path: new URL(req.url()).pathname,
         body: req.postDataJSON(),
       });
+      if (postResponse) return route.fulfill(json(postResponse));
       return route.fulfill(
         json({
           outcome: "executed",
@@ -382,6 +386,54 @@ test("the ledger card lists the changes, and Edit sends the edited plan to be co
     typed_count: null,
   });
 });
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`an edit the server could not apply keeps the card and its editor open (${scheme})`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.addInitScript((t) => {
+      try {
+        localStorage.setItem("theme", t);
+      } catch {}
+    }, scheme);
+    const message =
+      "That edit could not be applied, so nothing was changed and the plan is as it was: there is no project 'Nope'.";
+    const writes = await chat(page, {
+      actions: [ACTION],
+      postResponse: {
+        outcome: "invalid_plan",
+        action_id: ACTION.id,
+        message,
+        detail: {},
+      },
+    });
+    const card = page.getByTestId("pending-action");
+    await card.getByTestId("edit").click();
+    await card.getByLabel("Project name").fill("Public beta");
+    await card.getByTestId("save-and-confirm").click();
+    await expect.poll(() => writes.length).toBe(1);
+    // The reason is said, and nothing is settled: the editor and its
+    // Save and confirm are still there to correct the plan.
+    await expect(card.getByTestId("resolve-message")).toHaveAttribute(
+      "data-outcome",
+      "invalid_plan",
+    );
+    await expect(card.getByTestId("resolve-message")).toContainText(
+      "there is no project 'Nope'",
+    );
+    await expect(card.getByTestId("plan-editor")).toBeVisible();
+    await expect(card.getByTestId("save-and-confirm")).toBeEnabled();
+    await page.waitForTimeout(300);
+    const found = await page.evaluate(lowContrastText);
+    expect(
+      found,
+      found
+        .map((f) => `${f.ratio}/${f.need} "${f.text}" ${f.color} [${f.cls}]`)
+        .join("\n"),
+    ).toEqual([]);
+  });
+}
 
 test("a chat can be attached to a project from its header", async ({
   page,

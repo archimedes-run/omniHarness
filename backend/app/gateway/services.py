@@ -190,9 +190,14 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 #:   internal token only (internal_auth.channel_of);
 #: - ``memory_user_id`` (omniharness.runtime.user_context.MEMORY_USER_KEY):
 #:   whose long-term memory a run reads and writes when not its user's; set
-#:   only for a lead automation (the system user's, as before #133).
+#:   only for a lead automation (the system user's, as before #133);
+#: - ``connectors_off`` (CONNECTORS_OFF_KEY): the user's connected apps this
+#:   chat has switched off, named in the agent's prompt.
+CONNECTORS_OFF_KEY = "connectors_off"
+
 SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
     {
+        CONNECTORS_OFF_KEY,
         "user_id",
         "selected_sources",
         "agent_name",
@@ -904,14 +909,20 @@ async def start_run(
         grants_owner_id = user_id if run_as is not None else (await owner_user_id() or user_id)
 
     # Per-conversation tools: this thread's stored selection (namespaced source
-    # ids, pinned enforced by the repo). A thread with no stored selection gets
-    # pinned defaults inside the repo. If it cannot be read the key is absent
-    # (the agent's default surface), never the client's value.
+    # ids, pinned enforced by the repo). A chat that stored none (a new chat)
+    # starts with the pinned sources plus the user's connected apps
+    # (app.gateway.tool_selection); a scheduled run is not seeded (its chat is
+    # the system user's: it keeps the tools its rule configured). If it cannot
+    # be read the key is absent (the agent's default surface), never the
+    # client's value.
+    from app.gateway.tool_selection import active_connector_slugs, connectors_switched_off, thread_sources
+
     selected_sources: list[str] | None = None
+    connected: list[str] = []
     try:
-        selection_repo = getattr(request.app.state, "thread_tool_selection_repo", None)
-        if selection_repo is not None:
-            selected_sources = list(await selection_repo.get_sources(thread_id=thread_id))
+        if getattr(request.app.state, "thread_tool_selection_repo", None) is not None:
+            connected = await active_connector_slugs(request.app.state, user_id) if synthetic_rule_id is None else []
+            selected_sources = list(await thread_sources(request.app.state, thread_id, owner_id=user_id if synthetic_rule_id is None else None, active=connected))
     except Exception:
         logger.warning("Failed to load thread tool selection for %s (non-fatal)", sanitize_log_param(thread_id))
 
@@ -933,6 +944,12 @@ async def start_run(
     channel = channel_of(request)
     if channel:
         config["context"]["channel"] = channel
+    # The user's connected apps this chat has switched off: the agent is told
+    # to ask for them to be switched on in the chat's tool menu, not to ask
+    # the user to authorise an app that is already connected.
+    switched_off = connectors_switched_off(connected, selected_sources) if selected_sources is not None else []
+    if switched_off:
+        config["context"][CONNECTORS_OFF_KEY] = switched_off
     # The thread is the one this request was authorised for, never a value from
     # the body. A request carrying only config.context used to leave no
     # configurable at all, and the run died with KeyError 'thread_id'.

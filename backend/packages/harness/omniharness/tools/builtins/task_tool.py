@@ -82,6 +82,20 @@ def subagent_base_tools(
         kwargs["user_id"] = user_id
     if app_config is not None:
         kwargs["app_config"] = app_config
+    if selected_sources is not None or tool_access is not None:
+        # The model's tool cap, as the lead's (lead_agent._assemble_lead_tools):
+        # a chat starts with every connected app on, which can be more
+        # connector tools than one request may carry. A subagent has no
+        # deferred-tool filter, so toolkits past the cap are left out of its
+        # list instead of failing its model call (tools.fit_connectors_to_cap).
+        from omniharness.config import get_app_config
+        from omniharness.tools.tools import resolve_model_tool_cap
+
+        config = app_config or get_app_config()
+        model_config = config.get_model_config(model_name) if model_name else (config.models[0] if config.models else None)
+        if model_config is not None:
+            kwargs["max_tools"] = resolve_model_tool_cap(model_config)
+            kwargs["defer_overflow"] = False
     return get_available_tools(**kwargs)
 
 

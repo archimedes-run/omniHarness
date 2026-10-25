@@ -14,6 +14,7 @@ import {
   canDecline,
   formatExpiresIn,
   isExpired,
+  isSettled,
   originLabel,
   requiresTypedCount,
 } from "@/core/confirmations/logic";
@@ -51,17 +52,9 @@ export function PendingActionCard({
   const [draft, setDraft] = useState<LedgerChange[] | null>(null);
   // Once it has run, been declined or been resolved elsewhere, the actions
   // are gone: the result says what happened, and nothing is left to press.
-  const settled =
-    result != null &&
-    // A refusal that can still be fixed keeps the buttons: "the source was
-    // removed from the chat" is answered by adding it back and confirming.
-    ![
-      "unrecognised",
-      "threshold_not_met",
-      "tool_unavailable",
-      "thread_busy",
-      "confirm_busy",
-    ].includes(result.outcome);
+  // A refusal that can still be fixed keeps the buttons, and an edit the
+  // server could not apply keeps the editor open with its reason.
+  const settled = isSettled(result);
   const continueAgent =
     result?.outcome === "executed" &&
     typeof result.detail?.continue_agent === "string"

@@ -259,8 +259,12 @@ class ConfirmationFlow:
             # gateway: a tool raised on a missing injected argument and the
             # action sat claimed with outcome None.
             # The exception's TYPE only: its text (and a traceback's) can carry
-            # the call's arguments, and a log is not a redacted surface.
-            logger.error("policy: confirmed action %s (%s) did not complete: %s", claimed.id, claimed.tool_name, type(exc).__name__)
+            # the call's arguments, and a log is not a redacted surface. The
+            # one exception is the ledger's own refusal (LedgerError, raised
+            # as the cause of the controller's "Nothing was changed"): its
+            # text is the harness's message about the plan, and without it a
+            # failed confirmed plan cannot be diagnosed from the log.
+            logger.error("policy: confirmed action %s (%s) did not complete: %s%s", claimed.id, claimed.tool_name, type(exc).__name__, _ledger_reason(exc))
             self.store.resolve(claimed, Outcome.FAILED, f"authorised, but the tool did not complete: {exc}")
             return FlowResult(
                 FAILED,
@@ -426,3 +430,16 @@ def answerable_by_typed_reply(actions: list[PendingAction], runtime_context: dic
     ctx = runtime_context or {}
     speaker, thread = ctx.get("user_id"), ctx.get("thread_id")
     return [a for a in actions if _same_owner(a.owner_id, speaker) and _same_key(a.thread_id, thread)]
+
+
+def _ledger_reason(exc: BaseException) -> str:
+    """The ledger's reason, for the log, when `exc` is (or was raised from)
+    the ledger's own LedgerError; empty for anything else, whose text may
+    carry arguments a log must not hold."""
+    from app.gateway.utils import sanitize_log_param
+    from app.ledger.service import LedgerError
+
+    for candidate in (exc, exc.__cause__):
+        if isinstance(candidate, LedgerError):
+            return f" (ledger: {sanitize_log_param(str(candidate))})"
+    return ""

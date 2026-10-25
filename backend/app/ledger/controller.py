@@ -20,6 +20,39 @@ class GatewayLedgerController:
         except LedgerError:
             return None
 
+    def check_plan(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> tuple[str | None, list[dict]]:
+        """(why this plan could not be applied or None, what each change
+        resolved to). Writes nothing (LedgerService.validate). The policy
+        layer calls it before a ledger_apply plan becomes a confirmation card
+        (PolicyMiddleware._check_ledger_plan): an invalid plan is refused to
+        the model instead of failing after the user approved it, and a valid
+        one is pinned to what it resolved to (service.PIN_KEY)."""
+        try:
+            return None, self.service.validate(user_id=user_id, changes=changes, thread_id=thread_id)
+        except LedgerError as exc:
+            return str(exc), []
+
+    def validate(self, *, user_id: str, changes: list[dict], thread_id: str | None) -> str | None:
+        """Why this plan could not be applied, or None (see check_plan)."""
+        return self.check_plan(user_id=user_id, changes=changes, thread_id=thread_id)[0]
+
+    def task(self, *, user_id: str, project: str | None, task: str) -> dict | None:
+        """The user's task this reference names, as ledger_apply would resolve
+        it (by id, short id, title or close title; without a project, by id or
+        exact title), with its current values; None when it names none or
+        more than one. The declined-stays-declined rule compares updates by
+        it (grants.change_summaries)."""
+        try:
+            with self.service.repo.transaction() as s:
+                if project not in (None, ""):
+                    found = self.service._project(s, user_id, project, {})
+                    row = self.service._task(s, found, task, str(project))
+                else:
+                    row = self.service._task_anywhere(s, user_id, task)
+        except LedgerError:
+            return None
+        return {k: row.get(k) for k in ("id", "title", "status", "due_date", "owner")}
+
     def read(self, *, user_id: str, project: str | None) -> str:
         return self.service.read_text(user_id=user_id, project=project, today=date.today())
 

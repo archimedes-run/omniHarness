@@ -84,7 +84,7 @@ def test_a_chat_run_carrying_synthetic_trigger_still_asks_for_every_tier_3_call(
     assert studio.client.post("/api/ledger/projects", json={"name": "Launch"}).status_code == 201
     scripted += [
         _call([{"op": "create_project", "name": "Spoofed"}], "c1"),
-        _call([{"op": "create_goal", "project": "Launch", "title": "G"}], "c2"),
+        _call([{"op": "create_goal", "project": "Launch", "title": "G", "definition_of_done": "Done"}], "c2"),
         _call([{"op": "link_thread", "project": "Launch"}], "c3"),
         _call([{"op": "create_task", "project": "Launch", "title": "Mixed"}, {"op": "create_project", "name": "Also"}], "c4"),
     ]

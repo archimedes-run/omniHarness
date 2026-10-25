@@ -7,8 +7,9 @@ Endpoints:
 - GET  /api/threads/{thread_id}/tools/count  — live N/cap for the current selection
 
 Sources are namespaced ids: ``local:<server>`` and ``connector:<SLUG>``. Pinned
-defaults (local:filesystem, local:postgres) are enforced server-side and never
-trusted from the client.
+defaults (PINNED_SOURCES) are enforced server-side and never trusted from the
+client. A chat that has stored no selection reads as the pinned sources plus
+the caller's connected toolkits (app.gateway.tool_selection.thread_sources).
 """
 
 from __future__ import annotations
@@ -165,11 +166,15 @@ async def get_tools_catalog(request: Request) -> CatalogResponse:
 @router.get("/threads/{thread_id}/tools", response_model=SelectionResponse)
 @require_permission("threads", "read", owner_check=True)
 async def get_thread_tools(thread_id: str, request: Request) -> SelectionResponse:
+    from app.gateway.tool_selection import thread_sources
     from omniharness.persistence.thread_tool_selection.sql import PINNED_SOURCES
 
-    _get_user_id(request)
-    repo = get_thread_tool_selection_repo(request)
-    sources = await repo.get_sources(thread_id=thread_id)
+    user_id = _get_user_id(request)
+    get_thread_tool_selection_repo(request)  # 503 when the repository is missing, as before
+    # A new chat shows its starting selection (the pinned sources plus the
+    # caller's connected apps), the same one its runs use. The caller owns
+    # the chat: owner_check above.
+    sources = await thread_sources(request.app.state, thread_id, owner_id=user_id)
     return SelectionResponse(thread_id=thread_id, sources=sources, pinned=list(PINNED_SOURCES))
 
 
@@ -193,22 +198,26 @@ async def put_thread_tools(thread_id: str, body: SelectionUpdateRequest, request
 @router.get("/threads/{thread_id}/tools/count", response_model=CountResponse)
 @require_permission("threads", "read", owner_check=True)
 async def get_thread_tools_count(thread_id: str, request: Request) -> CountResponse:
+    from app.gateway.tool_selection import thread_sources
     from omniharness.config import get_app_config
-    from omniharness.tools.tools import ToolCapExceededError, get_available_tools, resolve_model_tool_cap
+    from omniharness.tools.tools import ToolCapExceededError, get_available_tools, offered_tool_count, resolve_model_tool_cap
 
     user_id = _get_user_id(request)
-    repo = get_thread_tool_selection_repo(request)
-    sources = set(await repo.get_sources(thread_id=thread_id))
+    get_thread_tool_selection_repo(request)
+    sources = set(await thread_sources(request.app.state, thread_id, owner_id=user_id))
 
     app_config = get_app_config()
     model_config = app_config.models[0] if app_config.models else None
     cap = resolve_model_tool_cap(model_config)
 
-    # Assemble WITHOUT enforcing the cap so we can report the real count even
-    # when it is over — the UI shows "N / cap" and blocks enabling more.
+    # Assembled as a run assembles it, cap included: connector toolkits past
+    # the cap are deferred to tool_search (tools.fit_connectors_to_cap), so the
+    # count is what the model receives. Over the cap only when the tools that
+    # cannot be deferred exceed it — the UI shows "N / cap" and blocks
+    # enabling more.
     try:
-        tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=app_config)
-        count = len(tools)
-    except ToolCapExceededError as exc:  # pragma: no cover - max_tools not passed here
+        tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap)
+        count = offered_tool_count(tools)
+    except ToolCapExceededError as exc:
         count = exc.count
     return CountResponse(count=count, cap=cap, over_cap=count > cap)
