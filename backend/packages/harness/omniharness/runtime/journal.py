@@ -158,8 +158,12 @@ class RunJournal(BaseCallbackHandler):
             [len(batch) for batch in messages],
         )
 
-        # Capture the first human message sent to any LLM in this run.
-        if not self._first_human_msg and messages:
+        # Capture the first human message sent to the agent's model in this
+        # run. Never from a middleware's own call: the summarizer's prompt
+        # (the whole conversation as one human message) or the title prompt
+        # would be recorded as the person's turn, and the chat's history (which
+        # skips middleware callers) would lose the person's real message.
+        if not self._first_human_msg and messages and not self._identify_caller(tags).startswith("middleware:"):
             for batch in reversed(messages):
                 for m in reversed(batch):
                     if isinstance(m, HumanMessage) and m.name != "summary":

@@ -11,6 +11,7 @@ from langchain.agents import AgentState
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.config import get_config
+from langgraph.constants import TAG_NOSTREAM
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
@@ -110,6 +111,17 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # The summary is the model's context, never chat content. LangGraph's
+        # "messages" stream mode forwards every chat-model call made inside a
+        # node, so without this the summarizer's reply ("## SESSION INTENT
+        # ...") streamed into the chat as an assistant message. The tag keeps
+        # the call out of the stream; the RunJournal still records it (by its
+        # middleware:summarize tag) and the summary still reaches the model.
+        # with_config REPLACES a binding's tags, so the existing ones (the
+        # factory's middleware:summarize) are carried over explicitly.
+        bound_tags = list((getattr(self.model, "config", None) or {}).get("tags") or [])
+        if TAG_NOSTREAM not in bound_tags:
+            self.model = self.model.with_config(tags=[*bound_tags, TAG_NOSTREAM])
         self._skills_container_path = skills_container_path or "/mnt/skills"
         self._skill_file_read_tool_names = frozenset(skill_file_read_tool_names or {"read_file", "read", "view", "cat"})
         self._before_summarization_hooks = before_summarization or []

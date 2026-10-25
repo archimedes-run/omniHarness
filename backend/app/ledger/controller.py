@@ -78,8 +78,12 @@ class GatewayLedgerController:
                 raise RuntimeError(f"Nothing was changed: {exc}.") from exc
             return f"Nothing was changed: {exc}."
         mark_committed()  # the transaction committed: this write happened
-        from app.gateway.display_safe import safe_field
+        from app.gateway.display_safe import model_line
 
-        # What the chat shows on the ledger step: each line made safe.
-        text = " ".join(safe_field(line) for line in done)
+        # The tool's result: the MODEL reads it, so links stay real (a
+        # defanged one was copied into answers as hxxps://a[.]example). Each
+        # line is still one line with no control or bidi characters, so
+        # content cannot start a line of its own. The chat's ledger step
+        # defangs it on display (ledger-write-step.tsx, safeField).
+        text = " ".join(model_line(line) for line in done)
         return f"{text} [undo {write_id}]" if write_id else text

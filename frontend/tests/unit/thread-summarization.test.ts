@@ -1,0 +1,156 @@
+import { readFileSync } from "fs";
+import { resolve } from "path";
+
+import type { Message } from "@langchain/langgraph-sdk";
+import { describe, expect, it } from "vitest";
+
+import {
+  appendUnique,
+  fetchRunMessages,
+  isMiddlewareStreamed,
+  messagesMovedBySummary,
+  summarizationUpdate,
+  type RunMessageRow,
+} from "@/core/threads/summarization";
+
+/**
+ * What the chat does when the agent's context is summarized (dogfooding,
+ * 2026-10-24), against the stream and journal recorded from the real backend
+ * (tests/rendering/fixtures/summarized-research.json).
+ */
+const FIX = JSON.parse(
+  readFileSync(
+    resolve(__dirname, "../rendering/fixtures/summarized-research.json"),
+    "utf8",
+  ),
+) as {
+  run2_sse: string;
+  state1: { values: { messages: Message[] } };
+  journal2: Record<string, RunMessageRow[]>;
+  leaked_summary_chunks: string[];
+};
+
+function events(sse: string): { event: string; data: unknown }[] {
+  return sse
+    .split("\n\n")
+    .map((block) => {
+      const lines = block.split("\n");
+      const event = lines
+        .find((l) => l.startsWith("event:"))
+        ?.slice(6)
+        .trim();
+      const data = lines.find((l) => l.startsWith("data:"))?.slice(5);
+      return event && data
+        ? { event, data: JSON.parse(data) as unknown }
+        : null;
+    })
+    .filter((e): e is { event: string; data: unknown } => e !== null);
+}
+
+const updates = events(FIX.run2_sse)
+  .filter((e) => e.event.startsWith("updates"))
+  .map((e) => e.data as Record<string, { messages?: Message[] } | null>);
+
+describe("a summarized turn's stream", () => {
+  it("finds the summarization update by its summary message, whatever the node is called", () => {
+    const found = updates.filter((u) => summarizationUpdate(u) !== null);
+    expect(found.length).toBeGreaterThan(1);
+    // The recorded node name is the middleware class's, not the base class's.
+    expect(Object.keys(found[0]!)).toEqual([
+      "OmniHarnessSummarizationMiddleware.before_model",
+    ]);
+    expect(
+      updates.filter(
+        (u) => "SummarizationMiddleware.before_model" in (u ?? {}),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("moves every replaced message into the history, each once, in order", () => {
+    // As the chat does: its copy of the live thread is the latest state the
+    // stream showed (each "values" event); each summarization moves what it
+    // replaced into the history.
+    let live: Message[] = FIX.state1.values.messages;
+    let history: Message[] = [];
+    for (const { event, data } of events(FIX.run2_sse)) {
+      if (event.startsWith("values")) {
+        live = (data as { messages: Message[] }).messages;
+        continue;
+      }
+      if (!event.startsWith("updates")) continue;
+      const summarized = summarizationUpdate(data as Record<string, unknown>);
+      if (summarized) {
+        history = appendUnique(
+          history,
+          messagesMovedBySummary(live, summarized),
+        );
+      }
+    }
+    const shown = [...history, ...live].filter(
+      (m) => !(m.type === "human" && m.name === "summary"),
+    );
+    const humans = shown
+      .filter((m) => m.type === "human")
+      .map((m) =>
+        Array.isArray(m.content)
+          ? (m.content[0] as { text: string }).text
+          : m.content,
+      );
+    expect(humans).toEqual(["now find 3 brunch spots too"]);
+    const tools = shown.filter((m) => m.type === "tool");
+    // The first turn's last fetch (still in its state), then the second
+    // turn's search and three fetches.
+    expect(tools.map((m) => m.name)).toEqual([
+      "web_fetch",
+      "web_search",
+      "web_fetch",
+      "web_fetch",
+      "web_fetch",
+    ]);
+    const ids = shown.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    // The live thread ends as the backend's state does: summary + the last few.
+    expect(live[0]?.name).toBe("summary");
+  });
+
+  it("tells a middleware's streamed model call from the agent's", () => {
+    const [chunk] = events(FIX.leaked_summary_chunks.join("\n\n"));
+    const [, metadata] = chunk!.data as [unknown, Record<string, unknown>];
+    expect(isMiddlewareStreamed({ streamMetadata: metadata })).toBe(true);
+    expect(
+      isMiddlewareStreamed({ streamMetadata: { tags: ["seq:step:1"] } }),
+    ).toBe(false);
+    expect(isMiddlewareStreamed(undefined)).toBe(false);
+  });
+});
+
+describe("the display history after a reload", () => {
+  it("reads a run's journal page by page until its first row", async () => {
+    const [, rows] = Object.entries(FIX.journal2).at(-1)!;
+    const asked: string[] = [];
+    const serve = async (url: string) => {
+      asked.push(url);
+      const before = new URL(url, "http://x").searchParams.get("before_seq");
+      const older =
+        before === null ? rows : rows.filter((r) => r.seq < Number(before));
+      const data = older.slice(-4);
+      return { data, has_more: older.length > data.length };
+    };
+    let next: number | null = null;
+    let messages: Message[] = [];
+    do {
+      const page = await fetchRunMessages(serve, "/api/run", next);
+      messages = [...page.messages, ...messages];
+      next = page.next;
+    } while (next !== null);
+    expect(asked[0]).toBe("/api/run?limit=200");
+    expect(asked.length).toBeGreaterThan(1);
+    // The person's message is the run's oldest row; the summarizer's own
+    // rows are middleware calls and never shown.
+    expect(messages[0]?.type).toBe("human");
+    expect(JSON.stringify(messages)).not.toContain("SESSION INTENT");
+    expect(messages).toHaveLength(
+      rows.filter((r) => !r.metadata.caller?.startsWith("middleware:")).length,
+    );
+  });
+});

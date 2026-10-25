@@ -103,11 +103,15 @@ def _goes_bad_after_its_card(client) -> tuple[dict, callable]:
     return {"op": "update_task", "project": "Other", "task": "T-1", "status": "done"}, remove
 
 
-def test_the_chat_ledger_step_and_home_show_a_hostile_title_safely(launch) -> None:
+def test_the_ledger_result_keeps_links_real_and_home_shows_a_hostile_title_safely(launch) -> None:
     out = _agent([_call([_task(EVIL)])]).invoke({"messages": [user_turn("add it")]}, context={"thread_id": "t1", "user_id": launch.user_id})
     [result] = [str(m.content) for m in out["messages"] if getattr(m, "type", "") == "tool"]
-    _clean(result)
-    assert "evil[.]example" in result
+    # The tool result is what the MODEL reads: one line, no bidi controls,
+    # links real (a defanged one was copied into answers). The chat's ledger
+    # step defangs it on display (frontend ledger-write-step.tsx, safeField).
+    for bad in ("\n", "‮", "‬"):
+        assert bad not in result, (bad, result)
+    assert "https://evil.example/x" in result and "[.]" not in result, result
     items = launch.client.get("/api/home/today", params={"since": "2000-01-01T00:00:00+00:00"}).json()["items"]
     [moved] = [i for i in items if "Pay" in i["text"]]
     _clean(moved["text"])

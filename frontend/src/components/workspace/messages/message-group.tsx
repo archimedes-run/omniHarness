@@ -241,7 +241,9 @@ export function MessageGroup({
         >
           <ChainOfThoughtStep
             label={
-              <span className="opacity-60">
+              // The step label's own muted colour, not faded further: at
+              // opacity-60 it fell below WCAG AA (2.6:1 light, 3.4:1 dark).
+              <span>
                 {showAbove
                   ? t.toolCalls.lessSteps
                   : t.toolCalls.moreSteps(aboveLastToolCallSteps.length)}

@@ -16,7 +16,14 @@ import { useUpdateSubtask } from "../tasks/context";
 import type { UploadedFileInfo } from "../uploads";
 import { promptInputFilePartToFile, uploadFiles } from "../uploads";
 
-import type { AgentThread, AgentThreadState, RunMessage } from "./types";
+import {
+  appendUnique,
+  fetchRunMessages,
+  isMiddlewareStreamed,
+  messagesMovedBySummary,
+  summarizationUpdate,
+} from "./summarization";
+import type { AgentThread, AgentThreadState } from "./types";
 
 export type ToolEndEvent = {
   name: string;
@@ -182,31 +189,12 @@ export function useThreadStream({
       }
     },
     onUpdateEvent(data) {
-      if (data["SummarizationMiddleware.before_model"]) {
-        const _messages = [
-          ...(data["SummarizationMiddleware.before_model"].messages ?? []),
-        ];
-
-        if (_messages.length < 2) {
-          return;
-        }
-        for (const m of _messages) {
-          if (m.name === "summary" && m.type === "human") {
-            summarizedRef.current?.add(m.id ?? "");
-          }
-        }
-        const _lastKeepMessage = _messages[2];
-        const _currentMessages = [...messagesRef.current];
-        const _movedMessages: Message[] = [];
-        for (const m of _currentMessages) {
-          if (m.id !== undefined && m.id === _lastKeepMessage?.id) {
-            break;
-          }
-          if (!summarizedRef.current?.has(m.id ?? "")) {
-            _movedMessages.push(m);
-          }
-        }
-        appendMessages(_movedMessages);
+      // The context was summarized: the messages the summary replaced leave
+      // the live thread, so they move into the display history and the
+      // person keeps seeing them (core/threads/summarization.ts).
+      const summarized = summarizationUpdate(data);
+      if (summarized) {
+        appendMessages(messagesMovedBySummary(messagesRef.current, summarized));
         messagesRef.current = [];
       }
 
@@ -282,7 +270,6 @@ export function useThreadStream({
   const [isUploading, setIsUploading] = useState(false);
   const sendInFlightRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
-  const summarizedRef = useRef<Set<string>>(null);
   // Track message count before sending so we know when server has responded
   const prevMsgCountRef = useRef(thread.messages.length);
   // Track human message count before sending to prevent clearing optimistic
@@ -292,8 +279,6 @@ export function useThreadStream({
   const prevHumanMsgCountRef = useRef(
     thread.messages.filter((m) => m.type === "human").length,
   );
-
-  summarizedRef.current ??= new Set<string>();
 
   // Reset thread-local pending UI state when switching between threads so
   // optimistic messages and in-flight guards do not leak across chat views.
@@ -521,15 +506,21 @@ export function useThreadStream({
     [thread, t.uploads.uploadingFiles, context, queryClient],
   );
 
+  // A middleware's own model call (the summarizer, the title) is never chat
+  // content, even if the server streams it.
+  const liveMessages = thread.messages.filter(
+    (message) => !isMiddlewareStreamed(thread.getMessagesMetadata?.(message)),
+  );
+
   // Cache the latest thread messages in a ref to compare against incoming history messages for deduplication,
   // and to allow access to the full message list in onUpdateEvent without causing re-renders.
-  if (thread.messages.length >= messagesRef.current.length) {
-    messagesRef.current = thread.messages;
+  if (liveMessages.length >= messagesRef.current.length) {
+    messagesRef.current = liveMessages;
   }
 
   const mergedMessages = mergeMessages(
     history,
-    thread.messages,
+    liveMessages,
     optimisticMessages,
   );
 
@@ -555,6 +546,9 @@ export function useThreadHistory(threadId: string) {
   const threadIdRef = useRef(threadId);
   const runsRef = useRef(runs.data ?? []);
   const indexRef = useRef(-1);
+  // The page cursor inside the run at indexRef: null reads its newest page.
+  // A long run has several pages, and the person's message is on its oldest.
+  const beforeRef = useRef<number | null>(null);
   const loadingRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -570,23 +564,25 @@ export function useThreadHistory(threadId: string) {
     }
     try {
       setLoading(true);
-      const result: { data: RunMessage[]; hasMore: boolean } = await fetch(
+      const page = await fetchRunMessages(
+        (url) =>
+          fetch(url, {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "include",
+          }).then((res) => res.json()),
         `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadIdRef.current)}/runs/${encodeURIComponent(run.run_id)}/messages`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-        },
-      ).then((res) => {
-        return res.json();
-      });
-      const _messages = result.data
-        .filter((m) => !m.metadata.caller?.startsWith("middleware:"))
-        .map((m) => m.content);
-      setMessages((prev) => [..._messages, ...prev]);
-      indexRef.current -= 1;
+        beforeRef.current,
+      );
+      setMessages((prev) => [...page.messages, ...prev]);
+      if (page.next !== null) {
+        beforeRef.current = page.next;
+      } else {
+        beforeRef.current = null;
+        indexRef.current -= 1;
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -598,6 +594,7 @@ export function useThreadHistory(threadId: string) {
     if (runs.data && runs.data.length > 0) {
       runsRef.current = runs.data ?? [];
       indexRef.current = runs.data.length - 1;
+      beforeRef.current = null;
     }
     loadMessages().catch(() => {
       toast.error("Failed to load thread history.");
@@ -605,9 +602,7 @@ export function useThreadHistory(threadId: string) {
   }, [threadId, runs.data, loadMessages]);
 
   const appendMessages = useCallback((_messages: Message[]) => {
-    setMessages((prev) => {
-      return [...prev, ..._messages];
-    });
+    setMessages((prev) => appendUnique(prev, _messages));
   }, []);
   const hasMore = indexRef.current >= 0 || !runs.data;
   return {
