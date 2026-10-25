@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from wizard.providers import SEARCH_PROVIDERS, WEB_FETCH_PROVIDERS, SearchProvider, WebProvider
-from wizard.ui import ask_choice, ask_secret, print_header, print_info, print_success
+from wizard.ui import ask_choice, ask_secret, print_header, print_info, print_success, print_warning
 
 
 @dataclass
@@ -57,6 +57,14 @@ def run_search_step(step_label: str = "Step 3/3") -> SearchStepResult:
                 fetch_api_key = ask_secret(f"{fetch_provider.env_var}")
                 provided_keys[fetch_provider.env_var] = fetch_api_key
                 print_success(f"Key will be saved to .env as {fetch_provider.env_var}")
+
+    if fetch_provider is not None and fetch_provider.name == "builtin_fetch" and "JINA_API_KEY" not in provided_keys:
+        print()
+        print_warning(
+            "The built-in fetcher fetches only through the fetch egress proxy, which Docker mode starts "
+            "('make docker-start'). A gateway run on the host has no proxy, so web_fetch will not fetch "
+            "pages there unless you set tools.web_fetch.proxy, or JINA_API_KEY in .env for the Jina fallback."
+        )
 
     return SearchStepResult(
         search_provider=search_provider,

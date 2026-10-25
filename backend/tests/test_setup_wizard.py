@@ -54,6 +54,9 @@ class TestProviders:
         free = [sp for sp in SEARCH_PROVIDERS if sp.env_var is None]
         assert free, "Expected at least one free (no-key) search provider"
 
+    def test_the_default_web_fetch_provider_is_the_built_in_fetcher(self):
+        assert WEB_FETCH_PROVIDERS[0].use == "omniharness.community.builtin_fetch.tools:web_fetch_tool"
+
     def test_at_least_one_free_web_fetch_provider(self):
         free = [provider for provider in WEB_FETCH_PROVIDERS if provider.env_var is None]
         assert free, "Expected at least one free (no-key) web fetch provider"
@@ -402,12 +405,24 @@ class TestWriteConfigYaml:
 
 
 class TestSearchStep:
+    def test_the_built_in_fetcher_warns_about_host_mode(self, monkeypatch):
+        for name in ("print_header", "print_success", "print_info"):
+            monkeypatch.setattr(search_step, name, lambda *_args, **_kwargs: None)
+        warnings: list[str] = []
+        monkeypatch.setattr(search_step, "print_warning", lambda message: warnings.append(message))
+        choices = iter([0, 0])
+        monkeypatch.setattr(search_step, "ask_choice", lambda *_a, **_k: next(choices))
+        result = search_step.run_search_step()
+        assert result.fetch_provider is not None and result.fetch_provider.name == "builtin_fetch"
+        assert warnings and "host" in warnings[0] and "JINA_API_KEY" in warnings[0]
+
     def test_reuses_api_key_for_same_provider(self, monkeypatch):
         monkeypatch.setattr(search_step, "print_header", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(search_step, "print_success", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(search_step, "print_info", lambda *_args, **_kwargs: None)
 
-        choices = iter([3, 1])
+        # Fetch index 2: exa, after the built-in fetcher (the default) and Jina.
+        choices = iter([3, 2])
         prompts: list[str] = []
 
         def fake_choice(_prompt, _options, default=0):

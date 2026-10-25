@@ -215,9 +215,18 @@ SEARCH_PROVIDERS: list[SearchProvider] = [
 
 WEB_FETCH_PROVIDERS: list[WebProvider] = [
     WebProvider(
+        name="builtin_fetch",
+        display_name="Built-in fetcher",
+        description="Default, no API key; fetches through the public-internet-only egress proxy (Docker)",
+        use="omniharness.community.builtin_fetch.tools:web_fetch_tool",
+        env_var=None,
+        tool_name="web_fetch",
+        extra_config={"timeout": 15},
+    ),
+    WebProvider(
         name="jina_ai",
         display_name="Jina AI Reader",
-        description="Good default reader, no API key required",
+        description="External reader service, no API key required",
         use="omniharness.community.jina_ai.tools:web_fetch_tool",
         env_var=None,
         tool_name="web_fetch",

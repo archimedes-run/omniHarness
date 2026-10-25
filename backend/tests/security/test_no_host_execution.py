@@ -27,6 +27,9 @@ SPAWNERS = {
         "NOT agent-reachable: stdio MCP servers the OWNER configured in extensions_config.json (file, or PUT /api/mcp/config: signed-in owner only, never the internal token); the sandbox has no route to the gateway"
     ),
     "packages/harness/omniharness/tools/connector_tools.py": "NOT agent-chosen: fixed command (sys.executable + the bundled Composio server script), scrubbed env + exactly four COMPOSIO_* keys",
+    "packages/harness/omniharness/community/builtin_fetch/extract.py": (
+        "NOT agent-chosen: fixed argv (sys.executable -I -m the bundled extract_worker), the fetched page passed as data on stdin, no shell; own process group, killed at the deadline"
+    ),
     "packages/harness/omniharness/utils/readability.py": "NOT agent-chosen: readabilipy's fixed node script (Readability.js) on fetched HTML passed as data, no shell",
 }
 

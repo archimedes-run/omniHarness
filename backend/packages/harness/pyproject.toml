@@ -36,6 +36,7 @@ dependencies = [
     "aiosqlite>=0.19",
     "alembic>=1.13",
     "composio-core>=0.7.0",
+    "trafilatura==2.1.0",
 ]
 
 [project.optional-dependencies]
