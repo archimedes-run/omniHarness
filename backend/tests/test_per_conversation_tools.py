@@ -297,3 +297,49 @@ def test_a_restated_ledger_plan_carries_no_stored_titles():
     action.plan_text = PolicyMiddleware._plan_text("ledger_apply", targets, action_id=action.id, arguments=action.arguments)
     text = restate(action)
     assert "T-3" in text and "SECRET STORED TITLE" not in text and "STORED PROJECT" not in text
+
+
+def test_a_refusal_is_recorded_once_per_outer_turn_without_reading_the_log(tmp_path, monkeypatch):
+    from app.policy.audit import PolicyAuditLog
+
+    log = PolicyAuditLog(path=tmp_path / "audit.jsonl", actor="default")
+    monkeypatch.setattr(PolicyAuditLog, "entries", lambda self: (_ for _ in ()).throw(AssertionError("read the whole log")))
+    common = {"tool": "ledger_apply", "targets": ["x"], "reason": "r", "owner_id": "u", "requester": "lead_agent", "origin": "content", "origin_source": "web_fetch"}
+    assert log.record_refused(thread_id="t1", turn_key="run:1", **common) is not None
+    assert log.record_refused(thread_id="t1", turn_key="run:1", **common) is None
+    # No thread: the run tells turns apart.
+    assert log.record_refused(thread_id=None, turn_key="run:2", **common) is not None
+    assert log.record_refused(thread_id=None, turn_key="run:3", **common) is not None
+    # A fresh index (a restart) seeds itself from the log's tail.
+    import app.policy.audit as audit
+
+    audit._SEEN.clear()
+    assert log.record_refused(thread_id="t1", turn_key="run:1", **common) is None
+
+
+def test_an_invited_agent_shares_its_inviting_turn():
+    from types import SimpleNamespace
+
+    from app.policy.middleware import PolicyMiddleware
+
+    middleware = PolicyMiddleware.__new__(PolicyMiddleware)
+    lead = SimpleNamespace(runtime=SimpleNamespace(context={"run_id": "r-1", "thread_id": "t"}), state={"messages": []})
+    assert middleware._turn_key(lead) == "run:r-1"
+    invited = SimpleNamespace(runtime=SimpleNamespace(context={PolicyMiddleware.TURN_KEY: "run:r-1", "thread_id": "t"}), state={"messages": [SimpleNamespace(type="human", id="sub-1")]})
+    assert middleware._turn_key(invited) == "run:r-1"
+
+
+def test_the_inviting_turn_hands_its_turn_to_the_agent_it_invites(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.policy.middleware import PolicyMiddleware
+    from omniharness.agents.invitation import invited_agent_context
+
+    middleware = PolicyMiddleware.__new__(PolicyMiddleware)
+    monkeypatch.setattr(PolicyMiddleware, "_origin", lambda self, request: ("user", "", ""))
+    monkeypatch.setattr(PolicyMiddleware, "_requester", lambda self, request: "lead_agent")
+    monkeypatch.setattr(PolicyMiddleware, "_delegation_chain", lambda self, request: ())
+    monkeypatch.setattr(PolicyMiddleware, "_private_read", lambda self, request, ruleset=None: SimpleNamespace(private=False))
+    lead = SimpleNamespace(runtime=SimpleNamespace(context={"run_id": "r-9", "thread_id": "t"}), state={"messages": []})
+    context = invited_agent_context(middleware._inviting_for(lead), "researcher")
+    assert context[PolicyMiddleware.TURN_KEY] == "run:r-9"

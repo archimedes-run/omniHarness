@@ -365,3 +365,53 @@ def test_refused_plans_are_recorded_once_per_turn_and_bounded(studio) -> None:
     [entry] = _refused(studio)
     assert len(entry["targets"]) <= 20 and all(len(t) <= 300 for t in entry["targets"])
     assert len(entry["plan_as_stated"]) <= 400
+
+
+# -- round 3: a declined owner or due-date change, however it is spelled --------
+
+
+def _declined_then_resent(studio, thread: str, declined: dict, resent: dict) -> bool:
+    """Decline a suggested update, re-send another in a user turn: True when
+    the re-sent one was held as the declined write (did not run)."""
+    _chat(studio, [_fetch(), _apply([{"op": "update_task", "project": "TEST P", "task": "T-1", **declined}])], said="summarise", thread=thread)
+    [card] = _pending(studio)
+    assert studio.client.post(f"/api/confirmations/{card['id']}/decline", json={}).json()["outcome"] == "declined"
+    before = _project(studio)["tasks"][0]
+    _chat(studio, [_apply([{"op": "update_task", "project": "TEST P", "task": "T-1", **resent}], "a2")], said="thanks", thread=thread)
+    after = _project(studio)["tasks"][0]
+    held = any("you declined this earlier" in a["plan_text"] for a in _pending(studio))
+    assert held == (before == after), (before, after)
+    return held
+
+
+def _owned_task(studio, owner: str | None = None) -> None:
+    project = _setup(studio)
+    _chat(studio, [_apply([{"op": "create_task", "project": "TEST P", "title": "Draft", **({"owner": owner} if owner else {})}], "c0")], said="add Draft", thread="t-setup")
+    assert [t["title"] for t in _project(studio)["tasks"]] == ["Draft"], project
+
+
+def test_a_declined_change_with_a_no_op_owner_is_held_when_resent_without_it(studio) -> None:
+    """The declined change set owner to what it already was: that is not part
+    of what was declined, so the same status change alone is still it."""
+    _owned_task(studio, owner="me")
+    assert _declined_then_resent(studio, "t-o1", {"status": "done", "owner": "me"}, {"status": "done"})
+
+
+def test_a_declined_no_op_title_is_not_part_of_what_was_declined(studio) -> None:
+    _owned_task(studio)
+    assert _declined_then_resent(studio, "t-o0", {"status": "done", "title": "Draft"}, {"status": "done"})
+
+
+def test_a_declined_owner_spelled_as_an_object_is_still_declined(studio) -> None:
+    _owned_task(studio)
+    assert _declined_then_resent(studio, "t-o2", {"owner": "agent"}, {"owner": {"kind": "agent"}})
+
+
+def test_a_declined_owner_me_resent_as_user_is_still_declined(studio) -> None:
+    _owned_task(studio)
+    assert _declined_then_resent(studio, "t-o3", {"owner": "me"}, {"owner": "user"})
+
+
+def test_a_declined_due_date_in_another_spelling_is_still_declined(studio) -> None:
+    _owned_task(studio)
+    assert _declined_then_resent(studio, "t-o4", {"due_date": "2026-12-01"}, {"due_date": "20261201"})

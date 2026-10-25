@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,44 @@ logger = logging.getLogger(__name__)
 #: How much of a refused plan is recorded (PolicyAuditLog.record_refused).
 REFUSED_LINES = 20
 REFUSED_CHARS = 300
+
+
+#: Refusal keys already recorded, per audit file: a small index, so a
+#: refusal never reads the whole log. Seeded once per file from its tail
+#: (_TAIL_BYTES), bounded to _SEEN_LIMIT keys (oldest dropped).
+_SEEN: dict[str, OrderedDict[str, None]] = {}
+_SEEN_LOCK = threading.Lock()
+_SEEN_LIMIT = 2048
+_TAIL_BYTES = 256 * 1024
+
+
+def _first_refusal(path: Path, key: str) -> bool:
+    """True the first time `key` is seen for this audit file (and records it)."""
+    with _SEEN_LOCK:
+        seen = _SEEN.get(str(path))
+        if seen is None:
+            seen = _SEEN[str(path)] = OrderedDict()
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(0, 2)
+                    size = handle.tell()
+                    handle.seek(max(size - _TAIL_BYTES, 0))
+                    tail = handle.read().decode("utf-8", errors="ignore").splitlines()
+            except FileNotFoundError:
+                tail = []
+            for line in tail:
+                if '"refusal_key"' not in line:
+                    continue
+                try:
+                    seen[str(json.loads(line).get("refusal_key"))] = None
+                except json.JSONDecodeError:
+                    continue
+        if key in seen:
+            return False
+        seen[key] = None
+        while len(seen) > _SEEN_LIMIT:
+            seen.popitem(last=False)
+        return True
 
 
 def _clip(text: object) -> str:
@@ -145,12 +185,14 @@ class PolicyAuditLog:
         the reason likewise, and ONE entry per thread and turn (`turn_key`):
         a model retrying a bad plan in a loop records it once. Returns None
         when this turn's refusal was already recorded."""
-        if thread_id and any(e.get("kind") == "refused-plan" and e.get("thread_id") == thread_id and e.get("turn_key") == turn_key for e in self.entries()):
+        key = f"{thread_id or ''}|{turn_key}"
+        if turn_key and not _first_refusal(self.path, key):
             return None
         reason = _clip(reason)
         entry = {
             "kind": "refused-plan",
             "turn_key": turn_key,
+            "refusal_key": key,
             "at": (now or datetime.now()).isoformat(),
             "actor": self.actor,
             "tier": 3,

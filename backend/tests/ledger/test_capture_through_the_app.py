@@ -25,7 +25,7 @@ class ToolCapableFake(GenericFakeChatModel):
         return self
 
 
-def propose(gateway, changes=CHANGES, said: str = "I'm launching the beta by Dec 1"):
+def propose(gateway, changes=CHANGES, said: str = "I'm launching the beta by Dec 1", thread: str = "thread-1"):
     """One chat turn whose model proposes ledger_apply, as the lead agent would."""
     from omniharness.agents.middlewares.policy_hook import build_policy_middleware
     from omniharness.config import get_app_config
@@ -40,9 +40,9 @@ def propose(gateway, changes=CHANGES, said: str = "I'm launching the beta by Dec
     agent = create_agent(model=model, tools=tools, middleware=[middleware])
     # The chat exists, as every chat a real run proposes in does: a card whose
     # chat does not exist (deleted) is refused at confirmation.
-    created = gateway.client.post("/api/threads", json={"thread_id": "thread-1"})
+    created = gateway.client.post("/api/threads", json={"thread_id": thread})
     assert created.status_code in (200, 409), created.text
-    return agent.invoke({"messages": [HumanMessage(content=said)]}, config={"configurable": {"thread_id": "thread-1"}}, context={"thread_id": "thread-1", "user_id": gateway.user_id})
+    return agent.invoke({"messages": [HumanMessage(content=said)]}, config={"configurable": {"thread_id": thread}}, context={"thread_id": thread, "user_id": gateway.user_id})
 
 
 def pending(gateway) -> list[dict]:
@@ -189,7 +189,8 @@ def _project_named(gateway, name: str) -> dict:
 def test_a_task_in_a_project_the_plan_creates_by_name_applies_after_confirm(gateway) -> None:
     propose(gateway, changes=[{"op": "create_project", "name": "Alpha"}, {"op": "create_task", "project": "Alpha", "title": "First"}])
     action = _confirm_only_card(gateway)
-    assert "_pin" not in action["arguments"]["changes"][1], "a pin to a row that only existed in the check"
+    pin = action["arguments"]["changes"][1].get("_pin") or {}
+    assert "project_id" not in pin and pin.get("in_plan_project") is True, "a pin to a row that only existed in the check"
     assert [t["title"] for t in _project_named(gateway, "Alpha")["tasks"]] == ["First"]
 
 
@@ -206,3 +207,39 @@ def test_linking_a_project_the_plan_creates_applies_after_confirm(gateway) -> No
     _confirm_only_card(gateway)
     links = _project_named(gateway, "Beta")["links"]
     assert ("thread", "thread-1") in [(link["to_kind"], link["to_ref"]) for link in links]
+
+
+# -- round 3: a change naming a task the plan creates must still mean that task --
+
+
+def _test_p_with_one_task(gateway) -> dict:
+    made = gateway.client.post("/api/ledger/projects", json={"name": "TEST P"}).json()
+    assert gateway.client.post(f"/api/ledger/projects/{made['id']}/tasks", json={"title": "Old"}).status_code == 201
+    return made
+
+
+def test_an_in_plan_task_named_by_short_id_cannot_be_retargeted_before_confirm(gateway) -> None:
+    made = _test_p_with_one_task(gateway)
+    propose(gateway, changes=[{"op": "create_task", "project": "TEST P", "title": "New"}, {"op": "update_task", "project": "TEST P", "task": "T-2", "status": "done"}])
+    [action] = pending(gateway)
+    assert action["arguments"]["changes"][1]["_pin"].get("in_plan_task") is True
+    # The user adds a task first: it is T-2 now, the plan's would be T-3.
+    assert gateway.client.post(f"/api/ledger/projects/{made['id']}/tasks", json={"title": "Mine"}).status_code == 201
+    resp = gateway.client.post(f"/api/confirmations/{action['id']}/confirm", json={})
+    assert resp.json()["outcome"] == "failed" and "the plan changed" in resp.json()["message"], resp.text
+    assert [(t["title"], t["status"]) for t in _project_named(gateway, "TEST P")["tasks"]] == [("Old", "todo"), ("Mine", "todo")]
+
+
+def test_apply_all_with_an_earlier_card_taking_the_short_id_writes_nothing(gateway) -> None:
+    _test_p_with_one_task(gateway)
+    propose(gateway, changes=[{"op": "create_task", "project": "TEST P", "title": "A"}])
+    # A second chat: in the first, the next turn would be read as the answer
+    # to its open card.
+    propose(gateway, changes=[{"op": "create_task", "project": "TEST P", "title": "B"}, {"op": "update_task", "project": "TEST P", "task": "T-2", "status": "done"}], thread="thread-2")
+    cards = pending(gateway)
+    assert len(cards) == 2, cards
+    first = next(c for c in cards if len(c["arguments"]["changes"]) == 1)
+    second = next(c for c in cards if c["id"] != first["id"])
+    body = gateway.client.post("/api/confirmations/apply-all", json={"ids": [first["id"], second["id"]]}).json()
+    assert {r["outcome"] for r in body["results"]} == {"failed", "not_applied"}, body
+    assert [t["title"] for t in _project_named(gateway, "TEST P")["tasks"]] == ["Old"]

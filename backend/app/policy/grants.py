@@ -280,6 +280,26 @@ def canonical_text(value: Any) -> str:
 _UPDATE_FIELDS = ("title", "status", "due_date", "owner")
 
 
+def _update_field(key: str, value: Any) -> str:
+    """An update's field as apply would STORE it, so equivalent spellings
+    compare equal: an owner as its kind and ref ("me" and "user" are one
+    owner; "agent" and {"kind": "agent"} too), a due date as ISO
+    ("20261201" is 2026-12-01). A value apply would refuse is compared as
+    text."""
+    from app.ledger.service import LedgerError, _date, _owner
+
+    try:
+        if key == "owner":
+            owner = _owner(value)
+            return f"owner:{owner['kind']}:{owner.get('ref') or ''}" if owner else "owner:none"
+        if key == "due_date":
+            day = _date(value, "due_date")
+            return day.isoformat() if day else "none"
+    except (LedgerError, TypeError, ValueError):
+        pass
+    return canonical_text(value)
+
+
 def change_summaries(arguments: dict[str, Any], resolve_project=None, resolve_task=None, *, trust_pins: bool = False) -> list[tuple[str, str, dict[str, str], dict[str, str] | None]]:
     """What a ledger_apply would do, canonicalised, one entry per change:
     (op, target, fields it sets, the target's current values or None).
@@ -314,8 +334,8 @@ def change_summaries(arguments: dict[str, Any], resolve_project=None, resolve_ta
                 current = resolve_task(project, filled.get("task"))
                 target = f"task:{current['id']}" if current else None
             if target:
-                now = {k: canonical_text(current.get(k)) for k in _UPDATE_FIELDS} if current else None
-                out.append((op, target, {k: canonical_text(filled[k]) for k in _UPDATE_FIELDS if k in filled}, now))
+                now = {k: _update_field(k, current.get(k)) for k in _UPDATE_FIELDS} if current else None
+                out.append((op, target, {k: _update_field(k, c.get(k)) for k in _UPDATE_FIELDS if k in c}, now))
                 continue
         resolved = resolve_project(project) if (resolve_project is not None and project) else None
         target = f"{resolved or canonical_text(project)}|{canonical_text(filled.get('task'))}"

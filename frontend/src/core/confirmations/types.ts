@@ -27,7 +27,10 @@ export type ResolveOutcome =
   | "chat_deleted"
   /** A typed "yes" in chat for an action the user did not cause: only the
    *  card's button can confirm it. Never returned by the card's own route. */
-  | "card_only";
+  | "card_only"
+  /** An edited plan that could not be applied: nothing ran, the original
+   *  plan is still open, and the edit can be corrected and saved again. */
+  | "invalid_plan";
 
 export interface PendingAction {
   id: string;

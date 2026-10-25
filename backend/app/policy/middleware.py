@@ -742,9 +742,19 @@ class PolicyMiddleware(AgentMiddleware):
 
         return model_safe_plan(action)[0]
 
-    @staticmethod
-    def _turn_key(request) -> str:
-        """This turn: the id (or position) of the latest human message."""
+    #: The outer turn a call belongs to, carried into every agent the turn
+    #: invites (_inviting_for), so a refusal by a delegate and one by the lead
+    #: in the same turn are one turn.
+    TURN_KEY = "policy_turn_key"
+
+    def _turn_key(self, request) -> str:
+        """This call's OUTER turn: inherited from the inviting turn, else the
+        run (one run is one turn), else the latest human message."""
+        context = self._runtime_context(request) or {}
+        if context.get(self.TURN_KEY):
+            return str(context[self.TURN_KEY])
+        if context.get("run_id"):
+            return f"run:{context['run_id']}"
         state = getattr(request, "state", None) or {}
         messages = state.get("messages") if isinstance(state, dict) else None
         for index in range(len(messages or []) - 1, -1, -1):
@@ -957,7 +967,8 @@ class PolicyMiddleware(AgentMiddleware):
         # count against the same cap (never treated as a chat with you).
         # It also starts from this turn's private reads: a delegate of a turn
         # that read the person's mail is in a turn that read their mail.
-        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), self._run_markers(request), private_read=self._private_read(request).private)
+        markers = (*self._run_markers(request), (self.TURN_KEY, self._turn_key(request)))
+        return self._inviting(origin, source, via, self._requester(request), self._delegation_chain(request), markers, private_read=self._private_read(request).private)
 
     def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
         """The scheduled run's markers in this call's context, if any."""

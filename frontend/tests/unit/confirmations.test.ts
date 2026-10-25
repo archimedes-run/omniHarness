@@ -110,3 +110,34 @@ describe("declining", () => {
     expect(canDecline(action(), new Date("2026-09-23T17:00:00Z"))).toBe(false);
   });
 });
+
+describe("isSettled", () => {
+  it("keeps a card open after an edit the server could not apply", async () => {
+    const { isSettled } = await import("@/core/confirmations/logic");
+    expect(
+      isSettled({
+        outcome: "invalid_plan",
+        action_id: "a",
+        message: "x",
+        detail: {},
+      }),
+    ).toBe(false);
+    expect(
+      isSettled({
+        outcome: "thread_busy",
+        action_id: "a",
+        message: "x",
+        detail: {},
+      }),
+    ).toBe(false);
+    expect(
+      isSettled({
+        outcome: "executed",
+        action_id: "a",
+        message: "x",
+        detail: {},
+      }),
+    ).toBe(true);
+    expect(isSettled(undefined)).toBe(false);
+  });
+});

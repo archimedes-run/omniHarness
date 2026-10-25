@@ -311,6 +311,13 @@ class LedgerService:
                 named = _as_named(c.get("project"), ref_names)
             if project["id"] not in created:
                 resolved.update({"project_id": project["id"], "project_name": project.get("name")})
+            elif str(c.get("project")) not in refs:
+                # Named BY NAME a project this plan creates: at apply it must
+                # still resolve to the one the plan creates, never to another
+                # row. (An in-plan ref can only ever name the plan's own.)
+                resolved["in_plan_project"] = True
+            if pin.get("in_plan_project") and project["id"] not in created:
+                raise LedgerError("the plan changed since it was proposed: a project it names is no longer the one it creates; nothing was changed")
             if op == "create_goal":
                 row = self.repo.create(
                     s,
@@ -351,6 +358,12 @@ class LedgerService:
                     task = self._task(s, project, c.get("task"), named)
                 if task["id"] not in created:
                     resolved.update({"task_id": task["id"], "short_id": task["short_id"], "title": task["title"]})
+                else:
+                    resolved["in_plan_task"] = True
+                if pin.get("in_plan_task") and task["id"] not in created:
+                    # Proposed as a task this plan creates (by its short id
+                    # or title): another task now answers to that name.
+                    raise LedgerError(f"the plan changed since it was proposed: task {c.get('task')!r} is no longer the one it creates; nothing was changed")
                 fields: dict[str, Any] = {}
                 if "title" in c:
                     fields["title"] = _text(c, "title", limit=300, required=True)
