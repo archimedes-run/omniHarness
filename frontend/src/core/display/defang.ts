@@ -18,6 +18,18 @@ const APP_ORIGIN = new URL(APP_BASE).origin;
  * `javascript:` all count as elsewhere.
  */
 export function isAppUrl(url: string): boolean {
+  // Anything that names a scheme is absolute, whatever the base. Resolved
+  // against a base with the same scheme, "https:host/p" would read as a
+  // relative path here, yet on a page served over another scheme the browser
+  // resolves it to https://host/p. The parser ignores whitespace and control
+  // characters inside a scheme, so they are ignored for this check too.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url.replace(/[\p{Cc}\p{Cf}\s]/gu, ""))) {
+    try {
+      return new URL(url).origin === APP_ORIGIN;
+    } catch {
+      return false;
+    }
+  }
   try {
     return new URL(url, APP_BASE).origin === APP_ORIGIN;
   } catch {
@@ -48,7 +60,8 @@ export function isLocalImageUrl(url: string): boolean {
 export function defangHost(url: string): string {
   let host = "";
   try {
-    host = new URL(url, APP_BASE).host;
+    // A URL naming a scheme is absolute: never resolved against the app.
+    host = (isAppUrl(url) ? new URL(url, APP_BASE) : new URL(url)).host;
   } catch {
     const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#\s]*)/i.exec(url.trim());
     host = m?.[1] ?? "";

@@ -243,3 +243,29 @@ class TestRunFeedback:
         with TestClient(app) as client:
             response = client.get("/api/runs/run-fb-3/feedback")
         assert response.status_code == 503
+
+
+def test_run_messages_pages_through_a_real_store_keeping_the_newest_row():
+    """The store's look-ahead row is the OLDEST on the latest page and when
+    paging back; the route dropped the newest instead (a run's final answer)."""
+    import asyncio
+
+    from omniharness.runtime.events.store.memory import MemoryRunEventStore
+
+    store = MemoryRunEventStore()
+    asyncio.run(store.put_batch([{"thread_id": "t-long", "run_id": "r-long", "event_type": "llm.ai.response", "category": "message", "content": f"msg-{i}", "metadata": {}} for i in range(1, 26)]))
+    app = _make_app(run_store=_make_run_store({"run_id": "r-long", "thread_id": "t-long"}), event_store=store)
+    with TestClient(app) as client:
+        latest = client.get("/api/runs/r-long/messages?limit=10").json()
+        assert latest["has_more"] is True
+        assert [r["content"] for r in latest["data"]] == [f"msg-{i}" for i in range(16, 26)]
+        rows, before = [], None
+        while True:
+            body = client.get("/api/runs/r-long/messages?limit=10" + (f"&before_seq={before}" if before else "")).json()
+            rows = body["data"] + rows
+            if not body["has_more"]:
+                break
+            before = body["data"][0]["seq"]
+        forward = client.get("/api/runs/r-long/messages?limit=10&after_seq=0").json()
+    assert [r["content"] for r in rows] == [f"msg-{i}" for i in range(1, 26)]
+    assert [r["content"] for r in forward["data"]] == [f"msg-{i}" for i in range(1, 11)]

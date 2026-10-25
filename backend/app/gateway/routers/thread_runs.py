@@ -318,6 +318,23 @@ async def list_thread_messages(
     return messages
 
 
+def message_page(rows: list[dict], limit: int, *, after_seq: int | None) -> dict:
+    """One page of a run's messages from a store's limit+1 rows.
+
+    The stores return rows oldest first, with the one extra row (the
+    look-ahead that says there is more) on the side being paged TOWARD: the
+    newest end for after_seq (paging forward), the oldest end otherwise (the
+    latest page, or paging back with before_seq). Dropping the wrong end lost
+    the newest row of every full page, e.g. a run's final answer.
+    """
+    has_more = len(rows) > limit
+    if has_more:
+        data = rows[:limit] if after_seq is not None else rows[1:]
+    else:
+        data = rows
+    return {"data": data, "has_more": has_more}
+
+
 @router.get("/{thread_id}/runs/{run_id}/messages")
 @require_permission("runs", "read", owner_check=True)
 async def list_run_messages(
@@ -340,17 +357,7 @@ async def list_run_messages(
         before_seq=before_seq,
         after_seq=after_seq,
     )
-    has_more = len(rows) > limit
-    # The stores return rows oldest first, with the one extra row (the
-    # look-ahead that says there is more) on the side being paged TOWARD:
-    # the newest end for after_seq (paging forward), the oldest end otherwise
-    # (the latest page, or paging back with before_seq). Dropping the wrong
-    # end lost the newest row of every full page, e.g. a run's final answer.
-    if has_more:
-        data = rows[:limit] if after_seq is not None else rows[1:]
-    else:
-        data = rows
-    return {"data": data, "has_more": has_more}
+    return message_page(rows, limit, after_seq=after_seq)
 
 
 @router.get("/{thread_id}/runs/{run_id}/events")

@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
-from app.gateway.routers.thread_runs import RunCreateRequest
+from app.gateway.routers.thread_runs import RunCreateRequest, message_page
 from app.gateway.services import sse_consumer, start_run, wait_result
 
 logger = logging.getLogger(__name__)
@@ -110,9 +110,7 @@ async def run_messages(
         before_seq=before_seq,
         after_seq=after_seq,
     )
-    has_more = len(rows) > limit
-    data = rows[:limit] if has_more else rows
-    return {"data": data, "has_more": has_more}
+    return message_page(rows, limit, after_seq=after_seq)
 
 
 @router.get("/{run_id}/feedback")
