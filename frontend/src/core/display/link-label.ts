@@ -47,7 +47,9 @@ export function labelHost(label: string): string | null {
   if (!text || /\s/.test(text)) return null;
   // A URL written without "//" ("https:good.example", "//good.example"):
   // read the host the way the browser would.
-  if (!/^https?:\/\//i.test(text)) {
+  // "citation:" labels are badges, checked where they render
+  // (external-link.tsx), not URLs.
+  if (!/^https?:\/\//i.test(text) && !/^citation:/i.test(text)) {
     text = text
       .replace(/^[a-z][a-z0-9+-]*:(?!\d+(?:[/?#]|$))/i, "")
       .replace(/^[/\\]+/, "");
