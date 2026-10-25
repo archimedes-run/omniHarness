@@ -28,25 +28,45 @@ const FILE_NAME =
 /** A label naming a URL with user info: never what it seems. */
 export const USERINFO = "userinfo";
 
+/** A label that reads as a domain but does not parse as one: read as
+ *  misleading rather than trusted (fail closed). */
+export const UNREADABLE = "unreadable";
+
+/** A file name that is also a country domain ("README.md", "setup.py"):
+ *  kept only when the link opens that very file. */
+const AMBIGUOUS_FILE = /^[^./\s]+\.(md|py)$/i;
+
 /** The host a label NAMES when it reads as a URL or a domain, USERINFO when
  *  it reads as a URL with user info, else null. */
 export function labelHost(label: string): string | null {
-  const text = label.replace(INVISIBLE, "").replace(WRAPPING, "");
+  // NFKC folds look-alike dots ("․" ONE DOT LEADER, "…") and letters.
+  let text = label
+    .replace(INVISIBLE, "")
+    .normalize("NFKC")
+    .replace(WRAPPING, "");
   if (!text || /\s/.test(text)) return null;
+  // A URL written without "//" ("https:good.example", "//good.example"):
+  // read the host the way the browser would.
+  if (!/^https?:\/\//i.test(text)) {
+    text = text
+      .replace(/^[a-z][a-z0-9+-]*:(?!\d+(?:[/?#]|$))/i, "")
+      .replace(/^[/\\]+/, "");
+  }
+  let candidate = "";
   try {
     if (/^https?:\/\//i.test(text)) {
       const url = new URL(text);
       return url.username || url.password ? USERINFO : url.hostname;
     }
     // The URL parser drops any port, and maps full-width letters and dots.
-    const candidate = text.split(/[/?#]/, 1)[0]!;
+    candidate = text.split(/[/?#]/, 1)[0]!;
     if (!DOT.test(candidate) || candidate.includes("@")) return null;
     if (FILE_NAME.test(candidate)) return null;
     const host = new URL(`http://${candidate}`).hostname;
     // A domain: dotted, ending in a letters-only (or punycode) label.
     return /\.([a-z]{2,63}|xn--[a-z0-9-]+)$/i.test(host) ? host : null;
   } catch {
-    return null;
+    return DOT.test(candidate) ? UNREADABLE : null;
   }
 }
 
@@ -71,9 +91,16 @@ export function isPunycode(host: string): boolean {
  */
 export function labelMisleads(label: string, url: URL): boolean {
   if (url.username || url.password) return true;
+  const bare = label.replace(INVISIBLE, "").trim();
+  if (
+    AMBIGUOUS_FILE.test(bare) &&
+    url.pathname.toLowerCase().endsWith(`/${bare.toLowerCase()}`)
+  ) {
+    return false;
+  }
   const named = labelHost(label);
   if (named === null) return false;
-  if (named === USERINFO) return true;
+  if (named === USERINFO || named === UNREADABLE) return true;
   return bareHost(named) !== bareHost(url.hostname) || isPunycode(url.hostname);
 }
 

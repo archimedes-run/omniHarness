@@ -81,6 +81,17 @@ describe("labels", () => {
     ["[ｇｏｏｄ.com](https://evil.example/x)", "https://evil.example/x"],
     ["[good。com](https://evil.example/x)", "https://evil.example/x"],
     ["[paypal.md](https://evil.example/x)", "https://evil.example/x"],
+    ["[good\u2024example](https://evil.example/x)", "https://evil.example/x"],
+    ["[good.example\u2026](https://evil.example/x)", "https://evil.example/x"],
+    ["[https:good.example](https://evil.example/x)", "https://evil.example/x"],
+    [
+      "[https:/good.example/](https://evil.example/x)",
+      "https://evil.example/x",
+    ],
+    [
+      "[//good.example/login](https://evil.example/x)",
+      "https://evil.example/x",
+    ],
     [
       "[https://good.com@evil.example/](https://evil.example/)",
       "https://evil.example/",
@@ -98,6 +109,11 @@ describe("labels", () => {
       ["[(vetri.example)](https://vetri.example/)", ">(vetri.example)<"],
       ["[Vetri Cucina](https://vetri.example/)", ">Vetri Cucina<"],
       ["[report.pdf](https://files.example/r)", ">report.pdf<"],
+      [
+        "[README.md](https://github.com/o/r/blob/main/README.md)",
+        ">README.md<",
+      ],
+      ["[setup.py](https://github.com/o/r/blob/main/setup.py)", ">setup.py<"],
     ] as const) {
       expect(render(markdown), markdown).toContain(label);
     }
