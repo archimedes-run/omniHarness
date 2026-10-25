@@ -57,9 +57,13 @@ export function PendingActionCard({
   // A refusal that can still be fixed keeps the buttons, and an edit the
   // server could not apply keeps the editor open with its reason.
   const settled = isSettled(result);
+  // Continue <agent> once it ran: answered at once ("executed"), or posted
+  // into the chat after the card said "running" (read from the posted
+  // message when the chat picked it up).
   const continueAgent =
-    result?.outcome === "executed" &&
-    typeof result.detail?.continue_agent === "string"
+    (result?.outcome === "executed" ||
+      (isRunning(result) && result?.detail?.landed === true)) &&
+    typeof result?.detail?.continue_agent === "string"
       ? result.detail.continue_agent
       : null;
   // FR-005: the clock drives expiry, not the fetch. Without this an action

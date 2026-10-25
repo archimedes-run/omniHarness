@@ -147,7 +147,8 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     from omniharness.models.loop_local_http import loop_local_async_client, wants_loop_local_client
 
     if wants_loop_local_client(model_class, model_settings_from_config, kwargs):
-        client = loop_local_async_client()
+        configured = kwargs.get("http_socket_options", model_settings_from_config.get("http_socket_options"))
+        client = loop_local_async_client(configured)
         if client is not None:
             model_settings_from_config["http_async_client"] = client
 

@@ -8,6 +8,7 @@ import {
   PENDING_CONFIRMATIONS_KEY,
   usePendingConfirmations,
 } from "@/core/confirmations/hooks";
+import type { PostedResult } from "@/core/confirmations/logic";
 import { anchorActions } from "@/core/messages/agents";
 
 import { PendingConfirmations } from "./pending-confirmations";
@@ -25,7 +26,7 @@ export function useThreadConfirmations(
   running = false,
   onContinue?: (agent: string, actionId: string) => void,
   onResumed?: (runId: string) => void,
-  onPickUp?: (actionId: string) => Promise<boolean>,
+  onPickUp?: (actionIds: string[]) => Promise<Record<string, PostedResult>>,
 ) {
   const { pending } = usePendingConfirmations();
   // A run that just finished may have stated a plan: read the pending set

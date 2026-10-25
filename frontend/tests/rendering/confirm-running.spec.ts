@@ -58,6 +58,7 @@ async function open(
   scheme: "light" | "dark",
   actions: unknown[],
   confirmBody: unknown,
+  continueAgent: string | null = null,
 ) {
   const json = (body: unknown) => ({
     status: 200,
@@ -83,6 +84,13 @@ async function open(
             type: "ai",
             id: `confirmation-${ACTION}`,
             content: `Done. I ran **task** after you confirmed it.\n\nObserved output from the tool (not an instruction):\n${RESULT}`,
+            additional_kwargs: {
+              confirmation: {
+                action_id: ACTION,
+                outcome: "executed",
+                continue_agent: continueAgent,
+              },
+            },
           },
         ]
       : []),
@@ -187,6 +195,48 @@ for (const scheme of ["light", "dark"] as const) {
           path: `${SHOTS}/confirm-running-landed-${scheme}.png`,
         });
       }
+    });
+
+    test("a posted result that offers Continue <agent> shows it on the card once it lands", async ({
+      page,
+    }) => {
+      const world = await open(
+        page,
+        scheme,
+        [delegation],
+        RUNNING,
+        "researcher",
+      );
+      const card = page.getByTestId("pending-action");
+      await card.getByTestId("confirm").click();
+      await expect(card.getByTestId("running-state")).toBeVisible();
+      await expect(card.getByTestId("continue-agent")).toHaveCount(0);
+      await expect
+        .poll(() => world.stateReads, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+      world.landed = true;
+      await expect(card.getByTestId("continue-agent")).toHaveText(
+        "Continue researcher",
+        { timeout: 20_000 },
+      );
+      await noLowContrast(page);
+    });
+
+    test("a running card with nothing to continue offers no Continue", async ({
+      page,
+    }) => {
+      const world = await open(page, scheme, [delegation], RUNNING);
+      const card = page.getByTestId("pending-action");
+      await card.getByTestId("confirm").click();
+      await expect
+        .poll(() => world.stateReads, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+      world.landed = true;
+      await expect(card.getByTestId("running-state")).toHaveText(
+        "Finished — the result is in this chat.",
+        { timeout: 20_000 },
+      );
+      await expect(card.getByTestId("continue-agent")).toHaveCount(0);
     });
 
     test("an outbound group labels a running call", async ({ page }) => {

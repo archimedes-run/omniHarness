@@ -40,6 +40,25 @@ export function postedMessageId(actionId: string): string {
   return `confirmation-${actionId}`;
 }
 
+/** What a chat found for a running card: its result was posted. */
+export interface PostedResult {
+  /** "Continue <agent>": the agent stopped at this call (from the posted
+   *  message's own confirmation record), else null. */
+  continueAgent: string | null;
+}
+
+/** The agent a posted result offers to continue, from the message the
+ *  gateway posted (additional_kwargs.confirmation.continue_agent). */
+export function postedContinueAgent(message: {
+  additional_kwargs?: unknown;
+}): string | null {
+  const kwargs = message.additional_kwargs as
+    | { confirmation?: { continue_agent?: unknown } }
+    | undefined;
+  const agent = kwargs?.confirmation?.continue_agent;
+  return typeof agent === "string" && agent ? agent : null;
+}
+
 /** Milliseconds until expiry; negative once it has passed. */
 export function msRemaining(expiresAt: string, now: Date): number {
   return new Date(expiresAt).getTime() - now.getTime();

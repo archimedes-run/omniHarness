@@ -176,6 +176,18 @@ class PendingStore:
                 out.append(action)
         return out
 
+    def open_in_thread(self, thread_id: str | None, now: datetime) -> list[PendingAction]:
+        """Unresolved, unexpired, unclaimed actions of ONE thread, read-only:
+        what a new proposal in that thread is compared with. Unlike
+        `open_actions` it writes nothing (an expired action is simply not
+        open), so it is cheap enough to run on every Tier 3 proposal."""
+        out = []
+        for path in sorted(self.directory.glob("*.json")):
+            action = self.get(path.stem)
+            if action and action.thread_id == thread_id and action.outcome is None and action.claimed_by is None and not action.is_expired(now):
+                out.append(action)
+        return out
+
     def awaiting_post(self, *, states: tuple[str, ...] = ("waiting",)) -> list[PendingAction]:
         """Confirmed actions whose result is not (or could not be) in their thread."""
         out = []

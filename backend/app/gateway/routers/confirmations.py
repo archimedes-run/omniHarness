@@ -202,6 +202,17 @@ _SLOTS = _ConfirmSlots()
 #: How long a confirm request waits for its call before answering RUNNING.
 #: A module value so tests can shorten it.
 CONFIRM_REPLY_WAIT_SECONDS = 10.0
+
+
+def answers_running(action: Any) -> bool:
+    """Whether a confirm request may answer RUNNING for this action: only a
+    long-running call, a delegation. Any other call is waited for, so its
+    card still gets Continue <agent> and the lead's resumed run, as before."""
+    from app.policy.middleware import ONE_OPEN_CARD_PER_TURN
+
+    return action is not None and action.tool_name in ONE_OPEN_CARD_PER_TURN
+
+
 #: Confirmed, claimed and still running: its result is posted into the chat
 #: when it finishes. Not a refusal: the card has nothing left to press.
 CONFIRM_RUNNING = "running"
@@ -840,35 +851,35 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # its slot until the pool thread finishes, and its result is still posted.
     #: Set when the route has answered RUNNING: the card has nothing more to
     #: say, so the chat is told how the call ended, failure included.
-    detached = {"running": False}
+    detached = {"running": False, "flow_done": False}
     work = asyncio.get_running_loop().create_task(
         _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via, request=request, detached=detached),
     )
     _CONFIRMING.add(work)
     work.add_done_callback(_CONFIRMING.discard)
-    if not posts:
-        # No chat to post the result into: the response is the only place it
-        # is shown, so it waits for it.
+    if not posts or not answers_running(action):
+        # No chat to post the result into, or a call that is not long-running:
+        # the response carries what only it can (the result, Continue
+        # <agent>, the run the lead resumes in), so it waits for it.
         return await asyncio.shield(work)
-    # THE REQUEST NEVER WAITS FOR A LONG CALL. A confirmed `task` runs its
+    # THE REQUEST NEVER WAITS FOR A DELEGATION. A confirmed `task` runs its
     # whole subagent, which can take minutes (subagents.timeout_seconds): the
     # route used to hold the request open for all of it, past any client's
-    # timeout (eval E-1). A call that finishes quickly answers as before; one
+    # timeout (eval E-1). One that finishes quickly answers as before; one
     # still running after CONFIRM_REPLY_WAIT_SECONDS answers RUNNING, and the
-    # detached task posts its result into the chat when it finishes.
-    # RUNNING only once the call is claimed: before that it can still be
-    # refused (its source gone, a wrong count), and that answer is the card's.
+    # detached task posts its result (or why it did not complete) into the
+    # chat when it finishes.
+    # RUNNING only once the call is claimed and still running: before the
+    # claim it can still be refused (that answer is the card's), and once the
+    # flow has returned the rest (post, resume) is short, so it is waited for.
     wait = CONFIRM_REPLY_WAIT_SECONDS
     while True:
         try:
             return await asyncio.wait_for(asyncio.shield(work), timeout=wait)
         except TimeoutError:
             current = middleware.pending.get(action_id)
-            if current is not None and current.claimed_by:
+            if current is not None and current.claimed_by and not detached["flow_done"]:
                 detached["running"] = True
-                if work.done():
-                    # It finished as the wait ran out: its own answer stands.
-                    return work.result()
                 return ResolveResponse(outcome=CONFIRM_RUNNING, action_id=action_id, message=CONFIRM_RUNNING_MESSAGE, detail={"running": True})
             wait = 1.0
 
@@ -901,6 +912,10 @@ async def _confirm_and_post(
         result = await _off_the_request_pool(flow.explicit, action_id, confirm=True, run_tool=run_tool, supplied_count=typed_count, answered=answered)
     finally:
         _SLOTS.give_back(user_id)
+        if detached is not None:
+            # From here the route waits for this task rather than answer
+            # RUNNING, so a failure is either on the card or in the chat.
+            detached["flow_done"] = True
 
     detail = _response_detail(result.detail)
     message = for_display(result.message)[0]

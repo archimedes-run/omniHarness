@@ -25,6 +25,8 @@ card is open makes no new card.
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import json
 import os
 import threading
@@ -402,43 +404,105 @@ def delegated_policy_dir():
 # ---------------------------------------------------------------------------
 
 
+def _failing_task_tools(monkeypatch, hold: tuple[threading.Event, threading.Event] | None) -> None:
+    """The confirmed `task` raises after its claim (building its subagent's
+    tools fails), optionally once released."""
+    task_tool = importlib.import_module("omniharness.tools.builtins.task_tool")
+
+    def broken(**_kwargs):
+        if hold is not None:
+            entered, release = hold
+            entered.set()
+            assert release.wait(30)
+        raise RuntimeError("the tool sources could not be loaded")
+
+    monkeypatch.setattr(task_tool, "subagent_base_tools", broken)
+
+
+def _delegation_card(gw) -> tuple[str, dict]:
+    thread_id = _thread(gw)
+    _say(gw, thread_id, "ask a helper to wipe the nightly backup", [AIMessage(content="", tool_calls=[DELEGATE]), AIMessage(content="Waiting.")])
+    [card] = _pending(gw, "task")
+    return thread_id, card
+
+
 def test_a_failure_after_running_is_posted_in_the_chat(gateway, monkeypatch) -> None:  # noqa: F811
+    import app.gateway.routers.confirmations as confirmations
+
+    monkeypatch.setattr(confirmations, "CONFIRM_REPLY_WAIT_SECONDS", 0.3)
+    thread_id, card = _delegation_card(gateway)
+    entered, release = threading.Event(), threading.Event()
+    _failing_task_tools(monkeypatch, (entered, release))
+    worker, box = _confirm_in_background(gateway, card["id"])
+    try:
+        assert entered.wait(30), "the confirmed call never started"
+        worker.join(15)
+        assert "response" in box, "the confirm request waited for the delegation"
+        assert box["response"].json()["outcome"] == "running", box["response"].json()
+    finally:
+        release.set()
+
+    assert _eventually(lambda: _report(gateway, thread_id, card["id"]) is not None, 30), "the failure was never told in the chat"
+    posted = _report(gateway, thread_id, card["id"])
+    assert "I could not complete **task** after you confirmed it" in posted["content"], posted["content"]
+    assert "the tool sources could not be loaded" in posted["content"], posted["content"]
+    assert posted["additional_kwargs"]["confirmation"]["outcome"] == "failed"
+    assert posted["additional_kwargs"]["confirmation"]["continue_agent"] is None
+
+
+def test_a_failure_the_card_shows_is_not_also_posted(gateway, monkeypatch) -> None:  # noqa: F811
+    """A delegation that fails before the wait runs out answers on the card."""
+    thread_id, card = _delegation_card(gateway)
+    _failing_task_tools(monkeypatch, None)
+    assert gateway.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()["outcome"] == "failed"
+    assert _report(gateway, thread_id, card["id"]) is None
+
+
+def test_a_slow_call_that_is_not_a_delegation_is_waited_for_and_keeps_continue(gateway, monkeypatch) -> None:  # noqa: F811
+    """Only a delegation answers RUNNING: a subagent's own slow call is
+    waited for, so its card still gets Continue <agent>, as on main."""
     import test_delegated_confirmation as delegated
     from test_delegated_confirmation import _user_delegates_and_subagent_proposes
 
     import app.gateway.routers.confirmations as confirmations
 
     monkeypatch.setattr(confirmations, "CONFIRM_REPLY_WAIT_SECONDS", 0.3)
-    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
-    delegated.WIPE_OUT["raise"] = "the backup volume is offline"
+    _thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
     entered, release = threading.Event(), threading.Event()
     delegated.HOLD["wipe"] = (entered, release)
     worker, box = _confirm_in_background(gateway, wipe["id"])
     try:
-        assert entered.wait(30), "the confirmed call never started"
-        worker.join(15)
-        assert "response" in box, "the confirm request waited for the call"
-        assert box["response"].json()["outcome"] == "running", box["response"].json()
+        assert entered.wait(30)
+        worker.join(1.5)
+        assert "response" not in box, "a non-delegation answered before its call finished"
     finally:
         release.set()
-
-    def failure() -> dict | None:
-        return _report(gateway, thread_id, wipe["id"])
-
-    assert _eventually(lambda: failure() is not None, 30), "the failure was never told in the chat"
-    posted = failure()
-    assert "could not complete **wipe_backup** after you confirmed it" in posted["content"], posted["content"]
-    assert "the backup volume is offline" in posted["content"], posted["content"]
-    assert posted["additional_kwargs"]["confirmation"]["outcome"] == "failed"
-    assert posted["additional_kwargs"]["confirmation"]["continue_agent"] is None
+    worker.join(30)
+    body = box["response"].json()
+    assert body["outcome"] == "executed", body
+    assert body["detail"]["continue_agent"] == "general-purpose", body
 
 
-def test_a_failure_the_card_shows_is_not_also_posted(gateway) -> None:  # noqa: F811
-    """A call that fails before the wait runs out answers on the card, as before."""
-    import test_delegated_confirmation as delegated
-    from test_delegated_confirmation import _user_delegates_and_subagent_proposes
+def test_a_failure_while_the_card_waits_on_the_rest_is_answered_not_lost(gateway, monkeypatch) -> None:  # noqa: F811
+    """The flow failed just before the wait ran out, and the rest (the
+    resume check) is still running: the card answers the failure, never
+    RUNNING with the failure left unsaid."""
+    import app.gateway.resume as resume
+    import app.gateway.routers.confirmations as confirmations
 
-    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
-    delegated.WIPE_OUT["raise"] = "the backup volume is offline"
-    assert gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()["outcome"] == "failed"
-    assert _report(gateway, thread_id, wipe["id"]) is None
+    monkeypatch.setattr(confirmations, "CONFIRM_REPLY_WAIT_SECONDS", 0.3)
+    real = resume.resume_after_confirm
+
+    async def slow(*args, **kwargs):
+        # A loop timer, not asyncio.sleep (the fixture shortens that).
+        loop = asyncio.get_running_loop()
+        later = loop.create_future()
+        loop.call_later(1.5, later.set_result, None)
+        await later
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(resume, "resume_after_confirm", slow)
+    _thread_id, card = _delegation_card(gateway)
+    _failing_task_tools(monkeypatch, None)
+    body = gateway.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()
+    assert body["outcome"] == "failed", body

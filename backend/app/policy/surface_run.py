@@ -112,6 +112,11 @@ def invoke(tool: Any, arguments: dict, *, runtime: Any, state: Any, call_id: str
 
 
 def _await(coro: Any) -> Any:
+    # A fresh loop each time: its model connections close with it
+    # (omniharness/models/loop_local_http.py).
+    from omniharness.models.loop_local_http import run_and_release
+
+    coro = run_and_release(coro)
     try:
         asyncio.get_running_loop()
     except RuntimeError:

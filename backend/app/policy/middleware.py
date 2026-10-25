@@ -52,9 +52,20 @@ def _now() -> datetime:
 #: claim and run a confirmation. Never returned when executing.
 _WOULD_RUN: Any = object()
 
-#: Held while a Tier 3 call is checked against the open proposals and saved
-#: (PolicyMiddleware._require_confirmation): one card per proposal.
-_PROPOSING = threading.Lock()
+#: One lock per (owner, thread), held while a Tier 3 call is checked against
+#: that thread's open proposals and saved (PolicyMiddleware.
+#: _require_confirmation). Per thread: other chats never wait on it.
+_PROPOSING: dict[tuple[str, str], threading.Lock] = {}
+_PROPOSING_GUARD = threading.Lock()
+
+
+def _proposing(owner_id: Any, thread_id: Any) -> threading.Lock:
+    key = (str(owner_id or ""), str(thread_id or ""))
+    with _PROPOSING_GUARD:
+        lock = _PROPOSING.get(key)
+        if lock is None:
+            lock = _PROPOSING[key] = threading.Lock()
+        return lock
 
 
 #: Tools of which one turn has at most ONE open card per agent: delegating
@@ -732,7 +743,7 @@ class PolicyMiddleware(AgentMiddleware):
         # is made and the model is told to end its turn. The check and the save
         # are one step, so calls dispatched together (one model step, parallel
         # tool calls) make one.
-        with _PROPOSING:
+        with _proposing(self._owner_id(request), self._thread_id(request)):
             earlier = self._open_duplicate(request, tool_name, arguments, privacy.turn_key, now)
             if earlier is None:
                 action = PendingAction(
@@ -798,12 +809,10 @@ class PolicyMiddleware(AgentMiddleware):
         any_call = tool_name in ONE_OPEN_CARD_PER_TURN
         thread_id, owner_id = self._thread_id(request), self._owner_id(request)
         requester, delegation_key = self._requester(request), self._delegation_key(request)
-        for action in self.pending.open_actions(now):
+        for action in self.pending.open_in_thread(thread_id, now):
             if (
-                action.claimed_by is None
-                and action.tool_name == tool_name
+                action.tool_name == tool_name
                 and action.group_key == turn_key
-                and action.thread_id == thread_id
                 and action.owner_id == owner_id
                 and action.requester == requester
                 and action.delegation_key == delegation_key

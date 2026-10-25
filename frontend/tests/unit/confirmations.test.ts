@@ -8,6 +8,7 @@ import {
   isRunning,
   isSettled,
   msRemaining,
+  postedContinueAgent,
   postedMessageId,
   RUNNING_PICKUP_INTERVAL_MS,
   RUNNING_PICKUP_MAX_TRIES,
@@ -173,5 +174,27 @@ describe("a confirmation that is still running", () => {
     const window = RUNNING_PICKUP_INTERVAL_MS * RUNNING_PICKUP_MAX_TRIES;
     expect(window).toBeGreaterThan(900_000);
     expect(window).toBeLessThanOrEqual(30 * 60_000);
+  });
+});
+
+describe("Continue <agent> from a posted result", () => {
+  it("is read from the message's own confirmation record", () => {
+    expect(
+      postedContinueAgent({
+        additional_kwargs: { confirmation: { continue_agent: "researcher" } },
+      }),
+    ).toBe("researcher");
+  });
+
+  it("is absent when the record names no agent, or there is none", () => {
+    expect(
+      postedContinueAgent({
+        additional_kwargs: { confirmation: { continue_agent: null } },
+      }),
+    ).toBeNull();
+    expect(postedContinueAgent({})).toBeNull();
+    expect(
+      postedContinueAgent({ additional_kwargs: { confirmation: "x" } }),
+    ).toBeNull();
   });
 });

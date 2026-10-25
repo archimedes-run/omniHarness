@@ -9,7 +9,11 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { getAPIClient } from "../api";
 import { fetch } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
-import { postedMessageId } from "../confirmations/logic";
+import {
+  postedContinueAgent,
+  postedMessageId,
+  type PostedResult,
+} from "../confirmations/logic";
 import { useI18n } from "../i18n/hooks";
 import type { FileInMessage } from "../messages/utils";
 import type { LocalSettings } from "../settings";
@@ -276,18 +280,29 @@ export function useThreadStream({
   useEffect(() => {
     setLandedMessages([]);
   }, [threadId]);
+  // ONE read of the thread for every running card; nothing is added if the
+  // person has moved to another chat meanwhile.
   const pickUpPosted = useCallback(
-    async (actionId: string): Promise<boolean> => {
+    async (actionIds: string[]): Promise<Record<string, PostedResult>> => {
       const id = threadIdRef.current;
-      if (!id) return false;
+      if (!id || actionIds.length === 0) return {};
       const state = await getAPIClient(isMock).threads.getState(id);
+      if (threadIdRef.current !== id) return {};
       const values = (state?.values ?? {}) as { messages?: Message[] };
-      const posted = (values.messages ?? []).find(
-        (message) => message.id === postedMessageId(actionId),
-      );
-      if (!posted) return false;
-      setLandedMessages((previous) => appendUnique(previous, [posted]));
-      return true;
+      const found: Record<string, PostedResult> = {};
+      const landed: Message[] = [];
+      for (const actionId of actionIds) {
+        const posted = (values.messages ?? []).find(
+          (message) => message.id === postedMessageId(actionId),
+        );
+        if (!posted) continue;
+        landed.push(posted);
+        found[actionId] = { continueAgent: postedContinueAgent(posted) };
+      }
+      if (landed.length > 0) {
+        setLandedMessages((previous) => appendUnique(previous, landed));
+      }
+      return found;
     },
     [isMock],
   );
