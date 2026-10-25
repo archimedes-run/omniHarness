@@ -753,6 +753,31 @@ def connectors_off_section(slugs: Any) -> str:
     )
 
 
+CODING_JOBS_SECTION = """
+<coding_jobs>
+You can run coding jobs with the `code_job` tool: OpenCode builds or changes software in this chat's container sandbox, and the system checks the result before you see it.
+- For a request to create, build, fix or change code or an app, call `code_job` right away.
+  This overrides the clarification rules for coding requests: do not ask the person to choose a language,
+  a template, a package manager or a folder name. Pick sensible defaults (a web app: Vite + React,
+  JavaScript, npm, a short folder name taken from the request), and say which you picked in one line
+  after the result. Ask first only when the request cannot be understood at all.
+- To show a web app, pass `verify_command: "npm run build"`, `expect_files: ["dist/index.html"]` and `publish_dir: "dist"`; the built app then opens in the artifact panel by itself.
+- Report the job's STATUS exactly as the tool returns it, with its evidence. Only a verified job may be called done or built; anything else is unverified or failed, and you say what was missing.
+</coding_jobs>
+"""
+
+
+def coding_jobs_section() -> str:
+    """Spec 009, Slice 1: present only when a coding job can run here (the
+    code_job tool is offered under the same condition)."""
+    from omniharness.code_jobs import get_code_job_controller
+
+    controller = get_code_job_controller()
+    if controller is None or controller.unavailable_reason() is not None:
+        return ""
+    return CODING_JOBS_SECTION
+
+
 def apply_prompt_template(
     subagent_enabled: bool = False,
     max_concurrent_subagents: int = 3,
@@ -814,4 +839,4 @@ def apply_prompt_template(
         custom_mounts_section=custom_mounts_section,
     )
 
-    return prompt + connectors_off_section(connectors_off) + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"
+    return prompt + connectors_off_section(connectors_off) + coding_jobs_section() + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"

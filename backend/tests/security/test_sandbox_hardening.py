@@ -123,6 +123,9 @@ def test_sandboxes_run_under_the_default_seccomp_profile(monkeypatch) -> None:
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
     cmd = " ".join(_run_cmd(monkeypatch))
     assert "seccomp=unconfined" not in cmd and "--privileged" not in cmd, cmd
+    # spec 009 FR-017: no privilege escalation inside the sandbox.
+    args = _run_cmd(monkeypatch)
+    assert args[args.index("--security-opt") + 1] == "no-new-privileges", args
 
 
 # ── egress: registries only, GET/HEAD, 443 ──────────────────────────────────
@@ -214,7 +217,7 @@ def test_docker_end_to_end() -> None:
 
 
 def _inspect(name: str, *, env: list[str] | None, security_opt: list[str] | None = None) -> dict:
-    return {"Name": f"/{name}", "Created": "2026-10-23T10:00:00Z", "NetworkSettings": {"Ports": {}}, "Config": {"Env": env or []}, "HostConfig": {"SecurityOpt": security_opt}}
+    return {"Name": f"/{name}", "Created": "2026-10-23T10:00:00Z", "NetworkSettings": {"Ports": {}}, "Config": {"Env": env or []}, "HostConfig": {"SecurityOpt": security_opt if security_opt is not None else ["no-new-privileges"]}}
 
 
 def _backend_with_containers(monkeypatch, entries: list[dict]):
@@ -257,11 +260,13 @@ def test_containers_without_this_gateways_key_or_with_unconfined_seccomp_are_rem
         _inspect(good, env=[f"SANDBOX_API_KEY={sandbox_api_key(good)}"]),
         _inspect("omni-harness-sandbox-0000000b", env=["PATH=/bin"]),  # started before #98
         _inspect("omni-harness-sandbox-0000000c", env=["SANDBOX_API_KEY=someone-elses"]),
-        _inspect("omni-harness-sandbox-0000000d", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000d')}"], security_opt=["seccomp=unconfined"]),
+        _inspect("omni-harness-sandbox-0000000d", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000d')}"], security_opt=["seccomp=unconfined", "no-new-privileges"]),
+        # Keyed and confined but started before spec 009: privilege escalation possible.
+        _inspect("omni-harness-sandbox-0000000e", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000e')}"], security_opt=[]),
     ]
     backend, stopped = _backend_with_containers(monkeypatch, entries)
     assert [i.container_name for i in backend.list_running()] == [good]
-    assert sorted(stopped) == ["omni-harness-sandbox-0000000b", "omni-harness-sandbox-0000000c", "omni-harness-sandbox-0000000d"]
+    assert sorted(stopped) == ["omni-harness-sandbox-0000000b", "omni-harness-sandbox-0000000c", "omni-harness-sandbox-0000000d", "omni-harness-sandbox-0000000e"]
 
 
 def test_discover_removes_an_unkeyed_container_instead_of_adopting_it(monkeypatch) -> None:

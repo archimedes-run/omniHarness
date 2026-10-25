@@ -172,7 +172,8 @@ def _egress_args(egress: tuple[str, str] | None) -> list[str]:
 
 def _is_hardened(entry: dict, container_name: str) -> bool:
     """A container this gateway may adopt: keyed with this gateway's key for
-    its name (#98) and not seccomp-unconfined or privileged (#99). One started
+    its name (#98), not seccomp-unconfined or privileged (#99), and started
+    with no-new-privileges (spec 009). One started
     before those changes (or by anything else) is not adopted."""
     env = (entry.get("Config") or {}).get("Env") or []
     try:
@@ -181,8 +182,12 @@ def _is_hardened(entry: dict, container_name: str) -> bool:
         return False
     keyed = [e for e in env if e.startswith(f"{SANDBOX_KEY_ENV}=")]
     host = entry.get("HostConfig") or {}
-    unconfined = any("unconfined" in str(opt) for opt in host.get("SecurityOpt") or [])
-    return keyed == [expected] and not unconfined and not host.get("Privileged")
+    opts = [str(opt) for opt in host.get("SecurityOpt") or []]
+    unconfined = any("unconfined" in opt for opt in opts)
+    # spec 009 FR-017: started with no-new-privileges (no sudo, no setuid
+    # escalation). One started before that is replaced, not adopted.
+    no_new_privileges = any(opt.replace("=", ":") in ("no-new-privileges", "no-new-privileges:true") for opt in opts)
+    return keyed == [expected] and not unconfined and no_new_privileges and not host.get("Privileged")
 
 
 SANDBOX_REFUSED_WITHOUT_NETWORK = (
@@ -543,6 +548,10 @@ class LocalContainerBackend(SandboxBackend):
                 "gateway.docker.internal:0.0.0.0",
                 "--name",
                 container_name,
+                # No privilege escalation inside (spec 009 FR-017): the image
+                # has no sudo grant and no setuid binaries; this makes sure.
+                "--security-opt",
+                "no-new-privileges",
             ]
         )
 

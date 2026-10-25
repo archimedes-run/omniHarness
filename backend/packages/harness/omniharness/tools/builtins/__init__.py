@@ -1,4 +1,5 @@
 from .clarification_tool import ask_clarification_tool
+from .code_job_tool import code_job_tool
 from .mcp_build_tool import mcp_build_tool
 from .present_file_tool import present_file_tool
 from .preview_tool import preview_tool
@@ -9,6 +10,7 @@ from .view_image_tool import view_image_tool
 
 __all__ = [
     "ask_clarification_tool",
+    "code_job_tool",
     "mcp_build_tool",
     "present_file_tool",
     "preview_tool",
