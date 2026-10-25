@@ -141,6 +141,16 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
         if "stream_usage" in getattr(model_class, "model_fields", {}):
             model_settings_from_config["stream_usage"] = True
 
+    # One connection pool per event loop: the library's shared default client
+    # let a subagent (its own loop) reuse the lead's connections (the server's
+    # loop) and hang (models/loop_local_http.py).
+    from omniharness.models.loop_local_http import loop_local_async_client, wants_loop_local_client
+
+    if wants_loop_local_client(model_class, model_settings_from_config, kwargs):
+        client = loop_local_async_client()
+        if client is not None:
+            model_settings_from_config["http_async_client"] = client
+
     model_instance = model_class(**kwargs, **model_settings_from_config)
 
     callbacks = build_tracing_callbacks()

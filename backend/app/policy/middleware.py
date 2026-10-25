@@ -20,6 +20,7 @@ than hidden.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -50,6 +51,27 @@ def _now() -> datetime:
 #: A probe's answer (`_complete_confirmation(execute=False)`): this turn would
 #: claim and run a confirmation. Never returned when executing.
 _WOULD_RUN: Any = object()
+
+#: Held while a Tier 3 call is checked against the open proposals and saved
+#: (PolicyMiddleware._require_confirmation): one card per proposal.
+_PROPOSING = threading.Lock()
+
+
+def canonical_arguments(arguments: Any) -> str:
+    """A call's arguments as compared for "the same proposal": key order and
+    spacing ignored, values exact."""
+    import json
+
+    return json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def duplicate_proposal_text(earlier: PendingAction) -> str:
+    """What the model is told when it repeats a proposal whose card is open."""
+    return (
+        f"Not proposed again: this is the same {earlier.tool_name} call as the one already waiting for the person "
+        f"to confirm on its card ({earlier.id}). Nothing new was proposed and nothing has run. "
+        "Do not propose it again; stop here and let the person answer the card."
+    )
 
 
 @dataclass
@@ -698,31 +720,44 @@ class PolicyMiddleware(AgentMiddleware):
         # stated in, not whatever the thread holds later.
         privacy = self._private_read(request, ruleset)
 
-        action = PendingAction(
-            plan_text="",
-            tool_name=tool_name,
-            arguments=arguments,
-            targets=targets,
-            tier_at_statement=decision.tier,
-            expires_at=default_expiry(now, ruleset.expires_after_seconds),
-            thread_id=self._thread_id(request),
-            requester=self._requester(request),
-            delegation_chain=self._delegation_chain(request),
-            origin=origin,
-            origin_source=origin_source,
-            origin_via=origin_via,
-            owner_id=self._owner_id(request),
-            surface=self._surface(request),
-            delegation_key=self._delegation_key(request),
-            run_markers=self._run_markers(request),
-            private_read=privacy.private,
-            outbound=is_outbound(tool_name, ruleset),
-            group_key=privacy.turn_key,
-        )
-        action.plan_text = self._plan_text_for(action)
-        if extra_note:
-            action.plan_text = f"{action.plan_text}\n\n{extra_note}"
-        self.pending.save(action)
+        # ONE CARD PER PROPOSAL. A model told "please confirm" re-issued the
+        # same call again and again in one turn (eval E-2: eight open cards).
+        # The same call, from the same agent, in the same thread and turn,
+        # while its card is still open, is not a new proposal: no card is
+        # made, and the model is told the earlier one is still waiting. The
+        # check and the save are one step, so two identical calls dispatched
+        # together (one model step, parallel tool calls) make one card.
+        with _PROPOSING:
+            earlier = self._open_duplicate(request, tool_name, arguments, privacy.turn_key, now)
+            if earlier is None:
+                action = PendingAction(
+                    plan_text="",
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    targets=targets,
+                    tier_at_statement=decision.tier,
+                    expires_at=default_expiry(now, ruleset.expires_after_seconds),
+                    thread_id=self._thread_id(request),
+                    requester=self._requester(request),
+                    delegation_chain=self._delegation_chain(request),
+                    origin=origin,
+                    origin_source=origin_source,
+                    origin_via=origin_via,
+                    owner_id=self._owner_id(request),
+                    surface=self._surface(request),
+                    delegation_key=self._delegation_key(request),
+                    run_markers=self._run_markers(request),
+                    private_read=privacy.private,
+                    outbound=is_outbound(tool_name, ruleset),
+                    group_key=privacy.turn_key,
+                )
+                action.plan_text = self._plan_text_for(action)
+                if extra_note:
+                    action.plan_text = f"{action.plan_text}\n\n{extra_note}"
+                self.pending.save(action)
+        if earlier is not None:
+            logger.info("policy: %s repeats open proposal %s; no new card", tool_name, earlier.id)
+            return self._mark_trusted_ack(request, self._as_tool_result(request, duplicate_proposal_text(earlier)))
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
         if self._is_invited(request):
             from omniharness.agents.invitation import STOPPED_AT_KEY
@@ -731,6 +766,34 @@ class PolicyMiddleware(AgentMiddleware):
             if isinstance(context, dict):
                 context.setdefault(STOPPED_AT_KEY, []).append({"id": action.id, "tool": tool_name})
         return self._mark_trusted_ack(request, self._as_tool_result(request, self._model_plan_text(action)))
+
+    def _open_duplicate(self, request, tool_name: str, arguments: dict, turn_key: str, now: datetime) -> PendingAction | None:
+        """An open proposal this call repeats exactly, or None.
+
+        Exactly: the same tool with the same canonical arguments, from the same
+        agent (requester, delegation), for the same person, in the same thread
+        and the same turn, and still open (unresolved, unclaimed, unexpired).
+        A call that differs in anything is a different proposal and gets its
+        own card. A turn that cannot be identified is never matched.
+        """
+        if not turn_key:
+            return None
+        wanted = canonical_arguments(arguments)
+        thread_id, owner_id = self._thread_id(request), self._owner_id(request)
+        requester, delegation_key = self._requester(request), self._delegation_key(request)
+        for action in self.pending.open_actions(now):
+            if (
+                action.claimed_by is None
+                and action.tool_name == tool_name
+                and action.group_key == turn_key
+                and action.thread_id == thread_id
+                and action.owner_id == owner_id
+                and action.requester == requester
+                and action.delegation_key == delegation_key
+                and canonical_arguments(action.arguments) == wanted
+            ):
+                return action
+        return None
 
     def _model_plan_text(self, action: PendingAction) -> str:
         """The plan as the MODEL is told it: for ledger_apply, the card's plan

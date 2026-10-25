@@ -50,6 +50,14 @@ def _norm(text: Any) -> str:
     return " ".join(re.sub(r"[^\w\s]", " ", str(text or "").lower()).split())
 
 
+def _without_project_word(normalised: str) -> str:
+    """A normalised reference without one trailing word "project" ("eval
+    garden project" -> "eval garden"); empty when there is none, or nothing
+    would be left."""
+    head, _, last = normalised.rpartition(" ")
+    return head if last == "project" and head else ""
+
+
 #: The shortest reference matched as a close title: "e" or "re" would match
 #: almost anything.
 _CLOSE_MIN = 3
@@ -478,6 +486,12 @@ class LedgerService:
             wanted = _norm(key)
             owned = s.scalars(select(LedgerProjectRow).where(LedgerProjectRow.owner_id == user_id)).all()
             matches = [row for row in owned if wanted and _norm(row.name) == wanted]
+            bare = _without_project_word(wanted)
+            if not matches and bare:
+                # "Eval Garden project" for the project "Eval Garden": the
+                # name plus the word "project", nothing else. Still the whole
+                # name, and still refused when it names more than one.
+                matches = [row for row in owned if _norm(row.name) == bare]
         if len(matches) == 1:
             return to_dict(matches[0])
         if len(matches) > 1:
@@ -656,6 +670,15 @@ class LedgerService:
             return "\n".join(lines)
         key = project.lower()
         match = next((p for p in projects if p["id"] == project or p["name"].lower() == key), None)
+        if match is None:
+            # As a change names one (_project): the name written differently,
+            # or with the word "project" after it; never a partial name.
+            wanted = _norm(project)
+            bare = _without_project_word(wanted)
+            found = [p for p in projects if wanted and _norm(p["name"]) == wanted] or [p for p in projects if bare and _norm(p["name"]) == bare]
+            if len(found) > 1:
+                return f"More than one project is called {project!r}; name it by id."
+            match = found[0] if found else None
         if match is None:
             return f"There is no project {project!r}."
         v = self.view(user_id=user_id, project_id=match["id"]) or {}

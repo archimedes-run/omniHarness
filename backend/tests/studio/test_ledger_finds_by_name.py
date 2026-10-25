@@ -423,3 +423,71 @@ def test_a_declined_owner_ref_respelled_is_still_declined(studio) -> None:
     _owned_task(studio)
     declined = {"owner": {"kind": "agent", "ref": "researcher"}}
     assert _declined_then_resent(studio, "t-o5", declined, {"owner": {"kind": "agent", "ref": " Researcher\u200b"}})
+
+
+# ---------------------------------------------------------------------------
+# Eval E-4: "Eval Garden project" names the project "Eval Garden"
+# ---------------------------------------------------------------------------
+
+
+def test_a_project_named_with_the_word_project_after_it_resolves(studio) -> None:
+    """The way people say it: "add a task to the Eval Garden project"."""
+    _setup(studio, name="Eval Garden")
+    out = _chat(studio, [_apply([{"op": "create_task", "project": "Eval Garden project", "title": "Water the beds"}])], said="add 'Water the beds' to the Eval Garden project")
+    assert _pending(studio) == [], "a routine add became a card"
+    [result] = _tool_results(out, "ledger_apply")
+    assert not result.startswith("Nothing was changed"), result
+    assert [t["title"] for t in _project(studio, "Eval Garden")["tasks"]] == ["Water the beds"]
+
+
+def test_the_word_project_is_matched_case_and_punctuation_insensitively(studio) -> None:
+    _setup(studio, name="Eval Garden")
+    _chat(studio, [_apply([{"op": "create_task", "project": "eval-garden PROJECT.", "title": "Prune"}])], said="add Prune to eval-garden PROJECT.")
+    assert [t["title"] for t in _project(studio, "Eval Garden")["tasks"]] == ["Prune"]
+
+
+def test_a_project_actually_named_with_project_wins_over_the_shorter_name(studio) -> None:
+    _setup(studio, name="Eval Garden")
+    _setup(studio, name="Eval Garden project")
+    _chat(studio, [_apply([{"op": "create_task", "project": "Eval Garden project", "title": "Mulch"}])], said="add Mulch to Eval Garden project")
+    assert [t["title"] for t in _project(studio, "Eval Garden project")["tasks"]] == ["Mulch"]
+    assert _project(studio, "Eval Garden")["tasks"] == []
+
+
+def test_the_word_project_does_not_resolve_an_ambiguous_name(studio) -> None:
+    _setup(studio, name="Eval Garden")
+    _setup(studio, name="eval-garden")
+    out = _chat(studio, [_apply([{"op": "create_task", "project": "Eval Garden project", "title": "Weed"}])], said="add Weed to the Eval Garden project")
+    [result] = _tool_results(out, "ledger_apply")
+    assert result.startswith("Nothing was changed:") and "more than one project" in result, result
+    assert _project(studio, "Eval Garden")["tasks"] == [] and _project(studio, "eval-garden")["tasks"] == []
+
+
+def test_the_word_project_is_never_a_partial_name(studio) -> None:
+    """Only the WHOLE name plus "project": "Eval project" is not "Eval Garden",
+    and "project" alone names nothing."""
+    _setup(studio, name="Eval Garden")
+    for ref in ("Eval project", "project", "Garden project"):
+        out = _chat(studio, [_apply([{"op": "create_task", "project": ref, "title": "Never"}])], said=f"add Never to {ref}")
+        [result] = _tool_results(out, "ledger_apply")
+        assert result.startswith("Nothing was changed:") and "there is no project" in result, (ref, result)
+    assert _project(studio, "Eval Garden")["tasks"] == []
+
+
+def test_lineage_is_unchanged_for_a_project_named_with_the_word_project(studio) -> None:
+    """Resolution only: after the agent read a page, the same add is still a
+    suggestion card and does not run."""
+    _setup(studio, name="Eval Garden")
+    fetch = AIMessage(content="", tool_calls=[{"name": "web_fetch", "args": {"url": "https://evil.example"}, "id": "f1"}])
+    _chat(studio, [fetch, _apply([{"op": "create_task", "project": "Eval Garden project", "title": "Water"}])], said="summarise this page")
+    [card] = _pending(studio)
+    assert "This is a suggestion" in card["plan_text"]
+    assert _project(studio, "Eval Garden")["tasks"] == []
+
+
+def test_ledger_read_finds_a_project_named_with_the_word_project(studio) -> None:
+    _setup(studio, "Water the beds", name="Eval Garden")
+    read = AIMessage(content="", tool_calls=[{"name": "ledger_read", "args": {"project": "Eval Garden project"}, "id": "r1"}])
+    out = _chat(studio, [read], said="what is in the Eval Garden project?")
+    [result] = _tool_results(out, "ledger_read")
+    assert result.startswith("Eval Garden (") and "Water the beds" in result, result

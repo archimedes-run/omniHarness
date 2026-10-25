@@ -199,6 +199,14 @@ class _ConfirmSlots:
 
 _SLOTS = _ConfirmSlots()
 
+#: How long a confirm request waits for its call before answering RUNNING.
+#: A module value so tests can shorten it.
+CONFIRM_REPLY_WAIT_SECONDS = 10.0
+#: Confirmed, claimed and still running: its result is posted into the chat
+#: when it finishes. Not a refusal: the card has nothing left to press.
+CONFIRM_RUNNING = "running"
+CONFIRM_RUNNING_MESSAGE = "Confirmed. It is running now, and its result will be posted in this chat when it finishes."
+
 #: Refused before the claim: too many confirmed calls are running. Nothing ran.
 CONFIRM_BUSY = "confirm_busy"
 #: What a busy refusal says, on the card and to a typed "yes" alike.
@@ -835,7 +843,27 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     )
     _CONFIRMING.add(work)
     work.add_done_callback(_CONFIRMING.discard)
-    return await asyncio.shield(work)
+    if not posts:
+        # No chat to post the result into: the response is the only place it
+        # is shown, so it waits for it.
+        return await asyncio.shield(work)
+    # THE REQUEST NEVER WAITS FOR A LONG CALL. A confirmed `task` runs its
+    # whole subagent, which can take minutes (subagents.timeout_seconds): the
+    # route used to hold the request open for all of it, past any client's
+    # timeout (eval E-1). A call that finishes quickly answers as before; one
+    # still running after CONFIRM_REPLY_WAIT_SECONDS answers RUNNING, and the
+    # detached task posts its result into the chat when it finishes.
+    # RUNNING only once the call is claimed: before that it can still be
+    # refused (its source gone, a wrong count), and that answer is the card's.
+    wait = CONFIRM_REPLY_WAIT_SECONDS
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(work), timeout=wait)
+        except TimeoutError:
+            current = middleware.pending.get(action_id)
+            if current is not None and current.claimed_by:
+                return ResolveResponse(outcome=CONFIRM_RUNNING, action_id=action_id, message=CONFIRM_RUNNING_MESSAGE, detail={"running": True})
+            wait = 1.0
 
 
 #: Confirmations in flight (held so a disconnected request's task finishes).
