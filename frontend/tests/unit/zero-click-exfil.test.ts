@@ -1,8 +1,9 @@
-import { createElement } from "react";
+import { createElement, type ComponentType, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { Markdown } from "@/components/ai-elements/markdown";
+import { ExternalLink } from "@/components/workspace/citations/external-link";
 import { MarkdownContent } from "@/components/workspace/messages/markdown-content";
 import {
   defangHost,
@@ -65,9 +66,41 @@ describe("chat markdown: injected image / autolink / link (zero-click)", () => {
     expect(html).not.toMatch(OUTSIDE);
     // Said, not silently dropped.
     expect(html).toContain("Image from attacker[.]example not loaded");
-    // The autolink shows its URL, defanged; the labelled link is a button.
-    expect(html).toContain("hxxps://attacker[.]example/c?d=");
-    expect(html).toContain("data-external-link");
+    // The autolink reads as its real URL, but like the labelled link it is a
+    // button that opens nothing until the person confirms.
+    expect(html).toContain(`>https://attacker.example/c?d=${SECRET}</button>`);
+    expect(html).not.toContain(">hxxps://");
+    expect(html.match(/data-external-link/g)).toHaveLength(2);
+  });
+
+  it("a link to any scheme but http(s) is inert text, never a button", () => {
+    const html = render(
+      "[run](javascript:alert(1)) [page](data:text/html,hi) [x](vbscript:msgbox) javascript:alert(2)",
+    );
+    expect(html).not.toContain("data-external-link");
+    expect(html).not.toMatch(/href="(javascript|data|vbscript):/i);
+    expect(html.match(/data-inert-link/g)).toHaveLength(3);
+    expect(html).toContain("javascript:alert(2)");
+  });
+
+  it("the outside-link button itself opens only http(s), whoever renders it", () => {
+    const Link = ExternalLink as ComponentType<{
+      href: string;
+      children?: ReactNode;
+    }>;
+    for (const href of [
+      "javascript:alert(1)",
+      "data:text/html,hi",
+      "vbscript:x",
+    ]) {
+      const html = renderToStaticMarkup(createElement(Link, { href }, "x"));
+      expect(html).toBe("<span>x</span>");
+    }
+    expect(
+      renderToStaticMarkup(
+        createElement(Link, { href: "https://a.example/" }, "x"),
+      ),
+    ).toContain("data-external-link");
   });
 
   it("raw HTML in agent text loads nothing from outside either", () => {

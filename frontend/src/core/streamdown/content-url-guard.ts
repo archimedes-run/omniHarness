@@ -10,6 +10,7 @@ import {
   defangHost,
   defangUrl,
   isAppUrl,
+  isHttpUrl,
   isLocalImageUrl,
 } from "@/core/display/defang";
 
@@ -34,8 +35,14 @@ import {
  *   an inline style that could load a URL;
  * - a link to another origin is not a live link: it renders as a button that
  *   shows the full URL and opens it (no referrer) only once the person
- *   confirms, so a link labelled "summary" is seen for what it sends. The
- *   app's own links are untouched.
+ *   confirms, so a link labelled "summary" is seen for what it sends. A bare
+ *   URL in the text (an autolink) is the same button and reads as its real
+ *   URL: "https://a.example/x", not "hxxps://a[.]example/x". Nothing is
+ *   fetched either way; the confirm is the boundary, and an agent's answer
+ *   is meant to carry links the person can use. The app's own links are
+ *   untouched;
+ * - only http(s) links become that button. Any other scheme (javascript:,
+ *   data:, vbscript:, file:…) is inert text: there is nothing safe to open.
  *
  * The Content-Security-Policy (next.config.js) is the second line: it blocks
  * any outside image or connection this misses.
@@ -154,11 +161,16 @@ function stripAttributes(el: Element) {
   }
 }
 
+/** Control and format characters (bidi overrides, zero-width…) out of a
+ *  URL shown as text, so it reads as what it opens. */
+const INVISIBLE = /[\p{Cc}\p{Cf}]/gu;
+
 /**
  * An outside link loses its href: the URL moves to `data-external-href`,
  * which the renderer turns into a button that shows the full URL and opens it
  * only when the person confirms (components/workspace/citations/
- * external-link.tsx). A link whose text is its URL shows it defanged.
+ * external-link.tsx). A link whose text is its URL (a bare URL in the text)
+ * shows that URL as it is. A link to any scheme but http(s) is inert text.
  */
 function guardLink(el: Element) {
   const href = asString(el.properties.href);
@@ -166,9 +178,14 @@ function guardLink(el: Element) {
   if (/^\s*(mailto|tel):/i.test(href)) return; // these fetch nothing
   delete el.properties.href;
   delete el.properties.target;
+  if (!isHttpUrl(href)) {
+    el.tagName = "span";
+    el.properties.dataInertLink = "";
+    return;
+  }
   el.properties.dataExternalHref = href;
   if (textOf(el).trim() === href.trim()) {
-    el.children = [{ type: "text", value: defangUrl(href) }];
+    el.children = [{ type: "text", value: href.trim().replace(INVISIBLE, "") }];
   }
 }
 

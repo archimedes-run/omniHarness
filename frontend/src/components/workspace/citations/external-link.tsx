@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { defangHost } from "@/core/display/defang";
+import { defangHost, isHttpUrl } from "@/core/display/defang";
 import { cn } from "@/lib/utils";
 
 /**
@@ -33,6 +33,11 @@ export function ExternalLink({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Only an http(s) URL is ever opened (the guard passes nothing else; this
+  // holds for any other caller too).
+  if (!isHttpUrl(href)) {
+    return <span className={className}>{children}</span>;
+  }
   const label = typeof children === "string" ? children : null;
   const citation = label ? /^citation:\s*(.*)$/i.exec(label) : null;
   const host = defangHost(href);
