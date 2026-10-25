@@ -271,6 +271,7 @@ async function chat(
     todos = [] as { content: string; status: string }[],
     actions = [] as unknown[],
     postResponse = undefined as Record<string, unknown> | undefined,
+    applied = "Created project “Beta launch”. Added T-1 “Landing page” to Beta launch.",
   } = {},
 ) {
   const writes: Write[] = [];
@@ -311,10 +312,7 @@ async function chat(
           outcome: "executed",
           action_id: "new",
           message: "Done.",
-          detail: {
-            result:
-              "Created project “Beta launch”. Added T-1 “Landing page” to Beta launch.",
-          },
+          detail: { result: applied },
         }),
       );
     }
@@ -516,3 +514,39 @@ test("a linked chat reads by its title when the chat list knows it", async ({
     "Beta planning",
   );
 });
+
+for (const scheme of ["light", "dark"] as const) {
+  test.describe(`${scheme} theme`, () => {
+    test.use({ colorScheme: scheme });
+
+    test("a confirmed card's result shows a link in it defanged, and reads AA", async ({
+      page,
+    }) => {
+      // The ledger tool's result keeps links real (the model reads it); the
+      // card is a display, so it defangs them, as the chat's ledger step does.
+      await page.addInitScript((t) => {
+        try {
+          localStorage.setItem("theme", t);
+        } catch {}
+      }, scheme);
+      await chat(page, {
+        actions: [ACTION],
+        applied:
+          "Added T-1 “Book Vetri https://vetricucina.example/landing/” to Beta launch.",
+      });
+      const card = page.getByTestId("pending-action");
+      await card.getByTestId("confirm").click();
+      const applied = card.getByTestId("applied");
+      await expect(applied).toHaveText(
+        "Added T-1 “Book Vetri hxxps://vetricucina[.]example/landing/” to Beta launch.",
+      );
+      const found = await page.evaluate(lowContrastText);
+      expect(
+        found,
+        found
+          .map((f) => `${f.ratio}/${f.need} "${f.text}" ${f.color} [${f.cls}]`)
+          .join("\n"),
+      ).toEqual([]);
+    });
+  });
+}

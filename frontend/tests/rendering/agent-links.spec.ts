@@ -25,6 +25,8 @@ const ANSWER = [
   "- [Vetri Cucina menu](https://vetricucina.example/menu)",
   "",
   "Not links: javascript:alert(1), [run me](javascript:alert(2)) and [a page](data:text/html,hi).",
+  "",
+  "Lookalikes: [https://good.example/login](https://evil.example/x), https://good.example@evil.example/y and https://evil.example/\u202egpj.exe.",
 ].join("\n");
 const SHOTS = process.env.SUMMARY_SHOTS_DIR;
 
@@ -114,6 +116,21 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(
         page.locator('[href^="javascript:" i], [href^="data:" i]'),
       ).toHaveCount(0);
+
+      // A label never names another host than the link opens, and carries
+      // no invisible characters.
+      for (const real of [
+        "https://evil.example/x",
+        "https://evil.example/y",
+        "https://evil.example/gpj.exe",
+      ]) {
+        await expect(
+          page.getByRole("button", { name: real, exact: true }),
+        ).toBeVisible();
+      }
+      const lookalikes = page.getByText(/^Lookalikes:/);
+      await expect(lookalikes).not.toContainText("good.example");
+      expect(await lookalikes.textContent()).not.toContain("\u202e");
 
       // Opening it: the full URL first, then a new window with no opener and
       // no referrer, only after the person says so.

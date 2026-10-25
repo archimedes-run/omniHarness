@@ -106,7 +106,7 @@ def _streamed_messages(events) -> list[tuple[dict, dict]]:
     return [(data[0], data[1]) for name, data in events if name.startswith("messages") and isinstance(data, list) and len(data) == 2]
 
 
-def _history(gw, thread_id: str) -> list[dict]:
+def _history(gw, thread_id: str, limit: int = 200) -> list[dict]:
     """The chat's display history, as the frontend reads it (core/threads/
     hooks.ts useThreadHistory): every run, every page, oldest first, minus
     middleware callers."""
@@ -115,7 +115,7 @@ def _history(gw, thread_id: str) -> list[dict]:
     for run in sorted(runs, key=lambda r: r["created_at"]):
         page, before = [], None
         while True:
-            query = "limit=200" + (f"&before_seq={before}" if before is not None else "")
+            query = f"limit={limit}" + (f"&before_seq={before}" if before is not None else "")
             got = gw.client.get(f"/api/threads/{thread_id}/runs/{run['run_id']}/messages?{query}").json()
             page = got["data"] + page
             if not got["has_more"]:
@@ -234,3 +234,20 @@ def test_a_research_turn_shows_the_model_and_the_summary_real_links(gateway, mon
     state = research._messages(gateway, thread_id)
     [summary] = [m for m in state if m.get("name") == "summary"]
     assert VETRI in summary["content"] and "[.]" not in summary["content"]
+
+
+def test_paging_a_long_runs_history_keeps_every_row_and_the_final_answer(gateway, monkeypatch):  # noqa: F811
+    """The route returned the newest limit+1 rows minus the NEWEST one, so a
+    run longer than a page lost its final answer after a reload. Through the
+    real route and the gateway's database store, in pages of 5."""
+    thread_id = research._thread(gateway)
+    steps = [research._step(research._call("web_search", {"query": f"q{n}"}, f"s{n}")) for n in range(8)]
+    _stream(gateway, thread_id, "find restaurants, many searches", [*steps, AIMessage(content="FINAL ANSWER: Vetri, Zahav.")])
+    [run] = gateway.client.get(f"/api/threads/{thread_id}/runs").json()
+    url = f"/api/threads/{thread_id}/runs/{run['run_id']}/messages"
+    whole = gateway.client.get(f"{url}?limit=200").json()
+    assert not whole["has_more"] and len(whole["data"]) > 10, "the run is not longer than a page; this test proves nothing"
+    latest = gateway.client.get(f"{url}?limit=5").json()
+    assert latest["has_more"] and "FINAL ANSWER" in json.dumps(latest["data"][-1]), latest["data"][-1]
+    paged = _history(gateway, thread_id, limit=5)
+    assert [r["seq"] for r in paged] == [r["seq"] for r in whole["data"]]

@@ -23,13 +23,13 @@ const RENDER_PATHS: Record<string, string> = {
     "the run summary page: targets and source labels",
   "components/workspace/home/moved-card.tsx": "Home: what moved today",
   "core/notification/hooks.ts": "notifications: a chat's title and reply",
+  "components/workspace/confirmations/pending-action-card.tsx":
+    "a confirmed card's result line (the tool's result, whose links stay real for the model); its other fields come from loadPending, made safe",
   "core/tools/search-results.ts":
     "chat: a search step's results (title, site, snippet; search-result-list.tsx renders them)",
 };
 
 const NOTED: Record<string, string> = {
-  "components/workspace/confirmations/pending-action-card.tsx":
-    "renders fields loadPending (core/confirmations/api.ts) made safe",
   "components/workspace/home/approval-row.tsx":
     "renders fields loadPending (core/confirmations/api.ts) made safe",
   "core/confirmations/types.ts": "type declarations only",

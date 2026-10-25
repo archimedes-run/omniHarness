@@ -90,7 +90,7 @@ export function ExternalLink({
             </DialogDescription>
           </DialogHeader>
           <p className="bg-muted text-foreground rounded-md p-3 font-mono text-xs break-all">
-            {href}
+            {href.replace(/[\p{Cc}\p{Cf}]/gu, "")}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>

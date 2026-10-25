@@ -341,7 +341,15 @@ async def list_run_messages(
         after_seq=after_seq,
     )
     has_more = len(rows) > limit
-    data = rows[:limit] if has_more else rows
+    # The stores return rows oldest first, with the one extra row (the
+    # look-ahead that says there is more) on the side being paged TOWARD:
+    # the newest end for after_seq (paging forward), the oldest end otherwise
+    # (the latest page, or paging back with before_seq). Dropping the wrong
+    # end lost the newest row of every full page, e.g. a run's final answer.
+    if has_more:
+        data = rows[:limit] if after_seq is not None else rows[1:]
+    else:
+        data = rows
     return {"data": data, "has_more": has_more}
 
 
