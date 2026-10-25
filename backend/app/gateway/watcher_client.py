@@ -58,6 +58,30 @@ def _root_cause(exc: BaseException) -> BaseException:
     return exc
 
 
+#: One call tries at most this many fresh connections (bounded retry).
+MAX_ATTEMPTS = 2
+#: The pause before the second attempt: a restarting watcher binds its port
+#: a moment after it was refused.
+RETRY_PAUSE_S = 0.25
+
+#: Whether the last call reached the watcher, per URL: failures are logged when
+#: the watcher stops answering and when it answers again, not on every poll.
+#: The gateway logged none, so a watcher that stayed unreachable left no trace.
+_reachable: dict[str, bool] = {}
+
+
+def _note_failure(url: str, exc: Exception) -> None:
+    if _reachable.get(url, True):
+        logger.warning("Session watcher at %s could not be asked: %s", url, exc)
+    _reachable[url] = False
+
+
+def _note_success(url: str) -> None:
+    if _reachable.get(url) is False:
+        logger.info("Session watcher at %s answers again", url)
+    _reachable[url] = True
+
+
 @dataclass
 class WatcherClient:
     #: Bounds one whole call — connect, initialise, call. The engine polls on
@@ -84,22 +108,55 @@ class WatcherClient:
         return dict(getattr(entry, "headers", None) or {})
 
     async def call(self, tool: str, arguments: dict | None = None) -> dict:
-        """Call one watcher tool and return its structured payload."""
+        """Call one watcher tool and return its structured payload.
+
+        Every attempt opens its own connection and MCP session: nothing is
+        cached between calls. A connection that was refused or dropped (the
+        watcher restarting: its port is not bound while it re-reads the
+        transcripts) is tried ONCE more on a fresh connection after a short
+        pause, within the same overall `timeout`, so the poll that lands in
+        the restart window recovers instead of reporting the watcher gone
+        until the next poll. A timeout is not retried: the watcher is there
+        and busy, and a second attempt would only add to its load.
+        """
+        url = self._url()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.timeout
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await self._attempt(url, tool, arguments, deadline - loop.time())
+            except WatcherTimedOut as exc:
+                _note_failure(url, exc)
+                raise
+            except WatcherUnreachable as exc:
+                remaining = deadline - loop.time()
+                if attempt >= MAX_ATTEMPTS or remaining <= RETRY_PAUSE_S:
+                    _note_failure(url, exc)
+                    raise
+                await asyncio.sleep(RETRY_PAUSE_S)
+                continue
+            _note_success(url)
+            return result
+
+    async def _attempt(self, url: str, tool: str, arguments: dict | None, budget: float) -> dict:
+        """One call on a connection and MCP session of its own."""
         from mcp import ClientSession
         from mcp.client.sse import sse_client
 
-        url = self._url()
+        budget = max(budget, 0.01)
 
         async def _call():
             from omniharness.mcp.watcher_token import watcher_headers
 
-            async with sse_client(url, headers=watcher_headers(SERVER_NAME, self._headers()), timeout=self.timeout) as (read, write):
+            async with sse_client(url, headers=watcher_headers(SERVER_NAME, self._headers()), timeout=budget) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     return await session.call_tool(tool, arguments or {})
 
         try:
-            result = await asyncio.wait_for(_call(), timeout=self.timeout)
+            result = await asyncio.wait_for(_call(), timeout=budget)
         except Exception as exc:  # noqa: BLE001 — every failure here means "could not ask"
             cause = _root_cause(exc)
             import httpx
