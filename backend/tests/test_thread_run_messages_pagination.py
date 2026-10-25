@@ -128,3 +128,54 @@ def test_empty_data_when_no_messages():
     body = response.json()
     assert body["data"] == []
     assert body["has_more"] is False
+
+
+# ---------------------------------------------------------------------------
+# Paging through a REAL store: every row once, the newest included
+# ---------------------------------------------------------------------------
+
+
+def _memory_store_with(rows: int):
+    import asyncio
+
+    from omniharness.runtime.events.store.memory import MemoryRunEventStore
+
+    store = MemoryRunEventStore()
+    events = [{"thread_id": "t-long", "run_id": "r-long", "event_type": "llm.ai.response", "category": "message", "content": f"msg-{i}", "metadata": {}} for i in range(1, rows + 1)]
+    asyncio.run(store.put_batch(events))
+    return store
+
+
+def _page_back(client, url: str, limit: int) -> list[dict]:
+    """Every row, as the chat reads them: the newest page, then before_seq."""
+    rows: list[dict] = []
+    before = None
+    while True:
+        query = f"limit={limit}" + (f"&before_seq={before}" if before is not None else "")
+        body = client.get(f"{url}?{query}").json()
+        assert len(body["data"]) <= limit
+        rows = body["data"] + rows
+        if not body["has_more"]:
+            return rows
+        before = body["data"][0]["seq"]
+
+
+def test_a_full_latest_page_keeps_the_newest_row():
+    """The store returns the newest limit+1 rows oldest first; the extra one
+    is the OLDEST. Trimming the other end lost a run's final answer."""
+    app = _make_app(event_store=_memory_store_with(25))
+    with TestClient(app) as client:
+        body = client.get("/api/threads/t-long/runs/r-long/messages?limit=10").json()
+    assert body["has_more"] is True
+    assert [r["content"] for r in body["data"]] == [f"msg-{i}" for i in range(16, 26)]
+
+
+def test_paging_back_returns_every_row_once_in_order():
+    app = _make_app(event_store=_memory_store_with(25))
+    with TestClient(app) as client:
+        rows = _page_back(client, "/api/threads/t-long/runs/r-long/messages", 10)
+        forward = client.get("/api/threads/t-long/runs/r-long/messages?limit=10&after_seq=0").json()
+    assert [r["content"] for r in rows] == [f"msg-{i}" for i in range(1, 26)]
+    # Paging forward keeps the oldest rows of the window (its look-ahead is the newest).
+    assert forward["has_more"] is True
+    assert [r["content"] for r in forward["data"]] == [f"msg-{i}" for i in range(1, 11)]

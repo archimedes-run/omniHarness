@@ -1,8 +1,9 @@
-import { createElement } from "react";
+import { createElement, type ComponentType, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { Markdown } from "@/components/ai-elements/markdown";
+import { ExternalLink } from "@/components/workspace/citations/external-link";
 import { MarkdownContent } from "@/components/workspace/messages/markdown-content";
 import {
   defangHost,
@@ -65,9 +66,80 @@ describe("chat markdown: injected image / autolink / link (zero-click)", () => {
     expect(html).not.toMatch(OUTSIDE);
     // Said, not silently dropped.
     expect(html).toContain("Image from attacker[.]example not loaded");
-    // The autolink shows its URL, defanged; the labelled link is a button.
-    expect(html).toContain("hxxps://attacker[.]example/c?d=");
-    expect(html).toContain("data-external-link");
+    // The autolink reads as its real URL, but like the labelled link it is a
+    // button that opens nothing until the person confirms.
+    expect(html).toContain(`>https://attacker.example/c?d=${SECRET}</button>`);
+    expect(html).not.toContain(">hxxps://");
+    expect(html.match(/data-external-link/g)).toHaveLength(2);
+  });
+
+  it("a link to any scheme but http(s) is inert text, never a button", () => {
+    const html = render(
+      "[run](javascript:alert(1)) [page](data:text/html,hi) [x](vbscript:msgbox) javascript:alert(2)",
+    );
+    expect(html).not.toContain("data-external-link");
+    expect(html).not.toMatch(/href="(javascript|data|vbscript):/i);
+    expect(html.match(/data-inert-link/g)).toHaveLength(3);
+    expect(html).toContain("javascript:alert(2)");
+  });
+
+  it("an outside link's label loses invisible characters, however it is written", () => {
+    const RLO = "\u202e";
+    const ZW = "\u200b";
+    const html = render(
+      `bare https://evil.example/${RLO}gpj.exe and [see${ZW} it${RLO}](https://evil.example/x)`,
+    );
+    expect(html).not.toContain(RLO);
+    expect(html).not.toContain(ZW);
+    expect(html).toContain(">https://evil.example/gpj.exe</button>");
+    expect(html).toContain(">see it</button>");
+  });
+
+  it("a label naming another host than the link opens shows the link's real URL", () => {
+    const cases: [string, string][] = [
+      [
+        "[https://good.example/login](https://evil.example/x)",
+        "https://evil.example/x",
+      ],
+      ["[good.example](https://evil.example/x)", "https://evil.example/x"],
+      ["[www.good.example/a](https://evil.example/)", "https://evil.example/"],
+      ["https://good.example@evil.example/x", "https://evil.example/x"],
+      ["[Vetri](https://user:pw@evil.example/x)", "https://evil.example/x"],
+    ];
+    for (const [markdown, shown] of cases) {
+      const html = render(markdown);
+      expect(html, markdown).toContain(`>${shown}</button>`);
+      expect(html, markdown).not.toContain("good.example");
+    }
+    // A label for the same host, a title, a file name: kept as written.
+    for (const [markdown, label] of [
+      ["[vetri.example](https://www.vetri.example/menu)", "vetri.example"],
+      ["[Vetri Cucina](https://vetri.example/)", "Vetri Cucina"],
+      ["[report.pdf](https://files.example/r)", "report.pdf"],
+      ["[citation:Vetri](https://vetri.example/)", "Vetri"],
+    ]) {
+      expect(render(markdown!), markdown).toContain(label!);
+    }
+  });
+
+  it("the outside-link button itself opens only http(s), whoever renders it", () => {
+    const Link = ExternalLink as ComponentType<{
+      href: string;
+      children?: ReactNode;
+    }>;
+    for (const href of [
+      "javascript:alert(1)",
+      "data:text/html,hi",
+      "vbscript:x",
+    ]) {
+      const html = renderToStaticMarkup(createElement(Link, { href }, "x"));
+      expect(html).toBe("<span>x</span>");
+    }
+    expect(
+      renderToStaticMarkup(
+        createElement(Link, { href: "https://a.example/" }, "x"),
+      ),
+    ).toContain("data-external-link");
   });
 
   it("raw HTML in agent text loads nothing from outside either", () => {

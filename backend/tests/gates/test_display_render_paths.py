@@ -4,9 +4,11 @@ display sanitiser (app/gateway/display_safe.py; review round 3).
 RENDER_PATHS enumerates the backend formatters that render such text:
 Telegram/Slack (the run footer the trigger engine appends to what a channel
 delivers), the run summary and grant-use APIs, confirmation cards (chat and
-Home's "Waiting on you" read the same list), Home's "What moved today", and
-the chat's ledger step. Each must CALL safe_field or safe_lines; a stale
-entry fails too. The frontend has its mirror in
+Home's "Waiting on you" read the same list) and Home's "What moved today".
+Each must CALL safe_field or safe_lines; a stale entry fails too. MODEL_PATHS
+are the opposite: text a model reads (the ledger tools' result) keeps its
+links real and is defanged where it is rendered (the chat's ledger step, in
+the frontend). The frontend has its mirror in
 frontend/tests/unit/display-render-paths.test.ts, and both sanitisers are
 checked against one case file here and there. Behavioural tests feeding a
 newline / bidi / URL payload through each path over HTTP live in
@@ -32,8 +34,17 @@ RENDER_PATHS: dict[tuple[str, str], str] = {
     ("app/gateway/routers/confirmations.py", "_view"): "confirmation and suggestion cards (chat, Home's Waiting on you)",
     ("app/gateway/home_view.py", "describe_change"): "Home: what moved today (ledger)",
     ("app/gateway/home_view.py", "describe_moved"): "Home: what moved today (outside sources)",
-    ("app/ledger/controller.py", "apply"): "chat: the ledger step's disclosed text",
 }
+
+#: Formatters whose text a MODEL reads (a tool result). Defanging is a display
+#: rule: a model shown hxxps://a[.]example copies it into its answer, so these
+#: strip control and bidi characters (display_safe.model_line) and leave links
+#: real. Whatever renders their text defangs it there: the chat's ledger step
+#: is frontend ledger-write-step.tsx, listed in display-render-paths.test.ts.
+MODEL_PATHS: dict[tuple[str, str], str] = {
+    ("app/ledger/controller.py", "apply"): "the ledger tools' result (also the chat's ledger step, defanged by the frontend)",
+}
+DEFANGERS = frozenset({"safe_field", "safe_lines", "defang", "defang_url", "defang_urls"})
 
 #: Render paths that put a LIVE link on screen: each must pass it through
 #: provider_link (or build it with github_pr_link) so only a provably
@@ -59,6 +70,26 @@ def test_each_render_path_calls_the_sanitiser(path: str, function: str) -> None:
     assert node is not None, f"stale RENDER_PATHS entry: {path}:{function} does not exist"
     calls = {getattr(n.func, "id", None) or getattr(n.func, "attr", None) for n in ast.walk(node) if isinstance(n, ast.Call)}
     assert calls & SANITISERS, f"{path}:{function} renders {RENDER_PATHS[(path, function)]} without display_safe.safe_field/safe_lines"
+
+
+@pytest.mark.parametrize(("path", "function"), list(MODEL_PATHS))
+def test_each_model_path_strips_controls_and_keeps_links_real(path: str, function: str) -> None:
+    node = _function(BACKEND / path, function)
+    assert node is not None, f"stale MODEL_PATHS entry: {path}:{function} does not exist"
+    calls = {getattr(n.func, "id", None) or getattr(n.func, "attr", None) for n in ast.walk(node) if isinstance(n, ast.Call)}
+    assert "model_line" in calls, f"{path}:{function} hands {MODEL_PATHS[(path, function)]} to the model without display_safe.model_line"
+    assert not calls & DEFANGERS, f"{path}:{function} defangs {MODEL_PATHS[(path, function)]}: the model would copy hxxps://… into its answer"
+
+
+def test_model_line_strips_like_safe_field_but_keeps_links() -> None:
+    from app.gateway.display_safe import defang, model_line, safe_field
+
+    cases = json.loads(CASES.read_text(encoding="utf-8"))
+    for given, expected in cases["field"]:
+        line = model_line(given)
+        assert "\n" not in line and "\u202e" not in line, given
+        assert defang(line) == expected == safe_field(given), given
+    assert model_line("see https://vetri.example/landing/ or www.zahav.example\n") == "see https://vetri.example/landing/ or www.zahav.example"
 
 
 def test_the_backend_sanitiser_agrees_with_the_shared_cases() -> None:

@@ -6,3 +6,6 @@ src/content/**/*.mdx
 # Prettier reformatting them would misrepresent what the agent produced, and
 # they are content rather than source.
 public/demo/
+
+# Recorded from the real backend and served verbatim by the rendering specs.
+tests/rendering/fixtures/

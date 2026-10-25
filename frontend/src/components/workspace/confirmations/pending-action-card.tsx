@@ -19,6 +19,7 @@ import {
   requiresTypedCount,
 } from "@/core/confirmations/logic";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
+import { safeField } from "@/core/display/safe";
 
 import { ArgumentsSummary, LongText, PlanText } from "./plan-text";
 
@@ -151,9 +152,11 @@ export function PendingActionCard({
           <LedgerPlanEditor changes={draft} onChange={setDraft} />
         ) : settled && typeof result?.detail?.result === "string" ? (
           // Once applied, say exactly what was saved (it may be an edit of
-          // the list above), in the ledger's own words.
+          // the list above), in the ledger's own words, made display-safe:
+          // the tool's result keeps links real for the model, so links in it
+          // are defanged here.
           <p className="text-foreground text-sm" data-testid="applied">
-            {result.detail.result}
+            {safeField(result.detail.result)}
           </p>
         ) : args && callOnly ? (
           // No specific items could be named, so the "target" is the whole

@@ -68,6 +68,17 @@ def safe_field(text: object) -> str:
     return defang(_strip(str(text if text is not None else "")))
 
 
+def model_line(text: object) -> str:
+    """One line of content-derived text for a MODEL to read (a tool result):
+    the same control, bidi and line-break stripping as :func:`safe_field`, but
+    URLs and domains stay REAL. Defanging is a display rule: a model shown
+    ``hxxps://a[.]example`` copies it into its answer, so the person gets a
+    broken link. Whatever renders the text defangs it (the chat's ledger step:
+    frontend ledger-write-step.tsx, through safeField). Trust is unchanged:
+    the text is still content, and the policy treats it as such."""
+    return _strip(str(text if text is not None else ""))
+
+
 def safe_lines(text: object) -> str:
     """A block whose LINE STRUCTURE the server chose (a plan, a reply's
     disclosure lines): each line made safe on its own."""

@@ -25,6 +25,16 @@ export function isAppUrl(url: string): boolean {
   }
 }
 
+/** True for an absolute http(s) URL, as the browser parses it. */
+export function isHttpUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * True for a URL that loads nothing over the network when used as an image
  * source: an inline `data:image/…` (an SVG loaded as an image cannot fetch
