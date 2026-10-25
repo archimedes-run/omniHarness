@@ -14,6 +14,7 @@ import {
   canDecline,
   formatExpiresIn,
   isExpired,
+  isRunning,
   isSettled,
   originLabel,
   requiresTypedCount,
@@ -56,9 +57,13 @@ export function PendingActionCard({
   // A refusal that can still be fixed keeps the buttons, and an edit the
   // server could not apply keeps the editor open with its reason.
   const settled = isSettled(result);
+  // Continue <agent> once it ran: answered at once ("executed"), or posted
+  // into the chat after the card said "running" (read from the posted
+  // message when the chat picked it up).
   const continueAgent =
-    result?.outcome === "executed" &&
-    typeof result.detail?.continue_agent === "string"
+    (result?.outcome === "executed" ||
+      (isRunning(result) && result?.detail?.landed === true)) &&
+    typeof result?.detail?.continue_agent === "string"
       ? result.detail.continue_agent
       : null;
   // FR-005: the clock drives expiry, not the fetch. Without this an action
@@ -213,7 +218,19 @@ export function PendingActionCard({
           </div>
         )}
 
-        {result && <ResolveMessage result={result} />}
+        {result && !isRunning(result) && <ResolveMessage result={result} />}
+        {isRunning(result) && (
+          <p
+            className="border-border bg-muted text-foreground rounded-md border p-3 text-sm"
+            data-testid="running-state"
+            data-landed={result?.detail?.landed === true}
+            role="status"
+          >
+            {result?.detail?.landed === true
+              ? "Finished — the result is in this chat."
+              : "Running — the result will appear in this chat."}
+          </p>
+        )}
         {result?.detail?.post_queued === true && (
           <p
             className="text-muted-foreground text-xs"

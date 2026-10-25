@@ -824,8 +824,12 @@ class SubagentExecutor:
                 logger.debug(f"[trace={self.trace_id}] Subagent {self.config.name} detected running event loop, using isolated loop")
                 return self._execute_in_isolated_loop(task, result_holder)
 
-            # Standard path: no running event loop, use asyncio.run
-            return asyncio.run(self._aexecute(task, result_holder))
+            # Standard path: no running event loop, use asyncio.run. The
+            # loop is gone when it returns, so its model connections close
+            # with it (models/loop_local_http.py).
+            from omniharness.models.loop_local_http import run_and_release
+
+            return asyncio.run(run_and_release(self._aexecute(task, result_holder)))
         except Exception as e:
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} execution failed")
             # Create a result with error if we don't have one

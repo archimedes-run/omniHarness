@@ -17,9 +17,46 @@ export const STILL_OPEN_OUTCOMES: readonly ResolveOutcome[] = [
 ];
 
 /** Once it has run, been declined or been resolved elsewhere, nothing is left
- *  to press: the result says what happened. */
+ *  to press: the result says what happened. A RUNNING call is settled too:
+ *  it was confirmed and claimed, so pressing again could only be refused. */
 export function isSettled(result: ResolveResult | undefined): boolean {
   return result != null && !STILL_OPEN_OUTCOMES.includes(result.outcome);
+}
+
+/** Confirmed and still running: its result is posted in the chat later. */
+export function isRunning(result: ResolveResult | undefined): boolean {
+  return result?.outcome === "running";
+}
+
+/** How often, and how many times, a chat looks for a running call's posted
+ *  result: every 5 s for 20 minutes, longer than a delegation may run
+ *  (subagents.timeout_seconds, 900 s by default). Bounded: after that the
+ *  result still shows the next time the chat is opened. */
+export const RUNNING_PICKUP_INTERVAL_MS = 5_000;
+export const RUNNING_PICKUP_MAX_TRIES = 240;
+
+/** The id the gateway gives the chat message it posts for a confirmed call. */
+export function postedMessageId(actionId: string): string {
+  return `confirmation-${actionId}`;
+}
+
+/** What a chat found for a running card: its result was posted. */
+export interface PostedResult {
+  /** "Continue <agent>": the agent stopped at this call (from the posted
+   *  message's own confirmation record), else null. */
+  continueAgent: string | null;
+}
+
+/** The agent a posted result offers to continue, from the message the
+ *  gateway posted (additional_kwargs.confirmation.continue_agent). */
+export function postedContinueAgent(message: {
+  additional_kwargs?: unknown;
+}): string | null {
+  const kwargs = message.additional_kwargs as
+    | { confirmation?: { continue_agent?: unknown } }
+    | undefined;
+  const agent = kwargs?.confirmation?.continue_agent;
+  return typeof agent === "string" && agent ? agent : null;
 }
 
 /** Milliseconds until expiry; negative once it has passed. */

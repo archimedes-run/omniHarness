@@ -199,6 +199,25 @@ class _ConfirmSlots:
 
 _SLOTS = _ConfirmSlots()
 
+#: How long a confirm request waits for its call before answering RUNNING.
+#: A module value so tests can shorten it.
+CONFIRM_REPLY_WAIT_SECONDS = 10.0
+
+
+def answers_running(action: Any) -> bool:
+    """Whether a confirm request may answer RUNNING for this action: only a
+    long-running call, a delegation. Any other call is waited for, so its
+    card still gets Continue <agent> and the lead's resumed run, as before."""
+    from app.policy.middleware import ONE_OPEN_CARD_PER_TURN
+
+    return action is not None and action.tool_name in ONE_OPEN_CARD_PER_TURN
+
+
+#: Confirmed, claimed and still running: its result is posted into the chat
+#: when it finishes. Not a refusal: the card has nothing left to press.
+CONFIRM_RUNNING = "running"
+CONFIRM_RUNNING_MESSAGE = "Confirmed. It is running now, and its result will be posted in this chat when it finishes."
+
 #: Refused before the claim: too many confirmed calls are running. Nothing ran.
 CONFIRM_BUSY = "confirm_busy"
 #: What a busy refusal says, on the card and to a typed "yes" alike.
@@ -830,12 +849,39 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # SHIELDED: the confirmation, its slot and its post are one detached task.
     # A client that disconnects cancels only its wait: the confirmed call keeps
     # its slot until the pool thread finishes, and its result is still posted.
+    #: Set when the route has answered RUNNING: the card has nothing more to
+    #: say, so the chat is told how the call ended, failure included.
+    detached = {"running": False, "flow_done": False}
     work = asyncio.get_running_loop().create_task(
-        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via, request=request),
+        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via, request=request, detached=detached),
     )
     _CONFIRMING.add(work)
     work.add_done_callback(_CONFIRMING.discard)
-    return await asyncio.shield(work)
+    if not posts or not answers_running(action):
+        # No chat to post the result into, or a call that is not long-running:
+        # the response carries what only it can (the result, Continue
+        # <agent>, the run the lead resumes in), so it waits for it.
+        return await asyncio.shield(work)
+    # THE REQUEST NEVER WAITS FOR A DELEGATION. A confirmed `task` runs its
+    # whole subagent, which can take minutes (subagents.timeout_seconds): the
+    # route used to hold the request open for all of it, past any client's
+    # timeout (eval E-1). One that finishes quickly answers as before; one
+    # still running after CONFIRM_REPLY_WAIT_SECONDS answers RUNNING, and the
+    # detached task posts its result (or why it did not complete) into the
+    # chat when it finishes.
+    # RUNNING only once the call is claimed and still running: before the
+    # claim it can still be refused (that answer is the card's), and once the
+    # flow has returned the rest (post, resume) is short, so it is waited for.
+    wait = CONFIRM_REPLY_WAIT_SECONDS
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(work), timeout=wait)
+        except TimeoutError:
+            current = middleware.pending.get(action_id)
+            if current is not None and current.claimed_by and not detached["flow_done"]:
+                detached["running"] = True
+                return ResolveResponse(outcome=CONFIRM_RUNNING, action_id=action_id, message=CONFIRM_RUNNING_MESSAGE, detail={"running": True})
+            wait = 1.0
 
 
 #: Confirmations in flight (held so a disconnected request's task finishes).
@@ -843,7 +889,19 @@ _CONFIRMING: set[asyncio.Task] = set()
 
 
 async def _confirm_and_post(
-    middleware: Any, flow: Any, action: Any, action_id: str, run_tool: Any, typed_count: int | None, user_id: str, checkpointer: Any, run_manager: Any, via: str = "button", *, request: Request | None = None
+    middleware: Any,
+    flow: Any,
+    action: Any,
+    action_id: str,
+    run_tool: Any,
+    typed_count: int | None,
+    user_id: str,
+    checkpointer: Any,
+    run_manager: Any,
+    via: str = "button",
+    *,
+    request: Request | None = None,
+    detached: dict[str, bool] | None = None,
 ) -> ResolveResponse:
     try:
         # No targets passed: the flow re-checks them itself (FR-029).
@@ -854,11 +912,19 @@ async def _confirm_and_post(
         result = await _off_the_request_pool(flow.explicit, action_id, confirm=True, run_tool=run_tool, supplied_count=typed_count, answered=answered)
     finally:
         _SLOTS.give_back(user_id)
+        if detached is not None:
+            # From here the route waits for this task rather than answer
+            # RUNNING, so a failure is either on the card or in the chat.
+            detached["flow_done"] = True
 
     detail = _response_detail(result.detail)
     message = for_display(result.message)[0]
     if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
         message = await _post_executed(middleware, action, action_id, result, detail, checkpointer, run_manager)
+    elif result.outcome in _ENDED_AFTER_CLAIM and detached is not None and detached.get("running") and action is not None and action.thread_id and action.surface:
+        # The card already said "running", so it cannot show this: the chat
+        # is where the person is told it did not complete.
+        await _post_failure(middleware, action_id, result, detail, checkpointer, run_manager)
     if request is not None:
         # The last open card of a turn's outbound group: the lead carries on
         # with the results (Feature 007). Any other card: nothing more.
@@ -882,6 +948,23 @@ async def _post_executed(middleware: Any, action: Any, action_id: str, result: A
     detail["post_queued"] = posted == "queued"
     detail["post_state"] = posted
     return message + _POST_NOTES.get(posted, "")
+
+
+#: Outcomes a claimed confirmation can end in besides EXECUTED.
+_ENDED_AFTER_CLAIM = ("failed", "targets_drifted")
+
+
+async def _post_failure(middleware: Any, action_id: str, result: Any, detail: dict[str, Any], checkpointer: Any, run_manager: Any) -> None:
+    """Post into the chat that a confirmed call, answered RUNNING, did not complete."""
+    from app.policy.surface_run import failure_report, report_message
+
+    stored = middleware.pending.get(action_id)
+    if stored is None:
+        return
+    report = report_message(stored, None, content=failure_report(stored, for_display(result.message)[0]))
+    posted = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=stored, message=report)
+    detail["posted_to_thread"] = posted == "written"
+    detail["post_state"] = posted
 
 
 async def _resume_into(request: Request, action_ids: list[str], detail: dict[str, Any]) -> str | None:

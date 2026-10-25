@@ -61,6 +61,7 @@ export default function AgentChatPage() {
   const {
     thread,
     sendMessage,
+    pickUpPosted,
     isHistoryLoading,
     hasMoreHistory,
     loadMoreHistory,
@@ -125,6 +126,9 @@ export default function AgentChatPage() {
     // The lead carrying on after a turn's outbound calls were answered: a run
     // the server started (Feature 007), joined so it streams into the chat.
     (runId) => void thread.joinStream(runId),
+    // A confirmed call still running when its card answered: its result is
+    // posted into this chat when it finishes, and read from the thread then.
+    pickUpPosted,
   );
 
   const tokenUsageInlineMode = tokenUsageEnabled

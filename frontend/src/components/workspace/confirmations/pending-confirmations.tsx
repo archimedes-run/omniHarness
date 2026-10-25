@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { applyAll, resumeRunId } from "@/core/confirmations/api";
@@ -11,7 +11,13 @@ import {
   useEditConfirmation,
   useResolveConfirmation,
 } from "@/core/confirmations/hooks";
-import { groupOutbound } from "@/core/confirmations/logic";
+import {
+  groupOutbound,
+  isRunning,
+  RUNNING_PICKUP_INTERVAL_MS,
+  RUNNING_PICKUP_MAX_TRIES,
+} from "@/core/confirmations/logic";
+import type { PostedResult } from "@/core/confirmations/logic";
 import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
 
 import { ApplyAllBar } from "./apply-all-bar";
@@ -37,6 +43,7 @@ export function PendingConfirmations({
   exclude,
   onContinue,
   onResumed,
+  onPickUp,
 }: {
   threadId?: string;
   quietWhenEmpty?: boolean;
@@ -49,6 +56,9 @@ export function PendingConfirmations({
   /** In a chat: the lead carries on after a turn's outbound calls were
    *  answered (Feature 007); the chat joins that run to show it. */
   onResumed?: (runId: string) => void;
+  /** In a chat: look for running calls' posted results, and show in the
+   *  chat those that have landed (keyed by action id). */
+  onPickUp?: (actionIds: string[]) => Promise<Record<string, PostedResult>>;
 }) {
   const { pending, isLoading, error } = usePendingConfirmations();
   const resolve = useResolveConfirmation();
@@ -59,6 +69,61 @@ export function PendingConfirmations({
   >({});
   const [applying, setApplying] = useState<string | null>(null);
   const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
+
+  // A call confirmed here that is still running: its result is posted into
+  // the chat when it finishes. Look for it on a bounded schedule, and once
+  // it has landed say so on the card.
+  const pickUp = useRef(onPickUp);
+  pickUp.current = onPickUp;
+  const running = Object.values(resolved)
+    .filter((r) => isRunning(r.result) && r.result.detail?.landed !== true)
+    .map((r) => r.action.id)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!running || !pickUp.current) return;
+    const ids = running.split(",");
+    let tries = 0;
+    let stopped = false;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (tries >= RUNNING_PICKUP_MAX_TRIES) clearInterval(timer);
+      // One read of the thread per tick, for every running card.
+      void pickUp
+        .current?.(ids)
+        .then((found) => {
+          const landed = Object.keys(found);
+          if (stopped || landed.length === 0) return;
+          setResolved((previous) => {
+            const next = { ...previous };
+            for (const id of landed) {
+              const entry = next[id];
+              if (!entry) continue;
+              next[id] = {
+                ...entry,
+                result: {
+                  ...entry.result,
+                  detail: {
+                    ...entry.result.detail,
+                    landed: true,
+                    continue_agent: found[id]!.continueAgent,
+                  },
+                },
+              };
+            }
+            return next;
+          });
+          void queryClient.invalidateQueries({
+            queryKey: PENDING_CONFIRMATIONS_KEY,
+          });
+        })
+        .catch(() => undefined);
+    }, RUNNING_PICKUP_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [running, queryClient]);
 
   const settle = (action: PendingAction, result: ResolveResult) => {
     setResolved((previous) => ({
