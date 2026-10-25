@@ -38,6 +38,27 @@ const FIX = JSON.parse(
   journal2: Record<string, Row[]>;
   leaked_summary_chunks: string[];
 };
+/**
+ * The same chat reloaded WHILE its second turn runs (dogfooding D1-g),
+ * recorded from the real backend: the summary has replaced the person's
+ * message in the thread state, the run is "running", and its journal so far
+ * is what the backend has written as the run goes
+ * (fixtures/summarized-inprogress.json; see its `_about`).
+ */
+const RUNNING = JSON.parse(
+  readFileSync(
+    fileURLToPath(
+      new URL("./fixtures/summarized-inprogress.json", import.meta.url),
+    ),
+    "utf8",
+  ),
+) as {
+  state: { values: { messages: unknown[] } } & Record<string, unknown>;
+  runs: unknown[];
+  journal: Record<string, Row[]>;
+};
+const RUNNING_THREAD = "00000000-0000-0000-0000-000000000002";
+const RUNNING_FIRST_ANSWER = "Here are your restaurants:";
 type Row = { seq: number; metadata: { caller?: string } };
 
 const THREAD = "00000000-0000-0000-0000-000000000001";
@@ -208,6 +229,85 @@ for (const scheme of ["light", "dark"] as const) {
           .join("\n"),
       ).toEqual([]);
     });
+  });
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  test.describe(`${scheme} theme, reloaded mid-run`, () => {
+    test.use({ colorScheme: scheme, viewport: { width: 1440, height: 2000 } });
+
+    for (const ahead of [false, true]) {
+      test(`the running turn's message from the person shows once${ahead ? " (journal ahead of the state)" : ""}`, async ({
+        page,
+      }) => {
+        // `ahead`: the thread state the chat loads lags the journal by one
+        // message (a reply journaled before its checkpoint reached the
+        // chat); it must not show twice or out of order.
+        const values = RUNNING.state.values.messages;
+        const state = ahead
+          ? {
+              ...RUNNING.state,
+              values: {
+                ...RUNNING.state.values,
+                messages: values.slice(0, -1),
+              },
+            }
+          : RUNNING.state;
+        await mockThread(page, scheme, {
+          current: { state, runs: RUNNING.runs, journal: RUNNING.journal },
+        });
+        await page.goto(`/workspace/chats/${RUNNING_THREAD}`, {
+          waitUntil: "networkidle",
+        });
+        await expect(page.getByText(SECOND, { exact: true })).toBeVisible();
+        await expect(page.getByText(SECOND, { exact: true })).toHaveCount(1);
+        await scrollUntilVisible(page, FIRST);
+        await expect(page.getByText(FIRST, { exact: true })).toHaveCount(1);
+        await expect(
+          page.getByText(RUNNING_FIRST_ANSWER, { exact: false }),
+        ).toHaveCount(1);
+        await expectNoSummary(page);
+        // Every step of both turns once: no step shown twice where the
+        // journal and the live thread overlap. With the journal ahead, the
+        // running turn's newest step is not shown until the live thread has
+        // it (it streams in), rather than shown out of order.
+        const groups = await page
+          .getByText(/^\d+ more steps?$/)
+          .allTextContents();
+        expect(groups).toEqual(
+          ahead
+            ? ["3 more steps", "1 more step"]
+            : ["3 more steps", "2 more steps"],
+        );
+        await expect(
+          page.getByText("https://hold.example", { exact: true }),
+        ).toHaveCount(ahead ? 0 : 1);
+        const first = await page
+          .getByText(FIRST, { exact: true })
+          .boundingBox();
+        const second = await page
+          .getByText(SECOND, { exact: true })
+          .boundingBox();
+        expect(first!.y).toBeLessThan(second!.y);
+        if (SHOTS && !ahead) {
+          mkdirSync(SHOTS, { recursive: true });
+          await page.waitForTimeout(1000);
+          await page.screenshot({
+            path: `${SHOTS}/summarized-chat-midrun-${scheme}.png`,
+            fullPage: true,
+          });
+        }
+        const found = await page.evaluate(lowContrastText);
+        expect(
+          found,
+          found
+            .map(
+              (f) => `${f.ratio}/${f.need} "${f.text}" ${f.color} [${f.cls}]`,
+            )
+            .join("\n"),
+        ).toEqual([]);
+      });
+    }
   });
 }
 

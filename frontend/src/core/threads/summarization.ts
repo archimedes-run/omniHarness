@@ -103,6 +103,57 @@ export function appendUnique(history: Message[], more: Message[]): Message[] {
   return added.length > 0 ? [...history, ...added] : history;
 }
 
+/**
+ * The display history up to where the live thread begins: everything before
+ * the first history message (a person's or the agent's, by id) the live
+ * thread also holds. From there on the
+ * live thread is shown. A run's journal is written as the run goes, so after
+ * a reload mid-run it can be AHEAD of the thread state the chat loaded (a
+ * reply journaled before its checkpoint reached the chat); keeping only a
+ * suffix-overlap trim showed those messages twice, and out of order.
+ */
+export function historyBeforeLive(
+  history: Message[],
+  live: Message[],
+): Message[] {
+  // By message id only. A journaled tool result carries no id, and tool call
+  // ids are not unique across runs (a scripted or provider-assigned "f3" in
+  // two turns), so matching them cut the history at an earlier turn's result.
+  const liveIds = new Set(live.map((message) => message.id).filter(Boolean));
+  const first = history.findIndex(
+    (message) =>
+      message.type !== "tool" && !!message.id && liveIds.has(message.id),
+  );
+  return first === -1 ? history : history.slice(0, first);
+}
+
+/** What the chat shows: the history before the live thread, the live thread, then what is being sent. */
+export function mergeDisplay(
+  history: Message[],
+  live: Message[],
+  optimistic: Message[],
+): Message[] {
+  return [...historyBeforeLive(history, live), ...live, ...optimistic];
+}
+
+/**
+ * The display history after a summarization moved `moved` out of the live
+ * thread `live`: what was shown before the live thread, then the moved
+ * messages, in order. Appending them to the whole history put a reloaded
+ * run's older messages after its newer ones once the history held the
+ * running run's journal.
+ */
+export function moveIntoHistory(
+  history: Message[],
+  live: Message[],
+  moved: Message[],
+): Message[] {
+  if (moved.length === 0) {
+    return history;
+  }
+  return appendUnique(historyBeforeLive(history, live), moved);
+}
+
 /** One journal row, as `/api/threads/{id}/runs/{run_id}/messages` returns it. */
 export interface RunMessageRow {
   seq: number;
