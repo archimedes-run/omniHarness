@@ -57,6 +57,11 @@ _WOULD_RUN: Any = object()
 _PROPOSING = threading.Lock()
 
 
+#: Tools of which one turn has at most ONE open card per agent: delegating
+#: (eval E-2). Any other tool is held only on an exact repeat.
+ONE_OPEN_CARD_PER_TURN = frozenset({"task"})
+
+
 def canonical_arguments(arguments: Any) -> str:
     """A call's arguments as compared for "the same proposal": key order and
     spacing ignored, values exact."""
@@ -66,11 +71,11 @@ def canonical_arguments(arguments: Any) -> str:
 
 
 def duplicate_proposal_text(earlier: PendingAction) -> str:
-    """What the model is told when it repeats a proposal whose card is open."""
+    """What the model is told when its card for this call is already open."""
     return (
-        f"Not proposed again: this is the same {earlier.tool_name} call as the one already waiting for the person "
-        f"to confirm on its card ({earlier.id}). Nothing new was proposed and nothing has run. "
-        "Do not propose it again; stop here and let the person answer the card."
+        f"Not proposed: a card for {earlier.tool_name} ({earlier.id}) is already waiting for the person to answer. "
+        "Nothing new was proposed and nothing has run. "
+        f"Do not propose {earlier.tool_name} again in this turn; end your turn now and let the person answer the card."
     )
 
 
@@ -720,13 +725,13 @@ class PolicyMiddleware(AgentMiddleware):
         # stated in, not whatever the thread holds later.
         privacy = self._private_read(request, ruleset)
 
-        # ONE CARD PER PROPOSAL. A model told "please confirm" re-issued the
-        # same call again and again in one turn (eval E-2: eight open cards).
-        # The same call, from the same agent, in the same thread and turn,
-        # while its card is still open, is not a new proposal: no card is
-        # made, and the model is told the earlier one is still waiting. The
-        # check and the save are one step, so two identical calls dispatched
-        # together (one model step, parallel tool calls) make one card.
+        # NO CARD FLOOD (_open_duplicate). A model told "please confirm"
+        # re-issued its delegation again and again in one turn, rephrased
+        # (eval E-2: eight open cards). While this agent's delegation card is
+        # open in this turn (or, for any tool, the same call's card), no card
+        # is made and the model is told to end its turn. The check and the save
+        # are one step, so calls dispatched together (one model step, parallel
+        # tool calls) make one.
         with _PROPOSING:
             earlier = self._open_duplicate(request, tool_name, arguments, privacy.turn_key, now)
             if earlier is None:
@@ -768,17 +773,29 @@ class PolicyMiddleware(AgentMiddleware):
         return self._mark_trusted_ack(request, self._as_tool_result(request, self._model_plan_text(action)))
 
     def _open_duplicate(self, request, tool_name: str, arguments: dict, turn_key: str, now: datetime) -> PendingAction | None:
-        """An open proposal this call repeats exactly, or None.
+        """The open card this call must not add to, or None.
 
-        Exactly: the same tool with the same canonical arguments, from the same
-        agent (requester, delegation), for the same person, in the same thread
-        and the same turn, and still open (unresolved, unclaimed, unexpired).
-        A call that differs in anything is a different proposal and gets its
-        own card. A turn that cannot be identified is never matched.
+        Only a card that is still open (unresolved, unclaimed, unexpired),
+        proposed by the same agent (requester, delegation) for the same person
+        in the same thread and the same turn, counts. Among those:
+
+        - a DELEGATION (`ONE_OPEN_CARD_PER_TURN`): any open card for the tool
+          holds it. Told "please confirm", the lead rephrased its delegation
+          and re-issued it, and split it into others (eval E-2: eight cards in
+          one turn, one an exact repeat). Delegating is one decision per turn
+          for the person; the model is told to end its turn.
+        - any other tool: only an exact repeat (same canonical arguments). A
+          turn may rightly propose several different calls of one tool, each
+          its own card: two emails, a group of ledger suggestions answered
+          with "Apply all", a turn's outbound lookups (Feature 007).
+
+        A later turn, or the same call once its card is answered or expired,
+        makes a card as usual. A turn that cannot be identified never matches.
         """
         if not turn_key:
             return None
         wanted = canonical_arguments(arguments)
+        any_call = tool_name in ONE_OPEN_CARD_PER_TURN
         thread_id, owner_id = self._thread_id(request), self._owner_id(request)
         requester, delegation_key = self._requester(request), self._delegation_key(request)
         for action in self.pending.open_actions(now):
@@ -790,7 +807,7 @@ class PolicyMiddleware(AgentMiddleware):
                 and action.owner_id == owner_id
                 and action.requester == requester
                 and action.delegation_key == delegation_key
-                and canonical_arguments(action.arguments) == wanted
+                and (any_call or canonical_arguments(action.arguments) == wanted)
             ):
                 return action
         return None

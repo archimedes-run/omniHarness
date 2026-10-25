@@ -9,6 +9,7 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { getAPIClient } from "../api";
 import { fetch } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
+import { postedMessageId } from "../confirmations/logic";
 import { useI18n } from "../i18n/hooks";
 import type { FileInMessage } from "../messages/utils";
 import type { LocalSettings } from "../settings";
@@ -267,6 +268,29 @@ export function useThreadStream({
 
   // Optimistic messages shown before the server stream responds
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
+  // Results the gateway posted into this chat outside any run (a confirmed
+  // call that finished after its card said "running"): read from the thread
+  // when the card asks, and shown after the live messages until the stream's
+  // own state carries them.
+  const [landedMessages, setLandedMessages] = useState<Message[]>([]);
+  useEffect(() => {
+    setLandedMessages([]);
+  }, [threadId]);
+  const pickUpPosted = useCallback(
+    async (actionId: string): Promise<boolean> => {
+      const id = threadIdRef.current;
+      if (!id) return false;
+      const state = await getAPIClient(isMock).threads.getState(id);
+      const values = (state?.values ?? {}) as { messages?: Message[] };
+      const posted = (values.messages ?? []).find(
+        (message) => message.id === postedMessageId(actionId),
+      );
+      if (!posted) return false;
+      setLandedMessages((previous) => appendUnique(previous, [posted]));
+      return true;
+    },
+    [isMock],
+  );
   const [isUploading, setIsUploading] = useState(false);
   const sendInFlightRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
@@ -518,11 +542,14 @@ export function useThreadStream({
     messagesRef.current = liveMessages;
   }
 
-  const mergedMessages = mergeMessages(
-    history,
-    liveMessages,
-    optimisticMessages,
-  );
+  const merged = mergeMessages(history, liveMessages, optimisticMessages);
+  const shownIds = new Set(merged.map((message) => message.id));
+  const mergedMessages = [
+    ...merged,
+    ...landedMessages.filter(
+      (message) => message.id != null && !shownIds.has(message.id),
+    ),
+  ];
 
   // Merge history, live stream, and optimistic messages for display
   // History messages may overlap with thread.messages; thread.messages take precedence
@@ -534,6 +561,7 @@ export function useThreadStream({
   return {
     thread: mergedThread,
     sendMessage,
+    pickUpPosted,
     isUploading,
     isHistoryLoading,
     hasMoreHistory,

@@ -27,6 +27,7 @@ const DONE: Record<string, string> = {
   expired: "Expired",
   failed: "Did not complete",
   chat_deleted: "Chat deleted",
+  running: "Running — the result will appear in this chat",
 };
 
 /** Outcomes after which a call has nothing left to press. */

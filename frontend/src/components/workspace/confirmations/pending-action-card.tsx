@@ -14,6 +14,7 @@ import {
   canDecline,
   formatExpiresIn,
   isExpired,
+  isRunning,
   isSettled,
   originLabel,
   requiresTypedCount,
@@ -213,7 +214,19 @@ export function PendingActionCard({
           </div>
         )}
 
-        {result && <ResolveMessage result={result} />}
+        {result && !isRunning(result) && <ResolveMessage result={result} />}
+        {isRunning(result) && (
+          <p
+            className="border-border bg-muted text-foreground rounded-md border p-3 text-sm"
+            data-testid="running-state"
+            data-landed={result?.detail?.landed === true}
+            role="status"
+          >
+            {result?.detail?.landed === true
+              ? "Finished — the result is in this chat."
+              : "Running — the result will appear in this chat."}
+          </p>
+        )}
         {result?.detail?.post_queued === true && (
           <p
             className="text-muted-foreground text-xs"

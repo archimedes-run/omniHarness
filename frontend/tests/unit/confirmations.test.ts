@@ -5,7 +5,12 @@ import {
   canDecline,
   formatRemaining,
   isExpired,
+  isRunning,
+  isSettled,
   msRemaining,
+  postedMessageId,
+  RUNNING_PICKUP_INTERVAL_MS,
+  RUNNING_PICKUP_MAX_TRIES,
   requiresTypedCount,
 } from "@/core/confirmations/logic";
 import type { PendingAction } from "@/core/confirmations/types";
@@ -139,5 +144,34 @@ describe("isSettled", () => {
       }),
     ).toBe(true);
     expect(isSettled(undefined)).toBe(false);
+  });
+});
+
+describe("a confirmation that is still running", () => {
+  const running = {
+    outcome: "running" as const,
+    action_id: "abc123abc123",
+    message: "Confirmed. It is running now.",
+    detail: { running: true },
+  };
+
+  it("is settled: confirmed and claimed, so nothing is left to press", () => {
+    expect(isRunning(running)).toBe(true);
+    expect(isSettled(running)).toBe(true);
+  });
+
+  it("is not mistaken for any other outcome", () => {
+    expect(isRunning({ ...running, outcome: "executed" })).toBe(false);
+    expect(isRunning(undefined)).toBe(false);
+  });
+
+  it("names the chat message the gateway posts for it", () => {
+    expect(postedMessageId("abc123abc123")).toBe("confirmation-abc123abc123");
+  });
+
+  it("is looked for longer than a delegation may run, and not forever", () => {
+    const window = RUNNING_PICKUP_INTERVAL_MS * RUNNING_PICKUP_MAX_TRIES;
+    expect(window).toBeGreaterThan(900_000);
+    expect(window).toBeLessThanOrEqual(30 * 60_000);
   });
 });

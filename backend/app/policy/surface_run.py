@@ -350,6 +350,16 @@ def search_results_text(tool_name: str, text: str) -> str | None:
     return "\n".join(lines)
 
 
+def failure_report(action: PendingAction, reason: str) -> str:
+    """What the thread says when a confirmed call that was still running when
+    its card answered "running" did not complete: who, which tool, and why,
+    redacted at the final boundary like a result."""
+    who = f"{action.requester} could not complete" if action.requester and action.requester != "lead_agent" else "I could not complete"
+    composed = f"{who} **{action.tool_name}** after you confirmed it. {reason}".strip()
+    final = _redacted(composed)
+    return final if final is not None else f"**{action.tool_name}** did not complete after you confirmed it. {WITHHELD_RESULT}"
+
+
 def report_message(action: PendingAction, result: Any, *, content: str | None = None) -> Any:
     """The thread message for a confirmed call, attributed to its proposer.
 
@@ -358,7 +368,11 @@ def report_message(action: PendingAction, result: Any, *, content: str | None = 
     """
     from langchain_core.messages import AIMessage
 
+    from .models import Outcome
+
     invited = bool(action.requester and action.requester != "lead_agent")
+    #: A claimed call that did not complete (its report says so).
+    failed = action.outcome in (Outcome.FAILED, Outcome.TARGETS_DRIFTED)
     return AIMessage(
         # One id per action: the card's post is verified by reading it back,
         # and a post retried after a restart is never added twice.
@@ -371,8 +385,8 @@ def report_message(action: PendingAction, result: Any, *, content: str | None = 
                 "tool_name": action.tool_name,
                 "agent": action.requester,
                 "delegation_chain": list(action.delegation_chain),
-                "outcome": "executed",
-                "continue_agent": action.requester if invited else None,
+                "outcome": str(getattr(action.outcome, "value", action.outcome)) if failed else "executed",
+                "continue_agent": action.requester if invited and not failed else None,
                 # Structured provenance: the result in this message is the
                 # tool's output, observed, untrusted (never an instruction).
                 "provenance": "untrusted_tool_output",

@@ -73,6 +73,7 @@ export default function ChatPage() {
   const {
     thread,
     sendMessage,
+    pickUpPosted,
     isUploading,
     isHistoryLoading,
     hasMoreHistory,
@@ -148,6 +149,9 @@ export default function ChatPage() {
     // The lead carrying on after a turn's outbound calls were answered: a run
     // the server started (Feature 007), joined so it streams into the chat.
     (runId) => void thread.joinStream(runId),
+    // A confirmed call still running when its card answered: its result is
+    // posted into this chat when it finishes, and read from the thread then.
+    pickUpPosted,
   );
 
   const tokenUsageInlineMode = tokenUsageEnabled

@@ -30,7 +30,11 @@ export type ResolveOutcome =
   | "card_only"
   /** An edited plan that could not be applied: nothing ran, the original
    *  plan is still open, and the edit can be corrected and saved again. */
-  | "invalid_plan";
+  | "invalid_plan"
+  /** Confirmed and claimed, and still running (a delegation can take
+   *  minutes): nothing is left to press, and the result, or why it did not
+   *  complete, is posted in the chat when it finishes. */
+  | "running";
 
 export interface PendingAction {
   id: string;

@@ -838,8 +838,11 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
     # SHIELDED: the confirmation, its slot and its post are one detached task.
     # A client that disconnects cancels only its wait: the confirmed call keeps
     # its slot until the pool thread finishes, and its result is still posted.
+    #: Set when the route has answered RUNNING: the card has nothing more to
+    #: say, so the chat is told how the call ended, failure included.
+    detached = {"running": False}
     work = asyncio.get_running_loop().create_task(
-        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via, request=request),
+        _confirm_and_post(middleware, flow, action, action_id, run_tool, body.typed_count, user_id, checkpointer, run_manager, via, request=request, detached=detached),
     )
     _CONFIRMING.add(work)
     work.add_done_callback(_CONFIRMING.discard)
@@ -862,6 +865,10 @@ async def _resolve(request: Request, action_id: str, *, confirm: bool, body: Res
         except TimeoutError:
             current = middleware.pending.get(action_id)
             if current is not None and current.claimed_by:
+                detached["running"] = True
+                if work.done():
+                    # It finished as the wait ran out: its own answer stands.
+                    return work.result()
                 return ResolveResponse(outcome=CONFIRM_RUNNING, action_id=action_id, message=CONFIRM_RUNNING_MESSAGE, detail={"running": True})
             wait = 1.0
 
@@ -871,7 +878,19 @@ _CONFIRMING: set[asyncio.Task] = set()
 
 
 async def _confirm_and_post(
-    middleware: Any, flow: Any, action: Any, action_id: str, run_tool: Any, typed_count: int | None, user_id: str, checkpointer: Any, run_manager: Any, via: str = "button", *, request: Request | None = None
+    middleware: Any,
+    flow: Any,
+    action: Any,
+    action_id: str,
+    run_tool: Any,
+    typed_count: int | None,
+    user_id: str,
+    checkpointer: Any,
+    run_manager: Any,
+    via: str = "button",
+    *,
+    request: Request | None = None,
+    detached: dict[str, bool] | None = None,
 ) -> ResolveResponse:
     try:
         # No targets passed: the flow re-checks them itself (FR-029).
@@ -887,6 +906,10 @@ async def _confirm_and_post(
     message = for_display(result.message)[0]
     if result.outcome == "executed" and action is not None and action.thread_id and action.surface:
         message = await _post_executed(middleware, action, action_id, result, detail, checkpointer, run_manager)
+    elif result.outcome in _ENDED_AFTER_CLAIM and detached is not None and detached.get("running") and action is not None and action.thread_id and action.surface:
+        # The card already said "running", so it cannot show this: the chat
+        # is where the person is told it did not complete.
+        await _post_failure(middleware, action_id, result, detail, checkpointer, run_manager)
     if request is not None:
         # The last open card of a turn's outbound group: the lead carries on
         # with the results (Feature 007). Any other card: nothing more.
@@ -910,6 +933,23 @@ async def _post_executed(middleware: Any, action: Any, action_id: str, result: A
     detail["post_queued"] = posted == "queued"
     detail["post_state"] = posted
     return message + _POST_NOTES.get(posted, "")
+
+
+#: Outcomes a claimed confirmation can end in besides EXECUTED.
+_ENDED_AFTER_CLAIM = ("failed", "targets_drifted")
+
+
+async def _post_failure(middleware: Any, action_id: str, result: Any, detail: dict[str, Any], checkpointer: Any, run_manager: Any) -> None:
+    """Post into the chat that a confirmed call, answered RUNNING, did not complete."""
+    from app.policy.surface_run import failure_report, report_message
+
+    stored = middleware.pending.get(action_id)
+    if stored is None:
+        return
+    report = report_message(stored, None, content=failure_report(stored, for_display(result.message)[0]))
+    posted = await post_result(checkpointer=checkpointer, run_manager=run_manager, store=middleware.pending, action=stored, message=report)
+    detail["posted_to_thread"] = posted == "written"
+    detail["post_state"] = posted
 
 
 async def _resume_into(request: Request, action_ids: list[str], detail: dict[str, Any]) -> str | None:

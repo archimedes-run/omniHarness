@@ -248,74 +248,197 @@ def test_the_confirm_request_returns_while_the_subagent_is_still_working(openai_
 
 
 # ---------------------------------------------------------------------------
-# E-2: one card per proposal
+# E-2: one open card per tool, per agent, per turn
 # ---------------------------------------------------------------------------
 
-OTHER = {**DELEGATE, "args": {**DELEGATE["args"], "prompt": "Wipe the backup named weekly."}}
+#: The eval's shape: the lead re-issued its delegation, rephrased, with a
+#: different max_turns each time, and split it into other delegations.
+REPHRASED = [
+    ("Best months to visit Lisbon", "Find the best months to visit Lisbon.", 10),
+    ("Best months to visit Lisbon", "Research the best months to visit Lisbon, with weather and crowds.", 12),
+    ("Lisbon transport passes & prices", "Find Lisbon transport passes and their prices.", 16),
+    ("Top 3 day trips from Lisbon", "Pick the top 3 day trips from Lisbon.", 14),
+    ("Best months to visit Lisbon", "What are the best months to visit Lisbon? Weather, crowds, prices.", 12),
+    ("Lisbon transport passes & prices", "Compare Viva Viagem, Lisboa Card and day passes.", 16),
+    ("Top 3 day trips from Lisbon", "Pick the top 3 day trips from Lisbon.", 14),
+]
+
+
+def _delegation(index: int) -> dict:
+    description, prompt, turns = REPHRASED[index]
+    return {"name": "task", "args": {"description": description, "prompt": prompt, "subagent_type": "general-purpose", "max_turns": turns}, "id": f"t{index}"}
 
 
 def _tool_results(messages: list[dict]) -> list[str]:
     return [str(m.get("content")) for m in messages if m.get("type") == "tool"]
 
 
-def test_the_same_delegation_reissued_in_one_turn_makes_one_card(gateway) -> None:  # noqa: F811
+def _with_lead_tier3_tool(monkeypatch) -> None:
+    """The lead also gets wipe_backup (Tier 3 in the fixture's rules)."""
+    from test_delegated_confirmation import wipe_backup
+
+    import omniharness.tools as tools
+
+    real = tools.get_available_tools
+
+    def available(**kwargs):
+        listed = real(**kwargs)
+        return [*listed, wipe_backup] if kwargs.get("subagent_enabled") else listed
+
+    monkeypatch.setattr("omniharness.tools.get_available_tools", available)
+
+
+def test_seven_rephrased_delegations_in_one_turn_make_one_card(gateway) -> None:  # noqa: F811
+    """Eval E-2, as it happened: one at a time, then three in one step."""
     thread_id = _thread(gateway)
+    steps = [
+        AIMessage(content="", tool_calls=[_delegation(0)]),
+        AIMessage(content="", tool_calls=[_delegation(1), _delegation(2), _delegation(3)]),
+        AIMessage(content="", tool_calls=[_delegation(4)]),
+        AIMessage(content="", tool_calls=[_delegation(5), _delegation(6)]),
+        AIMessage(content="One is waiting for you."),
+    ]
+    messages = _say(gateway, thread_id, "plan a long weekend in Lisbon", steps)
+    [card] = _pending(gateway, "task")
+    assert card["arguments_display"]["prompt"] == REPHRASED[0][1]
+    results = _tool_results(messages)
+    assert len(results) == 7, results
+    assert "Before I do this, please confirm" in results[0]
+    for held in results[1:]:
+        assert held.startswith("Not proposed: a card for task") and card["id"] in held, held
+        assert "Do not propose task again in this turn; end your turn now" in held, held
+
+
+def test_a_different_tool_in_the_same_turn_still_gets_a_card(gateway, monkeypatch) -> None:  # noqa: F811
+    _with_lead_tier3_tool(monkeypatch)
+    thread_id = _thread(gateway)
+    wipe = {"name": "wipe_backup", "args": {"name": "nightly"}, "id": "w1"}
+    _say(gateway, thread_id, "wipe the nightly backup and ask a helper to check", [AIMessage(content="", tool_calls=[_delegation(0)]), AIMessage(content="", tool_calls=[wipe]), AIMessage(content="Two are waiting.")])
+    assert len(_pending(gateway, "task")) == 1 and len(_pending(gateway, "wipe_backup")) == 1
+
+
+def test_another_tool_is_held_only_on_an_exact_repeat(gateway, monkeypatch) -> None:  # noqa: F811
+    """Several different calls of one tool in a turn are several cards (two
+    backups, two emails, a group of ledger suggestions); only the same call
+    again is held."""
+    _with_lead_tier3_tool(monkeypatch)
+    thread_id = _thread(gateway)
+    nightly = {"name": "wipe_backup", "args": {"name": "nightly"}, "id": "w1"}
+    weekly = {"name": "wipe_backup", "args": {"name": "weekly"}, "id": "w2"}
     messages = _say(
         gateway,
         thread_id,
-        "ask a helper to wipe the nightly backup",
-        [
-            AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d1"}]),
-            AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d2"}]),
-            # The same arguments in another key order are the same proposal.
-            AIMessage(content="", tool_calls=[{**DELEGATE, "args": dict(reversed(list(DELEGATE["args"].items()))), "id": "d3"}]),
-            AIMessage(content="It is waiting for you."),
-        ],
+        "wipe the nightly and the weekly backups",
+        [AIMessage(content="", tool_calls=[nightly, weekly]), AIMessage(content="", tool_calls=[{**nightly, "id": "w3"}]), AIMessage(content="Two are waiting.")],
     )
-    [card] = _pending(gateway, "task")
-    results = _tool_results(messages)
-    assert len(results) == 3, results
-    assert "Before I do this, please confirm" in results[0]
-    for repeated in results[1:]:
-        assert repeated.startswith("Not proposed again") and card["id"] in repeated and "Do not propose it again" in repeated, repeated
+    cards = _pending(gateway, "wipe_backup")
+    assert sorted(c["arguments_display"]["name"] for c in cards) == ["nightly", "weekly"]
+    held = _tool_results(messages)[2]
+    assert held.startswith("Not proposed: a card for wipe_backup") and "end your turn now" in held, held
 
 
-def test_the_same_delegation_twice_in_one_step_makes_one_card(gateway) -> None:  # noqa: F811
+def test_the_same_tool_in_a_later_turn_is_a_new_proposal(gateway) -> None:  # noqa: F811
+    """Only the turn's own repeats are held: asked again in a new turn, the
+    person sees a card for that turn too."""
     thread_id = _thread(gateway)
-    _say(
-        gateway,
-        thread_id,
-        "ask a helper to wipe the nightly backup",
-        [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "p1"}, {**DELEGATE, "id": "p2"}]), AIMessage(content="Waiting.")],
-    )
-    assert len(_pending(gateway, "task")) == 1
-
-
-def test_different_delegations_in_one_turn_each_get_a_card(gateway) -> None:  # noqa: F811
-    thread_id = _thread(gateway)
-    _say(
-        gateway,
-        thread_id,
-        "ask helpers to wipe the nightly and the weekly backups",
-        [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d1"}]), AIMessage(content="", tool_calls=[{**OTHER, "id": "d2"}]), AIMessage(content="Two are waiting.")],
-    )
-    assert sorted(a["arguments_display"]["prompt"] for a in _pending(gateway, "task")) == ["Wipe the backup named nightly.", "Wipe the backup named weekly."]
-
-
-def test_the_same_delegation_in_a_later_turn_is_a_new_proposal(gateway) -> None:  # noqa: F811
-    """Only a repeat within the turn is collapsed: asked again in a new turn,
-    the person sees a card for that turn too (the earlier one may be stale)."""
-    thread_id = _thread(gateway)
-    _say(gateway, thread_id, "ask a helper to wipe the nightly backup", [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d1"}]), AIMessage(content="Waiting.")])
-    _say(gateway, thread_id, "please, ask a helper to wipe the nightly backup", [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d2"}]), AIMessage(content="Waiting.")])
+    _say(gateway, thread_id, "ask a helper about Lisbon", [AIMessage(content="", tool_calls=[_delegation(0)]), AIMessage(content="Waiting.")])
+    _say(gateway, thread_id, "now also look into the Lisbon transport passes and what they cost", [AIMessage(content="", tool_calls=[_delegation(2)]), AIMessage(content="Waiting.")])
     assert len(_pending(gateway, "task")) == 2
 
 
-def test_a_repeat_after_the_card_was_answered_is_a_new_proposal(gateway) -> None:  # noqa: F811
+def test_after_the_open_card_is_declined_the_tool_can_be_proposed_again(gateway) -> None:  # noqa: F811
     thread_id = _thread(gateway)
-    _say(gateway, thread_id, "ask a helper to wipe the nightly backup", [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d1"}]), AIMessage(content="Waiting.")])
+    _say(gateway, thread_id, "ask a helper about Lisbon", [AIMessage(content="", tool_calls=[_delegation(0)]), AIMessage(content="Waiting.")])
     [first] = _pending(gateway, "task")
     assert gateway.client.post(f"/api/confirmations/{first['id']}/decline", json={}).json()["outcome"] == "declined"
-    _say(gateway, thread_id, "ok, ask a helper to wipe the nightly backup", [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d2"}]), AIMessage(content="Waiting.")])
+    _say(gateway, thread_id, "ok, just the transport passes then", [AIMessage(content="", tool_calls=[_delegation(2)]), AIMessage(content="Waiting.")])
     [second] = _pending(gateway, "task")
     assert second["id"] != first["id"]
+
+
+def test_after_the_open_card_expires_the_tool_can_be_proposed_again_in_the_turn(gateway, monkeypatch) -> None:  # noqa: F811
+    """Within ONE turn: an open card that expired no longer holds the tool
+    (a confirmed or declined one is resolved the same way; a card cannot be
+    pressed while its chat is replying). Expired through the store the
+    gateway reads, between two tool calls of the same run."""
+    from datetime import UTC, datetime, timedelta
+
+    import test_delegated_confirmation as delegated
+
+    from app.policy.pending import PendingStore
+
+    store = PendingStore(directory=delegated_policy_dir() / "pending")
+    seen: dict[str, int] = {}
+
+    class Expiring(delegated.HeldLeadFake):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            # Before the second proposal: the first card has expired.
+            if sum(1 for m in messages if getattr(m, "type", "") == "tool") == 1:
+                for action in store.open_actions(datetime.now(UTC)):
+                    action.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                    store.save(action)
+                    seen["expired"] = seen.get("expired", 0) + 1
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    monkeypatch.setattr("omniharness.agents.lead_agent.agent.create_chat_model", lambda **_: Expiring(messages=iter(list(delegated.LEAD_SCRIPT))))
+    thread_id = _thread(gateway)
+    messages = _say(gateway, thread_id, "ask a helper about Lisbon", [AIMessage(content="", tool_calls=[_delegation(0)]), AIMessage(content="", tool_calls=[_delegation(2)]), AIMessage(content="Waiting.")])
+    assert seen.get("expired") == 1
+    [card] = _pending(gateway, "task")
+    assert card["arguments_display"]["prompt"] == REPHRASED[2][1], "the tool stayed held after its card expired"
+    assert "Before I do this, please confirm" in _tool_results(messages)[1]
+
+
+def delegated_policy_dir():
+    from pathlib import Path
+
+    from omniharness.config import get_app_config
+
+    return Path(get_app_config().policy.state_dir)
+
+
+# ---------------------------------------------------------------------------
+# A failure after the card said "running" is told in the chat
+# ---------------------------------------------------------------------------
+
+
+def test_a_failure_after_running_is_posted_in_the_chat(gateway, monkeypatch) -> None:  # noqa: F811
+    import test_delegated_confirmation as delegated
+    from test_delegated_confirmation import _user_delegates_and_subagent_proposes
+
+    import app.gateway.routers.confirmations as confirmations
+
+    monkeypatch.setattr(confirmations, "CONFIRM_REPLY_WAIT_SECONDS", 0.3)
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    delegated.WIPE_OUT["raise"] = "the backup volume is offline"
+    entered, release = threading.Event(), threading.Event()
+    delegated.HOLD["wipe"] = (entered, release)
+    worker, box = _confirm_in_background(gateway, wipe["id"])
+    try:
+        assert entered.wait(30), "the confirmed call never started"
+        worker.join(15)
+        assert "response" in box, "the confirm request waited for the call"
+        assert box["response"].json()["outcome"] == "running", box["response"].json()
+    finally:
+        release.set()
+
+    def failure() -> dict | None:
+        return _report(gateway, thread_id, wipe["id"])
+
+    assert _eventually(lambda: failure() is not None, 30), "the failure was never told in the chat"
+    posted = failure()
+    assert "could not complete **wipe_backup** after you confirmed it" in posted["content"], posted["content"]
+    assert "the backup volume is offline" in posted["content"], posted["content"]
+    assert posted["additional_kwargs"]["confirmation"]["outcome"] == "failed"
+    assert posted["additional_kwargs"]["confirmation"]["continue_agent"] is None
+
+
+def test_a_failure_the_card_shows_is_not_also_posted(gateway) -> None:  # noqa: F811
+    """A call that fails before the wait runs out answers on the card, as before."""
+    import test_delegated_confirmation as delegated
+    from test_delegated_confirmation import _user_delegates_and_subagent_proposes
+
+    thread_id, wipe = _user_delegates_and_subagent_proposes(gateway)
+    delegated.WIPE_OUT["raise"] = "the backup volume is offline"
+    assert gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()["outcome"] == "failed"
+    assert _report(gateway, thread_id, wipe["id"]) is None
