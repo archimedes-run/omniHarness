@@ -823,7 +823,10 @@ async def test_a_killed_node_leaves_no_files_behind(tmp_path) -> None:
         pytest.skip("node is not installed")
     record = tmp_path / "node-tmpdir"
     with pytest.raises(FetchFailed, match="took longer"):
-        await run_bounded([node, "-e", _NODE_LEAVES_A_FILE, str(record)], b"", 2.0)
+        # A busy CI runner can take seconds just to start node: the deadline
+        # must leave it time to write its temp file before it is killed.
+        await run_bounded([node, "-e", _NODE_LEAVES_A_FILE, str(record)], b"", 8.0)
+    assert record.exists(), "node never started within the deadline (runner too slow?)"
     node_tmp = record.read_text()
     assert "omni-extract-" in node_tmp, "node must write into the private TMPDIR"
     assert not os.path.exists(node_tmp), "the killed node's files were left behind"
