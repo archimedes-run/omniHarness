@@ -187,7 +187,12 @@ def _is_hardened(entry: dict, container_name: str) -> bool:
     # spec 009 FR-017: started with no-new-privileges (no sudo, no setuid
     # escalation). One started before that is replaced, not adopted.
     no_new_privileges = any(opt.replace("=", ":") in ("no-new-privileges", "no-new-privileges:true") for opt in opts)
-    return keyed == [expected] and not unconfined and no_new_privileges and not host.get("Privileged")
+    caps_dropped = [str(c).upper() for c in host.get("CapDrop") or []] in (["ALL"], ["CAP_ALL"])
+    return keyed == [expected] and not unconfined and no_new_privileges and caps_dropped and not host.get("Privileged")
+
+
+#: Capabilities a sandbox keeps (everything else is dropped, spec 009 review).
+SANDBOX_CAPS = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "KILL", "AUDIT_WRITE")
 
 
 SANDBOX_REFUSED_WITHOUT_NETWORK = (
@@ -552,6 +557,12 @@ class LocalContainerBackend(SandboxBackend):
                 # has no sudo grant and no setuid binaries; this makes sure.
                 "--security-opt",
                 "no-new-privileges",
+                # Only the capabilities the image's start-up needs (create the
+                # user, chown its home, drop to it with su/supervisord); no raw
+                # sockets, mknod, chroot, setfcap/setpcap or setuid bits.
+                "--cap-drop",
+                "ALL",
+                *[arg for cap in SANDBOX_CAPS for arg in ("--cap-add", cap)],
             ]
         )
 

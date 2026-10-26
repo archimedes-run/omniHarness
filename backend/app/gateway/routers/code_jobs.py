@@ -28,7 +28,8 @@ def _payload(request: Request, job, after: int) -> dict:
     store = _store(request)
     config = getattr(request.app.state, "config", None)
     cap = config.code_jobs.monthly_cap_usd if config is not None else None
-    return {"job": job.public(), "steps": store.steps(job.id, after=max(0, after)), "month": {"spent_usd": round(store.month_spend(), 4), "cap_usd": cap}}
+    # The caller's own spend this month (the cap itself counts every job).
+    return {"job": job.public(), "steps": store.steps(job.id, after=max(0, after)), "month": {"spent_usd": round(store.month_spend(user_id=job.user_id), 4), "cap_usd": cap}}
 
 
 @router.get("/threads/{thread_id}/code-jobs")
