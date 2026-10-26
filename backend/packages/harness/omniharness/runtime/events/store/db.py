@@ -24,6 +24,8 @@ class DbRunEventStore(RunEventStore):
     def __init__(self, session_factory: async_sessionmaker[AsyncSession], *, max_trace_content: int = 10240):
         self._sf = session_factory
         self._max_trace_content = max_trace_content
+        #: None: not looked up yet; False: not SQLite (see _sqlite_sync_engine).
+        self._sync_engine = None
 
     @staticmethod
     def _row_to_dict(row: RunEventRow) -> dict:
@@ -112,44 +114,91 @@ class DbRunEventStore(RunEventStore):
                 session.add(row)
             return self._row_to_dict(row)
 
+    def _rows_for(self, events: list[dict], seq: int, user_id: str | None) -> list[RunEventRow]:
+        """The rows for `events`, numbered after `seq`."""
+        rows = []
+        for e in events:
+            seq += 1
+            content = e.get("content", "")
+            category = e.get("category", "trace")
+            metadata = e.get("metadata")
+            content, metadata = self._truncate_trace(category, content, metadata)
+            # Anything but text is stored as JSON: a chain's outputs can be a
+            # list, which the driver cannot bind (the whole batch was refused).
+            if not isinstance(content, str):
+                db_content = json.dumps(content, default=str, ensure_ascii=False)
+                metadata = {**(metadata or {}), "content_is_dict": True}
+            else:
+                db_content = content
+            rows.append(
+                RunEventRow(
+                    thread_id=e["thread_id"],
+                    run_id=e["run_id"],
+                    user_id=e.get("user_id", user_id),
+                    source=e.get("source"),
+                    event_type=e["event_type"],
+                    category=category,
+                    content=db_content,
+                    event_metadata=metadata,
+                    seq=seq,
+                    created_at=datetime.fromisoformat(e["created_at"]) if e.get("created_at") else datetime.now(UTC),
+                )
+            )
+        return rows
+
+    def _sqlite_sync_engine(self):
+        """A synchronous engine on the same SQLite file, or None (not SQLite).
+
+        Journal batches are written while a run goes (the chat's display
+        history reads them mid-run). Through aiosqlite a write transaction
+        needs the event loop to reach its COMMIT, and SQLite locks the whole
+        file meanwhile; gateway code that writes synchronously ON the loop
+        (the ledger's plan check before a confirmation card) then waited on
+        that lock with the loop blocked, until "database is locked". Written
+        from a worker thread through a synchronous connection, the batch
+        commits without the loop.
+        """
+        if self._sync_engine is False:
+            return None
+        if self._sync_engine is None:
+            engine = getattr(self._sf, "kw", {}).get("bind")
+            if engine is None or engine.dialect.name != "sqlite":
+                self._sync_engine = False
+                return None
+            from sqlalchemy import create_engine
+            from sqlalchemy.pool import NullPool
+
+            # NullPool: a connection per batch, none held open between runs.
+            url = engine.url.set(drivername="sqlite")
+            self._sync_engine = create_engine(url, connect_args={"check_same_thread": False}, poolclass=NullPool)
+        return self._sync_engine
+
+    def _put_batch_sync(self, engine, events: list[dict], user_id: str | None) -> list[dict]:
+        from sqlalchemy.orm import Session
+
+        with Session(engine, expire_on_commit=False) as session, session.begin():
+            thread_id = events[0]["thread_id"]
+            max_seq = session.scalar(select(func.max(RunEventRow.seq)).where(RunEventRow.thread_id == thread_id))
+            rows = self._rows_for(events, max_seq or 0, user_id)
+            session.add_all(rows)
+        return [self._row_to_dict(r) for r in rows]
+
     async def put_batch(self, events):
         if not events:
             return []
         user_id = self._user_id_from_context()
+        sync_engine = self._sqlite_sync_engine()
+        if sync_engine is not None:
+            import asyncio
+
+            return await asyncio.to_thread(self._put_batch_sync, sync_engine, events, user_id)
         async with self._sf() as session:
             async with session.begin():
                 # Get max seq for the thread (assume all events in batch belong to same thread).
-                # NOTE: with_for_update() on aggregates is a no-op on SQLite;
-                # the UNIQUE(thread_id, seq) constraint catches races there.
                 thread_id = events[0]["thread_id"]
                 max_seq = await session.scalar(select(func.max(RunEventRow.seq)).where(RunEventRow.thread_id == thread_id).with_for_update())
-                seq = max_seq or 0
-                rows = []
-                for e in events:
-                    seq += 1
-                    content = e.get("content", "")
-                    category = e.get("category", "trace")
-                    metadata = e.get("metadata")
-                    content, metadata = self._truncate_trace(category, content, metadata)
-                    if not isinstance(content, str):
-                        db_content = json.dumps(content, default=str, ensure_ascii=False)
-                        metadata = {**(metadata or {}), "content_is_dict": True}
-                    else:
-                        db_content = content
-                    row = RunEventRow(
-                        thread_id=e["thread_id"],
-                        run_id=e["run_id"],
-                        user_id=e.get("user_id", user_id),
-                        source=e.get("source"),
-                        event_type=e["event_type"],
-                        category=category,
-                        content=db_content,
-                        event_metadata=metadata,
-                        seq=seq,
-                        created_at=datetime.fromisoformat(e["created_at"]) if e.get("created_at") else datetime.now(UTC),
-                    )
-                    session.add(row)
-                    rows.append(row)
+                rows = self._rows_for(events, max_seq or 0, user_id)
+                session.add_all(rows)
             return [self._row_to_dict(r) for r in rows]
 
     async def list_messages(
