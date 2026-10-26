@@ -40,6 +40,9 @@ class RunRecord:
     error: str | None = None
 
 
+#: `RunManager.list_history(user_id=ALL_USERS)`: every user's runs (server-side).
+ALL_USERS = object()
+
 #: An active run row in the store not updated for this long belongs to a
 #: worker that died; it no longer holds its thread (write_when_idle).
 OTHER_WORKER_RUN_STALE_AFTER = timedelta(hours=1)
@@ -238,7 +241,7 @@ class RunManager:
             # us deterministic newest-first results even when timestamps tie.
             return [r for r in self._runs.values() if r.thread_id == thread_id]
 
-    async def list_history(self, thread_id: str, *, limit: int = 1000) -> list[RunRecord]:
+    async def list_history(self, thread_id: str, *, user_id: object = None, limit: int = 1000) -> list[RunRecord]:
         """Every run of a thread this gateway recorded, oldest first.
 
         `list_by_thread` sees only this process's runs since it started, so
@@ -248,16 +251,26 @@ class RunManager:
         vanished (dogfooding D1-f). This reads the run store and lays this
         process's records over it (theirs is the live status, e.g. a run just
         cancelled). Runs only this process knows (a store write that failed,
-        or no store) follow, in creation order. Not filtered by user: the
-        caller has checked who owns the thread, as for `list_by_thread`.
+        or no store) follow, in creation order.
+
+        The store is read for one user's runs: `user_id`, or by default (None)
+        the request's user. `ALL_USERS` reads every user's, for server-side
+        callers. With no user in context, only this process's records are
+        listed.
 
         At most `limit` runs, the newest ones.
         """
+        from omniharness.runtime.user_context import AUTO, resolve_user_id
+
+        try:
+            store_user = resolve_user_id(AUTO if user_id is None else user_id, method_name="RunManager.list_history") if user_id is not ALL_USERS else None
+        except RuntimeError:
+            return (await self.list_by_thread(thread_id))[-limit:]
         live = await self.list_by_thread(thread_id)
         if self._store is None:
             return live[-limit:]
         try:
-            rows = await self._store.list_by_thread(thread_id, user_id=None, limit=limit)
+            rows = await self._store.list_by_thread(thread_id, user_id=store_user, limit=limit)
         except Exception:
             logger.warning("Could not read runs of thread %s from the run store; listing this process's only", thread_id, exc_info=True)
             return live[-limit:]

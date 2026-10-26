@@ -5,6 +5,7 @@ import re
 import pytest
 
 from omniharness.runtime import RunManager, RunStatus
+from omniharness.runtime.runs.manager import ALL_USERS
 
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
@@ -145,14 +146,33 @@ async def test_list_history_reads_the_store_oldest_first_with_this_process_on_to
     await store.put("elsewhere", thread_id="other", status="success", created_at="2026-01-03T00:00:00+00:00")
     manager = RunManager(store=store)  # a fresh process: nothing in memory
     assert await manager.list_by_thread("t") == []
-    assert [(r.run_id, r.status) for r in await manager.list_history("t")] == [("old-1", RunStatus.success), ("old-2", RunStatus.error)]
+    assert [(r.run_id, r.status) for r in await manager.list_history("t", user_id=ALL_USERS)] == [("old-1", RunStatus.success), ("old-2", RunStatus.error)]
+    # By default, the request's user's runs only (these were stored with no user).
+    assert await manager.list_history("t") == []
 
     live = await manager.create("t")
     await manager.cancel(live.run_id)  # in memory only: interrupted, the store still says pending
-    history = await manager.list_history("t")
+    history = await manager.list_history("t", user_id=ALL_USERS)
     assert [r.run_id for r in history] == ["old-1", "old-2", live.run_id]
     assert history[-1].status == RunStatus.interrupted
-    assert [r.run_id for r in await manager.list_history("t", limit=2)] == ["old-2", live.run_id]
+    assert [r.run_id for r in await manager.list_history("t", user_id=ALL_USERS, limit=2)] == ["old-2", live.run_id]
+
+
+@pytest.mark.anyio
+async def test_list_history_reads_only_the_callers_runs_from_the_store():
+    from omniharness.runtime.runs.store.memory import MemoryRunStore
+    from omniharness.runtime.user_context import reset_current_user, set_current_user
+
+    store = MemoryRunStore()
+    await store.put("mine", thread_id="t", user_id="alice", created_at="2026-01-01T00:00:00+00:00")
+    await store.put("theirs", thread_id="t", user_id="bob", created_at="2026-01-02T00:00:00+00:00")
+    manager = RunManager(store=store)
+    for who, expected in (("alice", ["mine"]), ("bob", ["theirs"])):
+        token = set_current_user(type("U", (), {"id": who})())
+        try:
+            assert [r.run_id for r in await manager.list_history("t")] == expected
+        finally:
+            reset_current_user(token)
 
 
 @pytest.mark.anyio

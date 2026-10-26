@@ -147,11 +147,14 @@ async def wait_run(thread_id: str, body: RunCreateRequest, request: Request) -> 
 
 
 @router.get("/{thread_id}/runs", response_model=list[RunResponse])
-@require_permission("runs", "read", owner_check=True)
+@require_permission("runs", "read", owner_check=True, require_existing=True)
 async def list_runs(thread_id: str, request: Request) -> list[RunResponse]:
     """List a thread's runs, oldest first, including those of earlier
     gateway processes (read from the run store): the chat reads its display
-    history from each run's journal, and lost it on every restart."""
+    history from each run's journal, and lost it on every restart.
+
+    Only a thread that exists (a deleted one lists nothing), and from the
+    store only the caller's own runs."""
     run_mgr = get_run_manager(request)
     records = await run_mgr.list_history(thread_id)
     return [_record_to_response(r) for r in records]

@@ -425,6 +425,27 @@ class TestDbRunEventStore:
         await task
         await close_engine()
 
+    @pytest.mark.anyio
+    async def test_batches_of_one_thread_written_at_once_number_their_events_apart(self, tmp_path):
+        """The sync connection takes the write lock (BEGIN IMMEDIATE) before
+        reading max(seq), so concurrent batches never collide on
+        UNIQUE(thread_id, seq); and it runs with the async engine's pragmas."""
+        import asyncio
+
+        from omniharness.persistence.engine import close_engine, get_session_factory, init_engine
+        from omniharness.runtime.events.store.db import DbRunEventStore
+
+        await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", sqlite_dir=str(tmp_path))
+        s = DbRunEventStore(get_session_factory())
+        batches = [[{"thread_id": "t1", "run_id": f"r{n}", "event_type": "trace", "category": "trace", "content": f"{n}-{i}"} for i in range(5)] for n in range(12)]
+        results = await asyncio.gather(*(s.put_batch(b) for b in batches))
+        seqs = sorted(r["seq"] for batch in results for r in batch)
+        assert seqs == list(range(1, 61))
+        with s._sqlite_sync_engine().connect() as conn:
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+            assert conn.exec_driver_sql("PRAGMA synchronous").scalar() == 1  # NORMAL
+        await close_engine()
+
 
 # -- Factory tests --
 
@@ -434,7 +455,10 @@ class TestMakeRunEventStore:
 
     @pytest.mark.anyio
     async def test_memory_backend_default(self):
+        from omniharness.persistence.engine import close_engine
         from omniharness.runtime.events.store import make_run_event_store
+
+        await close_engine()  # no database (a failed test may leave one open)
 
         store = make_run_event_store(None)
         assert type(store).__name__ == "MemoryRunEventStore"

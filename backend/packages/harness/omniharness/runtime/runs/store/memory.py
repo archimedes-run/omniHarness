@@ -59,7 +59,7 @@ class MemoryRunStore(RunStore):
                 self._runs[run_id]["error"] = error
             self._runs[run_id]["updated_at"] = datetime.now(UTC).isoformat()
 
-    async def delete(self, run_id):
+    async def delete(self, run_id, *, user_id=None):
         self._runs.pop(run_id, None)
 
     async def update_run_completion(self, run_id, *, status, **kwargs):

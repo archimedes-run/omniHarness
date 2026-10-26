@@ -232,6 +232,81 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+/**
+ * The summary keeps a COPY of an earlier message after itself (the backend's
+ * skill rescue: same id, marked `omniharness_summary_rescued`). The recorded
+ * chat of STAGE2 with the first turn's first step (and its result) copied in
+ * after the summary, as the rescue places it.
+ */
+function withRescuedCopy(): Stage {
+  type Content = Record<string, unknown> & { type?: string; id?: string };
+  const runs = STAGE2.runs as { run_id: string }[];
+  const firstRun = FIX.journal2[runs[0]!.run_id]!.map(
+    (row) => (row as unknown as { content: Content }).content,
+  );
+  const step = firstRun.find(
+    (m) =>
+      m.type === "ai" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
+  )!;
+  const result = firstRun[firstRun.indexOf(step) + 1]!;
+  const marker = { omniharness_summary_rescued: true };
+  const state = STAGE2.state as { values: { messages: Content[] } };
+  const [summary, ...tail] = state.values.messages;
+  return {
+    ...STAGE2,
+    state: {
+      ...state,
+      values: {
+        ...state.values,
+        messages: [
+          summary,
+          { ...step, content: "", additional_kwargs: marker },
+          { ...result, id: "rescued-tool-copy", additional_kwargs: marker },
+          ...tail,
+        ],
+      },
+    },
+  };
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  test.describe(`${scheme} theme, a rescued copy after the summary`, () => {
+    test.use({ colorScheme: scheme, viewport: { width: 1440, height: 2000 } });
+
+    test("every message from the person still shows, once and in order", async ({
+      page,
+    }) => {
+      await mockThread(page, scheme, { current: withRescuedCopy() });
+      await page.goto(`/workspace/chats/${THREAD}`, {
+        waitUntil: "networkidle",
+      });
+      await expect(page.getByText(SECOND, { exact: true })).toBeVisible();
+      await scrollUntilVisible(page, FIRST);
+      await expect(page.getByText(FIRST, { exact: true })).toHaveCount(1);
+      await expect(page.getByText(SECOND, { exact: true })).toHaveCount(1);
+      await expect(page.getByText(FIRST_ANSWER, { exact: false })).toHaveCount(
+        1,
+      );
+      await expect(page.getByText("3 more steps", { exact: true })).toHaveCount(
+        2,
+      );
+      await expectNoSummary(page);
+      const first = await page.getByText(FIRST, { exact: true }).boundingBox();
+      const second = await page
+        .getByText(SECOND, { exact: true })
+        .boundingBox();
+      expect(first!.y).toBeLessThan(second!.y);
+      const found = await page.evaluate(lowContrastText);
+      expect(
+        found,
+        found
+          .map((f) => `${f.ratio}/${f.need} "${f.text}" ${f.color} [${f.cls}]`)
+          .join("\n"),
+      ).toEqual([]);
+    });
+  });
+}
+
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`${scheme} theme, reloaded mid-run`, () => {
     test.use({ colorScheme: scheme, viewport: { width: 1440, height: 2000 } });

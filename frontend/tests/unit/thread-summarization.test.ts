@@ -241,3 +241,65 @@ describe("a reload while a run is still going (D1-g)", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
+
+describe("a summary that keeps a rescued copy of an earlier message (skill rescue)", () => {
+  const RESCUED = { additional_kwargs: { omniharness_summary_rescued: true } };
+  const h = (id: string) => ({ id, type: "human", content: id }) as Message;
+  const a = (id: string, extra = {}) =>
+    ({ id, type: "ai", content: id, ...extra }) as Message;
+  const t = (call: string, extra = {}) =>
+    ({ type: "tool", tool_call_id: call, content: call, ...extra }) as Message;
+  const summary = {
+    id: "s",
+    type: "human",
+    name: "summary",
+    content: "summary",
+  } as Message;
+  // a1 loaded a skill (its result c1); the summary keeps a COPY of a1 (same
+  // id) and c1 after itself, then the recent tail h4, a4.
+  const full = [
+    h("h1"),
+    a("a1"),
+    t("c1"),
+    a("a1b"),
+    h("h2"),
+    a("a2"),
+    h("h3"),
+    a("a3"),
+    h("h4"),
+    a("a4"),
+  ];
+  const live = [summary, a("a1", RESCUED), t("c1", RESCUED), h("h4"), a("a4")];
+  const ids = (ms: Message[]) =>
+    ms.filter((m) => m.name !== "summary").map((m) => m.id ?? m.content);
+
+  it("after a reload, shows every turn once: the copy does not mark where the live thread begins", () => {
+    expect(ids(mergeDisplay(full, live, []))).toEqual(ids(full));
+  });
+
+  it("while streaming, moves every replaced message, not only those before the copy's original", () => {
+    const update = [
+      { type: "remove", id: "__remove_all__" } as Message,
+      ...live,
+    ];
+    const moved = messagesMovedBySummary(full, update);
+    expect(ids(moved)).toEqual([
+      "h1",
+      "a1",
+      "c1",
+      "a1b",
+      "h2",
+      "a2",
+      "h3",
+      "a3",
+    ]);
+    const history = moveIntoHistory([], full, moved);
+    expect(ids(mergeDisplay(history, live, []))).toEqual(ids(full));
+  });
+
+  it("an unmarked live message with an old id still marks where the live thread begins", () => {
+    expect(
+      historyBeforeLive(full, [summary, a("a3"), h("h4")]).map((m) => m.id),
+    ).toEqual(["h1", "a1", undefined, "a1b", "h2", "a2", "h3"]);
+  });
+});

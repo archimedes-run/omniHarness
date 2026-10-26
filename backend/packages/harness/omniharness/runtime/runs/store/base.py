@@ -57,7 +57,7 @@ class RunStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    async def delete(self, run_id: str) -> None:
+    async def delete(self, run_id: str, *, user_id=None) -> None:
         pass
 
     @abc.abstractmethod

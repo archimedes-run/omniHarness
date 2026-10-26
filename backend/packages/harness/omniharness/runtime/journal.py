@@ -77,6 +77,10 @@ class RunJournal(BaseCallbackHandler):
         self._buffer: list[dict] = []
         self._buffer_lock = threading.Lock()
         self._pending_flush_tasks: set[asyncio.Task[bool]] = set()
+        # True while flush() writes the rest of the buffer itself: no other
+        # write may start meanwhile (two writes of one thread at once could
+        # number their events from the same max seq).
+        self._draining = False
         # The run's loop and context, captured where the worker builds the
         # journal. A callback on an executor thread has no running loop; its
         # flush is handed to this loop (and runs in this context, so the event
@@ -361,7 +365,7 @@ class RunJournal(BaseCallbackHandler):
             # One write at a time: writes run in order (the store numbers
             # events as they arrive) and never race on one SQLite file. What
             # arrives meanwhile is written when the write in flight is done.
-            if not self._buffer or self._pending_flush_tasks:
+            if not self._buffer or self._pending_flush_tasks or self._draining:
                 return
             batch = self._buffer.copy()
             self._buffer.clear()
@@ -444,18 +448,22 @@ class RunJournal(BaseCallbackHandler):
         while self._pending_flush_tasks:
             await asyncio.gather(*tuple(self._pending_flush_tasks), return_exceptions=True)
 
-        while True:
-            with self._buffer_lock:
-                if not self._buffer:
-                    break
-                batch = self._buffer[: self._flush_threshold]
-                del self._buffer[: self._flush_threshold]
-            try:
-                await self._store.put_batch(batch)
-            except Exception:
+        self._draining = True
+        try:
+            while True:
                 with self._buffer_lock:
-                    self._buffer = batch + self._buffer
-                raise
+                    if not self._buffer:
+                        break
+                    batch = self._buffer[: self._flush_threshold]
+                    del self._buffer[: self._flush_threshold]
+                try:
+                    await self._store.put_batch(batch)
+                except Exception:
+                    with self._buffer_lock:
+                        self._buffer = batch + self._buffer
+                    raise
+        finally:
+            self._draining = False
 
     def get_completion_data(self) -> dict:
         """Return accumulated token and message data for run completion."""

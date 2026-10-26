@@ -165,12 +165,32 @@ class DbRunEventStore(RunEventStore):
             if engine is None or engine.dialect.name != "sqlite":
                 self._sync_engine = False
                 return None
-            from sqlalchemy import create_engine
+            from sqlalchemy import create_engine, event
             from sqlalchemy.pool import NullPool
 
             # NullPool: a connection per batch, none held open between runs.
             url = engine.url.set(drivername="sqlite")
-            self._sync_engine = create_engine(url, connect_args={"check_same_thread": False}, poolclass=NullPool)
+            sync_engine = create_engine(url, connect_args={"check_same_thread": False}, poolclass=NullPool)
+
+            @event.listens_for(sync_engine, "connect")
+            def _connect(dbapi_conn, _record):  # noqa: ARG001 — SQLAlchemy contract
+                # The async engine's pragmas (persistence/engine.py), and the
+                # transaction begun by us below, not by the driver.
+                dbapi_conn.isolation_level = None
+                cursor = dbapi_conn.cursor()
+                try:
+                    cursor.execute("PRAGMA synchronous=NORMAL;")
+                    cursor.execute("PRAGMA foreign_keys=ON;")
+                finally:
+                    cursor.close()
+
+            @event.listens_for(sync_engine, "begin")
+            def _begin(conn):
+                # The write lock BEFORE reading max(seq): two batches of one
+                # thread can never number their rows from the same max.
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+            self._sync_engine = sync_engine
         return self._sync_engine
 
     def _put_batch_sync(self, engine, events: list[dict], user_id: str | None) -> list[dict]:

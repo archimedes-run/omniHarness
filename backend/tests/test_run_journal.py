@@ -310,6 +310,37 @@ class TestBufferFlush:
         assert [r["content"]["content"] for r in rows] == ["one", "two", "three"]
 
     @pytest.mark.anyio
+    async def test_no_write_starts_while_the_final_flush_writes_the_rest(self):
+        """flush() writes the rest of the buffer itself; a message arriving
+        meanwhile must not start a second write of the same thread at once."""
+        store = MemoryRunEventStore()
+        release = asyncio.Event()
+        real = store.put_batch
+        running = {"now": 0, "most": 0}
+
+        async def slow_put(events):
+            running["now"] += 1
+            running["most"] = max(running["most"], running["now"])
+            try:
+                await release.wait()
+                return await real(events)
+            finally:
+                running["now"] -= 1
+
+        store.put_batch = slow_put
+        j = RunJournal("r1", "t1", store, flush_threshold=100)
+        j.on_chain_start({"name": "graph"}, {}, run_id=uuid4(), parent_run_id=None)  # a trace: buffered
+        final = asyncio.create_task(j.flush())
+        await asyncio.sleep(0.01)  # the final flush is writing
+        j.on_llm_end(_make_llm_response("late"), run_id=uuid4(), parent_run_id=None, tags=["lead_agent"])
+        assert not j._pending_flush_tasks, "a second write started during the final flush"
+        release.set()
+        await final
+        await j.flush()
+        assert running["most"] == 1
+        assert [e["event_type"] for e in await store.list_events("t1", "r1")] == ["run.start", "llm.ai.response"]
+
+    @pytest.mark.anyio
     async def test_events_retained_when_no_loop(self, journal_setup):
         """Events buffered in a sync (no-loop) context should survive
         until the async flush() in the finally block."""

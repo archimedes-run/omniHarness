@@ -507,3 +507,29 @@ def test_memory_flush_hook_preserves_agent_scoped_memory(monkeypatch: pytest.Mon
 
     queue.add_nowait.assert_called_once()
     assert queue.add_nowait.call_args.kwargs["agent_name"] == "research-agent"
+
+
+def test_skill_rescue_marks_the_copies_it_keeps_after_the_summary() -> None:
+    """A rescued message is an EARLIER message (same id) placed after the
+    summary. The chat finds where the live thread begins by message id, so a
+    rescued copy is marked: taken for the start of the live thread, it cut
+    the person's later messages out of the display history."""
+    from omniharness.agents.middlewares.summarization_middleware import RESCUED_MARKER
+
+    middleware = _middleware(
+        trigger=("messages", 4),
+        keep=("messages", 2),
+        preserve_recent_skill_count=5,
+        preserve_recent_skill_tokens=10_000,
+        preserve_recent_skill_tokens_per_skill=10_000,
+    )
+    original = _skill_conversation()
+    emitted = middleware.before_model({"messages": original}, _runtime())["messages"]
+    by_id = {m.id: m for m in original if m.id}
+    rescued = [m for m in emitted[2:] if (m.additional_kwargs or {}).get(RESCUED_MARKER)]
+    assert rescued, "nothing was rescued; this test proves nothing"
+    assert {type(m).__name__ for m in rescued} == {"AIMessage", "ToolMessage"}
+    for m in rescued:
+        assert m.id is None or m.id in by_id, "a rescued copy is a copy of an earlier message"
+    # The tail kept by the cutoff is the live conversation: not marked.
+    assert not any((m.additional_kwargs or {}).get(RESCUED_MARKER) for m in emitted[-2:])

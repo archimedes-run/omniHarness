@@ -90,6 +90,7 @@ MIGRATIONS = {
         'replacements': [
             ('run_events:\n  backend: memory', 'run_events:\n  backend: auto'),
         ],
+        'note': 'run_events.backend is now auto: run journals (each run\'s messages, tool results and traces) are kept in the database, so a summarized chat keeps its history across restarts. They are deleted with the chat and by run-history retention. Set run_events.backend: memory to keep them in memory only (lost on restart).',
     },
     # Future migrations go here:
     # 2: {
@@ -100,6 +101,7 @@ MIGRATIONS = {
 
 # Apply migrations in order for versions (user_version, example_version]
 migrated = []
+notes = []
 for version in range(user_version + 1, example_version + 1):
     migration = MIGRATIONS.get(version)
     if not migration:
@@ -109,6 +111,8 @@ for version in range(user_version + 1, example_version + 1):
         if old in raw_text:
             raw_text = raw_text.replace(old, new)
             migrated.append(f'{old} -> {new}')
+    if migration.get('note'):
+        notes.append(f'v{version}: ' + migration['note'])
 
 # Re-parse after text migrations
 user = yaml.safe_load(raw_text) or {}
@@ -117,6 +121,9 @@ if migrated:
     print(f'Applied {len(migrated)} migration(s):')
     for m in migrated:
         print(f'  ~ {m}')
+    print()
+for note in notes:
+    print(f'Note {note}')
     print()
 
 # ── Merge missing fields ─────────────────────────────────────────────────

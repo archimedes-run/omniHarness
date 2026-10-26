@@ -560,7 +560,9 @@ database:
 # ============================================================================
 # Storage backend for run events (messages + execution traces).
 #
-# backend: auto    -- The SQL database (as db) when there is one, else memory (default)
+# backend: auto    -- The SQL database (as db) when there is one, else memory (default;
+#                     also when this section is missing). Journals then persist:
+#                     they are deleted with their chat and by run-history retention
 # backend: memory  -- No persistence, data lost on restart: the chat's display
 #                     history of a summarized conversation is lost with it
 # backend: db      -- SQL database via ORM, full query capability (production)

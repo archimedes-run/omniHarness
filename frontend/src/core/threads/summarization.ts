@@ -25,6 +25,19 @@ function isSummary(message: Message): boolean {
   return message.type === "human" && message.name === "summary";
 }
 
+/** Set by the backend on a message its summarization keeps after the summary
+ * as a copy of an EARLIER message (same id): the skill rescue
+ * (summarization_middleware.RESCUED_MARKER). */
+export const RESCUED_MARKER = "omniharness_summary_rescued";
+
+/** A copy of an earlier message, kept after the summary: not where the live
+ * conversation begins. */
+export function isRescued(message: Message): boolean {
+  const extra = (message as { additional_kwargs?: Record<string, unknown> })
+    .additional_kwargs;
+  return extra?.[RESCUED_MARKER] === true;
+}
+
 /**
  * The messages of the update that summarized the context, or null when this
  * update did not. Found by its content, not by the node name: the node is
@@ -60,7 +73,11 @@ export function messagesMovedBySummary(
   current: Message[],
   update: Message[],
 ): Message[] {
-  const kept = update.filter((m) => m.type !== "remove" && !isSummary(m));
+  // A rescued copy is an earlier message (same id): the messages after the
+  // summary begin at the first one that is not.
+  const kept = update.filter(
+    (m) => m.type !== "remove" && !isSummary(m) && !isRescued(m),
+  );
   const firstKept = kept[0]?.id;
   const moved: Message[] = [];
   for (const message of current) {
@@ -119,7 +136,14 @@ export function historyBeforeLive(
   // By message id only. A journaled tool result carries no id, and tool call
   // ids are not unique across runs (a scripted or provider-assigned "f3" in
   // two turns), so matching them cut the history at an earlier turn's result.
-  const liveIds = new Set(live.map((message) => message.id).filter(Boolean));
+  // A rescued copy is an earlier message after the summary: matching it cut
+  // the history at that old turn and dropped the person's later messages.
+  const liveIds = new Set(
+    live
+      .filter((message) => !isRescued(message))
+      .map((message) => message.id)
+      .filter(Boolean),
+  );
   const first = history.findIndex(
     (message) =>
       message.type !== "tool" && !!message.id && liveIds.has(message.id),
@@ -133,7 +157,26 @@ export function mergeDisplay(
   live: Message[],
   optimistic: Message[],
 ): Message[] {
-  return [...historyBeforeLive(history, live), ...live, ...optimistic];
+  const shown = historyBeforeLive(history, live);
+  // A rescued copy whose original the history shows is shown there, once,
+  // where it happened; so are the tool results that answer it.
+  const shownIds = new Set(shown.map((m) => m.id).filter(Boolean));
+  const shownCalls = new Set(
+    shown
+      .filter((m) => m.type === "tool" && "tool_call_id" in m)
+      .map((m) => (m as { tool_call_id: string }).tool_call_id),
+  );
+  const rest = live.filter(
+    (m) =>
+      !isRescued(m) ||
+      !(
+        (!!m.id && shownIds.has(m.id)) ||
+        (m.type === "tool" &&
+          "tool_call_id" in m &&
+          shownCalls.has((m as { tool_call_id: string }).tool_call_id))
+      ),
+  );
+  return [...shown, ...rest, ...optimistic];
 }
 
 /**

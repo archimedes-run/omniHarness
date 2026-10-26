@@ -138,12 +138,14 @@ async def delete_thread_everywhere(app, thread_id: str) -> None:
 
     events = getattr(state, "run_event_store", None)
     if events is not None:
-        await events.delete_by_thread(thread_id)
+        # Server-chosen deletion: every row of the thread, with or without a
+        # user context (the sweep and the engine worker have none).
+        await events.delete_by_thread(thread_id, user_id=None)
 
     runs = getattr(state, "run_store", None)
     if runs is not None:
         for run in await runs.list_by_thread(thread_id, user_id=None, limit=10_000):
-            await runs.delete(run["run_id"])
+            await runs.delete(run["run_id"], user_id=None)
 
     if store is not None:
         await store.delete(thread_id, user_id=None)
@@ -291,8 +293,8 @@ async def trim_thread(app, thread_id: str, cutoff) -> bool:
             created = str(r.get("created_at") or "")
             if created and datetime.fromisoformat(created).replace(tzinfo=datetime.fromisoformat(created).tzinfo or UTC) < cutoff:
                 if events is not None:
-                    await events.delete_by_run(thread_id, r["run_id"])
-                await runs.delete(r["run_id"])
+                    await events.delete_by_run(thread_id, r["run_id"], user_id=None)
+                await runs.delete(r["run_id"], user_id=None)
     return True
 
 
