@@ -341,3 +341,42 @@ def test_the_lead_is_told_to_run_coding_jobs_only_where_they_can_run():
     finally:
         reset_code_job_controller()
     assert coding_jobs_section() == ""
+
+
+def test_the_sandbox_guard_fails_closed_until_the_sandbox_network_is_known():
+    import ipaddress
+
+    from app.gateway import sandbox_guard as g
+
+    try:
+        g.set_state(configured=True, subnets=[], own={"172.22.0.3", "192.168.200.4"}, trusted=[ipaddress.IPv4Network("192.168.200.0/24")])
+        assert g.refused("172.22.0.9"), "a sandbox address is served while the subnets are unknown"
+        assert g.refused("10.1.2.3")
+        assert not g.refused("192.168.200.10"), "nginx's network is served"
+        assert not g.refused("127.0.0.1") and not g.refused("172.22.0.3"), "loopback and the gateway's own addresses are served"
+        g.set_state(configured=True, subnets=[ipaddress.IPv4Network("172.22.0.0/16")], own={"172.22.0.3"}, trusted=[])
+        assert g.refused("172.22.0.9") and not g.refused("10.1.2.3")
+        assert not g.refused("172.22.0.3"), "the gateway calling itself on its sandbox-network address"
+        g.set_state(configured=False, subnets=[])
+        assert not g.refused("172.22.0.9")
+    finally:
+        g.set_state(configured=False, subnets=[])
+
+
+def test_the_sandbox_guard_reads_connected_networks_from_the_routing_table(tmp_path, monkeypatch):
+    from app.gateway import sandbox_guard as g
+
+    route = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\neth0\t0000A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\neth1\t000016AC\t00000000\t0001\t0\t0\t0\t0000FFFF\neth0\t00000000\t0100A8C0\t0003\t0\t0\t0\t00000000\n"
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        if path == "/proc/net/route":
+            p = tmp_path / "route"
+            p.write_text(route)
+            return real_open(p, *a, **k)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert [str(n) for n in g.local_networks()] == ["192.168.0.0/24", "172.22.0.0/16"]
+    monkeypatch.setenv("GATEWAY_TRUSTED_PROXIES", "192.168.0.10")
+    assert [str(n) for n in g.trusted_networks()] == ["192.168.0.0/24"]

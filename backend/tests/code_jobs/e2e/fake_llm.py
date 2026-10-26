@@ -33,7 +33,14 @@ SCRIPTS = {
         {"text": "finished"},
     ],
     "quick": [
-        {"tool": "bash", "args": {"command": "mkdir -p /tmp/omni-jobs && echo 0 > /tmp/omni-jobs/verify.exit; (sleep 300 >/dev/null 2>&1 &) ; echo left a process", "description": "forge an exit file and leave a process behind"}},
+        {
+            "tool": "bash",
+            "args": {
+                "command": "mkdir -p /mnt/user-data/workspace/e2e && cd /mnt/user-data/workspace/e2e && echo 0 > verify.exit; (sleep 300 >/dev/null 2>&1 &) ; (setsid env -i sh -c 'sleep 999' >/dev/null 2>&1 &) ; echo left processes",
+                "description": "forge an exit file and leave processes behind",
+            },
+        },
+        {"tool": "bash", "args": {"command": "sleep 1; pgrep -fc '[s]leep 999'", "description": "the leftover is alive while the worker runs"}},
         {"text": "All good, verified."},
     ],
     "hold": [

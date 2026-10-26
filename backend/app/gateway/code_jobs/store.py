@@ -141,6 +141,12 @@ class CodeJobStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._conn().executescript(_SCHEMA)
+        try:
+            # What a call actually cost by the provider's usage; cost_usd is what
+            # counts against the budget and cap (never above the reservation).
+            self._conn().execute("ALTER TABLE llm_calls ADD COLUMN actual_cost_usd REAL")
+        except sqlite3.OperationalError:
+            pass
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -291,7 +297,7 @@ class CodeJobStore:
             inflight = db.execute("SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE job_id = ? AND status = ?", (job_id, INFLIGHT)).fetchone()
             if inflight[0] >= max_inflight:
                 return None, f"too many model calls at once (at most {max_inflight})", 0
-            recent = db.execute("SELECT COUNT(*) FROM llm_calls WHERE container = ? AND at >= ? AND status != 'refused'", (container, now - 60)).fetchone()[0]
+            recent = db.execute("SELECT COUNT(*) FROM llm_calls WHERE container = ? AND at >= ?", (container, now - 60)).fetchone()[0]
             if recent >= rate_per_minute:
                 return None, f"rate limit ({rate_per_minute} calls a minute)", 0
             job_left = row["budget_usd"] - row["spent_usd"] - inflight[1]
@@ -328,11 +334,14 @@ class CodeJobStore:
             row = db.execute("SELECT job_id, cost_usd, status FROM llm_calls WHERE rowid = ?", (call_id,)).fetchone()
             if row is None or row["status"] != INFLIGHT:
                 return 0.0
-            charged = row["cost_usd"] if (usage is None or cost_usd is None) else cost_usd
+            reserved = row["cost_usd"]
+            # The reservation is the upper bound: a call never counts for more
+            # than what was reserved for it; its actual cost is recorded beside.
+            charged = reserved if (usage is None or cost_usd is None) else min(cost_usd, reserved)
             inp, cached, out = usage or (0, 0, 0)
             db.execute(
-                "UPDATE llm_calls SET status = ?, input_tokens = ?, cached_tokens = ?, output_tokens = ?, cost_usd = ?, latency_ms = ?, reason = ? WHERE rowid = ?",
-                (status if usage is not None else f"{status}-estimated", inp, cached, out, charged, latency_ms, reason, call_id),
+                "UPDATE llm_calls SET status = ?, input_tokens = ?, cached_tokens = ?, output_tokens = ?, cost_usd = ?, actual_cost_usd = ?, latency_ms = ?, reason = ? WHERE rowid = ?",
+                (status if usage is not None else f"{status}-estimated", inp, cached, out, charged, cost_usd, latency_ms, reason, call_id),
             )
             db.execute("UPDATE jobs SET spent_usd = spent_usd + ?, calls = calls + 1, updated_at = ? WHERE id = ?", (charged, now, row["job_id"]))
             return float(charged)
@@ -366,6 +375,10 @@ class CodeJobStore:
             )
             if status == "ok":
                 db.execute("UPDATE jobs SET spent_usd = spent_usd + ?, calls = calls + 1, updated_at = ? WHERE id = ?", (cost_usd, now, job_id))
+
+    def recent_calls(self, container: str, seconds: float = 60.0) -> int:
+        """Rows (calls and refusals) from one sandbox in the last `seconds`."""
+        return int(self._conn().execute("SELECT COUNT(*) FROM llm_calls WHERE container = ? AND at >= ?", (container, time.time() - seconds)).fetchone()[0])
 
     def last_refusal(self, job_id: str, kinds: tuple[str, ...]) -> str | None:
         """The latest refusal the proxy itself recorded for this job whose

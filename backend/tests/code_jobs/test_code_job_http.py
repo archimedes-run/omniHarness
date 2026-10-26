@@ -366,9 +366,9 @@ def test_deleting_the_thread_forgets_its_jobs(gateway):
 def test_the_gateway_api_refuses_requests_from_the_sandbox_network(gateway):
     import ipaddress
 
-    from app.gateway.sandbox_guard import set_sandbox_subnets
+    from app.gateway.sandbox_guard import set_state
 
-    set_sandbox_subnets([ipaddress.IPv4Network("172.22.0.0/16")])
+    set_state(configured=True, subnets=[ipaddress.IPv4Network("172.22.0.0/16")])
     try:
         from_sandbox = TestClient(gateway.client.app, client=("172.22.0.9", 5555))
         assert from_sandbox.get("/health").status_code == 403
@@ -376,4 +376,4 @@ def test_the_gateway_api_refuses_requests_from_the_sandbox_network(gateway):
         from_nginx = TestClient(gateway.client.app, client=("192.168.200.10", 5555))
         assert from_nginx.get("/health").status_code == 200
     finally:
-        set_sandbox_subnets([])
+        set_state(configured=False, subnets=[])
