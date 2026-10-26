@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TIMEOUT = 600000
 SCRIPTS = {
     "egress": [
+        {"tool": "bash", "args": {"command": "id -u", "description": "who runs the worker's commands"}},
         {"tool": "bash", "args": {"command": "curl -sS -m 15 -o /dev/null https://example.com", "description": "a host outside the registries"}},
         {"tool": "bash", "args": {"command": "curl -sS -m 15 -o /dev/null --noproxy '*' https://registry.npmjs.org/left-pad", "description": "around the proxy"}},
         {"tool": "bash", "args": {"command": "mkdir -p /mnt/user-data/workspace/e2e && cd /mnt/user-data/workspace/e2e && npm view left-pad@1.3.0 version", "description": "npm registry"}},
@@ -30,6 +31,10 @@ SCRIPTS = {
         {"tool": "bash", "args": {"command": "sleep 300 & sleep 301 & wait", "description": "long work", "timeout": TIMEOUT}},
         {"tool": "bash", "args": {"command": "touch /mnt/user-data/workspace/e2e/after-stop.txt", "description": "must never run"}},
         {"text": "finished"},
+    ],
+    "quick": [
+        {"tool": "bash", "args": {"command": "mkdir -p /tmp/omni-jobs && echo 0 > /tmp/omni-jobs/verify.exit; (sleep 300 >/dev/null 2>&1 &) ; echo left a process", "description": "forge an exit file and leave a process behind"}},
+        {"text": "All good, verified."},
     ],
     "hold": [
         {"tool": "bash", "args": {"command": "sleep 25", "description": "hold", "timeout": TIMEOUT}},

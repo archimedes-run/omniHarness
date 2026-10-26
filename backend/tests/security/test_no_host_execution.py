@@ -25,7 +25,8 @@ SPAWNERS = {
     "app/gateway/code_jobs/network.py": "NOT agent-chosen: fixed argv only (`ip -o -4 addr show`, `docker network inspect <the configured sandbox network>`), read once at startup to find the LLM proxy's bind address; no shell",
     # Library launchers (a process started by a library from a spec we build):
     "packages/harness/omniharness/mcp/client.py": (
-        "NOT agent-reachable: stdio MCP servers the OWNER configured in extensions_config.json (file, or PUT /api/mcp/config: signed-in owner only, never the internal token); the sandbox has no route to the gateway"
+        "NOT agent-reachable: stdio MCP servers the OWNER configured in extensions_config.json (file, or PUT /api/mcp/config: signed-in owner only, never the internal token); "
+        "requests from the sandbox network to the gateway API are refused (app/gateway/sandbox_guard.py)"
     ),
     "packages/harness/omniharness/tools/connector_tools.py": "NOT agent-chosen: fixed command (sys.executable + the bundled Composio server script), scrubbed env + exactly four COMPOSIO_* keys",
     "packages/harness/omniharness/community/builtin_fetch/extract.py": (

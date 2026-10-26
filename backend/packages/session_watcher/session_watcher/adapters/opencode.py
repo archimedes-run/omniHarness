@@ -8,12 +8,13 @@ like the other agents' session folders. Observe-only (D6): nothing here can
 act on a job.
 
 Record shapes (`timestamp` ISO-8601 on every record):
-  session   {"id", "project", "title"}     the job started
+  session   {"id", "project"}              the job started
   progress  {"text"}                        a command ran (with its exit code)
-  files     {"files": [...]}                files the worker changed (verified
-                                            by the gateway's own listing)
+  files     {"count"}                       how many files the worker changed
   end       {"status", "text"}              the job ended: verified, unverified,
                                             failed, stopped or blocked
+The relay carries no request text, commands or file names (they stay in the
+owner's chat), so nothing here can show one user's work to another.
 An unknown type is drift, counted like any adapter's.
 """
 
@@ -69,21 +70,22 @@ class OpenCodeAdapter(SessionAdapter):
                 return None
             state.session_id = sid
             state.project = str(record.get("project") or "")[:200]
-            title = str(record.get("title") or "")[:300]
-            return ParsedRecord(session_id=sid, at=at, kind=EventKind.STARTED, project=state.project, raw_type="user", text=title)
+            return ParsedRecord(session_id=sid, at=at, kind=EventKind.STARTED, project=state.project, raw_type="user", text="coding job started")
         if state.session_id is None:
             return None
         base = {"session_id": state.session_id, "at": at, "project": state.project}
         if rtype == "progress":
             return ParsedRecord(**base, kind=EventKind.PROGRESS, raw_type="assistant", stop_reason="tool_use", text=str(record.get("text") or "")[:300])
         if rtype == "files":
-            files = tuple(str(f)[:400] for f in (record.get("files") or []) if isinstance(f, str))[:200]
+            count = record.get("count") if isinstance(record.get("count"), int) else 0
+            # Placeholders: the watcher counts files changed; names stay private.
+            files = tuple(f"file {i + 1}" for i in range(max(0, min(count, 200))))
             return ParsedRecord(**base, kind=EventKind.PROGRESS, raw_type="files", confirmed_files=files)
         if rtype == "end":
             status = str(record.get("status") or "")
             # An OBSERVED end of the job. A stop is an interrupted turn.
             reason = "aborted" if status == "stopped" else "end_turn"
-            text = f"Coding job {status}: {str(record.get('text') or '')[:300]}"
+            text = f"Coding job {status}"
             return ParsedRecord(**base, kind=EventKind.COMPLETED, raw_type="assistant", stop_reason=reason, text=text)
         return ParsedRecord(**base, kind=None, raw_type=rtype)
 

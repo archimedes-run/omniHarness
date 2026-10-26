@@ -29,6 +29,7 @@ class CodeJobsConfig(BaseModel):
     wall_seconds: int = Field(default=1800, ge=60, le=4 * 3600, description="A job is stopped after this long")
     verify_timeout_seconds: int = Field(default=600, ge=30, le=600, description="Hard cap on the gateway's verification command (D4)")
     rate_per_minute: int = Field(default=60, ge=1, le=600, description="Model calls per sandbox per minute through the proxy")
+    max_concurrent_calls: int = Field(default=3, ge=1, le=8, description="Model calls one job may have in flight at once")
     max_request_bytes: int = Field(default=8 * 1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
     proxy_port: int = Field(default=8790, ge=1024, le=65535, description="The LLM proxy's port on the sandbox network")
     proxy_bind: str | None = Field(default=None, description="The LLM proxy's address; default: the gateway's own address on the sandbox network")

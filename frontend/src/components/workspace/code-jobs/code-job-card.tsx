@@ -406,10 +406,13 @@ function Evidence({ job }: { job: CodeJob }) {
             ) : null}
           </span>
         </li>
+      </ul>
+      <p className="text-muted-foreground mt-2 text-xs">
+        Reported by the worker, not checked by the system:
+      </p>
+      <ul className="mt-1 flex flex-col gap-1">
         <li className="flex items-start gap-2">
-          <Mark
-            ok={tests.length ? tests.every((t) => t.exit_code === 0) : null}
-          />
+          <Mark ok={null} />
           <span className="[overflow-wrap:anywhere]">
             {tests.length
               ? tests
@@ -419,7 +422,7 @@ function Evidence({ job }: { job: CodeJob }) {
                       `${safeField(t.command)}: exit ${t.exit_code ?? "?"}`,
                   )
                   .join("; ")
-              : "No tests were run"}
+              : "No tests reported"}
           </span>
         </li>
       </ul>

@@ -6,10 +6,16 @@ gateway relays each job's progress as a small JSON-lines file per job under
 worker's raw events). The watcher's OpenCode adapter
 (session_watcher.adapters.opencode) reads that folder, read-only.
 
+It carries NO content: no request text, no commands, no file names, no
+reasons. The watcher's feed is read by surfaces that are not per user, so a
+job appears there only as "a coding job, running / ended with status X, N
+files changed"; its details are in the owner's own chat card. The gateway's
+/api/sessions further keeps only the caller's own jobs (by job id).
+
 Record shapes (one JSON object per line, `timestamp` ISO-8601 UTC):
-  {"type": "session", "id", "project", "title"}
-  {"type": "progress", "text"}
-  {"type": "files", "files": [...]}            files the worker changed
+  {"type": "session", "id", "project"}         project: "coding job <id>"
+  {"type": "progress", "text"}                 "ran a command (exit N)"
+  {"type": "files", "count"}                   how many files changed
   {"type": "end", "status", "text"}            status: verified | unverified |
                                                failed | stopped | blocked
 """
@@ -41,15 +47,14 @@ class Relay:
         except OSError:
             logger.debug("code jobs: relay write failed for %s", self.job_id)
 
-    def session(self, *, project: str, title: str) -> None:
-        self._write({"type": "session", "id": f"opencode-{self.job_id}", "project": project, "title": title[:200]})
+    def session(self) -> None:
+        self._write({"type": "session", "id": f"opencode-{self.job_id}", "project": f"coding job {self.job_id[:8]}"})
 
-    def progress(self, text: str) -> None:
-        self._write({"type": "progress", "text": text[:300]})
+    def command(self, exit_code: int | None) -> None:
+        self._write({"type": "progress", "text": f"ran a command (exit {exit_code if exit_code is not None else '?'})"})
 
-    def files(self, files: list[str]) -> None:
-        if files:
-            self._write({"type": "files", "files": files[:200]})
+    def files(self, count: int) -> None:
+        self._write({"type": "files", "count": int(count)})
 
-    def end(self, *, status: str, text: str) -> None:
-        self._write({"type": "end", "status": status, "text": text[:500]})
+    def end(self, *, status: str) -> None:
+        self._write({"type": "end", "status": status, "text": status})

@@ -72,12 +72,41 @@ def _store(tmp_path):
     return CodeJobStore(tmp_path / "jobs.db")
 
 
+def _reserve(store, job="j", cap=20.0, inp=0.0, per_token=10.0 / 1e6, want=32000, inflight=3, rate=60, container="c"):
+    return store.reserve_call(job_id=job, container=container, model="m", monthly_cap_usd=cap, rate_per_minute=rate, max_inflight=inflight, input_cost_usd=inp, output_usd_per_token=per_token, requested_output_tokens=want)
+
+
 def test_a_call_is_refused_once_the_job_budget_is_spent(tmp_path):
     store = _store(tmp_path)
     store.create(job_id="j", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=0.10, model="m")
-    assert store.reserve_call(job_id="j", monthly_cap_usd=20) is None
-    store.record_call(job_id="j", container="c", model="m", status="ok", input_tokens=1, output_tokens=1, cost_usd=0.10)
-    assert "budget" in (store.reserve_call(job_id="j", monthly_cap_usd=20) or "")
+    call, reason, out = _reserve(store)
+    assert call and reason is None
+    # The reservation is pessimistic: output cut to what $0.10 buys (10k tokens at $10/M).
+    assert out == 10_000
+    store.settle_call(call, status="ok", usage=(1, 0, 1), cost_usd=0.10)
+    assert "budget" in (_reserve(store)[1] or "")
+
+
+def test_a_reservation_counts_until_it_settles_and_no_usage_charges_the_estimate(tmp_path):
+    store = _store(tmp_path)
+    store.create(job_id="j", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=1.0, model="m")
+    first, _, out = _reserve(store, inp=0.02)
+    assert out == 32_000  # $0.02 + 32k x $10/M = $0.34 reserved
+    second, _, _ = _reserve(store, inp=0.02)
+    third, _, out3 = _reserve(store, inp=0.02)
+    assert 29_990 <= out3 <= 30_000, "the third call gets only what the first two left"
+    assert store.settle_call(first, status="ok", usage=None, cost_usd=None) == pytest.approx(0.34), "no usage: the estimate is charged"
+    assert store.get("j").spent_usd == pytest.approx(0.34)
+
+
+def test_concurrent_calls_and_the_rate_are_capped_including_calls_in_flight(tmp_path):
+    store = _store(tmp_path)
+    store.create(job_id="j", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=50.0, model="m")
+    results = [_reserve(store, want=1000) for _ in range(5)]
+    assert [r[0] is not None for r in results] == [True, True, True, False, False]
+    assert "at once" in results[3][1]
+    store.settle_call(results[0][0], status="ok", usage=(1, 0, 1), cost_usd=0.0)
+    assert _reserve(store, want=1000, rate=3)[1].startswith("rate limit"), "in-flight calls count toward the rate"
 
 
 def test_a_call_is_refused_once_the_month_cap_is_reached(tmp_path):
@@ -86,19 +115,32 @@ def test_a_call_is_refused_once_the_month_cap_is_reached(tmp_path):
     store.record_call(job_id="a", container="c", model="m", status="ok", cost_usd=2.0)
     store.finish("a", status="verified", reason=None, result={})
     store.create(job_id="b", thread_id="t", user_id="u", tool_call_id="c2", title="x", project_dir="p", budget_usd=5, model="m")
-    assert "cap" in (store.reserve_call(job_id="b", monthly_cap_usd=2.0) or "")
-    assert store.reserve_call(job_id="b", monthly_cap_usd=2.5) is None
+    assert "cap" in (_reserve(store, job="b", cap=2.0)[1] or "")
+    assert _reserve(store, job="b", cap=2.5)[1] is None
 
 
 def test_a_stopped_or_finished_job_gets_no_more_model_calls(tmp_path):
     store = _store(tmp_path)
     store.create(job_id="j", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=1, model="m")
     assert store.request_stop("j")
-    assert store.reserve_call(job_id="j", monthly_cap_usd=20) == "the job is not running"
+    assert _reserve(store)[1] == "the job is not running"
     store.create(job_id="k", thread_id="t", user_id="u", tool_call_id="d", title="x", project_dir="p", budget_usd=1, model="m")
     assert store.finish("k", status="unverified", reason="r", result={})
     assert not store.finish("k", status="verified", reason=None, result={}), "a terminal status is set once"
-    assert store.reserve_call(job_id="k", monthly_cap_usd=20) == "the job is not running"
+    assert _reserve(store, job="k")[1] == "the job is not running"
+
+
+def test_month_spend_is_per_user_and_a_deleted_thread_forgets_its_jobs(tmp_path):
+    store = _store(tmp_path)
+    store.create(job_id="a", thread_id="t1", user_id="alice", tool_call_id="c", title="x", project_dir="p", budget_usd=5, model="m")
+    store.create(job_id="b", thread_id="t2", user_id="bob", tool_call_id="c", title="x", project_dir="p", budget_usd=5, model="m")
+    store.record_call(job_id="a", container="c", model="m", status="ok", cost_usd=1.0)
+    store.record_call(job_id="b", container="c", model="m", status="ok", cost_usd=2.0)
+    assert store.month_spend(user_id="alice") == pytest.approx(1.0) and store.month_spend() == pytest.approx(3.0)
+    store.add_step("a", "message", {"text": "secret plan"})
+    assert store.delete_thread("t1") == ["a"]
+    assert store.get("a") is None and store.steps("a") == []
+    assert store.month_spend() == pytest.approx(3.0), "spent money still counts toward the cap"
 
 
 def test_a_job_whose_runner_stopped_beating_is_reported_interrupted(tmp_path):

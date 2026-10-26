@@ -194,7 +194,7 @@ class CodeJobManager:
         job_id = uuid.uuid4().hex[:16]
         self.store.create(job_id=job_id, thread_id=thread_id, user_id=user_id, tool_call_id=tool_call_id, title=brief.title or brief.goal[:80], project_dir=brief.project_dir, budget_usd=settings.budget_usd, model=settings.model_label)
         relay = Relay(self._relay_dir, job_id)
-        relay.session(project=brief.project_dir, title=brief.title or brief.goal[:80])
+        relay.session()
         started = time.monotonic()
         running: Running | None = None
         status, why, result = "blocked", "the job did not start", {}
@@ -247,7 +247,7 @@ class CodeJobManager:
 
         await asyncio.to_thread(sh, f"mkdir -p {_q(d)} {_q(project)} && chmod 700 {_q(d)}")
         await asyncio.to_thread(self._write_rules, ops)
-        await asyncio.to_thread(sh, self._listing_cmd(project, f"{d}/before.tsv"), 60)
+        await self._beating(job_id, sh, self._listing_cmd(project, f"{d}/before.tsv"), 60)
         await asyncio.to_thread(ops.write, f"{d}/prompt.txt", render_prompt(brief))
         await asyncio.to_thread(ops.write, f"{d}/token", token)
         await asyncio.to_thread(ops.write, f"{d}/run.sh", self._run_script(job_id, d, brief, settings))
@@ -283,8 +283,7 @@ class CodeJobManager:
                     kind, data = step
                     self.store.add_step(job_id, kind, data)
                     if kind == "command":
-                        relay_text = f"ran `{data['command'][:120]}` (exit {data['exit_code']})"
-                        Relay(self._relay_dir, job_id).progress(relay_text)
+                        Relay(self._relay_dir, job_id).command(data["exit_code"])
             job = self.store.get(job_id)
             if job is not None and job.stop_requested:
                 stopped = True
@@ -321,11 +320,17 @@ class CodeJobManager:
                         break
                 break
 
+        if not running.cancelled:
+            # Whatever the worker left behind (a background server, a watcher,
+            # a process that writes files later) goes before anything is checked.
+            await asyncio.to_thread(self._kill, running)
         stderr = await asyncio.to_thread(ops.read_text, f"{d}/stderr.txt") or ""
         prompt = permission_prompt(stderr)
         if prompt and not stopped:
             blocked = f"OpenCode asked for a permission ({prompt}); jobs never answer permission prompts"
-        refusal = _proxy_refusal(stderr, running.tally.errors)
+        # Budget and cap refusals from the proxy's OWN records, never from text
+        # the worker printed.
+        refusal = self.store.last_refusal(job_id, ("budget", "cap"))
         if refusal and not stopped and not blocked:
             blocked = refusal
         worker_error = running.tally.errors[-1] if running.tally.errors else (f"exit {exit_code}" if exit_code not in (None, 0) else None)
@@ -337,20 +342,20 @@ class CodeJobManager:
         changed: dict = {"added": [], "modified": [], "deleted": [], "count": 0}
         published: dict | None = None
         if not stopped:
-            changed = await asyncio.to_thread(self._files_changed, ops, project, d)
-            Relay(self._relay_dir, job_id).files([*changed["added"], *changed["modified"]])
+            changed = await self._beating(job_id, self._files_changed, ops, project, d)
+            Relay(self._relay_dir, job_id).files(changed["count"])
             command = brief.verify_command or await asyncio.to_thread(self._default_verify, ops, project)
             if command and not blocked:
                 self.store.add_step(job_id, "phase", {"phase": "verifying", "text": f"The system runs `{command}` to check the result"})
                 verify = await self._verify(ops, job_id, d, project, command, settings.verify_timeout_seconds)
                 self.store.add_step(job_id, "verify", {"command": verify["command"], "exit_code": verify.get("exit_code"), "timed_out": verify.get("timed_out", False), "output": verify.get("log_tail", "")})
             for rel in brief.expect_files:
-                size = await asyncio.to_thread(self._size, ops, f"{project}/{rel}")
+                size = await self._beating(job_id, self._size, ops, f"{project}/{rel}")
                 expected.append({"path": rel, "exists": bool(size), "bytes": size or 0})
                 self.store.add_step(job_id, "check", {"path": rel, "exists": bool(size), "bytes": size or 0})
         status, why = decide_status(stopped=stopped, blocked=blocked, worker_error=worker_error, verify=verify, expected=expected)
         if status == "verified" and brief.publish_dir:
-            published = await asyncio.to_thread(self._publish, ops, brief, project)
+            published = await self._beating(job_id, self._publish, ops, brief, project)
             if published:
                 self.store.add_step(job_id, "published", published)
         job = self.store.get(job_id)
@@ -383,7 +388,7 @@ class CodeJobManager:
     def _end(self, job_id: str, status: str, why: str | None, result: dict, relay: Relay) -> CodeJobOutcome:
         result = {**result, "status": status, "reason": why}
         self.store.finish(job_id, status=status, reason=why, result=result)
-        relay.end(status=status, text=why or status)
+        relay.end(status=status)
         job = self.store.get(job_id)
         if self._record_history is not None and job is not None:
             try:
@@ -424,37 +429,39 @@ class CodeJobManager:
             return None
         return "npm run build" if isinstance(scripts, dict) and "build" in scripts else None
 
-    async def _verify(self, ops: SandboxOps, job_id: str, d: str, project: str, command: str, limit: int) -> dict:
-        script = "\n".join(
-            [
-                "#!/bin/bash",
-                f"cd {_q(project)} || {{ echo 'project folder missing' > {_q(d + '/verify.log')}; echo 127 > {_q(d + '/verify.exit')}; exit 0; }}",
-                f"env -i {self._pass_env()} CI=1 NO_COLOR=1 TERM=dumb timeout -k 5 {int(limit)} bash -c {_q(command)} < /dev/null > {_q(d + '/verify.log')} 2>&1",
-                f"echo $? > {_q(d + '/verify.exit')}",
-            ]
-        )
-        await asyncio.to_thread(ops.write, f"{d}/verify.sh", script + "\n")
-        session = f"ohjob-{job_id}-verify"
-        t0 = time.monotonic()
-        await asyncio.to_thread(ops.start, session, f"bash {_q(d + '/verify.sh')}")
-        code: int | None = None
-        while time.monotonic() - t0 < limit + 20:
-            await asyncio.sleep(1.0)
-            await asyncio.to_thread(ops.touch)
+    async def _beating(self, job_id: str, fn, *args):
+        """Run a sandbox call in a thread while the job keeps beating, so a
+        slow listing, copy or build never reads as a dead job (reap_stale)."""
+        task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=5.0)
+            if done:
+                return task.result()
             self.store.beat(job_id)
-            raw = await asyncio.to_thread(ops.read_text, f"{d}/verify.exit")
-            if raw is not None and raw.strip().lstrip("-").isdigit():
-                code = int(raw.strip())
-                break
-            job = self.store.get(job_id)
-            if job is not None and job.stop_requested:
-                break
-        await asyncio.to_thread(ops.end_session, session)
-        log = await asyncio.to_thread(ops.read_text, f"{d}/verify.log") or ""
+
+    async def _verify(self, ops: SandboxOps, job_id: str, d: str, project: str, command: str, limit: int) -> dict:
+        """The verify command, run by the gateway after the worker's whole
+        process group is gone. Its exit status is the one the sandbox API
+        reports for this exec, not a file the worker could have written.
+
+        What this does and does not prove: it guards against an honest but
+        wrong worker (a build that does not pass, a file that is not there).
+        The worker wrote the project, including its build script, so a worker
+        set on lying can make its own build "pass"; that is why the result is
+        shown as what the system checked, and its text is never trusted."""
+        log = f"{d}/verify.log"
+        cmd = f"rm -f {_q(log)}; cd {_q(project)} 2>/dev/null || exit 127; env -i {self._pass_env()} OMNI_JOB_ID={_q(job_id)} CI=1 NO_COLOR=1 TERM=dumb timeout -k 5 {int(limit)} bash -c {_q(command)} < /dev/null > {_q(log)} 2>&1"
+        t0 = time.monotonic()
+        try:
+            code, _ = await self._beating(job_id, lambda: ops.sh(cmd, timeout=int(limit) + 30))
+        except Exception:  # noqa: BLE001 - the sandbox API failed: no evidence
+            logger.exception("code job %s: verify exec failed", job_id)
+            code = None
+        text = await asyncio.to_thread(ops.read_text, log) or ""
         from .events import _shown
 
         timed_out = code is None or code in (124, 137)
-        return {"command": command, "exit_code": code, "timed_out": timed_out, "limit_s": limit, "seconds": round(time.monotonic() - t0, 1), "log_tail": _shown(log[-3000:], 3000)}
+        return {"command": command, "exit_code": code, "timed_out": timed_out, "limit_s": limit, "seconds": round(time.monotonic() - t0, 1), "log_tail": _shown(text[-3000:], 3000)}
 
     @staticmethod
     def _size(ops: SandboxOps, path: str) -> int | None:
@@ -501,9 +508,11 @@ class CodeJobManager:
         process still carrying the job's marker (one that left the group)."""
         ops, d = running.ops, f"{JOBS_DIR}/{running.job_id}"
         marker = f"OMNI_JOB_ID={running.job_id}"
+        # The process group recorded when the job started (the worker could
+        # rewrite the file later), else the file.
+        pg = f"PG={int(running.pgid)}; " if running.pgid else f"PG=$(cat {_q(d + '/pgid')} 2>/dev/null); "
         script = (
-            f"PG=$(cat {_q(d + '/pgid')} 2>/dev/null); "
-            'if [ -n "$PG" ]; then kill -TERM -- -$PG 2>/dev/null; for i in 1 2 3 4 5 6; do kill -0 -- -$PG 2>/dev/null || break; sleep 0.5; done; kill -KILL -- -$PG 2>/dev/null; fi; '
+            pg + 'if [ -n "$PG" ]; then kill -TERM -- -$PG 2>/dev/null; for i in 1 2 3 4 5 6; do kill -0 -- -$PG 2>/dev/null || break; sleep 0.5; done; kill -KILL -- -$PG 2>/dev/null; fi; '
             f"for p in /proc/[0-9]*; do tr '\\0' '\\n' < $p/environ 2>/dev/null | grep -qx {_q(marker)} && kill -KILL ${{p#/proc/}} 2>/dev/null; done; "
             "echo __killed__"
         )
@@ -530,6 +539,15 @@ class CodeJobManager:
         except Exception:  # noqa: BLE001 - the flag still ends it at the next poll
             logger.exception("code job %s: remote stop could not reach the sandbox", job_id)
         return True
+
+    async def forget_thread(self, thread_id: str) -> None:
+        """The thread is being deleted: stop its running job, then delete its
+        jobs, steps and relay files (model spend still counts toward the cap)."""
+        job = self.store.running_in_thread(thread_id)
+        if job is not None:
+            await self.stop(job.id)
+        for job_id in self.store.delete_thread(thread_id):
+            (self._relay_dir / f"{job_id}.jsonl").unlink(missing_ok=True)
 
     # -- the lead's report ------------------------------------------------------------
 
@@ -558,10 +576,12 @@ class CodeJobManager:
         lines.append(f"- Files changed: {changed.get('count', 0)}" + (f" ({', '.join(names[:12])}{', …' if len(names) > 12 else ''})" if names else "") + ".")
         worker = r.get("worker") or {}
         tests = worker.get("tests") or []
+        lines.append("Reported by the worker (its own command events; NOT checked by the system):")
         if tests:
-            lines.append("- Tests the worker ran (exit codes from its command events): " + "; ".join(f"`{t['command'][:80]}` exit {t.get('exit_code')}" for t in tests[-5:]) + ".")
+            lines.append("- Tests: " + "; ".join(f"`{t['command'][:80]}` exit {t.get('exit_code')}" for t in tests[-5:]) + ".")
         else:
-            lines.append("- Tests: none were run.")
+            lines.append("- Tests: none reported.")
+        lines.append("Note: the system's check shows the build passes and the files exist; the worker wrote the project, including its build script.")
         lines.append(f"Cost: ${float(r.get('cost_usd') or job.spent_usd):.2f} of a ${job.budget_usd:.2f} budget ({job.calls} model calls).")
         published = r.get("published")
         if published:
@@ -597,9 +617,3 @@ def _clip(text: str, n: int) -> str:
     from .events import _shown
 
     return _shown(text, n) if text else ""
-
-
-def _proxy_refusal(stderr: str, errors: list[str]) -> str | None:
-    blob = "\n".join([stderr[-4000:], *errors])
-    m = re.search(r"Refused by the OmniHarness gateway: ([^\"\n]{0,200})", blob)
-    return m.group(1).strip() if m else None

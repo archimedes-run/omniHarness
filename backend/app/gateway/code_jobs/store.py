@@ -23,6 +23,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 RUNNING = "running"
+INFLIGHT = "inflight"
+#: A reservation older than this never settled: its process died.
+STALE_INFLIGHT_S = 900
 #: Terminal statuses. Only `verified` may ever be reported as done.
 TERMINAL = frozenset({"verified", "unverified", "failed", "stopped", "blocked"})
 
@@ -252,21 +255,94 @@ class CodeJobStore:
 
     # -- model calls and money ----------------------------------------------
 
-    def reserve_call(self, *, job_id: str, monthly_cap_usd: float, now: float | None = None) -> str | None:
-        """None when a model call may start (job running, under its budget and
-        the monthly cap), else the refusal reason. One transaction."""
+    def reserve_call(
+        self,
+        *,
+        job_id: str,
+        container: str,
+        model: str,
+        monthly_cap_usd: float,
+        rate_per_minute: int,
+        max_inflight: int,
+        input_cost_usd: float,
+        output_usd_per_token: float,
+        requested_output_tokens: int,
+        min_output_tokens: int = 256,
+        now: float | None = None,
+    ) -> tuple[int | None, str | None, int]:
+        """Reserve a model call BEFORE it is forwarded: (call id, None, the
+        output tokens it may use) or (None, refusal reason, 0). One transaction.
+
+        The reservation is a row with a pessimistic cost (the input's size at
+        the input price, plus every allowed output token at the output price),
+        counted against the job's budget, the month's cap, the job's
+        concurrent calls and the sandbox's rate until the call settles. The
+        output tokens are cut to what the remaining money allows, so a call can
+        never cost more than what is left. A call whose provider reports no
+        usage, or that is cut short, is charged its reservation."""
+        now = now if now is not None else time.time()
         with self._tx() as db:
+            self._expire_stale(db, now)
             row = db.execute("SELECT status, stop_requested, spent_usd, budget_usd FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if row is None:
-                return "unknown job"
+                return None, "unknown job", 0
             if row["status"] != RUNNING or row["stop_requested"]:
-                return "the job is not running"
-            if row["spent_usd"] >= row["budget_usd"]:
-                return f"the job's budget (${row['budget_usd']:.2f}) is spent"
+                return None, "the job is not running", 0
+            inflight = db.execute("SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE job_id = ? AND status = ?", (job_id, INFLIGHT)).fetchone()
+            if inflight[0] >= max_inflight:
+                return None, f"too many model calls at once (at most {max_inflight})", 0
+            recent = db.execute("SELECT COUNT(*) FROM llm_calls WHERE container = ? AND at >= ? AND status != 'refused'", (container, now - 60)).fetchone()[0]
+            if recent >= rate_per_minute:
+                return None, f"rate limit ({rate_per_minute} calls a minute)", 0
+            job_left = row["budget_usd"] - row["spent_usd"] - inflight[1]
             month = db.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE at >= ?", (month_start(now),)).fetchone()[0]
-            if month >= monthly_cap_usd:
-                return f"this month's coding-job cap (${monthly_cap_usd:.2f}) is reached"
-        return None
+            month_left = monthly_cap_usd - month
+            left = min(job_left, month_left)
+            allowed = int((left - input_cost_usd) / output_usd_per_token) if output_usd_per_token > 0 else requested_output_tokens
+            output_tokens = min(requested_output_tokens, allowed)
+            if output_tokens < min_output_tokens:
+                if month_left <= job_left:
+                    return None, f"this month's coding-job cap (${monthly_cap_usd:.2f}) is reached", 0
+                return None, f"the job's budget (${row['budget_usd']:.2f}) is spent", 0
+            estimate = input_cost_usd + output_tokens * output_usd_per_token
+            cur = db.execute(
+                "INSERT INTO llm_calls (job_id, at, container, model, status, cost_usd) VALUES (?, ?, ?, ?, ?, ?)",
+                (job_id, now, container, model, INFLIGHT, estimate),
+            )
+            return int(cur.lastrowid), None, output_tokens
+
+    def settle_call(
+        self,
+        call_id: int,
+        *,
+        status: str,
+        usage: tuple[int, int, int] | None,
+        cost_usd: float | None,
+        latency_ms: int = 0,
+        reason: str | None = None,
+    ) -> float:
+        """Settle a reserved call; returns what was charged. No usage (or a
+        call cut short): the reservation is charged."""
+        now = time.time()
+        with self._tx() as db:
+            row = db.execute("SELECT job_id, cost_usd, status FROM llm_calls WHERE rowid = ?", (call_id,)).fetchone()
+            if row is None or row["status"] != INFLIGHT:
+                return 0.0
+            charged = row["cost_usd"] if (usage is None or cost_usd is None) else cost_usd
+            inp, cached, out = usage or (0, 0, 0)
+            db.execute(
+                "UPDATE llm_calls SET status = ?, input_tokens = ?, cached_tokens = ?, output_tokens = ?, cost_usd = ?, latency_ms = ?, reason = ? WHERE rowid = ?",
+                (status if usage is not None else f"{status}-estimated", inp, cached, out, charged, latency_ms, reason, call_id),
+            )
+            db.execute("UPDATE jobs SET spent_usd = spent_usd + ?, calls = calls + 1, updated_at = ? WHERE id = ?", (charged, now, row["job_id"]))
+            return float(charged)
+
+    @staticmethod
+    def _expire_stale(db: sqlite3.Connection, now: float) -> None:
+        """A reservation whose call never settled (the process died): charged."""
+        for row in db.execute("SELECT rowid, job_id, cost_usd FROM llm_calls WHERE status = ? AND at < ?", (INFLIGHT, now - STALE_INFLIGHT_S)).fetchall():
+            db.execute("UPDATE llm_calls SET status = 'lost-estimated' WHERE rowid = ?", (row[0],))
+            db.execute("UPDATE jobs SET spent_usd = spent_usd + ? WHERE id = ?", (row[2], row[1]))
 
     def record_call(
         self,
@@ -291,15 +367,35 @@ class CodeJobStore:
             if status == "ok":
                 db.execute("UPDATE jobs SET spent_usd = spent_usd + ?, calls = calls + 1, updated_at = ? WHERE id = ?", (cost_usd, now, job_id))
 
-    def calls_since(self, container: str, since: float) -> int:
-        return int(self._conn().execute("SELECT COUNT(*) FROM llm_calls WHERE container = ? AND at >= ?", (container, since)).fetchone()[0])
+    def last_refusal(self, job_id: str, kinds: tuple[str, ...]) -> str | None:
+        """The latest refusal the proxy itself recorded for this job whose
+        reason names one of `kinds` (e.g. budget, cap)."""
+        for row in self._conn().execute("SELECT reason FROM llm_calls WHERE job_id = ? AND status = 'refused' ORDER BY at DESC LIMIT 50", (job_id,)).fetchall():
+            if row[0] and any(k in row[0] for k in kinds):
+                return row[0]
+        return None
 
     def job_calls(self, job_id: str) -> list[dict]:
         rows = self._conn().execute("SELECT * FROM llm_calls WHERE job_id = ? ORDER BY at", (job_id,)).fetchall()
         return [dict(r) for r in rows]
 
-    def month_spend(self, now: float | None = None) -> float:
-        return float(self._conn().execute("SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE at >= ?", (month_start(now),)).fetchone()[0])
+    def month_spend(self, now: float | None = None, *, user_id: str | None = None) -> float:
+        """All jobs' spend this month (the cap's measure), or one user's own."""
+        if user_id is None:
+            return float(self._conn().execute("SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE at >= ?", (month_start(now),)).fetchone()[0])
+        sql = "SELECT COALESCE(SUM(c.cost_usd), 0) FROM llm_calls c JOIN jobs j ON j.id = c.job_id WHERE c.at >= ? AND j.user_id = ?"
+        return float(self._conn().execute(sql, (month_start(now), user_id)).fetchone()[0])
+
+    def delete_thread(self, thread_id: str) -> list[str]:
+        """Forget a deleted thread's jobs, steps and model-call rows; returns their ids."""
+        with self._tx() as db:
+            ids = [r[0] for r in db.execute("SELECT id FROM jobs WHERE thread_id = ?", (thread_id,)).fetchall()]
+            for job_id in ids:
+                db.execute("DELETE FROM steps WHERE job_id = ?", (job_id,))
+                # Money already spent still counts toward the month's cap.
+                db.execute("UPDATE llm_calls SET job_id = 'deleted', container = 'deleted' WHERE job_id = ?", (job_id,))
+                db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            return ids
 
 
 def _clip(text: str, n: int) -> str:

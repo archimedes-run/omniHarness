@@ -31,27 +31,28 @@ def _sessions(tmp_path) -> dict:
 def test_a_running_job_is_listed_as_an_opencode_session_and_its_end_is_observed(tmp_path):
     from app.gateway.code_jobs.relay import Relay
 
-    relay = Relay(tmp_path / "relay", "job123")
-    relay.session(project="counter-app", title="Build a counter app")
-    relay.progress("ran `npm install` (exit 0)")
+    relay = Relay(tmp_path / "relay", "job12345abc")
+    relay.session()
+    relay.command(0)
     payload = _sessions(tmp_path)
     session = next(s for s in payload["sessions"] if s["agent"] == "opencode")
-    assert session["agent_label"] == "OpenCode" and session["project"] == "counter-app"
+    # Content-free: an opaque label, never the request or the project's name.
+    assert session["agent_label"] == "OpenCode" and session["project"] == "coding job job12345"
     assert session["state"] == "working"
     assert [a["agent"] for a in payload["agents"]] == ["claude", "opencode"]
 
-    relay.files(["src/App.jsx", "package.json"])
-    relay.end(status="verified", text="verified")
+    relay.files(2)
+    relay.end(status="verified")
     payload = _sessions(tmp_path)
     session = next(s for s in payload["sessions"] if s["agent"] == "opencode")
-    assert session["state"] == "idle" and session["files_changed"] == ["src/App.jsx", "package.json"]
+    assert session["state"] == "idle" and len(session["files_changed"]) == 2
 
 
 def test_a_relay_line_of_an_unknown_type_is_drift_not_a_crash(tmp_path):
     from app.gateway.code_jobs.relay import Relay
 
     relay = Relay(tmp_path / "relay", "job9")
-    relay.session(project="p", title="t")
+    relay.session()
     with relay.path.open("a") as handle:
         handle.write(json.dumps({"type": "surprise", "timestamp": datetime.now(UTC).isoformat()}) + "\n")
     payload = _sessions(tmp_path)

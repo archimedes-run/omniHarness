@@ -127,6 +127,7 @@ def start(app: FastAPI) -> None:
                 subnets=subnets,
                 monthly_cap_usd=cj.monthly_cap_usd,
                 rate_per_minute=cj.rate_per_minute,
+                max_concurrent_calls=cj.max_concurrent_calls,
                 max_request_bytes=cj.max_request_bytes,
                 prices=dict(cj.prices),
                 policy_log=policy_dir / "llm-proxy.jsonl",

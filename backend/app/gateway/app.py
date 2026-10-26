@@ -321,6 +321,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.mcp_build_controller = mcp_ctrl
             set_mcp_build_controller(mcp_ctrl)
 
+        try:
+            from app.gateway.sandbox_guard import init_from_docker
+
+            init_from_docker()
+        except Exception:
+            logger.exception("The sandbox network guard could not read the sandbox network")
+
         # Coding jobs (spec 009, Slice 1): the job store, the LLM proxy on the
         # sandbox network, and the code_job controller. Never fatal: without
         # them code_job is simply not offered.
@@ -624,6 +631,12 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
         from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
         app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
+
+    # Outermost: nothing on the sandbox network reaches the gateway's API
+    # (app/gateway/sandbox_guard.py); its subnets are read at startup.
+    from app.gateway.sandbox_guard import SandboxPeerGuard
+
+    app.add_middleware(SandboxPeerGuard)
 
     # Include routers
     # Models API is mounted at /api/models
