@@ -85,6 +85,20 @@ def _clone_ai_message(
     return message.model_copy(update=update)
 
 
+#: Set in `additional_kwargs` on a message the skill rescue keeps after the
+#: summary: a copy of an EARLIER message, with the same id. The chat's display
+#: history matches messages by id to find where the live thread begins; a
+#: rescued copy is an old turn's message placed after the summary, and must
+#: not be taken for the start of the live thread (frontend
+#: core/threads/summarization.ts).
+RESCUED_MARKER = "omniharness_summary_rescued"
+
+
+def _mark_rescued(message: AnyMessage) -> AnyMessage:
+    """A copy of `message` that says it was rescued (same id, same content)."""
+    return message.model_copy(update={"additional_kwargs": {**(message.additional_kwargs or {}), RESCUED_MARKER: True}})
+
+
 @dataclass
 class _SkillBundle:
     """Skill-related tool calls and tool results associated with one AIMessage."""
@@ -239,13 +253,13 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
                 remaining_tool_calls = [tc for tc in msg.tool_calls if tc.get("id") not in bundle.skill_tool_call_ids]
 
                 if rescued_tool_calls:
-                    rescued.append(_clone_ai_message(msg, rescued_tool_calls, content=""))
+                    rescued.append(_mark_rescued(_clone_ai_message(msg, rescued_tool_calls, content="")))
                 if remaining_tool_calls or msg.content:
                     remaining.append(_clone_ai_message(msg, remaining_tool_calls))
                 continue
 
             if i in rescue_tool_indices:
-                rescued.append(msg)
+                rescued.append(_mark_rescued(msg))
                 continue
 
             remaining.append(msg)

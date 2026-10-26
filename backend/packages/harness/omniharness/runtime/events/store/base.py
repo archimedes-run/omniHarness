@@ -107,9 +107,12 @@ class RunEventStore(abc.ABC):
         """Count displayable messages (category=message) in a thread."""
 
     @abc.abstractmethod
-    async def delete_by_thread(self, thread_id: str) -> int:
-        """Delete all events for a thread. Return the number of deleted events."""
+    async def delete_by_thread(self, thread_id: str, *, user_id=None) -> int:
+        """Delete all events for a thread. Return the number of deleted events.
+
+        Server-side deletion (retention, thread delete) passes user_id=None:
+        every row of the thread, whoever's context is current."""
 
     @abc.abstractmethod
-    async def delete_by_run(self, thread_id: str, run_id: str) -> int:
+    async def delete_by_run(self, thread_id: str, run_id: str, *, user_id=None) -> int:
         """Delete all events for a specific run. Return the number of deleted events."""

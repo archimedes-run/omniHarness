@@ -278,6 +278,36 @@ def test_four_workers_starting_at_once_keep_the_old_log(tmp_path) -> None:
     assert sorted(today_lines) == [f"worker {i}" for i in range(4)]
 
 
+def test_handlers_of_one_process_swapping_the_symlink_at_once_never_collide(tmp_path, monkeypatch) -> None:
+    """Issue #93, made deterministic: two handlers of ONE process reach the
+    symlink swap together. Their temporary link had one name per process
+    (the pid), so one failed on the other's (FileExistsError), its cleanup
+    deleted the other's, the other's replace failed, and the plain file from
+    before was never replaced by the symlink."""
+    import threading
+    from pathlib import Path
+
+    (tmp_path / "gateway.log").write_text("line from before rotation\n")
+    today = [date(2026, 10, 20)]
+    handlers = [_handler(tmp_path, today) for _ in range(2)]
+    together = threading.Barrier(2, timeout=5)
+    real_symlink_to = Path.symlink_to
+
+    def symlink_to(self, target, *args, **kwargs):
+        if self.name.endswith(".tmp"):
+            together.wait()  # both swaps create their temporary link at once
+        return real_symlink_to(self, target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "symlink_to", symlink_to)
+    threads = [threading.Thread(target=h.emit, args=(_record(f"worker {i}"),)) for i, h in enumerate(handlers)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    [h.close() for h in handlers]
+    assert (tmp_path / "gateway.log").is_symlink(), "the plain file was never replaced by the symlink"
+    assert "line from before rotation" in "".join(p.read_text() for p in tmp_path.glob("gateway-pre-rotation-*.log"))
+    assert not list(tmp_path.glob(".gateway.log.*.tmp")), "a temporary link was left behind"
+
+
 def test_host_bash_never_sees_the_internal_token_or_api_keys(monkeypatch) -> None:
     from omniharness.sandbox.local.local_sandbox import scrubbed_environment
 

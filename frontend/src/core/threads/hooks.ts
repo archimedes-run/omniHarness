@@ -25,7 +25,9 @@ import {
   appendUnique,
   fetchRunMessages,
   isMiddlewareStreamed,
+  mergeDisplay,
   messagesMovedBySummary,
+  moveIntoHistory,
   summarizationUpdate,
 } from "./summarization";
 import type { AgentThread, AgentThreadState } from "./types";
@@ -48,43 +50,6 @@ export type ThreadStreamOptions = {
 type SendMessageOptions = {
   additionalKwargs?: Record<string, unknown>;
 };
-
-function mergeMessages(
-  historyMessages: Message[],
-  threadMessages: Message[],
-  optimisticMessages: Message[],
-): Message[] {
-  const threadMessageIds = new Set(
-    threadMessages
-      .map((m) => ("tool_call_id" in m ? m.tool_call_id : m.id))
-      .filter(Boolean),
-  );
-
-  // The overlap is a contiguous suffix of historyMessages (newest history == oldest thread).
-  // Scan from the end: shrink cutoff while messages are already in thread, stop as soon as
-  // we hit one that isn't — everything before that point is non-overlapping.
-  let cutoff = historyMessages.length;
-  for (let i = historyMessages.length - 1; i >= 0; i--) {
-    const msg = historyMessages[i];
-    if (!msg) {
-      continue;
-    }
-    if (
-      (msg?.id && threadMessageIds.has(msg.id)) ||
-      ("tool_call_id" in msg && threadMessageIds.has(msg.tool_call_id))
-    ) {
-      cutoff = i;
-    } else {
-      break;
-    }
-  }
-
-  return [
-    ...historyMessages.slice(0, cutoff),
-    ...threadMessages,
-    ...optimisticMessages,
-  ];
-}
 
 function getStreamErrorMessage(error: unknown): string {
   if (typeof error === "string" && error.trim()) {
@@ -137,7 +102,7 @@ export function useThreadStream({
     hasMore: hasMoreHistory,
     loadMore: loadMoreHistory,
     loading: isHistoryLoading,
-    appendMessages,
+    moveMessages,
   } = useThreadHistory(onStreamThreadId ?? "");
 
   // Keep listeners ref updated with latest callbacks
@@ -199,7 +164,10 @@ export function useThreadStream({
       // person keeps seeing them (core/threads/summarization.ts).
       const summarized = summarizationUpdate(data);
       if (summarized) {
-        appendMessages(messagesMovedBySummary(messagesRef.current, summarized));
+        moveMessages(
+          messagesRef.current,
+          messagesMovedBySummary(messagesRef.current, summarized),
+        );
         messagesRef.current = [];
       }
 
@@ -557,7 +525,7 @@ export function useThreadStream({
     messagesRef.current = liveMessages;
   }
 
-  const merged = mergeMessages(history, liveMessages, optimisticMessages);
+  const merged = mergeDisplay(history, liveMessages, optimisticMessages);
   const shownIds = new Set(merged.map((message) => message.id));
   const mergedMessages = [
     ...merged,
@@ -644,15 +612,15 @@ export function useThreadHistory(threadId: string) {
     });
   }, [threadId, runs.data, loadMessages]);
 
-  const appendMessages = useCallback((_messages: Message[]) => {
-    setMessages((prev) => appendUnique(prev, _messages));
+  const moveMessages = useCallback((live: Message[], moved: Message[]) => {
+    setMessages((prev) => moveIntoHistory(prev, live, moved));
   }, []);
   const hasMore = indexRef.current >= 0 || !runs.data;
   return {
     runs: runs.data,
     messages,
     loading,
-    appendMessages,
+    moveMessages,
     hasMore,
     loadMore: loadMessages,
   };

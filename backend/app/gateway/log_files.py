@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -56,7 +57,12 @@ class DailyAppendFileHandler(logging.Handler):
         self.prune(day)
 
     def _point_symlink(self, target: Path) -> None:
-        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        # A name of this call's own (issue #93). It was the pid alone, shared
+        # by every handler of one process: one unlinked another's temporary
+        # link or failed on it (FileExistsError), its cleanup then deleted the
+        # other's, the other's replace failed, and the plain file from before
+        # was never replaced by the symlink.
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             # A plain file from the old shell redirect: keep its lines by
             # HARD-LINKING it under a dated name, then atomically replace the
@@ -71,7 +77,6 @@ class DailyAppendFileHandler(logging.Handler):
                     os.link(self.path, keep, follow_symlinks=False)
                 except FileExistsError:
                     pass
-            tmp.unlink(missing_ok=True)
             tmp.symlink_to(target.name)
             os.replace(tmp, self.path)
         except OSError:

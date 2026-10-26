@@ -373,6 +373,79 @@ class TestDbRunEventStore:
         assert seqs == list(range(1, 51))
         await close_engine()
 
+    @pytest.mark.anyio
+    async def test_content_that_is_not_text_or_a_dict_is_stored(self, tmp_path):
+        """A chain's outputs can be a list. The driver could not bind it, the
+        whole batch was refused, and the journal kept none of its messages."""
+        from omniharness.persistence.engine import close_engine, get_session_factory, init_engine
+        from omniharness.runtime.events.store.db import DbRunEventStore
+
+        url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+        await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+        s = DbRunEventStore(get_session_factory())
+        await s.put_batch(
+            [
+                {"thread_id": "t1", "run_id": "r1", "event_type": "run.end", "category": "outputs", "content": [{"a": 1}, "b"]},
+                {"thread_id": "t1", "run_id": "r1", "event_type": "trace", "category": "trace", "content": ["x", 2]},
+                {"thread_id": "t1", "run_id": "r1", "event_type": "llm.human.input", "category": "message", "content": {"type": "human", "content": "hi"}},
+            ]
+        )
+        events = await s.list_events("t1", "r1")
+        assert [e["content"] for e in events] == [[{"a": 1}, "b"], ["x", 2], {"type": "human", "content": "hi"}]
+        await close_engine()
+
+    @pytest.mark.anyio
+    async def test_a_batch_commits_while_the_event_loop_is_blocked(self, tmp_path):
+        """SQLite locks the whole file for a write. Through aiosqlite a batch
+        needs the event loop to reach its COMMIT, so gateway code writing
+        synchronously ON the loop (the ledger's plan check before a card)
+        waited on the batch's lock with the loop blocked, until "database is
+        locked" failed the run. Journal batches are now written while a run
+        goes, so they commit from a worker thread, without the loop."""
+        import asyncio
+        import sqlite3
+        import time
+
+        from omniharness.persistence.engine import close_engine, get_session_factory, init_engine
+        from omniharness.runtime.events.store.db import DbRunEventStore
+
+        db = tmp_path / "test.db"
+        await init_engine("sqlite", url=f"sqlite+aiosqlite:///{db}", sqlite_dir=str(tmp_path))
+        s = DbRunEventStore(get_session_factory())
+        await s.put_batch([{"thread_id": "t1", "run_id": "r1", "event_type": "warm", "category": "trace", "content": "x"}])
+        task = asyncio.create_task(s.put_batch([{"thread_id": "t1", "run_id": "r1", "event_type": "llm.human.input", "category": "message", "content": {"type": "human", "content": "hi"}}]))
+        await asyncio.sleep(0)  # the batch starts
+        deadline = time.monotonic() + 3
+        found = 0
+        while time.monotonic() < deadline and not found:  # the loop is blocked here
+            time.sleep(0.05)
+            with sqlite3.connect(db, timeout=0.1) as conn:
+                found = conn.execute("SELECT count(*) FROM run_events WHERE event_type = 'llm.human.input'").fetchone()[0]
+        assert found == 1, "the batch could not commit while the event loop was blocked"
+        await task
+        await close_engine()
+
+    @pytest.mark.anyio
+    async def test_batches_of_one_thread_written_at_once_number_their_events_apart(self, tmp_path):
+        """The sync connection takes the write lock (BEGIN IMMEDIATE) before
+        reading max(seq), so concurrent batches never collide on
+        UNIQUE(thread_id, seq); and it runs with the async engine's pragmas."""
+        import asyncio
+
+        from omniharness.persistence.engine import close_engine, get_session_factory, init_engine
+        from omniharness.runtime.events.store.db import DbRunEventStore
+
+        await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", sqlite_dir=str(tmp_path))
+        s = DbRunEventStore(get_session_factory())
+        batches = [[{"thread_id": "t1", "run_id": f"r{n}", "event_type": "trace", "category": "trace", "content": f"{n}-{i}"} for i in range(5)] for n in range(12)]
+        results = await asyncio.gather(*(s.put_batch(b) for b in batches))
+        seqs = sorted(r["seq"] for batch in results for r in batch)
+        assert seqs == list(range(1, 61))
+        with s._sqlite_sync_engine().connect() as conn:
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+            assert conn.exec_driver_sql("PRAGMA synchronous").scalar() == 1  # NORMAL
+        await close_engine()
+
 
 # -- Factory tests --
 
@@ -382,7 +455,10 @@ class TestMakeRunEventStore:
 
     @pytest.mark.anyio
     async def test_memory_backend_default(self):
+        from omniharness.persistence.engine import close_engine
         from omniharness.runtime.events.store import make_run_event_store
+
+        await close_engine()  # no database (a failed test may leave one open)
 
         store = make_run_event_store(None)
         assert type(store).__name__ == "MemoryRunEventStore"
@@ -430,6 +506,31 @@ class TestMakeRunEventStore:
         store = make_run_event_store(config)
         assert type(store).__name__ == "MemoryRunEventStore"
         await close_engine()
+
+    @pytest.mark.anyio
+    async def test_auto_backend_uses_the_database_when_there_is_one(self, tmp_path):
+        """The run journal is the chat's display history once a conversation
+        is summarized; in memory it was lost on every gateway restart."""
+        from unittest.mock import MagicMock
+
+        from omniharness.persistence.engine import close_engine, init_engine
+        from omniharness.runtime.events.store import make_run_event_store
+
+        config = MagicMock()
+        config.backend = "auto"
+        config.max_trace_content = 10240
+        await init_engine("memory")
+        assert type(make_run_event_store(config)).__name__ == "MemoryRunEventStore"
+        await close_engine()
+        url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+        await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+        assert type(make_run_event_store(config)).__name__ == "DbRunEventStore"
+        await close_engine()
+
+    def test_the_default_backend_is_auto(self):
+        from omniharness.config.run_events_config import RunEventsConfig
+
+        assert RunEventsConfig().backend == "auto"
 
     @pytest.mark.anyio
     async def test_jsonl_backend(self):

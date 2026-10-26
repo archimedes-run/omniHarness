@@ -18,7 +18,9 @@ Key design decisions:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
+import threading
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -69,9 +71,29 @@ class RunJournal(BaseCallbackHandler):
         self._track_tokens = track_token_usage
         self._flush_threshold = flush_threshold
 
-        # Write buffer
+        # Write buffer. Callbacks arrive on the event loop AND on executor
+        # threads (LangChain runs a sync handler's callbacks in a worker thread
+        # under an async run), so the buffer is guarded by a lock.
         self._buffer: list[dict] = []
-        self._pending_flush_tasks: set[asyncio.Task[None]] = set()
+        self._buffer_lock = threading.Lock()
+        self._pending_flush_tasks: set[asyncio.Task[bool]] = set()
+        # True while flush() writes the rest of the buffer itself: no other
+        # write may start meanwhile (two writes of one thread at once could
+        # number their events from the same max seq).
+        self._draining = False
+        # The run's loop and context, captured where the worker builds the
+        # journal. A callback on an executor thread has no running loop; its
+        # flush is handed to this loop (and runs in this context, so the event
+        # store stamps the run's user). Before, such a flush was skipped and
+        # every event of a run waited for the worker's final flush: the run's
+        # journal (the chat's display history) was EMPTY while it ran, so a
+        # reload mid-run lost the person's message once summarization had
+        # replaced it in the thread state (dogfooding D1-g).
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+        self._context = contextvars.copy_context()
 
         # Token accumulators
         self._total_input_tokens = 0
@@ -288,46 +310,70 @@ class RunJournal(BaseCallbackHandler):
     # -- Internal methods --
 
     def _put(self, *, event_type: str, category: str, content: str | dict = "", metadata: dict | None = None) -> None:
-        self._buffer.append(
-            {
-                "thread_id": self.thread_id,
-                "run_id": self.run_id,
-                "event_type": event_type,
-                "category": category,
-                "content": content,
-                "metadata": metadata or {},
-                "created_at": datetime.now(UTC).isoformat(),
-            }
-        )
-        if len(self._buffer) >= self._flush_threshold:
+        with self._buffer_lock:
+            self._buffer.append(
+                {
+                    "thread_id": self.thread_id,
+                    "run_id": self.run_id,
+                    "event_type": event_type,
+                    "category": category,
+                    "content": content,
+                    "metadata": metadata or {},
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        # A message is what the chat's display history shows (the person's
+        # turn, a reply, a tool result): written as soon as it happens, so a
+        # reload mid-run reads it. Traces still batch.
+        if category == "message" or len(self._buffer) >= self._flush_threshold:
             self._flush_sync()
 
     def _flush_sync(self) -> None:
         """Best-effort flush of buffer to RunEventStore.
 
-        BaseCallbackHandler methods are synchronous.  If an event loop is
-        running we schedule an async ``put_batch``; otherwise the events
-        stay in the buffer and are flushed later by the async ``flush()``
-        call in the worker's ``finally`` block.
+        BaseCallbackHandler methods are synchronous. On the run's loop the
+        flush is scheduled there as an async ``put_batch``. From any other
+        thread (an executor thread running a callback, or a thread with a
+        short-lived loop of its own) it is handed to the run's loop. With no
+        run loop known, the events stay in the buffer for the async
+        ``flush()`` in the worker's ``finally`` block.
         """
-        if not self._buffer:
-            return
-        # Skip if a flush is already in flight — avoids concurrent writes
-        # to the same SQLite file from multiple fire-and-forget tasks.
-        if self._pending_flush_tasks:
-            return
         try:
-            loop = asyncio.get_running_loop()
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
-            # No event loop — keep events in buffer for later async flush.
+            loop = None
+        if self._loop is None and loop is not None:
+            self._loop = loop
+        if loop is None or loop is not self._loop:
+            target = self._loop
+            if target is None or target.is_closed():
+                return
+            try:
+                target.call_soon_threadsafe(self._flush_on_loop, context=self._context.copy())
+            except RuntimeError:
+                # The loop closed between the check and the call.
+                pass
             return
-        batch = self._buffer.copy()
-        self._buffer.clear()
-        task = loop.create_task(self._flush_async(batch))
-        self._pending_flush_tasks.add(task)
+        self._flush_on_loop()
+
+    def _flush_on_loop(self) -> None:
+        """Start one write of the buffer. Runs on the run's loop."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        with self._buffer_lock:
+            # One write at a time: writes run in order (the store numbers
+            # events as they arrive) and never race on one SQLite file. What
+            # arrives meanwhile is written when the write in flight is done.
+            if not self._buffer or self._pending_flush_tasks or self._draining:
+                return
+            batch = self._buffer.copy()
+            self._buffer.clear()
+            task = loop.create_task(self._flush_async(batch), context=self._context.copy())
+            self._pending_flush_tasks.add(task)
         task.add_done_callback(self._on_flush_done)
 
-    async def _flush_async(self, batch: list[dict]) -> None:
+    async def _flush_async(self, batch: list[dict]) -> bool:
         try:
             await self._store.put_batch(batch)
         except Exception:
@@ -338,15 +384,25 @@ class RunJournal(BaseCallbackHandler):
                 exc_info=True,
             )
             # Return failed events to buffer for retry on next flush
-            self._buffer = batch + self._buffer
+            with self._buffer_lock:
+                self._buffer = batch + self._buffer
+            return False
+        return True
 
     def _on_flush_done(self, task: asyncio.Task) -> None:
-        self._pending_flush_tasks.discard(task)
+        with self._buffer_lock:
+            self._pending_flush_tasks.discard(task)
         if task.cancelled():
             return
         exc = task.exception()
         if exc:
             logger.warning("Journal flush task failed: %s", exc)
+            return
+        # Events that arrived while this write was in flight. Not after a
+        # failed write: that would retry in a tight loop; the next event or
+        # the final flush retries it.
+        if task.result():
+            self._flush_on_loop()
 
     def _identify_caller(self, tags: list[str] | None) -> str:
         _tags = tags or []
@@ -387,17 +443,27 @@ class RunJournal(BaseCallbackHandler):
 
     async def flush(self) -> None:
         """Force flush remaining buffer. Called in worker's finally block."""
-        if self._pending_flush_tasks:
+        # A write that finishes starts the next one for what arrived
+        # meanwhile, so wait until none is in flight.
+        while self._pending_flush_tasks:
             await asyncio.gather(*tuple(self._pending_flush_tasks), return_exceptions=True)
 
-        while self._buffer:
-            batch = self._buffer[: self._flush_threshold]
-            del self._buffer[: self._flush_threshold]
-            try:
-                await self._store.put_batch(batch)
-            except Exception:
-                self._buffer = batch + self._buffer
-                raise
+        self._draining = True
+        try:
+            while True:
+                with self._buffer_lock:
+                    if not self._buffer:
+                        break
+                    batch = self._buffer[: self._flush_threshold]
+                    del self._buffer[: self._flush_threshold]
+                try:
+                    await self._store.put_batch(batch)
+                except Exception:
+                    with self._buffer_lock:
+                        self._buffer = batch + self._buffer
+                    raise
+        finally:
+            self._draining = False
 
     def get_completion_data(self) -> dict:
         """Return accumulated token and message data for run completion."""

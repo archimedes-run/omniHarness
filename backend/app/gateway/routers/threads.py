@@ -229,6 +229,23 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
         except Exception:
             logger.warning("Could not delete the delegation checkpoints of thread %s", sanitize_log_param(thread_id), exc_info=True)
 
+    # The thread's run journal (every message, tool result and trace) and its
+    # run rows. Every row of the thread, whoever wrote it (user_id=None): the
+    # route has checked who owns the thread. Logged, not silent.
+    events = getattr(request.app.state, "run_event_store", None)
+    if events is not None:
+        try:
+            await events.delete_by_thread(thread_id, user_id=None)
+        except Exception:
+            logger.warning("Could not delete the run journal of thread %s", sanitize_log_param(thread_id), exc_info=True)
+    runs = getattr(request.app.state, "run_store", None)
+    if runs is not None:
+        try:
+            for run in await runs.list_by_thread(thread_id, user_id=None, limit=10_000):
+                await runs.delete(run["run_id"], user_id=None)
+        except Exception:
+            logger.warning("Could not delete the runs of thread %s", sanitize_log_param(thread_id), exc_info=True)
+
     # Remove thread_meta row (best-effort) — required for sqlite backend
     # so the deleted thread no longer appears in /threads/search.
     try:

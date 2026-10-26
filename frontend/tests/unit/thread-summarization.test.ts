@@ -7,8 +7,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendUnique,
   fetchRunMessages,
+  historyBeforeLive,
   isMiddlewareStreamed,
+  mergeDisplay,
   messagesMovedBySummary,
+  moveIntoHistory,
   summarizationUpdate,
   type RunMessageRow,
 } from "@/core/threads/summarization";
@@ -27,6 +30,7 @@ const FIX = JSON.parse(
   run2_sse: string;
   state1: { values: { messages: Message[] } };
   journal2: Record<string, RunMessageRow[]>;
+  state2: { values: { messages: Message[] } };
   leaked_summary_chunks: string[];
 };
 
@@ -152,5 +156,150 @@ describe("the display history after a reload", () => {
     expect(messages).toHaveLength(
       rows.filter((r) => !r.metadata.caller?.startsWith("middleware:")).length,
     );
+  });
+});
+
+describe("a reload while a run is still going (D1-g)", () => {
+  const msg = (id: string, type: "human" | "ai" = "ai"): Message => ({
+    id,
+    type,
+    content: id,
+  });
+  const tool = (id: string, call: string): Message => ({
+    id,
+    type: "tool",
+    tool_call_id: call,
+    content: id,
+  });
+
+  it("shows the running run's journal up to where the live thread begins, each message once", () => {
+    // The journal is written as the run goes, so it can be AHEAD of the
+    // thread state the chat loaded (a3 journaled, its checkpoint not yet in).
+    const history = [
+      msg("h2", "human"),
+      msg("a1"),
+      tool("t1", "c1"),
+      msg("a2"),
+      tool("t2", "c2"),
+      msg("a3"),
+    ];
+    const live = [msg("summary", "human"), msg("a2"), tool("t2-copy", "c2")];
+    const shown = mergeDisplay(history, live, []);
+    expect(shown.map((m) => m.id)).toEqual([
+      "h2",
+      "a1",
+      "t1",
+      "summary",
+      "a2",
+      "t2-copy",
+    ]);
+  });
+
+  it("keeps the whole history when the live thread holds none of it", () => {
+    const history = [msg("h1", "human"), msg("a1")];
+    expect(historyBeforeLive(history, [msg("x")])).toBe(history);
+  });
+
+  it("puts what a later summarization moves after what was shown before the live thread, in order", () => {
+    // Reloaded mid-run before this run summarized: the history holds the
+    // running run's journal, the live thread still holds the older turns.
+    const history = [msg("h2", "human"), msg("a1")];
+    const live = [
+      msg("h1", "human"),
+      msg("f1"),
+      msg("h2", "human"),
+      msg("a1"),
+      msg("a2"),
+    ];
+    const moved = live.slice(0, 4);
+    const next = moveIntoHistory(history, live, moved);
+    expect(next.map((m) => m.id)).toEqual(["h1", "f1", "h2", "a1"]);
+    // Appending to the whole history put the older turn after the newer one.
+    expect(appendUnique(history, moved).map((m) => m.id)).toEqual([
+      "h2",
+      "a1",
+      "h1",
+      "f1",
+    ]);
+  });
+
+  it("is not cut at an earlier turn's tool result that reuses a call id", () => {
+    // Recorded: both turns' fetches are "f3"; the live thread keeps the
+    // second turn's. The journal's tool rows carry no message id.
+    const history = Object.values(FIX.journal2).flatMap((rows) =>
+      rows
+        .filter((row) => !row.metadata?.caller?.startsWith("middleware:"))
+        .map((row) => row.content),
+    );
+    const shown = mergeDisplay(history, FIX.state2.values.messages, []);
+    const texts = JSON.stringify(shown);
+    expect(texts).toContain("Run one answer: Vetri Cucina");
+    expect(
+      shown.filter((m) => m.type === "human" && m.name !== "summary"),
+    ).toHaveLength(2);
+    const ids = shown.map((m) => m.id).filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("a summary that keeps a rescued copy of an earlier message (skill rescue)", () => {
+  const RESCUED = { additional_kwargs: { omniharness_summary_rescued: true } };
+  const h = (id: string) => ({ id, type: "human", content: id }) as Message;
+  const a = (id: string, extra = {}) =>
+    ({ id, type: "ai", content: id, ...extra }) as Message;
+  const t = (call: string, extra = {}) =>
+    ({ type: "tool", tool_call_id: call, content: call, ...extra }) as Message;
+  const summary = {
+    id: "s",
+    type: "human",
+    name: "summary",
+    content: "summary",
+  } as Message;
+  // a1 loaded a skill (its result c1); the summary keeps a COPY of a1 (same
+  // id) and c1 after itself, then the recent tail h4, a4.
+  const full = [
+    h("h1"),
+    a("a1"),
+    t("c1"),
+    a("a1b"),
+    h("h2"),
+    a("a2"),
+    h("h3"),
+    a("a3"),
+    h("h4"),
+    a("a4"),
+  ];
+  const live = [summary, a("a1", RESCUED), t("c1", RESCUED), h("h4"), a("a4")];
+  const ids = (ms: Message[]) =>
+    ms.filter((m) => m.name !== "summary").map((m) => m.id ?? m.content);
+
+  it("after a reload, shows every turn once: the copy does not mark where the live thread begins", () => {
+    expect(ids(mergeDisplay(full, live, []))).toEqual(ids(full));
+  });
+
+  it("while streaming, moves every replaced message, not only those before the copy's original", () => {
+    const update = [
+      { type: "remove", id: "__remove_all__" } as Message,
+      ...live,
+    ];
+    const moved = messagesMovedBySummary(full, update);
+    expect(ids(moved)).toEqual([
+      "h1",
+      "a1",
+      "c1",
+      "a1b",
+      "h2",
+      "a2",
+      "h3",
+      "a3",
+    ]);
+    const history = moveIntoHistory([], full, moved);
+    expect(ids(mergeDisplay(history, live, []))).toEqual(ids(full));
+  });
+
+  it("an unmarked live message with an old id still marks where the live thread begins", () => {
+    expect(
+      historyBeforeLive(full, [summary, a("a3"), h("h4")]).map((m) => m.id),
+    ).toEqual(["h1", "a1", undefined, "a1b", "h2", "a2", "h3"]);
   });
 });

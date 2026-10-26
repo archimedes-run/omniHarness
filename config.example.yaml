@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 9
+config_version: 10
 
 # ============================================================================
 # Logging
@@ -560,16 +560,20 @@ database:
 # ============================================================================
 # Storage backend for run events (messages + execution traces).
 #
-# backend: memory  -- No persistence, data lost on restart (default)
+# backend: auto    -- The SQL database (as db) when there is one, else memory (default;
+#                     also when this section is missing). Journals then persist:
+#                     they are deleted with their chat and by run-history retention
+# backend: memory  -- No persistence, data lost on restart: the chat's display
+#                     history of a summarized conversation is lost with it
 # backend: db      -- SQL database via ORM, full query capability (production)
 # backend: jsonl   -- Append-only JSONL files (lightweight single-node persistence)
 #
 # run_events:
-#   backend: memory
+#   backend: auto
 #   max_trace_content: 10240    # Truncation threshold for trace content (db backend, bytes)
 #   track_token_usage: true     # Accumulate token counts to RunRow
 run_events:
-  backend: memory
+  backend: auto
   max_trace_content: 10240
   track_token_usage: true
 
