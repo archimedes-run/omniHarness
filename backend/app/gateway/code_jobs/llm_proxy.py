@@ -133,6 +133,67 @@ def _normalise_body(body: dict, upstream: Upstream, output_tokens: int) -> dict:
     return out
 
 
+#: An inline image (data: URI) may be at most this many characters.
+MAX_IMAGE_CHARS = 5 * 1024 * 1024
+#: Each image is reserved at this many input tokens, whatever its size.
+IMAGE_TOKENS = 4_000
+
+
+class ContentRefused(ValueError):
+    pass
+
+
+def check_content(body: dict) -> int:
+    """Refuse any message content the provider would fetch or read from
+    elsewhere; returns the number of inline images.
+
+    Allowed parts: `text`, and `image_url` only as a `data:image/...` URI of
+    bounded size. A remote image URL, `file` (file_id / file_data),
+    `input_audio` and any unknown part type are refused: the provider would
+    fetch a URL the worker chose, a way around the registries-only egress.
+    Every message (tool results included) and any nested content is checked.
+    """
+    images = 0
+
+    def walk(content: object) -> None:
+        nonlocal images
+        if content is None or isinstance(content, str):
+            return
+        if isinstance(content, dict):
+            content = [content]
+        if not isinstance(content, list):
+            raise ContentRefused("message content must be text or a list of parts")
+        for part in content:
+            if isinstance(part, str):
+                continue
+            if not isinstance(part, dict):
+                raise ContentRefused("a content part must be an object")
+            kind = part.get("type")
+            if kind == "text":
+                if not isinstance(part.get("text", ""), str):
+                    raise ContentRefused("a text part must hold text")
+                continue
+            if kind == "image_url":
+                image = part.get("image_url")
+                url = image.get("url") if isinstance(image, dict) else image
+                if not isinstance(url, str) or not url.startswith("data:image/"):
+                    raise ContentRefused("only inline (data:) images are allowed, never a URL")
+                if len(url) > MAX_IMAGE_CHARS:
+                    raise ContentRefused("an inline image is too large")
+                images += 1
+                continue
+            raise ContentRefused(f"content parts of type {str(kind)[:40]!r} are not allowed")
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        raise ContentRefused("messages must be a list")
+    for message in messages:
+        if not isinstance(message, dict):
+            raise ContentRefused("a message must be an object")
+        walk(message.get("content"))
+    return images
+
+
 def _requested_output(body: dict) -> int:
     for key in ("max_completion_tokens", "max_tokens"):
         value = body.get(key)
@@ -186,8 +247,15 @@ def build_proxy_app(settings: ProxySettings) -> Starlette:
 
     def refuse(claims: tokens.JobClaims | None, peer: str, status: int, reason: str, model: str = "") -> JSONResponse:
         if claims is not None:
+            # Refusals count toward the sandbox's rate; past it, a flood is
+            # answered 429 without writing a row each time, and logged once a minute.
+            if settings.store.recent_calls(claims.container) >= settings.rate_per_minute:
+                if (count := refusal_log.due(f"token:{claims.container}")) is not None:
+                    _policy_log(settings.policy_log, {"decision": "refused", "reason": "rate limit (refusals)", "job_id": claims.job_id, "thread_id": claims.thread_id, "peer": peer, "count": count})
+                return _error(429, f"Refused by the OmniHarness gateway: rate limit ({settings.rate_per_minute} calls a minute)")
             settings.store.record_call(job_id=claims.job_id, container=claims.container, model=model, status="refused", reason=reason)
-            _policy_log(settings.policy_log, {"decision": "refused", "reason": reason, "job_id": claims.job_id, "thread_id": claims.thread_id, "peer": peer})
+            if (count := refusal_log.due(f"token:{claims.container}:{reason[:40]}")) is not None:
+                _policy_log(settings.policy_log, {"decision": "refused", "reason": reason, "job_id": claims.job_id, "thread_id": claims.thread_id, "peer": peer, "count": count})
         elif (count := refusal_log.due(peer)) is not None:
             _policy_log(settings.policy_log, {"decision": "refused", "reason": reason, "job_id": None, "thread_id": None, "peer": peer, "count": count})
         return _error(status, f"Refused by the OmniHarness gateway: {reason}")
@@ -197,12 +265,13 @@ def build_proxy_app(settings: ProxySettings) -> Starlette:
 
     def authenticate(request: Request) -> tuple[tokens.JobClaims | None, JSONResponse | None, str]:
         peer = request.client.host if request.client else ""
-        if settings.subnets:
-            try:
-                if not any(ipaddress.IPv4Address(peer) in net for net in settings.subnets):
-                    return None, refuse(None, peer, 403, "not from the sandbox network"), peer
-            except ValueError:
-                return None, refuse(None, peer, 403, "not from the sandbox network"), peer
+        # No known sandbox subnet: nothing can be from it (fail closed).
+        try:
+            inside = any(ipaddress.IPv4Address(peer) in net for net in settings.subnets)
+        except ValueError:
+            inside = False
+        if not inside:
+            return None, refuse(None, peer, 403, "not from the sandbox network"), peer
         auth = request.headers.get("authorization", "")
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         try:
@@ -248,8 +317,12 @@ def build_proxy_app(settings: ProxySettings) -> Starlette:
         upstream, why = settings.upstream_for()
         if upstream is None:
             return refuse(claims, peer, 503, why or "no model available")
+        try:
+            images = check_content(body)
+        except ContentRefused as exc:
+            return refuse(claims, peer, 400, str(exc), model=str(body.get("model")))
         price = price_for(upstream.model, settings.prices)
-        input_cost = (len(raw) / BYTES_PER_TOKEN) * price.input / 1_000_000
+        input_cost = (len(raw) / BYTES_PER_TOKEN + images * IMAGE_TOKENS) * price.input / 1_000_000
         call_id, reason, output_tokens = settings.store.reserve_call(
             job_id=claims.job_id,
             container=claims.container,

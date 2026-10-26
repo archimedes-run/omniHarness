@@ -514,7 +514,12 @@ class CodeJobManager:
         script = (
             pg + 'if [ -n "$PG" ]; then kill -TERM -- -$PG 2>/dev/null; for i in 1 2 3 4 5 6; do kill -0 -- -$PG 2>/dev/null || break; sleep 0.5; done; kill -KILL -- -$PG 2>/dev/null; fi; '
             f"for p in /proc/[0-9]*; do tr '\\0' '\\n' < $p/environ 2>/dev/null | grep -qx {_q(marker)} && kill -KILL ${{p#/proc/}} 2>/dev/null; done; "
-            "echo __killed__"
+            # Best effort, last: every process of the sandbox user that is not
+            # part of the sandbox's own service trees (its API server and REPLs,
+            # started by the root supervisor; the shell-session server), which
+            # catches a worker process that left the group and cleared its
+            # environment (setsid env -i ...).
+             + LEFTOVER_SWEEP + "echo __killed__"
         )
         try:
             ops.sh(script, timeout=20)
@@ -597,6 +602,16 @@ class CodeJobManager:
 
 
 MAX_HISTORY_STEPS = 400
+
+LEFTOVER_SWEEP = (
+    "ps -eo pid=,ppid=,user=,comm= | awk -v self=$$ '"
+    "{ p=$1; pp[p]=$2; u[p]=$3; c[p]=$4; all[p]=1 } "
+    "END { "
+    'for (p in all) if (u[p]=="gem" && ((pp[p] in u && u[pp[p]]!="gem" && pp[p]!=1) || (pp[p]==1 && c[p] ~ /^tmux/))) keep[p]=1; '
+    "changed=1; while (changed) { changed=0; for (p in all) if (!(p in keep) && (pp[p] in keep)) { keep[p]=1; changed=1 } } "
+    'for (p in all) if (u[p]=="gem" && !(p in keep) && p!=self) print p }\' '
+    "| xargs -r kill -KILL 2>/dev/null; "
+)
 
 
 def _artifacts_of(result: dict | None) -> list[str]:

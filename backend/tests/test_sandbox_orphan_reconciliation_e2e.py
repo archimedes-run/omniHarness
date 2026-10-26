@@ -48,10 +48,13 @@ E2E_PREFIX = "omni-harness-sandbox-e2e-test"
 
 
 def _keyed_run(name: str) -> list[str]:
-    """A container as this gateway starts one: keyed with its name (#98)."""
+    """A container as this gateway starts one: keyed with its name (#98), no
+    privilege escalation and only the start-up's capabilities (spec 009)."""
+    from omniharness.community.aio_sandbox.local_backend import SANDBOX_CAPS
     from omniharness.community.aio_sandbox.sandbox_auth import sandbox_api_key
 
-    return ["docker", "run", "--rm", "-d", "--name", name, "-e", f"SANDBOX_API_KEY={sandbox_api_key(name)}", E2E_TEST_IMAGE, "sleep", "3600"]
+    caps = [arg for cap in SANDBOX_CAPS for arg in ("--cap-add", cap)]
+    return ["docker", "run", "--rm", "-d", "--name", name, "-e", f"SANDBOX_API_KEY={sandbox_api_key(name)}", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", *caps, E2E_TEST_IMAGE, "sleep", "3600"]
 
 
 @pytest.fixture(autouse=True)

