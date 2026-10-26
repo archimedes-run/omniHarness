@@ -55,6 +55,9 @@ class FakeSandbox:
         self.lock = threading.Lock()
         self.emitted = 0
         self.finished = threading.Event()
+        self.before_exit = None
+        self.verify_runs = 0
+        self.verify_env = ""
 
     # -- filesystem --------------------------------------------------------------
 
@@ -93,6 +96,12 @@ class FakeSandbox:
             if self.kill_works:
                 self.killed.set()
             return 0, "__killed__"
+        if "timeout -k 5" in command and "verify.log" in command:
+            log = re.search(r"> (\S+verify\.log)", command).group(1).strip("'")
+            self._put(log, self.verify_log)
+            self.verify_runs += 1
+            self.verify_env = command
+            return (self.verify_exit if self.verify_exit is not None else 124), ""
         if "find . " in command and "-printf" in command:
             project = re.search(r"cd (\S+) 2>/dev/null", command).group(1).strip("'")
             out = re.search(r"head -n 5000 > (\S+?);", command).group(1).strip("'")
@@ -172,6 +181,8 @@ class FakeSandbox:
         if self.killed.is_set():
             return
         self._put(f"{d}/stderr.txt", self.stderr)
+        if self.before_exit is not None:
+            self.before_exit()
         self._put(f"{d}/exit", "0\n")
         self.finished.set()
 
