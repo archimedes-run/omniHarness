@@ -1,5 +1,7 @@
 export const GITHUB_URL = "https://github.com/archimedes-run/omniHarness";
-export const DOCS_URL = "/en/docs";
+// The in-app docs route (/en/docs) fails to render in a production build,
+// so the docs links go to the README on GitHub until that is fixed.
+export const DOCS_URL = `${GITHUB_URL}#readme`;
 
 /**
  * The landing sections the header links to. The anchors are written `/#id`,

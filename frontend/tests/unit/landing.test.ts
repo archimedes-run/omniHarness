@@ -71,7 +71,9 @@ describe("landing page", () => {
   });
 
   it("every header anchor is /#id and resolves to a rendered section", () => {
-    const anchors = NAV_LINKS.map((l) => l.href).filter((h) => h.includes("#"));
+    const anchors = NAV_LINKS.map((l) => l.href).filter((h) =>
+      h.startsWith("/#"),
+    );
     expect(anchors).toHaveLength(3);
     for (const href of anchors) {
       expect(href, "absolute, so it works from the blog and docs").toMatch(
@@ -90,7 +92,9 @@ describe("landing page", () => {
   it("the calls to action go to the workspace, GitHub and the docs", () => {
     expect(hrefs.filter((h) => h === "/workspace")).toHaveLength(2);
     expect(hrefs).toContain("https://github.com/archimedes-run/omniHarness");
-    expect(hrefs).toContain("/en/docs");
+    expect(hrefs).toContain(
+      "https://github.com/archimedes-run/omniHarness#readme",
+    );
   });
 
   it("has a menu button for small screens", () => {

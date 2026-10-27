@@ -27,7 +27,7 @@ const MOMENTS = [
   {
     time: "6:10 PM",
     dateTime: "18:10",
-    text: "Your terminal coding agent has finished; Home shows the session is waiting on you.",
+    text: "Your terminal coding agent has stopped and is waiting on you; Home shows it.",
   },
 ];
 
