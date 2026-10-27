@@ -24,6 +24,7 @@ from app.gateway.routers import (
     composio,
     confirmations,
     drafts,
+    evals,
     feedback,
     home,
     inbox,
@@ -651,6 +652,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
     app.include_router(run_history.router)
+    app.include_router(evals.router)
 
     # Automations: the one write path for trigger rules (Phase 2.5).
     app.include_router(automations.router)

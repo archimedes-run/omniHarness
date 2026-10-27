@@ -2,6 +2,7 @@ from .clarification_tool import ask_clarification_tool
 from .mcp_build_tool import mcp_build_tool
 from .present_file_tool import present_file_tool
 from .preview_tool import preview_tool
+from .research_tool import research_tool
 from .setup_agent_tool import setup_agent
 from .task_tool import task_tool
 from .update_agent_tool import update_agent
@@ -12,6 +13,7 @@ __all__ = [
     "mcp_build_tool",
     "present_file_tool",
     "preview_tool",
+    "research_tool",
     "setup_agent",
     "task_tool",
     "update_agent",

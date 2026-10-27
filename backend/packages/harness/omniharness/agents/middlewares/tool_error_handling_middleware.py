@@ -28,7 +28,10 @@ class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         if len(detail) > 500:
             detail = detail[:497] + "..."
 
-        content = f"Error: Tool '{tool_name}' failed with {exc.__class__.__name__}: {detail}. Continue with available context, or choose an alternative tool."
+        content = (
+            f"Error: Tool '{tool_name}' failed with {exc.__class__.__name__}: {detail}. Read the error. Change the arguments, the tool or the approach "
+            "before trying again; do not repeat the same call. If this step cannot succeed, say so and what is needed."
+        )
         return ToolMessage(
             content=content,
             tool_call_id=tool_call_id,

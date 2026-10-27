@@ -16,6 +16,7 @@ export const SETTINGS_SECTIONS = [
   "safety",
   "notification",
   "activity",
+  "evals",
   "appearance",
   "about",
 ] as const;
@@ -40,6 +41,7 @@ export function SettingsNav() {
     safety: "Safety",
     notification: "Notifications",
     activity: "Activity log",
+    evals: "Evals",
     appearance: t.settings.sections.appearance,
     about: t.settings.sections.about,
   };

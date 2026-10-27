@@ -1,0 +1,59 @@
+id: T08
+title: Three independent Lisbon lookups, delegated, one brief
+source: research habit
+mode: ultra
+prompt: 'Research these in parallel: (a) the best months to visit Lisbon, (b) Lisbon public transport passes and prices, (c) the top 3 day trips from Lisbon. Combine them into one short brief with links.'
+tools: []
+confirm: confirm-all
+budget:
+  seconds: 900
+  est_usd: 0.3
+checks:
+- tool_called:
+    name: delegation
+    min: 2
+- min_links:
+    n: 3
+- no_open_cards
+mock:
+  lead:
+  - tool_calls:
+    - name: research
+      args:
+        description: Lisbon best months
+        brief: 'Goal: best months to visit Lisbon. Inputs: none. Constraints: public web only. Done when: a recommendation with 1 source. Return: 2 lines with a source URL.'
+    - name: research
+      args:
+        description: Lisbon transport passes
+        brief: 'Goal: Lisbon transport passes and prices. Inputs: none. Constraints: public web only. Done when: pass names and prices with a source. Return: a list with source URLs.'
+    - name: research
+      args:
+        description: Lisbon day trips
+        brief: 'Goal: top 3 day trips from Lisbon. Inputs: none. Constraints: public web only. Done when: 3 trips with sources. Return: 3 items, each with a source URL.'
+  - expect:
+      tool: research
+      contains: Succeeded
+    content: 'Lisbon in brief:
+
+
+      - Best months: April to June and September to October [Visit Lisboa](https://www.visitlisboa.com/).
+
+      - Transport: the Navegante pass covers metro, bus and tram [Carris Metropolitana](https://www.carrismetropolitana.pt/).
+
+      - Day trips: Sintra, Cascais and Evora [Parques de Sintra](https://www.parquesdesintra.pt/).'
+  sub:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: lisbon best months
+  - content: 'April to June. Source: https://www.visitlisboa.com/'
+  - tool_calls:
+    - name: web_search
+      args:
+        query: lisbon transport passes
+  - content: 'Navegante pass. Source: https://www.carrismetropolitana.pt/'
+  - tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips
+  - content: 'Sintra, Cascais, Evora. Source: https://www.parquesdesintra.pt/'

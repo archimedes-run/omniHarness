@@ -116,20 +116,26 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
     )
 
 
-def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
+#: Added to both the `write_todos` description and the <todo_list_system>
+#: block (spec 009 plan 0c): the checklist states what done means and is not
+#: ticked on anyone's word.
+_DONE_WHEN_RULE = """The first item is always "Done when: <checkable outcomes>". Before your final
+reply, every item is either completed with evidence from a tool result, or
+listed in your reply as not verified. A task is not completed because a
+subagent or a tool's text says so; it is completed when you have checked it."""
+
+
+def _create_todo_list_middleware(is_plan_mode: bool = False) -> TodoMiddleware:
     """Create and configure the TodoList middleware.
 
-    Args:
-        is_plan_mode: Whether to enable plan mode with TodoList middleware.
-
-    Returns:
-        TodoMiddleware instance if plan mode is enabled, None otherwise.
+    Bound in EVERY chat mode and in scheduled runs (spec 009 FR-050, owner
+    decision Q-S0-1: flash too), not only in the plan modes. `is_plan_mode` is
+    kept for callers and no longer gates the tool.
     """
-    if not is_plan_mode:
-        return None
 
     # Custom prompts matching OmniHarness's style
-    system_prompt = """
+    system_prompt = (
+        """
 <todo_list_system>
 You have access to the `write_todos` tool to help you manage and track complex multi-step objectives.
 
@@ -160,12 +166,19 @@ This tool is designed for complex objectives that require systematic tracking:
 - Add new tasks discovered during implementation
 - Don't be afraid to revise the todo list as you learn more
 
+**Done when:**
+"""
+        + _DONE_WHEN_RULE
+        + """
+
 **Task Management:**
 Writing todos takes time and tokens - use it when helpful for managing complex problems, not for simple requests.
 </todo_list_system>
 """
+    )
 
-    tool_description = """Use this tool to create and manage a structured task list for complex work sessions.
+    tool_description = (
+        """Use this tool to create and manage a structured task list for complex work sessions.
 
 **IMPORTANT: Only use this tool for complex tasks (3+ steps). For simple requests, just do the work directly.**
 
@@ -199,6 +212,12 @@ Skip this tool when:
 - `in_progress`: Currently working on (can have multiple if tasks run in parallel)
 - `completed`: Task finished successfully
 
+## Done when
+
+"""
+        + _DONE_WHEN_RULE
+        + """
+
 ## Task Completion Requirements
 
 **CRITICAL: Only mark a task as completed when you have FULLY accomplished it.**
@@ -227,6 +246,7 @@ Being proactive with task management demonstrates thoroughness and ensures all r
 
 **Remember**: If you only need a few tool calls to complete a task and it's clear what to do, it's better to just do the task directly and NOT use this tool at all.
 """
+    )
 
     return TodoMiddleware(system_prompt=system_prompt, tool_description=tool_description)
 
@@ -267,12 +287,15 @@ def _build_middlewares(
     if summarization_middleware is not None:
         middlewares.append(summarization_middleware)
 
-    # Add TodoList middleware if plan mode is enabled
+    # The checklist (write_todos) in every mode (spec 009 FR-050). The
+    # verification middleware sits BEFORE it so its after_model hook runs
+    # AFTER the todo gate's (hooks run in reverse order): the record is put
+    # on the reply only when the gate lets the reply through.
     cfg = _get_runtime_config(config)
-    is_plan_mode = cfg.get("is_plan_mode", False)
-    todo_list_middleware = _create_todo_list_middleware(is_plan_mode)
-    if todo_list_middleware is not None:
-        middlewares.append(todo_list_middleware)
+    from omniharness.agents.middlewares.verification_middleware import VerificationMiddleware
+
+    middlewares.append(VerificationMiddleware())
+    middlewares.append(_create_todo_list_middleware(cfg.get("is_plan_mode", False)))
 
     # Add TokenUsageMiddleware when token_usage tracking is enabled
     if resolved_app_config.token_usage.enabled:
@@ -478,6 +501,7 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
         user_id=run_user_id,
         max_tools=max_tools,
         tool_access=tool_access,
+        research_enabled=True,
     )
     return filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include)
 

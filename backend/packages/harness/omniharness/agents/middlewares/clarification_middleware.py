@@ -64,8 +64,14 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         Returns:
             Formatted message string
         """
+        from omniharness.tools.builtins.clarification_tool import CLARIFICATION_TYPES
+
         question = args.get("question", "")
         clarification_type = args.get("clarification_type", "missing_info")
+        if clarification_type not in CLARIFICATION_TYPES:
+            # A removed kind (approach_choice, risk_confirmation, suggestion:
+            # spec 009 FR-057) sent anyway is shown as a plain question.
+            clarification_type = "missing_info"
         context = args.get("context")
         options = args.get("options", [])
 
@@ -114,7 +120,42 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
         return "\n".join(message_parts)
 
-    def _handle_clarification(self, request: ToolCallRequest) -> Command:
+    #: On the tool result that sent a mid-task question back (FR-057): one
+    #: per turn, so a task that truly became impossible can still ask.
+    DEFERRED_MARKER = "omniharness_clarification_deferred"
+
+    def _mid_task_deferral(self, request: ToolCallRequest) -> ToolMessage | None:
+        """A question asked after work has started in this turn is sent back
+        once (spec 009 FR-056/FR-057): the model is told to pick a default and
+        continue, or to stop as blocked. Before any work, or the second time in
+        a turn, the question goes to the person as usual."""
+        from omniharness.agents.working_loop import NON_EVIDENCE_TOOLS, tool_steps, turn_messages
+
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages") if isinstance(state, dict) else None
+        if not messages:
+            return None
+        turn = turn_messages(list(messages))
+        call_id = request.tool_call.get("id", "")
+        started = [s for s in tool_steps(turn) if s["name"] not in NON_EVIDENCE_TOOLS and s["id"] != call_id and s["ok"] is not None]
+        if not started:
+            return None
+        for message in turn:
+            if isinstance(message, ToolMessage) and (message.additional_kwargs or {}).get(self.DEFERRED_MARKER):
+                return None
+        logger.info("Clarification asked mid-task; sent back once with the default rule")
+        return ToolMessage(
+            content=(
+                "Not asked: work on this task has already started. Do not ask the person to choose mid-task. "
+                "Pick the most sensible default, state the assumption in one line, and continue. If the task truly "
+                "cannot go ahead, stop and say what is done, the exact blocker and what the person needs to do."
+            ),
+            tool_call_id=call_id,
+            name="ask_clarification",
+            additional_kwargs={self.DEFERRED_MARKER: True},
+        )
+
+    def _handle_clarification(self, request: ToolCallRequest) -> Command | ToolMessage:
         """Handle clarification request and return command to interrupt execution.
 
         Args:
@@ -123,6 +164,10 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         Returns:
             Command that interrupts execution with the formatted clarification message
         """
+        deferred = self._mid_task_deferral(request)
+        if deferred is not None:
+            return deferred
+
         # Extract clarification arguments
         args = request.tool_call.get("args", {})
         question = args.get("question", "")

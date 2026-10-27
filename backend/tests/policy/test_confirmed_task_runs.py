@@ -41,9 +41,11 @@ from langchain_core.messages import AIMessage
 from test_delegated_confirmation import (  # noqa: F401 - `gateway` is a fixture
     DELEGATE,
     EXAMPLE,
+    LEAD_SCRIPT,
     _eventually,
     _pending,
     _say,
+    _settled,
     _thread,
     _thread_messages,
     _wire,
@@ -352,7 +354,10 @@ def test_after_the_open_card_is_declined_the_tool_can_be_proposed_again(gateway)
     thread_id = _thread(gateway)
     _say(gateway, thread_id, "ask a helper about Lisbon", [AIMessage(content="", tool_calls=[_delegation(0)]), AIMessage(content="Waiting.")])
     [first] = _pending(gateway, "task")
+    # The decline resumes the lead (spec 009 FR-058): it says what was not done.
+    LEAD_SCRIPT[:] = [AIMessage(content="Not done: you declined the delegation.")]
     assert gateway.client.post(f"/api/confirmations/{first['id']}/decline", json={}).json()["outcome"] == "declined"
+    assert _settled(gateway, thread_id)
     _say(gateway, thread_id, "ok, just the transport passes then", [AIMessage(content="", tool_calls=[_delegation(2)]), AIMessage(content="Waiting.")])
     [second] = _pending(gateway, "task")
     assert second["id"] != first["id"]

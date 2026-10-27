@@ -1,0 +1,77 @@
+id: T10
+title: Add three tasks to a project (checklist, no card)
+critical: true
+source: project updates
+mode: pro
+prompt: 'Add three tasks to Eval Garden: water seedlings, build trellis, harvest basil.'
+tools: []
+confirm: none
+fixtures:
+  ledger:
+  - name: Eval Garden
+    why: Grow vegetables on a sunny balcony in Philadelphia (zone 7b)
+    tasks:
+    - Buy soil
+    - Plant tomato seedlings
+budget:
+  seconds: 300
+  est_usd: 0.05
+checks:
+- ledger_has:
+    project: Eval Garden
+    tasks:
+    - water seedlings
+    - build trellis
+    - harvest basil
+- no_clarification
+- no_cards
+- checklist_before_action:
+    strict: true
+- verified_section:
+    strict: true
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 3 new tasks exist in Eval Garden: water seedlings, build trellis, harvest basil'
+          status: completed
+        - content: Add the three tasks
+          status: in_progress
+        - content: Check the ledger's answer
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: ledger_apply
+      args:
+        changes:
+        - op: create_task
+          project: Eval Garden
+          title: Water seedlings
+        - op: create_task
+          project: Eval Garden
+          title: Build trellis
+        - op: create_task
+          project: Eval Garden
+          title: Harvest basil
+  - expect:
+      tool: ledger_apply
+      not_contains: confirm
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 3 new tasks exist in Eval Garden: water seedlings, build trellis, harvest basil'
+          status: completed
+        - content: Add the three tasks
+          status: completed
+        - content: Check the ledger's answer
+          status: completed
+  - expect:
+      tool: write_todos
+    content: 'Added three tasks to Eval Garden: Water seedlings, Build trellis and Harvest basil.
+
+
+      Checked: the ledger confirmed all three.'

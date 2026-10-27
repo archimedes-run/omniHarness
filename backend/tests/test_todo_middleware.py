@@ -275,11 +275,29 @@ class TestAfterModel:
         }
         assert mw.after_model(state, _make_runtime()) is None
 
-    def test_still_sends_reminder_before_cap(self):
+    def test_reminder_is_sent_once_per_turn(self):
+        """Spec 009 FR-052: one reminder per turn (was two per thread)."""
         mw = TodoMiddleware()
         state = {
             "messages": [
-                _completion_reminder_msg(),  # 1 reminder so far
+                HumanMessage(content="do the thing"),
+                _completion_reminder_msg(),  # already reminded in this turn
+                _ai_no_tool_calls(),
+            ],
+            "todos": _incomplete_todos(),
+        }
+        assert mw.after_model(state, _make_runtime()) is None
+
+    def test_a_reminder_in_an_earlier_turn_does_not_count(self):
+        """The cap is per turn: a thread whose earlier turn used it still gets
+        one in a new turn (it used to be thread-wide and never fired again)."""
+        mw = TodoMiddleware()
+        state = {
+            "messages": [
+                HumanMessage(content="first task"),
+                _completion_reminder_msg(),
+                _ai_no_tool_calls(),
+                HumanMessage(content="second task"),
                 _ai_no_tool_calls(),
             ],
             "todos": _incomplete_todos(),
@@ -287,6 +305,33 @@ class TestAfterModel:
         result = mw.after_model(state, _make_runtime())
         assert result is not None
         assert result["jump_to"] == "model"
+
+    def test_honest_stop_with_not_verified_list_is_let_through(self):
+        """A reply that lists the unfinished items under "Not verified" is an
+        honest stop (FR-052, FR-055): not sent back."""
+        mw = TodoMiddleware()
+        state = {
+            "messages": [
+                HumanMessage(content="do the thing"),
+                AIMessage(content="Did step 1.\n\nNot verified:\n- Step 2: the API returned 404\n- Step 3: depends on step 2"),
+            ],
+            "todos": _incomplete_todos(),
+        }
+        assert mw.after_model(state, _make_runtime()) is None
+
+    def test_forced_stop_is_not_sent_back(self):
+        mw = TodoMiddleware()
+        state = {
+            "messages": [HumanMessage(content="do it"), AIMessage(content="partial\n\n[FORCED STOP] Repeated tool calls exceeded the safety limit.")],
+            "todos": _incomplete_todos(),
+        }
+        assert mw.after_model(state, _make_runtime()) is None
+
+    def test_reminder_asks_to_finish_or_report_not_verified(self):
+        mw = TodoMiddleware()
+        state = {"messages": [HumanMessage(content="go"), _ai_no_tool_calls()], "todos": _incomplete_todos()}
+        content = mw.after_model(state, _make_runtime())["messages"][0].content
+        assert "Not verified" in content
 
 
 class TestAafterModel:

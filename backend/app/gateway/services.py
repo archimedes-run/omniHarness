@@ -1037,7 +1037,32 @@ async def start_run(
     # title from the checkpoint and calls thread_store.update_display_name
     # after the run completes.
 
+    _trace_when_done(request.app, record, owner_id=user_id, resume=server_resume[1] if server_resume is not None else None, assistant_id=body.assistant_id)
     return record
+
+
+def _trace_when_done(app: Any, record: Any, *, owner_id: str | None, resume: dict | None, assistant_id: str | None) -> None:
+    """When a lead run ends, write its per-run trace to the run history
+    (spec 009 FR-080). Fire-and-forget: the trace never holds up or fails the
+    run."""
+    if (assistant_id or "lead_agent") != "lead_agent" or getattr(record, "task", None) is None:
+        return
+    from app.run_history.chat_trace import record_chat_trace
+
+    def done(_task: Any) -> None:
+        status = getattr(getattr(record, "status", None), "value", None) or str(getattr(record, "status", ""))
+        try:
+            task = asyncio.get_running_loop().create_task(record_chat_trace(app, run_id=record.run_id, thread_id=record.thread_id, status=status, owner_id=owner_id, resume=dict(resume) if resume else None))
+        except RuntimeError:
+            return
+        _TRACE_TASKS.add(task)
+        task.add_done_callback(_TRACE_TASKS.discard)
+
+    record.task.add_done_callback(done)
+
+
+#: Trace writes in flight (held so they are not garbage-collected mid-write).
+_TRACE_TASKS: set = set()
 
 
 async def sse_consumer(

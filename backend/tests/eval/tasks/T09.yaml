@@ -1,0 +1,46 @@
+id: T09
+title: Mark a task done and add a note
+critical: true
+source: project updates
+mode: pro
+prompt: 'In my Eval Garden project, mark ''Buy soil'' as done and add a note: bought 2 bags.'
+tools: []
+confirm: none
+fixtures:
+  ledger:
+  - name: Eval Garden
+    why: Grow vegetables on a sunny balcony in Philadelphia (zone 7b)
+    tasks:
+    - Buy soil
+    - Plant tomato seedlings
+budget:
+  seconds: 300
+  est_usd: 0.05
+checks:
+- ledger_has:
+    project: Eval Garden
+    done:
+    - Buy soil
+    note: 2 bags
+- no_clarification
+- no_open_cards
+mock:
+  lead:
+  - tool_calls:
+    - name: ledger_apply
+      args:
+        changes:
+        - op: update_task
+          project: Eval Garden
+          task: Buy soil
+          status: done
+        - op: add_note
+          project: Eval Garden
+          decided: Bought 2 bags of soil
+          why: for the balcony beds
+  - expect:
+      tool: ledger_apply
+    content: 'Marked "Buy soil" done in Eval Garden and added the note: bought 2 bags.
+
+
+      Checked: the ledger confirmed both changes.'

@@ -30,6 +30,7 @@ import { rehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
 import { useUpdateSubtask } from "@/core/tasks/context";
 import type { AgentThreadState } from "@/core/threads";
+import { findTurnVerification } from "@/core/verification";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
@@ -47,6 +48,7 @@ import {
 } from "./message-token-usage";
 import { MessageListSkeleton } from "./skeleton";
 import { SubtaskCard } from "./subtask-card";
+import { VerificationBar } from "./verification-badge";
 
 /** Clear space under the last message, so it can scroll above the chat bar,
  * which floats over the bottom of the thread. It follows the bar's measured
@@ -322,6 +324,16 @@ export function MessageList({
             turnUsageMessages,
             isLoading: isStreamingGroup,
           })}
+          {group.type === "assistant" && !isStreamingGroup && (
+            <VerificationBar
+              record={findTurnVerification(
+                group.messages,
+                thread.values?.messages,
+                (thread.values as { verifications?: Record<string, unknown> })
+                  ?.verifications,
+              )}
+            />
+          )}
           {group.type === "assistant" &&
             renderAssistantCopyButton(group.messages)}
         </div>
@@ -367,6 +379,16 @@ export function MessageList({
             files={normalizeArtifactEntries(files)}
             threadId={threadId}
           />
+          {!isStreamingGroup && (
+            <VerificationBar
+              record={findTurnVerification(
+                group.messages,
+                thread.values?.messages,
+                (thread.values as { verifications?: Record<string, unknown> })
+                  ?.verifications,
+              )}
+            />
+          )}
           {renderTokenUsage({
             messages: group.messages,
             turnUsageMessages,

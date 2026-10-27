@@ -64,3 +64,4 @@ config.yaml.bak
 .gstack/
 .worktrees
 extensions/
+/eval/results/

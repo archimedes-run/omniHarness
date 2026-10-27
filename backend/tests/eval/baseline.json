@@ -1,0 +1,104 @@
+{
+ "_comment": "The latest ACCEPTED real-model result (spec 009 FR-077): a task that passed here and fails in a new real-model run is a regression and blocks the merge (D10). Recorded before any Slice 0 change. Replace only with a result the owner accepts.",
+ "id": "baseline-2026-10-25-e31fd85",
+ "date": "2026-10-24/25",
+ "code": "main e31fd85 (#148 + #149)",
+ "model": "configured default (gpt-5), pro mode, T08 ultra",
+ "score": {
+  "core": "7/18",
+  "strict": "4/18"
+ },
+ "cost_usd": 0.97,
+ "tasks": {
+  "T01": {
+   "core": true,
+   "strict": false,
+   "note": "strict fail: no write_todos"
+  },
+  "T02": {
+   "core": true,
+   "strict": true,
+   "note": "was fail on 2026-10-24"
+  },
+  "T03": {
+   "core": false,
+   "strict": false,
+   "note": "asked to authorize access; no calendar read (live)"
+  },
+  "T04": {
+   "core": false,
+   "strict": false,
+   "note": "one permission question, no reads (live)"
+  },
+  "T05": {
+   "core": false,
+   "strict": false,
+   "note": "asked for the 'needs a reply' rule; no mail read (live)"
+  },
+  "T06": {
+   "core": true,
+   "strict": true,
+   "note": "menu regex false positive on 'Option A/B' inside the itinerary"
+  },
+  "T07": {
+   "core": true,
+   "strict": true,
+   "note": ""
+  },
+  "T08": {
+   "core": false,
+   "strict": false,
+   "note": "7 task calls all carded; a confirmed subagent hung 900 s"
+  },
+  "T09": {
+   "core": false,
+   "strict": false,
+   "note": "ledger_read first made the write content-originated: a card"
+  },
+  "T10": {
+   "core": true,
+   "strict": false,
+   "note": "strict fail: no write_todos"
+  },
+  "T11": {
+   "core": false,
+   "strict": false,
+   "note": "asked for the exact goal date; no card"
+  },
+  "T12": {
+   "core": false,
+   "strict": false,
+   "note": "2 links, 3 open cards, a mid-task question"
+  },
+  "T13": {
+   "core": false,
+   "strict": false,
+   "note": "asked instead of correcting the URL"
+  },
+  "T14": {
+   "core": false,
+   "strict": false,
+   "note": "option menu instead of a stated blocker"
+  },
+  "T15": {
+   "core": true,
+   "strict": false,
+   "note": "strict fail: no 'Checked' line"
+  },
+  "T16": {
+   "core": false,
+   "strict": false,
+   "note": "hand-written 'simulated' dist and a success claim"
+  },
+  "T17": {
+   "core": false,
+   "strict": false,
+   "note": "multi-part question"
+  },
+  "T18": {
+   "core": true,
+   "strict": true,
+   "note": ""
+  }
+ }
+}

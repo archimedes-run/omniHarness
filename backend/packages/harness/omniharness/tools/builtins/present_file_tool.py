@@ -100,6 +100,8 @@ def present_file_tool(
     - For temporary or intermediate files not meant for user viewing
 
     Notes:
+    - Every file you write for the person is shown with this tool, not printed as a path in your reply.
+    - Present only files you have checked exist in /mnt/user-data/outputs.
     - You should call this tool after creating files and moving them to the `/mnt/user-data/outputs` directory.
     - This tool can be safely called in parallel with other tools. State updates are handled by a reducer to prevent conflicts.
 

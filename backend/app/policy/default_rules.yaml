@@ -221,6 +221,24 @@ policy:
     - pattern: "task"
       tier: 3
       reversible: false
+    # The read-only web researcher (spec 009 FR-061, owner decision Q-S0-2):
+    # a subagent whose ONLY tools are web_search, web_fetch and image_search
+    # (subagents/builtins/research_agent.py). Its reach is exactly those three
+    # lookups, which the lead makes at Tier 1 in a turn that has read no
+    # private data; delegating them changes who runs the lookup, not what can
+    # leave the machine. So: Tier 2 (it runs and is disclosed) while the turn
+    # has read no private data, and Tier 3, a card, once it has (the brief the
+    # lead writes could carry that data out), like the lookups themselves.
+    # Every lookup the researcher makes is still classified on its own by the
+    # policy layer, judged by the inviting turn's private reads. Its result is
+    # public web content (`reads_private: false`). `task` is unchanged.
+    - pattern: "research"
+      tier: 2
+      reversible: true
+      reads_private: false
+      exceptions:
+        - after_private_read: true
+          tier: 3
     # An agent the USER called in with "@". Never chosen by a model: the tool
     # is bound only for a turn whose own text mentions a member of the chat,
     # and the lead hands that turn over deterministically. The called agent's

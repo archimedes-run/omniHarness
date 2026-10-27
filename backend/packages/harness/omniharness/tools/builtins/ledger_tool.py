@@ -60,6 +60,8 @@ def ledger_read_tool(runtime: ToolRuntime[ContextT, ThreadState], project: str |
         '- {"op":"update_task","task":"the task\'s title (or T-3)","project":"the project\'s name","title":"only to rename it","status":"todo|doing|blocked|done|dropped","due_date":"…"}\n'
         '- {"op":"add_note","project":"the project\'s name","decided":"what was decided","why":"…"}\n'
         '- {"op":"link_thread","project":"the project\'s name"} attaches this conversation to the project.\n'
+        "Put every change one request asks for in ONE call (a new project with its goal and its tasks together, using "
+        "`ref`), so the user confirms once. "
         "`ref` lets later changes in the same call name a project or goal created earlier in it. Omit fields you do not know. "
         'If it was proposed, stop: the user confirms with the card or by replying themselves. Never write the confirmation ("yes …") yourself.'
     ),

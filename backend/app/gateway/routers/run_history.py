@@ -121,10 +121,10 @@ async def delete_all(confirm: str, request: Request) -> Deleted:
 
 @router.get("/runs", response_model=list[RunSummaryView])
 @require_permission("threads", "read")
-async def list_runs(request: Request, kind: str | None = None, source_id: str | None = None, limit: int = 50) -> list[RunSummaryView]:
+async def list_runs(request: Request, kind: str | None = None, source_id: str | None = None, limit: int = 50, thread_id: str | None = None) -> list[RunSummaryView]:
     from app.gateway.ownership import filter_accessible
 
-    runs = _history(request).list(kind=kind, source_id=source_id, limit=min(max(limit, 1), 500))
+    runs = _history(request).list(kind=kind, source_id=source_id, limit=min(max(limit, 1), 500), thread_id=thread_id)
     return [RunSummaryView(**r.__dict__) for r in await filter_accessible(request, runs, lambda r: r.owner_id)]
 
 
@@ -151,4 +151,33 @@ async def get_run(run_id: str, request: Request) -> RunDetail:
     # Someone else's run reads exactly like a missing one.
     if run is None or not await can_access(request, run.get("owner_id")):
         raise HTTPException(status_code=404, detail="No such run (it may have been purged).")
+    return RunDetail(**run)
+
+
+@router.get("/traces/{run_id}", response_model=RunDetail)
+@require_permission("threads", "read")
+async def get_trace(run_id: str, request: Request) -> RunDetail:
+    """The per-run trace of a lead run (spec 009 FR-082), by its run id (the
+    id the chat knows). Owner only: someone else's reads as missing. The ids
+    of the runs that resumed this one are filled in at read time."""
+    from app.gateway.ownership import can_access
+    from app.run_history.chat_trace import CHAT
+
+    h = _history(request)
+    found = h.list(kind=CHAT, source_id=run_id, limit=1)
+    run = h.get(found[0].id) if found else None
+    if run is None or not await can_access(request, run.get("owner_id")):
+        raise HTTPException(status_code=404, detail="No trace for this run yet; traces are written when a run ends.")
+    body = run.get("body")
+    trace = body.get("trace") if isinstance(body, dict) else None
+    if isinstance(trace, dict) and run.get("thread_id"):
+        resumes = []
+        for summary in h.list(kind=CHAT, thread_id=run["thread_id"], limit=50):
+            if summary.id == run["id"]:
+                continue
+            other = (h.get(summary.id) or {}).get("body") or {}
+            other_trace = other.get("trace") if isinstance(other, dict) else None
+            if isinstance(other_trace, dict) and (other_trace.get("resumed_from") or {}).get("run_id") == run_id:
+                resumes.append(other_trace.get("run_id"))
+        trace["resumes"] = resumes
     return RunDetail(**run)

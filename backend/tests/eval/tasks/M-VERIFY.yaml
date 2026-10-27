@@ -1,0 +1,61 @@
+id: M-VERIFY
+title: Finishing with an unticked item sends the lead back once
+mock_only: true
+source: spec 009 FR-052 (mocked)
+mode: pro
+prompt: Find a bakery in Fishtown and its opening hours.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- message_count:
+    name: todo_completion_reminder
+    n: 1
+- verification_status:
+    allowed:
+    - unverified
+- answer_contains:
+    values:
+    - Not verified
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: a Fishtown bakery with its opening hours from its own page'
+          status: completed
+        - content: Find a bakery
+          status: in_progress
+        - content: Get its opening hours
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: web_search
+      args:
+        query: fishtown bakery
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: a Fishtown bakery with its opening hours from its own page'
+          status: completed
+        - content: Find a bakery
+          status: completed
+        - content: Get its opening hours
+          status: in_progress
+  - expect:
+      tool: write_todos
+    content: Try Suraya in Fishtown.
+  - expect:
+      any_contains: Your checklist still has items
+    content: 'Suraya in Fishtown has a bakery counter: https://www.surayaphilly.com/
+
+
+      Not verified:
+
+      - Opening hours: I did not open its page, so the hours are not checked.'

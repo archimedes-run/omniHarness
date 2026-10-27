@@ -1,0 +1,91 @@
+id: T11
+title: Tier 3 card, confirmed, then the task continues (resume)
+critical: true
+source: 'Tier 3 resume; owner dogfooding: stop at a Tier 3 card and resume after confirm'
+mode: pro
+prompt: 'Create a new project called ''Eval Kitchen Reno'' with the goal ''finish by March'' and two tasks: get quotes, pick tiles.'
+tools: []
+confirm: confirm-all
+budget:
+  seconds: 420
+  est_usd: 0.08
+checks:
+- card_raised:
+    tool: ledger_apply
+- ledger_has:
+    project: Eval Kitchen Reno
+    goal: March
+    tasks:
+    - get quotes
+    - pick tiles
+- no_open_cards
+- resumed:
+    min: 1
+- verified_section:
+    strict: true
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: the project Eval Kitchen Reno exists with the goal ''finish by March'' and the tasks get quotes and pick tiles'
+          status: completed
+        - content: Propose the project and goal
+          status: in_progress
+        - content: Add the two tasks
+          status: pending
+        - content: Check the ledger
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: ledger_apply
+      args:
+        changes:
+        - op: create_project
+          ref: p1
+          name: Eval Kitchen Reno
+          why: Kitchen renovation
+        - op: create_goal
+          project: p1
+          title: Finish by March
+          definition_of_done: The kitchen renovation is finished by the end of March
+  - expect:
+      tool: ledger_apply
+    content: I've proposed the project and its goal; it waits for your confirmation on the card.
+  - expect:
+      any_contains: confirmed this call and it ran
+    tool_calls:
+    - name: ledger_apply
+      args:
+        changes:
+        - op: create_task
+          project: Eval Kitchen Reno
+          title: Get quotes
+        - op: create_task
+          project: Eval Kitchen Reno
+          title: Pick tiles
+  - expect:
+      tool: ledger_apply
+    content: The two tasks are proposed on a card.
+  - expect:
+      any_contains: confirmed this call and it ran
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: the project Eval Kitchen Reno exists with the goal ''finish by March'' and the tasks get quotes and pick tiles'
+          status: completed
+        - content: Propose the project and goal
+          status: completed
+        - content: Add the two tasks
+          status: completed
+        - content: Check the ledger
+          status: completed
+  - expect:
+      tool: write_todos
+    content: 'Eval Kitchen Reno exists with the goal "Finish by March" and the tasks Get quotes and Pick tiles.
+
+
+      Checked: the ledger confirmed the project, the goal and both tasks.'

@@ -2,52 +2,37 @@ from typing import Literal
 
 from langchain.tools import tool
 
+#: The question kinds the tool accepts (spec 009 FR-057). Choosing between
+#: approaches, confirming a risky action and asking approval for a suggestion
+#: are not questions for the person: the agent picks a sensible default, and
+#: consequential actions are stopped by the policy layer's confirmation cards
+#: (constitution Article II), never by a model-written "are you sure?".
+CLARIFICATION_TYPES = ("missing_info", "ambiguous_requirement")
+
 
 @tool("ask_clarification", parse_docstring=True, return_direct=True)
 def ask_clarification_tool(
     question: str,
-    clarification_type: Literal[
-        "missing_info",
-        "ambiguous_requirement",
-        "approach_choice",
-        "risk_confirmation",
-        "suggestion",
-    ],
+    clarification_type: Literal["missing_info", "ambiguous_requirement"],
     context: str | None = None,
     options: list[str] | None = None,
 ) -> str:
-    """Ask the user for clarification when you need more information to proceed.
+    """Ask the person one question when information the task cannot go ahead without is missing, and no read tool (memory, files, ledger, mail, calendar, web) can find it.
 
-    Use this tool when you encounter situations where you cannot proceed without user input:
+    Ask before you start working, not halfway through.
 
-    - **Missing information**: Required details not provided (e.g., file paths, URLs, specific requirements)
-    - **Ambiguous requirements**: Multiple valid interpretations exist
-    - **Approach choices**: Several valid approaches exist and you need user preference
-    - **Risky operations**: Destructive actions that need explicit confirmation (e.g., deleting files, modifying production)
-    - **Suggestions**: You have a recommendation but want user approval before proceeding
+    Do not use this tool to:
+    - confirm a risky or consequential action (the system shows the person a confirmation card for those automatically);
+    - let the person choose between approaches (pick a sensible default and state it);
+    - ask permission to read anything (reading never needs permission).
 
-    The execution will be interrupted and the question will be presented to the user.
-    Wait for the user's response before continuing.
-
-    When to use ask_clarification:
-    - You need information that wasn't provided in the user's request
-    - The requirement can be interpreted in multiple ways
-    - Multiple valid implementation approaches exist
-    - You're about to perform a potentially dangerous operation
-    - You have a recommendation but need user approval
-
-    Best practices:
-    - Ask ONE clarification at a time for clarity
-    - Be specific and clear in your question
-    - Don't make assumptions when clarification is needed
-    - For risky operations, ALWAYS ask for confirmation
-    - After calling this tool, execution will be interrupted automatically
+    The run pauses until the person answers.
 
     Args:
-        question: The clarification question to ask the user. Be specific and clear.
-        clarification_type: The type of clarification needed (missing_info, ambiguous_requirement, approach_choice, risk_confirmation, suggestion).
-        context: Optional context explaining why clarification is needed. Helps the user understand the situation.
-        options: Optional list of choices (for approach_choice or suggestion types). Present clear options for the user to choose from.
+        question: The one question to ask. Be specific.
+        clarification_type: missing_info (a required value is absent) or ambiguous_requirement (the request has two readings that lead to different results and nothing you can read settles it).
+        context: Optional: why the task cannot go ahead without the answer.
+        options: Optional: only for a missing value with a known small set (for example which of two calendars). Never a menu of approaches.
     """
     # This is a placeholder implementation
     # The actual logic is handled by ClarificationMiddleware which intercepts this tool call

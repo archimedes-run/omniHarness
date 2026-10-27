@@ -45,6 +45,20 @@ def merge_viewed_images(existing: dict[str, ViewedImageData] | None, new: dict[s
     return {**existing, **new}
 
 
+#: How many verification records a thread keeps (newest win).
+VERIFICATIONS_KEPT = 100
+
+
+def merge_verifications(existing: dict[str, dict] | None, new: dict[str, dict] | None) -> dict[str, dict]:
+    """Reducer for `verifications`: the server's verification record of each
+    final reply, by message id (spec 009 FR-052). Kept in state so the badge
+    survives a reload and summarisation (which removes messages, not this)."""
+    merged = {**(existing or {}), **(new or {})}
+    if len(merged) > VERIFICATIONS_KEPT:
+        merged = dict(list(merged.items())[-VERIFICATIONS_KEPT:])
+    return merged
+
+
 class ThreadState(AgentState):
     sandbox: NotRequired[SandboxState | None]
     thread_data: NotRequired[ThreadDataState | None]
@@ -53,3 +67,4 @@ class ThreadState(AgentState):
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
+    verifications: Annotated[dict[str, dict], merge_verifications]  # final reply's message id -> verification record

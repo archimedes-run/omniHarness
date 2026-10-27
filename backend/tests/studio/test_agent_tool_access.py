@@ -304,8 +304,10 @@ def test_an_agent_saved_before_006g_keeps_exactly_its_old_tools(gw) -> None:
     _say(gw, tid, "hello", agent="legacy")
     offered = _offered(gw.lead)
     # What main assembles for it: its groups, the pinned MCP server, no
-    # connector (none selected in this chat), plus update_agent.
-    expected = {t.name for t in get_available_tools(groups=["web", "file:read"], app_config=get_app_config(), selected_sources={"local:session-watcher", "local:filesystem"}, user_id=gw.user_id)} | {"update_agent"}
+    # connector (none selected in this chat), plus update_agent; and since
+    # spec 009 Slice 0 every lead run also has the checklist (write_todos, in
+    # every mode) and the read-only web researcher (research: it has `web`).
+    expected = {t.name for t in get_available_tools(groups=["web", "file:read"], app_config=get_app_config(), selected_sources={"local:session-watcher", "local:filesystem"}, user_id=gw.user_id)} | {"update_agent", "write_todos", "research"}
     assert {"web_search", "web_fetch", "read_file", FS_READ} <= offered, offered
     assert not {GMAIL_FETCH, NOTES_READ, "write_file"} & offered, offered
     assert offered == expected, f"an agent without an allowlist changed tools: +{sorted(offered - expected)} -{sorted(expected - offered)}"

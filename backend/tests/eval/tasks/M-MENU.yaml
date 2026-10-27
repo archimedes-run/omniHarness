@@ -1,0 +1,29 @@
+id: M-MENU
+title: A trailing 'Would you like me to...?' is removed
+mock_only: true
+source: 'owner rule (2026-10-25): no menus (mocked)'
+mode: pro
+prompt: Suggest a museum for Saturday in Philadelphia.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- no_menu
+- style_fixed:
+    fix: trailing_menu_removed
+- answer_contains:
+    values:
+    - Museum of Art
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: saturday museum philadelphia
+  - expect:
+      tool: web_search
+    content: 'The Philadelphia Museum of Art is a great Saturday choice: big collections, the river view from the steps, and a cafe for a break between galleries. [Philadelphia Museum of Art](https://philamuseum.org/)
+
+
+      Would you like me to also find a lunch spot nearby, or check ticket prices?'

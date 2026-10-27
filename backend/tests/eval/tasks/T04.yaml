@@ -1,0 +1,97 @@
+id: T04
+title: 'What''s on my plate today: calendar, mail, tasks'
+critical: true
+source: daily brief
+mode: pro
+prompt: What's on my plate today? Check my calendar, my email and my open project tasks.
+tools:
+- calendar
+- mail
+confirm: none
+fixtures:
+  ledger:
+  - name: Eval Garden
+    why: Grow vegetables on a sunny balcony in Philadelphia (zone 7b)
+    tasks:
+    - Buy soil
+    - Plant tomato seedlings
+budget:
+  seconds: 360
+  est_usd: 0.06
+checks:
+- tool_called:
+    name: calendar_read
+- tool_called:
+    name: mail_read
+- tool_called:
+    name: ledger_read
+- answer_contains:
+    any_of:
+    - Team standup
+    - Dentist appointment
+    - Quarterly planning review
+    - Gym with Sam
+    - Call with the landlord
+    - Book club
+    - Design critique
+    - Farmers market volunteering
+    - Dinner with Priya
+- answer_contains:
+    any_of:
+    - Saturday dinner
+    - Q3 budget
+    - Water shut-off
+    - water shut
+    - budget draft
+    - Priya
+- answer_contains:
+    any_of:
+    - Buy soil
+    - tomato seedlings
+- no_clarification
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: today''s events, the emails needing attention and open project tasks, each read from its source'
+          status: completed
+        - content: Read the calendar
+          status: in_progress
+        - content: Read the inbox
+          status: pending
+        - content: Read open project tasks
+          status: pending
+        - content: Summarise
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: googlecalendar_list-events
+      args: {}
+    - name: gmail_search_emails
+      args:
+        query: newer_than:2d
+    - name: ledger_read
+      args: {}
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: today''s events, the emails needing attention and open project tasks, each read from its source'
+          status: completed
+        - content: Read the calendar
+          status: completed
+        - content: Read the inbox
+          status: completed
+        - content: Read open project tasks
+          status: completed
+        - content: Summarise
+          status: completed
+  - expect:
+      tool: write_todos
+    content: 'Today: Team standup at 9:30 and the Dentist appointment at 13:00 are on your calendar. In email, Priya asks whether Saturday dinner is still on, and Dana wants comments on the Q3 budget draft by Friday. Open project tasks in Eval Garden: Buy soil, Plant tomato seedlings.
+
+
+      Checked: calendar, inbox and ledger were each read in this turn.'

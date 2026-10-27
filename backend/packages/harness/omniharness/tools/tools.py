@@ -7,7 +7,7 @@ from omniharness.config.app_config import AppConfig
 from omniharness.persistence.thread_tool_selection.sql import PINNED_SOURCES
 from omniharness.reflection import resolve_variable
 from omniharness.sandbox.security import is_host_bash_allowed
-from omniharness.tools.builtins import ask_clarification_tool, mcp_build_tool, present_file_tool, preview_tool, task_tool, view_image_tool
+from omniharness.tools.builtins import ask_clarification_tool, mcp_build_tool, present_file_tool, preview_tool, research_tool, task_tool, view_image_tool
 from omniharness.tools.builtins.tool_search import reset_deferred_registry
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
     from omniharness.tools.names import canonical_tool_name
     from omniharness.tools.skill_manage_tool import skill_manage_tool
 
-    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, preview_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
+    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, research_tool, skill_manage_tool, preview_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
     registry: dict[str, object] = {canonical_tool_name(getattr(t, "name", "")): t for t in objects}
     cfg = config
     if cfg is None:
@@ -118,7 +118,7 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
 #: false` in default_rules.yaml). They are reserved whether or not this install
 #: offers the built-in, so an outside tool can never pass its output off as a
 #: public one (web-research review, finding 1).
-PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "ask_clarification", "present_files", "tool_search", "write_todos"})
+PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos"})
 
 
 def refuse_builtin_collisions(tools: list[BaseTool], source: str, config: AppConfig | None = None) -> list[BaseTool]:
@@ -161,6 +161,7 @@ def get_available_tools(
     max_tools: int | None = None,
     tool_access: object | None = None,
     defer_overflow: bool = True,
+    research_enabled: bool = False,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -251,6 +252,12 @@ def get_available_tools(
         from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
 
         builtin_tools.extend([ledger_read_tool, ledger_apply_tool])
+
+    # The read-only web researcher (spec 009 FR-061): for the lead, in every
+    # mode, when a web search tool is configured. Never for a subagent
+    # (research_enabled is False there): no nesting.
+    if research_enabled and any(t.name == "web_search" for t in loaded_tools):
+        builtin_tools.append(research_tool)
 
     # Add subagent tools only if enabled via runtime parameter
     if subagent_enabled:
