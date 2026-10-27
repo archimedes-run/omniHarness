@@ -380,3 +380,34 @@ def test_the_sandbox_guard_reads_connected_networks_from_the_routing_table(tmp_p
     assert [str(n) for n in g.local_networks()] == ["192.168.0.0/24", "172.22.0.0/16"]
     monkeypatch.setenv("GATEWAY_TRUSTED_PROXIES", "192.168.0.10")
     assert [str(n) for n in g.trusted_networks()] == ["192.168.0.0/24"]
+
+
+def test_the_guard_reads_ipv4_mapped_addresses_cidr_proxies_and_keeps_the_last_subnets(monkeypatch):
+    import ipaddress
+
+    from app.gateway import sandbox_guard as g
+
+    try:
+        g.set_state(configured=True, subnets=[ipaddress.IPv4Network("172.22.0.0/16")], own=set(), trusted=[])
+        assert g.refused("::ffff:172.22.0.9"), "an IPv4-mapped sandbox address slips through"
+        monkeypatch.setattr(g, "local_networks", lambda: [ipaddress.IPv4Network("192.168.200.0/24"), ipaddress.IPv4Network("172.22.0.0/16")])
+        monkeypatch.setenv("GATEWAY_TRUSTED_PROXIES", "192.168.200.10/24, not-an-ip")
+        assert g.trusted_networks() == [ipaddress.IPv4Network("192.168.200.0/24")]
+        import app.gateway.code_jobs.network as network
+
+        monkeypatch.setattr(network, "network_subnets", lambda name: [])
+        monkeypatch.setattr(network, "_local_ipv4_addresses", lambda: ["172.22.0.3"])
+        assert g._refresh("omni-test") is True, "a failed refresh forgot the known subnets"
+        assert g.refused("172.22.0.9")
+    finally:
+        g.set_state(configured=False, subnets=[])
+
+
+def test_the_sweep_spares_every_process_from_before_the_job():
+    from app.gateway.code_jobs.runner import leftover_sweep, snapshot_keys
+
+    keys = snapshot_keys("  1 Sun Oct 25 11:30:00 2026\n 254 Sun Oct 25 11:30:01 2026\nbogus\n")
+    assert keys == frozenset({"1|Sun Oct 25 11:30:00 2026", "254|Sun Oct 25 11:30:01 2026"})
+    script = leftover_sweep(keys)
+    assert "254|Sun Oct 25 11:30:01 2026" in script and "tmux" not in script, "spared by recorded pid and start time, never by name"
+    assert leftover_sweep(None) == "" and leftover_sweep(frozenset()) == ""

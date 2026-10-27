@@ -303,15 +303,95 @@ def test_text_and_inline_images_are_allowed_and_an_image_is_reserved_large(proxy
     assert _call(app, token=_token(), body={"model": "worker", "messages": [{"role": "user", "content": [too_big]}]}).status_code in (400, 413)
 
 
-def test_a_call_never_counts_for_more_than_its_reservation(proxy):
-    app, store, upstream, _ = proxy
-    # The provider reports far more usage than the reservation could cover.
+def test_the_actual_cost_counts_and_a_call_over_its_reservation_is_marked(proxy):
+    app, store, upstream, tmp = proxy
+    # The provider reports far more usage than the reservation covered.
     upstream.usage = {"prompt_tokens": 50_000_000, "completion_tokens": 50_000_000}
     resp = _call(app, token=_token(), body={"model": "worker", "messages": [{"role": "user", "content": "x"}], "max_tokens": 300})
     assert resp.status_code == 200
     row = store.job_calls("job-a")[-1]
-    assert row["actual_cost_usd"] > 100 and row["cost_usd"] < 0.01, row
-    assert store.get("job-a").spent_usd < 0.01
+    assert row["cost_usd"] == row["actual_cost_usd"] > 100 > row["reserved_usd"], row
+    assert store.get("job-a").spent_usd > 100, "real money counts against the budget"
+    assert store.over_reservation("job-a") == 1
+    assert '"over_reservation": true' in (tmp / "policy" / "llm-proxy.jsonl").read_text()
+    # The budget is now spent: the next call is refused before it is forwarded.
+    assert _call(app, token=_token()).status_code == 402
+
+
+def test_the_input_reservation_is_one_token_per_byte(proxy):
+    app, store, upstream, _ = proxy
+    body = {"model": "worker", "messages": [{"role": "user", "content": "x" * 40_000}], "max_tokens": 300}
+    assert _call(app, token=_token(), body=body).status_code == 200
+    row = store.job_calls("job-a")[-1]
+    # >= 40k input tokens at gpt-5's $1.25/M (the output part is only 300 tokens).
+    assert row["reserved_usd"] >= 40_000 * 1.25 / 1e6
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [{"type": "browser_search"}],
+        [{"type": "code_interpreter"}],
+        [{"type": "builtin_function", "function": {"name": "$web_search"}}],
+        [{"type": "web_search", "web_search": {"enable": True}}],
+        [{"type": "retrieval", "retrieval": {"knowledge_id": "k"}}],
+        [{"type": "function", "function": {"name": "f", "parameters": {}}, "web_search": {}}],
+        [{"type": "function", "function": {"name": "f", "url": "https://attacker.example/"}}],
+        "web_search",
+    ],
+)
+def test_only_function_tools_reach_the_provider(proxy, tools):
+    app, store, upstream, _ = proxy
+    resp = _call(app, token=_token(), body={"model": "worker", "messages": [{"role": "user", "content": "x"}], "tools": tools})
+    assert resp.status_code == 400 and upstream.requests == []
+
+
+@pytest.mark.parametrize("choice", [{"type": "web_search"}, {"type": "function", "function": {"name": "f"}, "extra": 1}, "browse"])
+def test_tool_choice_is_limited(proxy, choice):
+    app, store, upstream, _ = proxy
+    body = {"model": "worker", "messages": [{"role": "user", "content": "x"}], "tools": [{"type": "function", "function": {"name": "f"}}], "tool_choice": choice}
+    assert _call(app, token=_token(), body=body).status_code == 400 and upstream.requests == []
+
+
+def test_function_tools_and_message_keys_are_rebuilt_from_allowed_pieces(proxy):
+    app, store, upstream, _ = proxy
+    body = {
+        "model": "worker",
+        "messages": [
+            {"role": "system", "content": "rules", "web_search_options": {}},
+            {"role": "user", "content": "x", "metadata": {"a": 1}},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}, "extra": 1}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "ok", "files": ["file-1"]},
+        ],
+        "tools": [{"type": "function", "function": {"name": "f", "description": "d", "parameters": {"type": "object"}, "strict": True}}],
+        "tool_choice": {"type": "function", "function": {"name": "f"}},
+    }
+    assert _call(app, token=_token(), body=body).status_code == 200
+    sent = json.loads(upstream.requests[-1].content)
+    assert sent["messages"][0] == {"role": "system", "content": "rules"}
+    assert sent["messages"][1] == {"role": "user", "content": "x"}
+    assert sent["messages"][2]["tool_calls"] == [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]
+    assert sent["messages"][3] == {"role": "tool", "content": "ok", "tool_call_id": "c1"}
+    assert sent["tool_choice"] == {"type": "function", "function": {"name": "f"}}
+
+
+@pytest.mark.parametrize(
+    "role_or_call",
+    [
+        {"role": "function", "content": "x"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c", "type": "web_search", "web_search": {}}]},
+    ],
+)
+def test_unknown_roles_and_non_function_tool_calls_are_refused(proxy, role_or_call):
+    app, store, upstream, _ = proxy
+    assert _call(app, token=_token(), body={"model": "worker", "messages": [role_or_call]}).status_code == 400 and upstream.requests == []
+
+
+@pytest.mark.parametrize("url", ["data:image/svg+xml;base64,PHN2Zz4=", "data:text/html;base64,PGh0bWw+", "data:image/png,notbase64", 'data:image/png;base64,AAAA"onerror'])
+def test_inline_images_must_be_base64_png_jpeg_gif_or_webp(proxy, url):
+    app, store, upstream, _ = proxy
+    body = {"model": "worker", "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]}
+    assert _call(app, token=_token(), body=body).status_code == 400
 
 
 def test_a_flood_of_refused_calls_is_capped_by_the_rate(proxy):

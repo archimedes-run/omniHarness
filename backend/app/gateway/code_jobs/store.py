@@ -141,12 +141,14 @@ class CodeJobStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._conn().executescript(_SCHEMA)
-        try:
-            # What a call actually cost by the provider's usage; cost_usd is what
-            # counts against the budget and cap (never above the reservation).
-            self._conn().execute("ALTER TABLE llm_calls ADD COLUMN actual_cost_usd REAL")
-        except sqlite3.OperationalError:
-            pass
+        for column in ("actual_cost_usd REAL", "reserved_usd REAL"):
+            try:
+                # cost_usd: what counts against the budget and the cap (the
+                # actual cost when the provider reported usage, else the
+                # reservation); reserved_usd: the pre-call reservation.
+                self._conn().execute(f"ALTER TABLE llm_calls ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -335,13 +337,16 @@ class CodeJobStore:
             if row is None or row["status"] != INFLIGHT:
                 return 0.0
             reserved = row["cost_usd"]
-            # The reservation is the upper bound: a call never counts for more
-            # than what was reserved for it; its actual cost is recorded beside.
-            charged = reserved if (usage is None or cost_usd is None) else min(cost_usd, reserved)
+            # Real money counts: the actual cost when the provider reported
+            # usage (the reservation was the gate before the call, so the
+            # budget can be overshot by at most the calls in flight), else the
+            # reservation. A call that cost more than its reservation is
+            # marked so it shows on the job card and in the log.
+            charged = reserved if (usage is None or cost_usd is None) else cost_usd
             inp, cached, out = usage or (0, 0, 0)
             db.execute(
-                "UPDATE llm_calls SET status = ?, input_tokens = ?, cached_tokens = ?, output_tokens = ?, cost_usd = ?, actual_cost_usd = ?, latency_ms = ?, reason = ? WHERE rowid = ?",
-                (status if usage is not None else f"{status}-estimated", inp, cached, out, charged, cost_usd, latency_ms, reason, call_id),
+                "UPDATE llm_calls SET status = ?, input_tokens = ?, cached_tokens = ?, output_tokens = ?, cost_usd = ?, actual_cost_usd = ?, reserved_usd = ?, latency_ms = ?, reason = ? WHERE rowid = ?",
+                (status if usage is not None else f"{status}-estimated", inp, cached, out, charged, cost_usd, reserved, latency_ms, reason, call_id),
             )
             db.execute("UPDATE jobs SET spent_usd = spent_usd + ?, calls = calls + 1, updated_at = ? WHERE id = ?", (charged, now, row["job_id"]))
             return float(charged)
@@ -387,6 +392,11 @@ class CodeJobStore:
             if row[0] and any(k in row[0] for k in kinds):
                 return row[0]
         return None
+
+    def over_reservation(self, job_id: str) -> int:
+        """Calls of this job whose actual cost exceeded their reservation."""
+        sql = "SELECT COUNT(*) FROM llm_calls WHERE job_id = ? AND actual_cost_usd IS NOT NULL AND reserved_usd IS NOT NULL AND actual_cost_usd > reserved_usd"
+        return int(self._conn().execute(sql, (job_id,)).fetchone()[0])
 
     def job_calls(self, job_id: str) -> list[dict]:
         rows = self._conn().execute("SELECT * FROM llm_calls WHERE job_id = ? ORDER BY at", (job_id,)).fetchall()

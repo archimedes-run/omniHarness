@@ -56,6 +56,9 @@ def refused(host: str | None) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False  # not an IP (an in-process test client)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+        host = str(ip)
     if ip.is_loopback or host in state["own"]:
         return False
     if state["known"]:
@@ -104,19 +107,27 @@ def local_networks() -> list[ipaddress.IPv4Network]:
 
 def trusted_networks() -> list[ipaddress.IPv4Network]:
     """The local networks that hold a trusted proxy (nginx's network)."""
-    proxies = []
+    proxies: list[ipaddress.IPv4Network] = []
     for raw in os.environ.get("GATEWAY_TRUSTED_PROXIES", "").split(","):
         try:
-            proxies.append(ipaddress.ip_address(raw.strip()))
+            # An address or a CIDR range.
+            net = ipaddress.ip_network(raw.strip(), strict=False)
         except ValueError:
             continue
-    return [net for net in local_networks() if any(p in net for p in proxies)]
+        if isinstance(net, ipaddress.IPv4Network):
+            proxies.append(net)
+    return [net for net in local_networks() if any(p.overlaps(net) for p in proxies)]
 
 
 def _refresh(name: str) -> bool:
     from app.gateway.code_jobs.network import _local_ipv4_addresses, network_subnets
 
     subnets = network_subnets(name)
+    if not subnets:
+        with _lock:
+            known = list(_state["subnets"]) if _state["known"] else []
+        # A failed refresh keeps the last subnets that were read.
+        subnets = known
     set_state(configured=True, subnets=subnets, own=set(_local_ipv4_addresses()), trusted=trusted_networks())
     if subnets:
         logger.info("sandbox guard: requests from %s are refused", ", ".join(str(n) for n in subnets))

@@ -34,7 +34,7 @@ docker run -d --name "$P-egress" --network "$NET_OUT" --tmpfs /run/egress -v "$V
 docker network connect "$NET_IN" "$P-egress"
 docker run -d --name "$P-fakellm" --network "$NET_OUT" -v "$ROOT/backend/tests/code_jobs/e2e:/e2e:ro" --entrypoint python3 "$GATEWAY_IMAGE" /e2e/fake_llm.py 9999 >/dev/null
 # A container on the outside network only: the proxy must be unreachable from it.
-docker run -d --name "$P-outsider" --network "$NET_OUT" --entrypoint sleep "$EGRESS_IMAGE" 600 >/dev/null
+docker run -d --name "$P-outsider" --network "$NET_OUT" --entrypoint sleep "$EGRESS_IMAGE" 3600 >/dev/null
 for _ in $(seq 1 40); do docker logs "$P-egress" 2>&1 | grep -q "Accepting SSL bumped" && break; sleep 0.5; done
 
 docker create --name "$P-gateway" --network "$NET_OUT" \

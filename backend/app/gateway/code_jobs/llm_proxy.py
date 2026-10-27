@@ -17,6 +17,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import re
 import socket
 import threading
 import time
@@ -113,12 +114,134 @@ ALLOWED_KEYS = frozenset(
 )
 #: The most output one call may ask for.
 OUTPUT_CAP = 32_000
-#: Pessimistic input estimate: one token per this many bytes of request body.
-BYTES_PER_TOKEN = 3
+#: The input estimate is a true upper bound: one token per byte of request
+#: (no tokenizer encodes more than one token per byte), images aside.
+BYTES_PER_TOKEN = 1
+#: An inline image (data: URI) may be at most this many characters.
+MAX_IMAGE_CHARS = 5 * 1024 * 1024
+#: Each image is reserved at this many input tokens (a conservative figure
+#: above what the providers' tiling charges for the largest image allowed).
+IMAGE_TOKENS = 20_000
+_DATA_IMAGE = re.compile(r"^data:image/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]*$")
+_ROLES = frozenset({"system", "developer", "user", "assistant", "tool"})
+_FUNCTION_KEYS = frozenset({"name", "description", "parameters", "strict"})
 
 
-def _normalise_body(body: dict, upstream: Upstream, output_tokens: int) -> dict:
-    out = {k: v for k, v in body.items() if k in ALLOWED_KEYS}
+class ContentRefused(ValueError):
+    pass
+
+
+def _text(value: object, what: str) -> str:
+    if not isinstance(value, str):
+        raise ContentRefused(f"{what} must be text")
+    return value
+
+
+def _content(content: object, counter: dict) -> object:
+    """Message content: text, or a list of `text` parts and bounded inline
+    images. A remote image URL, a file, audio or any other part type is
+    refused: the provider would fetch or read something the worker chose."""
+    if content is None or isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        content = [content]
+    if not isinstance(content, list):
+        raise ContentRefused("message content must be text or a list of parts")
+    out = []
+    for part in content:
+        if not isinstance(part, dict):
+            raise ContentRefused("a content part must be an object")
+        kind = part.get("type")
+        if kind == "text":
+            out.append({"type": "text", "text": _text(part.get("text", ""), "a text part")})
+            continue
+        if kind == "image_url":
+            image = part.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            if not isinstance(url, str) or len(url) > MAX_IMAGE_CHARS + 1 or not _DATA_IMAGE.match(url):
+                raise ContentRefused("only inline images (data:image/png|jpeg|gif|webp;base64) are allowed, never a URL")
+            if len(url) > MAX_IMAGE_CHARS:
+                raise ContentRefused("an inline image is too large")
+            counter["images"] += 1
+            counter["image_chars"] += len(url)
+            entry: dict = {"url": url}
+            if isinstance(image, dict) and image.get("detail") in ("auto", "low", "high"):
+                entry["detail"] = image["detail"]
+            out.append({"type": "image_url", "image_url": entry})
+            continue
+        raise ContentRefused(f"content parts of type {str(kind)[:40]!r} are not allowed")
+    return out
+
+
+def _tool_call(call: object) -> dict:
+    if not isinstance(call, dict) or call.get("type", "function") != "function" or not isinstance(call.get("function"), dict):
+        raise ContentRefused("only function tool calls are allowed")
+    fn = call["function"]
+    return {"id": _text(call.get("id", ""), "a tool call id"), "type": "function", "function": {"name": _text(fn.get("name"), "a function name"), "arguments": _text(fn.get("arguments", ""), "function arguments")}}
+
+
+def _message(message: object, counter: dict) -> dict:
+    """Only the keys a chat message needs; anything else is dropped."""
+    if not isinstance(message, dict):
+        raise ContentRefused("a message must be an object")
+    role = message.get("role")
+    if role not in _ROLES:
+        raise ContentRefused(f"a message role must be one of {sorted(_ROLES)}")
+    out: dict = {"role": role, "content": _content(message.get("content"), counter)}
+    if isinstance(message.get("name"), str):
+        out["name"] = message["name"]
+    if role == "assistant" and message.get("tool_calls") is not None:
+        calls = message["tool_calls"]
+        if not isinstance(calls, list):
+            raise ContentRefused("tool_calls must be a list")
+        out["tool_calls"] = [_tool_call(c) for c in calls]
+    if role == "tool":
+        out["tool_call_id"] = _text(message.get("tool_call_id", ""), "a tool_call_id")
+    return out
+
+
+def _tool(tool: object) -> dict:
+    """Function tools only: a provider's own server-side tools (web search,
+    browsing, code execution, retrieval) would reach outside the sandbox."""
+    if not isinstance(tool, dict) or tool.get("type") != "function" or set(tool) - {"type", "function"}:
+        raise ContentRefused("only function tools are allowed")
+    fn = tool.get("function")
+    if not isinstance(fn, dict) or set(fn) - _FUNCTION_KEYS or not isinstance(fn.get("name"), str):
+        raise ContentRefused("a function tool may hold only name, description, parameters and strict")
+    return {"type": "function", "function": dict(fn)}
+
+
+def _tool_choice(choice: object) -> object:
+    if choice in ("auto", "none", "required"):
+        return choice
+    if isinstance(choice, dict) and choice.get("type") == "function" and set(choice) == {"type", "function"}:
+        fn = choice["function"]
+        if isinstance(fn, dict) and set(fn) == {"name"} and isinstance(fn["name"], str):
+            return {"type": "function", "function": {"name": fn["name"]}}
+    raise ContentRefused("tool_choice must be auto, none, required or a function by name")
+
+
+def sanitize_request(body: dict) -> tuple[dict, dict]:
+    """The request the provider will see, rebuilt from allowed pieces only;
+    raises ContentRefused for anything that could reach outside the sandbox.
+    Returns (request fields, {"images": n, "image_chars": n})."""
+    counter = {"images": 0, "image_chars": 0}
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        raise ContentRefused("messages must be a list")
+    clean: dict = {k: v for k, v in body.items() if k in ALLOWED_KEYS and k not in ("messages", "tools", "tool_choice")}
+    clean["messages"] = [_message(m, counter) for m in messages]
+    if body.get("tools") is not None:
+        if not isinstance(body["tools"], list):
+            raise ContentRefused("tools must be a list")
+        clean["tools"] = [_tool(t) for t in body["tools"]]
+    if body.get("tool_choice") is not None:
+        clean["tool_choice"] = _tool_choice(body["tool_choice"])
+    return clean, counter
+
+
+def _normalise_body(clean: dict, upstream: Upstream, output_tokens: int) -> dict:
+    out = dict(clean)
     out["model"] = upstream.model
     if out.get("stream"):
         out["stream_options"] = {"include_usage": True}
@@ -131,67 +254,6 @@ def _normalise_body(body: dict, upstream: Upstream, output_tokens: int) -> dict:
     else:
         out["max_tokens"] = output_tokens
     return out
-
-
-#: An inline image (data: URI) may be at most this many characters.
-MAX_IMAGE_CHARS = 5 * 1024 * 1024
-#: Each image is reserved at this many input tokens, whatever its size.
-IMAGE_TOKENS = 4_000
-
-
-class ContentRefused(ValueError):
-    pass
-
-
-def check_content(body: dict) -> int:
-    """Refuse any message content the provider would fetch or read from
-    elsewhere; returns the number of inline images.
-
-    Allowed parts: `text`, and `image_url` only as a `data:image/...` URI of
-    bounded size. A remote image URL, `file` (file_id / file_data),
-    `input_audio` and any unknown part type are refused: the provider would
-    fetch a URL the worker chose, a way around the registries-only egress.
-    Every message (tool results included) and any nested content is checked.
-    """
-    images = 0
-
-    def walk(content: object) -> None:
-        nonlocal images
-        if content is None or isinstance(content, str):
-            return
-        if isinstance(content, dict):
-            content = [content]
-        if not isinstance(content, list):
-            raise ContentRefused("message content must be text or a list of parts")
-        for part in content:
-            if isinstance(part, str):
-                continue
-            if not isinstance(part, dict):
-                raise ContentRefused("a content part must be an object")
-            kind = part.get("type")
-            if kind == "text":
-                if not isinstance(part.get("text", ""), str):
-                    raise ContentRefused("a text part must hold text")
-                continue
-            if kind == "image_url":
-                image = part.get("image_url")
-                url = image.get("url") if isinstance(image, dict) else image
-                if not isinstance(url, str) or not url.startswith("data:image/"):
-                    raise ContentRefused("only inline (data:) images are allowed, never a URL")
-                if len(url) > MAX_IMAGE_CHARS:
-                    raise ContentRefused("an inline image is too large")
-                images += 1
-                continue
-            raise ContentRefused(f"content parts of type {str(kind)[:40]!r} are not allowed")
-
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        raise ContentRefused("messages must be a list")
-    for message in messages:
-        if not isinstance(message, dict):
-            raise ContentRefused("a message must be an object")
-        walk(message.get("content"))
-    return images
 
 
 def _requested_output(body: dict) -> int:
@@ -318,11 +380,12 @@ def build_proxy_app(settings: ProxySettings) -> Starlette:
         if upstream is None:
             return refuse(claims, peer, 503, why or "no model available")
         try:
-            images = check_content(body)
+            clean, counted = sanitize_request(body)
         except ContentRefused as exc:
             return refuse(claims, peer, 400, str(exc), model=str(body.get("model")))
         price = price_for(upstream.model, settings.prices)
-        input_cost = (len(raw) / BYTES_PER_TOKEN + images * IMAGE_TOKENS) * price.input / 1_000_000
+        input_tokens = (len(raw) - counted["image_chars"]) / BYTES_PER_TOKEN + counted["images"] * IMAGE_TOKENS
+        input_cost = input_tokens * price.input / 1_000_000
         call_id, reason, output_tokens = settings.store.reserve_call(
             job_id=claims.job_id,
             container=claims.container,
@@ -338,7 +401,8 @@ def build_proxy_app(settings: ProxySettings) -> Starlette:
             status = 429 if reason and ("rate" in reason or "at once" in reason) else 402
             return refuse(claims, peer, status, reason or "refused", model=upstream.model)
 
-        payload = _normalise_body(body, upstream, output_tokens)
+        reserve_estimate = input_cost + output_tokens * price.output / 1_000_000
+        payload = _normalise_body(clean, upstream, output_tokens)
         headers = {"content-type": "application/json", "authorization": f"Bearer {upstream.api_key}"}
         url = f"{upstream.base_url}/chat/completions"
         started = time.monotonic()
@@ -353,6 +417,9 @@ def build_proxy_app(settings: ProxySettings) -> Starlette:
             inp, cached, out = usage or (0, 0, 0)
             entry = {"decision": "allowed", "status": status, "job_id": claims.job_id, "thread_id": claims.thread_id, "model": upstream.model}
             entry.update(input_tokens=inp, cached_tokens=cached, output_tokens=out, cost_usd=round(charged, 6), estimated=usage is None, latency_ms=latency, reason=reason)
+            if cost is not None and cost > reserve_estimate + 1e-9:
+                entry["over_reservation"] = True
+                logger.warning("llm proxy: a call of job %s cost $%.4f, more than its $%.4f reservation", claims.job_id, cost, reserve_estimate)
             _policy_log(settings.policy_log, entry)
 
         try:

@@ -27,6 +27,7 @@ Lifecycle of one job:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -91,6 +92,8 @@ class Running:
     job_id: str
     ops: SandboxOps
     pgid: int | None = None
+    #: Processes alive before the worker started (pid|start time), recorded by the gateway.
+    snapshot: frozenset[str] | None = None
     cancelled: bool = False
     tally: Tally = field(default_factory=Tally)
 
@@ -251,6 +254,13 @@ class CodeJobManager:
         await asyncio.to_thread(ops.write, f"{d}/prompt.txt", render_prompt(brief))
         await asyncio.to_thread(ops.write, f"{d}/token", token)
         await asyncio.to_thread(ops.write, f"{d}/run.sh", self._run_script(job_id, d, brief, settings))
+        # Through a file, not the shell's output: the sandbox's shell is a
+        # terminal, and a long listing would garble the session.
+        snap = f"/tmp/omni-snapshot-{uuid.uuid4().hex}"
+        await asyncio.to_thread(sh, f"{SNAPSHOT_CMD} > {_q(snap)} 2>/dev/null; true", 30)
+        before = await asyncio.to_thread(ops.read_text, snap) or ""
+        await asyncio.to_thread(sh, f"rm -f {_q(snap)}", 15)
+        running.snapshot = snapshot_keys(before) or None
         await asyncio.to_thread(ops.start, f"ohjob-{job_id}", f"bash {_q(d + '/run.sh')}")
         self.store.update(job_id, phase="working")
         self.store.add_step(job_id, "phase", {"phase": "working", "text": "OpenCode started in the sandbox"})
@@ -378,10 +388,12 @@ class CodeJobManager:
             "cost_usd": round(job.spent_usd, 6) if job else 0.0,
             "budget_usd": job.budget_usd if job else settings.budget_usd,
             "calls": job.calls if job else 0,
+            "over_reservation_calls": self.store.over_reservation(job_id),
             "model": settings.model_label,
             "published": published,
             "duration_s": round(time.monotonic() - started, 1),
         }
+        await asyncio.to_thread(ops.end_session, f"ohjob-{job_id}")
         await asyncio.to_thread(sh, f"rm -rf {_q(d)}", 30)
         return status, why, result
 
@@ -514,13 +526,24 @@ class CodeJobManager:
         script = (
             pg + 'if [ -n "$PG" ]; then kill -TERM -- -$PG 2>/dev/null; for i in 1 2 3 4 5 6; do kill -0 -- -$PG 2>/dev/null || break; sleep 0.5; done; kill -KILL -- -$PG 2>/dev/null; fi; '
             f"for p in /proc/[0-9]*; do tr '\\0' '\\n' < $p/environ 2>/dev/null | grep -qx {_q(marker)} && kill -KILL ${{p#/proc/}} 2>/dev/null; done; "
-            # Best effort, last: every process of the sandbox user that is not
-            # part of the sandbox's own service trees (its API server and REPLs,
-            # started by the root supervisor; the shell-session server), which
-            # catches a worker process that left the group and cleared its
-            # environment (setsid env -i ...).
-             + LEFTOVER_SWEEP + "echo __killed__"
         )
+        # Best effort, last: every sandbox-user process created after the
+        # worker started (by pid and start time, recorded by the gateway),
+        # which catches one that left the group and cleared its environment.
+        # The list can be long, and the sandbox's shell takes commands through
+        # a terminal with a line limit, so the sweep goes in a file run only if
+        # its checksum is the one computed here (a survivor that rewrote it
+        # only skips the sweep).
+        sweep = leftover_sweep(running.snapshot)
+        if sweep:
+            path = f"/tmp/omni-sweep-{uuid.uuid4().hex}.sh"
+            digest = hashlib.sha256(sweep.encode()).hexdigest()
+            try:
+                ops.write(path, sweep)
+                script += f'f={_q(path)}; [ "$(sha256sum "$f" | cut -c1-64)" = {digest} ] && bash "$f"; rm -f "$f"; '
+            except Exception:  # noqa: BLE001
+                logger.exception("code job %s: the sweep could not be written", running.job_id)
+        script += "echo __killed__"
         try:
             ops.sh(script, timeout=20)
         except Exception:  # noqa: BLE001
@@ -588,6 +611,8 @@ class CodeJobManager:
             lines.append("- Tests: none reported.")
         lines.append("Note: the system's check shows the build passes and the files exist; the worker wrote the project, including its build script.")
         lines.append(f"Cost: ${float(r.get('cost_usd') or job.spent_usd):.2f} of a ${job.budget_usd:.2f} budget ({job.calls} model calls).")
+        if r.get("over_reservation_calls"):
+            lines.append(f"Note: {r['over_reservation_calls']} model call(s) cost more than the system had reserved for them.")
         published = r.get("published")
         if published:
             lines.append(f"Shown to the person in the artifact panel: {published['path']}.")
@@ -603,15 +628,41 @@ class CodeJobManager:
 
 MAX_HISTORY_STEPS = 400
 
-LEFTOVER_SWEEP = (
-    "ps -eo pid=,ppid=,user=,comm= | awk -v self=$$ '"
-    "{ p=$1; pp[p]=$2; u[p]=$3; c[p]=$4; all[p]=1 } "
-    "END { "
-    'for (p in all) if (u[p]=="gem" && ((pp[p] in u && u[pp[p]]!="gem" && pp[p]!=1) || (pp[p]==1 && c[p] ~ /^tmux/))) keep[p]=1; '
-    "changed=1; while (changed) { changed=0; for (p in all) if (!(p in keep) && (pp[p] in keep)) { keep[p]=1; changed=1 } } "
-    'for (p in all) if (u[p]=="gem" && !(p in keep) && p!=self) print p }\' '
-    "| xargs -r kill -KILL 2>/dev/null; "
-)
+SNAPSHOT_CMD = "ps -u gem -o pid=,lstart="
+_SAFE_KEY = re.compile(r"^[0-9]+\|[A-Za-z0-9: ]+$")
+
+
+def snapshot_keys(ps_output: str) -> frozenset[str]:
+    """`pid|start time` of every process alive before the worker started."""
+    keys = set()
+    for line in ps_output.splitlines():
+        parts = line.split()
+        if len(parts) >= 6 and parts[0].isdigit():
+            key = f"{parts[0]}|{' '.join(parts[1:6])}"
+            if _SAFE_KEY.match(key):
+                keys.add(key)
+    return frozenset(keys)
+
+
+def leftover_sweep(snapshot: frozenset[str] | None) -> str:
+    """Best effort: kill every process of the sandbox user that did NOT exist
+    before the worker started (by pid and start time, recorded by the gateway,
+    not by name), except this command's own process tree. Processes from
+    before the job (the sandbox's services, the lead's own background
+    processes) are left alone; anything the job started, whatever it calls
+    itself or however it detached, goes."""
+    if not snapshot:
+        return ""
+    keep = ";".join(sorted(snapshot))  # the sandbox user's processes only
+    return (
+        "ps -eo pid=,ppid=,user=,lstart= | awk -v self=$$ -v keep=" + shlex.quote(keep) + " '"
+        'BEGIN { n = split(keep, a, ";"); for (i = 1; i <= n; i++) k[a[i]] = 1 } '
+        '{ p = $1; pp[p] = $2; u[p] = $3; key[p] = $1 "|" $4 " " $5 " " $6 " " $7 " " $8; all[p] = 1 } '
+        "END { mine[self] = 1; changed = 1; "
+        "while (changed) { changed = 0; for (p in all) if (!(p in mine) && (pp[p] in mine)) { mine[p] = 1; changed = 1 } } "
+        'for (p in all) if (u[p] == "gem" && !(key[p] in k) && !(p in mine)) print p }\' '
+        "| xargs -r kill -KILL 2>/dev/null; "
+    )
 
 
 def _artifacts_of(result: dict | None) -> list[str]:
