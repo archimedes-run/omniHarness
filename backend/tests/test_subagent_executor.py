@@ -14,6 +14,7 @@ the real implementation in isolation.
 """
 
 import asyncio
+import importlib
 import sys
 import threading
 from datetime import datetime
@@ -38,6 +39,17 @@ _MOCKED_MODULE_NAMES = [
     "omniharness.skills.storage",
 ]
 
+# Real modules under the mocked `omniharness.agents` and `omniharness.models` that the executor imports
+# lazily, at call time (see _setup_executor_classes).
+_LAZILY_IMPORTED_MODULE_NAMES = [
+    "omniharness.agents.invitation",
+    "omniharness.agents.turns",
+    "omniharness.agents.tool_surface",
+    "omniharness.agents.middlewares.llm_error_handling_middleware",
+    "omniharness.agents.middlewares.tool_error_handling_middleware",
+    "omniharness.models.loop_local_http",
+]
+
 
 @pytest.fixture(autouse=True)
 def _setup_executor_classes():
@@ -46,6 +58,15 @@ def _setup_executor_classes():
     This fixture runs once per test and yields the executor classes.
     It handles module cleanup to avoid affecting other test files.
     """
+    # The executor imports these lazily, at call time, from under
+    # `omniharness.agents` and `omniharness.models`, which are mocked below. A submodule already in
+    # sys.modules is found there; one that is not cannot be imported from a
+    # MagicMock parent ("not a package"). So import the real ones first: the
+    # file used to pass only when an earlier test file in the same process had
+    # imported them, and failed alone or on a pytest-xdist worker that had not.
+    for name in _LAZILY_IMPORTED_MODULE_NAMES:
+        importlib.import_module(name)
+
     # Save original modules
     original_modules = {name: sys.modules.get(name) for name in _MOCKED_MODULE_NAMES}
     original_executor = sys.modules.get("omniharness.subagents.executor")

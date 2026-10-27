@@ -10,6 +10,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import omniharness.persistence.models  # noqa: F401 — register ALL tables so FKs resolve in create_all (else this passes only after another file imported them)
 from omniharness.persistence.base import Base
 
 # ---------------------------------------------------------------------------
