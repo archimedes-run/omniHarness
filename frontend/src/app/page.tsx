@@ -1,24 +1,20 @@
 import { Footer } from "@/components/landing/footer";
 import { Header } from "@/components/landing/header";
 import { Hero } from "@/components/landing/hero";
-import { AgentSkillsSection } from "@/components/landing/sections/agent-skills-section";
-import { ExampleHarnessesSection } from "@/components/landing/sections/example-harnesses-section";
-import { FeaturesSection } from "@/components/landing/sections/features-section";
+import { DaySection } from "@/components/landing/sections/day-section";
 import { FinalCtaSection } from "@/components/landing/sections/final-cta-section";
-import { HarnessDefinitionSection } from "@/components/landing/sections/harness-definition-section";
-import { LivePreviewDemoSection } from "@/components/landing/sections/live-preview-demo-section";
+import { ProductSection } from "@/components/landing/sections/product-section";
+import { SafetySection } from "@/components/landing/sections/safety-section";
 
 export default function LandingPage() {
   return (
-    <div className="bg-card text-foreground min-h-screen w-full overflow-x-clip">
+    <div className="bg-background text-foreground min-h-screen w-full overflow-x-clip">
       <Header />
       <main className="flex w-full flex-col">
         <Hero />
-        <HarnessDefinitionSection />
-        <AgentSkillsSection />
-        <FeaturesSection />
-        <LivePreviewDemoSection />
-        <ExampleHarnessesSection />
+        <DaySection />
+        <ProductSection />
+        <SafetySection />
         <FinalCtaSection />
       </main>
       <Footer />

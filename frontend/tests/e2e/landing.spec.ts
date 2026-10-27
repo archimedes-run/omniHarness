@@ -3,10 +3,9 @@ import { expect, test } from "@playwright/test";
 import { mockLangGraphAPI } from "./utils/mock-api";
 
 /**
- * The landing page as it is since 7639b43 (2026-06-11): the brand is a link in
- * the header nav (not a header h1), and the hero's call to action is "Start
- * building" -> /workspace (not "Get Started"). These two tests were red from
- * that commit until this update; they asserted the previous page.
+ * The landing page ("B · Product-first"): the brand is a link in the header
+ * nav, and the hero's call to action is "Get started" -> /workspace (the
+ * closing section repeats it).
  */
 test.describe("Landing page", () => {
   test("renders the header and hero section", async ({ page }) => {
@@ -21,18 +20,18 @@ test.describe("Landing page", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     // The hero's is the first of two (the closing section repeats it).
     await expect(
-      page.getByRole("link", { name: /start building/i }).first(),
+      page.getByRole("link", { name: /get started/i }).first(),
     ).toBeVisible();
   });
 
-  test("Start building navigates to a new chat in the workspace", async ({
+  test("Get started navigates to a new chat in the workspace", async ({
     page,
   }) => {
     mockLangGraphAPI(page);
 
     await page.goto("/");
     await page
-      .getByRole("link", { name: /start building/i })
+      .getByRole("link", { name: /get started/i })
       .first()
       .click();
 
