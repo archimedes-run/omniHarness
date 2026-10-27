@@ -108,6 +108,24 @@ def _restore_policy_builder():
 
 
 @pytest.fixture(autouse=True)
+def _restore_memory_config():
+    """Keep the memory configuration from leaking between tests.
+
+    `memory_config._memory_config` is process-global, and every app-config
+    load replaces it (`load_memory_config_from_dict`). A test whose config
+    turns memory off left it off, and a later memory-queue or updater test in
+    the same process found every `add()` a no-op. Which tests share a process
+    differs between a serial and a parallel run, so this failed only under
+    `make test` (pytest-xdist), and only on some workers.
+    """
+    from omniharness.config import memory_config
+
+    saved = memory_config._memory_config
+    yield
+    memory_config._memory_config = saved
+
+
+@pytest.fixture(autouse=True)
 def _reset_skill_storage_singleton():
     """Reset the SkillStorage singleton between tests to prevent cross-test contamination."""
     try:
