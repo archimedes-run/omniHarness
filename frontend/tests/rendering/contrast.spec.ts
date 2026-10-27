@@ -663,6 +663,39 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+/**
+ * The landing page at phone width too, with its menu open: the layout (and
+ * so what sits behind each piece of text) changes below the md breakpoint.
+ */
+for (const scheme of ["light", "dark"] as const) {
+  test.describe(`${scheme} theme, phone width`, () => {
+    test.use({ colorScheme: scheme, viewport: { width: 390, height: 844 } });
+    test("/: all text meets WCAG AA, menu open", async ({ page }) => {
+      await page.addInitScript((t) => {
+        try {
+          localStorage.setItem("theme", t);
+        } catch {}
+      }, scheme);
+      await page.goto("/", { waitUntil: "networkidle" });
+      expect(
+        await page.evaluate(() =>
+          document.documentElement.classList.contains("dark"),
+        ),
+        "the page did not take the theme",
+      ).toBe(scheme === "dark");
+      await page.getByRole("button", { name: "Open menu" }).click();
+      await expect(page.locator("#landing-mobile-menu")).toBeVisible();
+      const found = await auditPage(page);
+      expect(
+        found,
+        found
+          .map((f) => `${f.ratio}/${f.need} "${f.text}" ${f.color} [${f.cls}]`)
+          .join("\n"),
+      ).toEqual([]);
+    });
+  });
+}
+
 test("POSITIVE CONTROL: the probe finds low contrast when it is there", async ({
   page,
 }) => {

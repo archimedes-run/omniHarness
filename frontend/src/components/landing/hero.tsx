@@ -1,82 +1,77 @@
-"use client";
-
 import { ArrowRightIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
 import Link from "next/link";
-import { useEffect, useRef } from "react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const CHARS = "      ..··:::;;;+++===***???%%%##@";
+import { GITHUB_URL } from "./links";
 
-function AsciiBackground() {
-  const preRef = useRef<HTMLPreElement>(null);
-  const rafRef = useRef<number>(0);
-  const startRef = useRef(0);
-  const colsRef = useRef(0);
-  const rowsRef = useRef(0);
+const MOCK_NAV = ["Home", "Chats", "Projects", "Automations", "Agents"];
 
-  useEffect(() => {
-    startRef.current = performance.now();
-
-    function measure() {
-      const el = preRef.current;
-      if (!el) return;
-      const { width, height } = el.getBoundingClientRect();
-      colsRef.current = Math.max(1, Math.floor(width / 5.5));
-      rowsRef.current = Math.max(1, Math.floor(height / 13));
-    }
-
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (preRef.current) ro.observe(preRef.current);
-
-    function tick() {
-      const el = preRef.current;
-      if (!el) {
-        rafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-
-      const t = (performance.now() - startRef.current) * 0.001;
-      const cols = colsRef.current;
-      const rows = rowsRef.current;
-      const lines: string[] = [];
-
-      for (let y = 0; y < rows; y++) {
-        let line = "";
-        for (let x = 0; x < cols; x++) {
-          const fx = (x / cols) * Math.PI * 9;
-          const fy = (y / rows) * Math.PI * 7;
-
-          const v =
-            Math.sin(fx + t * 0.65) * Math.cos(fy + t * 0.42) * 0.48 +
-            Math.sin(fx * 0.55 - fy * 0.85 + t * 1.05) * 0.3 +
-            Math.cos((fx + fy) * 0.5 + t * 0.33) * 0.22;
-
-          const norm = Math.max(0, Math.min(0.999, (v + 1) * 0.5));
-          line += CHARS[Math.floor(norm * CHARS.length)];
-        }
-        lines.push(line);
-      }
-
-      el.textContent = lines.join("\n");
-      rafRef.current = requestAnimationFrame(tick);
-    }
-
-    rafRef.current = requestAnimationFrame(tick);
-
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      ro.disconnect();
-    };
-  }, []);
-
+/**
+ * A static drawing of the workspace (not a screenshot, not live): the
+ * sidebar and one exchange with the lead agent, with the inline Undo a
+ * reversible change carries. The content is generic sample data.
+ */
+function AppMock() {
   return (
-    <pre
-      ref={preRef}
-      aria-hidden
-      className="text-foreground/[0.045] pointer-events-none absolute inset-0 overflow-hidden font-mono text-[9px] leading-[13px] tracking-[0.01em] whitespace-pre select-none"
-    />
+    <figure
+      aria-label="The OmniHarness workspace: a chat with the lead agent"
+      className="border-border bg-card mx-auto mt-12 w-full max-w-4xl overflow-hidden rounded-xl border text-left shadow-sm"
+    >
+      <div className="border-border text-muted-foreground flex items-center gap-2 border-b px-4 py-2 text-xs">
+        <span className="font-mono">localhost:2026</span>
+        <span aria-hidden>·</span>
+        <span>Chats</span>
+      </div>
+      <div className="grid min-h-64 grid-cols-1 sm:grid-cols-[11rem_1fr]">
+        <ul className="bg-surface-raised text-muted-foreground hidden flex-col gap-0.5 p-3 text-sm sm:flex">
+          {MOCK_NAV.map((item) => (
+            <li
+              key={item}
+              className={cn(
+                "rounded-md px-2 py-1.5",
+                item === "Chats" && "bg-card text-foreground font-medium",
+              )}
+            >
+              {item}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-col gap-4 p-4 sm:p-6">
+          <p className="bg-surface-raised text-foreground ml-auto w-fit max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm">
+            Summarise my week and tell me what&apos;s overdue in Website
+            relaunch.
+          </p>
+          <div className="flex flex-col gap-2">
+            <span className="text-muted-foreground text-xs font-medium">
+              Lead agent
+            </span>
+            <p className="text-foreground-2 max-w-[60ch] text-sm leading-relaxed">
+              You have 7 meetings this week; Tuesday is the busiest. In{" "}
+              <span className="text-foreground font-medium">
+                Website relaunch
+              </span>
+              , two tasks are overdue:{" "}
+              <span className="text-foreground font-medium">
+                write the pricing page copy
+              </span>{" "}
+              and{" "}
+              <span className="text-foreground font-medium">
+                review the new screenshots
+              </span>
+              . I moved the first one to Friday.
+            </p>
+            <div className="border-border bg-background flex w-fit items-center gap-3 rounded-lg border px-3 py-1.5 text-xs">
+              <span className="text-foreground-2">
+                Moved &ldquo;Write the pricing page copy&rdquo; to Fri
+              </span>
+              <span className="text-primary font-medium">Undo</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
   );
 }
 
@@ -84,74 +79,45 @@ export function Hero({ className }: { className?: string }) {
   return (
     <section
       className={cn(
-        "relative flex min-h-[100svh] items-center justify-center overflow-hidden px-4 pt-28 pb-18 sm:px-6 sm:pt-32 sm:pb-24",
+        "px-4 pt-16 pb-16 text-center sm:px-6 sm:pt-24 sm:pb-20",
         className,
       )}
     >
-      <AsciiBackground />
+      <div className="mx-auto flex max-w-4xl flex-col items-center">
+        <span className="border-border bg-card text-foreground-2 rounded-full border px-3 py-1 text-xs">
+          Self-hosted · open source
+        </span>
 
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(ellipse 56% 54% at 50% 42%, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.88) 42%, rgba(255,255,255,0.46) 72%, transparent 100%)",
-        }}
-      />
-
-      <div className="relative z-10 mx-auto flex max-w-6xl flex-col items-center gap-8 text-center">
-        <div className="border-border bg-card/90 text-muted-foreground inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium shadow-sm backdrop-blur-sm">
-          <span className="bg-foreground size-1.5 rounded-full" />
-          Autonomous AI workers on your infrastructure
-        </div>
-
-        <h1 className="text-foreground max-w-5xl text-4xl leading-[1.04] font-bold tracking-tight text-balance sm:text-5xl lg:text-[4.6rem]">
-          Build autonomous AI workers that run, inspect, and repair real
-          workflows.
+        <h1 className="text-foreground mt-6 text-4xl leading-[1.06] font-bold tracking-tight text-balance sm:text-5xl lg:text-6xl">
+          A team of AI agents
+          <span className="text-muted-foreground block">
+            that works for you, at home.
+          </span>
         </h1>
 
-        <p className="text-muted-foreground max-w-3xl text-base leading-relaxed text-pretty sm:text-lg">
-          OmniHarness packages agents, MCP tools, memory, workflows, and
-          sandboxed execution into durable harnesses you can run, inspect,
-          reuse, and govern.
+        <p className="text-foreground-2 mt-5 max-w-2xl text-base leading-relaxed text-pretty sm:text-lg">
+          Chat with a lead agent that brings in specialists, keeps your projects
+          up to date, runs your automations — and checks with you before
+          anything irreversible.
         </p>
 
-        <p className="text-muted-foreground max-w-3xl text-sm leading-relaxed text-pretty sm:text-base">
-          Ship research workers, coding workbenches, approval-driven
-          automations, dashboard generators, and live project previews from one
-          self-hosted workspace.
-        </p>
-
-        <div className="mt-1 flex flex-col items-center gap-3 sm:flex-row">
-          <Link href="/workspace">
-            <span className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg px-7 text-sm font-semibold transition-colors">
-              Start building
-              <ArrowRightIcon className="size-4" />
-            </span>
-          </Link>
-          <a
-            href="https://github.com/archimedes-run/omniHarness"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="border-border bg-card/90 text-foreground hover:border-input hover:bg-muted inline-flex h-11 items-center gap-2 rounded-lg border px-7 text-sm font-semibold transition-colors"
-          >
-            <GitHubLogoIcon className="size-4" />
-            View on GitHub
-          </a>
+        <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row">
+          <Button asChild size="lg">
+            <Link href="/workspace">
+              Get started
+              <ArrowRightIcon />
+            </Link>
+          </Button>
+          <Button asChild size="lg" variant="outline">
+            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
+              <GitHubLogoIcon />
+              View on GitHub
+            </a>
+          </Button>
         </div>
-
-        <p className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
-          Open source · Self-hosted · Sandbox-native · MCP-ready
-        </p>
       </div>
 
-      <div
-        aria-hidden
-        className="pointer-events-none absolute right-0 bottom-0 left-0 h-40"
-        style={{
-          background: "linear-gradient(to bottom, transparent, white)",
-        }}
-      />
+      <AppMock />
     </section>
   );
 }

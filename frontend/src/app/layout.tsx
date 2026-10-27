@@ -32,7 +32,8 @@ const jetbrainsMono = localFont({
 
 export const metadata: Metadata = {
   title: "OmniHarness",
-  description: "A LangChain-based framework for building super agents.",
+  description:
+    "A self-hosted, open-source team of AI agents: research, projects, automations and coding, with approval before anything irreversible.",
 };
 
 export default async function RootLayout({

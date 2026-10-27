@@ -75,167 +75,11 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
       "#0E6F7E",
     ],
   },
-  "components/landing/sections/what-is-omniharness-section.tsx": {
-    reason:
-      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
-    literals: ["rgba("],
-  },
-  "components/landing/sections/features-section.tsx": {
-    reason:
-      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
-    literals: ["rgba("],
-  },
-  "components/landing/sections/example-harnesses-section.tsx": {
-    reason:
-      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
-    literals: ["rgba("],
-  },
-  "components/landing/header.tsx": {
-    reason:
-      "soft drop shadow, a slate tint at 8% or less, that reads in both themes",
-    literals: ["rgba("],
-  },
   "app/workspace/chats/[thread_id]/page.tsx": {
     reason: "not a colour: an issue number (#2746) in a comment",
     literals: ["#2746"],
   },
-  "components/landing/hero.tsx": {
-    reason: "decorative glow (rgba) behind the hero",
-    literals: ["rgba("],
-  },
-  "components/landing/progressive-skills-animation.tsx": {
-    reason: "always-dark terminal panel (zinc) in both themes",
-    literals: [
-      "bg-blue-600",
-      "bg-zinc-800",
-      "bg-zinc-900/50",
-      "border-zinc-700",
-      "border-zinc-800",
-      "text-blue-400",
-      "text-purple-400",
-      "text-white",
-      "text-zinc-300",
-      "text-zinc-400",
-      "text-zinc-500",
-      "text-zinc-600",
-    ],
-  },
-  "components/landing/section.tsx": {
-    reason: "decorative heading gradient",
-    literals: ["from-white", "to-gray-400", "via-gray-200"],
-  },
-  "components/landing/sections/agent-skills-section.tsx": {
-    reason:
-      "always-dark agent-log panel and diagram (stone-950) in both themes; a soft drop shadow (rgba)",
-    literals: [
-      "rgba(",
-      "#111827",
-      "#1c1917",
-      "#6b7280",
-      "#94a3b8",
-      "#9ca3af",
-      "#a8a29e",
-      "#cbd5e1",
-      "#d6d3d1",
-      "#e7e5e4",
-      "#f5f5f4",
-      "#ffffff",
-      "bg-stone-500",
-      "bg-stone-700",
-      "bg-stone-950",
-      "border-stone-800",
-      "shadow-stone-900/10",
-      "text-emerald-400",
-      "text-emerald-400/80",
-      "text-sky-400/80",
-      "text-stone-100",
-      "text-stone-200",
-      "text-stone-300",
-      "text-stone-400",
-    ],
-  },
-  "components/landing/sections/case-study-section.tsx": {
-    reason: "image overlay: white text and shadow over a photo",
-    literals: ["rgba(", "shadow-black", "text-white/85"],
-  },
-  "components/landing/sections/community-section.tsx": {
-    reason: "decorative particle colours",
-    literals: ["#60A5FA", "#A560FA", "#A5FA60"],
-  },
-  "components/landing/sections/final-cta-section.tsx": {
-    reason:
-      "always-dark call-to-action card (stone-950, white text) in both themes; a soft drop shadow (rgba)",
-    literals: [
-      "rgba(",
-      "bg-stone-100",
-      "bg-stone-950",
-      "bg-white",
-      "bg-white/10",
-      "bg-white/6",
-      "border-white/16",
-      "text-stone-950",
-      "text-white",
-      "text-white/55",
-      "text-white/70",
-    ],
-  },
-  "components/landing/sections/harness-definition-section.tsx": {
-    reason: "decorative gradient bar; a soft drop shadow (rgba)",
-    literals: ["rgba(", "from-stone-900", "to-stone-200", "via-stone-500"],
-  },
-  "components/landing/sections/live-preview-demo-section.tsx": {
-    reason:
-      "mock app: always-dark code editor and file tree, syntax colours, macOS window dots",
-    literals: [
-      "#111111",
-      "#1a1a1a",
-      "#34d399",
-      "#3b82f6",
-      "#4ade80",
-      "#60a5fa",
-      "#78716c",
-      "#93c5fd",
-      "#a8a29e",
-      "#d6d3d1",
-      "#dbeafe",
-      "#ef4444",
-      "#f59e0b",
-      "#f5f5f4",
-      "#fb923c",
-      "#fbbf24",
-      "#fde047",
-      "#fde68a",
-      "bg-blue-500",
-      "bg-green-500",
-      "bg-red-500",
-      "bg-stone-300",
-      "bg-stone-700",
-      "bg-stone-800",
-      "bg-yellow-500",
-      "border-stone-800",
-      "shadow-stone-200/60",
-      "text-stone-200",
-      "text-stone-400",
-      "text-white",
-      "text-white/60",
-      "text-white/80",
-    ],
-  },
-  "components/landing/sections/sandbox-section.tsx": {
-    reason: "always-dark sandbox chips (zinc) in both themes",
-    literals: [
-      "bg-zinc-900",
-      "border-zinc-800",
-      "text-blue-500",
-      "text-purple-400",
-      "text-zinc-300",
-      "text-zinc-400",
-    ],
-  },
-  "components/landing/sections/whats-new-section.tsx": {
-    reason: "decorative backdrop colour",
-    literals: ["#0a0a0a"],
-  },
+
   "components/ui/aurora-text.tsx": {
     reason: "visual effect: the colours are its parameters",
     literals: ["#0070F3", "#38bdf8", "#7928CA", "#FF0080"],
@@ -245,10 +89,6 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
     reason: "visual effect: computes its own rgba from the colour it is given",
     literals: ["rgb(", "rgba("],
   },
-  "components/ui/magic-bento.tsx": {
-    reason: "visual effect: glow colour parameter",
-    literals: ["rgba("],
-  },
 
   "components/ui/shine-border.tsx": {
     reason: "visual effect: the colours are its parameters",
@@ -257,10 +97,6 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
   "components/ui/spotlight-card.tsx": {
     reason: "visual effect: spotlight rgba",
     literals: ["rgba("],
-  },
-  "components/ui/terminal.tsx": {
-    reason: "macOS window dots (red, yellow, green)",
-    literals: ["bg-green-500", "bg-red-500", "bg-yellow-500"],
   },
 
   "components/ui/word-rotate.tsx": {
@@ -392,6 +228,29 @@ describe("colours come from theme tokens, site-wide", () => {
       .map((d) => relative(SRC, d));
     expect(missed, "these component directories are not scanned").toEqual([]);
     expect(scanned.size).toBeGreaterThan(10);
+  });
+
+  it("scans the landing page and allows it no fixed colour at all", () => {
+    // The landing page follows the theme in both modes (Graphite tokens
+    // only): no exception may be listed for it, and its files are scanned.
+    const landing = files(SRC)
+      .map((f) => relative(SRC, f))
+      .filter(
+        (f) => f.startsWith("components/landing/") || f === "app/page.tsx",
+      );
+    expect(landing).toEqual(
+      expect.arrayContaining([
+        "app/page.tsx",
+        "components/landing/hero.tsx",
+        "components/landing/header.tsx",
+        "components/landing/footer.tsx",
+        "components/landing/sections/safety-section.tsx",
+      ]),
+    );
+    expect(
+      Object.keys(ALLOWED).filter((f) => landing.includes(f)),
+      "the landing page uses theme tokens only",
+    ).toEqual([]);
   });
 
   it("exempts directories only with a reason", () => {
