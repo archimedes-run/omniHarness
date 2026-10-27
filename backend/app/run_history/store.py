@@ -610,8 +610,11 @@ class RunHistory:
 
     # -- reads ------------------------------------------------------------
 
-    def list(self, *, kind: str | None = None, source_id: str | None = None, limit: int = 50) -> list[RunSummary]:
+    def list(self, *, kind: str | None = None, source_id: str | None = None, limit: int = 50, thread_id: str | None = None) -> list[RunSummary]:
         where, args = [], []
+        if thread_id:
+            where.append("thread_id = ?")
+            args.append(thread_id)
         if kind:
             where.append("kind = ?")
             args.append(kind)

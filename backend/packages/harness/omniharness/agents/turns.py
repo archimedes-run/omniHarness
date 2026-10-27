@@ -37,6 +37,13 @@ def mark_user_turn(message: Any) -> Any:
     return message
 
 
+#: On a tool result, set by the policy layer (app.policy.middleware): the
+#: call's tier and outcome ("ran", "needs_confirmation", "refused") and its
+#: card id. Display and measurement data (the per-run trace, the todo gate's
+#: "stopped at a card"); no policy decision reads it back.
+POLICY_STEP_MARKER = "omniharness_policy_step"
+
+
 #: On the summary message that replaces history (summarization_middleware):
 #: what the summarized part of the CURRENT turn was, so the policy's
 #: private-read walk (app.policy.private_reads) can still judge it once the

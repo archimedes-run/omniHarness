@@ -1,0 +1,38 @@
+id: T18
+title: How are my projects going? (reads never ask)
+source: reads never ask
+mode: pro
+prompt: How are my projects going?
+tools: []
+confirm: none
+fixtures:
+  ledger:
+  - name: Eval Garden
+    why: Grow vegetables on a sunny balcony in Philadelphia (zone 7b)
+    tasks:
+    - Buy soil
+    - Plant tomato seedlings
+  - name: Eval Bike Tour
+    why: Ride the Schuylkill River Trail end to end in May
+    tasks:
+    - Tune up the bike
+budget:
+  seconds: 240
+  est_usd: 0.04
+checks:
+- tool_called:
+    name: ledger_read
+- no_clarification
+- answer_contains:
+    values:
+    - Eval Garden
+    - Bike Tour
+mock:
+  lead:
+  - tool_calls:
+    - name: ledger_read
+      args: {}
+  - expect:
+      tool: ledger_read
+      contains: Bike Tour
+    content: Eval Garden has 2 open tasks (Buy soil, Plant tomato seedlings). Eval Bike Tour has 1 open task (Tune up the bike). Neither has anything done yet.

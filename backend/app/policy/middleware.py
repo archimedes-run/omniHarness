@@ -23,6 +23,7 @@ import logging
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -71,6 +72,62 @@ def _proposing(owner_id: Any, thread_id: Any) -> threading.Lock:
 #: Tools of which one turn has at most ONE open card per agent: delegating
 #: (eval E-2). Any other tool is held only on an exact repeat.
 ONE_OPEN_CARD_PER_TURN = frozenset({"task"})
+
+
+#: Per tool call: what the policy decided, for the per-run trace (spec 009
+#: FR-080): {"tier", "outcome", "card_id"}. Stamped on the call's tool result
+#: as display data (STEP_KEY); no decision ever reads it back.
+_STEP: ContextVar[dict | None] = ContextVar("policy_step", default=None)
+
+
+def _step() -> dict:
+    """This call's step record, or a throwaway outside a tool call."""
+    step = _STEP.get()
+    return step if step is not None else {}
+
+
+from omniharness.agents.turns import POLICY_STEP_MARKER as STEP_KEY  # noqa: E402
+
+
+def _stamp_step(result: Any, step: dict) -> Any:
+    if not step:
+        return result
+    messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
+    for message in messages:
+        if getattr(message, "type", None) == "tool" and isinstance(getattr(message, "additional_kwargs", None), dict):
+            message.additional_kwargs[STEP_KEY] = {"tier": step.get("tier"), "outcome": step.get("outcome") or "ran", **({"card_id": step["card_id"]} if step.get("card_id") else {})}
+    return result
+
+
+async def _off_loop(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a card's statement off the event loop, in this context.
+
+    Stating a card checks a ledger plan with a DRY-RUN write transaction
+    (LedgerService.validate), synchronously. On the run's event loop that
+    waited for SQLite's write lock while the lock's holder (the run journal's
+    async writer on the same database) needed that very loop to commit: the
+    check timed out with "database is locked", fell back to proposing the plan
+    unchecked, and an invalid plan reached a card and failed after the person
+    confirmed it (eval T11, 2026-10-24 and 2026-10-26)."""
+    import asyncio
+    import contextvars
+    import functools
+
+    context = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, fn, *args, **kwargs))
+
+
+def _is_registered_write_todos(tool: Any) -> bool:
+    """The checklist tool the harness's TodoMiddleware registers, by the
+    identity of its function (never by name): its result echoes the call's own
+    arguments (lineage.TRUSTED_TOOL_RESULTS)."""
+    try:
+        from langchain.agents.middleware import todo as todo_module
+    except ImportError:  # pragma: no cover
+        return False
+    func = getattr(tool, "func", None)
+    coroutine = getattr(tool, "coroutine", None)
+    return bool(getattr(tool, "name", None) == "write_todos" and (func is getattr(todo_module, "_write_todos", object()) or coroutine is getattr(todo_module, "_awrite_todos", object())))
 
 
 def canonical_arguments(arguments: Any) -> str:
@@ -126,18 +183,38 @@ class PolicyMiddleware(AgentMiddleware):
     # -- the chokepoint ----------------------------------------------------
 
     def wrap_tool_call(self, request, handler):
+        token = _STEP.set({})
+        try:
+            return _stamp_step(self._wrap_tool_call(request, handler), _step())
+        finally:
+            _STEP.reset(token)
+
+    async def awrap_tool_call(self, request, handler):
+        token = _STEP.set({})
+        try:
+            return _stamp_step(await self._awrap_tool_call(request, handler), _step())
+        finally:
+            _STEP.reset(token)
+
+    def _wrap_tool_call(self, request, handler):
         from omniharness.agents.invitation import inviting_turn
 
         # Whatever tier it gets, a call runs without any pin its model wrote
         # (a pin is the server's: _check_ledger_plan).
         request = self._without_model_pins(request)
         decision = self._classify(request)
+        _step()["tier"] = int(decision.tier) if not decision.refused else None
         if decision.refused:
+            _step()["outcome"] = "refused"
             return self._refuse_unruled(request, decision)
+        declined = self._declined_this_turn(request)
+        if declined is not None:
+            _step()["outcome"] = "refused"
+            return declined
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
-                return handler(request)
+                return self._mark_trusted_ack(request, handler(request))
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
@@ -161,26 +238,32 @@ class PolicyMiddleware(AgentMiddleware):
         # Tier 3 always asks: a standing grant never skips a confirmation.
         return self._require_confirmation(request, decision)
 
-    async def awrap_tool_call(self, request, handler):
+    async def _awrap_tool_call(self, request, handler):
         # Any agent this call invites (the `task` tool) starts from this
         # call's provenance, not as the user (omniharness.agents.invitation).
         from omniharness.agents.invitation import inviting_turn
 
         request = self._without_model_pins(request)
         decision = self._classify(request)
+        _step()["tier"] = int(decision.tier) if not decision.refused else None
         if decision.refused:
+            _step()["outcome"] = "refused"
             return self._refuse_unruled(request, decision)
+        declined = self._declined_this_turn(request)
+        if declined is not None:
+            _step()["outcome"] = "refused"
+            return declined
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
-                return await handler(request)
+                return self._mark_trusted_ack(request, await handler(request))
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
             if grant is None:
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
-                return self._require_confirmation(request, decision, extra_note=grant)
+                return await _off_loop(self._require_confirmation, request, decision, extra_note=grant)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
             self._mark_trusted_ack(request, result)
@@ -200,7 +283,7 @@ class PolicyMiddleware(AgentMiddleware):
             return result
 
         # Tier 3 always asks: a standing grant never skips a confirmation.
-        return self._require_confirmation(request, decision)
+        return await _off_loop(self._require_confirmation, request, decision)
 
     # -- standing grants (Feature 006, app/policy/grants.py) ----------------
     #
@@ -445,6 +528,41 @@ class PolicyMiddleware(AgentMiddleware):
                 unruled = set(report.unruled)
                 changes["tools"] = [t for t in tools if getattr(t, "name", None) not in unruled]
         return request.override(**changes) if changes else request
+
+    #: What the model is told when it repeats a call the person declined in
+    #: this turn (spec 009 FR-058a). Nothing ran.
+    DECLINED_REPEAT_TEXT = "Not run: the person declined this exact call earlier in this task. Do not try it again. Finish what you can without it, and say in your reply what was not done because of the decline."
+
+    def _declined_this_turn(self, request: Any) -> Any:
+        """A call identical (tool + canonical arguments) to one the person
+        DECLINED in this same turn is refused, whatever its tier (FR-058a): a
+        resume after a decline never makes the declined call again. Only a
+        refusal, never a run: this check can only stop calls.
+
+        Checked in a run resumed after a confirmation (the only way a decline
+        and a later call share a turn: the card ends the run that raised it),
+        so an ordinary call does not read the pending store."""
+        from omniharness.agents.called_agents import RESUME_ACTION_KEY
+
+        context = self._runtime_context(request) or {}
+        if not isinstance(context.get(RESUME_ACTION_KEY), dict):
+            return None
+        thread_id = self._thread_id(request)
+        if not thread_id:
+            return None
+        name = self._tool_name(request)
+        declined = [a for a in self.pending.declined_in_thread(thread_id, self._owner_id(request)) if a.tool_name == name]
+        if not declined:
+            return None
+        turn_key = self._private_read(request).turn_key
+        if not turn_key:
+            return None
+        wanted = canonical_arguments(self._arguments(request))
+        for action in declined:
+            if action.group_key == turn_key and canonical_arguments(action.arguments) == wanted:
+                logger.info("policy: %s repeats declined action %s in the same turn; refused", name, action.id)
+                return self._as_tool_result(request, self.DECLINED_REPEAT_TEXT)
+        return None
 
     def _refuse_unruled(self, request: Any, decision: Any) -> Any:
         from .coverage import refusal_text
@@ -775,6 +893,7 @@ class PolicyMiddleware(AgentMiddleware):
             logger.info("policy: %s repeats open proposal %s; no new card", tool_name, earlier.id)
             return self._mark_trusted_ack(request, self._as_tool_result(request, duplicate_proposal_text(earlier)))
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
+        _step().update({"outcome": "needs_confirmation", "card_id": action.id, "tier": int(action.tier_at_statement)})
         if self._is_invited(request):
             from omniharness.agents.invitation import STOPPED_AT_KEY
 
@@ -941,7 +1060,8 @@ class PolicyMiddleware(AgentMiddleware):
 
         from .lineage import TRUSTED_ACK_MARKER
 
-        if getattr(request, "tool", None) is not ledger_apply_tool:
+        tool = getattr(request, "tool", None)
+        if tool is not ledger_apply_tool and not _is_registered_write_todos(tool):
             return result
         messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
         for message in messages:

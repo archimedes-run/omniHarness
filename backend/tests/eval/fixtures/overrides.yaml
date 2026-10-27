@@ -1,0 +1,19 @@
+# Tracked overrides on config.example.yaml for every eval trial (spec 009
+# FR-072). Everything that reaches outside the trial is off: channels,
+# connectors (none configured), MCP servers (an empty extensions file), the
+# trigger engine, memory and titles. The policy layer is switched ON by the
+# harness with the SHIPPED rules and a temporary state dir.
+channels: null
+trigger_engine:
+  enabled: false
+memory:
+  enabled: false
+  injection_enabled: false
+title:
+  enabled: false
+token_usage:
+  enabled: true
+run_events:
+  backend: auto
+  max_trace_content: 10240
+  track_token_usage: true

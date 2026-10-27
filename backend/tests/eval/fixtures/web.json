@@ -1,0 +1,281 @@
+{
+ "_comment": "Recorded web results for mock mode (spec 009 FR-072: the web tools hit the network only in real mode). search: first topic whose keywords all appear in the query wins; pages: exact URL, else a generic page. Topics are matched in order, so the generic 'date' topic is last.",
+ "search": [
+  {
+   "keywords": [
+    "fishtown"
+   ],
+   "results": [
+    {
+     "title": "Suraya",
+     "url": "https://www.surayaphilly.com/",
+     "snippet": "Lebanese restaurant with a garden in Fishtown."
+    },
+    {
+     "title": "Wm. Mulherin's Sons",
+     "url": "https://www.wmmulherinssons.com/",
+     "snippet": "Wood-fired Italian in a former whiskey blending house."
+    },
+    {
+     "title": "Kalaya",
+     "url": "https://www.kalayaphilly.com/",
+     "snippet": "Southern Thai in Fishtown."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "rittenhouse"
+   ],
+   "results": [
+    {
+     "title": "Parc",
+     "url": "https://www.parc-restaurant.com/",
+     "snippet": "French bistro on Rittenhouse Square."
+    },
+    {
+     "title": "Friday Saturday Sunday",
+     "url": "https://www.fridaysaturdaysunday.com/",
+     "snippet": "Tasting menu."
+    },
+    {
+     "title": "Ambra",
+     "url": "https://www.ambrarestaurant.com/",
+     "snippet": "Italian tasting menu."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "old city"
+   ],
+   "results": [
+    {
+     "title": "Fork",
+     "url": "https://www.forkrestaurant.com/",
+     "snippet": "New American in Old City."
+    },
+    {
+     "title": "Royal Boucherie",
+     "url": "https://www.royalboucherie.com/",
+     "snippet": "French brasserie."
+    },
+    {
+     "title": "Amada",
+     "url": "https://www.amadarestaurant.com/",
+     "snippet": "Spanish tapas."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "passyunk"
+   ],
+   "results": [
+    {
+     "title": "Laurel",
+     "url": "https://www.restaurantlaurel.com/",
+     "snippet": "Tasting menu on East Passyunk."
+    },
+    {
+     "title": "Bing Bing Dim Sum",
+     "url": "https://www.bingbingdimsum.com/",
+     "snippet": "Playful dim sum."
+    },
+    {
+     "title": "Fond",
+     "url": "https://www.fondphilly.com/",
+     "snippet": "Seasonal American."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "react"
+   ],
+   "results": [
+    {
+     "title": "React 19 release notes",
+     "url": "https://react.dev/blog/2024/12/05/react-19",
+     "snippet": "Actions, use(), ref as a prop."
+    },
+    {
+     "title": "React versions",
+     "url": "https://react.dev/versions",
+     "snippet": "Latest stable release."
+    },
+    {
+     "title": "React 19 on GitHub",
+     "url": "https://github.com/facebook/react/releases",
+     "snippet": "Release changelog."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "saturday"
+   ],
+   "results": [
+    {
+     "title": "Reading Terminal Market",
+     "url": "https://readingterminalmarket.org/",
+     "snippet": "Historic indoor market."
+    },
+    {
+     "title": "Philadelphia Museum of Art",
+     "url": "https://philamuseum.org/",
+     "snippet": "Art museum and Rocky steps."
+    },
+    {
+     "title": "Longwood Gardens",
+     "url": "https://longwoodgardens.org/",
+     "snippet": "Gardens and conservatory."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "lisbon"
+   ],
+   "results": [
+    {
+     "title": "Visit Lisboa",
+     "url": "https://www.visitlisboa.com/",
+     "snippet": "Official tourism site."
+    },
+    {
+     "title": "Carris Metropolitana passes",
+     "url": "https://www.carrismetropolitana.pt/",
+     "snippet": "Transport passes and prices."
+    },
+    {
+     "title": "Sintra day trip",
+     "url": "https://www.parquesdesintra.pt/",
+     "snippet": "Palaces and parks of Sintra."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "tomato"
+   ],
+   "results": [
+    {
+     "title": "Sungold cherry tomato",
+     "url": "https://extension.umd.edu/resource/tomatoes-sungold",
+     "snippet": "Very productive cherry tomato for containers."
+    },
+    {
+     "title": "Patio Princess",
+     "url": "https://www.burpee.com/patio-princess-hybrid-tomato",
+     "snippet": "Compact determinate tomato for pots."
+    },
+    {
+     "title": "Tiny Tim tomatoes",
+     "url": "https://www.rodalesorganiclife.com/tiny-tim-tomato",
+     "snippet": "Dwarf cherry tomato."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "httpx"
+   ],
+   "results": [
+    {
+     "title": "httpx on PyPI",
+     "url": "https://pypi.org/project/httpx/",
+     "snippet": "The next generation HTTP client."
+    },
+    {
+     "title": "PyPI JSON API",
+     "url": "https://docs.pypi.org/api/json/",
+     "snippet": "GET https://pypi.org/pypi/<project>/json"
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "auth"
+   ],
+   "results": [
+    {
+     "title": "Auth.js",
+     "url": "https://authjs.dev/",
+     "snippet": "Authentication for the web (formerly NextAuth.js)."
+    },
+    {
+     "title": "Better Auth",
+     "url": "https://www.better-auth.com/",
+     "snippet": "Framework-agnostic TypeScript auth library."
+    },
+    {
+     "title": "Lucia",
+     "url": "https://lucia-auth.com/",
+     "snippet": "Resources on implementing sessions."
+    },
+    {
+     "title": "Next.js authentication guide",
+     "url": "https://nextjs.org/docs/app/guides/authentication",
+     "snippet": "Official guide."
+    }
+   ]
+  },
+  {
+   "keywords": [
+    "date"
+   ],
+   "results": [
+    {
+     "title": "Vetri Cucina",
+     "url": "https://www.vetricucina.com/",
+     "snippet": "Intimate Italian tasting menu in a Spruce Street townhouse."
+    },
+    {
+     "title": "Zahav",
+     "url": "https://www.zahavrestaurant.com/",
+     "snippet": "Modern Israeli cooking, a Philadelphia classic for a special night."
+    },
+    {
+     "title": "Friday Saturday Sunday",
+     "url": "https://www.fridaysaturdaysunday.com/",
+     "snippet": "Rittenhouse tasting menu and upstairs cocktail bar."
+    },
+    {
+     "title": "Laser Wolf",
+     "url": "https://www.laserwolfphilly.com/",
+     "snippet": "Israeli skewer house in Kensington."
+    },
+    {
+     "title": "Her Place Supper Club",
+     "url": "https://www.herplacesupperclub.com/",
+     "snippet": "Small supper club with a set menu."
+    },
+    {
+     "title": "Philadelphia date night guide",
+     "url": "https://www.phillymag.com/foobooz/date-night-restaurants/",
+     "snippet": "Our favourite date-night restaurants."
+    }
+   ]
+  }
+ ],
+ "default_search": [
+  {
+   "title": "Example result",
+   "url": "https://example.org/result",
+   "snippet": "A generic recorded result."
+  }
+ ],
+ "pages": {
+  "https://pypi.org/pypi/httpx/jsonx": {
+   "error": "HTTP 404 Not Found for https://pypi.org/pypi/httpx/jsonx"
+  },
+  "https://pypi.org/pypi/httpx/json": {
+   "text": "{\"info\": {\"name\": \"httpx\", \"version\": \"0.28.1\"}}"
+  },
+  "https://notes.example/leaky": {
+   "text": "Meeting notes. The deploy token is ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab and the venue is the library."
+  }
+ },
+ "default_page": "Recorded page text for {url}: opening hours, location and a short description."
+}

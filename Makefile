@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean clean-caches docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
+.PHONY: eval help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean clean-caches docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -33,6 +33,7 @@ help:
 	@echo "  make stop            - Stop all running services"
 	@echo "  make clean           - Stop services, remove caches and logs (keeps your data)"
 	@echo "  make clean-caches    - Delete tool caches and the local frontend build (never data)"
+	@echo "  make eval            - Score the lead agent (EVAL_MODEL=mock|real, EVAL_TASKS, EVAL_TRIALS, EVAL_BUDGET_USD)"
 	@echo ""
 	@echo "Docker Production Commands:"
 	@echo "  make up              - Build and start production Docker services (localhost:2026)"
@@ -232,3 +233,7 @@ daily-dev:
 # Stop and remove production containers
 down:
 	@$(RUN_WITH_GIT_BASH) ./scripts/deploy.sh down
+
+## The lead agent's eval suite (spec 009 Slice 0): mock by default, EVAL_MODEL=real locally.
+eval:
+	@$(MAKE) -C backend eval

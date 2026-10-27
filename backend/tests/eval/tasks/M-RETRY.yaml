@@ -1,0 +1,33 @@
+id: M-RETRY
+title: A tool error, then a changed call that succeeds
+mock_only: true
+source: spec 009 FR-054 (mocked)
+mode: pro
+prompt: Get the httpx version from https://pypi.org/pypi/httpx/jsonx
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- error_then_changed_success
+- trace_step:
+    type: retry
+    min: 0
+- answer_contains:
+    values:
+    - 0.28.1
+mock:
+  lead:
+  - tool_calls:
+    - name: web_fetch
+      args:
+        url: https://pypi.org/pypi/httpx/jsonx
+  - expect:
+      contains: Change the arguments, the tool or the approach
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://pypi.org/pypi/httpx/json
+  - expect:
+      contains: 0.28.1
+    content: httpx is at 0.28.1 (the given URL returned 404; the JSON API path is /json).

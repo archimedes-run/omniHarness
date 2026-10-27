@@ -41,8 +41,13 @@ def _reminder_in_messages(messages: list[Any]) -> bool:
 
 
 def _completion_reminder_count(messages: list[Any]) -> int:
-    """Return the number of todo_completion_reminder HumanMessages in *messages*."""
-    return sum(1 for msg in messages if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "todo_completion_reminder")
+    """The number of todo_completion_reminder messages in the CURRENT turn.
+
+    Counted per turn (spec 009 FR-052), not over the whole thread: a thread
+    whose earlier turns used up a thread-wide cap never reminded again."""
+    from omniharness.agents.working_loop import turn_messages
+
+    return sum(1 for msg in turn_messages(messages) if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "todo_completion_reminder")
 
 
 def _format_todos(todos: list[Todo]) -> str:
@@ -110,9 +115,11 @@ class TodoMiddleware(TodoListMiddleware):
         """Async version of before_model."""
         return self.before_model(state, runtime)
 
-    # Maximum number of completion reminders before allowing the agent to exit.
-    # This prevents infinite loops when the agent cannot make further progress.
-    _MAX_COMPLETION_REMINDERS = 2
+    # Completion reminders per turn before the agent may finish anyway (FR-052:
+    # once). The reminder asks it to finish the items OR to report them as
+    # not verified; a reply that already has a "Not verified" list is an
+    # honest stop and is let through.
+    _MAX_COMPLETION_REMINDERS = 1
 
     @hook_config(can_jump_to=["model"])
     @override
@@ -121,17 +128,17 @@ class TodoMiddleware(TodoListMiddleware):
         state: PlanningState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
-        """Prevent premature agent exit when todo items are still incomplete.
+        """Send the lead back once when it would finish with unticked items.
 
-        In addition to the base class check for parallel ``write_todos`` calls,
-        this override intercepts model responses that have no tool calls while
-        there are still incomplete todo items. It injects a reminder
-        ``HumanMessage`` and jumps back to the model node so the agent
-        continues working through the todo list.
-
-        A retry cap of ``_MAX_COMPLETION_REMINDERS`` (default 2) prevents
-        infinite loops when the agent cannot make further progress.
+        Spec 009 FR-052 (generalising PreviewVerificationMiddleware's gate):
+        when the model gives a final reply (no tool calls) while checklist
+        items are not completed, and the reply has no "Not verified" list
+        naming what is missing, one reminder is injected and the model runs
+        again. It may then finish the items, or stop honestly with a "Not
+        verified" list. A forced stop by the loop detector is never sent back.
         """
+        from omniharness.agents.working_loop import DONE_WHEN_RE, NOT_VERIFIED_RE, card_pending, text_of
+
         # 1. Preserve base class logic (parallel write_todos detection).
         base_result = super().after_model(state, runtime)
         if base_result is not None:
@@ -142,27 +149,35 @@ class TodoMiddleware(TodoListMiddleware):
         last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
         if not last_ai or last_ai.tool_calls:
             return None
+        reply = text_of(last_ai)
+        if "[FORCED STOP]" in reply:
+            return None
 
         # 3. Allow exit when all todos are completed or there are no todos.
         todos: list[Todo] = state.get("todos") or []  # type: ignore[assignment]
-        if not todos or all(t.get("status") == "completed" for t in todos):
+        incomplete = [t for t in todos if t.get("status") != "completed" and not DONE_WHEN_RE.match(str(t.get("content") or ""))]
+        if not todos or not incomplete:
             return None
 
-        # 4. Enforce a reminder cap to prevent infinite re-engagement loops.
+        # 4. An honest stop: the reply lists what is not verified; or the turn
+        #    stops at a confirmation card and resumes once it is answered.
+        if NOT_VERIFIED_RE.search(reply) or card_pending(messages):
+            return None
+
+        # 5. Once per turn.
         if _completion_reminder_count(messages) >= self._MAX_COMPLETION_REMINDERS:
             return None
 
-        # 5. Inject a reminder and force the agent back to the model.
-        incomplete = [t for t in todos if t.get("status") != "completed"]
         incomplete_text = "\n".join(f"- [{t.get('status', 'pending')}] {t.get('content', '')}" for t in incomplete)
         reminder = HumanMessage(
             name="todo_completion_reminder",
             content=(
                 "<system_reminder>\n"
-                "You have incomplete todo items that must be finished before giving your final response:\n\n"
+                "Your checklist still has items that are not completed:\n\n"
                 f"{incomplete_text}\n\n"
-                "Please continue working on these tasks. Call `write_todos` to mark items as completed "
-                "as you finish them, and only respond when all items are done.\n"
+                "Finish them now if you can (tick each with write_todos as it is done). If an item cannot be "
+                'done, do not claim it: end your reply with a "Not verified" list naming each such item and '
+                "what is missing or what failed.\n"
                 "</system_reminder>"
             ),
         )

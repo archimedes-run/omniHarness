@@ -164,7 +164,7 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._partition_with_skill_rescue(messages, cutoff_index)
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = self._create_summary(messages_to_summarize)
-        new_messages = self._mark_turn(self._build_new_messages(summary), messages_to_summarize)
+        new_messages = self._mark_turn(self._build_new_messages(summary), messages_to_summarize, state.get("todos"), preserved_messages)
 
         return {
             "messages": [
@@ -189,7 +189,7 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._partition_with_skill_rescue(messages, cutoff_index)
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
         summary = await self._acreate_summary(messages_to_summarize)
-        new_messages = self._mark_turn(self._build_new_messages(summary), messages_to_summarize)
+        new_messages = self._mark_turn(self._build_new_messages(summary), messages_to_summarize, state.get("todos"), preserved_messages)
 
         return {
             "messages": [
@@ -207,15 +207,37 @@ class OmniHarnessSummarizationMiddleware(SummarizationMiddleware):
         return [HumanMessage(content=f"Here is a summary of the conversation to date:\n\n{summary}", name="summary")]
 
     @staticmethod
-    def _mark_turn(new_messages: list[HumanMessage], messages_to_summarize: list[AnyMessage]) -> list[HumanMessage]:
+    def _mark_turn(new_messages: list[HumanMessage], messages_to_summarize: list[AnyMessage], todos: list | None = None, preserved_messages: list[AnyMessage] | None = None) -> list[HumanMessage]:
         """Record on the summary what the summarized part of the current turn
         was (turns.TURN_SUMMARY_MARKER), so a turn that outgrows the context
-        is still judged by its own reads, not failed as unknown."""
+        is still judged by its own reads, not failed as unknown.
+
+        Next to it, the plan record (spec 009 FR-059, working_loop.plan_record):
+        the checklist, the done-criteria, the findings already verified (tool,
+        query or URL) and the open blockers, built by the server from the
+        summarized messages and the thread's `todos`, never by the summariser
+        model. It is also appended to the summary text, so the next model call
+        sees what is done and does not search for it again. A record that
+        cannot be built is left out ("plan lost, re-plan"), never invented."""
         from omniharness.agents.turns import TURN_SUMMARY_MARKER, summarized_turn
+        from omniharness.agents.working_loop import PLAN_RECORD_KEY, is_turn_start, plan_record, plan_record_text
 
         if new_messages:
             first = new_messages[0]
-            first.additional_kwargs = {**(first.additional_kwargs or {}), TURN_SUMMARY_MARKER: summarized_turn(list(messages_to_summarize))}
+            extra: dict = {TURN_SUMMARY_MARKER: summarized_turn(list(messages_to_summarize))}
+            try:
+                # Findings belong to the CURRENT turn only: when the turn
+                # started after the summarized part (its start is preserved),
+                # what was summarized is earlier turns, not this task's work.
+                current_turn_kept = any(is_turn_start(m) for m in (preserved_messages or []))
+                record = plan_record([] if current_turn_kept else list(messages_to_summarize), todos if isinstance(todos, list) else None)
+            except Exception:  # noqa: BLE001
+                logger.warning("plan record could not be built for the summary", exc_info=True)
+                record = None
+            if record is not None:
+                extra[PLAN_RECORD_KEY] = record
+                first.content = f"{first.content}\n\n{plan_record_text(record)}"
+            first.additional_kwargs = {**(first.additional_kwargs or {}), **extra}
         return new_messages
 
     def _partition_with_skill_rescue(
