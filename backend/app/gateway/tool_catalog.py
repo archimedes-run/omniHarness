@@ -42,7 +42,7 @@ BUILTIN_NAMES: dict[str, tuple[str, str]] = {
     "builtin:file:write": ("Write files", "Create and edit files in the sandbox workspace"),
     "builtin:bash": ("Shell", "Run commands in the sandbox"),
     "builtin:ledger": ("Tasks and notes", "Your projects, tasks and decisions"),
-    "builtin:workspace": ("Workspace", "Previews, MCP building and skill editing"),
+    "builtin:workspace": ("Workspace", "Previews, coding jobs, MCP building and skill editing"),
 }
 
 #: The tools people reach for first in each app, most common first (the

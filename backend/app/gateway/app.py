@@ -21,6 +21,7 @@ from app.gateway.routers import (
     auth,
     automations,
     channels,
+    code_jobs,
     composio,
     confirmations,
     drafts,
@@ -320,6 +321,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.mcp_build_controller = mcp_ctrl
             set_mcp_build_controller(mcp_ctrl)
 
+        try:
+            from app.gateway.sandbox_guard import init_from_docker
+
+            init_from_docker()
+        except Exception:
+            logger.exception("The sandbox network guard could not read the sandbox network")
+
+        # Coding jobs (spec 009, Slice 1): the job store, the LLM proxy on the
+        # sandbox network, and the code_job controller. Never fatal: without
+        # them code_job is simply not offered.
+        try:
+            from app.gateway import code_jobs as code_jobs_runtime
+
+            code_jobs_runtime.start(app)
+        except Exception:
+            logger.exception("Coding jobs could not be started; code_job is not offered")
+
         # Ensure admin user exists (auto-create on first boot)
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration
         await _ensure_admin_user(app)
@@ -451,6 +469,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 )
             except Exception:
                 logger.exception("Failed to stop MCP server manager")
+
+        try:
+            from app.gateway import code_jobs as code_jobs_runtime
+
+            code_jobs_runtime.stop(app)
+        except Exception:
+            logger.exception("Failed to stop coding jobs")
 
         preview_session_manager = getattr(app.state, "preview_session_manager", None)
         if preview_session_manager is not None:
@@ -607,6 +632,12 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
         app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxies)
 
+    # Outermost: nothing on the sandbox network reaches the gateway's API
+    # (app/gateway/sandbox_guard.py); its subnets are read at startup.
+    from app.gateway.sandbox_guard import SandboxPeerGuard
+
+    app.add_middleware(SandboxPeerGuard)
+
     # Include routers
     # Models API is mounted at /api/models
     app.include_router(models.router)
@@ -639,6 +670,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Preview sessions API is mounted at /api/threads/{thread_id}/previews
     app.include_router(previews.router)
+
+    # Coding jobs (spec 009): /api/threads/{thread_id}/code-jobs
+    app.include_router(code_jobs.router)
 
     # Uploads API is mounted at /api/threads/{thread_id}/uploads
     app.include_router(uploads.router)
