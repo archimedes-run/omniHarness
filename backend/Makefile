@@ -7,7 +7,18 @@ dev:
 gateway:
 	PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001
 
+# Parallel across all cores (pytest-xdist). `--dist loadfile` keeps each test
+# file on one worker, in file order, as a serial run has it: several files are
+# one ordered scenario on a module-scoped fixture (a real multi-worker gateway
+# in tests/policy_multiworker/, for one), which per-test distribution splits
+# across processes. -q with -rfE: a summary plus every failure and error,
+# instead of one line per test for thousands of tests.
 test:
+	PYTHONPATH=. uv run pytest tests/ -n auto --dist loadfile -q -rfE
+
+# One process, verbose: for bisecting an order-dependent failure, or when a
+# test misbehaves only under xdist.
+test-serial:
 	PYTHONPATH=. uv run pytest tests/ -v
 
 # `uv run`, not `uvx`. uvx resolves the LATEST ruff every invocation, so a new

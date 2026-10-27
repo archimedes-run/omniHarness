@@ -4,6 +4,7 @@ Uses MemoryRunEventStore as the backend for direct event inspection.
 """
 
 import asyncio
+import threading
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -339,6 +340,36 @@ class TestBufferFlush:
         await j.flush()
         assert running["most"] == 1
         assert [e["event_type"] for e in await store.list_events("t1", "r1")] == ["run.start", "llm.ai.response"]
+
+    def test_the_final_flush_does_not_spin_on_a_finished_write_whose_callback_is_pending(self):
+        """A write that has finished stays in the in-flight set until its done
+        callback runs on the loop. The final flush used to loop on gather()
+        over it; on a finished task gather() returns without yielding, so the
+        callback never ran and the run's loop spun at 100% CPU forever. Seen
+        as hung runs when the suite ran on every core at once."""
+        store = MemoryRunEventStore()
+        rows: list = []
+
+        async def main():
+            j = RunJournal("r1", "t1", store, flush_threshold=100)
+
+            async def finished_write():
+                return True
+
+            write = asyncio.get_running_loop().create_task(finished_write())
+            await write
+            j._pending_flush_tasks.add(write)  # finished; its done callback has not run yet
+            j.on_chain_start({"name": "graph"}, {}, run_id=uuid4(), parent_run_id=None)  # buffered
+            await j.flush()
+            rows.extend(await store.list_events("t1", "r1"))
+
+        # A spinning loop never yields, so no asyncio timeout can stop it; the
+        # flush runs on its own thread and the test waits for that thread.
+        runner = threading.Thread(target=lambda: asyncio.run(main()), daemon=True)
+        runner.start()
+        runner.join(10)
+        assert not runner.is_alive(), "the final flush spun on a finished write"
+        assert [e["event_type"] for e in rows] == ["run.start"]
 
     @pytest.mark.anyio
     async def test_events_retained_when_no_loop(self, journal_setup):

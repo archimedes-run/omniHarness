@@ -1,4 +1,5 @@
 import base64
+import builtins
 import importlib
 import os
 from pathlib import Path
@@ -123,8 +124,15 @@ def test_view_image_sanitizes_read_errors(tmp_path: Path, monkeypatch: pytest.Mo
     image_path = Path(thread_data["uploads_path"]) / "sample.png"
     image_path.write_bytes(PNG_BYTES)
 
-    def _open(*args, **kwargs):
-        raise PermissionError(f"permission denied: {image_path}")
+    real_open = builtins.open
+
+    # Only the image's read fails. Failing every open() also failed the
+    # tool's first mimetypes.guess_type() in a fresh process (it lazily reads
+    # the system mime.types), so the test depended on which tests ran before.
+    def _open(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and Path(file).resolve() == image_path.resolve():
+            raise PermissionError(f"permission denied: {image_path}")
+        return real_open(file, *args, **kwargs)
 
     monkeypatch.setattr("builtins.open", _open)
 
