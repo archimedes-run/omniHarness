@@ -6,22 +6,27 @@ import { SectionHeading } from "./section-heading";
 const MOMENTS = [
   {
     time: "8:45 AM",
+    dateTime: "08:45",
     text: "Your morning briefing lands in Telegram: today's calendar, the inbox, and what moved overnight.",
   },
   {
     time: "10:20 AM",
+    dateTime: "10:20",
     text: "“Compare three standing desks under $600.” The researcher answers with sourced links, no interruptions.",
   },
   {
     time: "1:05 PM",
+    dateTime: "13:05",
     text: "A specialist agent finishes a repository review, and its report opens in the file panel beside the chat.",
   },
   {
     time: "3:40 PM",
+    dateTime: "15:40",
     text: "The inbox agent proposes deleting 14 newsletters, then waits for your Confirm before anything is removed.",
   },
   {
     time: "6:10 PM",
+    dateTime: "18:10",
     text: "Your terminal coding agent has finished; Home shows the session is waiting on you.",
   },
 ];
@@ -45,7 +50,10 @@ export function DaySection() {
             key={m.time}
             className="border-border bg-card flex flex-col gap-1 rounded-xl border px-4 py-3 sm:flex-row sm:items-baseline sm:gap-5"
           >
-            <time className="text-muted-foreground w-20 shrink-0 text-sm tabular-nums">
+            <time
+              dateTime={m.dateTime}
+              className="text-muted-foreground w-20 shrink-0 text-sm tabular-nums"
+            >
               {m.time}
             </time>
             <span className="text-foreground text-sm leading-relaxed sm:text-base">

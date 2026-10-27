@@ -66,7 +66,12 @@ function AppMock() {
               <span className="text-foreground-2">
                 Moved &ldquo;Write the pricing page copy&rdquo; to Fri
               </span>
-              <span className="text-primary font-medium">Undo</span>
+              <span
+                aria-hidden
+                className="text-primary pointer-events-none cursor-default font-medium select-none"
+              >
+                Undo
+              </span>
             </div>
           </div>
         </div>

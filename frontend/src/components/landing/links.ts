@@ -5,7 +5,7 @@ export const DOCS_URL = "/en/docs";
  * The landing sections the header links to. The anchors are written `/#id`,
  * not `#id`: the header is also the navbar of the blog and the docs, where a
  * bare `#id` would point at an id on that page instead of the landing page.
- * tests/unit/landing.test.tsx checks each one resolves to a rendered id.
+ * tests/unit/landing.test.ts checks each one resolves to a rendered id.
  */
 export const SECTION_IDS = {
   product: "product",

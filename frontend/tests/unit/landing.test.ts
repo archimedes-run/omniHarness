@@ -30,6 +30,14 @@ const headings = (level: number) =>
     (m) => text(m[1]!),
   );
 
+/** The Asks first tier card: from its heading to the end of its <li>. */
+function asksFirst(markup: string): string {
+  const at = markup.indexOf(">Asks first<");
+  if (at < 0) return "";
+  const start = markup.lastIndexOf("<li", at);
+  return markup.slice(start, markup.indexOf("</li>", at));
+}
+
 describe("landing page", () => {
   it("POSITIVE CONTROL: the helpers see ids, hrefs and headings", () => {
     expect(ids.size).toBeGreaterThan(3);
@@ -97,6 +105,35 @@ describe("landing page", () => {
 
   it("claims nothing that is not shipped", () => {
     expect(html).not.toMatch(/opencode/i);
+    // MCP Build isn't merged yet.
+    expect(html).not.toMatch(/MCP Build/i);
+  });
+
+  it("never offers Apply all for the asks-first tier", () => {
+    const tier3 = asksFirst(html);
+    expect(tier3, "the Asks first tier is not on the page").toMatch(
+      /Asks first/,
+    );
+    expect(tier3).not.toMatch(/apply all/i);
+  });
+
+  it("keeps the phone menu in the DOM, hidden, so aria-controls resolves", () => {
+    expect(html).toMatch(/<div id="landing-mobile-menu" hidden=""/);
+    const nav = html.slice(
+      html.indexOf('<nav aria-label="Main"'),
+      html.indexOf("</nav>"),
+    );
+    expect(nav, "the menu sits inside the nav landmark").toContain(
+      'id="landing-mobile-menu"',
+    );
+  });
+
+  it("gives the timeline machine-readable times", () => {
+    const times = [...html.matchAll(/<time dateTime="([^"]*)"/g)].map(
+      (m) => m[1]!,
+    );
+    expect(times).toHaveLength(5);
+    for (const t of times) expect(t).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
   });
 });
 

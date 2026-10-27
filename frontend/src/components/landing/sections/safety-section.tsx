@@ -18,7 +18,7 @@ const TIERS = [
   },
   {
     label: "Asks first",
-    text: "Anything that sends, deletes, shares or spends waits for your Confirm, with Apply all for a batch.",
+    text: "Anything that sends, deletes, shares or spends waits for your Confirm.",
     accent: "border-l-warning",
   },
 ];
@@ -26,8 +26,10 @@ const TIERS = [
 const RULES = [
   "Tools without a rule are refused, never defaulted.",
   "Content an agent reads can suggest, never approve.",
-  "Run history is encrypted on your disk.",
+  "Automation run history is encrypted on your disk.",
 ];
+
+const INERT = "pointer-events-none cursor-default";
 
 /** A drawing of an approval card, not a live control. */
 function ApprovalCard() {
@@ -43,11 +45,22 @@ function ApprovalCard() {
       <p className="text-muted-foreground mt-1 text-xs">
         Nothing happens until you choose.
       </p>
-      <div className="mt-4 flex justify-end gap-2">
-        <span className={buttonVariants({ variant: "outline", size: "sm" })}>
+      {/* Drawn buttons: not focusable, not clickable, no hover. */}
+      <div
+        aria-hidden
+        className="pointer-events-none mt-4 flex justify-end gap-2 select-none"
+      >
+        <span
+          className={cn(
+            buttonVariants({ variant: "outline", size: "sm" }),
+            INERT,
+          )}
+        >
           Decline
         </span>
-        <span className={buttonVariants({ size: "sm" })}>Confirm</span>
+        <span className={cn(buttonVariants({ size: "sm" }), INERT)}>
+          Confirm
+        </span>
       </div>
     </figure>
   );

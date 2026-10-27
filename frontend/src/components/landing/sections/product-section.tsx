@@ -46,13 +46,13 @@ const FEATURES: { icon: LucideIcon; title: string; text: string }[] = [
   },
   {
     icon: Boxes,
-    title: "MCP Suite and MCP Build",
-    text: "Connect MCP servers and toolkits, or describe a tool: an agent builds and tests it in a sandbox, and you approve its first run.",
+    title: "MCP Suite",
+    text: "Connect MCP servers and toolkits, each with live health and its tool count, and failing sources shown, never hidden.",
   },
   {
     icon: Container,
     title: "Sandboxed code",
-    text: "Code runs in a Docker sandbox per chat, never on your host, and can reach package registries and nothing else.",
+    text: "When code runs, it runs in a Docker sandbox per chat, never on your host, and can reach package registries and nothing else.",
   },
   {
     icon: TerminalSquare,
