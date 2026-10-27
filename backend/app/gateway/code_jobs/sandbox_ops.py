@@ -58,16 +58,30 @@ class AioJobSandbox:
             self._client.shell.create_session(id=self._ctl, exec_dir="/tmp", no_change_timeout=120)
             self._ctl_ready = True
 
+    def _fresh_ctl(self) -> None:
+        # A new id: a session id that was cleaned up is not reusable.
+        self._ctl = f"ohjob-ctl-{uuid.uuid4().hex[:8]}"
+        self._ctl_ready = False
+        self._ensure_ctl()
+
     def sh(self, command: str, *, timeout: int = 30) -> tuple[int | None, str]:
         self._ensure_ctl()
+
+        def run():
+            return self._client.shell.exec_command(id=self._ctl, command=command, no_change_timeout=timeout, hard_timeout=float(timeout) + 5, truncate=False)
+
         try:
-            result = self._client.shell.exec_command(id=self._ctl, command=command, no_change_timeout=timeout, hard_timeout=float(timeout) + 5, truncate=False)
+            result = run()
         except Exception as exc:  # noqa: BLE001 - the session was cleaned up under us: once more, fresh
             if "Session not found" not in str(exc):
                 raise
-            self._ctl_ready = False
-            self._ensure_ctl()
-            result = self._client.shell.exec_command(id=self._ctl, command=command, no_change_timeout=timeout, hard_timeout=float(timeout) + 5, truncate=False)
+            self._fresh_ctl()
+            result = run()
+        data = result.data
+        if data is not None and data.status == "terminated" and data.exit_code == -1 and not (data.output or "").strip():
+            # The session's shell is gone (it was cleaned up or killed): once more, fresh.
+            self._fresh_ctl()
+            result = run()
         data = result.data
         if data is None:
             return None, ""
@@ -112,7 +126,8 @@ class AioJobSandbox:
     def close(self) -> None:
         if self._ctl_ready:
             self.end_session(self._ctl)
-            self._ctl_ready = False
+        self._ctl = f"ohjob-ctl-{uuid.uuid4().hex[:8]}"
+        self._ctl_ready = False
 
     def touch(self) -> None:
         if self._touch is not None:

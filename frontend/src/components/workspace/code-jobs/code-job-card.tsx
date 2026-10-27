@@ -407,6 +407,16 @@ function Evidence({ job }: { job: CodeJob }) {
           </span>
         </li>
       </ul>
+      {r?.over_reservation_calls ? (
+        <p
+          className="text-foreground-2 mt-2 text-xs"
+          data-testid="code-job-over-reservation"
+        >
+          {r.over_reservation_calls} model call
+          {r.over_reservation_calls === 1 ? "" : "s"} cost more than the system
+          had reserved for {r.over_reservation_calls === 1 ? "it" : "them"}.
+        </p>
+      ) : null}
       <p className="text-muted-foreground mt-2 text-xs">
         Reported by the worker, not checked by the system:
       </p>

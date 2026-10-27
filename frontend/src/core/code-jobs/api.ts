@@ -48,6 +48,7 @@ export interface CodeJobResult {
   cost_usd?: number;
   budget_usd?: number;
   calls?: number;
+  over_reservation_calls?: number;
   model?: string;
   published?: { artifact_id: string; path: string } | null;
   duration_s?: number;

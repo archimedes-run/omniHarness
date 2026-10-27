@@ -10,7 +10,8 @@ import { lowContrastText } from "./contrast-probe";
  *   stop route;
  * - when it ends: the steps fold away (and open again on request), and the
  *   card shows the status the SYSTEM decided, with its evidence (the build
- *   check's exit code, the expected files, the files changed, tests);
+ *   check's exit code, the expected files, the files changed, tests, and
+ *   any model calls that cost more than was reserved for them);
  * - a verified build opens in the artifact panel; an unverified job never
  *   reads as done and offers no app;
  * - a step's status comes from its exit code, never from the worker's words;
@@ -319,7 +320,9 @@ for (const scheme of ["light", "dark"] as const) {
         page,
         scheme,
         {
-          job: job("verified", { result: VERIFIED_RESULT }),
+          job: job("verified", {
+            result: { ...VERIFIED_RESULT, over_reservation_calls: 2 },
+          }),
           steps: STEPS,
           month: { spent_usd: 0.31, cap_usd: 20 },
         },
@@ -341,6 +344,10 @@ for (const scheme of ["light", "dark"] as const) {
       );
       await expect(evidence).toContainText("4 files changed");
       await expect(evidence).toContainText("npm test: exit 1");
+      // Calls that cost more than was reserved for them are shown.
+      await expect(card.getByTestId("code-job-over-reservation")).toHaveText(
+        "2 model calls cost more than the system had reserved for them.",
+      );
       await aa(page);
       if (SHOTS)
         await card.screenshot({

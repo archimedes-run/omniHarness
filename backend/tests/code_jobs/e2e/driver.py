@@ -51,6 +51,8 @@ PROVIDER_KEY = os.environ["E2E_PROVIDER_KEY"]
 SECRET = os.environ["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"]
 SABOTAGE = os.environ.get("E2E_SABOTAGE", "")
 PORT = 8790
+#: The check exits 9 if any leftover the worker started is still alive, else 3.
+LEFTOVER_CHECK = "pgrep -f '[s]leep 999|[s]leep 888|[t]muxanything 889' >/dev/null && exit 9; exit 3"
 failed = False
 
 
@@ -149,16 +151,6 @@ def main() -> int:
     }
     (work / "a" / "workspace" / "opencode.json").write_text(json.dumps(hostile))
 
-    # -- the kill sweep on its own: a sandbox-user process outside every service tree --
-    subprocess.run(["docker", "exec", "-d", "-u", "gem", a, "setsid", "env", "-i", "sh", "-c", "sleep 777"], check=True)
-    time.sleep(1)
-    check("positive control: the stray process runs", True, dexec(a, "pgrep -fc '[s]leep 777'", user="gem").strip() not in ("", "0"))
-    from app.gateway.code_jobs.runner import Running
-
-    manager._kill(Running(job_id="sweep-test", ops=ops["a"]))
-    check("the kill sweep ends a stray sandbox-user process (no group, no marker)", "0", dexec(a, "pgrep -fc '[s]leep 777'", user="gem").strip() or "0")
-    check("the sandbox's own API survives the sweep", (0, True), (lambda r: (r[0], "alive" in r[1]))(ops["a"].sh("echo alive")))
-
     async def scenario() -> None:
         # -- egress and secrets, while a real job runs ------------------------------------
         brief = CodeJobBrief(goal="[scenario:egress] check the network and write hello.txt", project_dir="e2e", verify_command="test -s hello.txt", expect_files=["hello.txt"])
@@ -205,13 +197,26 @@ def main() -> int:
         check("the provider saw only the proxy-injected key", True, bool(seen) and all(h == f"Bearer {PROVIDER_KEY}" for h in seen))
 
         # -- the check's exit status is the sandbox API's, and leftovers die first --
-        quick = await manager.run(thread_id="a", user_id="u", tool_call_id="quick", brief=CodeJobBrief(goal="[scenario:quick] nothing", project_dir="e2e", verify_command="pgrep -f '[s]leep 999' >/dev/null && exit 9; exit 3"))
+        # A detached process the lead started BEFORE the job (a daemon, a server):
+        # the job's sweep must leave it alone.
+        subprocess.run(["docker", "exec", "-d", "-u", "gem", a, "setsid", "env", "-i", "sh", "-c", "sleep 555"], check=True)
+        await asyncio.sleep(1)
+        check("positive control: the lead's earlier detached process runs", True, dexec(a, "pgrep -fc '[s]leep 555'", user="gem").strip() not in ("", "0"))
+        quick = await manager.run(thread_id="a", user_id="u", tool_call_id="quick", brief=CodeJobBrief(goal="[scenario:quick] nothing", project_dir="e2e", verify_command=LEFTOVER_CHECK))
+        print("      quick job:", quick.status, store.get(quick.job_id).reason, round((store.get(quick.job_id).finished_at or 0) - store.get(quick.job_id).created_at, 1), "s", flush=True)
+        for st in store.steps(quick.job_id):
+            if st["kind"] in ("command", "error"):
+                print("      quick:", st.get("command", st.get("message", ""))[:90], "->", st.get("exit_code"), repr(st.get("output", "")[-160:]), flush=True)
         alive = next((st for st in store.steps(quick.job_id) if st["kind"] == "command" and "pgrep" in st["command"]), {})
-        check("positive control: the leftovers ran and were alive while the worker ran", True, alive.get("exit_code") == 0 and alive.get("output", "").strip().startswith(("1", "2")))
+        check("positive control: the leftovers ran and were alive while the worker ran", True, alive.get("exit_code") == 0 and alive.get("output", "").strip() not in ("", "0"))
         # exit 3, not 9: no leftover was alive when the check ran.
-        check("a failing check fails the job whatever the worker wrote, and leftovers were gone before it", ("failed", 3), (quick.status, (store.get(quick.job_id).result or {}).get("verify", {}).get("exit_code")))
+        check("a failing check fails the job whatever the worker wrote, and leftovers were gone before it", ("failed", 3), (quick.status, ((store.get(quick.job_id).result or {}).get("verify") or {}).get("exit_code")))
         check("the worker's leftover process is gone before the check", "0", dexec(a, "pgrep -fc '[s]leep 300'", user="gem").strip() or "0")
         check("a leftover that left the group and cleared its environment is gone too", "0", dexec(a, "pgrep -fc '[s]leep 999'", user="gem").strip() or "0")
+        check("a private tmux server the worker started is gone", "0", dexec(a, "pgrep -fc '[s]leep 888'", user="gem").strip() or "0")
+        check("a renamed binary the worker started is gone", "0", dexec(a, "pgrep -fc '[t]muxanything 889'", user="gem").strip() or "0")
+        check("the lead's earlier detached process survived the job", True, dexec(a, "pgrep -fc '[s]leep 555'", user="gem").strip() not in ("", "0"))
+        check("the sandbox's own API survives the sweep", (0, True), (lambda r: (r[0], "alive" in r[1]))(ops["a"].sh("echo alive")))
 
         # -- token scope -----------------------------------------------------------------------
         hold = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="hold", brief=CodeJobBrief(goal="[scenario:hold] hold", project_dir="e2e")))

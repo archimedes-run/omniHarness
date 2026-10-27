@@ -99,6 +99,25 @@ def test_a_reservation_counts_until_it_settles_and_no_usage_charges_the_estimate
     assert store.get("j").spent_usd == pytest.approx(0.34)
 
 
+def test_the_actual_cost_counts_against_the_budget_and_the_month_cap_even_above_the_reservation(tmp_path):
+    store = _store(tmp_path)
+    store.create(job_id="a", thread_id="t", user_id="u", tool_call_id="c1", title="x", project_dir="p", budget_usd=1.0, model="m")
+    call, _, out = _reserve(store, job="a", want=1000)
+    reserved = 1000 * 10.0 / 1e6
+    assert store.settle_call(call, status="ok", usage=(9, 0, 9), cost_usd=3.0) == pytest.approx(3.0), "the actual cost is charged, not min(actual, reserved)"
+    assert store.get("a").spent_usd == pytest.approx(3.0)
+    row = store.job_calls("a")[-1]
+    assert row["reserved_usd"] == pytest.approx(reserved) and row["actual_cost_usd"] == pytest.approx(3.0)
+    assert store.over_reservation("a") == 1
+    assert "budget" in (_reserve(store, job="a")[1] or ""), "the overshoot ends the job's calls"
+    store.create(job_id="b", thread_id="t", user_id="u", tool_call_id="c2", title="x", project_dir="p", budget_usd=5.0, model="m")
+    assert "cap" in (_reserve(store, job="b", cap=3.0)[1] or ""), "the month cap counts the actual cost"
+    # A cheaper call than reserved is charged its actual cost too.
+    call, _, _ = _reserve(store, job="b", cap=20.0, want=1000)
+    assert store.settle_call(call, status="ok", usage=(1, 0, 1), cost_usd=0.001) == pytest.approx(0.001)
+    assert store.over_reservation("b") == 0
+
+
 def test_concurrent_calls_and_the_rate_are_capped_including_calls_in_flight(tmp_path):
     store = _store(tmp_path)
     store.create(job_id="j", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=50.0, model="m")
@@ -380,3 +399,110 @@ def test_the_sandbox_guard_reads_connected_networks_from_the_routing_table(tmp_p
     assert [str(n) for n in g.local_networks()] == ["192.168.0.0/24", "172.22.0.0/16"]
     monkeypatch.setenv("GATEWAY_TRUSTED_PROXIES", "192.168.0.10")
     assert [str(n) for n in g.trusted_networks()] == ["192.168.0.0/24"]
+
+
+def test_the_guard_reads_ipv4_mapped_addresses_cidr_proxies_and_keeps_the_last_subnets(monkeypatch):
+    import ipaddress
+
+    from app.gateway import sandbox_guard as g
+
+    try:
+        g.set_state(configured=True, subnets=[ipaddress.IPv4Network("172.22.0.0/16")], own=set(), trusted=[])
+        assert g.refused("::ffff:172.22.0.9"), "an IPv4-mapped sandbox address slips through"
+        monkeypatch.setattr(g, "local_networks", lambda: [ipaddress.IPv4Network("192.168.200.0/24"), ipaddress.IPv4Network("172.22.0.0/16")])
+        monkeypatch.setenv("GATEWAY_TRUSTED_PROXIES", "192.168.200.10/24, not-an-ip")
+        assert g.trusted_networks() == [ipaddress.IPv4Network("192.168.200.0/24")]
+        import app.gateway.code_jobs.network as network
+
+        monkeypatch.setattr(network, "network_subnets", lambda name: [])
+        monkeypatch.setattr(network, "_local_ipv4_addresses", lambda: ["172.22.0.3"])
+        assert g._refresh("omni-test") is True, "a failed refresh forgot the known subnets"
+        assert g.refused("172.22.0.9")
+    finally:
+        g.set_state(configured=False, subnets=[])
+
+
+def test_the_sweep_spares_every_process_from_before_the_job():
+    from app.gateway.code_jobs.runner import leftover_sweep, snapshot_keys
+
+    keys = snapshot_keys("  1 Sun Oct 25 11:30:00 2026\n 254 Sun Oct 25 11:30:01 2026\nbogus\n")
+    assert keys == frozenset({"1|Sun Oct 25 11:30:00 2026", "254|Sun Oct 25 11:30:01 2026"})
+    script = leftover_sweep(keys)
+    assert "254|Sun Oct 25 11:30:01 2026" in script and "tmux" not in script, "spared by recorded pid and start time, never by name"
+    assert leftover_sweep(None) == "" and leftover_sweep(frozenset()) == ""
+
+
+def test_the_guard_is_closed_even_when_its_first_read_of_the_sandbox_network_raises(monkeypatch):
+    import ipaddress
+
+    import app.gateway.code_jobs.network as network
+    from app.gateway import sandbox_guard as g
+
+    class Alive:
+        def is_alive(self):
+            return True
+
+    def boom(name):
+        raise RuntimeError("docker is not answering")
+
+    monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-test-sandboxes")
+    monkeypatch.setattr(g, "_thread", Alive())  # no background refresh in a test
+    monkeypatch.setattr(network, "network_subnets", boom)
+    monkeypatch.setattr(network, "_local_ipv4_addresses", lambda: ["172.22.0.3"])
+    monkeypatch.setattr(g, "local_networks", lambda: [ipaddress.IPv4Network("192.168.200.0/24"), ipaddress.IPv4Network("172.22.0.0/16")])
+    monkeypatch.setenv("GATEWAY_TRUSTED_PROXIES", "192.168.200.10")
+    try:
+        g.init_from_docker()
+        assert g.refused("172.22.0.9"), "the guard was left open after a failed first read"
+        assert not g.refused("192.168.200.10") and not g.refused("127.0.0.1") and not g.refused("172.22.0.3")
+    finally:
+        g.set_state(configured=False, subnets=[])
+
+
+def test_the_sweep_kills_only_what_the_job_started_and_a_detached_process_from_before_the_job_survives(tmp_path):
+    """The sweep script itself, run by bash against a fake `ps` (the parent of
+    `ps` is the sweep's own shell) and a `kill` that records its targets."""
+    import os
+    import shutil
+    import stat
+    import subprocess
+
+    from app.gateway.code_jobs.runner import leftover_sweep, snapshot_keys
+
+    if not shutil.which("bash") or not shutil.which("awk"):
+        pytest.skip("needs bash and awk")
+    t0, t1, t2 = "Sun Oct 25 11:30:00 2026", "Sun Oct 25 11:31:00 2026", "Sun Oct 25 11:45:00 2026"
+    before = "\n".join(f"{pid} {t}" for pid, t in [(1, t0), (50, t0), (55, t0), (60, t1), (61, t1)])
+    snapshot = snapshot_keys(before)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    killed = tmp_path / "killed"
+    # pid ppid user start; SELF is the sweep's shell (ps's parent), CTL its parent.
+    rows = [
+        ("1", "0", "root", t0),  # init
+        ("50", "1", "gem", t0),  # the sandbox API server, from before the job
+        ("55", "50", "gem", t0),  # the gateway's control session shell (before the job)
+        ("60", "1", "gem", t1),  # the lead's detached background server, started before the job
+        ("61", "1", "gem", t2),  # pid 61 reused by a new process (other start time)
+        ("70", "1", "gem", t2),  # the worker's detached leftover (setsid env -i)
+        ("71", "1", "gem", t2),  # a private tmux server the worker started
+        ("72", "71", "gem", t2),  # ... and its child
+        ("73", "1", "gem", t2),  # a renamed binary the worker started
+        ("80", "1", "root", t2),  # not the sandbox user
+        ("CTL", "55", "gem", t2),  # a control shell recreated during the job
+        ("SELF", "CTL", "gem", t2),  # the sweep's own shell
+    ]
+    lines = "\\n".join(f"{p} {pp} {u} {t}" for p, pp, u, t in rows)
+    (bindir / "ps").write_text(f'#!/bin/bash\nSELF=$PPID\nCTL=$(( SELF + 100000 ))\nprintf "{lines}\\n" | sed -e "s/^SELF /$SELF /" -e "s/ SELF / $SELF /" -e "s/^CTL /$CTL /" -e "s/ CTL / $CTL /"\n')
+    (bindir / "kill").write_text(f'#!/bin/bash\nshift\nfor p in "$@"; do echo "$p" >> {killed}; done\n')
+    for f in ("ps", "kill"):
+        (bindir / f).chmod((bindir / f).stat().st_mode | stat.S_IEXEC)
+    script = tmp_path / "sweep.sh"
+    script.write_text(leftover_sweep(snapshot))
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+    subprocess.run(["bash", str(script)], env=env, check=True, timeout=20)
+    victims = set(killed.read_text().split()) if killed.exists() else set()
+    assert "60" not in victims, "the lead's detached process from before the job was killed"
+    assert not victims & {"1", "50", "55", "80"}, "a process from before the job, or another user's, was killed"
+    assert {"61", "70", "71", "72", "73"} <= victims, "a process the job started survived the sweep"
+    assert all(v.isdigit() and int(v) < 100 for v in victims), "the sweep killed its own shell or the control session"

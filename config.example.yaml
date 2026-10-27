@@ -324,7 +324,7 @@ sandbox:
 # thread's container sandbox (never on the host). It is offered only with the
 # container sandbox above (AioSandboxProvider + the registries proxy), and only
 # when the worker's model can be served through the gateway's LLM proxy (an
-# OpenAI-compatible or Anthropic model). The sandbox gets NO provider key: the
+# OpenAI-compatible model, or one with such an endpoint). The sandbox gets NO provider key: the
 # worker calls a gateway proxy on the sandbox network with a per-job token,
 # and the gateway injects the key. Every value below is a ceiling the gateway
 # enforces. All optional; the defaults are shown.
