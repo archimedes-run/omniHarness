@@ -444,9 +444,19 @@ class RunJournal(BaseCallbackHandler):
     async def flush(self) -> None:
         """Force flush remaining buffer. Called in worker's finally block."""
         # A write that finishes starts the next one for what arrived
-        # meanwhile, so wait until none is in flight.
-        while self._pending_flush_tasks:
-            await asyncio.gather(*tuple(self._pending_flush_tasks), return_exceptions=True)
+        # meanwhile, so wait until none is in flight. Wait on the UNFINISHED
+        # ones only: a finished write stays in the set until its done callback
+        # runs, and gather() over finished tasks returns without yielding to
+        # the loop (Python 3.12 completes it eagerly), so looping on it would
+        # spin forever with that callback never getting to run. A finished
+        # write left there is harmless: the drain below writes what it would
+        # have started, and its callback finds _draining set or nothing left.
+        while True:
+            with self._buffer_lock:
+                in_flight = [task for task in self._pending_flush_tasks if not task.done()]
+            if not in_flight:
+                break
+            await asyncio.gather(*in_flight, return_exceptions=True)
 
         self._draining = True
         try:
