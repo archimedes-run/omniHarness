@@ -30,6 +30,13 @@ version can be restored without replaying a chain:
            by app.gateway.automations_store into the rules file, which stays
            what the trigger engine reads; this module never writes that file.
 
+  apps     one history per app id (Spec 011 FR-003) under the user's directory
+           ({user}/app_versions/{app_id}.jsonl), snapshot {"manifest",
+           "manifest_hash", "bundle_hash", "script_hashes"}. The bundle (one
+           self-contained HTML document) is stored content-addressed beside it
+           ({user}/app_bundles/{sha256}.html) and never rewritten: a version
+           names its bundle by hash, so restore needs no copy.
+
 A thing that existed before its first versioned write gets a baseline version
 (source "existing") first, so the first edit can be undone too. For
 automations the rules file can also be edited by hand at any time, so every
@@ -61,8 +68,8 @@ from omniharness.config.agents_config import SOUL_FILENAME, validate_agent_name
 
 logger = logging.getLogger(__name__)
 
-Kind = Literal["agent", "skill", "automation"]
-SOURCES = frozenset({"manual", "draft", "proposal", "chat", "undo", "existing"})
+Kind = Literal["agent", "skill", "automation", "app"]
+SOURCES = frozenset({"manual", "draft", "proposal", "chat", "undo", "existing", "code_job"})
 LEAD_AGENT = "lead_agent"
 CONFIG_FILENAME = "config.yaml"
 #: The agent's standing grants (app/policy/grants.py). Changed ONLY by a write
@@ -643,6 +650,112 @@ def automation_target(history_dir: Path, rule_id: str, to_version: int) -> dict 
     return target.snapshot
 
 
+# -- apps ---------------------------------------------------------------------
+#
+# Spec 011. Only a verified app-mode coding job (source "code_job") or a
+# library Restore (source "undo") writes here; the gateway's registration
+# (app.gateway.apps.registry) is the one caller of write_app.
+
+APP_VERSIONS_DIR = "app_versions"
+APP_BUNDLES_DIR = "app_bundles"
+_APP_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+_BUNDLE_HASH = re.compile(r"^[0-9a-f]{64}$")
+
+
+def validate_app_id(app_id: str) -> str:
+    if not isinstance(app_id, str) or not _APP_ID.match(app_id):
+        raise ValueError(f"invalid app id {app_id!r}")
+    return app_id
+
+
+def _app_root(user_id: str) -> Path:
+    from omniharness.config.paths import get_paths
+
+    return get_paths().user_dir(user_id)
+
+
+def _app_history_file(user_id: str, app_id: str) -> Path:
+    return _app_root(user_id) / APP_VERSIONS_DIR / f"{validate_app_id(app_id)}.jsonl"
+
+
+def write_app_bundle(user_id: str, html: bytes) -> str:
+    """Store one bundle content-addressed; returns its SHA-256. Idempotent: a
+    bundle already stored is left as it is (same hash, same bytes)."""
+    digest = hashlib.sha256(html).hexdigest()
+    path = _app_root(user_id) / APP_BUNDLES_DIR / f"{digest}.html"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(path.parent)) as handle:
+            handle.write(html)
+            tmp = Path(handle.name)
+        tmp.replace(path)
+    return digest
+
+
+def read_app_bundle(user_id: str, digest: str) -> bytes:
+    """The bundle with this hash, checked against it (a changed file is refused)."""
+    if not _BUNDLE_HASH.match(str(digest or "")):
+        raise VersionNotFoundError("invalid bundle hash")
+    path = _app_root(user_id) / APP_BUNDLES_DIR / f"{digest}.html"
+    if not path.exists():
+        raise VersionNotFoundError(f"bundle {digest} is not stored")
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise VersionNotFoundError(f"bundle {digest} does not match its hash")
+    return data
+
+
+def app_history(user_id: str, app_id: str) -> list[Version]:
+    return _versions(_app_history_file(user_id, app_id))
+
+
+def app_restored_from(user_id: str, app_id: str) -> dict[int, int]:
+    """version -> the version it restored, for versions written by Restore."""
+    return {int(r["version"]): int(r["restored_from"]) for r in _read_lines(_app_history_file(user_id, app_id)) if isinstance(r.get("version"), int) and isinstance(r.get("restored_from"), int)}
+
+
+def app_ids(user_id: str) -> list[str]:
+    directory = _app_root(user_id) / APP_VERSIONS_DIR
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob("*.jsonl") if _APP_ID.match(p.stem))
+
+
+def write_app(user_id: str, app_id: str, snapshot: dict, *, who: str, source: str, base_version: int | None = None, restored_from: int | None = None) -> Version:
+    """Record a new version of an app. The snapshot's bundle must already be
+    stored (write_app_bundle). Refused (StaleWriteError) when `base_version`
+    is given and is not the current version."""
+    if source not in ("code_job", "undo"):
+        raise ValueError("an app version is written only by a verified coding job or a Restore")
+    if not isinstance(snapshot, dict) or not _BUNDLE_HASH.match(str(snapshot.get("bundle_hash", ""))):
+        raise ValueError("an app snapshot names its bundle by hash")
+    read_app_bundle(user_id, snapshot["bundle_hash"])  # stored and intact
+    history = _app_history_file(user_id, app_id)
+    with _locked(history):
+        versions = _versions(history)
+        current = versions[-1].version if versions else 0
+        if base_version is not None and base_version != current:
+            raise StaleWriteError("app", app_id, base_version, current)
+        before = versions[-1].snapshot if versions else None
+        changed = ["created"] if before is None else _changed(before, snapshot)
+        if restored_from is not None:
+            changed = [f"restored from version {restored_from}", *changed]
+        now = datetime.now(UTC).isoformat()
+        record = {"app_id": app_id, "version": current + 1, "at": now, "who": who, "source": source, "changed": changed, "snapshot": snapshot}
+        if restored_from is not None:
+            record["restored_from"] = restored_from
+        _append(history, record)
+        return Version(version=current + 1, at=now, who=who, source=source, changed=changed, snapshot=snapshot)
+
+
+def restore_app(user_id: str, app_id: str, to_version: int, *, who: str, base_version: int | None = None) -> Version:
+    """Restore `to_version` as a NEW version (undo is a new version, 010)."""
+    target = next((v for v in app_history(user_id, app_id) if v.version == to_version), None)
+    if target is None or target.snapshot is None:
+        raise VersionNotFoundError(f"app '{app_id}' has no version {to_version}")
+    return write_app(user_id, app_id, dict(target.snapshot), who=who, source="undo", base_version=base_version, restored_from=to_version)
+
+
 # -- undo ---------------------------------------------------------------------
 
 
@@ -655,6 +768,8 @@ def undo(kind: Kind, name: str, to_version: int, *, who: str, base_version: int 
         # The rules file is materialised by app.gateway.automations_store, which
         # this package cannot import: see app.gateway.routers.automations.undo_rule.
         raise ValueError("undo an automation through app.gateway.routers.automations.undo_rule")
+    if kind == "app":
+        return restore_app(user_id or "", name, to_version, who=who, base_version=base_version)
     versions = agent_history(user_id or "", name) if kind == "agent" else skill_history(name, storage)
     target = next((v for v in versions if v.version == to_version), None)
     if target is None:

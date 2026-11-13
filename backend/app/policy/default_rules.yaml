@@ -550,6 +550,11 @@ policy:
     - pattern: "connector-googlecalendar_GOOGLECALENDAR_FIND_EVENT"
       tier: 1
       reversible: true
+    # Lists events in a window (Home's calendar and the Apps calendar source,
+    # Spec 011). Newer than the SDK list below; a read like FIND_EVENT.
+    - pattern: "connector-googlecalendar_GOOGLECALENDAR_EVENTS_LIST"
+      tier: 1
+      reversible: true
     - pattern: "connector-googlecalendar_GOOGLECALENDAR_LIST_CALENDARS"
       tier: 1
       reversible: true

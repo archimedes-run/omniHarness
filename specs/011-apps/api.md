@@ -36,7 +36,7 @@ approval card (PR 2), and the coding job's app mode (PR 3a). Requirements are in
 | 403 | `source_refused` | the source failed a read-only check (catalog allowlist, Tier 1, runtime floor) |
 | 409 | `hash_mismatch` | approve: the hash posted is not the current version's hash |
 | 409 | `stale_version` | restore: `base_version` is no longer the current version |
-| 422 | `invalid_request` | a body failed validation (pins, restore, refusal report) |
+| 422 | `invalid_request` | pins that are not distinct apps of yours. Other body validation failures use FastAPI's default 422 shape (`detail` is a list) |
 | 429 | `rate_limited` | 60 bridge requests per app per minute per owner; `Retry-After` header set |
 | 503 | `apps_unavailable` | the gateway has no SQL store |
 
@@ -147,11 +147,18 @@ grant, `status` is `needs_approval` and `approval` carries a new card.
   "sources": [ SourceView, … ],
   "grants": [
     {"manifest_hash": "…", "approved_at": "…", "revoked_at": null, "version": 3}
+  ],
+  "activity": [
+    {"at": "…", "event": "app_approved", "detail": {"version": 3, "manifest_hash": "…", "card": "…", "via": "button"}}
   ]
 }
 ```
 
-`grants` is newest first and includes ended ones.
+`grants` is newest first and includes ended ones. `activity` is the app's last
+20 audit entries, newest first: `app_registered`, `app_approved`,
+`app_revoked`, `app_restored`, `bridge_refused` (`detail.reason`:
+`not_approved` / `unknown_source` / `source_refused`), `app_message_refused`.
+Events and ids only, never data.
 
 ### `POST /api/apps/{id}/revoke`
 
@@ -263,6 +270,8 @@ Every source in one round trip:
 ```
 
 Same errors as above (`403 not_approved` when the version is not approved).
+A source that fails a read-only check does not fail the whole batch: its
+result is `failed` with a `reason` starting `Refused:`.
 Calling it (or loading `app.html`) marks the app as opened; the refresher keeps
 sources of apps opened in the last 24 h warm.
 
@@ -314,9 +323,13 @@ The host page reports a frame message it dropped (FR-022). Body:
 {"reason": "source_not_approved", "type": "data", "source": "inbox_bodies"}
 ```
 
-`reason` ≤ 120 chars, `type` ≤ 32, `source` ≤ 64 (both optional). Stored in
-the apps audit log as `app_message_refused`. `204`. Rate limited with the
-bridge's per-app limit.
+Codes only, no free text (a frame cannot carry data into the log through a
+report): `reason` matches `[a-z][a-z0-9_]{0,47}` (for example
+`source_not_approved`, `unknown_type`, `invalid_message`, `oversized`,
+`rate_limited`, `second_load`); `type` and `source` (both optional) match
+`[a-z][a-z0-9_]{0,31}`; send no `source` when the frame's value is not a
+valid name. Anything else is `422`. Stored in the apps audit log as
+`app_message_refused`. `204`. Rate limited with the bridge's per-app limit.
 
 ## Catalog (for the kit and the fake bridge)
 
@@ -377,7 +390,7 @@ registers an app (FR-007, FR-028).
 ```python
 from app.gateway.apps.registry import register_app
 
-result = register_app(
+result = await register_app(
     app_state,                      # request.app.state or the gateway's app.state
     owner_id=owner_id,
     manifest=manifest_dict,         # parsed omni-app.json
@@ -390,6 +403,13 @@ result = register_app(
 ```
 
 Raises `AppRegistrationError(code, message)` with codes `invalid_manifest`,
+`source_refused` (a connector source failing a read-only check),
+`invalid_request` (a malformed `app_id`), `apps_unavailable` (no SQL store),
+`invalid_bundle` (entry file not UTF-8),
 `bundle_too_large` (> 2 MB after inlining), `forbidden_api` (`RTCPeerConnection`,
 `RTCDataChannel`, `WebSocket`, `eval`, `new Function`), `remote_url` (a script,
-style, image or font that is not inline or `data:`), `missing_file`.
+style, image or font that is not inline or `data:`; also any `src`, `href`,
+`action` or `srcset` in markup pointing at a remote or `javascript:` URL,
+`<a href="https://…">` included: links go through the `open` message),
+`missing_file`. Code inside `<script>` is not scanned for URLs (the CSP
+governs it) but is scanned for the forbidden names.

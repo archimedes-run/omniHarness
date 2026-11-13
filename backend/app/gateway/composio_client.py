@@ -12,6 +12,7 @@ Flow for OAuth connection initiation:
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -160,21 +161,49 @@ def _extract_display(data: dict[str, Any]) -> str | None:
 READ_ONLY_SLUGS = frozenset({"GOOGLECALENDAR_EVENTS_LIST", "GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS"})
 
 
-async def execute_read_tool(client: ComposioClient, *, slug: str, connected_account_id: str, user_id: str, arguments: dict[str, Any], timeout: float = 8.0) -> Any:
+#: The most of a tool's answer read before parsing; more is "can't tell".
+READ_MAX_BYTES = 1024 * 1024
+
+
+async def execute_read_tool(
+    client: ComposioClient,
+    *,
+    slug: str,
+    connected_account_id: str,
+    user_id: str,
+    arguments: dict[str, Any],
+    timeout: float = 8.0,
+    allowed: frozenset[str] = READ_ONLY_SLUGS,
+    max_bytes: int = READ_MAX_BYTES,
+) -> Any:
     """Run one read-only Composio tool through the user's existing connection.
 
-    Raises ComposioError for a slug outside READ_ONLY_SLUGS, an HTTP failure,
-    or a call Composio reports as unsuccessful: the caller says "can't tell".
+    `allowed`: the read allowlist of the caller (Home's READ_ONLY_SLUGS by
+    default; the Apps catalog passes its own). Raises ComposioError for a slug
+    outside it, an HTTP failure, an answer over `max_bytes`, or a call Composio
+    reports as unsuccessful: the caller says "can't tell".
     """
-    if slug not in READ_ONLY_SLUGS:
-        raise ComposioError(f"{slug} is not a read-only tool Home may run")
+    if slug not in allowed:
+        raise ComposioError(f"{slug} is not a read-only tool this caller may run")
     body = {"connected_account_id": connected_account_id, "user_id": user_id, "arguments": arguments}
     # `_transport`: unset in production; tests stand in for Composio's HTTP.
     async with httpx.AsyncClient(headers=client._headers, base_url=_BASE, timeout=timeout, transport=getattr(client, "_transport", None)) as http:
-        r = await http.post(f"/v3/tools/execute/{slug}", json=body)
-    if not r.is_success:
-        raise ComposioError(f"{slug}: HTTP {r.status_code}")
-    payload = r.json()
+        async with http.stream("POST", f"/v3/tools/execute/{slug}", json=body) as r:
+            if not r.is_success:
+                raise ComposioError(f"{slug}: HTTP {r.status_code}")
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in r.aiter_bytes():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ComposioError(f"{slug}: answer larger than {max_bytes} bytes")
+                chunks.append(chunk)
+    try:
+        payload = json.loads(b"".join(chunks))
+    except ValueError as exc:
+        raise ComposioError(f"{slug}: answer is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise ComposioError(f"{slug}: answer is not an object")
     if payload.get("successful") is False:
         raise ComposioError(f"{slug}: {str(payload.get('error') or 'unsuccessful')[:200]}")
     return payload.get("data")
