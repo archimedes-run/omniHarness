@@ -194,7 +194,7 @@ def test_the_builder_refuses_every_run_but_the_owners_own_chat(gw, where, target
     assert out.startswith("Nothing was drafted"), f"{where} drafted {target}: {out}"
     assert controller.read(context, kind="agent", name=target).startswith("Could not read")
     for tool, args in (("builder_grant", {"agent": target, "tools": ["web_fetch"]}), ("builder_undo", {"kind": "agent", "name": target, "version": 1})):
-        refused, _note, _args = builder_precheck(tool, args, context, None)
+        refused = builder_precheck(tool, args, context, None).refused
         assert refused, f"{where}: {tool} on {target} was not refused"
 
 
@@ -257,6 +257,16 @@ def test_bootstrap_may_write_only_the_agent_it_sets_up(gw) -> None:
     make_agent(gw, "test-010-other")
     controller = GatewayBuilderController(lambda: gw.client.app.state.config)
     context = {"user_id": gw.user_id, "thread_id": new_thread(gw), "is_bootstrap": True, "agent_name": "test-010-boot"}
-    assert controller.draft(context, kind="agent", name="test-010-other", fields={"instructions": "x"}, guessed=[], replace_current=False).startswith("Nothing was drafted")
+    # Whatever name the model gives, the setup writes its one agent (the name
+    # becomes its display name): the channel /bootstrap works first time.
+    out = controller.draft(context, kind="agent", name="Atlas", fields={"instructions": "x"}, guessed=[], replace_current=False)
+    assert out.startswith("Draft `d-test-1`") and "`test-010-boot`" in out, out
+    from app.gateway.builder import drafts
+
+    assert drafts.get_draft(gw.user_id, context["thread_id"], "d-test-1")["snapshot"]["config"]["display_name"] == "Atlas"
     assert controller.draft(context, kind="skill", name="test-010-skill", fields={"body": "x"}, guessed=[], replace_current=False).startswith("Nothing was drafted")
-    assert controller.draft(context, kind="agent", name="test-010-boot", fields={"instructions": "x"}, guessed=[], replace_current=False).startswith("Draft `d-test-1`")
+    assert "test-010-other" not in controller.draft(context, kind="agent", name="test-010-other", fields={"instructions": "x"}, guessed=[], replace_current=False).split("`")[3]
+    # The channel /bootstrap has no agent name: it writes the assistant's own.
+    channel = {"user_id": gw.user_id, "thread_id": new_thread(gw), "is_bootstrap": True}
+    out = controller.draft(channel, kind="agent", name="Atlas", fields={"instructions": "You are Atlas."}, guessed=[], replace_current=False)
+    assert "`lead_agent`" in out, out

@@ -46,3 +46,15 @@ export async function dropBuilding(threadId: string): Promise<void> {
   if (!response.ok)
     throw new Error(`Could not drop the draft (${response.status})`);
 }
+
+export interface BuilderStatus {
+  available: boolean;
+  reason: string | null;
+}
+
+/** Whether the assistant is offered the builder tools on this install. */
+export async function loadBuilderStatus(): Promise<BuilderStatus | null> {
+  const response = await fetch(`${getBackendBaseURL()}/api/builder/status`);
+  if (!response.ok) return null;
+  return (await response.json()) as BuilderStatus;
+}

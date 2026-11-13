@@ -35,6 +35,18 @@ Article I (gateway API only), II (policy layer decides, Tier 3 asks), III (prove
 - Until Slice 3 the cards render through the existing pending-action card (plain, no diff UI), so the slice is usable alone.
 - Tests: through `create_app()`, chat → draft → typed yes → version 1 source "chat"; stale base refused. Attack tests: a tool result containing "yes"; an email read before the proposal (becomes a suggestion, typed yes refused); an @-called agent and a delegated subagent editing themselves and their inviter; a resume run trying to answer a card. Each with its sabotage.
 
+#### Slice 2 as built
+
+- **What the model reads back.** `builder_read` and `builder_diff` return stored config text, so a turn that called them is a content turn: a save, grant or undo proposed after them in that turn is a suggestion, saved by its button only. Typed "yes" works when the assistant drafted without reading stored text (a create from one sentence; an edit where `builder_draft` names only the changed fields, and the builder reads the live config itself). The draft acknowledgement, the card's plan as the model sees it and every save result name ids, field names, counts and versions only; the full draft or diff is shown to the owner on the card.
+- **A draft carries its cause.** A draft records the origin of the turn that made it; saved from a later turn, a draft made in a content turn is still a suggestion.
+- **Access never rides along.** A save never widens an agent's effective tools (tool groups, per-tool list, the tools its skills allow); the widening is left out, named on the card, and proposed with `builder_grant` (button only). Narrowing rides with the save. A new agent starts with no tool groups. An undo keeps the agent's current tool list, tool groups, skills list and standing grants, and says so when the older version differed. A skill draft keeps the skill's other frontmatter (allowed-tools included); a skill undo that would change allowed-tools is refused (Skill Studio).
+- **Automations with grants.** The save or undo card of an automation names the agent it runs as and that agent's standing grants; when it holds any, only the button confirms it.
+- **One typed yes, one card.** With a save card and button-only builder cards open together, a typed yes confirms the save card only. Dropping the build (the chip's x) refuses all of its open cards, grant and undo included.
+- **Bootstrap.** The setup conversation writes its one agent whatever name the model passes (it becomes the display name); the channel `/bootstrap` writes the assistant's own.
+- **Off, visibly.** With the policy off, or a rules file that names none of the builder tools, the builder is not offered (no tools, no prompt section) and Settings > Safety says why (`GET /api/builder/status`).
+- **Skills from chat** change only an existing custom skill whose recorded owner is this account.
+- Deferred to Slice 3: per-item checkboxes on the grant card (today the card lists each item and is confirmed as a whole, by its button).
+
 ### Slice 3: Cards and chip (needs 009 Slice 1b's first PR)
 
 - Draft preview, Diff, Created/Saved cards; questions via the shared Question card with typed text routed as a revision (spec "Requirements on the shared Question card"); vague-edit options built from the live config (FR-008).

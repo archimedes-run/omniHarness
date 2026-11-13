@@ -481,7 +481,10 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
         max_tools=max_tools,
         tool_access=tool_access,
     )
-    return filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include)
+    # A skill's allowed-tools narrows the run's working tools, never the
+    # builder: it is the owner's own means of changing agents and skills, and
+    # each of its writes waits for the owner's confirmation anyway.
+    return filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include | {t.name for t in extra_tools})
 
 
 def builder_tools_for(cfg: dict) -> list[BaseTool]:
@@ -489,7 +492,13 @@ def builder_tools_for(cfg: dict) -> list[BaseTool]:
     from omniharness.runtime.builder.controller import get_builder_controller
     from omniharness.runtime.builder.surface import builder_refusal
 
-    if get_builder_controller() is None or builder_refusal(cfg) is not None:
+    controller = get_builder_controller()
+    if controller is None or builder_refusal(cfg) is not None:
+        return []
+    unavailable = getattr(controller, "unavailable_reason", None)
+    if callable(unavailable) and unavailable() is not None:
+        # Not offered at all (no <builder> prompt section either): see
+        # GET /api/builder/status for why.
         return []
     from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
 

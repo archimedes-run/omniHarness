@@ -26,14 +26,18 @@ BUTTON_ONLY_TOOLS: frozenset[str] = frozenset({"builder_grant"})
 #: Every builder tool that proposes (Tier 3); each is prechecked before a card.
 PROPOSING_TOOLS: frozenset[str] = TYPED_SAVE_TOOLS | BUTTON_ONLY_TOOLS
 
-#: The builder's tools, whose results the harness composes itself from the
-#: call's own arguments and the owner's own stored config (never a page, an
-#: email or a tool's output): reading them does not make the turn "content"
-#: (lineage.TRUSTED_TOOL_RESULTS). Without this, drafting before proposing in
-#: one turn made every builder save a suggestion, and a typed "yes" could
-#: never save anything. Trust is still by the tool's identity
+#: The builder's tools whose results the harness composes itself and which
+#: carry NO stored text: a draft's acknowledgement and a proposal's plan, save
+#: or refusal name ids, field names, counts and versions only (the owner reads
+#: the full draft on the card). They do not make the turn "content"
+#: (lineage.TRUSTED_TOOL_RESULTS); trust is by the tool's identity
 #: (middleware._mark_trusted_ack), never its name.
-TRUSTED_RESULT_TOOLS: frozenset[str] = frozenset({"builder_draft", "builder_read", "builder_diff"}) | PROPOSING_TOOLS
+#:
+#: NOT here: builder_read and builder_diff. They return stored text (an
+#: agent's instructions, a skill's files, a rule's prompt), which content may
+#: have put there, so a turn that read them is a content turn: a save proposed
+#: after them is a suggestion, saved only by its button.
+TRUSTED_RESULT_TOOLS: frozenset[str] = frozenset({"builder_draft"}) | PROPOSING_TOOLS
 
 #: FR-015 / decided default Q2: the whole message, normalised by
 #: confirm._normalise (lower case, punctuation stripped, spaces collapsed).

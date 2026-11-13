@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 
 import { PENDING_CONFIRMATIONS_KEY } from "@/core/confirmations/hooks";
 
-import { dropBuilding, loadBuilding } from "./api";
+import { dropBuilding, loadBuilderStatus, loadBuilding } from "./api";
 
 export const builderKey = (threadId: string) => ["builder", threadId];
 
@@ -42,4 +42,11 @@ export function useDropBuilding(threadId: string) {
       });
     },
   });
+}
+
+export function useBuilderStatus() {
+  return useQuery({
+    queryKey: ["builder", "status"],
+    queryFn: () => loadBuilderStatus(),
+  }).data;
 }

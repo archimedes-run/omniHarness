@@ -20,6 +20,7 @@ things are particular to it, both here:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from .builder_rules import PROPOSING_TOOLS
@@ -30,33 +31,56 @@ from .pending import PendingStore
 logger = logging.getLogger(__name__)
 
 
-def builder_precheck(tool_name: str, arguments: dict, context: dict | None, store: PendingStore | None) -> tuple[str | None, str, dict]:
-    """(why it is refused, or None; the text the card adds; the arguments the
-    card records, which pin the exact draft it shows). Not a builder
-    proposal: (None, "", the arguments unchanged)."""
+@dataclass(frozen=True)
+class BuilderCheck:
+    """What the builder said about a proposal before its card."""
+
+    refused: str | None = None
+    #: The card's text for the OWNER (the draft or diff, in full).
+    note: str = ""
+    #: The arguments the card records (a save pins its exact draft).
+    arguments: dict = field(default_factory=dict)
+    #: A draft's own cause, when it was not the owner's request: the card's
+    #: origin may only degrade to it, never improve.
+    origin: tuple[str, str] | None = None
+    #: Why only the card's button confirms it ("" when typing may).
+    button_only: str = ""
+
+
+#: What the MODEL reads in place of the builder's card text: the card shows the
+#: owner the draft, which can hold stored text; the model's copy never does.
+MODEL_NOTE = "The draft or change is shown to the user in full on its card."
+
+
+def builder_precheck(tool_name: str, arguments: dict, context: dict | None, store: PendingStore | None) -> BuilderCheck:
+    """The builder's check of a proposal before its card. Not a builder
+    proposal: nothing to say, arguments unchanged."""
     if tool_name not in PROPOSING_TOOLS:
-        return None, "", arguments
+        return BuilderCheck(arguments=arguments)
     from omniharness.runtime.builder.controller import get_builder_controller
 
     controller = get_builder_controller()
     precheck = getattr(controller, "precheck", None)
     if not callable(precheck):
-        return "the builder is not available here, so nothing can be saved.", "", arguments
-    refused, note, replaces, pinned = precheck(tool_name, dict(arguments or {}), dict(context or {}))
-    if refused is None and replaces and store is not None:
+        return BuilderCheck(refused="the builder is not available here, so nothing can be saved.", arguments=arguments)
+    out = precheck(tool_name, dict(arguments or {}), dict(context or {}))
+    pinned = out.get("arguments") or arguments
+    if out.get("refused") is None and out.get("replaces") and store is not None:
         ctx = context or {}
         refuse_open_builder_cards(store, ctx.get("thread_id"), ctx.get("user_id"), keep_draft=str(pinned.get("draft_id") or ""), reason="A newer draft replaced this one, so it was not saved.")
-    return refused, note, pinned
+    origin = out.get("origin")
+    return BuilderCheck(refused=out.get("refused"), note=out.get("note") or "", arguments=pinned, origin=tuple(origin) if origin else None, button_only=out.get("button_only") or "")
 
 
-def refuse_open_builder_cards(store: PendingStore, thread_id: str | None, owner_id: str | None, *, reason: str, keep_draft: str = "") -> list[PendingAction]:
-    """Refuse (never run) every open builder save card in this chat, except
-    one for `keep_draft`. Returns the refused actions."""
+def refuse_open_builder_cards(store: PendingStore, thread_id: str | None, owner_id: str | None, *, reason: str, keep_draft: str = "", include_grants: bool = False) -> list[PendingAction]:
+    """Refuse (never run) every open builder save and undo card in this chat
+    (and its grant cards with `include_grants`: dropping the build), except a
+    save card for `keep_draft`. Returns the refused actions."""
     if not thread_id:
         return []
     refused: list[PendingAction] = []
     for action in store.open_in_thread(thread_id, datetime.now(UTC)):
-        if action.tool_name not in PROPOSING_TOOLS or action.tool_name == "builder_grant":
+        if action.tool_name not in PROPOSING_TOOLS or (action.tool_name == "builder_grant" and not include_grants):
             continue
         if owner_id is not None and action.owner_id is not None and str(action.owner_id) != str(owner_id):
             continue

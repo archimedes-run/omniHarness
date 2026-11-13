@@ -81,10 +81,13 @@ def test_edit_shows_the_live_before_and_applies_as_the_next_version(gw) -> None:
     make_agent(gw, "test-010-standup", description="Daily standup")
     thread_id = new_thread(gw)
     edit = {"kind": "agent", "name": "test-010-standup", "fields": {"instructions": "Keep it to three lines."}}
-    script(gw, [call("builder_read", {"kind": "agent", "name": "test-010-standup"}, "r1")], [call("builder_draft", edit, "c1")], [call("builder_save", {"draft_id": "d-test-1"}, "c2")], "Here is the diff.")
+    # Drafted without reading the stored config first: the builder reads it
+    # itself, the owner sees the diff on the card, and a typed reply counts.
+    script(gw, [call("builder_draft", edit, "c1")], [call("builder_save", {"draft_id": "d-test-1"}, "c2")], "Here is the diff.")
     say(gw, thread_id, "make my standup agent shorter")
     [card] = cards(gw, "builder_save")
     assert "− You are test-010-standup." in card["plan_text"] and "+ Keep it to three lines." in card["plan_text"], card["plan_text"]
+    assert card["confirmable_by_typing"] is True
     before = agent_state(gw, "test-010-standup")[1]
     script(gw, "Applied.")
     say(gw, thread_id, "apply")
@@ -92,6 +95,22 @@ def test_edit_shows_the_live_before_and_applies_as_the_next_version(gw) -> None:
     assert version == before + 1 and snapshot["soul"] == "Keep it to three lines."
     assert snapshot["config"]["description"] == "Daily standup", "a field the edit did not name changed"
     assert agent_history(gw, "test-010-standup")[-1].source == "chat"
+
+
+def test_an_edit_after_reading_stored_config_saves_by_button_only(gw) -> None:
+    make_agent(gw, "test-010-standup", description="Daily standup")
+    thread_id = new_thread(gw)
+    edit = {"kind": "agent", "name": "test-010-standup", "fields": {"instructions": "Keep it to three lines."}}
+    script(gw, [call("builder_read", {"kind": "agent", "name": "test-010-standup"}, "r1")], [call("builder_draft", edit, "c1")], [call("builder_save", {}, "c2")], "Diff.")
+    say(gw, thread_id, "make my standup agent shorter")
+    [card] = cards(gw, "builder_save")
+    assert card["confirmable_by_typing"] is False and "builder_read" in card["origin_label"], card
+    before = agent_state(gw, "test-010-standup")
+    script(gw, "Ok.")
+    say(gw, thread_id, "apply")
+    assert agent_state(gw, "test-010-standup") == before
+    assert gw.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()["outcome"] == "executed"
+    assert agent_state(gw, "test-010-standup")[0]["soul"] == "Keep it to three lines."
 
 
 def test_a_stale_base_version_is_refused_and_nothing_is_overwritten(gw) -> None:

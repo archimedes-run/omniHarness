@@ -37,6 +37,11 @@ class BuilderState(BaseModel):
     building: Building | None = None
 
 
+class BuilderStatus(BaseModel):
+    available: bool
+    reason: str | None = Field(None, description="Why the assistant is not offered the builder tools on this install")
+
+
 class DropResult(BaseModel):
     thread_id: str
     dropped: bool
@@ -83,5 +88,20 @@ async def drop_builder(thread_id: str, request: Request) -> DropResult:
         policy = getattr(get_app_config(), "policy", None)
         if policy is not None and getattr(policy, "enabled", True):
             store = PendingStore(directory=Path(policy.state_dir) / "pending")
-            refused = len(refuse_open_builder_cards(store, thread_id, user_id, reason="The draft was dropped, so it was not saved."))
+            refused = len(refuse_open_builder_cards(store, thread_id, user_id, reason="The draft was dropped, so it was not saved.", include_grants=True))
     return DropResult(thread_id=thread_id, dropped=was is not None, refused_cards=refused)
+
+
+@router.get("/builder/status", response_model=BuilderStatus, summary="Whether the chat builder is offered on this install")
+async def builder_status(request: Request) -> BuilderStatus:
+    """Shown on Settings > Safety: the builder is not offered when the policy
+    is off or the rules file in force names none of its tools, and that is
+    said where the owner looks, not only in the log."""
+    _user_id(request)
+    from omniharness.runtime.builder.controller import get_builder_controller
+
+    controller = get_builder_controller()
+    if controller is None:
+        return BuilderStatus(available=False, reason="the builder is not running in this process.")
+    reason = controller.unavailable_reason()
+    return BuilderStatus(available=reason is None, reason=reason)

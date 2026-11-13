@@ -68,6 +68,7 @@ def _to_dict(action: PendingAction) -> dict:
         "private_read": action.private_read,
         "outbound": action.outbound,
         "group_key": action.group_key,
+        "button_only_reason": action.button_only_reason,
     }
 
 
@@ -103,6 +104,7 @@ def _from_dict(raw: dict) -> PendingAction:
         private_read=raw.get("private_read") is not False,
         outbound=bool(raw.get("outbound")),
         group_key=str(raw.get("group_key") or ""),
+        button_only_reason=str(raw.get("button_only_reason") or ""),
     )
     action.claimed_by = raw.get("claimed_by")
     if raw.get("outcome"):

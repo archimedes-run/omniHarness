@@ -154,6 +154,12 @@ def recognise(message, pending: list[PendingAction], runtime_context: dict | Non
     open_ids = {action.id for action in pending}
     named = next((m for m in _ID.findall(text) if m in open_ids), None)
 
+    if named is None and len(open_ids) > 1 and all(is_builder_card(a.tool_name) for a in pending):
+        # A save card beside button-only builder cards (a grant): a typed yes
+        # can only ever mean the one typing may confirm.
+        typable = [a.id for a in pending if a.confirmable_by_typing]
+        if len(typable) == 1:
+            named = typable[0]
     if named is None:
         if len(open_ids) > 1:
             # FR-035: ambiguity is not resolved by guessing which was meant.
@@ -204,6 +210,15 @@ def model_safe_plan(action: PendingAction) -> tuple[str, list[str]]:
     line is replaced by its stored-free counterpart; nothing else changes."""
     targets = list(action.targets)
     plan = action.plan_text
+    if is_builder_card(action.tool_name):
+        # The card shows the owner the draft or diff, which can hold stored
+        # text (an agent's instructions, a skill's files); the model is told
+        # the plan without it (Spec 010).
+        from .builder_cards import MODEL_NOTE
+        from .middleware import PolicyMiddleware
+
+        base = PolicyMiddleware._plan_text(action.tool_name, targets, action.requester, action.delegation_chain, action.id, action.arguments, origin_note=action.origin_note())
+        return f"{base}\n\n{MODEL_NOTE}", targets
     if action.tool_name != "ledger_apply":
         return plan, targets
     from app.ledger.service import render

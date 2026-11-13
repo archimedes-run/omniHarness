@@ -28,6 +28,8 @@ from omniharness.agents.thread_state import ThreadState
 from omniharness.runtime.builder.controller import get_builder_controller
 
 _UNAVAILABLE = "The builder is not available in this environment."
+#: Where builder_draft hands the controller the turn's messages.
+DRAFT_MESSAGES_KEY = "_builder_messages"
 
 
 def _context(runtime: ToolRuntime[ContextT, ThreadState] | None) -> dict:
@@ -69,7 +71,13 @@ def builder_draft_tool(
     controller = get_builder_controller()
     if controller is None:
         return _UNAVAILABLE
-    return controller.draft(_context(runtime), kind=kind, name=name, fields=dict(fields or {}), guessed=list(guessed or []), replace_current=bool(replace_current))
+    context = _context(runtime)
+    # The turn's messages, so the draft records what caused it (a page or an
+    # email read earlier in the turn makes it a suggestion, Spec 010 FR-027).
+    state = getattr(runtime, "state", None)
+    messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
+    context[DRAFT_MESSAGES_KEY] = list(messages) if messages is not None else None
+    return controller.draft(context, kind=kind, name=name, fields=dict(fields or {}), guessed=list(guessed or []), replace_current=bool(replace_current))
 
 
 @tool(
@@ -118,9 +126,10 @@ def builder_save_tool(runtime: ToolRuntime[ContextT, ThreadState], draft_id: str
 @tool(
     "builder_grant",
     description=(
-        "Give an existing agent more: integrations or tools it may use, or standing grants (action class ids it may do "
-        "on its own in a scheduled run). Only PROPOSED: it is confirmed with the card's button and never by a typed "
-        "reply. Ask for it only when the user's request needs it. It never connects a new app."
+        "Give an existing agent more: integrations or tools on its per-tool list, tool groups, a new skills list (skills "
+        "can allow tools), or standing grants (action class ids it may do on its own in a scheduled run). Only PROPOSED: "
+        "it is confirmed with the card's button and never by a typed reply. Ask for it only when the user's request needs "
+        "it, or when a save left tool access out. It never connects a new app."
     ),
 )
 def builder_grant_tool(
@@ -129,11 +138,15 @@ def builder_grant_tool(
     integrations: list[str] | None = None,
     tools: list[str] | None = None,
     autonomy: list[str] | None = None,
+    tool_groups: list[str] | None = None,
+    skills: list[str] | None = None,
 ) -> str:
     controller = get_builder_controller()
     if controller is None:
         return _UNAVAILABLE
-    return controller.grant(_context(runtime), agent=agent, integrations=list(integrations or []), tools=list(tools or []), autonomy=list(autonomy or []))
+    return controller.grant(
+        _context(runtime), agent=agent, integrations=list(integrations or []), tools=list(tools or []), autonomy=list(autonomy or []), tool_groups=list(tool_groups or []), skills=list(skills) if skills is not None else None
+    )
 
 
 @tool(

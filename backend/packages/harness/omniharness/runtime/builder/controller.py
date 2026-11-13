@@ -33,7 +33,7 @@ class BuilderController(Protocol):
         """Save a draft (only ever run as a confirmed Tier 3 action)."""
         ...
 
-    def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str]) -> str:
+    def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str], tool_groups: list[str] | None = None, skills: list[str] | None = None) -> str:
         """Widen an agent's tool access or standing grants (button-confirmed only)."""
         ...
 
@@ -41,11 +41,14 @@ class BuilderController(Protocol):
         """Undo `version` (the current one): the version before it, as a new version (confirmed only)."""
         ...
 
-    def precheck(self, tool_name: str, arguments: dict, context: dict) -> tuple[str | None, str, bool, dict]:
+    def precheck(self, tool_name: str, arguments: dict, context: dict) -> dict:
         """Before a save, grant or undo card is shown (app/policy/builder_cards):
-        (why it is refused or None, the card's text, whether it replaces the
-        chat's other open builder cards, the arguments the card records: a
-        save names its draft, the chat's current one when the call did not)."""
+        {"refused", "note", "replaces", "arguments", "origin", "button_only"}."""
+        ...
+
+    def unavailable_reason(self) -> str | None:
+        """Why the builder is not offered on this install (no policy layer, or
+        the rules in force do not name its tools), or None."""
         ...
 
 

@@ -76,9 +76,9 @@ Once you have enough information:
 2. Generate the SOUL.md following the template structure exactly.
 3. Record it as a draft with `builder_draft`, which shows it to the user and saves nothing:
    ```
-   builder_draft(kind="agent", name="<the agent's name from this setup>", fields={"instructions": "<full SOUL.md content>", "description": "<one-line description>"})
+   builder_draft(kind="agent", name="<the name the user chose>", fields={"instructions": "<full SOUL.md content>", "description": "<one-line description>"})
    ```
-   Present it warmly: "here's [Name] on paper — does this feel right?"
+   In this setup the draft always writes the agent being set up; the name you pass becomes its display name. Present it warmly: "here's [Name] on paper — does this feel right?"
 4. Iterate until the user is happy: each change is a new `builder_draft` call.
 5. Call `builder_save` with the latest draft id. This puts the draft on a card; the user saves it with the card's button or by replying "yes". Stop and wait for them. Never write the confirmation yourself.
 6. After the user has confirmed and the save succeeded, confirm: "✅ [Name] is officially real."
