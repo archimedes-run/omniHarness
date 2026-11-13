@@ -76,13 +76,16 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
     `error` (the check itself could not run: never counted, always shown)."""
     # `summary` holds the failures in the system's own words only (no text
     # from the page): it becomes the job's reason, which is not fenced.
-    base = {"widths": list(WIDTHS), "mode": mode, "seconds": round(seconds, 1), "failures": [], "summary": [], "warnings": [], "error": None}
+    # `publishable`: false only when the page itself is broken (it did not
+    # load, rendered nothing, threw on load, crashed or hung); an app that
+    # overflows or clips a chart is still shown, marked as failed.
+    base = {"widths": list(WIDTHS), "mode": mode, "seconds": round(seconds, 1), "failures": [], "summary": [], "warnings": [], "error": None, "publishable": True}
 
     def error(why: str) -> dict:
         return {**base, "outcome": "error", "error": why}
 
     def fail(why: str) -> dict:
-        return {**base, "outcome": "fail", "failures": [why], "summary": [why]}
+        return {**base, "outcome": "fail", "failures": [why], "summary": [why], "publishable": False}
 
     if exit_code == 97:
         return error("the check script did not match its checksum")
@@ -105,6 +108,7 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
     failures: list[str] = []
     summary: list[str] = []
     warnings: list[str] = []
+    broken = False
     # Repeated findings (the same chart, the same error) are listed once, with their widths.
     clipped: dict[str, list] = {}
     labels: dict[str, list] = {}
@@ -117,10 +121,12 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
         if page.get("crashed") is True:
             failures.append(f"the page crashed the browser at {width} px")
             summary.append(failures[-1])
+            broken = True
             continue
         if page.get("loaded") is not True:
             failures.append(f"did not load at {width} px ({_text(page.get('load_error'), 80) or 'no reason given'})")
             summary.append(f"did not load at {width} px")
+            broken = True
             continue
         overflow, client = _int(page.get("overflow_px")), _int(page.get("client_width"), 100_000)
         offenders = page.get("offenders")
@@ -147,6 +153,7 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
     if blank:
         failures.append(f"rendered nothing at {_widths(blank)}")
         summary.append(failures[-1])
+    broken |= bool(blank or errors)
     for message, ws in errors.items():
         failures.append(f"uncaught error on load at {_widths(ws)}: {message}")
         summary.append(f"uncaught error on load at {_widths(ws)}")
@@ -164,12 +171,18 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
         else:
             return error("the check left no readable result")
         summary.append(failures[-1])
-    return {**base, "outcome": "fail" if failures else "pass", "failures": failures[:MAX_FAILURES], "summary": summary[:MAX_FAILURES], "warnings": warnings[:MAX_WARNINGS]}
+        broken = True
+    return {**base, "outcome": "fail" if failures else "pass", "publishable": not broken, "failures": failures[:MAX_FAILURES], "summary": summary[:MAX_FAILURES], "warnings": warnings[:MAX_WARNINGS]}
 
 
 def counts_against(layout: dict | None) -> bool:
     """A failed check stops `verified` unless config says `warn`."""
     return bool(layout) and layout.get("outcome") == "fail" and layout.get("mode") == "enforce"
+
+
+def publishable(layout: dict | None) -> bool:
+    """A web app whose build passed is shown unless its page is broken."""
+    return not layout or layout.get("publishable", True) is not False
 
 
 def reason(layout: dict) -> str:
@@ -192,7 +205,12 @@ def report_lines(layout: dict, fenced) -> list[str]:
     if outcome == "pass":
         lines.append(f"{head} the page fits at every width.")
     else:
-        counted = "counted: the result is not verified" if layout.get("mode") == "enforce" else "NOT counted (config: code_jobs.layout_check = warn)"
+        if layout.get("mode") != "enforce":
+            counted = "NOT counted (config: code_jobs.layout_check = warn)"
+        elif layout.get("publishable", True):
+            counted = "counted: the result is not verified (the app is still shown to the person, marked as failing the layout check)"
+        else:
+            counted = "counted: the result is not verified and the app is not shown (the page itself is broken)"
         lines.append(f"{head} FAILED, {counted}. Failures (element names and error text come from the page):")
         lines += fenced("LAYOUT FAILURES", "\n".join(layout.get("failures", [])))
     if layout.get("warnings"):

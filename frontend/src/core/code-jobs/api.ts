@@ -67,6 +67,8 @@ export interface CodeJobResult {
   over_reservation_calls?: number;
   model?: string;
   published?: { artifact_id: string; path: string } | null;
+  /** This job is the one automatic fix of that job's layout failures. */
+  fix_of?: string | null;
   duration_s?: number;
 }
 

@@ -346,7 +346,9 @@ sandbox:
 #   wall_seconds: 1800          # a job is stopped after this long
 #   verify_timeout_seconds: 600 # the gateway's own build check
 #   layout_check: enforce       # a built web app at 360/560/1280 px in a headless browser:
-#                               # enforce (a failure means not verified) | warn | off
+#                               # enforce: a failure means not verified (the app is still shown,
+#                               #   marked, unless the page is broken) and the lead runs ONE
+#                               #   automatic fix job | warn: shown, not counted | off
 #   rate_per_minute: 60         # model calls per sandbox
 #   proxy_port: 8790            # on the sandbox network only
 #   prices:                     # US$ per million tokens, overriding the built-in table

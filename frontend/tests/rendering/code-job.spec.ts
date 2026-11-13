@@ -16,7 +16,8 @@ import { lowContrastText } from "./contrast-probe";
  *   reads as done and offers no app;
  * - a step's status comes from its exit code, never from the worker's words;
  * - the system's layout check of a built app shows as evidence: "fits" on a
- *   pass, each failure on a fail (and then no app is offered);
+ *   pass, each failure on a fail; an app that fails it is still offered,
+ *   labelled "Open the app (layout check failed)";
  * - a job that finishes while the person watches keeps "Open the app" above
  *   the floating chat bar;
  * - every piece of text reads at WCAG AA in both themes.
@@ -397,6 +398,9 @@ for (const scheme of ["light", "dark"] as const) {
         });
       await card.getByTestId("code-job-steps-toggle").click();
       await expect(card.getByTestId("code-job-steps")).toBeVisible();
+      await expect(card.getByTestId("code-job-open-app")).toHaveText(
+        "Open the app",
+      );
       await card.getByTestId("code-job-open-app").click();
       // The built page opens in the artifact panel's preview.
       await expect(
@@ -474,7 +478,7 @@ for (const scheme of ["light", "dark"] as const) {
         });
     });
 
-    test("a failed layout check lists each failure, is not verified and offers no app", async ({
+    test("a failed layout check lists each failure, is not verified, and still offers the app, marked", async ({
       page,
     }) => {
       const failures = [
@@ -495,7 +499,8 @@ for (const scheme of ["light", "dark"] as const) {
             "chart labels may be cut: svg in div.bars (8 px past the right) at 360 px",
           ],
         },
-        published: null,
+        published: VERIFIED_RESULT.published,
+        fix_of: "0123456789abcdef",
       };
       await open(
         page,
@@ -523,7 +528,14 @@ for (const scheme of ["light", "dark"] as const) {
         "Warning (not counted): chart labels may be cut",
       );
       await expect(layout.getByLabel("failed", { exact: true })).toBeVisible();
-      await expect(card.getByTestId("code-job-open-app")).toHaveCount(0);
+      // Still shown, so the person can look; the button says the check failed.
+      await expect(card.getByTestId("code-job-open-app")).toHaveText(
+        "Open the app (layout check failed)",
+      );
+      await expect(card.getByTestId("code-job-fix-of")).toContainText(
+        "The automatic fix of an earlier job's layout failures",
+      );
+      await expect(card).not.toContainText(/\bVerified\b/);
       await aa(page);
       if (SHOTS)
         await card.screenshot({

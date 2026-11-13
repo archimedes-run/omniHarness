@@ -218,6 +218,8 @@ function JobView({
 
   const result = job.result;
   const published = result?.published;
+  // An app whose layout check failed is still shown, and says so.
+  const layoutFailed = result?.layout?.outcome === "fail";
 
   // A job that finished while the person watched: its steps fold, the card
   // shrinks, and "Open the app" can land under the chat bar that floats over
@@ -342,7 +344,9 @@ function JobView({
             data-testid="code-job-open-app"
           >
             <AppWindowIcon className="size-3.5" aria-hidden />
-            Open the app
+            {layoutFailed
+              ? "Open the app (layout check failed)"
+              : "Open the app"}
           </Button>
         </div>
       ) : null}
@@ -387,6 +391,15 @@ function Evidence({ job }: { job: CodeJob }) {
   const names = [...(changed?.added ?? []), ...(changed?.modified ?? [])];
   return (
     <div className="border-t px-3 py-2 text-sm" data-testid="code-job-evidence">
+      {r?.fix_of ? (
+        <p
+          className="text-muted-foreground mb-1 text-xs"
+          data-testid="code-job-fix-of"
+        >
+          The automatic fix of an earlier job&apos;s layout failures (run once,
+          by the system&apos;s rule).
+        </p>
+      ) : null}
       {job.reason ? (
         <p className="text-foreground-2 mb-1 [overflow-wrap:anywhere]">
           {safeField(job.reason)}

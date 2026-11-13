@@ -31,6 +31,9 @@ class CodeJobBrief:
     expect_files: list[str] = field(default_factory=list)
     publish_dir: str | None = None
     title: str = ""
+    #: The one automatic layout fix: the id of the job whose layout check
+    #: failed. The gateway allows one per job, never a fix of a fix.
+    fix_of: str | None = None
 
 
 @dataclass

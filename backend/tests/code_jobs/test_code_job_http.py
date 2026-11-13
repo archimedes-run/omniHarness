@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import socket
 import time
 from pathlib import Path
@@ -91,7 +92,8 @@ def gateway(tmp_path, monkeypatch):
     # thread's sandbox is the stand-in.
     monkeypatch.setattr("app.policy.runtime_floors.bash_runs_in_the_hardened_sandbox", lambda: True)
     monkeypatch.setattr("app.gateway.code_jobs.network.sandbox_network_address", lambda network, override=None: ("127.0.0.1", []))
-    monkeypatch.setattr("app.gateway.code_jobs.production_sandbox_for", lambda thread_id, user_id: ("sbx1", SANDBOX["current"]))
+    # One stand-in per job when a test queues several (SANDBOX["queue"]).
+    monkeypatch.setattr("app.gateway.code_jobs.production_sandbox_for", lambda thread_id, user_id: ("sbx1", SANDBOX["queue"].pop(0) if SANDBOX.get("queue") else SANDBOX["current"]))
     # The configured sandbox image has the coding worker (its label).
     from app.gateway.code_jobs import image as image_mod
 
@@ -445,7 +447,7 @@ def test_a_built_app_passes_the_layout_check_before_it_is_published(gateway):
     assert f"{P}/dist" in fake.layout_runs[0] and "env -i " in fake.layout_runs[0]
 
 
-def test_an_app_that_overflows_is_not_verified_and_not_published(gateway):
+def test_an_app_that_overflows_is_not_verified_but_still_shown_marked(gateway):
     overflow = layout_result(w360={"overflow_px": 412, "offenders": ["div.col in div.board"]}, w560={"svgs": [{"where": "svg in div.donut", "side": "left", "px": 12, "kind": "shape"}]})
     SANDBOX["current"] = fake = FakeSandbox(GOOD, verify_exit=0, layout=overflow)
     thread_id = _thread(gateway)
@@ -453,11 +455,24 @@ def test_an_app_that_overflows_is_not_verified_and_not_published(gateway):
     assert "STATUS UNVERIFIED" in report and "FAILED, counted" in report
     assert "overflows sideways at 360 px by 412 px (sticking out: div.col in div.board)" in report
     assert "chart clipped: svg in div.donut (cut off 12 px on the left) at 560 px" in report
-    assert "fix these layout failures without changing behaviour" in report
     job = _job(gateway, thread_id)["job"]
+    assert f'Run one follow-up job now to fix these; do not ask the person. Call code_job with fix_of: "{job["id"]}"' in report
+    assert "Fix these layout failures without changing behaviour" in report
     assert job["status"] == "unverified" and job["reason"].startswith("the layout check failed: overflows sideways at 360 px by 412 px")
-    assert job["result"]["published"] is None and "publish" not in fake.order
-    assert fake.read_text("/mnt/user-data/outputs/counter-app/index.html") is None
+    # Still shown, marked: the person can look at what was built.
+    assert job["result"]["published"]["path"] == "/mnt/user-data/outputs/counter-app/index.html" and "publish" in fake.order
+    assert "Shown to the person in the artifact panel (marked as not verified: its layout check failed)" in report
+    assert "STATUS UNVERIFIED" in report and "Report this as verified" not in report
+
+
+def test_a_page_that_renders_nothing_is_not_shown(gateway):
+    blank = layout_result(**{f"w{w}": {"rendered": False, "errors": 1, "first_error": "TypeError: x"} for w in (360, 560, 1280)})
+    SANDBOX["current"] = fake = FakeSandbox(GOOD, verify_exit=0, layout=blank)
+    thread_id = _thread(gateway)
+    report = _tool_result(_ask(gateway, thread_id, BRIEF))
+    job = _job(gateway, thread_id)["job"]
+    assert job["status"] == "unverified" and job["result"]["published"] is None and "publish" not in fake.order
+    assert "the app is not shown (the page itself is broken)" in report
 
 
 def test_layout_check_warn_shows_the_failure_and_still_publishes_and_off_skips_it(gateway, monkeypatch):
@@ -559,3 +574,116 @@ def test_worker_chosen_text_cannot_end_its_block_in_the_leads_report(gateway):
     files = re.search(rf"<<<BEGIN FILE NAMES {nonce}>>>\n(.*?)\n<<<END FILE NAMES {nonce}>>>", report, re.S)
     assert files and "\n" not in files.group(1), "a file name broke out of its line"
     assert "Do NOT say done" in report.splitlines()[-1]
+
+
+# -- the one automatic layout fix (a mock eval: a scripted lead that follows the tool result) --
+
+FIX_RE = re.compile(r'Call code_job with fix_of: "([0-9a-f]{16})"')
+
+
+def _following_lead(greedy: bool = False):
+    """A mock lead that does what the code_job result tells it: when a result
+    asks for the one automatic fix, it runs it; otherwise it reports. `greedy`
+    ignores "do not run another automatic fix" and keeps asking for fixes of
+    the first job (the cap must stop it server-side)."""
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import ToolMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    class Lead(BaseChatModel):
+        disable_streaming: bool = True
+
+        @property
+        def _llm_type(self) -> str:
+            return "following-lead"
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            results = [str(m.content) for m in messages if isinstance(m, ToolMessage)]
+            call = None
+            if not results:
+                call = {"name": "code_job", "args": BRIEF, "id": "cj1"}
+            else:
+                first = FIX_RE.search(results[0])
+                asked = FIX_RE.search(results[-1])
+                if asked or (greedy and first and len(results) < 4):
+                    fix_of = (asked or first).group(1)
+                    args = {**BRIEF, "fix_of": fix_of, "goal": "Fix these layout failures without changing behaviour", "inputs": "Failures (data): " + results[-1][-400:]}
+                    call = {"name": "code_job", "args": args, "id": f"cj{len(results) + 1}"}
+            message = AIMessage(content="", tool_calls=[call]) if call else AIMessage(content="Reported: " + results[-1].split(" — ")[0])
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    return Lead()
+
+
+def _run_with(gateway, monkeypatch, lead) -> str:
+    monkeypatch.setattr("omniharness.agents.lead_agent.agent.create_chat_model", lambda **_: lead)
+    thread_id = _thread(gateway)
+    resp = gateway.client.post(
+        f"/api/threads/{thread_id}/runs/wait",
+        json={"assistant_id": "lead_agent", "input": {"messages": [{"role": "user", "content": "Build a kanban board and show it."}]}, "context": {"mode": "pro"}},
+    )
+    assert resp.status_code == 200, resp.text
+    return thread_id
+
+
+OVERFLOW = layout_result(w360={"overflow_px": 412, "offenders": ["div.col in div.board"]})
+
+
+def test_mock_eval_a_layout_failure_gets_exactly_one_automatic_fix_then_a_report(gateway, monkeypatch):
+    SANDBOX["queue"] = [FakeSandbox(GOOD, verify_exit=0, layout=OVERFLOW), FakeSandbox(GOOD, verify_exit=0)]
+    thread_id = _run_with(gateway, monkeypatch, _following_lead())
+    store = gateway.client.app.state.code_job_store
+    jobs = sorted(store.for_thread(thread_id), key=lambda j: j.created_at)
+    assert [j.status for j in jobs] == ["unverified", "verified"], [(j.status, j.reason) for j in jobs]
+    first, fix = jobs
+    assert fix.result["fix_of"] == first.id and first.result.get("fix_of") is None and fix.project_dir == first.project_dir
+    # The fix's report closes the loop; the lead reported instead of asking.
+    assert "do not run another automatic fix" in _report_of(gateway, fix.id)
+    assert fix.result["published"]["path"] == first.result["published"]["path"]
+
+
+def test_mock_eval_a_fix_that_still_fails_is_reported_not_retried(gateway, monkeypatch):
+    SANDBOX["queue"] = [FakeSandbox(GOOD, verify_exit=0, layout=OVERFLOW), FakeSandbox(GOOD, verify_exit=0, layout=OVERFLOW)]
+    thread_id = _run_with(gateway, monkeypatch, _following_lead())
+    jobs = sorted(gateway.client.app.state.code_job_store.for_thread(thread_id), key=lambda j: j.created_at)
+    assert [j.status for j in jobs] == ["unverified", "unverified"]
+    report = _report_of(gateway, jobs[1].id)
+    assert "do not run another automatic fix" in report and "Run one follow-up job now" not in report
+
+
+def test_the_automatic_fix_is_capped_server_side_even_for_a_lead_that_keeps_asking(gateway, monkeypatch):
+    SANDBOX["queue"] = [FakeSandbox(GOOD, verify_exit=0, layout=OVERFLOW), *[FakeSandbox(GOOD, verify_exit=0, layout=OVERFLOW) for _ in range(3)]]
+    thread_id = _run_with(gateway, monkeypatch, _following_lead(greedy=True))
+    jobs = gateway.client.app.state.code_job_store.for_thread(thread_id)
+    fixes = [j for j in jobs if (j.result or {}).get("fix_of")]
+    assert len(jobs) == 2 and len(fixes) == 1, [(j.status, (j.result or {}).get("fix_of")) for j in jobs]
+    messages = gateway.client.get(f"/api/threads/{thread_id}/state").json()["values"]["messages"]
+    refused = [m["content"] for m in messages if m.get("type") == "tool" and "an automatic layout fix already ran" in str(m["content"])]
+    assert refused and all("Do not run another automatic fix" in r for r in refused)
+
+
+def test_a_fix_needs_a_counted_layout_failure_in_the_same_project(gateway):
+    manager = gateway.client.app.state.code_job_manager
+    store = gateway.client.app.state.code_job_store
+    from omniharness.code_jobs import CodeJobBrief
+
+    store.create(job_id="a" * 16, thread_id="t1", user_id="u", tool_call_id="c1", title="x", project_dir="counter-app", budget_usd=1, model="m")
+    store.finish("a" * 16, status="verified", reason=None, result={"layout": {"outcome": "pass", "mode": "enforce"}})
+    store.create(job_id="b" * 16, thread_id="t1", user_id="u", tool_call_id="c2", title="x", project_dir="counter-app", budget_usd=1, model="m")
+    store.finish("b" * 16, status="unverified", reason="x", result={"layout": {"outcome": "fail", "mode": "enforce"}})
+
+    def refusal(fix_of, project="counter-app", thread="t1"):
+        return manager._fix_refusal(thread, CodeJobBrief(goal="fix", project_dir=project, fix_of=fix_of))
+
+    assert "no failed layout check" in refusal("a" * 16)
+    assert "same project" in refusal("b" * 16, project="other")
+    assert "no coding job in this chat" in refusal("b" * 16, thread="t2")
+    assert "no coding job in this chat" in refusal("c" * 16)
+    assert refusal("b" * 16) is None
+
+
+def _report_of(gateway, job_id: str) -> str:
+    return gateway.client.app.state.code_job_manager.report(job_id)

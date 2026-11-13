@@ -573,3 +573,11 @@ def test_the_worker_rules_and_the_leads_brief_make_web_apps_responsive_by_defaul
         assert needle in rules, needle
     assert "responsive by default" in CODING_JOBS_SECTION
     assert "no horizontal page scroll" in CODING_JOBS_SECTION
+
+
+def test_the_lead_runs_exactly_one_automatic_layout_fix_without_asking() -> None:
+    from omniharness.agents.lead_agent.prompt import CODING_JOBS_SECTION
+
+    assert "run exactly ONE follow-up `code_job` right away, without asking the person" in CODING_JOBS_SECTION
+    assert "`fix_of` set to the failed job's id" in CODING_JOBS_SECTION and "quoted as data" in CODING_JOBS_SECTION
+    assert 'Never run a second automatic fix: when a result says "do not run another automatic fix"' in CODING_JOBS_SECTION

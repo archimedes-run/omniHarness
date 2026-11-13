@@ -18,8 +18,9 @@ Checks, each printed as `ok` or `FAIL` (exit 1 if any fails):
     sandbox: 403; no token: 401; the proxy is unreachable off the sandbox
     network);
   * the layout check, in the image's own browser: an app that fits is
-    verified and published; one that overflows sideways, one with a clipped
-    chart and a blank page are not; nothing of the check is left running
+    verified and published; one that overflows sideways and one with a
+    clipped chart are unverified but still shown; a blank page is unverified
+    and not shown; nothing of the check is left running
     (sabotage: E2E_SABOTAGE=nooverflow, noclip or norender turns that part
     of the check off).
 """
@@ -195,11 +196,13 @@ def main() -> int:
         status, over, published = laid["overflow"]
         check("an app that overflows sideways is not verified", ("unverified", "fail"), (status, over.get("outcome")))
         check("the overflow is reported with its width and amount", True, any(f.startswith("overflows sideways at 360 px by ") for f in over.get("failures", [])))
-        check("the app that overflows is not published", (None, False), (published, (work / "a" / "outputs" / "layout-overflow").exists()))
-        status, clipped, _ = laid["clipped"]
+        check("the app that overflows is still shown, marked as unverified", True, bool(published) and (work / "a" / "outputs" / "layout-overflow" / "index.html").is_file())
+        status, clipped, published = laid["clipped"]
         check("an app with a clipped chart is not verified", ("unverified", True), (status, any(f.startswith("chart clipped: svg in div.donut") for f in clipped.get("failures", []))))
-        status, blank, _ = laid["blank"]
+        check("the app with a clipped chart is still shown", True, bool(published))
+        status, blank, published = laid["blank"]
         check("a blank page is not verified", ("unverified", True), (status, "rendered nothing at 360, 560, 1280 px" in blank.get("failures", [])))
+        check("a blank page is not shown", (None, False), (published, (work / "a" / "outputs" / "layout-blank").exists()))
         check("its uncaught error is reported", True, any(f.startswith("uncaught error on load") and "boom" in f for f in blank.get("failures", [])))
         check("nothing of the layout check is left running", "0", dexec(a, "pgrep -fc '[l]ayout_probe|[o]pt/browser/chrome'").strip() or "0")
         check("the layout check leaves no files behind", "", dexec(a, "ls -d /tmp/omni-layout-* 2>/dev/null").strip())

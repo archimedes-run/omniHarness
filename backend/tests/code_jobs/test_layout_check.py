@@ -130,6 +130,17 @@ def test_strings_from_the_page_are_filtered_and_clipped():
     assert parse(layout_result(w360={"svgs": odd}))["outcome"] == "pass"
 
 
+def test_only_a_broken_page_keeps_the_app_hidden():
+    assert parse(layout_result(w360={"overflow_px": 40}))["publishable"] is True
+    assert parse(layout_result(w360={"svgs": [{"where": "svg", "side": "left", "px": 30, "kind": "shape"}]}))["publishable"] is True
+    for broken in ({"rendered": False}, {"errors": 1, "first_error": "x"}, {"loaded": False}, {"crashed": True}):
+        assert parse(layout_result(w560=broken))["publishable"] is False, broken
+    assert parse(None, exit_code=124)["publishable"] is False
+    assert parse(json.dumps({"v": 1, "pages": [layout_page(360)], "timed_out": True}))["publishable"] is False
+    # A check that could not run hides nothing.
+    assert layout.publishable(parse(None, exit_code=0)) and layout.publishable(None)
+
+
 # -- the status ---------------------------------------------------------------
 
 
@@ -166,19 +177,26 @@ def _report(tmp_path, status, reason, result):
     return CodeJobManager(store=store, settings=lambda: None, unavailable=lambda: None, sandbox_for=lambda t, u: None, relay_dir=tmp_path).report("j")
 
 
-def test_the_report_quotes_the_failures_as_page_data_and_offers_a_follow_up_job(tmp_path):
+def test_the_report_quotes_the_failures_as_page_data_and_asks_for_one_automatic_fix(tmp_path):
     failed = parse(layout_result(w360={"overflow_px": 412, "offenders": ["div.col in div.board"]}))
     report = _report(tmp_path, "unverified", layout.reason(failed), {"verify": {**OK_VERIFY}, "layout": failed})
     assert "Layout check (a headless browser at 360 / 560 / 1280 px, run by the system): FAILED, counted" in report
     assert "<<<BEGIN LAYOUT FAILURES" in report and "overflows sideways at 360 px by 412 px (sticking out: div.col in div.board)" in report
-    assert "fix these layout failures without changing behaviour" in report and "Do NOT say done" in report
+    assert 'Run one follow-up job now to fix these; do not ask the person. Call code_job with fix_of: "j"' in report and "Do NOT say done" in report
+    assert "Fix these layout failures without changing behaviour" in report and "the app is still shown to the person" in report
+
+    # The fix itself never asks for another one, failed or verified.
+    again = _report(tmp_path / "f", "unverified", layout.reason(failed), {"verify": {**OK_VERIFY}, "layout": failed, "fix_of": "a" * 16})
+    assert "do not run another automatic fix" in again and "Run one follow-up" not in again
+    fixed = _report(tmp_path / "v", "verified", None, {"verify": {**OK_VERIFY}, "layout": parse(layout_result()), "fix_of": "a" * 16})
+    assert "do not run another automatic fix" in fixed and "Run one follow-up" not in fixed
 
     passed = _report(tmp_path / "p", "verified", None, {"verify": {**OK_VERIFY}, "layout": parse(layout_result())})
-    assert "the page fits at every width" in passed and "follow-up" not in passed
+    assert "the page fits at every width" in passed and "follow-up" not in passed and "automatic fix" not in passed
 
     warned = parse(layout_result(w360={"overflow_px": 40}), mode="warn")
     text = _report(tmp_path / "w", "verified", None, {"verify": {**OK_VERIFY}, "layout": warned})
-    assert "NOT counted (config: code_jobs.layout_check = warn)" in text and "follow-up" not in text
+    assert "NOT counted (config: code_jobs.layout_check = warn)" in text and "follow-up" not in text and "fix_of" not in text
 
     broken = _report(tmp_path / "b", "verified", None, {"verify": {**OK_VERIFY}, "layout": parse(json.dumps({"v": 1, "setup_error": "the browser did not start"}))})
     assert "could not run (the browser did not start); not counted either way" in broken
