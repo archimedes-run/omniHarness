@@ -129,6 +129,10 @@ tools:
     #                          # (HTTP error, unsupported type); never a refused URL, never when the
     #                          # proxy is down. Jina needs JINA_API_KEY, which docker compose does NOT
     #                          # pass by default: add it to the gateway environment to enable Jina.
+    # PDFs (Content-Type application/pdf, or octet-stream starting with %PDF-) go through the
+    # same proxy and checks; fixed limits: 10 MB download, 30 s for fetch + text extraction,
+    # text from the first 200 pages. Encrypted, image-only (scanned) or malformed PDFs answer
+    # "couldn't extract text from this PDF: <reason>" and are never sent to Jina.
 
   # Web fetch tool (uses Exa)
   # - name: web_fetch

@@ -89,6 +89,19 @@ class EgressProxyDown(WebFetchError):
         super().__init__(f"{EGRESS_PROXY_DOWN} ({detail})" if detail else EGRESS_PROXY_DOWN)
 
 
+#: The exact start of the tool's message when a fetched PDF yields no text.
+PDF_UNREADABLE = "couldn't extract text from this PDF:"
+
+
+class PdfUnreadable(WebFetchError):
+    """A PDF was fetched (or refused for size) but no text can be taken from
+    it: too large, encrypted, no text layer (scanned), or malformed. Final:
+    never retried elsewhere."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"{PDF_UNREADABLE} {reason}")
+
+
 @dataclass(frozen=True)
 class Target:
     url: str
