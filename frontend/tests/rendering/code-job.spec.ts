@@ -543,6 +543,43 @@ for (const scheme of ["light", "dark"] as const) {
         });
     });
 
+    test("a layout check whose result could not be read is counted and says so", async ({
+      page,
+    }) => {
+      const reason =
+        "the layout check gave no answer: the check left no readable result";
+      const result = {
+        ...VERIFIED_RESULT,
+        status: "unverified",
+        reason,
+        layout: {
+          ...VERIFIED_RESULT.layout,
+          outcome: "error",
+          error: "the check left no readable result",
+          error_code: "unreadable",
+          counted: true,
+        },
+      };
+      await open(
+        page,
+        scheme,
+        {
+          job: job("unverified", { result, reason }),
+          steps: STEPS,
+          month: { spent_usd: 0.31, cap_usd: 20 },
+        },
+        true,
+      );
+      const card = page.getByTestId("code-job-card");
+      await expect(card.getByTestId("code-job-layout")).toHaveText(
+        "Layout check gave no answer (the check left no readable result; counted: not verified)",
+      );
+      await expect(card.getByTestId("code-job-open-app")).toHaveText(
+        "Open the app (layout not checked)",
+      );
+      await aa(page);
+    });
+
     test("a job that finishes while watched keeps Open the app above the chat bar", async ({
       page,
     }) => {

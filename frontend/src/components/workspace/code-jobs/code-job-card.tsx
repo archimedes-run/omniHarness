@@ -220,6 +220,7 @@ function JobView({
   const published = result?.published;
   // An app whose layout check failed is still shown, and says so.
   const layoutFailed = result?.layout?.outcome === "fail";
+  const layoutNoAnswer = !!result?.layout && countedNoAnswer(result.layout);
 
   // A job that finished while the person watched: its steps fold, the card
   // shrinks, and "Open the app" can land under the chat bar that floats over
@@ -346,7 +347,9 @@ function JobView({
             <AppWindowIcon className="size-3.5" aria-hidden />
             {layoutFailed
               ? "Open the app (layout check failed)"
-              : "Open the app"}
+              : layoutNoAnswer
+                ? "Open the app (layout not checked)"
+                : "Open the app"}
           </Button>
         </div>
       ) : null}
@@ -488,6 +491,16 @@ function layoutWidths(layout: CodeJobLayout) {
   return `${(layout.widths ?? []).join(" / ")} px`;
 }
 
+/** No answer from the check that still counts against "verified" (its
+ * result could not be read), as opposed to one the system could not run. */
+function countedNoAnswer(layout: CodeJobLayout) {
+  return (
+    layout.outcome === "error" &&
+    layout.counted === true &&
+    layout.mode !== "warn"
+  );
+}
+
 function layoutSummary(layout: CodeJobLayout) {
   if (layout.outcome === "pass")
     return `Layout check: fits ${layoutWidths(layout)}`;
@@ -495,7 +508,9 @@ function layoutSummary(layout: CodeJobLayout) {
     const n = layout.failures?.length ?? 0;
     return `Layout check failed: ${n} problem${n === 1 ? "" : "s"}`;
   }
-  return "Layout check could not run";
+  return countedNoAnswer(layout)
+    ? "Layout check gave no answer"
+    : "Layout check could not run";
 }
 
 /** The system's layout check (a headless browser at each width). The
@@ -504,6 +519,7 @@ function LayoutEvidence({ layout }: { layout: CodeJobLayout }) {
   const failures = layout.failures ?? [];
   const warnings = layout.warnings ?? [];
   const counted = layout.mode !== "warn";
+  const noAnswer = countedNoAnswer(layout);
   return (
     <li
       className="flex items-start gap-2"
@@ -520,7 +536,7 @@ function LayoutEvidence({ layout }: { layout: CodeJobLayout }) {
           ok={
             layout.outcome === "pass"
               ? true
-              : layout.outcome === "fail"
+              : layout.outcome === "fail" || noAnswer
                 ? false
                 : null
           }
@@ -531,16 +547,23 @@ function LayoutEvidence({ layout }: { layout: CodeJobLayout }) {
           <>Layout check: fits {layoutWidths(layout)} </>
         ) : layout.outcome === "fail" ? (
           <>Layout check failed at {layoutWidths(layout)} </>
+        ) : noAnswer ? (
+          <>Layout check gave no answer </>
         ) : (
           <>Layout check could not run </>
         )}
         <span className="text-muted-foreground">
           {layout.outcome === "error"
-            ? `(${safeField(layout.error ?? "no reason given")}; not counted)`
+            ? `(${safeField(layout.error ?? "no reason given")}; ${noAnswer ? "counted: not verified" : "not counted"})`
             : counted
               ? "(run by the system)"
               : "(run by the system; not counted: config says warn)"}
         </span>
+        {failures.length ? (
+          <p className="text-muted-foreground mt-1 text-xs">
+            Element names and error text below come from the page.
+          </p>
+        ) : null}
         {failures.length ? (
           <ul
             className="text-foreground-2 mt-1 flex list-disc flex-col gap-0.5 pl-4 text-xs"

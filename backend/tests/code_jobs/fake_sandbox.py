@@ -131,6 +131,13 @@ class FakeSandbox:
             if self.layout:
                 self._put(f"{directory}/result.json", self.layout)
             return self.layout_exit, ""
+        if "result.json" in command and "stat -c %s" in command:
+            content = self.read_text(shlex.split(command)[3])
+            return 0, str(len(content)) if content is not None else "none"
+        if "tail -c 4000" in command:
+            parts = shlex.split(command)
+            self._put(parts[5], (self.read_text(parts[3]) or "")[-4000:])
+            return 0, ""
         if "__made__" in command:
             return 0, "__made__"
         if "__page__" in command:
@@ -179,7 +186,7 @@ class FakeSandbox:
         if "__ok__" in command:
             parts = shlex.split(command)
             source = parts[2].rsplit("/index.html", 1)[0]
-            target = parts[parts.index("mkdir") + 2]
+            target = parts[parts.index("/usr/bin/mkdir") + 2]
             with self.lock:
                 items = [(p, c) for p, c in self.fs.items() if p.startswith(source + "/")]
             if not any(p == source + "/index.html" and c for p, c in items):
@@ -191,7 +198,7 @@ class FakeSandbox:
                 self._put(target + path[len(source) :], content)
             self.order.append("publish")
             return 0, "__ok__"
-        if command.startswith("rm -rf "):
+        if command.startswith(("rm -rf ", "/usr/bin/rm -rf ")):
             prefix = shlex.split(command)[2]
             with self.lock:
                 for path in [p for p in self.fs if p.startswith(prefix)]:

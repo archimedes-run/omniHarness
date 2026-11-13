@@ -361,7 +361,7 @@ class Check:
         self.result.update(extra)
         text = json.dumps(self.result)
         if len(text) > MAX_RESULT:
-            text = json.dumps({"v": 1, "setup_error": "the result was too large"})
+            text = json.dumps({"v": 1, "setup_error": "too_large"})
         try:
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as f:
@@ -429,7 +429,7 @@ class Check:
             page["_loaded"].set()
         elif method == "Runtime.exceptionThrown":
             d = p.get("exceptionDetails") or {}
-            text = clip(((d.get("exception") or {}).get("description")) or d.get("text") or "error", 200).split("  ")[0].strip()
+            text = clip(((d.get("exception") or {}).get("description")) or d.get("text") or "error", 120).split("  ")[0].strip()
             if text.startswith("ResizeObserver loop"):
                 return  # reported by browsers for a harmless resize loop
             page["errors"] += 1
@@ -455,14 +455,14 @@ class Check:
             cdp.call("Emulation.setDeviceMetricsOverride", {"width": width, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
             nav = cdp.call("Page.navigate", {"url": self.origin + "/"}, session)
             if nav.get("errorText"):
-                page["load_error"] = clip(nav["errorText"], 80)
+                page["load_error"] = "nav"
                 return page
             arrived = page["_loaded"].wait(LOAD_S)
             if page["crashed"]:
-                page["load_error"] = "the page crashed the browser"
+                page["load_error"] = "crashed"
                 return page
             if not arrived:
-                page["load_error"] = f"did not finish loading within {LOAD_S:.0f} s"
+                page["load_error"] = "slow"
                 return page
             time.sleep(SETTLE_S)
             frame = cdp.call("Page.getFrameTree", None, session)["frameTree"]["frame"]["id"]
@@ -470,13 +470,13 @@ class Check:
             res = cdp.call("Runtime.evaluate", {"expression": MEASURE, "contextId": world["executionContextId"], "returnByValue": True}, session)
             value = (res.get("result") or {}).get("value")
             if res.get("exceptionDetails") or not isinstance(value, dict):
-                page["load_error"] = "the page could not be measured"
+                page["load_error"] = "unmeasurable"
                 return page
             page.update(value)
             page["loaded"] = True
             return page
-        except (CdpError, KeyError, TypeError) as exc:
-            page["load_error"] = "the page crashed the browser" if page["crashed"] else f"the page did not respond ({clip(exc, 60)})"
+        except (CdpError, KeyError, TypeError):
+            page["load_error"] = "crashed" if page["crashed"] else "no_response"
             return page
         finally:
             self.pages.pop(session, None)
@@ -493,12 +493,12 @@ class Check:
             if not os.path.isdir(root):
                 raise OSError
         except OSError:
-            return self.finish(setup_error="the site folder is missing")
+            return self.finish(setup_error="site_missing")
         try:
             http.server.ThreadingHTTPServer.daemon_threads = True
             self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root))
         except OSError:
-            return self.finish(setup_error="the local server did not start")
+            return self.finish(setup_error="server")
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
         # Short paths: the browser puts a Unix socket under its temp folder,
@@ -532,7 +532,7 @@ class Check:
                 setsid=True,
             )
         except OSError as exc:
-            return self.finish(setup_error=f"the browser did not start ({clip(exc, 80)})")
+            return self.finish(setup_error="browser", detail=clip(exc, 80))
         finally:
             os.close(child_in)
             os.close(child_out)
@@ -540,11 +540,15 @@ class Check:
         try:
             self.cdp.call("Browser.getVersion", timeout=15)
         except CdpError as exc:
-            return self.finish(setup_error=f"the browser did not start ({self.why_not_started(exc)})")
+            return self.finish(setup_error="browser", detail=self.why_not_started(exc))
         for width in WIDTHS:
             if self.cdp.dead:
                 return self.finish(browser_exit=True)
-            self.result["pages"].append(self.check_width(width))
+            try:
+                self.result["pages"].append(self.check_width(width))
+            except CdpError:
+                # The browser would not open or attach a page: it is gone or stuck.
+                return self.finish(browser_exit=True)
         return self.finish()
 
 

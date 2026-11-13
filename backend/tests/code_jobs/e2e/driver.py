@@ -22,12 +22,18 @@ Checks, each printed as `ok` or `FAIL` (exit 1 if any fails):
     clipped chart are unverified but still shown; a blank page is unverified
     and not shown; nothing of the check is left running
     (sabotage: E2E_SABOTAGE=nooverflow, noclip or norender turns that part
-    of the check off).
+    of the check off);
+  * programs the sandbox user planted earlier on PATH (env, timeout, ps, ...)
+    are never run by the system's commands: a planted timeout cannot forge a
+    pass, a planted ps cannot switch the sweep off, and the control session
+    runs on a fixed PATH (sabotage: E2E_SABOTAGE=nofixedpath keeps the user's
+    PATH in the session; pathprobe or pathps also put a PATH lookup back).
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import subprocess
@@ -65,6 +71,39 @@ PORT = 8790
 #: cleanup after the check must end.
 LEFTOVER_CHECK = "(setsid env -i sh -c 'sleep 666' >/dev/null 2>&1 &); pgrep -f '[s]leep 999|[s]leep 888|[t]muxanything 889' >/dev/null && exit 9; exit 3"
 failed = False
+
+#: Programs the sandbox user plants earlier on PATH (a later job's session finds
+#: them first). If the gateway's own commands ever ran one: it records its name
+#: (outside a worker), `ps` lists no process (no sweep), `timeout` forges a
+#: passing layout result.
+PLANTED = ("env", "sha256sum", "cut", "timeout", "ps", "awk", "xargs", "tr", "grep", "mkdir", "rm", "stat", "tail", "head", "find", "cp", "chmod")
+_PASS = json.dumps({"v": 1, "pages": [{"width": w, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "overflow_px": 0, "client_width": w, "offenders": [], "rendered": True, "svgs": []} for w in (360, 560, 1280)]})
+_FORGE = r"""#!/bin/sh
+# Records its name and its caller, unless the worker started it (OpenCode and
+# its commands are the worker's business, not the system's).
+worker=no; pid=$PPID
+while [ "${pid:-1}" -gt 1 ]; do
+  case "$(/usr/bin/tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)" in *opencode*) worker=yes ;; esac
+  pid=$(/usr/bin/awk '{print $4}' /proc/$pid/stat 2>/dev/null)
+done
+if [ -z "$OMNI_JOB_ID" ] && [ "$worker" = no ]; then
+  chain=""; pid=$PPID
+  while [ "${pid:-1}" -gt 1 ]; do chain="$chain <- $(/usr/bin/tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | /usr/bin/head -c 120)"; pid=$(/usr/bin/awk '{print $4}' /proc/$pid/stat 2>/dev/null); done
+  echo "$(basename "$0") $*$chain" >> /tmp/planted-hits
+fi
+case "$(basename "$0")" in
+  ps) exit 0 ;;
+  timeout) for a; do last="$a"; done; printf %s 'PASS_JSON' > "$last"; exit 0 ;;
+esac
+exit 0
+""".replace("PASS_JSON", _PASS)
+PLANT_CMD = (
+    "/usr/bin/mkdir -p /home/gem/.fnm_shell/bin && cd /home/gem/.fnm_shell/bin && echo "
+    + base64.b64encode(_FORGE.encode()).decode()
+    + " | /usr/bin/base64 -d > forge && /usr/bin/chmod +x forge"
+    + "".join(f" && /usr/bin/ln -sf forge {t}" for t in PLANTED)
+    + " && echo planted"
+)
 
 
 def check(name: str, expected, actual) -> None:
@@ -148,6 +187,22 @@ def main() -> int:
         manager._kill = lambda running: None  # type: ignore[method-assign]
     if SABOTAGE == "nocleanup":
         manager._cleanup = lambda running: None  # type: ignore[method-assign]
+    if SABOTAGE in ("nofixedpath", "pathps", "pathprobe"):
+        # Sabotage: the control session keeps the sandbox user's PATH.
+        import app.gateway.code_jobs.sandbox_ops as ops_mod
+
+        ops_mod.CTL_SETUP = "true"
+    if SABOTAGE == "pathps":
+        # Sabotage: the process snapshot looks ps up on the session's PATH.
+        import app.gateway.code_jobs.runner as runner_mod
+
+        runner_mod.SNAPSHOT_CMD = "ps -u gem -o pid=,lstart="
+    if SABOTAGE == "pathprobe":
+        # Sabotage: the probe command looks timeout and env up on the session's PATH.
+        from app.gateway.code_jobs import layout as layout_cmd
+
+        original = layout_cmd.command
+        layout_cmd.command = lambda *args: original(*args).replace("/usr/bin/timeout ", "timeout ").replace("/usr/bin/env -i PATH=/usr/bin:/bin", 'env -i PATH="${PATH}"')
     if SABOTAGE in ("nooverflow", "noclip", "norender"):
         # Sabotage: one part of the layout probe turned off (the gateway
         # writes and checksums the sabotaged script, as it would the real one).
@@ -204,6 +259,22 @@ def main() -> int:
         check("a blank page is not verified", ("unverified", True), (status, "rendered nothing at 360, 560, 1280 px" in blank.get("failures", [])))
         check("a blank page is not shown", (None, False), (published, (work / "a" / "outputs" / "layout-blank").exists()))
         check("its uncaught error is reported", True, any(f.startswith("uncaught error on load") and "boom" in f for f in blank.get("failures", [])))
+        # -- programs planted earlier on PATH are never what the system runs --------------
+        # Placed by the sandbox user, as an earlier job or the lead's own command could.
+        dexec(a, PLANT_CMD, user="gem")
+        session_path = ops["a"].sh("echo $PATH")[1].strip().splitlines()[-1]
+        found = ops["a"].sh('PATH="$OMNI_USER_PATH" command -v timeout ps env sha256sum rm | /usr/bin/head -n 5')[1]
+        ops["a"].close()  # the next job opens a fresh session, as in production
+        check("positive control: the sandbox user's PATH finds the planted programs first", 5, found.count("/home/gem/.fnm_shell/bin/"))
+        check("the system's control session runs on a fixed PATH", "/usr/bin:/bin", session_path)
+        outcome = await manager.run(thread_id="a", user_id="u", tool_call_id="layout-planted", brief=web("planted"))
+        job = store.get(outcome.job_id)
+        lay = (job.result or {}).get("layout") or {}
+        print(f"      layout planted: {job.status} | {lay.get('outcome')} {lay.get('failures')} {lay.get('error') or ''}", flush=True)
+        check("a planted timeout cannot forge a passing layout check", ("unverified", "fail"), (job.status, lay.get("outcome")))
+        check("a planted ps cannot switch the sweep off: the unmarked leftover is gone", "0", dexec(a, "pgrep -fc '[s]leep 777'", user="gem").strip() or "0")
+        check("no planted program was run by the system's commands", "", dexec(a, "cat /tmp/planted-hits 2>/dev/null").strip())
+        dexec(a, "cd /home/gem/.fnm_shell/bin && rm -f forge env sha256sum cut timeout ps awk xargs tr grep mkdir rm stat tail head find cp chmod; rm -f /tmp/planted-hits; pkill -f '[s]leep 777'")
         check("nothing of the layout check is left running", "0", dexec(a, "pgrep -fc '[l]ayout_probe|[o]pt/browser/chrome'").strip() or "0")
         check("the layout check leaves no files behind", "", dexec(a, "ls -d /tmp/omni-layout-* 2>/dev/null").strip())
 

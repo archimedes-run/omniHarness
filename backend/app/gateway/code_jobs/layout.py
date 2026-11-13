@@ -36,18 +36,42 @@ MAX_RESULT_CHARS = 65536
 MAX_FAILURES = 8
 MAX_WARNINGS = 5
 _WHERE = re.compile(r"[^A-Za-z0-9_#.\- ]")
+#: Why the check could not give an answer: a fixed set of codes, each with the
+#: system's own wording (no text from the probe or the page is ever shown in
+#: its place), and whether it counts against `verified` under `enforce`. A
+#: missing interpreter or browser is the system's problem and is not counted;
+#: a result that cannot be read or a script that does not match its
+#: checksum is, because something in the sandbox interfered.
+ERRORS: dict[str, tuple[str, bool]] = {
+    "checksum": ("the check script did not match its checksum", True),
+    "unreadable": ("the check left no readable result", True),
+    "too_large": ("the check's result was too large", True),
+    "no_answer": ("the sandbox did not answer", False),
+    "no_python": ("the sandbox has no Python 3.10 for the check", False),
+    "browser": ("the browser did not start", False),
+    "server": ("the check's local server did not start", False),
+    "site_missing": ("the built folder was missing", False),
+}
+#: Why a page did not load (the probe sends one of these codes).
+LOAD_ERRORS = {
+    "nav": "the page could not be opened",
+    "slow": "it did not finish loading within 10 s",
+    "crashed": "it crashed the browser",
+    "unmeasurable": "it could not be measured",
+    "no_response": "it stopped responding",
+}
 
 
-def command(directory: str, root: str, job_id: str, path_env: str) -> str:
+def command(directory: str, root: str, job_id: str) -> str:
     """The shell command that runs the probe from `directory` (fresh, the
-    system's own) against the site in `root`. No proxy variables: the page
-    gets no way out of the sandbox."""
+    system's own) against the site in `root`. Every tool by absolute path,
+    a fixed PATH, no proxy variables: the page gets no way out of the sandbox."""
     q = shlex.quote
     script, out = f"{directory}/layout_probe.py", f"{directory}/result.json"
     return (
-        f'f={q(script)}; [ "$(sha256sum "$f" | cut -c1-64)" = {DIGEST} ] || exit 97; '
-        f"cd {q(directory)} && env -i {path_env} HOME={q(directory)} TMPDIR={q(directory)} OMNI_JOB_ID={q(job_id)} "
-        f'timeout -k 5 {TIMEOUT_SECONDS} {PYTHON} -I -S "$f" {q(root)} {q(out)} < /dev/null > /dev/null 2>&1'
+        f'f={q(script)}; [ "$(/usr/bin/sha256sum "$f" | /usr/bin/cut -c1-64)" = {DIGEST} ] || exit 97; '
+        f"cd {q(directory)} && /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 HOME={q(directory)} TMPDIR={q(directory)} OMNI_JOB_ID={q(job_id)} "
+        f'/usr/bin/timeout -k 5 {TIMEOUT_SECONDS} {PYTHON} -I -S "$f" {q(root)} {q(out)} < /dev/null > /dev/null 2>&1'
     )
 
 
@@ -73,37 +97,43 @@ def _widths(ws: list[int]) -> str:
 def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float = 0.0) -> dict:
     """The probe's result file, checked field by field. `outcome` is
     `pass`, `fail` (the page's fault: counted unless the mode is `warn`) or
-    `error` (the check itself could not run: never counted, always shown)."""
+    `error` (no answer: a code from ERRORS, counted or not as it says)."""
     # `summary` holds the failures in the system's own words only (no text
     # from the page): it becomes the job's reason, which is not fenced.
     # `publishable`: false only when the page itself is broken (it did not
-    # load, rendered nothing, threw on load, crashed or hung); an app that
-    # overflows or clips a chart is still shown, marked as failed.
-    base = {"widths": list(WIDTHS), "mode": mode, "seconds": round(seconds, 1), "failures": [], "summary": [], "warnings": [], "error": None, "publishable": True}
+    # load, rendered nothing, crashed or hung); an app that overflows, clips
+    # a chart or throws on load but renders is still shown, marked as failed.
+    base = {"widths": list(WIDTHS), "mode": mode, "seconds": round(seconds, 1), "failures": [], "summary": [], "warnings": [], "error": None, "error_code": None, "counted": False, "publishable": True}
 
-    def error(why: str) -> dict:
-        return {**base, "outcome": "error", "error": why}
+    def error(code: str) -> dict:
+        wording, counted = ERRORS[code]
+        return {**base, "outcome": "error", "error": wording, "error_code": code, "counted": counted}
 
     def fail(why: str) -> dict:
         return {**base, "outcome": "fail", "failures": [why], "summary": [why], "publishable": False}
 
     if exit_code == 97:
-        return error("the check script did not match its checksum")
+        return error("checksum")
     data = None
     if raw is not None and len(raw) <= MAX_RESULT_CHARS:
         try:
             data = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             data = None
     if raw is None or not isinstance(data, dict) or data.get("v") != 1:
         if exit_code in (124, 137):
             return fail(f"the page kept the browser busy past the check's {TIMEOUT_SECONDS} s limit")
-        return error("the check left no readable result" if exit_code is not None else "the sandbox did not answer")
+        if exit_code is None:
+            return error("no_answer")
+        if exit_code in (126, 127) and raw is None:
+            return error("no_python")
+        return error("unreadable")
     if data.get("setup_error") is not None:
-        return error(_text(data.get("setup_error"), 160) or "the check could not start")
+        code = data.get("setup_error")
+        return error(code if isinstance(code, str) and code in ERRORS and code not in ("no_answer", "no_python", "checksum") else "unreadable")
     pages = data.get("pages")
     if not isinstance(pages, list) or len(pages) > len(WIDTHS):
-        return error("the check left no readable result")
+        return error("unreadable")
 
     failures: list[str] = []
     summary: list[str] = []
@@ -117,14 +147,14 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
     for i, page in enumerate(pages):
         width = WIDTHS[i]
         if not isinstance(page, dict) or page.get("width") != width:
-            return error("the check left no readable result")
+            return error("unreadable")
         if page.get("crashed") is True:
             failures.append(f"the page crashed the browser at {width} px")
             summary.append(failures[-1])
             broken = True
             continue
         if page.get("loaded") is not True:
-            failures.append(f"did not load at {width} px ({_text(page.get('load_error'), 80) or 'no reason given'})")
+            failures.append(f"did not load at {width} px ({LOAD_ERRORS.get(page.get('load_error'), 'no reason given')})")
             summary.append(f"did not load at {width} px")
             broken = True
             continue
@@ -132,10 +162,10 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
         offenders = page.get("offenders")
         svgs = page.get("svgs")
         if overflow is None or client is None or not isinstance(page.get("rendered"), bool) or not isinstance(offenders, list) or not isinstance(svgs, list):
-            return error("the check left no readable result")
+            return error("unreadable")
         count = _int(page.get("errors")) or 0
         if count:
-            errors.setdefault(_text(page.get("first_error"), 160) or "an error", []).append(width)
+            errors.setdefault(_text(page.get("first_error"), 120) or "an error", []).append(width)
         if not page["rendered"]:
             blank.append(width)
         if overflow > 1:
@@ -153,7 +183,7 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
     if blank:
         failures.append(f"rendered nothing at {_widths(blank)}")
         summary.append(failures[-1])
-    broken |= bool(blank or errors)
+    broken |= bool(blank)
     for message, ws in errors.items():
         failures.append(f"uncaught error on load at {_widths(ws)}: {message}")
         summary.append(f"uncaught error on load at {_widths(ws)}")
@@ -169,14 +199,21 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str, seconds: float =
         elif data.get("browser_exit") is True:
             failures.append(f"the browser closed while loading the page (at {missing} px)")
         else:
-            return error("the check left no readable result")
+            return error("unreadable")
         summary.append(failures[-1])
         broken = True
     return {**base, "outcome": "fail" if failures else "pass", "publishable": not broken, "failures": failures[:MAX_FAILURES], "summary": summary[:MAX_FAILURES], "warnings": warnings[:MAX_WARNINGS]}
 
 
 def counts_against(layout: dict | None) -> bool:
-    """A failed check stops `verified` unless config says `warn`."""
+    """A failed check, or a counted error, stops `verified` unless config says `warn`."""
+    if not layout or layout.get("mode") != "enforce":
+        return False
+    return layout.get("outcome") == "fail" or (layout.get("outcome") == "error" and layout.get("counted") is True)
+
+
+def asks_for_fix(layout: dict | None) -> bool:
+    """Only failures of the page itself get the one automatic fix."""
     return bool(layout) and layout.get("outcome") == "fail" and layout.get("mode") == "enforce"
 
 
@@ -188,6 +225,8 @@ def publishable(layout: dict | None) -> bool:
 def reason(layout: dict) -> str:
     """The job's reason: the system's words only (the page's text stays in
     the fenced failure list)."""
+    if layout.get("outcome") == "error":
+        return f"the layout check gave no answer: {layout.get('error')}"
     items = layout.get("summary") or []
     shown = "; ".join(items[:3])
     more = len(items) - 3
@@ -200,6 +239,8 @@ def report_lines(layout: dict, fenced) -> list[str]:
     head = f"- Layout check (a headless browser at {' / '.join(str(w) for w in WIDTHS)} px, run by the system):"
     outcome = layout.get("outcome")
     if outcome == "error":
+        if counts_against(layout):
+            return [f"{head} gave no answer ({layout.get('error')}); counted: the result is not verified."]
         return [f"{head} could not run ({layout.get('error')}); not counted either way."]
     lines: list[str] = []
     if outcome == "pass":

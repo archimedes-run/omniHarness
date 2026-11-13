@@ -38,6 +38,9 @@ CLIPPED_HTML = (
 BLANK_HTML = '<!doctype html><html><body><div id="root"></div><script>throw new Error("boom: cannot read properties of undefined")</script></body></html>'
 
 
+LEFTOVER_CMD = "(/usr/bin/setsid /usr/bin/env -i /usr/bin/sleep 777 >/dev/null 2>&1 &) ; echo left"
+
+
 def app(project: str, html: str) -> list:
     return [{"tool": "write", "args": {"filePath": f"{W}/{project}/dist/index.html", "content": html}}, {"text": "Built the app; it is responsive."}]
 
@@ -77,6 +80,10 @@ SCRIPTS = {
     "layout_overflow": app("layout-overflow", OVERFLOW_HTML),
     "layout_clipped": app("layout-clipped", CLIPPED_HTML),
     "layout_blank": app("layout-blank", BLANK_HTML),
+    "layout_planted": [
+        {"tool": "bash", "args": {"command": LEFTOVER_CMD, "description": "leave a detached process without the job's marker"}},
+        *app("layout-planted", OVERFLOW_HTML),
+    ],
     "hold": [
         {"tool": "bash", "args": {"command": "sleep 25", "description": "hold", "timeout": TIMEOUT}},
         {"text": "held"},

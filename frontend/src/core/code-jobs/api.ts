@@ -29,7 +29,11 @@ export interface CodeJobLayout {
   /** The failures in the system's own words (the job's reason). */
   summary?: string[];
   warnings: string[];
+  /** The system's wording for why there is no answer (a fixed set). */
   error: string | null;
+  error_code?: string | null;
+  /** That no-answer counts against "verified" (its result could not be read). */
+  counted?: boolean;
   seconds?: number;
 }
 
