@@ -87,8 +87,9 @@ test("a new agent made through all four steps saves its avatar, Gmail tools, a s
   await page.getByTestId("schedule-time").fill("08:30");
   await page.locator('[data-day="3"]').click();
   await page.getByTestId("schedule-zone").selectOption("America/Chicago");
+  // CDT in summer, CST in winter: the readout names the zone's current offset.
   await expect(page.getByTestId("schedule-readout")).toContainText(
-    "Every Mon and Wed at 8:30 AM CDT",
+    /Every Mon and Wed at 8:30 AM C[DS]T/,
   );
   await page.getByTestId("schedule-task").fill("List what is waiting on me.");
   await page.getByTestId("schedule-save").click();
