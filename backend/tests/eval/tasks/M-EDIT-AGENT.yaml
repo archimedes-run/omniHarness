@@ -1,0 +1,39 @@
+id: M-EDIT-AGENT
+title: An edit reads the live config first, then puts the change on a card
+mock_only: true
+source: spec 010 FR-019 (mocked; the harness seeds no agents, so the draft is a create)
+mode: pro
+prompt: Make my standup agent shorter and stop it running on Fridays.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- tool_called:
+    name: builder_read
+- card_raised:
+    tool: builder_save
+mock:
+  lead:
+  - tool_calls:
+    - name: builder_read
+      args:
+        kind: agent
+        name: eval-standup
+  - expect:
+      tool: builder_read
+    tool_calls:
+    - name: builder_draft
+      args:
+        kind: agent
+        name: eval-standup
+        fields:
+          instructions: Post a three-line standup summary on weekdays except Friday.
+  - expect:
+      tool: builder_draft
+    tool_calls:
+    - name: builder_save
+      args: {}
+  - expect:
+      tool: builder_save
+    content: The change is on a card; apply it with the button or reply apply.

@@ -1,0 +1,26 @@
+id: M-VAGUE-EDIT
+title: A vague edit offers options from the live config and saves nothing
+mock_only: true
+source: spec 010 FR-008 (mocked)
+mode: pro
+prompt: Make my agents better.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- tool_called:
+    name: builder_read
+- tool_not_called:
+    name: builder_save
+- no_cards
+mock:
+  lead:
+  - tool_calls:
+    - name: builder_read
+      args:
+        kind: agent
+  - expect:
+      tool: builder_read
+      contains: Agents
+    content: 'Which should change? Its instructions, its skills, or its schedule (recommended: instructions).'

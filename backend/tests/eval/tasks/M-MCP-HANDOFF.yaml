@@ -1,0 +1,30 @@
+id: M-MCP-HANDOFF
+title: An MCP server request is handed to MCP Studio and drafts nothing
+mock_only: true
+source: spec 010 FR-001 (mocked)
+mode: pro
+prompt: Build me an MCP server for my bank's API.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- no_cards
+- tool_not_called:
+    name: builder_save
+- answer_contains:
+    values:
+    - MCP Studio
+mock:
+  lead:
+  - tool_calls:
+    - name: builder_draft
+      args:
+        kind: mcp_server
+        name: bank
+        fields:
+          request: a server for my bank's API
+  - expect:
+      tool: builder_draft
+      contains: MCP Studio
+    content: MCP servers are built in MCP Studio; open it from the MCP page and describe your bank's API there.
