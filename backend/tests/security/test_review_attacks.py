@@ -95,7 +95,10 @@ def test_atk_login_is_not_a_password_oracle_for_refused_accounts(sec) -> None:
 # ── (a) the owner-only door, every route ─────────────────────────────────
 
 
+# The preview storage shim is public on purpose: a fixed script, no thread data,
+# fetched by the sandboxed (cookie-less) preview iframe. Exact path only.
 _PUBLIC = {"/api/channels/openclaw/webhook", "/api/v1/auth/login/local", "/api/v1/auth/register", "/api/v1/auth/logout", "/api/v1/auth/setup-status", "/api/v1/auth/initialize"}
+_PUBLIC.add("/api/threads/{thread_id}/artifacts/preview-runtime/storage-shim.js")
 
 
 def test_atk_every_route_refuses_the_second_accounts_session(sec) -> None:

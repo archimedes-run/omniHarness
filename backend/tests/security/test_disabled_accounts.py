@@ -115,7 +115,10 @@ def test_the_prefix_hack_migrates_to_disabled_at(make_gateway) -> None:
     assert login(app, "first@example.com", "F1rst!Strong")[1].status_code == 200  # hash restored, earliest again
 
 
+# The preview storage shim is public on purpose: a fixed script, no thread data,
+# fetched by the sandboxed (cookie-less) preview iframe. Exact path only.
 _PUBLIC = {"/api/channels/openclaw/webhook", "/api/v1/auth/login/local", "/api/v1/auth/register", "/api/v1/auth/logout", "/api/v1/auth/setup-status", "/api/v1/auth/initialize"}
+_PUBLIC.add("/api/threads/{thread_id}/artifacts/preview-runtime/storage-shim.js")
 
 
 def test_a_re_enabled_non_owner_reaches_no_route_at_all(sec) -> None:
