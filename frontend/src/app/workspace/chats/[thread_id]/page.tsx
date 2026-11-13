@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
+import { BuildingChip } from "@/components/workspace/chat-bar/building-chip";
 import {
   ChatBox,
   useComposerInset,
@@ -235,6 +236,14 @@ export default function ChatPage() {
                     />
                   </div>
                 </div>
+                {/* "Building: <name>" while this chat builds an agent, skill
+                    or automation (Spec 010 FR-003); nothing otherwise. */}
+                <BuildingChip
+                  threadId={threadId}
+                  enabled={!isNewThread}
+                  running={thread.isLoading}
+                  rowClassName="flex -translate-y-4 justify-start pb-2"
+                />
                 {mountedRef.current ? (
                   <InputBox
                     className="bg-background/5 w-full -translate-y-4"

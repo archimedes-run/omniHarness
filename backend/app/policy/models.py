@@ -261,10 +261,18 @@ class PendingAction:
     #: The turn it was stated in: the id of the message that started it
     #: ("" when unknown). Groups a turn's outbound cards.
     group_key: str = ""
+    #: Set (as the reason) when only the card's button may confirm this one,
+    #: whoever caused it (Spec 010: an automation that runs with standing
+    #: grants). Grants themselves are button-only by tool (builder_rules).
+    button_only_reason: str = ""
 
     @property
     def confirmable_by_typing(self) -> bool:
-        return self.origin == "user"
+        from .builder_rules import button_only
+
+        # A button-only part (a grant, tool-access widening, a connection:
+        # Spec 010 FR-016) is never confirmed by typing, whoever caused it.
+        return self.origin == "user" and not button_only(self.tool_name) and not self.button_only_reason
 
     def _cause(self) -> str:
         """'content from web_fetch' / 'an automation'; '' when it cannot be said."""
@@ -285,14 +293,23 @@ class PendingAction:
 
     def origin_reason(self) -> str:
         """Why a typed confirmation does not count, as a clause."""
+        from .builder_rules import button_only
+
+        if self.origin == "user" and button_only(self.tool_name):
+            return "a change to what an agent may use or do on its own"
+        if self.origin == "user" and self.button_only_reason:
+            return self.button_only_reason
         cause = self._cause()
         if not cause:
             return "proposed without a request I could trace to you"
         return f"suggested via {self.origin_via} from {cause}, not by you" if self.origin_via else f"suggested by {cause}, not by you"
 
     def origin_note(self) -> str:
-        """The plan's sentence about its cause; empty for the user's own request."""
-        if self.origin == "user":
+        """The plan's sentence about its cause; empty for the user's own request
+        (unless it is button-only, which the plan must say)."""
+        from .builder_rules import button_only
+
+        if self.origin == "user" and not button_only(self.tool_name) and not self.button_only_reason:
             return ""
         reason = self.origin_reason()
         return f"{reason[:1].upper()}{reason[1:]}."

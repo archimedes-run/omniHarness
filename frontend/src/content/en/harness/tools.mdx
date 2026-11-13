@@ -58,15 +58,9 @@ Asks the user a clarifying question before proceeding. This is triggered by the 
 
 ---
 
-### setup_agent
+### Chat builder
 
-Dynamically configures the current agent session. Used during the bootstrap flow when setting up a new custom agent.
-
----
-
-### update_agent
-
-Persists updates to the current custom agent's `SOUL.md` and `config.yaml`. Bound to the lead agent only when a custom agent is active (`agent_name` is set in the runtime context). Use this when the user asks the agent to refine its own description, personality, skill whitelist, tool-group whitelist, or default model — it writes directly into the per-user layout `{base_dir}/users/{user_id}/agents/{agent_name}/`, so the change is picked up automatically on the next user turn. Only the fields you explicitly pass are updated; omit a field to preserve its existing value. Pass `skills=[]` to disable all skills, or omit `skills` to keep the existing whitelist.
+`builder_draft`, `builder_read`, `builder_diff`, `builder_save`, `builder_grant` and `builder_undo` build and edit agents, custom skills and automations from the owner's own chat with the assistant (also in the bootstrap flow for a new agent). A draft lives in the chat and is never saved on its own; `builder_save` and `builder_undo` are confirmed on their card or by the owner typing a clear yes; `builder_grant` (tool access, standing grants) only with its card's button. Custom agents, scheduled, delegated, @-called and resumed runs never hold these tools, so an agent cannot change itself.
 
 ---
 

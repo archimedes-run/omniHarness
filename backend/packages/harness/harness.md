@@ -141,8 +141,9 @@ omniharness/
 │       ├── task_tool.py               # task tool (async subagent delegation)
 │       ├── view_image_tool.py         # view_image tool
 │       ├── tool_search.py             # tool_search + DeferredToolRegistry
-│       ├── setup_agent_tool.py        # setup_agent (bootstrap-only)
-│       └── update_agent_tool.py       # update_agent (custom agent self-update)
+│       ├── builder_tools.py           # the chat builder's tools (Spec 010)
+│       ├── setup_agent_tool.py        # setup_agent (on no tool list since Spec 010)
+│       └── update_agent_tool.py       # update_agent (on no tool list since Spec 010)
 │
 ├── community/
 │   ├── tavily/tools.py         # web_search, web_fetch
@@ -1298,7 +1299,6 @@ Assembles the full tool list for an agent run:
    - Filters out host bash tools if `not is_host_bash_allowed()`
    - Warns on name mismatches between config name and tool `.name`
 2. Built-in tools: `present_files`, `ask_clarification`
-   - `skill_manage_tool` if `skill_evolution.enabled`
    - `task` if `subagent_enabled=True`
    - `view_image` if model's `supports_vision=True`
 3. MCP tools (if `include_mcp=True`):

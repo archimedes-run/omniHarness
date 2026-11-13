@@ -265,16 +265,15 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
    - `present_files` - Make output files visible to user (only `/mnt/user-data/outputs`)
    - `ask_clarification` - Request clarification (intercepted by ClarificationMiddleware → interrupts)
    - `view_image` - Read image as base64 (added only if model supports vision)
-   - `setup_agent` - Bootstrap-only: persist a brand-new custom agent's `SOUL.md` and `config.yaml`. Bound only when `is_bootstrap=True`.
-   - `update_agent` - Custom-agent-only: persist self-updates to the current agent's `SOUL.md` / `config.yaml` from inside a normal chat (partial update + atomic write). Bound when `agent_name` is set and `is_bootstrap=False`.
+   - The chat builder (Spec 010; added by the lead's own assembly, `lead_agent.agent.builder_tools_for`, not here): `builder_draft`, `builder_read`, `builder_diff` (Tier 1), `builder_save`, `builder_undo` (Tier 3: card button or a typed yes from the closed list in `app/policy/builder_rules.py`), `builder_grant` (Tier 3, button only). Offered only to the assistant in the owner's own chat (bootstrap included), never to a custom agent or a scheduled, delegated, @-called or resumed run (`omniharness.runtime.builder.surface`). `setup_agent`, `update_agent` and `skill_manage` are on no model's tool list; the builder's save is the chat's only path to the agent and skill writers.
 4. **Subagent tool** (if enabled):
    - `task` - Delegate to subagent (description, prompt, subagent_type, max_turns)
 
 **Per-agent integrations and tools (006-G)** — `AgentConfig.tools` (`{integrations: [...], tools: [...]}`, integration ids `local:<mcp server>`, `connector:<TOOLKIT>`, `builtin:<config group>`, `builtin:ledger`, `builtin:workspace`):
 - Enforced in ONE place, `get_available_tools(tool_access=...)` → `omniharness/tools/agent_access.apply_tool_access`. Every run path passes the agent's own allowlist: the lead factory (chat, scheduled firings, confirmation rebuilds via `lead_agent_tools`), `task` delegates (run metadata `tool_access`, recorded on the subagent tool surface) and @-called agents (`called_agents.call_agent_tool`, from the called agent's config).
-- With an allowlist: `tool_groups` and the chat's source picker no longer apply; the agent's own MCP servers and connector toolkits load; the core tools (`present_files`, `ask_clarification`, `view_image`, `task`, `tool_search`, `update_agent`, `setup_agent`, `call_agent`, `write_todos`) stay; everything else must be named, and an unattributable tool is dropped (fails closed; an unreadable allowlist on disk is read as empty).
+- With an allowlist: `tool_groups` and the chat's source picker no longer apply; the agent's own MCP servers and connector toolkits load; the core tools (`present_files`, `ask_clarification`, `view_image`, `task`, `tool_search`, `call_agent`, `write_todos`) stay; everything else must be named, and an unattributable tool is dropped (fails closed; an unreadable allowlist on disk is read as empty).
 - Without one (agents saved before 006-G, the lead agent): exactly the old behaviour.
-- The agent changing itself (`update_agent`, version source `proposal`) never changes `tools` (`config_versions._keep_tools`). Assigning a tool never changes its policy tier.
+- An agent cannot change itself (no agent holds a writing tool); a `proposal` write never changes `tools` (`config_versions._keep_tools`). Assigning a tool never changes its policy tier.
 - `GET /api/studio/tool-catalog` (`app/gateway/tool_catalog.py`, owner only) lists every integration and tool from the same assembly functions, each tool's tier from `app.policy.explain` (runtime floors included; `None` = no rule, never offered).
 - Also on `AgentConfig`: `avatar` (one of `AGENT_AVATARS`, validated by the API; a random one on create) and `notify` (delivery defaults for the agent's new schedules).
 

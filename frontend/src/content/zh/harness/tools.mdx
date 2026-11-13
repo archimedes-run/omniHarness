@@ -55,15 +55,9 @@ task(agent="general-purpose", task="...", context="...")
 
 ---
 
-### setup_agent
+### Chat builder
 
-动态配置当前 Agent 会话。在设置新自定义 Agent 的引导流程中使用。
-
----
-
-### update_agent
-
-将更新持久化到当前自定义 Agent 的 `SOUL.md` 和 `config.yaml`。仅当激活了自定义 Agent（运行时上下文中存在 `agent_name`）时，才会绑定到 lead agent。当用户在 Agent 内开启 chat 并要求该 Agent 调整自身的描述、人格、技能白名单、工具组白名单或默认模型时使用——它会直接写入按用户隔离的 `{base_dir}/users/{user_id}/agents/{agent_name}/` 下的真实配置文件，下一轮对话即可生效。仅显式传入的字段会被更新；省略某个字段以保留其现有值。传入 `skills=[]` 可禁用全部技能，省略 `skills` 则保留现有白名单。
+`builder_draft`、`builder_read`、`builder_diff`、`builder_save`、`builder_grant` 和 `builder_undo` 在所有者与助手的对话中创建和编辑 Agent、自定义技能和自动化（新 Agent 的引导流程中也可用）。草稿只保存在对话中；`builder_save` 和 `builder_undo` 需在卡片上确认或由所有者明确回复 yes；`builder_grant`（工具权限、长期授权）只能通过卡片按钮确认。自定义 Agent、定时、委派、@ 调用和恢复的运行都不会拥有这些工具，因此 Agent 无法修改自身。
 
 ---
 

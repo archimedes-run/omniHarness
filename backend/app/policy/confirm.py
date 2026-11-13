@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .builder_rules import BUILDER_CONFIRM_FORMS, is_builder_card
 from .lineage import eligible_to_confirm
 from .models import PendingAction
 from .provenance import is_synthetic_turn
@@ -104,6 +105,10 @@ class Recognition:
     verdict: Verdict
     action_id: str | None = None
     reason: str = ""
+    #: The reply addressed a builder card and is not a verdict on it: it is a
+    #: revision of the draft, for the model (Spec 010 FR-009, FR-015), not an
+    #: unrecognised answer to restate.
+    revision: bool = False
 
 
 def _normalise(text: str) -> str:
@@ -149,6 +154,12 @@ def recognise(message, pending: list[PendingAction], runtime_context: dict | Non
     open_ids = {action.id for action in pending}
     named = next((m for m in _ID.findall(text) if m in open_ids), None)
 
+    if named is None and len(open_ids) > 1 and all(is_builder_card(a.tool_name) for a in pending):
+        # A save card beside button-only builder cards (a grant): a typed yes
+        # can only ever mean the one typing may confirm.
+        typable = [a.id for a in pending if a.confirmable_by_typing]
+        if len(typable) == 1:
+            named = typable[0]
     if named is None:
         if len(open_ids) > 1:
             # FR-035: ambiguity is not resolved by guessing which was meant.
@@ -158,6 +169,15 @@ def recognise(message, pending: list[PendingAction], runtime_context: dict | Non
         return Recognition(Verdict.UNRECOGNISED, reason="no action is pending")
 
     words = text.replace(named, "").strip()
+    action = next((a for a in pending if a.id == named), None)
+    if action is not None and is_builder_card(action.tool_name):
+        # Spec 010 FR-015: a builder card has its own closed list, matched on
+        # the whole message; anything else revises the draft.
+        if words in BUILDER_CONFIRM_FORMS:
+            return Recognition(Verdict.CONFIRM, action_id=named)
+        if words in _DECLINE_FORMS:
+            return Recognition(Verdict.DECLINE, action_id=named)
+        return Recognition(Verdict.UNRECOGNISED, action_id=named, reason="a revision of the draft, not a yes or a no", revision=True)
     if words in _CONFIRM_FORMS:
         return Recognition(Verdict.CONFIRM, action_id=named)
     if words in _DECLINE_FORMS:
@@ -190,6 +210,15 @@ def model_safe_plan(action: PendingAction) -> tuple[str, list[str]]:
     line is replaced by its stored-free counterpart; nothing else changes."""
     targets = list(action.targets)
     plan = action.plan_text
+    if is_builder_card(action.tool_name):
+        # The card shows the owner the draft or diff, which can hold stored
+        # text (an agent's instructions, a skill's files); the model is told
+        # the plan without it (Spec 010).
+        from .builder_cards import MODEL_NOTE
+        from .middleware import PolicyMiddleware
+
+        base = PolicyMiddleware._plan_text(action.tool_name, targets, action.requester, action.delegation_chain, action.id, action.arguments, origin_note=action.origin_note())
+        return f"{base}\n\n{MODEL_NOTE}", targets
     if action.tool_name != "ledger_apply":
         return plan, targets
     from app.ledger.service import render

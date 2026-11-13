@@ -30,6 +30,7 @@ from typing import Any, cast
 
 from langchain.agents.middleware import AgentMiddleware
 
+from .builder_cards import builder_precheck
 from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger, ExecutionRecord
@@ -947,6 +948,20 @@ class PolicyMiddleware(AgentMiddleware):
                     self._record_refused_plan(request, decision, arguments, invalid, origin, origin_source)
                 return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {invalid}."))
 
+        # Spec 010: a builder proposal is checked before its card (the draft is
+        # this chat's, its base version is current, its target is not the
+        # proposer or its call chain); the card then shows the draft or diff.
+        builder = builder_precheck(decision.tool_name, arguments, self._runtime_context(request), self.pending)
+        if builder.refused is not None:
+            logger.info("policy: %s refused before its card: %s", decision.tool_name, builder.refused)
+            return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {builder.refused}"))
+        arguments = builder.arguments
+        if builder.origin is not None and origin == "user":
+            # A draft made in a turn that read content stays a suggestion.
+            origin, origin_source = builder.origin
+        if builder.note:
+            extra_note = f"{builder.note}\n\n{extra_note}" if extra_note else builder.note
+
         if origin != "user":
             logger.warning("policy: %s was suggested by %s %s (via %s); it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source, origin_via or "-")
 
@@ -989,6 +1004,7 @@ class PolicyMiddleware(AgentMiddleware):
                     private_read=privacy.private,
                     outbound=is_outbound(tool_name, ruleset),
                     group_key=privacy.turn_key,
+                    button_only_reason=builder.button_only,
                 )
                 action.plan_text = self._plan_text_for(action)
                 if extra_note:
@@ -1161,12 +1177,15 @@ class PolicyMiddleware(AgentMiddleware):
         only when, the tool dispatched IS a registered built-in whose results
         are trusted (lineage.TRUSTED_TOOL_RESULTS), by object identity: an
         outside tool with the same name is never marked."""
+        from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
         from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
 
+        from .builder_rules import TRUSTED_RESULT_TOOLS
         from .lineage import TRUSTED_ACK_MARKER
 
         tool = getattr(request, "tool", None)
-        if tool is not ledger_apply_tool and not _is_registered_write_todos(tool):
+        trusted_tools = (ledger_apply_tool, *(t for t in BUILDER_TOOLS if t.name in TRUSTED_RESULT_TOOLS))
+        if not any(tool is trusted for trusted in trusted_tools) and not _is_registered_write_todos(tool):
             return result
         messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
         for message in messages:

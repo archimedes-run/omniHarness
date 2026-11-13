@@ -138,6 +138,15 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.ledger_service = None
             set_ledger_controller(None)
 
+        # The chat builder (Spec 010): the builder tools exist only while this
+        # controller is registered, and only in the owner's own chat
+        # (omniharness.runtime.builder.surface).
+        from app.gateway.builder.service import GatewayBuilderController
+        from omniharness.runtime.builder.controller import set_builder_controller
+
+        set_builder_controller(GatewayBuilderController(lambda: getattr(app.state, "config", None) or config))
+        stack.callback(set_builder_controller, None)
+
         # Composio connections repository (always enabled when DB is available)
         if sf is not None:
             from omniharness.persistence.composio_connections import ComposioConnectionRepository
