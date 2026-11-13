@@ -77,6 +77,18 @@ class FetchFailed(WebFetchError):
     """The fetch did not succeed (network, HTTP status, content). May fall back."""
 
 
+#: The exact start of the tool's message when the egress proxy is missing or down.
+EGRESS_PROXY_DOWN = "page fetching unavailable: egress proxy down"
+
+
+class EgressProxyDown(WebFetchError):
+    """No egress proxy is configured, or it cannot be reached or answers with an
+    error. Fail closed: no direct fetch, and never retried elsewhere."""
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__(f"{EGRESS_PROXY_DOWN} ({detail})" if detail else EGRESS_PROXY_DOWN)
+
+
 @dataclass(frozen=True)
 class Target:
     url: str

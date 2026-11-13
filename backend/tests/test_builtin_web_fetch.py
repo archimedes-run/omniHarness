@@ -20,7 +20,7 @@ from omniharness.community.builtin_fetch import fetcher as fetcher_module
 from omniharness.community.builtin_fetch import guard
 from omniharness.community.builtin_fetch import tools as tools_module
 from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, FetchSettings, fetch
-from omniharness.community.builtin_fetch.guard import FetchFailed, FetchRefused, check_url, is_blocked_ip, resolve_and_check
+from omniharness.community.builtin_fetch.guard import EGRESS_PROXY_DOWN, EgressProxyDown, FetchFailed, FetchRefused, check_url, is_blocked_ip, resolve_and_check
 
 PUBLIC_IP = "93.184.215.14"
 HTML = b"<html><head><title>Hello page</title></head><body><article><h1>Hello page</h1><p>" + b"Readable paragraph text for the extractor. " * 20 + b"</p></article></body></html>"
@@ -333,6 +333,8 @@ async def test_a_small_gzip_body_is_decoded(dns) -> None:
 @pytest.mark.anyio
 async def test_the_timeout_covers_the_whole_fetch(dns) -> None:
     async def slow(request: httpx.Request) -> httpx.Response:
+        # The proxy answered (as a CONNECT reply would); the site is slow.
+        await request.extensions["trace"]("http11.receive_response_headers.complete", {})
         await asyncio.sleep(0.15)
         if request.url.path == "/3":
             return page(request)
@@ -371,9 +373,202 @@ def test_the_default_timeout_is_15_seconds() -> None:
 async def test_no_proxy_configured_means_no_fetch(dns, monkeypatch) -> None:
     built = []
     monkeypatch.setattr(fetcher_module.httpx, "AsyncClient", lambda *a, **k: built.append(k))
-    with pytest.raises(FetchFailed, match="no fetch egress proxy"):
+    with pytest.raises(EgressProxyDown) as info:
         await fetch("https://example.com/", FetchSettings(proxy=None))
+    assert str(info.value).startswith(EGRESS_PROXY_DOWN)
+    assert not isinstance(info.value, FetchFailed), "never a failure a fallback may retry"
     assert built == []
+
+
+def _closed_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("url", ["https://example.com/", "http://example.com/"])
+async def test_an_unreachable_proxy_fails_closed(dns, url) -> None:
+    """A real client, a proxy on a closed localhost port: connection refused."""
+    with pytest.raises(EgressProxyDown) as info:
+        await fetch(url, FetchSettings(proxy=f"http://127.0.0.1:{_closed_port()}", timeout=5))
+    assert str(info.value).startswith(EGRESS_PROXY_DOWN)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ProxyError("502 Bad Gateway"), httpx.ProxyError("407 Proxy Authentication Required"), httpx.ConnectError("refused"), httpx.ConnectTimeout("timed out")],
+)
+async def test_a_proxy_error_fails_closed(dns, error) -> None:
+    def broken(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    with pytest.raises(EgressProxyDown) as info:
+        await fetch("https://example.com/", settings(), transport=Recorder(broken).transport)
+    assert str(info.value).startswith(EGRESS_PROXY_DOWN)
+
+
+# ── a real local fake proxy: what the proxy does decides proxy-down ─────────
+
+
+class FakeProxy:
+    """An asyncio TCP server standing in for the egress proxy. ``mode``:
+
+    * hang: accept, read the request, never answer
+    * close: accept, read the request, close without a byte
+    * garbage: answer with bytes that are not HTTP
+    * connect_ok_close: answer the CONNECT with 200, then close (the site's TLS fails)
+    * connect_ok_junk: answer the CONNECT with 200, then send non-TLS bytes (a bad handshake)
+    * connect_ok_hang: answer the CONNECT with 200, then nothing (a slow handshake)
+    """
+
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.requests: list[bytes] = []
+        self.server: asyncio.AbstractServer | None = None
+        self._writers: list[asyncio.StreamWriter] = []
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._writers.append(writer)
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+            writer.close()
+            return
+        self.requests.append(head)
+        if self.mode == "hang":
+            await asyncio.sleep(60)
+        elif self.mode == "garbage":
+            writer.write(b"\x00\x01 not http at all \xff\r\n\r\n")
+            await writer.drain()
+        elif self.mode.startswith("connect_ok"):
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+            if self.mode == "connect_ok_junk":
+                writer.write(b"definitely not a TLS server hello\r\n" * 4)
+                await writer.drain()
+                await asyncio.sleep(0.2)
+            elif self.mode == "connect_ok_hang":
+                await asyncio.sleep(60)
+        writer.close()
+
+    async def __aenter__(self) -> str:
+        self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        port = self.server.sockets[0].getsockname()[1]
+        return f"http://127.0.0.1:{port}"
+
+    async def __aexit__(self, *exc) -> None:
+        for writer in self._writers:
+            writer.close()
+        assert self.server is not None
+        self.server.close()
+
+
+@pytest.fixture
+def proxy_tool(monkeypatch, dns):
+    """The tool with the REAL fetcher (no transport), config {extra}, and the
+    Jina client replaced by a recorder."""
+    state: dict = {"extra": {}, "jina_calls": []}
+
+    def config():
+        cfg = MagicMock()
+        tool_cfg = MagicMock()
+        tool_cfg.model_extra = dict(state["extra"])
+        cfg.get_tool_config.return_value = tool_cfg
+        return cfg
+
+    async def fake_crawl(self, url, return_format="html", timeout=10):
+        state["jina_calls"].append(url)
+        return "<html><body><p>from the jina reader</p></body></html>"
+
+    from omniharness.community.jina_ai.jina_client import JinaClient
+
+    monkeypatch.setattr(tools_module, "get_app_config", config)
+    monkeypatch.setattr(JinaClient, "crawl", fake_crawl)
+    monkeypatch.delenv(tools_module.PROXY_ENV, raising=False)
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    return state
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["hang", "close", "garbage"])
+@pytest.mark.parametrize("url", ["https://example.com/", "http://example.com/"])
+async def test_a_proxy_that_never_answers_properly_is_down(proxy_tool, mode, url) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    fake = FakeProxy(mode)
+    async with fake as proxy:
+        proxy_tool["extra"] = {"proxy": proxy, "timeout": 1, "jina_fallback": True}
+        result = await web_fetch_tool.ainvoke({"url": url})
+    assert fake.requests, "the request reached the fake proxy"
+    assert result.startswith(EGRESS_PROXY_DOWN), (mode, result)
+    assert proxy_tool["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_a_blackholed_proxy_surfaces_as_a_connect_timeout(dns) -> None:
+    """Connecting gets a share of the budget, so an unreachable proxy is a
+    connect timeout, well before the whole budget runs out."""
+    assert fetcher_module._connect_timeout(FetchSettings(proxy="http://p:3128")) < fetcher_module.TIMEOUT_CAP / 2
+    assert fetcher_module._connect_timeout(FetchSettings(proxy="http://p:3128", timeout=2)) == 1.0
+
+    import httpcore
+
+    real = httpcore.AsyncConnectionPool
+    seen: list[float | None] = []
+
+    class Pool(real):  # type: ignore[misc,valid-type]
+        """A proxy address that never accepts: the connect step times out."""
+
+        async def handle_async_request(self, request):
+            seen.append(request.extensions.get("timeout", {}).get("connect"))
+            raise httpcore.ConnectTimeout("blackholed")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(httpcore, "AsyncConnectionPool", Pool)
+        mp.setattr(httpcore, "AsyncHTTPProxy", lambda *a, **k: Pool())
+        with pytest.raises(EgressProxyDown):
+            await fetch("https://example.com/", FetchSettings(proxy="http://192.0.2.1:3128", timeout=4))
+    assert seen == [2.0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "proxy",
+    ["ftp://127.0.0.1:3128", "socks9://127.0.0.1:1", "http://127.0.0.1:notaport", "http://[::1", "://", "127.0.0.1:3128"],
+)
+async def test_an_unusable_proxy_url_is_down_at_call_time(proxy_tool, proxy) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    proxy_tool["extra"] = {"proxy": proxy, "jina_fallback": True}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert result.startswith(EGRESS_PROXY_DOWN), (proxy, result)
+    assert proxy_tool["jina_calls"] == []
+    with pytest.raises(EgressProxyDown):
+        await fetch("https://example.com/", FetchSettings(proxy=proxy))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["connect_ok_close", "connect_ok_junk", "connect_ok_hang"])
+async def test_a_site_failing_after_the_proxy_answered_is_the_sites_failure(proxy_tool, mode) -> None:
+    """After a 200 CONNECT the proxy is up: a TLS failure, a bad handshake or a
+    slow one is the site's, an ordinary error (and an enabled fallback may run)."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    fake = FakeProxy(mode)
+    async with fake as proxy:
+        proxy_tool["extra"] = {"proxy": proxy, "timeout": 2}
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+        assert result.startswith("Error: request failed:"), (mode, result)
+        assert not result.startswith(EGRESS_PROXY_DOWN)
+        assert proxy_tool["jina_calls"] == []
+        proxy_tool["extra"] = {"proxy": proxy, "timeout": 2, "jina_fallback": True}
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert "from the jina reader" in result and proxy_tool["jina_calls"] == ["https://example.com/"]
+    assert all(r.startswith(b"CONNECT example.com:443") for r in fake.requests)
 
 
 @pytest.mark.anyio
@@ -440,7 +635,7 @@ async def test_http_errors_and_binary_content_are_failures(dns) -> None:
         await fetch("https://example.com/a.pdf", settings(), transport=pdf.transport)
 
 
-# ── the tool: extraction, Jina only as a keyed fallback ─────────────────────
+# ── the tool: extraction, Jina only when enabled in config ──────────────────
 
 
 @pytest.fixture
@@ -488,6 +683,7 @@ async def test_the_tool_returns_readable_markdown(tool_env) -> None:
 async def test_no_jina_key_means_jina_is_never_called(tool_env) -> None:
     from omniharness.community.builtin_fetch.tools import web_fetch_tool
 
+    tool_env["extra"] = {"jina_fallback": True}
     tool_env["handler"] = lambda r: httpx.Response(503)
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert result.startswith("Error:") and "503" in result
@@ -498,19 +694,109 @@ async def test_no_jina_key_means_jina_is_never_called(tool_env) -> None:
 
 
 @pytest.mark.anyio
-async def test_jina_is_the_fallback_when_the_key_is_set_and_the_fetch_failed(tool_env, monkeypatch) -> None:
+async def test_jina_is_the_fallback_only_when_enabled_in_config(tool_env, monkeypatch) -> None:
     from omniharness.community.builtin_fetch.tools import web_fetch_tool
 
     monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["handler"] = lambda r: httpx.Response(503)
+    # The key alone (the default config) enables nothing.
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert result.startswith("Error:") and "503" in result and tool_env["jina_calls"] == []
+    for not_true in (False, "true", 1, None):
+        tool_env["extra"] = {"jina_fallback": not_true}
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+        assert result.startswith("Error:") and tool_env["jina_calls"] == [], not_true
+    tool_env["extra"] = {"jina_fallback": True}
+    tool_env["handler"] = page
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert tool_env["jina_calls"] == [], "a successful built-in fetch never calls Jina"
     tool_env["handler"] = lambda r: httpx.Response(503)
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert "from the jina reader" in result and tool_env["jina_calls"] == ["https://example.com/"]
-    tool_env["jina_calls"].clear()
-    tool_env["extra"] = {"jina_fallback": False}
+
+
+@pytest.mark.anyio
+async def test_a_down_proxy_never_falls_back_even_with_jina_enabled(tool_env, monkeypatch) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+
+    def proxy_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("502 Bad Gateway")
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 61] Connection refused")
+
+    for handler in (proxy_error, refused):
+        tool_env["handler"] = handler
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+        assert result.startswith(EGRESS_PROXY_DOWN), result
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.fixture
+def wire(monkeypatch, dns):
+    """The tool with the REAL fetcher and the REAL Jina client, every httpx
+    client in the process forced onto one recording transport: what would go
+    out on the wire. Config is {extra}; the proxy comes only from it."""
+    state: dict = {"extra": {}, "requests": []}
+
+    def config():
+        cfg = MagicMock()
+        tool_cfg = MagicMock()
+        tool_cfg.model_extra = dict(state["extra"])
+        cfg.get_tool_config.return_value = tool_cfg
+        return cfg
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["requests"].append(request)
+        if request.url.host == "r.jina.ai":
+            return httpx.Response(200, text="<html><body><p>from the jina reader</p></body></html>")
+        return httpx.Response(503)
+
+    real = httpx.AsyncClient
+
+    def recording_client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_client)
+    monkeypatch.setattr(tools_module, "get_app_config", config)
+    monkeypatch.delenv(tools_module.PROXY_ENV, raising=False)
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    return state
+
+
+@pytest.mark.anyio
+async def test_a_jina_key_alone_sends_nothing_to_jina(wire) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    # No proxy configured: the error, and nothing at all on the wire.
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
-    assert result.startswith("Error:") and tool_env["jina_calls"] == []
+    assert result.startswith(EGRESS_PROXY_DOWN), result
+    assert wire["requests"] == []
+    # Proxy configured, the site fails: the site's error, and only the site was asked.
+    wire["extra"] = {"proxy": "http://fetch-egress.test:3128"}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert result.startswith("Error:") and "503" in result
+    assert {r.url.host for r in wire["requests"]} == {"example.com"}
+
+
+@pytest.mark.anyio
+async def test_jina_enabled_in_config_goes_to_jina(wire) -> None:
+    """The control for the test above: the recorder does see Jina when enabled."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    wire["extra"] = {"proxy": "http://fetch-egress.test:3128", "jina_fallback": True}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert "from the jina reader" in result
+    assert [r.url.host for r in wire["requests"]] == ["example.com", "r.jina.ai"]
+    wire["requests"].clear()
+    wire["extra"] = {"provider": "jina"}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert "from the jina reader" in result and [r.url.host for r in wire["requests"]] == ["r.jina.ai"]
 
 
 @pytest.mark.anyio
@@ -518,6 +804,7 @@ async def test_a_refused_url_never_falls_back_to_jina(tool_env, monkeypatch) -> 
     from omniharness.community.builtin_fetch.tools import web_fetch_tool
 
     monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
     for url in ("http://169.254.169.254/", "http://gateway/", "http://localhost/"):
         result = await web_fetch_tool.ainvoke({"url": url})
         assert result.startswith("Error:"), url
@@ -568,13 +855,27 @@ def test_the_example_config_uses_the_built_in_fetcher() -> None:
     assert entry["use"] == "omniharness.community.builtin_fetch.tools:web_fetch_tool"
 
 
-def test_the_jina_key_counts_as_used_by_the_built_in_fetcher() -> None:
-    """Its fallback reads JINA_API_KEY, so the unused-secrets line must not name it."""
+def test_the_jina_key_counts_as_used_only_with_jina_enabled() -> None:
+    """A key with Jina off is a dead secret: the unused-secrets line names it."""
     from app.gateway.secret_usage import unused_secret_keys
 
-    config = {"tools": [{"name": "web_fetch", "use": "omniharness.community.builtin_fetch.tools:web_fetch_tool"}]}
-    assert unused_secret_keys(["JINA_API_KEY"], config, {}) == []
+    builtin = {"name": "web_fetch", "use": "omniharness.community.builtin_fetch.tools:web_fetch_tool"}
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [builtin]}, {}) == ["JINA_API_KEY"]
     assert unused_secret_keys(["JINA_API_KEY"], {"tools": []}, {}) == ["JINA_API_KEY"]
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [{**builtin, "jina_fallback": True}]}, {}) == []
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [{**builtin, "provider": "jina"}]}, {}) == []
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [{"name": "web_fetch", "use": "omniharness.community.jina_ai.tools:web_fetch_tool"}]}, {}) == []
+
+
+def test_the_jina_key_is_not_passed_to_the_gateway_by_default() -> None:
+    from pathlib import Path
+
+    from app.gateway.secret_usage import GATEWAY_ENV_KEYS, OPT_IN_ENV_KEYS
+
+    assert "JINA_API_KEY" in OPT_IN_ENV_KEYS and "JINA_API_KEY" not in GATEWAY_ENV_KEYS
+    repo = Path(__file__).resolve().parents[2]
+    for compose in ("docker/docker-compose.yaml", "docker/docker-compose-dev.yaml"):
+        assert "      - JINA_API_KEY\n" not in (repo / compose).read_text(), compose
 
 
 # ── extraction: a killable child process, inside the budget ─────────────────

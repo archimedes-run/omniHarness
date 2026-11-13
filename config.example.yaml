@@ -111,7 +111,10 @@ tools:
   # egress proxy (docker/fetch-egress: public internet only, ports 80/443, every
   # redirect hop re-checked) and extracts readable markdown with trafilatura.
   # Hard caps: 2 MB body, 15 s per fetch, 5 redirects; the options below can
-  # lower them, never raise them. With no proxy configured nothing is fetched.
+  # lower them, never raise them. With no proxy configured, an unusable proxy
+  # URL, or any failure before the proxy answers, nothing is fetched: the tool
+  # answers "page fetching unavailable: egress proxy down" and never falls back
+  # to a direct fetch or to Jina.
   # NOTE: Only one web_fetch provider can be active at a time.
   - name: web_fetch
     group: web
@@ -122,8 +125,10 @@ tools:
     # max_redirects: 5
     # blocked_networks: []     # extra CIDRs to refuse, on top of the built-in private/reserved list
     # provider: builtin        # or: jina (needs JINA_API_KEY; never called without it)
-    # jina_fallback: true      # with JINA_API_KEY set, Jina retries a URL the built-in fetch FAILED on
-    #                          # (network error, HTTP error, unsupported type); never a refused URL
+    # jina_fallback: false     # default off. true: Jina retries a URL the built-in fetch FAILED on
+    #                          # (HTTP error, unsupported type); never a refused URL, never when the
+    #                          # proxy is down. Jina needs JINA_API_KEY, which docker compose does NOT
+    #                          # pass by default: add it to the gateway environment to enable Jina.
 
   # Web fetch tool (uses Exa)
   # - name: web_fetch
@@ -132,7 +137,8 @@ tools:
   #   # api_key: $EXA_API_KEY
 
   # Web fetch tool (uses the Jina AI reader directly, no egress proxy or guard
-  # in the gateway; the built-in fetcher above can use Jina as a fallback instead)
+  # in the gateway; the built-in fetcher above can opt in to Jina with jina_fallback: true).
+  # JINA_API_KEY is optional here and not passed by docker compose by default.
   # - name: web_fetch
   #   group: web
   #   use: omniharness.community.jina_ai.tools:web_fetch_tool

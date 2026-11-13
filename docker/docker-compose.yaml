@@ -207,6 +207,9 @@ services:
       - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
       # Allowlisted keys from .env (secret_usage.GATEWAY_ENV_KEYS); NO env_file.
       # Bare names: passed only when set (compose --env-file ../.env), never as "".
+      # Opt-in keys (secret_usage.OPT_IN_ENV_KEYS) are NOT listed: JINA_API_KEY is
+      # needed only with Jina enabled in config (tools.web_fetch jina_fallback /
+      # provider: jina, or the jina_ai tool); add it here or in a compose override then.
       - ANTHROPIC_API_KEY
       - ANTHROPIC_AUTH_TOKEN
       - ANTHROPIC_BILLING_HEADER
@@ -229,7 +232,6 @@ services:
       - GITHUB_TOKEN
       - GOOGLE_API_KEY
       - INFOQUEST_API_KEY
-      - JINA_API_KEY
       - LANGSMITH_API_KEY
       - LANGSMITH_ENDPOINT
       - LANGSMITH_PROJECT
