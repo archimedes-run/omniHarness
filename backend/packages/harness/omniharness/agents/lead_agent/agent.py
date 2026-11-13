@@ -296,6 +296,11 @@ def _build_middlewares(
 
     middlewares.append(VerificationMiddleware())
     middlewares.append(_create_todo_list_middleware(cfg.get("is_plan_mode", False)))
+    # Bounded research turns: an identical repeat of a read is answered from
+    # the earlier result, and past a budget each result says to answer now.
+    from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware
+
+    middlewares.append(TurnBudgetMiddleware())
 
     # Add TokenUsageMiddleware when token_usage tracking is enabled
     if resolved_app_config.token_usage.enabled:

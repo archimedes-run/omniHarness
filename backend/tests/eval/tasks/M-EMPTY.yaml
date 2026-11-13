@@ -1,0 +1,35 @@
+id: M-EMPTY
+title: An empty final reply is sent back once to write the answer
+mock_only: true
+source: 'real-model eval 2026-11-13 (T02: many lookups, then an empty reply)'
+mode: pro
+prompt: Main new features of the latest stable React release; cite 3 sources.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- min_links:
+    n: 3
+    distinct_hosts: 2
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: latest stable React release features
+  - expect:
+      tool: web_search
+    content: ''
+  - expect:
+      any_contains: Your last reply was empty
+    content: 'The newest major release adds Actions, the `use()` API and refs as props [React 19](https://react.dev/blog/2024/12/05/react-19).
+
+
+      Sources:
+
+      - [React 19 release notes](https://react.dev/blog/2024/12/05/react-19)
+
+      - [React versions](https://react.dev/versions)
+
+      - [React releases on GitHub](https://github.com/facebook/react/releases)'

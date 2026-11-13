@@ -32,7 +32,7 @@ from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
 from omniharness.agents.thread_state import ThreadState
-from omniharness.agents.working_loop import VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of, unpresented_outputs
+from omniharness.agents.working_loop import VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of, unbacked_claims, unpresented_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,15 @@ class VerificationMiddleware(AgentMiddleware):
         if changed:
             fixes.append("trailing_menu_removed")
             reply = new_body
+        # Claims need receipts (owner rule): "I created / sent / scheduled X"
+        # with no change made in this turn (per the policy layer's stamps and
+        # the resume's outcomes) gets the server's correction appended.
+        claims = unbacked_claims(reply, messages)
+        if claims:
+            fixes.append("unbacked_claim_flagged")
+            quoted = "; ".join(f"\u201c{c}\u201d" for c in claims)
+            reply = reply.rstrip() + f"\n\nNot verified: {quoted}: no change was made in this task, so this did not happen yet."
+            changed = True
         context = getattr(runtime, "context", None) or {}
         run_id = context.get("run_id") if isinstance(context, dict) else None
         try:
@@ -78,6 +87,8 @@ class VerificationMiddleware(AgentMiddleware):
             return None
         if fixes:
             record["style_fixes"] = fixes
+        if claims:
+            record["unbacked_claims"] = claims
         try:
             unshown = unpresented_outputs(messages, state.get("artifacts") or [], (state.get("thread_data") or {}).get("outputs_path"))
         except Exception:  # noqa: BLE001 - presenting is a convenience; the reply stands without it

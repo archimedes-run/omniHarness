@@ -44,6 +44,8 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from omniharness.agents.working_loop import RESUME_OUTCOME_MARKER
+
 logger = logging.getLogger(__name__)
 
 #: The `resume_action` record's kind for a lead resume (a delegate's Continue
@@ -101,7 +103,9 @@ def resume_messages(actions: list[Any]) -> list[Any]:
             text = f"This call did not complete ({outcome}): {action.outcome_reason or 'no reason recorded'}"
         if index == len(actions) - 1:
             text += "\n\nCarry on with the user's original request from where you stopped, using these results."
-        messages.append(ToolMessage(content=text, tool_call_id=f"confirmed-{action.id}", name=action.tool_name, additional_kwargs={"provenance": UNTRUSTED_TOOL_OUTPUT}))
+        # The outcome as display data (working_loop.receipts): an executed
+        # confirmed call is a change the resumed reply may report.
+        messages.append(ToolMessage(content=text, tool_call_id=f"confirmed-{action.id}", name=action.tool_name, additional_kwargs={"provenance": UNTRUSTED_TOOL_OUTPUT, RESUME_OUTCOME_MARKER: outcome}))
     return messages
 
 

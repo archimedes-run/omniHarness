@@ -1057,7 +1057,8 @@ def _trace_when_done(app: Any, record: Any, *, owner_id: str | None, resume: dic
     def done(_task: Any) -> None:
         status = getattr(getattr(record, "status", None), "value", None) or str(getattr(record, "status", ""))
         try:
-            task = asyncio.get_running_loop().create_task(record_chat_trace(app, run_id=record.run_id, thread_id=record.thread_id, status=status, owner_id=owner_id, resume=dict(resume) if resume else None))
+            write = record_chat_trace(app, run_id=record.run_id, thread_id=record.thread_id, status=status, owner_id=owner_id, resume=dict(resume) if resume else None)
+            task = asyncio.get_running_loop().create_task(asyncio.wait_for(write, timeout=60))
         except RuntimeError:
             return
         _TRACE_TASKS.add(task)
@@ -1068,6 +1069,26 @@ def _trace_when_done(app: Any, record: Any, *, owner_id: str | None, resume: dic
 
 #: Trace writes in flight (held so they are not garbage-collected mid-write).
 _TRACE_TASKS: set = set()
+
+
+async def drain_trace_tasks(timeout: float = 5.0) -> None:
+    """At shutdown, BEFORE the database engine closes: let the trace writes in
+    flight finish (bounded), then cancel what is left. A trace write still
+    holding a database connection while the engine was disposed held the
+    gateway's shutdown forever (seen in CI as a test stuck in teardown)."""
+    loop = asyncio.get_running_loop()
+    # Only this loop's writes: a task left by an earlier app (another event
+    # loop, already closed: tests build many) never finishes and is dropped.
+    for task in [t for t in _TRACE_TASKS if t.get_loop() is not loop]:
+        _TRACE_TASKS.discard(task)
+    pending = [t for t in _TRACE_TASKS if not t.done()]
+    if not pending:
+        return
+    _done, still = await asyncio.wait(pending, timeout=timeout)
+    for task in still:
+        task.cancel()
+    if still:
+        await asyncio.wait(still, timeout=timeout)
 
 
 async def sse_consumer(

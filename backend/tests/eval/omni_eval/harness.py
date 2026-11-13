@@ -627,6 +627,7 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
             "cost_source": cost_source,
             "stopped": stopped,
             "keys_passed": trial.passed_keys,
+            "fetches": fetch_outcomes(outcome.steps),
             "thread_id": thread_id,
             "final": outcome.final[:4000],
             "tools": outcome.names,
@@ -634,6 +635,26 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
             "verification": outcome.final_verification,
             "trace_count": len(traces),
         }
+
+
+def fetch_outcomes(steps: list[dict]) -> dict:
+    """How the trial's page fetches went (real mode: through the fetch egress
+    proxy): ok, failed, a bot-check page instead of content, and repeats."""
+    fetches = [s for s in steps if s.get("name") == "web_fetch"]
+    seen: set[str] = set()
+    out = {"ok": 0, "failed": 0, "bot_check": 0, "repeats": 0}
+    for step in fetches:
+        key = json.dumps(step.get("args") or {}, sort_keys=True, default=str)
+        out["repeats"] += key in seen
+        seen.add(key)
+        text = str(step.get("output") or "")
+        if step.get("ok") is False:
+            out["failed"] += 1
+        elif "enable javascript" in text.lower() or "client challenge" in text.lower():
+            out["bot_check"] += 1
+        else:
+            out["ok"] += 1
+    return out
 
 
 def trial_cost(client: Any, thread_id: str, traces: list[dict], *, mode: str, model_config: list[dict] | None) -> tuple[dict, float | None, str | None]:

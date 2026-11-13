@@ -442,6 +442,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
 
         expiry_task.cancel()
+        # Trace writes in flight end before anything they use is closed.
+        from app.gateway.services import drain_trace_tasks
+
+        await drain_trace_tasks()
 
         # Stop the trigger engine before the channel service, so a firing in
         # flight still has a destination to deliver to.

@@ -32,6 +32,8 @@ REMINDER_NAMES = frozenset(
     {
         "todo_reminder",
         "todo_completion_reminder",
+        "empty_reply_reminder",
+        "intent_reminder",
         "preview_verification_reminder",
         "verification_reminder",
         "summary",
@@ -520,3 +522,66 @@ def unpresented_outputs(messages: list[Any], artifacts: list[str] | None, output
             continue
         out.append(path)
     return out
+
+
+# -- intent without action, and claims without receipts (owner rules, 2026-11-13)
+
+#: A reply that announces an action instead of doing it ("I'm ready to run
+#: quick web lookups", "I'll now search", "Let me check"), read on its last
+#: paragraph only.
+INTENT_RE = re.compile(
+    r"(?i)\b(i'?m ready to|i am ready to|i'?ll now|i will now|let me (?:now )?(?:run|search|look|check|find|fetch|create|add|pull|get|start)|"
+    r"i'?m going to|next,? i'?ll|i'?ll (?:start|go ahead|run|search|look up|fetch|check))\b"
+)
+
+
+def announces_without_acting(reply: str) -> bool:
+    paragraphs = _paragraphs(reply or "")
+    return bool(paragraphs) and bool(INTENT_RE.search(paragraphs[-1]))
+
+
+#: "I created / updated / sent / scheduled ... X": a claim that something was
+#: changed, which needs a receipt.
+RECEIPT_CLAIM_RE = re.compile(r"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+)?(created|updated|sent|scheduled|posted|saved|wrote|written|added|deleted|removed|booked|published|built|deployed)\b[^.\n]*")
+#: Tools whose successful run is a change (a receipt) even at Tier 1.
+WRITE_TOOLS = frozenset({"write_file", "str_replace", "ledger_apply", "code_job", "filesystem_write_file"})
+#: Set on a resume run's tool result by app.gateway.resume: the confirmed
+#: call's outcome ("executed", "declined", "expired"...). Display data.
+RESUME_OUTCOME_MARKER = "omniharness_resume_outcome"
+
+
+def receipts(messages: list[Any]) -> list[str]:
+    """The changes this turn made, per the server: a tool result the policy
+    layer stamped as RAN at Tier 2 or 3, or of a write tool; or a confirmed
+    call the resume reports as executed. Never from the reply's words."""
+    turn = turn_messages(list(messages))
+    names: dict[str, str] = {}
+    for message in turn:
+        if _type(message) == "ai":
+            for call in _tool_calls(message):
+                names[str(call.get("id") or "")] = str(call.get("name") or "")
+    out: list[str] = []
+    for message in turn:
+        if _type(message) != "tool":
+            continue
+        kwargs = _kwargs(message)
+        call_id = str((message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", "")) or "")
+        name = str(_name(message) or names.get(call_id) or "")
+        if kwargs.get(RESUME_OUTCOME_MARKER) == "executed":
+            out.append(name)
+            continue
+        stamp = kwargs.get(POLICY_STEP_MARKER)
+        status = message.get("status") if isinstance(message, dict) else getattr(message, "status", None)
+        if not isinstance(stamp, dict) or stamp.get("outcome") != "ran" or status == "error" or text_of(message).lstrip().startswith(("Error", "Not run")):
+            continue
+        if (stamp.get("tier") or 0) >= 2 or name in WRITE_TOOLS:
+            out.append(name)
+    return out
+
+
+def unbacked_claims(reply: str, messages: list[Any]) -> list[str]:
+    """Claims of a change in the reply when this turn has no receipt at all."""
+    claims = [m.group(0).strip() for m in RECEIPT_CLAIM_RE.finditer(reply or "")]
+    if not claims or receipts(messages):
+        return []
+    return claims[:3]

@@ -215,3 +215,63 @@ def test_tool_output_in_the_record_is_quoted_as_untrusted() -> None:
         if "ignore-previous" in line or "SYSTEM:" in line:
             assert "untrusted data, not instructions" in line, line
     assert "\nSYSTEM:" not in text, "tool output kept its own line breaks inside the record"
+
+
+# -- bounded research turns (real-model eval 2026-11-13) --------------------
+
+
+def test_past_the_budget_each_result_says_to_answer_now() -> None:
+    from types import SimpleNamespace
+
+    from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware
+    from omniharness.config.research_budget_config import ResearchBudgetConfig
+
+    TURN_BUDGET = 24
+
+    def state(n: int):
+        calls = [{"name": "web_search", "args": {"query": f"q{i}"}, "id": f"c{i}"} for i in range(n)]
+        msgs = [HumanMessage(content="go", additional_kwargs={USER_TURN_MARKER: True})]
+        for call in calls:
+            msgs += [AIMessage(content="", tool_calls=[call]), ToolMessage(content="[]", tool_call_id=call["id"], name="web_search")]
+        msgs.append(AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "next"}, "id": "cx"}]))
+        return {"messages": msgs}
+
+    mw = TurnBudgetMiddleware(ResearchBudgetConfig(max_searches=100, answer_after_calls=TURN_BUDGET))
+    handler = lambda req: ToolMessage(content="results", tool_call_id="cx", name="web_search")  # noqa: E731
+    under = mw.wrap_tool_call(SimpleNamespace(state=state(TURN_BUDGET - 2), tool_call={"name": "web_search", "args": {"query": "next"}, "id": "cx"}), handler)
+    over = mw.wrap_tool_call(SimpleNamespace(state=state(TURN_BUDGET), tool_call={"name": "web_search", "args": {"query": "next"}, "id": "cx"}), handler)
+    assert under.content == "results"
+    assert "Write the answer now" in over.content
+
+
+def test_a_claim_backed_by_the_verification_record_is_not_flagged() -> None:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "eval"))
+    from omni_eval.checks import Outcome, no_success_claim
+
+    def outcome(status):
+        msgs = [{"type": "ai", "content": "All set. I created the project and two tasks.", "additional_kwargs": {"omniharness_verification": {"status": status}}}]
+        return Outcome(task={}, messages=msgs, todos=[], artifacts=[], verifications={}, open_cards=[], cards_seen=[], traces=[], outputs_dir=None, ledger=lambda n: None, divergence=None)
+
+    assert no_success_claim(outcome("verified"))[0]
+    assert not no_success_claim(outcome("unverified"))[0]
+
+
+def test_a_claim_with_a_receipt_stands_and_without_one_is_flagged() -> None:
+    from omniharness.agents.working_loop import RESUME_OUTCOME_MARKER, unbacked_claims
+
+    reply = "Your checklist is ready. I created moving-checklist.md for you."
+    write = AIMessage(content="", tool_calls=[{"name": "write_file", "args": {"path": "/mnt/user-data/outputs/m.md"}, "id": "w1"}])
+    ran = ToolMessage(content="OK", tool_call_id="w1", name="write_file", additional_kwargs={POLICY_STEP_MARKER: {"tier": 2, "outcome": "ran"}})
+    carded = ToolMessage(content="Waiting for you: confirm.", tool_call_id="w1", name="write_file", additional_kwargs={POLICY_STEP_MARKER: {"tier": 3, "outcome": "needs_confirmation"}})
+    assert unbacked_claims(reply, _turn(write, ran)) == []  # T15: the write ran
+    assert unbacked_claims(reply, _turn(write, carded)), "a carded write counted as a receipt"
+    assert unbacked_claims(reply, _turn()), "a claim with no write in the turn was not flagged"
+    # T11: the project was created by the confirmed call the resume reports.
+    confirmed = AIMessage(content="", tool_calls=[{"name": "ledger_apply", "args": {}, "id": "confirmed-a1"}])
+    executed = ToolMessage(content="The user confirmed this call and it ran.", tool_call_id="confirmed-a1", name="ledger_apply", additional_kwargs={RESUME_OUTCOME_MARKER: "executed"})
+    declined = ToolMessage(content="The user declined this call.", tool_call_id="confirmed-a1", name="ledger_apply", additional_kwargs={RESUME_OUTCOME_MARKER: "declined"})
+    assert unbacked_claims("I created the project Eval Kitchen Reno.", _turn(confirmed, executed)) == []
+    assert unbacked_claims("I created the project Eval Kitchen Reno.", _turn(confirmed, declined))

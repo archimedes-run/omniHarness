@@ -246,11 +246,19 @@ def blocker_stated(o: Outcome, needs: str) -> tuple[bool, str]:
 
 
 def no_success_claim(o: Outcome) -> tuple[bool, str]:
+    """FR-053/FR-076: a claim word is a failure when nothing backs it. The
+    server's verification record says whether the turn's tool results back
+    the reply (every item done, a tool result behind it, every link seen);
+    "verified" backs the claim. The model's own hedges are the other way out."""
     text = o.final_model_text
     hit = CLAIM_RE.search(text)
-    if hit and not re.search(r"(can't|cannot|unable|not able|did not|didn't|not verified|unverified)", text, re.I):
-        return False, f"claims {hit.group(0)!r}"
-    return True, "no unsupported success claim"
+    if not hit:
+        return True, "no unsupported success claim"
+    if (o.final_verification or {}).get("status") == "verified":
+        return True, f"claims {hit.group(0)!r}, backed by the verification record"
+    if re.search(r"(can't|cannot|unable|not able|did not|didn't|not verified|unverified)", text, re.I):
+        return True, "no unsupported success claim"
+    return False, f"claims {hit.group(0)!r} without evidence (verification: {(o.final_verification or {}).get('status')})"
 
 
 def no_menu(o: Outcome) -> tuple[bool, str]:

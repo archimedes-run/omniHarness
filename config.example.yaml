@@ -221,6 +221,21 @@ loop_detection:
   #     hard_limit: 300
 
 # ============================================================================
+# Research Budget
+# ============================================================================
+# Caps on the lead's web lookups in one task (one message and the runs that
+# resume it after a confirmation). Past a cap the lookup is not made and the
+# lead is told to answer with what it has and say what is still uncertain. A
+# repeat of a fetch already made in the task is answered from that result: no
+# network call, and it does not count.
+
+research_budget:
+  enabled: true
+  max_searches: 8         # web_search + image_search per task
+  max_fetches: 10         # web_fetch per task (distinct URLs)
+  answer_after_calls: 24  # after this many tool calls, each result says "write the answer now"
+
+# ============================================================================
 # Sandbox Configuration
 # ============================================================================
 # Choose between local sandbox (direct execution) or Docker-based AIO sandbox

@@ -153,6 +153,37 @@ class TodoMiddleware(TodoListMiddleware):
         if "[FORCED STOP]" in reply:
             return None
 
+        # An EMPTY final reply (seen live after a long run of tool calls: the
+        # person got nothing) is sent back once per turn to write the answer.
+        if not reply.strip() and not card_pending(messages):
+            from omniharness.agents.working_loop import turn_messages
+
+            if not any(isinstance(m, HumanMessage) and getattr(m, "name", None) == "empty_reply_reminder" for m in turn_messages(messages)):
+                reminder = HumanMessage(
+                    name="empty_reply_reminder",
+                    content=(
+                        "<system_reminder>\nYour last reply was empty, so the person got nothing. Write the answer now "
+                        "from the results you already have. Do not call more tools unless something essential is missing; "
+                        'list anything you could not do under "Not verified".\n</system_reminder>'
+                    ),
+                )
+                return {"jump_to": "model", "messages": [reminder]}
+
+        # Intent without action (owner rule): a reply that announces what it
+        # is about to do ("I'm ready to run the lookups", "Let me check")
+        # with no tool call is sent back once per turn to do it. Not at a
+        # pending card: there the run rightly waits for the person.
+        from omniharness.agents.working_loop import announces_without_acting
+        from omniharness.agents.working_loop import turn_messages as _turn
+
+        if reply.strip() and announces_without_acting(reply) and not card_pending(messages):
+            if not any(isinstance(m, HumanMessage) and getattr(m, "name", None) == "intent_reminder" for m in _turn(messages)):
+                reminder = HumanMessage(
+                    name="intent_reminder",
+                    content=("<system_reminder>\nYour reply says what you are about to do, but you made no tool call, so nothing happened. Do it now: call the tools. If you cannot, say why in your reply.\n</system_reminder>"),
+                )
+                return {"jump_to": "model", "messages": [reminder]}
+
         # 3. Allow exit when all todos are completed or there are no todos.
         todos: list[Todo] = state.get("todos") or []  # type: ignore[assignment]
         incomplete = [t for t in todos if t.get("status") != "completed" and not DONE_WHEN_RE.match(str(t.get("content") or ""))]
@@ -175,9 +206,10 @@ class TodoMiddleware(TodoListMiddleware):
                 "<system_reminder>\n"
                 "Your checklist still has items that are not completed:\n\n"
                 f"{incomplete_text}\n\n"
-                "Finish them now if you can (tick each with write_todos as it is done). If an item cannot be "
-                'done, do not claim it: end your reply with a "Not verified" list naming each such item and '
-                "what is missing or what failed.\n"
+                'If your tool results already meet the "Done when" outcomes, tick the items with write_todos '
+                "and answer now; do not search or fetch again to re-check what you have. Do only the work an item "
+                'still truly needs. If an item cannot be done, do not claim it: end your reply with a "Not verified" '
+                "list naming each such item and what is missing or what failed.\n"
                 "</system_reminder>"
             ),
         )
