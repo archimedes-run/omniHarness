@@ -76,8 +76,11 @@ MOCK_WEB = [
 DEFAULT_TASK_SECONDS = 300
 MAX_TASK_SECONDS = 600
 #: A run with no new journal event for this long is stalled and stopped.
-#: Not 60: one high-effort model call on a long context can pass a minute.
-STALL_SECONDS = 120
+#: Above the model request timeout (models.factory, 180 s, then one retry):
+#: the journal writes nothing while a model call is in flight, and a final
+#: answer on a long context took up to 134 s in the real eval (T07); 120 s
+#: stopped a run that was about to answer.
+STALL_SECONDS = 240
 #: ... except while a delegation or coding job it started is still out: the
 #: lead writes nothing until its result returns (the research subagent's own
 #: limit is 240 s). The wall clock still bounds it.

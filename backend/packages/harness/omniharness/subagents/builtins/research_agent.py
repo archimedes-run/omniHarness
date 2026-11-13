@@ -37,6 +37,11 @@ and its source URL. End with "Sources:" listing every URL you used. If the brief
     disallowed_tools=["task", "research", "ask_clarification", "present_files"],
     skills=[],
     model="inherit",
-    max_turns=24,
+    # Graph steps, not model calls (the executor passes it as the recursion
+    # limit): every middleware hook is a step, so 24 ended every research run
+    # after two or three lookups with "Recursion limit of 24 reached" (real
+    # eval 2026-11-13: T06, T07, T08). Its lookups are bounded by the search
+    # and fetch budget (TurnBudgetMiddleware) and by its 240 s limit.
+    max_turns=150,
     timeout_seconds=240,
 )

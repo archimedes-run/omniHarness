@@ -384,3 +384,17 @@ def test_a_notice_line_the_model_wrote_is_removed() -> None:
 
     reply = "Lunch is held.\n\nRan without asking: calendar_create_hold"
     assert MODEL_NOTICE_RE.sub("", reply).rstrip() == "Lunch is held."
+
+
+def test_a_model_request_is_bounded_unless_the_config_says_otherwise() -> None:
+    from omniharness.models.factory import DEFAULT_MAX_RETRIES, DEFAULT_REQUEST_TIMEOUT_SECONDS, _bound_request_time
+
+    settings: dict = {}
+    _bound_request_time("langchain_openai:ChatOpenAI", settings)
+    assert settings == {"timeout": DEFAULT_REQUEST_TIMEOUT_SECONDS, "max_retries": DEFAULT_MAX_RETRIES}
+    own = {"request_timeout": 600, "max_retries": 4}
+    _bound_request_time("langchain_openai:ChatOpenAI", own)
+    assert own == {"request_timeout": 600, "max_retries": 4}
+    other: dict = {}
+    _bound_request_time("langchain_anthropic:ChatAnthropic", other)
+    assert other == {}

@@ -201,3 +201,12 @@ def test_a_mock_trial_does_not_inherit_the_callers_omni_harness_settings(monkeyp
     import os
 
     assert os.environ["OMNI_HARNESS_FETCH_EGRESS_PROXY"] == "http://caller-proxy:3128", "not restored after the trial"
+
+
+def test_the_stall_window_outlasts_one_model_request() -> None:
+    """The journal writes nothing while a model call is in flight; a final
+    answer took up to 134 s in the real eval. The stall window must outlast
+    the model request timeout, or a run about to answer is stopped."""
+    from omniharness.models.factory import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    assert harness.STALL_SECONDS > DEFAULT_REQUEST_TIMEOUT_SECONDS

@@ -432,6 +432,8 @@ def plan_record(messages_to_summarize: list[Any], todos: list[dict] | None) -> d
         output = text_of(message)
         status = message.get("status") if isinstance(message, dict) else getattr(message, "status", None)
         ok = status != "error" and not output.lstrip().lower().startswith("error")
+        if output.lstrip().startswith(("Not run", "[From earlier in this task")):
+            continue  # refused or served from the task's cache: neither done nor a blocker
         # Done means the policy layer RAN it (review M3): a call that raised a
         # card, was refused or is waiting is never "already done", whatever its
         # result text says. Known only from the server's stamp on the result.

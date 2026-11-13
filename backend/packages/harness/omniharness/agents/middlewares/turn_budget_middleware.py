@@ -102,19 +102,47 @@ class TurnBudgetMiddleware(AgentMiddleware):
         budget = self.budget
         if not getattr(budget, "enabled", True):
             return None
+        # Calls of the same reply made before this one count too: a reply with
+        # 13 searches at once used to pass a cap of 8 whole (real eval T06).
+        batch = self._earlier_in_batch(steps, call_id)
         if name in SEARCH_TOOLS:
-            used = sum(1 for s in steps if s["name"] in SEARCH_TOOLS and self._counted(s))
-            if used >= budget.max_searches:
-                return ToolMessage(content=OVER_BUDGET.format(what="search", n=budget.max_searches), tool_call_id=call_id, name=name)
+            cap = self._search_cap(request, budget)
+            used = sum(1 for s in steps if s["name"] in SEARCH_TOOLS and self._counted(s)) + sum(1 for s in batch if s["name"] in SEARCH_TOOLS)
+            if used >= cap:
+                return ToolMessage(content=OVER_BUDGET.format(what="search", n=cap), tool_call_id=call_id, name=name)
         if name == "research":
-            used = sum(1 for s in steps if s["name"] == "research" and self._counted(s))
+            used = sum(1 for s in steps if s["name"] == "research" and self._counted(s)) + sum(1 for s in batch if s["name"] == "research")
             if used >= getattr(budget, "max_research", 3):
                 return ToolMessage(content=OVER_BUDGET.format(what="research", n=budget.max_research), tool_call_id=call_id, name=name)
         if name in FETCH_TOOLS:
-            used = len({_canonical(s["args"]) for s in steps if s["name"] in FETCH_TOOLS and self._counted(s)})
+            used = len({_canonical(s["args"]) for s in steps if s["name"] in FETCH_TOOLS and (self._counted(s) or s in batch)})
             if used >= budget.max_fetches:
                 return ToolMessage(content=OVER_BUDGET.format(what="fetch", n=budget.max_fetches), tool_call_id=call_id, name=name)
         return None
+
+    @staticmethod
+    def _earlier_in_batch(steps: list[dict], call_id: str) -> list[dict]:
+        """The calls of the current reply before this one (no result yet)."""
+        pending = [s for s in steps if s["ok"] is None]
+        ids = [s["id"] for s in pending]
+        return pending[: ids.index(call_id)] if call_id in ids else []
+
+    #: "12 restaurants", "find 5", "top 3 day trips": the number of items asked.
+    _ITEMS_RE = __import__("re").compile(r"\b(\d{1,2})\b(?!\s*(?:%|am|pm|minutes?|hours?|days?|weeks?|months?|years?|\$))")
+
+    def _search_cap(self, request: Any, budget: Any) -> int:
+        """The search cap, scaled to the number of items the person asked for
+        (one search per item, plus a few), never above twice the configured
+        cap: "12 date-night restaurants" gets 16, "5 picks" keeps 8."""
+        from omniharness.agents.working_loop import _type, text_of, turn_messages
+
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
+        turn = turn_messages(list(messages or []))
+        asked = text_of(turn[0]) if turn and _type(turn[0]) == "human" else ""
+        numbers = [int(n) for n in self._ITEMS_RE.findall(asked or "") if 1 < int(n) <= 50]
+        wanted = max(numbers) + 4 if numbers else 0
+        return max(budget.max_searches, min(wanted, 2 * budget.max_searches))
 
     def _with_note(self, result: Any, steps: list[dict]) -> Any:
         from omniharness.agents.working_loop import NON_EVIDENCE_TOOLS
