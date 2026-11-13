@@ -12,7 +12,9 @@ every app project:
 
 An app has no network: `fetch`, XHR, WebSocket, EventSource, beacons, remote
 images, CSS `url()` to anywhere, forms, popups, top navigation, nested frames and
-workers are all blocked. Images and fonts must be `data:` URLs; charts are inline
+workers are all blocked, and it may only be shown inside OmniHarness's own app
+page (the shim's first act is to say hello to that page; an app document that
+reloads or replaces itself is closed). Images and fonts must be `data:` URLs; charts are inline
 SVG. It talks to the host page only through `omni`:
 
 ```js
@@ -41,9 +43,35 @@ Use these words, so every app reads the same. `omni.describe(result)` returns th
 While the first answer is on its way, show a quiet placeholder of the tile's size,
 not a spinner over the whole page.
 
+## No HTML from strings, no frames
+
+The app document's CSP carries Trusted Types with no policy allowed:
+
+```
+require-trusted-types-for 'script'; trusted-types 'none'
+```
+
+So every API that turns a string into HTML or script throws: `innerHTML`,
+`outerHTML`, `insertAdjacentHTML`, `document.write`, `DOMParser`,
+`createContextualFragment`, `setHTMLUnsafe`, `iframe.srcdoc`, `script.text`,
+`javascript:` URLs. The shim also refuses every frame element (`iframe`, `frame`,
+`object`, `embed`...) however it is made, and removes XSLT.
+
+What still works, and is all an app needs: `document.createElement`,
+`textContent`, `setAttribute` (except `srcdoc` and event handlers),
+`appendChild`/`append`/`replaceChildren`, `classList`, `style`, SVG through
+`createElementNS`, and `<style>` text.
+
+- **React** renders through these DOM calls and works. Never use
+  `dangerouslySetInnerHTML`.
+- **Plain DOM code** works. Never assign HTML strings; build nodes.
+- Frameworks that stamp templates with `innerHTML` (Svelte 5, Lit, Vue's
+  stringified static content) do not work under this policy. Do not use them.
+
 ## Rules
 
 - Single self-contained file: no dynamic imports, no remote URLs, no `eval`, no
   `new Function`, no `WebSocket`, no `RTCPeerConnection` (registration refuses them).
+- No `innerHTML` or any other HTML-from-string API, and no frame elements (above).
 - Responsive from 360 px; touch targets at least 24 px; no text under 12 px.
 - Use the Graphite tokens (`graphite.css`) in both themes.

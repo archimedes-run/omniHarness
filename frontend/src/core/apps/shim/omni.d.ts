@@ -15,6 +15,12 @@
  *
  * Every tile handles all four states; see README.md beside this file for the
  * words to use.
+ *
+ * The app's CSP has Trusted Types with no policy (`require-trusted-types-for
+ * 'script'; trusted-types 'none'`): build the DOM with createElement and
+ * textContent (React does); innerHTML, insertAdjacentHTML, srcdoc,
+ * document.write and other HTML-from-string APIs throw, and the shim refuses
+ * frame elements of any kind.
  */
 
 export type SourceState = "fresh" | "empty" | "not_connected" | "failed";

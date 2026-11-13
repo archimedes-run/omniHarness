@@ -8,51 +8,126 @@
   },
   "frame_to_host": {
     "data": {
-      "v": { "const": 1 },
-      "type": { "const": "data" },
-      "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
-      "source": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "data"
+      },
+      "id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      }
     },
     "refresh": {
-      "v": { "const": 1 },
-      "type": { "const": "refresh" },
-      "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
-      "source": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "refresh"
+      },
+      "id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      }
     },
     "open": {
-      "v": { "const": 1 },
-      "type": { "const": "open" },
-      "url": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "open"
+      },
+      "url": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048
+      }
     },
     "connect": {
-      "v": { "const": 1 },
-      "type": { "const": "connect" },
-      "source": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "connect"
+      },
+      "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      }
     }
   },
   "frame_to_host_window": {
-    "ready": {
-      "v": { "const": 1 },
-      "type": { "const": "ready" }
+    "hello": {
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "hello"
+      },
+      "nonce": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{16,64}$"
+      }
     }
   },
   "host_to_frame": {
     "init": {
-      "v": { "const": 1 },
-      "type": { "const": "init" },
-      "app": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,47}$" },
-      "version": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-      "theme": { "enum": ["light", "dark"] }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "init"
+      },
+      "app": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+      },
+      "version": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000000
+      },
+      "theme": {
+        "enum": ["light", "dark"]
+      }
     },
     "result": {
-      "v": { "const": 1 },
-      "type": { "const": "result" },
-      "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
-      "source": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" },
-      "state": { "enum": ["fresh", "empty", "not_connected", "failed"] },
-      "data": { "json": true },
-      "fetched_at": { "type": ["string", "null"], "maxLength": 64 },
-      "stale": { "type": "boolean" },
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "result"
+      },
+      "id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      },
+      "state": {
+        "enum": ["fresh", "empty", "not_connected", "failed"]
+      },
+      "data": {
+        "json": true
+      },
+      "fetched_at": {
+        "type": ["string", "null"],
+        "maxLength": 64
+      },
+      "stale": {
+        "type": "boolean"
+      },
       "reason": {
         "type": ["string", "null"],
         "maxLength": 300,
@@ -60,13 +135,29 @@
       }
     },
     "update": {
-      "v": { "const": 1 },
-      "type": { "const": "update" },
-      "source": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" },
-      "state": { "enum": ["fresh", "empty", "not_connected", "failed"] },
-      "data": { "json": true },
-      "fetched_at": { "type": ["string", "null"], "maxLength": 64 },
-      "stale": { "type": "boolean" },
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "update"
+      },
+      "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      },
+      "state": {
+        "enum": ["fresh", "empty", "not_connected", "failed"]
+      },
+      "data": {
+        "json": true
+      },
+      "fetched_at": {
+        "type": ["string", "null"],
+        "maxLength": 64
+      },
+      "stale": {
+        "type": "boolean"
+      },
       "reason": {
         "type": ["string", "null"],
         "maxLength": 300,
@@ -74,15 +165,32 @@
       }
     },
     "theme": {
-      "v": { "const": 1 },
-      "type": { "const": "theme" },
-      "theme": { "enum": ["light", "dark"] }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "theme"
+      },
+      "theme": {
+        "enum": ["light", "dark"]
+      }
     },
     "error": {
-      "v": { "const": 1 },
-      "type": { "const": "error" },
-      "id": { "type": ["string", "null"], "maxLength": 64, "optional": true },
-      "reason": { "type": "string", "maxLength": 300 }
+      "v": {
+        "const": 1
+      },
+      "type": {
+        "const": "error"
+      },
+      "id": {
+        "type": ["string", "null"],
+        "maxLength": 64,
+        "optional": true
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 300
+      }
     }
   }
 }

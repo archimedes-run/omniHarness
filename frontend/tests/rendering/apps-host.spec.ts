@@ -60,25 +60,36 @@ async function contrast(page: Page) {
 }
 
 test.describe("the host page", () => {
-  test("embeds the app with sandbox=allow-scripts exactly, and the page CSP frames only this origin", async ({
+  test("embeds the app with sandbox=allow-scripts exactly, and the page CSP frames only this origin's /api/apps/", async ({
     page,
   }) => {
     await installFakeBridge(page);
     const response = await page.goto("/workspace/apps/today");
+    const host = new URL(page.url()).host;
     const csp = response!.headers()["content-security-policy"] ?? "";
-    expect(csp).toContain("frame-src 'self';");
-    expect(csp).not.toMatch(/frame-src[^;]*blob:/);
+    const frameSrc = /frame-src ([^;]*)/.exec(csp)?.[1];
+    expect(frameSrc).toBe(`http://${host}/api/apps/`);
+    // One policy only: the proxy's replaced next.config's fallback.
+    expect(csp).not.toContain("frame-src 'none'");
     const frame = page.locator('[data-testid="app-frame"]');
     await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    // The per-open nonce rides in the fragment (the cache key is unchanged).
     await expect(frame).toHaveAttribute(
       "src",
-      "/api/apps/today/versions/3/app.html",
+      /^\/api\/apps\/today\/versions\/3\/app\.html#omni-nonce=[A-Za-z0-9_-]{22}$/,
     );
     await expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
     // The library route carries the same policy.
     const lib = await page.request.get("/workspace/apps");
     expect(lib.headers()["content-security-policy"]).toContain(
-      "frame-src 'self';",
+      `frame-src http://${host}/api/apps/;`,
+    );
+    // A Host header that is not a plain host frames nothing.
+    const odd = await page.request.get("/workspace/apps", {
+      headers: { host: "evil.example/x" },
+    });
+    expect(odd.headers()["content-security-policy"] ?? "").not.toContain(
+      "evil.example",
     );
   });
 
@@ -222,9 +233,11 @@ test.describe("the host page", () => {
     const frame = await appFrame(page);
     await frame.evaluate(() => location.reload());
     await expect(page.getByTestId("app-reloaded")).toBeVisible();
+    // The reloaded document's hello, or its load, whichever the host sees
+    // first, ends it.
     await expect
-      .poll(() => bridge.log.refused)
-      .toEqual([{ reason: "second_load" }]);
+      .poll(() => bridge.log.refused.map((r) => r.reason).join())
+      .toMatch(/^(second_load|second_document)$/);
     await expect(page.getByTestId("app-reloaded")).toContainText(
       "This app reloaded itself. Reopen it.",
     );
@@ -491,4 +504,24 @@ test.describe("phone width", () => {
       }
     });
   }
+});
+
+test("a gateway without the Apps routes (404) costs one quiet request each", async ({
+  page,
+}) => {
+  const hits: string[] = [];
+  await page.route(/\/api\/(apps|preferences\/app-pins)(\/|\?|$)/, (route) => {
+    hits.push(new URL(route.request().url()).pathname);
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Not Found" }),
+    });
+  });
+  await page.goto("/workspace/chats", { waitUntil: "networkidle" });
+  await page.waitForTimeout(1500);
+  const sidebar = page.locator('[data-sidebar="sidebar"]');
+  await expect(sidebar.getByText("Apps", { exact: true })).toBeVisible();
+  expect(hits.filter((p) => p === "/api/apps")).toHaveLength(1);
+  expect(hits.filter((p) => p === "/api/preferences/app-pins")).toHaveLength(1);
 });

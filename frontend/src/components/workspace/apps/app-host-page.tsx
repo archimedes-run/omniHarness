@@ -159,6 +159,7 @@ function ApprovedApp({
         app={app}
         onConnect={onConnect}
         connected={connected}
+        connectOpen={connectFor !== null}
         takePrefetch={takePrefetch}
       />
       <ConnectSheet
