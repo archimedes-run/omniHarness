@@ -31,6 +31,7 @@ import type { RuleView, RulesView } from "@/core/triggers/types";
 import { cn } from "@/lib/utils";
 
 import { RuleForm, blankRule } from "./rule-form";
+import { MissingRule, RuleVersionsList } from "./rule-versions";
 import { RunDetails } from "./run-details";
 
 /** What the right-hand side shows: one automation, or the new-automation editor. */
@@ -49,7 +50,7 @@ const TONE: Record<string, string> = {
 /**
  * The Automations panel (Feature 006, Automations.dc.html): the list with
  * on/off state on the left; on the right, one automation with its History
- * and Edit tabs, or a blank editor for a new one. Every write goes through the
+ * (runs), Versions (Spec 010: every change, undoable) and Edit tabs, or a blank editor for a new one. Every write goes through the
  * one validated write path (core/automations), naming the rule file version
  * it was based on.
  */
@@ -275,16 +276,9 @@ function RuleDetail({
   const toggle = useSetRuleEnabled();
   const [tab, setTab] = useState("history");
   if (!rule) {
-    return (
-      <div className="px-4 py-5 md:px-7">
-        <Alert data-testid="no-such-rule">
-          <AlertTitle>There is no automation called {ruleId}</AlertTitle>
-          <AlertDescription>
-            It may have been deleted or renamed.
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
+    // Gone from the rules file: a deleted (or undone) automation still has
+    // its versions, and the deleted state's Undo brings it back.
+    return <MissingRule ruleId={ruleId} writable={view.writable} />;
   }
   const name = ruleName(rule);
   return (
@@ -338,18 +332,30 @@ function RuleDetail({
           aria-label="Automation views"
           className="border-border h-auto w-full justify-start rounded-none border-b px-4 pt-4 md:px-7"
         >
-          {["history", "edit"].map((value) => (
+          {["history", "versions", "edit"].map((value) => (
             <TabsTrigger
               key={value}
               value={value}
               className="data-[state=active]:border-primary text-muted-foreground data-[state=active]:text-foreground min-h-11 flex-none rounded-none border-0 border-b-2 border-transparent px-3 py-2 data-[state=active]:bg-transparent data-[state=active]:shadow-none md:min-h-9"
             >
-              {value === "history" ? "History" : "Edit"}
+              {value === "history"
+                ? "History"
+                : value === "versions"
+                  ? "Versions"
+                  : "Edit"}
             </TabsTrigger>
           ))}
         </TabsList>
         <TabsContent value="history">
           <History view={view} rule={rule} />
+        </TabsContent>
+        <TabsContent value="versions">
+          <RuleVersionsList
+            ruleId={rule.id}
+            via="page"
+            writable={view.writable}
+            className="w-full max-w-[760px] px-4 py-6 md:px-7"
+          />
         </TabsContent>
         <TabsContent value="edit">
           <div className="max-w-[760px] px-4 py-6 md:px-7">

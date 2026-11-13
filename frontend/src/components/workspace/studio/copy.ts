@@ -308,6 +308,9 @@ const enUS = {
       `${on ? "Pause" : "Resume"} schedule: ${what}`,
     editSchedule: "Edit schedule",
     deleteSchedule: "Delete schedule",
+    scheduleVersions: "Versions of this schedule",
+    versionsLocked:
+      "Save or discard your changes first: restoring a version reloads this agent's schedules.",
     deleted: (what: string) => `Deleted “${what}”`,
     newSchedule: "New schedule",
     closeEditor: "Close editor",
@@ -789,6 +792,9 @@ const zhCN: StudioCopy = {
     pause: (on, what) => `${on ? "暂停" : "恢复"}计划：${what}`,
     editSchedule: "编辑计划",
     deleteSchedule: "删除计划",
+    scheduleVersions: "此计划的版本",
+    versionsLocked:
+      "请先保存或放弃你的更改：恢复版本会重新加载此智能体的计划。",
     deleted: (what) => `已删除“${what}”`,
     newSchedule: "新计划",
     closeEditor: "关闭编辑器",

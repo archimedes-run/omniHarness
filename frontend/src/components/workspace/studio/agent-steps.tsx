@@ -7,6 +7,7 @@ import {
   ClockIcon,
   CodeIcon,
   HandIcon,
+  HistoryIcon,
   HomeIcon,
   InfoIcon,
   ListIcon,
@@ -31,6 +32,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { RuleVersionsList } from "@/components/workspace/automations/rule-versions";
 import { AVATARS, avatarMeta, randomAvatar } from "@/core/agents";
 import { allZones, browserZone, type Day } from "@/core/automations/schedule";
 import { useSkills } from "@/core/skills/hooks";
@@ -504,6 +506,8 @@ export function AgentScheduleStep({
   drafted,
   runs,
   inner,
+  versionsLocked = false,
+  onRuleRestored,
 }: {
   form: AgentForm;
   patch: (p: Partial<AgentForm>) => void;
@@ -511,10 +515,15 @@ export function AgentScheduleStep({
   drafted: boolean;
   runs: AgentRuns | undefined;
   inner: InnerRef;
+  /** Unsaved edits: restoring a schedule's version would reload over them. */
+  versionsLocked?: boolean;
+  /** A schedule's version was restored (Spec 010): reload the schedules. */
+  onRuleRestored?: () => void;
 }) {
   const c = useStudioCopy();
   const a = c.agent;
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [versionsOf, setVersionsOf] = useState<string | null>(null);
   const [lastDeleted, setLastDeleted] = useState<{
     row: SchedRow;
     index: number;
@@ -704,19 +713,47 @@ export function AgentScheduleStep({
             onSave={commit}
           />
         ) : (
-          <ScheduleCard
-            key={row.key}
-            row={row}
-            onToggle={() =>
-              patch({
-                schedules: list.map((r) =>
-                  r.key === row.key ? { ...r, enabled: !r.enabled } : r,
-                ),
-              })
-            }
-            onEdit={() => openEdit(row)}
-            onDelete={() => remove(row)}
-          />
+          <div key={row.key}>
+            <ScheduleCard
+              row={row}
+              onToggle={() =>
+                patch({
+                  schedules: list.map((r) =>
+                    r.key === row.key ? { ...r, enabled: !r.enabled } : r,
+                  ),
+                })
+              }
+              onEdit={() => openEdit(row)}
+              onDelete={() => remove(row)}
+              versionsOpen={!!row.ruleId && versionsOf === row.ruleId}
+              onVersions={
+                row.ruleId && onRuleRestored
+                  ? () =>
+                      setVersionsOf(
+                        versionsOf === row.ruleId ? null : row.ruleId,
+                      )
+                  : undefined
+              }
+            />
+            {row.ruleId && versionsOf === row.ruleId ? (
+              <div
+                className="note"
+                style={{ display: "block", margin: "6px 0 10px" }}
+                data-testid="schedule-versions"
+              >
+                <RuleVersionsList
+                  ruleId={row.ruleId}
+                  via="studio"
+                  writable={runs?.writable ?? false}
+                  locked={versionsLocked ? a.versionsLocked : undefined}
+                  onRestored={() => {
+                    setVersionsOf(null);
+                    onRuleRestored?.();
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
         ),
       )}
       {editor && !editor.key ? (
@@ -790,11 +827,15 @@ function ScheduleCard({
   onToggle,
   onEdit,
   onDelete,
+  versionsOpen = false,
+  onVersions,
 }: {
   row: SchedRow;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  versionsOpen?: boolean;
+  onVersions?: () => void;
 }) {
   const a = useStudioCopy().agent;
   const what = recurrenceText(row.cron, row.timezone);
@@ -843,6 +884,18 @@ function ScheduleCard({
           testId="schedule-toggle"
         />
         <span style={{ width: 8 }} />
+        {onVersions ? (
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={a.scheduleVersions}
+            aria-expanded={versionsOpen}
+            onClick={onVersions}
+            data-testid="schedule-versions-toggle"
+          >
+            <HistoryIcon size={16} aria-hidden />
+          </button>
+        ) : null}
         <button
           type="button"
           className="icon-btn"

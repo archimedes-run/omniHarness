@@ -153,7 +153,7 @@ async def on_agent_deleted(app_config, agent: str, deleted_by: str) -> int:
         return 0
     for _ in range(3):  # the file may change between the read and the write
         try:
-            edit_rules(app_config, lambda doc: disable_agent_rules(doc, agent), None)
+            edit_rules(app_config, lambda doc: disable_agent_rules(doc, agent), None, who=f"user:{deleted_by}", via="agent-deleted")
             logger.info("agent %s deleted: switched off %d rule(s) naming it", agent, count)
             return count
         except RulesEditError as exc:

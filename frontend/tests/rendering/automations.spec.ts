@@ -279,6 +279,19 @@ async function serve(page: Page, path: string, rules: unknown = RULES) {
   );
   await page.route("**/api/automations/rules**", (route) => {
     const req = route.request();
+    if (req.method() === "GET" && req.url().includes("/versions")) {
+      // Spec 010: the Versions tab's read (automation-versions.spec.ts).
+      return route.fulfill(
+        json({
+          rule_id: "hushed",
+          current: 0,
+          unrecorded: false,
+          exists: true,
+          can_undo_create: false,
+          versions: [],
+        }),
+      );
+    }
     writes.push({
       method: req.method(),
       url: req.url(),
@@ -472,7 +485,7 @@ test("each run is worded as on the board, and an unsettled one is never called d
   ).toHaveAttribute("href", "/workspace/chats/th-1");
 });
 
-test("History and Edit are a real tablist, moved with the arrow keys", async ({
+test("History, Versions and Edit are a real tablist, moved with the arrow keys", async ({
   page,
 }) => {
   await serve(page, `${AUTOMATIONS}/hushed`);
@@ -483,6 +496,8 @@ test("History and Edit are a real tablist, moved with the arrow keys", async ({
   ).toBeVisible();
   await expect(history).toHaveAttribute("aria-selected", "true");
   await history.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Versions" })).toBeFocused();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("tab", { name: "Edit" })).toBeFocused();
   await expect(page.getByRole("tab", { name: "Edit" })).toHaveAttribute(

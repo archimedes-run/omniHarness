@@ -17,6 +17,12 @@ Three scans over app/, packages/ and scripts/:
      resolve_agent_dir, or an "agents" path joined with "config.yaml"), also
      writes, moves, copies or deletes files. config.yaml holds the agent's
      grants, so a second writer could grant without a version.
+  4. (Spec 010 FR-022) no FUNCTION that reaches the trigger rules file
+     (_resolve_rules_path, trigger_engine.rules_path, default_rules.json) also
+     writes, moves or deletes files, outside app/gateway/automations_store.py;
+     and inside it, the one function that writes files (_replace_file) is used
+     only as the materialiser handed to config_versions.write_automations, so
+     every write to the rules file is a recorded version.
 
 ALLOWED names each exception and why. A stale entry fails.
 """
@@ -36,6 +42,14 @@ FILE_WRITES = frozenset({"write_text", "write_bytes", "dump", "replace", "rename
 AGENT_DIRS = frozenset({"user_agent_dir", "agent_dir", "user_agents_dir", "agents_dir", "resolve_agent_dir"})
 #: Anything that changes files: scan 3 counts deleting and moving too.
 TREE_WRITES = FILE_WRITES | frozenset({"safe_dump", "move", "copytree", "copy", "copy2", "copyfile", "rmtree", "unlink", "touch", "mkdir"})
+
+RULES_STORE = "app/gateway/automations_store.py"
+#: The rules file's writer inside the store, and the versioned call it may be
+#: handed to (and nothing else).
+RULES_WRITER = "_replace_file"
+#: File-changing calls scan 4 counts (TREE_WRITES plus the low-level ones an
+#: atomic write uses).
+RULES_WRITES = TREE_WRITES | frozenset({"mkstemp", "fdopen", "NamedTemporaryFile", "fchmod"})
 
 ALLOWED: dict[str, str] = {
     STORE: "the store itself",
@@ -137,3 +151,93 @@ def test_allowed_entries_are_real_and_still_needed() -> None:
     for rel, reason in ALLOWED.items():
         assert reason, rel
         assert (BACKEND / rel).exists(), f"stale ALLOWED entry: {rel}"
+
+
+# -- scan 4: the trigger rules file (Spec 010 FR-022) -------------------------
+
+
+def _reaches_rules_file(nodes) -> bool:
+    for n in nodes:
+        if isinstance(n, ast.Name) and n.id == "_resolve_rules_path":
+            return True
+        if isinstance(n, ast.Attribute) and n.attr == "_resolve_rules_path":
+            return True
+        if isinstance(n, ast.alias) and n.name == "_resolve_rules_path":
+            return True
+        if isinstance(n, ast.Attribute) and n.attr == "rules_path" and isinstance(n.value, ast.Attribute) and n.value.attr == "trigger_engine":
+            return True
+        if isinstance(n, ast.Constant) and n.value == "default_rules.json":
+            return True
+    return False
+
+
+def _writes(nodes) -> list[int]:
+    out = []
+    for n in nodes:
+        if isinstance(n, ast.Call):
+            name = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+            if name in RULES_WRITES or (name == "open" and len(n.args) > 1 and isinstance(n.args[1], ast.Constant) and any(c in str(n.args[1].value) for c in "wax+")):
+                out.append(n.lineno)
+    return out
+
+
+def rules_file_violations(source: str) -> list[str]:
+    """Scan 4, per function (and module level): reaches the rules file and
+    changes files."""
+    tree = ast.parse(source)
+    found = []
+    functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
+    module_nodes = [n for stmt in tree.body if not isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) for n in ast.walk(stmt)]
+    for scope, nodes in [("module level", module_nodes), *((f.name, list(ast.walk(f))) for f in functions)]:
+        if _reaches_rules_file(nodes):
+            writes = _writes(nodes)
+            if writes:
+                found.append(f"{scope}() reaches the trigger rules file and changes files (lines {sorted(set(writes))[:5]}) outside the versioned store")
+    return found
+
+
+def rules_store_violations(source: str) -> list[str]:
+    """Inside automations_store: only RULES_WRITER changes files, and it is
+    referenced only inside the `materialise=` argument of a call to
+    config_versions.write_automations."""
+    tree = ast.parse(source)
+    found = []
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)):
+        if fn.name != RULES_WRITER and _writes(list(ast.walk(fn))):
+            found.append(f"{fn.name}() changes files; only {RULES_WRITER}() may, as the versioned store's materialiser")
+    allowed_refs: set[int] = set()
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        if (getattr(call.func, "attr", None) or getattr(call.func, "id", None)) == "write_automations":
+            for kw in call.keywords:
+                if kw.arg == "materialise":
+                    allowed_refs |= {id(n) for n in ast.walk(kw.value)}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id == RULES_WRITER and id(n) not in allowed_refs:
+            found.append(f"line {n.lineno}: {RULES_WRITER} used outside config_versions.write_automations(materialise=...)")
+    if not allowed_refs:
+        found.append("the rules file is never written through config_versions.write_automations")
+    return found
+
+
+def test_the_rules_file_scan_sees_a_bypass() -> None:
+    """Positive controls for scan 4."""
+    assert rules_file_violations("def f(cfg):\n    _resolve_rules_path(cfg).write_text('{}')\n")
+    assert rules_file_violations("import os\ndef f(app):\n    p = app.trigger_engine.rules_path\n    os.replace('/tmp/x', p)\n")
+    assert rules_file_violations("def f(cfg):\n    from app.gateway.trigger_engine_wiring import _resolve_rules_path\n    open(_resolve_rules_path(cfg), 'w')\n")
+    assert not rules_file_violations("def f(cfg):\n    return _resolve_rules_path(cfg).read_text()\n")
+    # Inside the store: a second writer, or the writer called directly.
+    good = "def _replace_file(p, d):\n    p.write_text(d)\ndef write_rules(p, d):\n    write_automations(materialise=lambda: _replace_file(p, d))\n"
+    assert not rules_store_violations(good)
+    assert rules_store_violations(good + "def other(p):\n    p.write_text('x')\n")
+    assert rules_store_violations(good + "def sneaky(p, d):\n    _replace_file(p, d)\n")
+
+
+def test_the_rules_file_is_written_only_through_the_versioned_store() -> None:
+    found = []
+    for path in _files():
+        rel = _rel(path)
+        if rel == RULES_STORE:
+            continue
+        found += [f"{rel}: {v}" for v in rules_file_violations(path.read_text())]
+    found += [f"{RULES_STORE}: {v}" for v in rules_store_violations((BACKEND / RULES_STORE).read_text())]
+    assert not found, "a write to the trigger rules file bypasses the versioned store:\n" + "\n".join(found)
