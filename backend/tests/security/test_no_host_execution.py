@@ -22,7 +22,11 @@ BACKEND = Path(__file__).resolve().parents[2]
 SPAWNERS = {
     "app/gateway/mcp_server_manager.py": "container runtime only (docker build/run/rm for built MCP servers; published on 127.0.0.1). Its in-gateway stdio test phase is refused (#76)",
     "packages/harness/omniharness/community/aio_sandbox/local_backend.py": "container runtime only (the sandbox containers themselves)",
-    "app/gateway/code_jobs/network.py": "NOT agent-chosen: fixed argv only (`ip -o -4 addr show`, `docker network inspect <the configured sandbox network>`), read once at startup to find the LLM proxy's bind address; no shell",
+    "app/gateway/code_jobs/network.py": (
+        "NOT agent-chosen: fixed argv only (`ip -o -4 addr show`, `docker network inspect <the configured sandbox network>`): "
+        "at startup to find the LLM proxy's bind address, and by the sandbox guard (app/gateway/sandbox_guard.py) at startup and on its periodic refresh; no shell"
+    ),
+    "app/gateway/code_jobs/image.py": "NOT agent-chosen: fixed argv only (`docker image inspect <the configured sandbox.image>`), cached for a few minutes, to see whether the image has the coding worker; no shell",
     # Library launchers (a process started by a library from a spec we build):
     "packages/harness/omniharness/mcp/client.py": (
         "NOT agent-reachable: stdio MCP servers the OWNER configured in extensions_config.json (file, or PUT /api/mcp/config: signed-in owner only, never the internal token); "

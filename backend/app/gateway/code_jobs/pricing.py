@@ -8,6 +8,8 @@ sooner, never later.
 
 from __future__ import annotations
 
+import re
+
 from omniharness.config.code_jobs_config import ModelPrice
 
 TABLE: dict[str, ModelPrice] = {
@@ -26,17 +28,22 @@ TABLE: dict[str, ModelPrice] = {
 FALLBACK = ModelPrice(input=15.0, cached_input=15.0, output=75.0)
 
 
+#: The only suffix a table key may be followed by and still match: a date
+#: ("-2025-08-07", "-20250807"). Any other suffix is a different model
+#: ("gpt-5.1", "gpt-5-pro") and is charged at FALLBACK.
+_DATED = re.compile(r"^-(\d{4}-\d{2}-\d{2}|\d{8})$")
+
+
 def price_for(model: str, overrides: dict[str, ModelPrice] | None = None) -> ModelPrice:
     name = (model or "").strip().lower()
     for table in (overrides or {}, TABLE):
-        if name in table:
-            return table[name]
-    # Dated or suffixed ids ("gpt-5-2025-08-07", "claude-sonnet-4-5-20250929"):
-    # the longest table key the id starts with.
-    for table in (overrides or {}, TABLE):
-        keys = sorted((k for k in table if name.startswith(k.lower())), key=len, reverse=True)
-        if keys:
-            return table[keys[0]]
+        lowered = {k.lower(): v for k, v in table.items()}
+        if name in lowered:
+            return lowered[name]
+        # A dated id of a table model ("gpt-5-mini-2025-08-07").
+        for key, price in lowered.items():
+            if name.startswith(key) and _DATED.match(name[len(key) :]):
+                return price
     return FALLBACK
 
 

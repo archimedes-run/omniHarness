@@ -12,7 +12,8 @@ Checks, each printed as `ok` or `FAIL` (exit 1 if any fails):
   * the provider key reached the provider only through the proxy;
   * verification: the gateway's own check passes, the job is verified;
   * Stop: the worker's whole process group is gone within 5 s and nothing
-    after it runs (sabotage: E2E_SABOTAGE=nokill makes Stop a no-op);
+    after it runs (sabotage: E2E_SABOTAGE=nokill makes Stop a no-op;
+    E2E_SABOTAGE=nocleanup skips the cleanup after the system's check);
   * token scope: the job token works only from its own sandbox (another
     sandbox: 403; no token: 401; the proxy is unreachable off the sandbox
     network).
@@ -52,7 +53,9 @@ SECRET = os.environ["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"]
 SABOTAGE = os.environ.get("E2E_SABOTAGE", "")
 PORT = 8790
 #: The check exits 9 if any leftover the worker started is still alive, else 3.
-LEFTOVER_CHECK = "pgrep -f '[s]leep 999|[s]leep 888|[t]muxanything 889' >/dev/null && exit 9; exit 3"
+#: It also leaves a detached process of its own (sleep 666) behind, which the
+#: cleanup after the check must end.
+LEFTOVER_CHECK = "(setsid env -i sh -c 'sleep 666' >/dev/null 2>&1 &); pgrep -f '[s]leep 999|[s]leep 888|[t]muxanything 889' >/dev/null && exit 9; exit 3"
 failed = False
 
 
@@ -135,6 +138,8 @@ def main() -> int:
     manager = CodeJobManager(store=store, settings=lambda: settings, unavailable=lambda: None, sandbox_for=lambda thread, user: (thread, ops[thread]), relay_dir=work / "state" / "watch")
     if SABOTAGE == "nokill":
         manager._kill = lambda running: None  # type: ignore[method-assign]
+    if SABOTAGE == "nocleanup":
+        manager._cleanup = lambda running: None  # type: ignore[method-assign]
     a = names["a"]
 
     # -- the sandbox itself ---------------------------------------------------------------------
@@ -215,6 +220,7 @@ def main() -> int:
         check("a leftover that left the group and cleared its environment is gone too", "0", dexec(a, "pgrep -fc '[s]leep 999'", user="gem").strip() or "0")
         check("a private tmux server the worker started is gone", "0", dexec(a, "pgrep -fc '[s]leep 888'", user="gem").strip() or "0")
         check("a renamed binary the worker started is gone", "0", dexec(a, "pgrep -fc '[t]muxanything 889'", user="gem").strip() or "0")
+        check("a detached process the system's check started is gone after the job", "0", dexec(a, "pgrep -fc '[s]leep 666'", user="gem").strip() or "0")
         check("the lead's earlier detached process survived the job", True, dexec(a, "pgrep -fc '[s]leep 555'", user="gem").strip() not in ("", "0"))
         check("the sandbox's own API survives the sweep", (0, True), (lambda r: (r[0], "alive" in r[1]))(ops["a"].sh("echo alive")))
 

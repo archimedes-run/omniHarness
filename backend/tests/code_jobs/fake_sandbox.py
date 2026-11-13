@@ -58,6 +58,8 @@ class FakeSandbox:
         self.before_exit = None
         self.verify_runs = 0
         self.verify_env = ""
+        #: "kill", "verify", "cleanup", "publish", in the order they ran.
+        self.order: list[str] = []
 
     # -- filesystem --------------------------------------------------------------
 
@@ -93,6 +95,7 @@ class FakeSandbox:
     def sh(self, command: str, *, timeout: int = 30) -> tuple[int | None, str]:
         if "kill -TERM" in command:
             self.kill_calls += 1
+            self.order.append("kill")
             if self.kill_works:
                 self.killed.set()
             return 0, "__killed__"
@@ -100,6 +103,7 @@ class FakeSandbox:
             log = re.search(r"> (\S+verify\.log)", command).group(1).strip("'")
             self._put(log, self.verify_log)
             self.verify_runs += 1
+            self.order.append("verify")
             self.verify_env = command
             return (self.verify_exit if self.verify_exit is not None else 124), ""
         if "find . " in command and "-printf" in command:
@@ -115,6 +119,19 @@ class FakeSandbox:
                         rows.append(f"{rel}\t{len(content)}\t{self.mtime[path]:.3f}")
             self._put(out, "\n".join(rows) + ("\n" if rows else ""))
             return 0, ""
+        if "/proc/[0-9]*" in command and "__killed__" in command:
+            # The cleanup alone (marker and sweep), after the system's check.
+            self.order.append("cleanup")
+            return 0, "__killed__"
+        if "__free__" in command:
+            target = shlex.split(command.split(";", 1)[0])[4]
+            with self.lock:
+                under = {p: c for p, c in self.fs.items() if p.startswith(target + "/")}
+            if not under:
+                return 0, "__free__"
+            if '"created_by": "code_job"' in under.get(target + "/artifact_manifest.json", ""):
+                return 0, "__ours__"
+            return 0, "__taken__"
         if "stat -c %s" in command:
             path = shlex.split(command)[2]
             content = self.read_text(path)
@@ -130,8 +147,12 @@ class FakeSandbox:
                 items = [(p, c) for p, c in self.fs.items() if p.startswith(source + "/")]
             if not any(p == source + "/index.html" and c for p, c in items):
                 return 1, ""
+            with self.lock:
+                for path in [p for p in self.fs if p.startswith(target + "/")]:
+                    del self.fs[path]  # rm -rf target
             for path, content in items:
                 self._put(target + path[len(source) :], content)
+            self.order.append("publish")
             return 0, "__ok__"
         if command.startswith("rm -rf "):
             prefix = shlex.split(command)[2]

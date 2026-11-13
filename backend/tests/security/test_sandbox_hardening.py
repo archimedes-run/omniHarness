@@ -361,3 +361,32 @@ def test_a_container_that_only_shares_the_prefix_is_neither_adopted_nor_stopped(
 def test_the_sandbox_api_proxy_allows_long_commands() -> None:
     dockerfile = (REPO / "docker" / "sandbox" / "Dockerfile").read_text()
     assert "proxy_read_timeout 3600s;" in dockerfile and "grep -q 'proxy_read_timeout 3600s;'" in dockerfile
+
+
+# -- the sandbox network stays IPv4-only ------------------------------------------
+
+
+def _sandbox_networks(compose_path):
+    data = yaml.safe_load(compose_path.read_text()) or {}
+    return {key: (spec or {}) for key, spec in (data.get("networks") or {}).items() if "sandbox" in key or "sandbox" in str((spec or {}).get("name", ""))}
+
+
+def test_the_sandbox_networks_never_enable_ipv6():
+    """The gateway judges sandbox peers by the network's IPv4 subnets: the
+    sandbox networks must stay IPv4-only, in both compose files and in any
+    code or script that creates a sandbox network."""
+    repo = Path(__file__).resolve().parents[3]
+    for name in ("docker-compose.yaml", "docker-compose-dev.yaml"):
+        networks = _sandbox_networks(repo / "docker" / name)
+        assert networks, f"no sandbox network found in {name}"
+        for key, spec in networks.items():
+            assert spec.get("enable_ipv6") not in (True, "true", "True", "yes", 1), f"{name}: {key} enables IPv6"
+            opts = {str(k).lower(): str(v).lower() for k, v in (spec.get("driver_opts") or {}).items()}
+            assert not any("ipv6" in k and v in ("1", "true") for k, v in opts.items()), f"{name}: {key} enables IPv6 through driver_opts"
+            for pool in (spec.get("ipam") or {}).get("config") or []:
+                assert ":" not in str((pool or {}).get("subnet", "")), f"{name}: {key} has an IPv6 subnet"
+    # Code and scripts that create networks: none asks for IPv6.
+    sources = [*(repo / "backend" / "app").rglob("*.py"), *(repo / "backend" / "packages").rglob("*.py"), *(repo / "scripts").glob("*.sh"), *(repo / "docker" / "provisioner").rglob("*.py")]
+    ipv6 = re.compile(r"enable_ipv6|--ipv6|EnableIPv6", re.I)
+    offenders = [str(p.relative_to(repo)) for p in sources if ipv6.search(p.read_text(errors="ignore"))]
+    assert offenders == [], f"a network is created with IPv6: {offenders}"

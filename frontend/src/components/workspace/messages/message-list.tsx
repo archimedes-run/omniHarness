@@ -389,7 +389,9 @@ export function MessageList({
         if (message.type !== "ai") continue;
         for (const toolCall of message.tool_calls ?? []) {
           if (toolCall.name !== "code_job" || !toolCall.id) continue;
-          const resultMessage = group.messages.find(
+          // Looked up in the whole thread: when the message made other tool
+          // calls too, the results join the group after this card.
+          const resultMessage = messages.find(
             (m) => m.type === "tool" && m.tool_call_id === toolCall.id,
           );
           cards.push(

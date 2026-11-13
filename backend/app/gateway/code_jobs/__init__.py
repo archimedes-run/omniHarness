@@ -2,8 +2,8 @@
 
 `start(app)` runs in the gateway lifespan. It opens the job store, works out
 whether coding jobs can run here at all (the hardened container sandbox, the
-gateway's address on the sandbox network for the LLM proxy, a model the proxy
-can serve), starts the proxy listener, and registers the manager as the
+gateway's address on the sandbox network for the LLM proxy, a sandbox image
+with the coding worker, a model the proxy can serve), starts the proxy listener, and registers the manager as the
 harness's CodeJobController so `code_job` is offered. When any precondition
 fails, the controller still answers `unavailable_reason()`, the tool is not
 offered, and the reason is logged once.
@@ -67,6 +67,11 @@ def start(app: FastAPI) -> None:
 
     config = get_app_config()
     cj = config.code_jobs
+    # The sandbox image is read afresh for this process (a rebuilt image is
+    # seen at once after a restart).
+    from .image import clear_cache
+
+    clear_cache()
     proxy_host: str | None = None
     subnets: list = []
     network = sandbox_network()
@@ -89,6 +94,10 @@ def start(app: FastAPI) -> None:
             return "they need the container sandbox (the hardened Docker sandbox with the registries proxy)"
         if not proxy_host:
             return "the gateway has no address on the sandbox network for its model proxy"
+        from .image import unsupported_reason
+
+        if why := unsupported_reason():
+            return why
         _, why = upstream_for()
         return why
 

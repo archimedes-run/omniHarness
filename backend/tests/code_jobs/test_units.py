@@ -181,6 +181,11 @@ def test_prices_cover_dated_ids_and_unknown_models_cost_the_most():
     assert price_for("gpt-5-mini-2025-08-07").input == 0.25
     assert price_for("gpt-5").output == 10.0
     assert price_for("some-new-model") == FALLBACK
+    assert price_for("gpt-5-20250807").input == 1.25
+    # A newer or different model of a family is not priced at the family's base row.
+    for other in ("gpt-5.1", "gpt-5.2-codex", "gpt-5-pro", "gpt-5-mini-high", "claude-opus-4-1", "claude-sonnet-4-5-20250929", "gpt-5-2025-08"):
+        assert price_for(other) == FALLBACK, other
+    assert price_for("gpt-5-pro", {"gpt-5-pro": FALLBACK.model_copy(update={"input": 7.0})}).input == 7.0
     assert cost_usd("gpt-5", input_tokens=1_000_000, cached_tokens=0, output_tokens=0) == pytest.approx(1.25)
     assert cost_usd("gpt-5", input_tokens=1_000_000, cached_tokens=1_000_000, output_tokens=0) == pytest.approx(0.125)
 
@@ -506,3 +511,52 @@ def test_the_sweep_kills_only_what_the_job_started_and_a_detached_process_from_b
     assert not victims & {"1", "50", "55", "80"}, "a process from before the job, or another user's, was killed"
     assert {"61", "70", "71", "72", "73"} <= victims, "a process the job started survived the sweep"
     assert all(v.isdigit() and int(v) < 100 for v in victims), "the sweep killed its own shell or the control session"
+
+
+def test_the_sandbox_image_check_reads_the_label_and_caches_it(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    from app.gateway.code_jobs import image
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        labels = {"new:tag": '{"omni.opencode_version":"1.19.3","version":"1.11.0"}', "old:tag": '{"version":"1.11.0"}', "none:tag": "null"}
+        if argv[3] not in labels:
+            return SimpleNamespace(returncode=1, stdout="", stderr="No such image")
+        return SimpleNamespace(returncode=0, stdout=labels[argv[3]], stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    image.clear_cache()
+    try:
+        assert image.opencode_version("new:tag", now=0) == "1.19.3"
+        assert image.opencode_version("old:tag", now=0) is None, "an image without the label is not a coding-worker image"
+        assert image.opencode_version("none:tag", now=0) is None and image.opencode_version("missing:tag", now=0) is None
+        n = len(calls)
+        assert image.opencode_version("old:tag", now=10) is None and len(calls) == n, "cached"
+        assert image.opencode_version("old:tag", now=10 + image.RECHECK_SECONDS) is None and len(calls) == n + 1, "checked again later"
+        monkeypatch.setattr(image, "configured_image", lambda: "old:tag")
+        assert "old:tag" in (image.unsupported_reason() or "")
+        monkeypatch.setattr(image, "configured_image", lambda: "new:tag")
+        assert image.unsupported_reason() is None
+    finally:
+        image.clear_cache()
+
+
+def test_make_daily_rebuilds_the_session_watcher_image():
+    """The watcher runs code baked into its image and compose passes it the
+    new --opencode-root flag: `make daily` must rebuild it, or an old image
+    crash-loops on the flag."""
+    from pathlib import Path
+
+    makefile = (Path(__file__).resolve().parents[3] / "Makefile").read_text()
+    recipe = makefile.split("\ndaily:", 1)[1].split("\n\n", 1)[0]
+    lines = [line.strip() for line in recipe.splitlines()[1:]]
+    built = [line for line in lines if "up -d" in line and "--build" in line and "session-watcher" in line]
+    assert built, recipe
+    first_start = next(i for i, line in enumerate(lines) if "up -d" in line and "session-watcher" in line)
+    assert lines[first_start] in built, "the watcher is started before it is rebuilt"
+    gateway = [line for line in lines if "up -d" in line and "gateway" in line]
+    assert gateway and all("--build" not in line for line in gateway), "the gateway's start is unchanged"

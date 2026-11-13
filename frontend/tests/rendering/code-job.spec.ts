@@ -144,7 +144,7 @@ const VERIFIED_RESULT = {
   duration_s: 93,
 };
 
-function history(done: boolean, report: string) {
+function history(done: boolean, report: string, mixed = false) {
   const messages: unknown[] = [
     {
       type: "human",
@@ -156,9 +156,33 @@ function history(done: boolean, report: string) {
       type: "ai",
       id: "a1",
       content: "",
-      tool_calls: [{ id: "cj1", name: "code_job", args: BRIEF }],
+      tool_calls: [
+        { id: "cj1", name: "code_job", args: BRIEF },
+        ...(mixed
+          ? [
+              {
+                id: "s1",
+                name: "task",
+                args: {
+                  subagent_type: "general-purpose",
+                  description: "Check the licence of the template",
+                  prompt: "Check it",
+                },
+              },
+            ]
+          : []),
+      ],
     },
   ];
+  if (done && mixed) {
+    messages.push({
+      type: "tool",
+      id: "t2",
+      name: "task",
+      tool_call_id: "s1",
+      content: "Task Succeeded. Result: MIT.",
+    });
+  }
   if (done) {
     messages.push({
       type: "tool",
@@ -191,6 +215,7 @@ async function open(
   scheme: "light" | "dark",
   payload: unknown,
   done: boolean,
+  mixed = false,
 ) {
   const json = (body: unknown, status = 200) => ({
     status,
@@ -206,6 +231,7 @@ async function open(
   const state = history(
     done,
     "Coding job job0123456789abc (counter-app): STATUS VERIFIED",
+    mixed,
   )[0];
   await page.route("**/api/langgraph/**", (route) => {
     const url = route.request().url();
@@ -365,6 +391,33 @@ for (const scheme of ["light", "dark"] as const) {
       ).toBeVisible();
       if (SHOTS)
         await page.screenshot({ path: `${SHOTS}/code-job-app-${scheme}.png` });
+    });
+
+    test("a coding job made beside another tool call keeps that call's card", async ({
+      page,
+    }) => {
+      await open(
+        page,
+        scheme,
+        {
+          job: job("verified", { result: VERIFIED_RESULT }),
+          steps: STEPS,
+          month: { spent_usd: 0.31, cap_usd: 20 },
+        },
+        true,
+        true,
+      );
+      const card = page.getByTestId("code-job-card");
+      await expect(card.getByTestId("code-job-status")).toHaveText("Verified");
+      // The other call (a subagent task) is still shown, with its result.
+      await expect(
+        page.getByText("Check the licence of the template"),
+      ).toBeVisible();
+      await aa(page);
+      if (SHOTS)
+        await page.screenshot({
+          path: `${SHOTS}/code-job-mixed-${scheme}.png`,
+        });
     });
 
     test("an unverified job never reads as done and offers no app", async ({
