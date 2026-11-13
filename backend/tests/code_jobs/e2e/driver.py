@@ -56,6 +56,8 @@ OUTSIDER = os.environ["E2E_OUTSIDER"]
 PROVIDER_KEY = os.environ["E2E_PROVIDER_KEY"]
 SECRET = os.environ["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"]
 SABOTAGE = os.environ.get("E2E_SABOTAGE", "")
+#: E2E_ONLY=layout runs the layout check's part alone (the sandbox checks still run).
+ONLY = os.environ.get("E2E_ONLY", "")
 PORT = 8790
 #: The check exits 9 if any leftover the worker started is still alive, else 3.
 #: It also leaves a detached process of its own (sleep 666) behind, which the
@@ -176,7 +178,36 @@ def main() -> int:
     }
     (work / "a" / "workspace" / "opencode.json").write_text(json.dumps(hostile))
 
+    async def layout_check() -> None:
+        # -- the layout check, in the image's own browser -------------------------------------
+        def web(name: str) -> CodeJobBrief:
+            return CodeJobBrief(goal=f"[scenario:layout_{name}] build the app", project_dir=f"layout-{name}", verify_command="test -s dist/index.html", expect_files=["dist/index.html"], publish_dir="dist")
+
+        laid = {}
+        for name in ("fit", "overflow", "clipped", "blank"):
+            outcome = await manager.run(thread_id="a", user_id="u", tool_call_id=f"layout-{name}", brief=web(name))
+            job = store.get(outcome.job_id)
+            laid[name] = (job.status, (job.result or {}).get("layout") or {}, (job.result or {}).get("published"))
+            print(f"      layout {name}: {job.status} | {laid[name][1].get('outcome')} {laid[name][1].get('failures')} {laid[name][1].get('error') or ''} {laid[name][1].get('seconds')} s", flush=True)
+        status, fit, published = laid["fit"]
+        check("an app that fits at 360 / 560 / 1280 px passes the layout check", ("verified", "pass", []), (status, fit.get("outcome"), fit.get("failures")))
+        check("the app that fits is published", True, bool(published) and (work / "a" / "outputs" / "layout-fit" / "index.html").is_file())
+        status, over, published = laid["overflow"]
+        check("an app that overflows sideways is not verified", ("unverified", "fail"), (status, over.get("outcome")))
+        check("the overflow is reported with its width and amount", True, any(f.startswith("overflows sideways at 360 px by ") for f in over.get("failures", [])))
+        check("the app that overflows is not published", (None, False), (published, (work / "a" / "outputs" / "layout-overflow").exists()))
+        status, clipped, _ = laid["clipped"]
+        check("an app with a clipped chart is not verified", ("unverified", True), (status, any(f.startswith("chart clipped: svg in div.donut") for f in clipped.get("failures", []))))
+        status, blank, _ = laid["blank"]
+        check("a blank page is not verified", ("unverified", True), (status, "rendered nothing at 360, 560, 1280 px" in blank.get("failures", [])))
+        check("its uncaught error is reported", True, any(f.startswith("uncaught error on load") and "boom" in f for f in blank.get("failures", [])))
+        check("nothing of the layout check is left running", "0", dexec(a, "pgrep -fc '[l]ayout_probe|[o]pt/browser/chrome'").strip() or "0")
+        check("the layout check leaves no files behind", "", dexec(a, "ls -d /tmp/omni-layout-* 2>/dev/null").strip())
+
     async def scenario() -> None:
+        if ONLY == "layout":
+            await layout_check()
+            return
         # -- egress and secrets, while a real job runs ------------------------------------
         brief = CodeJobBrief(goal="[scenario:egress] check the network and write hello.txt", project_dir="e2e", verify_command="test -s hello.txt", expect_files=["hello.txt"])
         task = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="egress", brief=brief))
@@ -276,30 +307,7 @@ def main() -> int:
         await manager.stop(store.by_call("a", "hold").id)
         await hold
 
-        # -- the layout check, in the image's own browser -------------------------------------
-        def web(name: str) -> CodeJobBrief:
-            return CodeJobBrief(goal=f"[scenario:layout_{name}] build the app", project_dir=f"layout-{name}", verify_command="test -s dist/index.html", expect_files=["dist/index.html"], publish_dir="dist")
-
-        laid = {}
-        for name in ("fit", "overflow", "clipped", "blank"):
-            outcome = await manager.run(thread_id="a", user_id="u", tool_call_id=f"layout-{name}", brief=web(name))
-            job = store.get(outcome.job_id)
-            laid[name] = (job.status, (job.result or {}).get("layout") or {}, (job.result or {}).get("published"))
-            print(f"      layout {name}: {job.status} | {laid[name][1].get('outcome')} {laid[name][1].get('failures')} {laid[name][1].get('error') or ''} {laid[name][1].get('seconds')} s", flush=True)
-        status, fit, published = laid["fit"]
-        check("an app that fits at 360 / 560 / 1280 px passes the layout check", ("verified", "pass", []), (status, fit.get("outcome"), fit.get("failures")))
-        check("the app that fits is published", True, bool(published) and (work / "a" / "outputs" / "layout-fit" / "index.html").is_file())
-        status, over, published = laid["overflow"]
-        check("an app that overflows sideways is not verified", ("unverified", "fail"), (status, over.get("outcome")))
-        check("the overflow is reported with its width and amount", True, any(f.startswith("overflows sideways at 360 px by ") for f in over.get("failures", [])))
-        check("the app that overflows is not published", (None, False), (published, (work / "a" / "outputs" / "layout-overflow").exists()))
-        status, clipped, _ = laid["clipped"]
-        check("an app with a clipped chart is not verified", ("unverified", True), (status, any(f.startswith("chart clipped: svg in div.donut") for f in clipped.get("failures", []))))
-        status, blank, _ = laid["blank"]
-        check("a blank page is not verified", ("unverified", True), (status, "rendered nothing at 360, 560, 1280 px" in blank.get("failures", [])))
-        check("its uncaught error is reported", True, any(f.startswith("uncaught error on load") and "boom" in f for f in blank.get("failures", [])))
-        check("nothing of the layout check is left running", "0", dexec(a, "pgrep -fc '[l]ayout_probe|[o]pt/browser/chrome'").strip() or "0")
-        check("the layout check leaves no files behind", "", dexec(a, "ls -d /tmp/omni-layout-* 2>/dev/null").strip())
+        await layout_check()
 
         # -- Stop kills the process group ---------------------------------------------------------
         stop_task = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="stop", brief=CodeJobBrief(goal="[scenario:stop] long work", project_dir="e2e")))

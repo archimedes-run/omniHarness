@@ -7,6 +7,7 @@
 #
 #   scripts/code-job-e2e.sh                     # all checks (see driver.py)
 #   E2E_SABOTAGE=nokill scripts/code-job-e2e.sh # Stop does nothing: must FAIL
+#   E2E_ONLY=layout scripts/code-job-e2e.sh     # the layout check's part alone
 #
 # Needs Docker, the sandbox image (make sandbox-image), the egress image and a
 # gateway image with the backend's dependencies (the dev compose's gateway).
@@ -42,7 +43,7 @@ docker create --name "$P-gateway" --network "$NET_OUT" \
   -e OMNI_HARNESS_INTERNAL_AUTH_TOKEN="e2e-secret-$(rand)" -e E2E_PROVIDER_KEY="sk-e2e-provider-$(rand)" -e E2E_CANARY="canary-$(rand)" \
   -e OMNI_HARNESS_SANDBOX_NETWORK="$NET_IN" -e OMNI_HARNESS_SANDBOX_EGRESS_PROXY="http://$P-egress:3128" -e OMNI_HARNESS_SANDBOX_EGRESS_CA_VOLUME="$VOL" \
   -e SANDBOX_IMAGE="$SANDBOX_IMAGE" -e E2E_PREFIX="$P" -e E2E_HOST_DIR="$HOST_DIR" -e E2E_FAKE_LLM="$P-fakellm" -e E2E_OUTSIDER="$P-outsider" \
-  -e E2E_SABOTAGE="${E2E_SABOTAGE:-}" -e OMNI_HARNESS_CONFIG_PATH=/app/config.example.yaml -e OPENAI_API_KEY=placeholder \
+  -e E2E_SABOTAGE="${E2E_SABOTAGE:-}" -e E2E_ONLY="${E2E_ONLY:-}" -e OMNI_HARNESS_CONFIG_PATH=/app/config.example.yaml -e OPENAI_API_KEY=placeholder \
   -v "$ROOT/config.example.yaml:/app/config.example.yaml:ro" --workdir /app/backend \
   "$GATEWAY_IMAGE" sh -c "PYTHONPATH=. uv run --no-sync python tests/code_jobs/e2e/driver.py" >/dev/null
 docker network connect "$NET_IN" "$P-gateway"
