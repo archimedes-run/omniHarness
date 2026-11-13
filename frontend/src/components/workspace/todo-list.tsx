@@ -100,7 +100,11 @@ export function TodoList({
         id={listId}
         className={cn(
           "bg-accent flex grow flex-col px-2 transition-all duration-300 ease-out",
-          collapsed ? "hidden" : "pb-4",
+          // Collapsed keeps its 12px spacer (the card sits translated under
+          // the chat bar's edge; without it the header slides beneath the
+          // input and its buttons cannot be clicked) while the list itself is
+          // hidden from view and from the accessibility tree.
+          collapsed ? "h-0 pb-3 [&>*]:hidden" : "pb-4",
         )}
       >
         <QueueList className="bg-background mt-0 w-full rounded-t-xl">
