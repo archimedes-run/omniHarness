@@ -116,10 +116,10 @@ def _restore_question_opener():
     starts with none; a test whose gateway starts registers its own."""
     from omniharness.agents import questions
 
-    saved = (questions._opener, questions._refusal)
-    questions._opener = questions._refusal = None
+    saved = (questions._opener, questions._refusal, questions._applies)
+    questions._opener = questions._refusal = questions._applies = None
     yield
-    questions._opener, questions._refusal = saved
+    questions._opener, questions._refusal, questions._applies = saved
 
 
 @pytest.fixture(autouse=True)

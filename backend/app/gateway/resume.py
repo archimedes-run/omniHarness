@@ -209,8 +209,9 @@ async def resume_after_question(request: Request, question: Any, *, from_sweep: 
         middleware = None
     store = getattr(middleware, "pending", None)
     turn_key = str(question.asker_data.get("turn_key") or "")
-    if store is not None and from_sweep:
-        reason = await _why_not(request, question.thread_id, set())
+    if from_sweep:
+        call = str((question.asker.get("ref") or {}).get("tool_call_id") or "")
+        reason = await _why_not(request, question.thread_id, set(), {call} if call else set())
         if reason:
             logger.info("resume: not resuming thread %s after its question expired (%s)", question.thread_id, reason)
             return None
@@ -237,7 +238,7 @@ async def _resume_turn(request: Request, thread: str, store: Any, seeds: list[An
         for a in taken:
             store.release_continue(a.id)
         for q in included:
-            (questions.directory / f"{q.id}.included").unlink(missing_ok=True)
+            questions.release(q.id, "included")
 
     lock = store.locked(turn_lock) if store is not None else _question_lock(questions, turn_lock)
     with lock:
@@ -271,6 +272,12 @@ async def _resume_turn(request: Request, thread: str, store: Any, seeds: list[An
             included.append(q)
     if await _thread_running(request, thread):
         give_back()
+        if question is not None and question.state == "answered":
+            # Kept, not dropped: the sweep offers it again once the chat is
+            # free (or the next resume of this turn carries it).
+            questions.take_once(question.id, "deferred")
+            logger.info("resume: the chat is replying; the answer is kept for the next resume")
+            return None
         logger.info("resume: the chat is replying; its confirmed results are posted, not resumed")
         return None
     record = {
@@ -310,6 +317,8 @@ async def _resume_turn(request: Request, thread: str, store: Any, seeds: list[An
         run.task.add_done_callback(finished)
     elif taken:  # pragma: no cover - launch always attaches its task
         give_back()
+    for q in included:
+        questions.release(q.id, "deferred")
     logger.info("resume: the lead carries on in %s after %d confirmed call(s) and %d answered question(s)", run.run_id, len(taken), len(included))
     return run.run_id
 
@@ -325,7 +334,7 @@ def _question_lock(questions: Any, lock_id: str) -> Any:
 
     @contextlib.contextmanager
     def held():
-        with open(questions.directory / f"{lock_id}.lock", "a+") as handle:
+        with open(questions.lock_path(lock_id), "a+") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -372,12 +381,23 @@ def _swept_path(store: Any, thread: str, actions: list[Any]) -> Any:
     return store.directory / f"{_turn_lock_id(thread, actions)}.swept"
 
 
-async def _owner_request(app: Any) -> Request | None:
+async def _owner_request(app: Any, *, user_id: str | None = None) -> Request | None:
+    """A server-built request as `user_id` (a question's owner) when that is a
+    person's account, else as the install owner."""
     from app.gateway.deps import get_local_provider
-    from app.gateway.ownership import owner_user_id
+    from app.gateway.ownership import is_internal, owner_user_id
 
-    owner = await owner_user_id()
-    user = await get_local_provider().get_user(owner) if owner else None
+    user = None
+    if user_id:
+        try:
+            user = await get_local_provider().get_user(str(user_id))
+        except Exception:  # noqa: BLE001
+            user = None
+        if user is not None and is_internal(user):
+            user = None
+    if user is None:
+        owner = await owner_user_id()
+        user = await get_local_provider().get_user(owner) if owner else None
     if user is None:
         return None
     scope = {
@@ -399,7 +419,7 @@ async def _owner_request(app: Any) -> Request | None:
     return request
 
 
-async def _why_not(request: Request, thread: str, card_ids: set[str]) -> str | None:
+async def _why_not(request: Request, thread: str, card_ids: set[str], question_call_ids: set[str] | None = None) -> str | None:
     """Why this turn must not be resumed by the sweep, or None."""
     from app.gateway.deps import get_run_manager, get_thread_store
     from omniharness.agents.turns import POLICY_STEP_MARKER, USER_TURN_MARKER
@@ -418,7 +438,19 @@ async def _why_not(request: Request, thread: str, card_ids: set[str]) -> str | N
         return "the person stopped the task"
     if checkpointer is not None:
         messages = ((getattr(tup, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or [] if tup else []
-        card_at = max((i for i, m in enumerate(messages) if getattr(m, "type", None) == "tool" and str(((getattr(m, "additional_kwargs", None) or {}).get(POLICY_STEP_MARKER) or {}).get("card_id") or "") in card_ids), default=None)
+        calls = question_call_ids or set()
+        card_at = max(
+            (
+                i
+                for i, m in enumerate(messages)
+                if getattr(m, "type", None) == "tool"
+                and (
+                    str(((getattr(m, "additional_kwargs", None) or {}).get(POLICY_STEP_MARKER) or {}).get("card_id") or "") in card_ids
+                    or (calls and str(getattr(m, "tool_call_id", "") or "") in calls and getattr(m, "name", None) == "ask_clarification")
+                )
+            ),
+            default=None,
+        )
         person_at = max((i for i, m in enumerate(messages) if getattr(m, "type", None) == "human" and (getattr(m, "additional_kwargs", None) or {}).get(USER_TURN_MARKER) is True), default=None)
         if card_at is not None and person_at is not None and person_at > card_at:
             return "the person has moved on to a newer message"

@@ -32,7 +32,8 @@ def ask_clarification_tool(
     Args:
         question: The one question to ask, 1 to 500 characters. Be specific.
         clarification_type: missing_info (a required value is absent) or ambiguous_requirement (the request has two readings that lead to different results and nothing you can read settles it).
-        options: Required: 2 to 4 likely answers, each 1 to 60 characters and different from each other (for example the two calendars, or the three most likely cities). Never a menu of approaches. The person can always type another answer.
+        options: For a choice, 2 to 4 likely answers, each 1 to 60 characters and different from each other (for example the two calendars, or the three most likely cities). Leave it out for an open question.
+            Never a menu of approaches. The person can always type another answer.
         recommended: Optional: the number (1 to 4) of the option you suggest, when one is clearly the most likely.
         context: Optional: why the task cannot go ahead without the answer (up to 500 characters).
     """

@@ -14,7 +14,7 @@ from langgraph.graph import END
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from omniharness.agents.questions import QUESTION_MARKER, QuestionRefused, open_question
+from omniharness.agents.questions import QUESTION_MARKER, QuestionRefused, makes_cards, open_question
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +45,14 @@ def _recommended_index(raw: object, count: int) -> int | None:
     return number - 1 if 1 <= number <= count else None
 
 
-def problem_message(problem: str, call_id: str) -> ToolMessage:
+def problem_message(problem: str, call_id: str, *, marker: str | None = None) -> ToolMessage:
     """A question that cannot be asked as it is: the model is told why and
     runs again (it is not a pause)."""
     return ToolMessage(
         content=f"Not asked: {problem}. Ask again with that fixed, or pick a sensible default, state it, and continue.",
         tool_call_id=call_id,
         name="ask_clarification",
+        additional_kwargs={marker: True} if marker else {},
     )
 
 
@@ -221,26 +222,49 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
     # -- the question card ---------------------------------------------------
 
-    def _shape_problem(self, args: dict) -> str | None:
-        """Why this question cannot be a card (2 to 4 short, distinct options,
-        a question of 1 to 500 characters), or None. Checked only when the
-        gateway makes cards; the store checks the same limits again."""
-        if not card_questions_enabled():
-            return None
+    #: On the tool result that sent a badly shaped question back: once per
+    #: turn; a second bad one is shown as a free-form question instead.
+    SHAPE_MARKER = "omniharness_question_shape"
+
+    @staticmethod
+    def _problem_of(args: dict) -> str | None:
         question = str(args.get("question") or "").strip()
         options = _options_list(args.get("options"))
         if not 1 <= len(question) <= 500:
             return "the question must be 1 to 500 characters"
-        if not 2 <= len(options) <= 4:
-            return "give 2 to 4 short options the person can pick from (they can still type their own answer)"
+        if len(options) == 1 or len(options) > 4:
+            return "give 2 to 4 short options the person can pick from, or none for an open question (they can always type their own answer)"
         if any(not 1 <= len(o) <= 60 for o in options):
             return "each option must be 1 to 60 characters"
         if len({o.casefold() for o in options}) != len(options):
             return "the options must be different from each other"
         raw = args.get("recommended")
-        if raw is not None and _recommended_index(raw, len(options)) is None:
+        if raw is not None and options and _recommended_index(raw, len(options)) is None:
             return f"recommended must be an option number from 1 to {len(options)}"
         return None
+
+    def _shape(self, args: dict, context: dict | None, messages: list | None) -> tuple[str | None, dict]:
+        """(why this question cannot be a card, the args to use). Checked only
+        for runs that get a card; the store checks the same limits again. A
+        question is sent back at most ONCE per turn: the second bad one is
+        shown as a free-form question (its options dropped), never looped."""
+        if not card_questions_enabled() or not makes_cards(context):
+            return None, args
+        problem = self._problem_of(args)
+        if problem is None:
+            return None, args
+        from omniharness.agents.working_loop import turn_messages
+
+        sent_back = any(isinstance(m, ToolMessage) and (m.additional_kwargs or {}).get(self.SHAPE_MARKER) for m in turn_messages(list(messages or [])))
+        if not sent_back:
+            return problem, args
+        fixed = {**args, "question": str(args.get("question") or "").strip()[:500] or "Could you tell me more?", "options": [], "recommended": None}
+        return None, fixed
+
+    @staticmethod
+    def _context_of(runtime: object) -> dict:
+        context = getattr(runtime, "context", None) or {}
+        return dict(context) if isinstance(context, dict) else {}
 
     def _open_card(self, request: ToolCallRequest, args: dict, tool_call_id: str) -> dict | None:
         runtime = getattr(request, "runtime", None)
@@ -284,9 +308,10 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
         # Get the tool call ID
         tool_call_id = request.tool_call.get("id", "")
-        problem = self._shape_problem(args)
+        state = getattr(request, "state", None) or {}
+        problem, args = self._shape(args, self._context_of(getattr(request, "runtime", None)), state.get("messages") if isinstance(state, dict) else None)
         if problem is not None:
-            return problem_message(problem, tool_call_id)
+            return problem_message(problem, tool_call_id, marker=self.SHAPE_MARKER)
 
         logger.info("Intercepted clarification request")
         logger.debug("Clarification question: %s", question)
@@ -306,7 +331,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             kwargs[QUESTION_MARKER] = {"id": card["id"]}
             # Read as text where there is no card (a channel, the model's own
             # history): how to answer.
-            formatted_message += "\n\nAnswer on the card, or reply with an option number or your own words."
+            formatted_message += "\n\nAnswer on the card, or reply with an option number or your own words." if _options_list(args.get("options")) else "\n\nAnswer on the card, or reply with your answer."
 
         # Create a ToolMessage with the formatted question
         # This will be added to the message history
@@ -340,7 +365,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     # together with other calls goes through the tool node, which loops on
     # (not every call is return_direct), and is sent back in wrap_tool_call.
 
-    def _defer_sole_question(self, state: dict) -> dict | None:
+    def _defer_sole_question(self, state: dict, runtime: object = None) -> dict | None:
         messages = state.get("messages") or []
         last = messages[-1] if messages else None
         if not isinstance(last, AIMessage) or len(last.tool_calls or []) != 1:
@@ -350,19 +375,19 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             return None
         deferred = self._deferral(messages, call.get("id", ""), call.get("args") or {})
         if deferred is None:
-            problem = self._shape_problem(call.get("args") or {})
+            problem, _ = self._shape(call.get("args") or {}, self._context_of(runtime), messages)
             if problem is None:
                 return None
-            deferred = problem_message(problem, call.get("id", ""))
+            deferred = problem_message(problem, call.get("id", ""), marker=self.SHAPE_MARKER)
         return {"jump_to": "model", "messages": [deferred]}
 
     @hook_config(can_jump_to=["model"])
-    def after_model(self, state: ClarificationMiddlewareState, runtime) -> dict | None:  # noqa: ARG002
-        return self._defer_sole_question(state)
+    def after_model(self, state: ClarificationMiddlewareState, runtime) -> dict | None:
+        return self._defer_sole_question(state, runtime)
 
     @hook_config(can_jump_to=["model"])
-    async def aafter_model(self, state: ClarificationMiddlewareState, runtime) -> dict | None:  # noqa: ARG002
-        return self._defer_sole_question(state)
+    async def aafter_model(self, state: ClarificationMiddlewareState, runtime) -> dict | None:
+        return self._defer_sole_question(state, runtime)
 
     @override
     def wrap_tool_call(

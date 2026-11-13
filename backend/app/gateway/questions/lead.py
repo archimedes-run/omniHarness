@@ -120,7 +120,7 @@ def open_lead_question(
     return {"id": record.id, "expires_at": record.expires_at.isoformat()}
 
 
-async def resume_lead(question: Question, *, app: Any = None, request: Any = None) -> dict[str, Any] | None:
+async def resume_lead(question: Question, *, app: Any = None, request: Any = None, retry: bool = False) -> dict[str, Any] | None:
     """The lead's resume handler (called once per terminal question)."""
     from .service import get_store
 
@@ -134,13 +134,26 @@ async def resume_lead(question: Question, *, app: Any = None, request: Any = Non
         return None
     from app.gateway.resume import _owner_request, resume_after_question
 
+    # From the sweep (an expiry, or an answer whose resume found the chat
+    # busy): resumed as the question's owner, and not when the person has
+    # moved on since.
+    from_sweep = request is None
     if request is None:
-        request = await _owner_request(app)
+        request = await _owner_request(app, user_id=question.owner_id)
         if request is None:
             return None
-    run_id = await resume_after_question(request, question, from_sweep=answer.get("via") is None)
+    run_id = await resume_after_question(request, question, from_sweep=from_sweep)
     return {"resume_run_id": run_id} if run_id else None
 
 
 def install() -> None:
     register_asker(LEAD, resume_lead, display_name="OmniHarness")
+
+
+def makes_cards(runtime_context: dict | None) -> bool:
+    """For the harness: does this run ask with a card at all? (The card's
+    option limits are checked only for runs that do.)"""
+    try:
+        return asks_with_a_card(runtime_context)
+    except Exception:  # noqa: BLE001
+        return False

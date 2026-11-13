@@ -33,6 +33,7 @@ from .store import (
     EXPIRED,
     EXPIRED_ASKER_ENDED,
     FREE_TEXT_MAX,
+    TIMEOUT_MAX_SECONDS,
     VIA_BUTTON,
     VIA_TAGGED_MESSAGE,
     Question,
@@ -112,26 +113,47 @@ def message_text(message: Any) -> str:
 class TypedOutcome:
     """What a person's typed turn did to the thread's questions."""
 
-    def __init__(self, answered: Question | None = None, open_count: int = 0) -> None:
+    def __init__(self, answered: Question | None = None, open_count: int = 0, *, cards_open: bool = False) -> None:
         self.answered = answered
         self.open_count = open_count
+        #: A Tier 3 card is open beside the question(s): the typed message
+        #: answered nothing and confirmed nothing (both are button-only).
+        self.cards_open = cards_open
 
     def note(self) -> str | None:
-        """A one-time note for the model reading this turn, or None."""
+        """A one-time note for the model reading this turn, or None. Server
+        words only: the question's own text (content) is never quoted here."""
         if self.answered is not None:
-            q = self.answered
-            choice = q.answer or {}
-            if choice.get("option") is not None:
-                said = f"option {int(choice['option']) + 1}, “{q.options[int(choice['option'])]['label']}”"
-            else:
-                said = "in their own words"
-            return f"(The person's message above answers your open question “{q.question}”: {said}.)"
+            choice = self.answered.answer or {}
+            said = f"option {int(choice['option']) + 1}" if choice.get("option") is not None else "in their own words"
+            return f"(Server note: the person's message above answers the question you asked on its card: {said}.)"
+        if self.open_count >= 1 and self.cards_open:
+            return (
+                "(Server note: a question card and a confirmation card are both open in this chat, so a typed message "
+                "answers no question and confirms or declines nothing. Tell the person once, in one sentence, to use the "
+                "buttons on the cards. Do not act on their message as an answer.)"
+            )
         if self.open_count >= 2:
             return f"(Server note: {self.open_count} questions are open in this chat, so a typed message answers none of them. Tell the person once, in one sentence, to answer each on its card. Do not guess their answers.)"
         return None
 
 
-def answer_from_turn(message: Any, runtime_context: dict | None, *, may_answer: bool, now: datetime | None = None) -> TypedOutcome:
+def open_for_turn(message: Any, runtime_context: dict | None, *, may_answer: bool, now: datetime | None = None) -> list[Question]:
+    """The speaker's open questions in this thread, for a turn that may
+    answer at all (else none). The policy layer reads it first: while any is
+    open, a typed message never confirms or declines a Tier 3 card."""
+    from app.policy.lineage import is_user_turn
+
+    if not may_answer or not is_user_turn(message):
+        return []
+    ctx = runtime_context or {}
+    thread, speaker = ctx.get("thread_id"), ctx.get("user_id")
+    if not thread or not speaker:
+        return []
+    return get_store().open_in_thread(str(thread), str(speaker), now or datetime.now(UTC))
+
+
+def answer_from_turn(message: Any, runtime_context: dict | None, *, may_answer: bool, cards_open: bool = False, now: datetime | None = None) -> TypedOutcome:
     """The owner's own tagged turn answers the ONLY open question of its thread.
 
     `may_answer` is `confirm_flow.turn_may_answer(message, context)`, computed
@@ -139,18 +161,14 @@ def answer_from_turn(message: Any, runtime_context: dict | None, *, may_answer: 
     a tool result, an agent's reply, an untagged channel message, a scheduled,
     resumed, @-called or invited agent's turn. Then the speaker must be the
     question's owner, and exactly one question must be open in the thread.
+    With a Tier 3 card open in the thread as well (`cards_open`), it answers
+    neither: the person uses the buttons.
     """
-    from app.policy.lineage import is_user_turn
-
-    if not may_answer or not is_user_turn(message):
-        return TypedOutcome()
-    ctx = runtime_context or {}
-    thread, speaker = ctx.get("thread_id"), ctx.get("user_id")
-    if not thread or not speaker:
-        return TypedOutcome()
     now = now or datetime.now(UTC)
+    open_ = open_for_turn(message, runtime_context, may_answer=may_answer, now=now)
+    if open_ and cards_open:
+        return TypedOutcome(open_count=len(open_), cards_open=True)
     store = get_store()
-    open_ = store.open_in_thread(str(thread), str(speaker), now)
     if len(open_) != 1:
         # None, or two or more: a typed reply answers none (QC-01).
         return TypedOutcome(open_count=len(open_))
@@ -204,7 +222,9 @@ def answer_by_owner(qid: str, user_id: str, *, option: int | None, text: str | N
     answered = store.answer(qid, option=option, text=cleaned, via=VIA_BUTTON, now=now)
     if answered is None:
         current = store.get(qid)
-        raise AnswerRefused(409, f"This question is {current.state if current else 'gone'}: {current.outcome_text() if current else ''}".strip())
+        from app.gateway.display_safe import safe_field
+
+        raise AnswerRefused(409, safe_field(f"This question is {current.state if current else 'gone'}: {current.outcome_text() if current else ''}".strip()))
     logger.info("question %s answered on its card", qid)
     return answered
 
@@ -231,16 +251,19 @@ async def dispatch(question: Question, *, app: Any = None, request: Any = None) 
         return None
 
 
-async def end_for_thread(thread_id: str, *, app: Any = None, request: Any = None, run_id: str | None = None) -> list[Question]:
+async def end_for_thread(thread_id: str, *, app: Any = None, request: Any = None, run_id: str | None = None, kinds: tuple[str, ...] = ()) -> list[Question]:
     """Stop, a cancelled run or a deleted thread: the thread's open questions
-    (only those the run asked, when `run_id` is given) expire as
-    `asker_ended`, and each asker is told once."""
+    expire as `asker_ended`, and each asker is told once. With `run_id`, only
+    the questions that run asked, plus every open question of the asker
+    `kinds` named (Stop ends the lead's questions even when the run that
+    asked has already ended)."""
     store = get_store()
     ended = []
     for question in store.in_thread(str(thread_id)):
         if question.state != "open":
             continue
-        if run_id is not None and str((question.asker.get("ref") or {}).get("run_id") or "") != str(run_id):
+        asked_by_run = str((question.asker.get("ref") or {}).get("run_id") or "") == str(run_id)
+        if run_id is not None and not asked_by_run and question.asker.get("kind") not in kinds:
             continue
         done = store.expire(question.id, EXPIRED_ASKER_ENDED)
         if done is not None:
@@ -257,10 +280,22 @@ async def sweep(app: Any, *, now: datetime | None = None) -> list[Question]:
     now = now or datetime.now(UTC)
     store = get_store()
     expired = store.expire_due(now)
-    pending = [q for q in store.all() if q.state in (ANSWERED, EXPIRED) and not store.was_taken(q.id, "dispatched") and (now - q.expires_at).total_seconds() < 24 * 3600]
+    terminal = [q for q in store.all() if q.state in (ANSWERED, EXPIRED) and (now - q.created_at).total_seconds() < 24 * 3600 + TIMEOUT_MAX_SECONDS]
     seen = {q.id for q in expired}
-    for question in [*expired, *(q for q in pending if q.id not in seen)]:
+    for question in [*expired, *(q for q in terminal if q.id not in seen and not store.was_taken(q.id, "dispatched"))]:
         await dispatch(question, app=app)
+    # An answer whose resume found the chat busy is kept and offered again
+    # (the handler is idempotent: a turn's answer is carried by one resume).
+    for question in terminal:
+        if store.was_taken(question.id, "deferred") and not store.was_taken(question.id, "included"):
+            handler = _HANDLERS.get(str(question.asker.get("kind") or ""))
+            if handler is None:
+                continue
+            try:
+                await handler(question, app=app, request=None, retry=True)
+            except Exception:  # noqa: BLE001
+                logger.exception("question %s: deferred resume failed", question.id)
+    store.prune(now)
     return expired
 
 
@@ -315,7 +350,7 @@ def public_view(question: Question, now: datetime | None = None) -> dict[str, An
         "state": state,
         "expired_reason": question.expired_reason or ("timeout" if state == EXPIRED else ""),
         "answer": answer,
-        "outcome": question.outcome_text() if question.state != "open" else ("" if state == "open" else _due_text(question)),
+        "outcome": safe_field(question.outcome_text() if question.state != "open" else ("" if state == "open" else _due_text(question))),
         "free_text_max": FREE_TEXT_MAX,
     }
 

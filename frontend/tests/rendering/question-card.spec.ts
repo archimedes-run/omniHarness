@@ -363,3 +363,24 @@ test("phone width: options stack, nothing scrolls sideways", async ({
   expect(card!.x + card!.width).toBeLessThanOrEqual(390);
   await shot(page, "open-phone");
 });
+
+test("a free-form question shows only its text box", async ({ page }) => {
+  await mockChat(page, "light", [
+    question({
+      question: "What is your flight number?",
+      context: "",
+      options: [],
+      recommended: null,
+      recommended_label: null,
+    }),
+  ]);
+  await page.goto(`/workspace/chats/${THREAD}`, { waitUntil: "networkidle" });
+  await expect(page.getByTestId("question-card")).toBeVisible();
+  await expect(page.getByTestId("question-options")).toHaveCount(0);
+  await expect(page.getByTestId("question-text-input")).toHaveAttribute(
+    "placeholder",
+    "Your answer",
+  );
+  await expectAA(page);
+  await shot(page, "free-form-light");
+});

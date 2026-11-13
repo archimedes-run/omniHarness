@@ -18,8 +18,9 @@ def _q(**kwargs):
 @pytest.mark.parametrize(
     "kwargs, reason",
     [
-        ({"options": ["Only one"]}, "2 to 4 options"),
-        ({"options": ["A", "B", "C", "D", "E"]}, "2 to 4 options"),
+        ({"options": ["Only one"]}, "or 2 to 4"),
+        ({"options": ["A", "B", "C", "D", "E"]}, "or 2 to 4"),
+        ({"options": [], "recommended": 0}, "recommended"),
         ({"options": ["A", ""]}, "label must be 1 to 60"),
         ({"options": ["A", "x" * 61]}, "label must be 1 to 60"),
         ({"options": ["Same", "same"]}, "distinct"),
@@ -73,3 +74,53 @@ def test_one_shot_locks_and_unsafe_ids(tmp_path):
     assert store.take_once(q.id, "dispatched") is True
     assert store.take_once(q.id, "dispatched") is False
     assert store.get("../etc/passwd") is None and store.answer("../x", option=0, text=None, via="button") is None
+
+
+def test_a_free_form_question_has_no_options():
+    q = _q(options=[])
+    assert q.options == [] and q.recommended is None
+
+
+def test_a_claim_that_was_never_saved_expires_once_due(tmp_path):
+    import os
+
+    store = QuestionStore(tmp_path)
+    q = store.save(_q())
+    path = store._path(q.id)
+    os.link(path, path.with_name(f"{q.id}.final"))  # a worker died after the claim
+    assert store.answer(q.id, option=0, text=None, via="button") is None
+    later = datetime.now(UTC) + timedelta(seconds=120)
+    assert [x.id for x in store.expire_due(later)] == [q.id]
+    assert store.get(q.id).state == "expired"
+
+
+def test_old_answered_and_expired_questions_are_pruned(tmp_path):
+    store = QuestionStore(tmp_path)
+    old = _q()
+    old.created_at = datetime.now(UTC) - timedelta(days=40)
+    old.expires_at = old.created_at + timedelta(days=1)
+    store.save(old)
+    store.answer(old.id, option=0, text=None, via="button", now=old.created_at + timedelta(hours=1))
+    fresh = store.save(_q())
+    assert store.prune(datetime.now(UTC)) == 1
+    assert store.get(old.id) is None and store.get(fresh.id) is not None
+
+
+def test_a_threads_questions_are_read_without_reading_other_threads(tmp_path):
+    store = QuestionStore(tmp_path)
+    a, b = store.save(_q(thread_id="ta")), store.save(_q(thread_id="tb"))
+    assert [q.id for q in store.in_thread("ta")] == [a.id] and [q.id for q in store.in_thread("tb")] == [b.id]
+    store.delete_thread("ta")
+    assert store.get(a.id) is None and store.get(b.id) is not None
+
+
+def test_the_409_detail_is_sanitised(tmp_path, monkeypatch):
+    from app.gateway.questions import service
+
+    store = QuestionStore(tmp_path)
+    monkeypatch.setattr(service, "get_store", lambda directory=None: store)
+    q = store.save(_q(options=["https://evil.example/x", "B"]))
+    store.answer(q.id, option=0, text=None, via="button")
+    with pytest.raises(service.AnswerRefused) as refused:
+        service.answer_by_owner(q.id, "o1", option=1, text=None)
+    assert refused.value.status == 409 and "https://" not in refused.value.detail and "hxxps://evil[.]example/x" in refused.value.detail

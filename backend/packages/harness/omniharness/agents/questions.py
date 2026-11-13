@@ -22,11 +22,20 @@ class QuestionRefused(ValueError):
 
 _opener: Callable[..., dict[str, Any] | None] | None = None
 _refusal: type[Exception] | None = None
+_applies: Callable[[dict | None], bool] | None = None
 
 
-def register_question_opener(opener: Callable[..., dict[str, Any] | None], refusal: type[Exception]) -> None:
-    global _opener, _refusal
-    _opener, _refusal = opener, refusal
+def register_question_opener(opener: Callable[..., dict[str, Any] | None], refusal: type[Exception], applies: Callable[[dict | None], bool] | None = None) -> None:
+    global _opener, _refusal, _applies
+    _opener, _refusal, _applies = opener, refusal, applies
+
+
+def makes_cards(runtime_context: dict | None) -> bool:
+    """Would a question asked in this run become a card? False with no
+    opener, and for runs that never get one (scheduled, invited, @-called)."""
+    if _opener is None:
+        return False
+    return True if _applies is None else bool(_applies(runtime_context))
 
 
 def open_question(**kwargs: Any) -> dict[str, Any] | None:

@@ -493,10 +493,11 @@ class PolicyMiddleware(AgentMiddleware):
     # does not match the audit log.
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
-        verdict, note = self._complete_confirmation(request)
+        asked = self._open_questions(request)
+        verdict, note = (None, None) if asked else self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        outcome = self._answer_question(request)
+        outcome = self._answer_question(request, asked)
         return self._guard_self_verdict(handler(self._offered(request, self._question_note(request, note, outcome))))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
@@ -512,7 +513,10 @@ class PolicyMiddleware(AgentMiddleware):
         # runs the same flow again: same claim, same result. Sending every
         # person's turn to the pool made new chats wait while it was full
         # (#118).
-        verdict, note = self._complete_confirmation(request, execute=False)
+        # While a question card is open in the thread, a typed message never
+        # confirms or declines a Tier 3 card: cards are button-only then.
+        asked = self._open_questions(request)
+        verdict, note = (None, None) if asked else self._complete_confirmation(request, execute=False)
         if verdict is _WOULD_RUN:
             from langchain_core.messages import AIMessage
 
@@ -526,7 +530,7 @@ class PolicyMiddleware(AgentMiddleware):
             verdict, note = outcome
         if verdict is not None:
             return verdict
-        answered = self._answer_question(request)
+        answered = self._answer_question(request, asked)
         if answered is not None and answered.answered is not None:
             from app.gateway.questions.service import dispatch
 
@@ -542,14 +546,32 @@ class PolicyMiddleware(AgentMiddleware):
     # card answers no question). The answer is recorded as data on the
     # question; the message itself stays the owner's turn, unchanged.
 
-    def _answer_question(self, request: Any) -> Any:
+    def _open_questions(self, request: Any) -> list:
+        """The speaker's open question cards in this thread, when this turn
+        could answer at all (else none)."""
+        messages = list(getattr(request, "messages", None) or [])
+        if not messages:
+            return []
+        try:
+            from app.gateway.questions.service import open_for_turn
+
+            return open_for_turn(messages[-1], self._runtime_context(request), may_answer=self._may_answer(request))
+        except Exception:  # noqa: BLE001 - unreadable questions: cards keep their typed path
+            logger.exception("policy: reading the thread's open questions failed")
+            return []
+
+    def _answer_question(self, request: Any, asked: list | None = None) -> Any:
         messages = list(getattr(request, "messages", None) or [])
         if not messages:
             return None
         try:
             from app.gateway.questions.service import answer_from_turn
 
-            return answer_from_turn(messages[-1], self._runtime_context(request), may_answer=self._may_answer(request))
+            cards_open = False
+            if asked:
+                owner = self._owner_id(request)
+                cards_open = any((a.owner_id or None) == (owner or None) for a in self.pending.open_in_thread(self._thread_id(request), self.now()))
+            return answer_from_turn(messages[-1], self._runtime_context(request), may_answer=self._may_answer(request), cards_open=cards_open)
         except Exception:  # noqa: BLE001 - a question store failure never blocks the person's turn
             logger.exception("policy: reading the thread's open questions failed")
             return None

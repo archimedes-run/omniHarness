@@ -49,7 +49,7 @@ def install() -> None:
     from omniharness.agents.questions import register_question_opener
 
     from .lead import install as install_lead
-    from .lead import open_lead_question
+    from .lead import makes_cards, open_lead_question
 
     install_lead()
-    register_question_opener(open_lead_question, QuestionError)
+    register_question_opener(open_lead_question, QuestionError, applies=makes_cards)

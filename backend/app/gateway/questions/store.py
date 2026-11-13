@@ -204,8 +204,10 @@ def build_question(
         if len(description) > DESCRIPTION_MAX:
             raise QuestionError(f"each option description must be at most {DESCRIPTION_MAX} characters")
         cleaned.append({"label": label, "description": description})
-    if not OPTIONS_MIN <= len(cleaned) <= OPTIONS_MAX:
-        raise QuestionError(f"a question needs {OPTIONS_MIN} to {OPTIONS_MAX} options")
+    # No options: a free-form question (the card is its text box). Otherwise
+    # 2 to 4: a single option is no choice.
+    if cleaned and not OPTIONS_MIN <= len(cleaned) <= OPTIONS_MAX:
+        raise QuestionError(f"a question needs no options (free-form) or {OPTIONS_MIN} to {OPTIONS_MAX}")
     if len({o["label"].casefold() for o in cleaned}) != len(cleaned):
         raise QuestionError("option labels must be distinct")
     if recommended is not None and not (isinstance(recommended, int) and 0 <= recommended < len(cleaned)):
@@ -243,52 +245,95 @@ def build_question(
     )
 
 
+#: Answered and expired questions older than this are removed by the sweep.
+RETENTION_DAYS = 30
+
+
+def _thread_key(thread_id: str) -> str:
+    import hashlib
+
+    return "t" + hashlib.sha256(str(thread_id).encode()).hexdigest()[:20]
+
+
 @dataclass
 class QuestionStore:
-    """One JSON file per question; the terminal claim is a hard link."""
+    """One JSON file per question, in one folder per thread (so a thread's
+    questions are read without reading anyone else's); the terminal claim is
+    a hard link next to the record."""
 
     directory: Path
 
     def __post_init__(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
-
-    def _path(self, qid: str) -> Path:
-        return self.directory / f"{qid}.json"
+        self._where: dict[str, Path] = {}
 
     def _safe_id(self, qid: str) -> bool:
         return bool(qid) and qid.isalnum() and len(qid) <= 64
 
+    def _thread_dir(self, thread_id: str) -> Path:
+        return self.directory / _thread_key(thread_id)
+
+    def _path(self, qid: str) -> Path | None:
+        """Where a question's record is (cached; found by name otherwise)."""
+        if not self._safe_id(str(qid or "")):
+            return None
+        known = self._where.get(qid)
+        if known is not None and known.exists():
+            return known
+        for path in self.directory.glob(f"t*/{qid}.json"):
+            self._where[qid] = path
+            return path
+        return None
+
+    def _side(self, qid: str, name: str) -> Path | None:
+        path = self._path(qid)
+        return path.with_name(f"{qid}.{name}") if path is not None else None
+
+    def lock_path(self, name: str) -> Path:
+        return self.directory / f"{name}.lock"
+
     def save(self, question: Question) -> Question:
-        fd, tmp = tempfile.mkstemp(dir=str(self.directory), suffix=".tmp")
+        folder = self._thread_dir(question.thread_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(folder), suffix=".tmp")
+        target = folder / f"{question.id}.json"
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(question.to_dict(), handle, indent=2, sort_keys=True)
-            os.replace(tmp, self._path(question.id))
+            os.replace(tmp, target)
         finally:
             Path(tmp).unlink(missing_ok=True)
+        self._where[question.id] = target
         return question
 
-    def get(self, qid: str) -> Question | None:
-        if not self._safe_id(str(qid or "")):
-            return None
+    def _read(self, path: Path) -> Question | None:
         try:
-            return Question.from_dict(json.loads(self._path(qid).read_text(encoding="utf-8")))
+            return Question.from_dict(json.loads(path.read_text(encoding="utf-8")))
         except FileNotFoundError:
             return None
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-            logger.error("question %s is unreadable: %s", qid, exc)
+            logger.error("question %s is unreadable: %s", path.stem, exc)
             return None
+
+    def get(self, qid: str) -> Question | None:
+        path = self._path(str(qid or ""))
+        return self._read(path) if path is not None else None
 
     def all(self) -> list[Question]:
         out = []
-        for path in sorted(self.directory.glob("*.json")):
-            question = self.get(path.stem)
+        for path in sorted(self.directory.glob("t*/*.json")):
+            question = self._read(path)
             if question is not None:
                 out.append(question)
         return out
 
     def in_thread(self, thread_id: str) -> list[Question]:
-        return [q for q in self.all() if q.thread_id == thread_id]
+        out = []
+        for path in sorted(self._thread_dir(thread_id).glob("*.json")):
+            question = self._read(path)
+            if question is not None and question.thread_id == str(thread_id):
+                out.append(question)
+        return out
 
     def open_in_thread(self, thread_id: str, owner_id: str | None, now: datetime) -> list[Question]:
         """Open, not yet due questions of this thread and owner."""
@@ -300,8 +345,8 @@ class QuestionStore:
         """Take the terminal claim and apply `change` to the open record.
         Returns the saved terminal question for exactly one caller, None for
         every other (already answered, expired, or missing)."""
-        source, final = self._path(qid), self.directory / f"{qid}.final"
-        if not self._safe_id(qid) or not source.exists():
+        source, final = self._path(qid), self._side(qid, "final")
+        if source is None or final is None:
             return None
         try:
             os.link(source, final)
@@ -310,7 +355,7 @@ class QuestionStore:
         except OSError as exc:
             logger.error("could not claim question %s: %s", qid, exc)
             return None
-        question = self.get(qid)
+        question = self._read(source)
         if question is None or question.state != OPEN:
             return None
         change(question)
@@ -341,29 +386,71 @@ class QuestionStore:
         return self._finalise(qid, apply)
 
     def expire_due(self, now: datetime) -> list[Question]:
-        return [q for q in (self.expire(c.id, EXPIRED_TIMEOUT, now=now) for c in self.all() if c.is_due(now)) if q is not None]
+        """Expire due questions. A question whose claim was taken by a worker
+        that died before saving (claim present, record still open) can never
+        be claimed again: once due, it is expired here directly."""
+        out = []
+        for current in self.all():
+            if not current.is_due(now):
+                continue
+            done = self.expire(current.id, EXPIRED_TIMEOUT, now=now)
+            if done is None:
+                final = self._side(current.id, "final")
+                fresh = self.get(current.id)
+                if final is not None and final.exists() and fresh is not None and fresh.state == OPEN:
+                    fresh.state = EXPIRED
+                    fresh.expired_reason = EXPIRED_TIMEOUT
+                    done = self.save(fresh)
+                    logger.warning("question %s: its claim was never completed; expired", current.id)
+            if done is not None:
+                out.append(done)
+        return out
+
+    def prune(self, now: datetime, *, days: int = RETENTION_DAYS) -> int:
+        """Remove answered and expired questions older than `days`."""
+        removed = 0
+        cutoff = now - timedelta(days=days)
+        for question in self.all():
+            if question.state != OPEN and max(question.created_at, question.expires_at if question.state == EXPIRED else question.created_at) < cutoff:
+                self._remove(question)
+                removed += 1
+        return removed
+
+    def _remove(self, question: Question) -> None:
+        folder = self._thread_dir(question.thread_id)
+        for path in folder.glob(f"{question.id}.*"):
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+        self._where.pop(question.id, None)
 
     # -- one-shot locks --------------------------------------------------------
 
     def take_once(self, qid: str, name: str) -> bool:
         """True for exactly one caller ever (a hard link named `<id>.<name>`)."""
-        if not self._safe_id(qid) or not name.isalpha():
+        if not name.isalpha():
             return False
-        source = self._path(qid)
-        if not source.exists():
+        source, side = self._path(qid), self._side(qid, name)
+        if source is None or side is None:
             return False
         try:
-            os.link(source, self.directory / f"{qid}.{name}")
+            os.link(source, side)
         except (FileExistsError, OSError):
             return False
         return True
 
     def was_taken(self, qid: str, name: str) -> bool:
-        return (self.directory / f"{qid}.{name}").exists()
+        side = self._side(qid, name)
+        return bool(side is not None and side.exists())
+
+    def release(self, qid: str, name: str) -> None:
+        side = self._side(qid, name)
+        if side is not None:
+            side.unlink(missing_ok=True)
 
     def delete_thread(self, thread_id: str) -> None:
         """Forget a deleted thread's questions (after expiring the open ones)."""
+        import shutil
+
         for question in self.in_thread(thread_id):
-            for path in self.directory.glob(f"{question.id}.*"):
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
+            self._where.pop(question.id, None)
+        shutil.rmtree(self._thread_dir(thread_id), ignore_errors=True)

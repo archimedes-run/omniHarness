@@ -116,11 +116,28 @@ def test_the_leads_question_opens_a_card_and_ends_the_run(gateway):  # noqa: F81
     assert len(LEAD_SAW) == 1, "the run did not end at the question"
 
 
-def test_a_question_without_options_is_sent_back_not_shown(gateway):  # noqa: F811
+def test_a_free_form_question_is_a_card_with_only_its_text_box(gateway):  # noqa: F811
     thread_id = _thread(gateway)
-    _say(gateway, thread_id, "plan dinner", [_step(_call("ask_clarification", {"question": "Which city?", "clarification_type": "missing_info"}, "a1")), AIMessage(content="Going with Philadelphia.")])
-    assert _questions(gateway, thread_id) == []
-    assert any(m[0] == "tool" and m[2].startswith("Not asked: give 2 to 4") for m in LEAD_SAW[-1]), LEAD_SAW[-1]
+    question = _ask(gateway, thread_id, args={"question": "What is your flight number?", "clarification_type": "missing_info"})
+    assert question["options"] == [] and question["recommended"] is None
+    tool = [m for m in _messages(gateway, thread_id) if m["type"] == "tool" and m["name"] == "ask_clarification"][-1]
+    assert "1." not in tool["content"] and "reply with your answer" in tool["content"]
+    assert len(LEAD_SAW) == 1
+    LEAD_SCRIPT[:] = [AIMessage(content="Thanks.")]
+    body = gateway.client.post(f"/api/questions/{question['id']}/answer", json={"text": "UA 123"}).json()
+    assert body["question"]["answer"]["text"] == "UA 123"
+    assert gateway.client.post(f"/api/questions/{question['id']}/answer", json={"option": 0}).status_code in (409, 422)
+
+
+def test_a_badly_shaped_question_is_sent_back_once_then_shown_free_form(gateway):  # noqa: F811
+    """No loop: at most one extra model call for a bad shape."""
+    thread_id = _thread(gateway)
+    one = {"question": "Which city?", "clarification_type": "missing_info", "options": ["Philadelphia"]}
+    _say(gateway, thread_id, "plan dinner", [_step(_call("ask_clarification", one, "a1")), _step(_call("ask_clarification", one, "a2"))])
+    assert len(LEAD_SAW) == 2, "a bad shape was sent back more than once (or never)"
+    assert any(m[0] == "tool" and m[2].startswith("Not asked: give 2 to 4 short options") for m in LEAD_SAW[-1])
+    [question] = _questions(gateway, thread_id)
+    assert question["state"] == "open" and question["options"] == [] and question["question"] == "Which city?"
 
 
 # -- QC-07: a click resumes the lead with the answer as data ---------------------
@@ -178,7 +195,10 @@ def test_the_owners_typed_reply_answers_the_only_open_question_without_a_second_
     _say(gateway, thread_id, "2", [AIMessage(content="New York, then.")])
     [after] = _questions(gateway, thread_id)
     assert after["state"] == "answered" and after["answer"] == {"option": 1, "text": None, "via": "tagged_message", "at": after["answer"]["at"]}
-    assert any(m[1] == "question_note" and "answers your open question" in m[2] for m in LEAD_SAW[-1])
+    notes = [m[2] for m in LEAD_SAW[-1] if m[1] == "question_note"]
+    assert notes and "answers the question you asked on its card: option 2" in notes[0]
+    # The question's own text (content) is never quoted in a human-role note.
+    assert "Which city" not in notes[0] and "New York" not in notes[0]
     _settle(gateway, thread_id)
     assert len(_runs(gateway, thread_id)) == 2, "a typed answer started a resume run as well as the owner's turn"
     assert question["id"] == after["id"]
@@ -408,3 +428,116 @@ def test_question_text_is_sent_through_the_display_sanitiser(gateway):  # noqa: 
     assert "‮" not in question["question"] and "https://" not in question["question"] and "hxxps://evil[.]example/x" in question["question"]
     assert question["options"][0]["label"] == "evil[.]example"
     assert "asker_data" not in question and "owner_id" not in question
+
+
+# -- review round: cards and questions together, ownership, Stop, recovery -------
+
+
+def test_with_a_card_and_a_question_open_a_typed_yes_does_nothing(gateway):  # noqa: F811
+    """A typed message confirms no card while a question is open, and answers
+    no question while a card is open: both are button-only, and the person is
+    told once to use the buttons. The buttons still work for both."""
+    thread_id = _thread(gateway)
+    _say(gateway, thread_id, "wipe the nightly backup", [_step(_call("wipe_backup", {"name": "nightly"}, "w1")), AIMessage(content="waiting")])
+    [wipe] = _cards(gateway, "wipe_backup")
+    assert wipe["confirmable_by_typing"] is True
+    qid = _probe_question(gateway, thread_id, text="Keep the old name?")
+    _say(gateway, thread_id, "yes", [AIMessage(content="Please use the buttons on the cards.")])
+    _settle(gateway, thread_id)
+    assert "wipe_backup" not in RAN, "a typed yes confirmed a card while a question was open"
+    assert [c["id"] for c in _cards(gateway, "wipe_backup")] == [wipe["id"]]
+    assert [q["state"] for q in _questions(gateway, thread_id) if q["id"] == qid] == ["open"]
+    assert any(m[1] == "question_note" and "use the buttons" in m[2] for m in LEAD_SAW[-1]), LEAD_SAW[-1]
+    # Buttons still work for both.
+    ok = gateway.client.post(f"/api/questions/{qid}/answer", json={"option": 0})
+    assert ok.status_code == 200 and ok.json()["question"]["state"] == "answered"
+    out = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
+    assert out["outcome"] == "executed" and "wipe_backup" in RAN
+
+
+def test_a_question_asked_in_a_channel_is_answerable_by_the_owner_on_the_web(gateway):  # noqa: F811
+    from app.gateway.questions import build_question, get_store, register_asker
+    from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+    async def handler(question, *, app=None, request=None, retry=False):
+        return None
+
+    register_asker("probe", handler, display_name="The probe")
+    thread_id = _thread(gateway)
+    q = build_question(thread_id=thread_id, owner_id=DEFAULT_USER_ID, asker={"kind": "probe", "ref": {}}, origin="content", question="Q?", options=["A", "B"], timeout_seconds=60)
+    get_store().save(q)
+    assert [x["id"] for x in _questions(gateway, thread_id)] == [q.id]
+    assert q.id in [x["id"] for x in gateway.client.get("/api/questions").json()["questions"]]
+    assert gateway.client.post(f"/api/questions/{q.id}/answer", json={"option": 1}).status_code == 200
+
+
+def test_stop_ends_the_leads_open_question_even_after_the_asking_run_ended(gateway, monkeypatch):  # noqa: F811
+    import threading
+
+    import test_web_research as wr
+
+    thread_id = _thread(gateway)
+    question = _ask(gateway, thread_id)
+    release = threading.Event()
+
+    def slow(text: str) -> str:
+        release.wait(10)
+        return "published"
+
+    monkeypatch.setattr(wr.notes_publish, "func", slow)
+    # While the question is open, another run of the thread is going (here a
+    # slow tool); the person presses Stop on it.
+    LEAD_SCRIPT[:] = [_step(_call("notes_publish", {"text": "x"}, "n1")), AIMessage(content="done")]
+    from app.gateway.questions import get_store
+
+    store = get_store()
+    run = gateway.client.post(f"/api/threads/{thread_id}/runs", json={"assistant_id": "lead_agent", "input": None, "context": {}})
+    assert run.status_code == 200, run.text
+    run_id = run.json()["run_id"]
+    deadline = time.time() + 10
+    while time.time() < deadline and gateway.client.get(f"/api/threads/{thread_id}/runs/{run_id}").json().get("status") != "running":
+        time.sleep(0.02)
+    stopped = gateway.client.post(f"/api/threads/{thread_id}/runs/{run_id}/cancel")
+    release.set()
+    assert stopped.status_code in (202, 204), stopped.text
+    after = store.get(question["id"])
+    assert after.state == "expired" and after.expired_reason == "asker_ended"
+    _settle(gateway, thread_id)
+
+
+def test_an_answer_that_finds_the_chat_busy_is_kept_and_resumed_later(gateway, monkeypatch):  # noqa: F811
+    thread_id = _thread(gateway)
+    question = _ask(gateway, thread_id)
+    busy = {"on": True}
+
+    async def running(request, thread):
+        return busy["on"]
+
+    monkeypatch.setattr("app.gateway.routers.confirmations._thread_running", running)
+    body = gateway.client.post(f"/api/questions/{question['id']}/answer", json={"option": 1}).json()
+    assert body["resume_run_id"] is None and body["question"]["state"] == "answered"
+    from app.gateway.questions import get_store
+
+    assert get_store().was_taken(question["id"], "deferred")
+    busy["on"] = False
+    LEAD_SCRIPT[:] = [AIMessage(content="New York, then.")]
+    _sweep(gateway)
+    _settle(gateway, thread_id)
+    assert any(m[0] == "tool" and "option 2: New York" in m[2] for m in LEAD_SAW[-1]), "the kept answer never reached the lead"
+    assert len(_runs(gateway, thread_id)) == 2
+    _sweep(gateway)
+    _settle(gateway, thread_id)
+    assert len(_runs(gateway, thread_id)) == 2, "a kept answer was resumed twice"
+
+
+def test_runs_that_never_get_a_card_are_not_held_to_the_cards_shape():
+    from app.gateway import questions as cards
+    from omniharness.agents.middlewares.clarification_middleware import ClarificationMiddleware
+
+    cards.install()
+    mw = ClarificationMiddleware()
+    bad = {"question": "Which city?", "clarification_type": "missing_info", "options": ["Only one"]}
+    chat = {"thread_id": "t", "user_id": "u"}
+    assert mw._shape(bad, chat, [])[0] is not None
+    for context in ({**chat, "turn_provenance": "synthetic-trigger"}, {**chat, "called_agent": "helper"}, {**chat, "invited_origin": "user"}, {"thread_id": "t"}):
+        assert mw._shape(bad, context, []) == (None, bad), context

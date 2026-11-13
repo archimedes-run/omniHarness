@@ -146,47 +146,49 @@ export function QuestionCard({
 
       {state === "open" && (
         <>
-          <div
-            role="group"
-            aria-label="Options"
-            className="flex flex-wrap gap-2 max-sm:flex-col"
-            data-testid="question-options"
-          >
-            {shown.options.map((option, index) => {
-              const suggested = shown.recommended === index;
-              return (
-                <Button
-                  key={`${shown.id}-${index}`}
-                  type="button"
-                  variant={suggested ? "default" : "outline"}
-                  className="h-auto min-h-9 flex-col items-start gap-0.5 px-3 py-2 text-left whitespace-normal max-md:min-h-11 max-sm:w-full"
-                  disabled={busy}
-                  onClick={() => send({ option: index })}
-                  data-testid="question-option"
-                  data-suggested={suggested}
-                  aria-describedby={
-                    suggested ? `${textId}-suggested` : undefined
-                  }
-                >
-                  <span className="font-medium">{option.label}</span>
-                  {suggested && shown.recommended_label && (
-                    <span
-                      id={`${textId}-suggested`}
-                      className="text-xs font-normal"
-                      data-testid="question-suggested"
-                    >
-                      {shown.recommended_label}
-                    </span>
-                  )}
-                  {option.description && (
-                    <span className="text-xs font-normal opacity-90">
-                      {option.description}
-                    </span>
-                  )}
-                </Button>
-              );
-            })}
-          </div>
+          {shown.options.length > 0 && (
+            <div
+              role="group"
+              aria-label="Options"
+              className="flex flex-wrap gap-2 max-sm:flex-col"
+              data-testid="question-options"
+            >
+              {shown.options.map((option, index) => {
+                const suggested = shown.recommended === index;
+                return (
+                  <Button
+                    key={`${shown.id}-${index}`}
+                    type="button"
+                    variant={suggested ? "default" : "outline"}
+                    className="h-auto min-h-9 flex-col items-start gap-0.5 px-3 py-2 text-left whitespace-normal max-md:min-h-11 max-sm:w-full"
+                    disabled={busy}
+                    onClick={() => send({ option: index })}
+                    data-testid="question-option"
+                    data-suggested={suggested}
+                    aria-describedby={
+                      suggested ? `${textId}-suggested` : undefined
+                    }
+                  >
+                    <span className="font-medium">{option.label}</span>
+                    {suggested && shown.recommended_label && (
+                      <span
+                        id={`${textId}-suggested`}
+                        className="text-xs font-normal"
+                        data-testid="question-suggested"
+                      >
+                        {shown.recommended_label}
+                      </span>
+                    )}
+                    {option.description && (
+                      <span className="text-xs font-normal opacity-90">
+                        {option.description}
+                      </span>
+                    )}
+                  </Button>
+                );
+              })}
+            </div>
+          )}
           <form
             className="flex items-end gap-2 max-sm:flex-col max-sm:items-stretch"
             onSubmit={(event) => {
@@ -195,14 +197,20 @@ export function QuestionCard({
             }}
           >
             <label htmlFor={textId} className="sr-only">
-              Or answer in your own words
+              {shown.options.length > 0
+                ? "Or answer in your own words"
+                : "Your answer"}
             </label>
             <Textarea
               id={textId}
               value={text}
               rows={1}
               maxLength={shown.free_text_max}
-              placeholder="Or answer in your own words"
+              placeholder={
+                shown.options.length > 0
+                  ? "Or answer in your own words"
+                  : "Your answer"
+              }
               className="min-h-9 text-sm"
               disabled={busy}
               onChange={(event) => setText(event.target.value)}

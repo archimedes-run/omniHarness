@@ -172,12 +172,15 @@ async def get_run(thread_id: str, run_id: str, request: Request) -> RunResponse:
 
 
 async def _end_questions(request: Request, thread_id: str, run_id: str) -> None:
-    """Stop: the questions this run asked expire as `asker_ended` (009
-    question-card.md). Never stops the cancel."""
+    """Stop: the questions this run asked, and the thread's open lead
+    questions, expire as `asker_ended` (009 question-card.md). Never stops
+    the cancel."""
     try:
         from app.gateway.questions import end_for_thread
 
-        await end_for_thread(thread_id, app=request.app, run_id=run_id)
+        # The questions this run asked, and the lead's open questions in the
+        # thread even when the run that asked them has already ended.
+        await end_for_thread(thread_id, app=request.app, run_id=run_id, kinds=("lead",))
     except Exception:
         logger.warning("Could not close the questions of a cancelled run", exc_info=True)
 
