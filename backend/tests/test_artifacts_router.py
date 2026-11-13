@@ -863,3 +863,149 @@ def test_workspace_file_content_rejects_traversal(tmp_path, monkeypatch) -> None
         response = client.get("/api/threads/thread-1/workspace/files/content?root=my-app&path=../secret")
 
     assert response.status_code == 400
+
+
+# --- Storage shim for sandboxed previews ---
+#
+# The preview iframe is sandboxed without allow-same-origin, so the page has an
+# opaque origin and localStorage/sessionStorage throw. Every previewed HTML page
+# loads a tiny in-memory stand-in first; nothing else about the response changes.
+
+SHIM_TAG = '<script src="/api/threads/thread-1/artifacts/preview-runtime/storage-shim.js"></script>'
+TODO_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><script type="module" src="./assets/index.js"></script></head><body><div id="root"></div></body></html>'
+
+
+def _shim_app(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from app.gateway.auth_middleware import AuthMiddleware
+
+    paths = Paths(tmp_path)
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.include_router(artifacts_router.router)
+    return TestClient(app), paths
+
+
+def test_preview_html_loads_the_storage_shim_before_anything_else(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    html_path = outputs_dir / "todo" / "index.html"
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.write_text(TODO_HTML, encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/preview/mnt/user-data/outputs/todo/index.html")
+
+    assert response.status_code == 200
+    head_start = response.text.index("<head>") + len("<head>")
+    assert response.text[head_start:].startswith(SHIM_TAG + '<base href="/api/threads/thread-1/artifacts/preview-token/')
+    assert response.text.count(SHIM_TAG) == 1
+    assert response.text.index(SHIM_TAG) < response.text.index("./assets/index.js")
+    # The file on disk is not modified.
+    assert html_path.read_text(encoding="utf-8") == TODO_HTML
+
+
+def test_preview_html_keeps_the_exact_preview_csp(tmp_path, monkeypatch) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    (outputs_dir / "index.html").write_text(TODO_HTML, encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/preview/mnt/user-data/outputs/index.html")
+
+    expected = artifacts_router.PREVIEW_SECURITY_HEADERS
+    assert response.headers["content-security-policy"] == expected["Content-Security-Policy"]
+    # The shim is a same-origin external script, which the CSP already allowed.
+    assert "script-src 'self'" in response.headers["content-security-policy"]
+    for name in ("X-Content-Type-Options", "X-Frame-Options", "Cross-Origin-Resource-Policy", "Referrer-Policy", "Cache-Control"):
+        assert response.headers[name] == expected[name], name
+
+
+@pytest.mark.parametrize(
+    ("html", "expected_prefix"),
+    [
+        # No <head>: after <html>, never before the doctype (quirks mode).
+        ("<!doctype html><html><body>hi</body></html>", "<!doctype html><html>" + SHIM_TAG),
+        ("<!DOCTYPE html><body>hi</body>", "<!DOCTYPE html>" + SHIM_TAG),
+        ("<p>fragment</p>", SHIM_TAG),
+        # <header> is not <head>.
+        ("<html><header>top</header></html>", "<html>" + SHIM_TAG),
+        ('<html><head data-x="1"><title>t</title></head></html>', '<html><head data-x="1">' + SHIM_TAG),
+    ],
+)
+def test_preview_html_without_a_plain_head_still_gets_the_shim_first(tmp_path, monkeypatch, html: str, expected_prefix: str) -> None:
+    client, outputs_dir = _make_preview_test_app(tmp_path, monkeypatch)
+    (outputs_dir / "page.html").write_text(html, encoding="utf-8")
+
+    with client:
+        response = client.get("/api/threads/thread-1/artifacts/preview/mnt/user-data/outputs/page.html")
+
+    assert response.status_code == 200
+    assert response.text.startswith(expected_prefix)
+    assert response.text.count(SHIM_TAG) == 1
+
+
+def test_token_route_html_also_gets_the_shim_and_assets_are_untouched(tmp_path, monkeypatch) -> None:
+    client, paths = _shim_app(monkeypatch, tmp_path)
+    paths.ensure_thread_dirs("thread-1", user_id="user-1")
+    site = paths.sandbox_outputs_dir("thread-1", user_id="user-1") / "site"
+    (site / "assets").mkdir(parents=True)
+    (site / "about.html").write_text(TODO_HTML, encoding="utf-8")
+    js = "localStorage.setItem('todos', '[]')"
+    (site / "assets" / "index.js").write_text(js, encoding="utf-8")
+    token = artifacts_router._create_preview_token("thread-1", "user-1", "/mnt/user-data/outputs/site")
+    base = f"/api/threads/thread-1/artifacts/preview-token/{token}/mnt/user-data/outputs/site"
+
+    with client:
+        page = client.get(f"{base}/about.html")
+        asset = client.get(f"{base}/assets/index.js")
+
+    assert page.status_code == 200
+    assert page.text.count(SHIM_TAG) == 1
+    assert page.headers["content-security-policy"] == artifacts_router.PREVIEW_SECURITY_HEADERS["Content-Security-Policy"]
+    assert asset.status_code == 200
+    assert asset.text == js
+
+
+def test_download_route_never_gets_the_shim(tmp_path, monkeypatch) -> None:
+    artifact_path = tmp_path / "index.html"
+    artifact_path.write_text(TODO_HTML, encoding="utf-8")
+    monkeypatch.setattr(artifacts_router, "resolve_thread_virtual_path", lambda _thread_id, _path: artifact_path)
+    app = make_authed_test_app()
+    app.include_router(artifacts_router.router)
+
+    with TestClient(app) as client:
+        for query in ("", "?download=true"):
+            response = client.get(f"/api/threads/thread-1/artifacts/mnt/user-data/outputs/index.html{query}")
+            assert response.status_code == 200
+            assert response.content == TODO_HTML.encode("utf-8")
+            assert response.headers["content-disposition"].startswith("attachment;")
+
+
+def test_storage_shim_is_served_publicly_as_nosniff_javascript(tmp_path, monkeypatch) -> None:
+    client, _ = _shim_app(monkeypatch, tmp_path)
+
+    with client:
+        # No session cookie: the sandboxed page fetches it from an opaque origin.
+        response = client.get("/api/threads/thread-1/artifacts/preview-runtime/storage-shim.js")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/javascript")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    # Loaded by an opaque-origin page, like the token-route assets.
+    assert response.headers["cross-origin-resource-policy"] == "cross-origin"
+    assert response.text == artifacts_router.PREVIEW_STORAGE_SHIM_JS
+    for api in ("localStorage", "sessionStorage", "getItem", "setItem", "removeItem", "clear", "key", "length"):
+        assert api in response.text, api
+    # No network, no real cookies.
+    for forbidden in ("fetch(", "XMLHttpRequest", "sendBeacon", "WebSocket", "import(", "http"):
+        assert forbidden not in response.text, forbidden
+
+
+def test_storage_shim_route_is_the_only_new_public_path(tmp_path, monkeypatch) -> None:
+    client, _ = _shim_app(monkeypatch, tmp_path)
+
+    with client:
+        sibling = client.get("/api/threads/thread-1/artifacts/preview-runtime/other.js")
+
+    assert sibling.status_code == 401
