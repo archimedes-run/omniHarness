@@ -29,7 +29,6 @@ from pathlib import Path
 WIDTHS = (360, 560, 1280)
 #: The probe's own budget is 38 s; this is the hard stop around it.
 TIMEOUT_SECONDS = 45
-MODES = ("enforce", "warn", "off")
 PYTHON = "/usr/bin/python3.10"
 SCRIPT = Path(__file__).with_name("layout_probe.py").read_text(encoding="utf-8")
 DIGEST = hashlib.sha256(SCRIPT.encode()).hexdigest()
