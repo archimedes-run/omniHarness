@@ -110,11 +110,49 @@ def test_a_tier1_action_is_not_announced(system):
     assert "calendar_read" not in replies[-1]
 
 
-def test_the_model_phrasing_it_itself_is_accepted(system):
-    """The model MAY disclose in its own words. It may not skip one — so a
-    reply that already names the action is left alone rather than duplicated."""
+def test_the_model_phrasing_it_itself_does_not_replace_the_notice(system):
+    """Owner decision (spec 009 review H1/H2): the model's own "I used X"
+    never counts as the notice. The server's line is appended anyway, once."""
     replies = _run(system, calendar_create_hold, "I used calendar_create_hold to put Lunch on your calendar.")
 
     final = replies[-1]
-    assert final.count("calendar_create_hold") == 1, f"the disclosure was appended on top of the model's own: {final!r}"
-    assert "For the record" not in final
+    assert final.endswith("Ran without asking: calendar_create_hold"), final
+    assert final.count("Ran without asking") == 1
+
+
+def _final_message(system, tool, said: str) -> AIMessage:
+    model = ToolCapableFake(
+        messages=iter(
+            [
+                AIMessage(content="", tool_calls=[{"name": tool.name, "args": {"title": "Lunch"} if tool is calendar_create_hold else {}, "id": "tc1"}]),
+                AIMessage(content=said),
+            ]
+        )
+    )
+    agent = create_agent(model=model, tools=[tool], middleware=[system.middleware])
+    out = agent.invoke({"messages": [HumanMessage(content="do the thing")]})
+    return [m for m in out["messages"] if isinstance(m, AIMessage) and m.content][-1]
+
+
+def test_the_appended_block_is_marked_for_display_and_still_in_the_text(system):
+    """Spec 009 Slice 0: the chat shows the appended disclosure as a system note
+    under the answer, not as the assistant's narration. The policy layer only
+    ADDS a display marker naming the block it appended; the reply's text is
+    exactly what it was (the guarantee above is untouched)."""
+    from omniharness.agents.turns import DISCLOSURE_MARKER
+
+    final = _final_message(system, calendar_create_hold, "All done!")
+    text = str(final.content)
+    marker = final.additional_kwargs.get(DISCLOSURE_MARKER)
+    assert marker, "no display marker on a reply the policy layer appended to"
+    assert text.endswith(marker["text"]) and text[: -len(marker["text"])].rstrip() == "All done!"
+    assert "calendar_create_hold" in text, "the disclosure left the text"
+    assert [i["tool"] for i in marker["items"]] == ["calendar_create_hold"]
+
+
+def test_no_notice_and_no_marker_without_a_tier2_action(system):
+    final = _final_message(system, calendar_read, "There are two events.")
+    from omniharness.agents.turns import DISCLOSURE_MARKER
+
+    assert DISCLOSURE_MARKER not in final.additional_kwargs
+    assert "Ran without asking" not in str(final.content)

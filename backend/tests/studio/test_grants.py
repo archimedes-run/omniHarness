@@ -543,3 +543,20 @@ def test_the_delivered_message_lists_the_runs_writes_and_links_to_undo_all(studi
     assert footer.rstrip().endswith("/workspace/runs/fire-tg")
     assert "SECRET BODY" not in footer
     assert _run_footer(get_app_config())("fire-none") == ""
+
+
+def test_the_delivered_scheduled_run_message_says_ran_under_grant_once(studio) -> None:
+    """Owner principle: each Tier 2 action disclosed exactly once. A scheduled
+    run's delivered message (its reply, then the footer with the Undo all
+    link) carries one "Ran under grant: ..." line, at the end of the reply,
+    right above the run's writes and the link."""
+    from app.gateway.trigger_engine_wiring import _run_footer
+    from omniharness.config import get_app_config
+
+    _setup(studio, ["tasks"])
+    out = _run(studio, [_call([_task("One"), _task("Two")], "c1")], scheduled=True, firing="fire-grant")
+    reply = str(out["messages"][-1].content)
+    delivered = reply + "\n\n" + _run_footer(get_app_config())("fire-grant")
+    assert delivered.count("Ran under grant:") == 1, delivered
+    assert reply.rstrip().splitlines()[-1].startswith("Ran under grant: ledger_apply"), reply
+    assert "Ran without asking" not in reply

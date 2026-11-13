@@ -1,0 +1,45 @@
+id: T20
+title: 'A short note saved as a file: no narration, no menu, presented'
+source: 'owner rules (2026-10-25): no tool-call narration, no ''Want me to...?'' menus, files presented in the panel'
+mode: pro
+prompt: Write a short note to my landlord about the leaking kitchen tap and save it as a file.
+tools: []
+confirm: none
+budget:
+  seconds: 300
+  est_usd: 0.05
+checks:
+- file_in_outputs:
+    glob: '*'
+    min_bytes: 100
+- presented:
+    glob: '*'
+- no_narration
+- no_menu
+- no_clarification
+mock:
+  lead:
+  - tool_calls:
+    - name: write_file
+      args:
+        description: landlord note
+        path: /mnt/user-data/outputs/note-to-landlord.md
+        content: 'Hi,
+
+
+          The kitchen tap has been leaking steadily since Monday and is getting worse. Could you arrange a plumber this week? I''m home after 5pm most days.
+
+
+          Thanks,
+
+          '
+  - expect:
+      tool: write_file
+    tool_calls:
+    - name: present_files
+      args:
+        filepaths:
+        - /mnt/user-data/outputs/note-to-landlord.md
+  - expect:
+      tool: present_files
+    content: 'The note to your landlord is in the file panel: it describes the leak, asks for a plumber this week and gives your availability.'

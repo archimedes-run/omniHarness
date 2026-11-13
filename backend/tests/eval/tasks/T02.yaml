@@ -1,0 +1,37 @@
+id: T02
+title: Latest stable React release, 3 sources
+source: research habit
+mode: pro
+prompt: What are the main new features of the latest stable React release? Cite 3 sources.
+tools: []
+confirm: none
+budget:
+  seconds: 420
+  est_usd: 0.08
+checks:
+- min_links:
+    n: 3
+    distinct_hosts: 2
+- tool_called:
+    name: web_*
+- no_clarification
+- no_open_cards
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: latest stable React release features
+  - expect:
+      tool: web_search
+      contains: react.dev
+    content: 'The latest stable React release adds Actions for async transitions, the `use()` API and refs as props [citation:React 19](https://react.dev/blog/2024/12/05/react-19).
+
+
+      Sources:
+
+      - [React 19 release notes](https://react.dev/blog/2024/12/05/react-19)
+
+      - [React versions](https://react.dev/versions)
+
+      - [React releases on GitHub](https://github.com/facebook/react/releases)'

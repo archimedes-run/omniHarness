@@ -212,3 +212,46 @@ def _run_store_key_outside_home(tmp_path_factory, monkeypatch):
     temp dir per test: no test reads or writes ~/.omni-harness-secrets."""
     keydir = tmp_path_factory.mktemp("run-store-key")
     monkeypatch.setenv("OMNI_HARNESS_RUN_STORE_KEY_FILE", str(keydir / "run_store.key"))
+
+
+# -- a hung test fails instead of holding the job ----------------------------
+#
+# pytest-timeout is not a dependency. A test that hangs (a run that never
+# ends, a request into a stuck event loop) used to hold the CI job until its
+# 40-minute limit, with no test named. Past this limit the test gets an
+# exception in its main thread (SIGALRM), after every thread's stack is
+# written to stderr, so it FAILS by name and the run carries on. If even that
+# cannot interrupt it, the worker dumps the stacks and exits a minute later
+# (xdist reports it as crashed). No test needs anywhere near this long;
+# OMNI_TEST_HARD_TIMEOUT moves it (0 turns it off).
+_HARD_TIMEOUT = float(os.environ.get("OMNI_TEST_HARD_TIMEOUT") or 300)
+
+
+class HardTestTimeout(BaseException):
+    """Raised in a test that ran past OMNI_TEST_HARD_TIMEOUT."""
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    import faulthandler
+    import signal
+    import threading
+
+    armed = _HARD_TIMEOUT > 0 and hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread()
+    previous = None
+    if armed:
+
+        def _expired(signum, frame):
+            faulthandler.dump_traceback(all_threads=True)
+            raise HardTestTimeout(f"{item.nodeid} ran past {_HARD_TIMEOUT:.0f} s (OMNI_TEST_HARD_TIMEOUT)")
+
+        previous = signal.signal(signal.SIGALRM, _expired)
+        signal.setitimer(signal.ITIMER_REAL, _HARD_TIMEOUT)
+        faulthandler.dump_traceback_later(_HARD_TIMEOUT + 60, exit=True)
+    try:
+        yield
+    finally:
+        if armed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+            faulthandler.cancel_dump_traceback_later()

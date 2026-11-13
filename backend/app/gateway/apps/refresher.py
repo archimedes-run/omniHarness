@@ -75,3 +75,14 @@ async def run_forever(app_state) -> None:
             raise
         except Exception:  # noqa: BLE001 - one bad pass must not end the loop
             logger.warning("apps refresher pass failed", exc_info=True)
+
+
+async def stop(task: asyncio.Task | None, *, timeout: float) -> None:
+    """Cancel the refresher loop and every background bridge refresh, and wait
+    for them to finish (bounded): none of them may still be inside a database
+    session when the engine closes. Results and errors are ignored."""
+    tasks = [t for t in (task, *bridge.background_tasks()) if t is not None and not t.done()]
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout)

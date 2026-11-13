@@ -130,15 +130,19 @@ def _hash_tool_calls(tool_calls: list[dict]) -> str:
     return hashlib.md5(blob.encode()).hexdigest()[:12]
 
 
-_WARNING_MSG = "[LOOP DETECTED] You are repeating the same tool calls. Stop calling tools and produce your final answer now. If you cannot complete the task, summarize what you accomplished so far."
-
-_TOOL_FREQ_WARNING_MSG = (
-    "[LOOP DETECTED] You have called {tool_name} {count} times without producing a final answer. Stop calling tools and produce your final answer now. If you cannot complete the task, summarize what you accomplished so far."
+_WARNING_MSG = (
+    "[LOOP DETECTED] You have made the same tool call several times. It will not give a different result. "
+    "Change your approach for this step, or stop and report it as blocked: what is done, what failed and what is needed. Do not report it as done."
 )
 
-_HARD_STOP_MSG = "[FORCED STOP] Repeated tool calls exceeded the safety limit. Producing final answer with results collected so far."
+_TOOL_FREQ_WARNING_MSG = (
+    "[LOOP DETECTED] You have called {tool_name} {count} times in this task. More calls of it will not help. Use the results you already have: "
+    "change your approach, or stop and report what is done, what failed and what is needed. Do not report unfinished steps as done."
+)
 
-_TOOL_FREQ_HARD_STOP_MSG = "[FORCED STOP] Tool {tool_name} called {count} times — exceeded the per-tool safety limit. Producing final answer with results collected so far."
+_HARD_STOP_MSG = "[FORCED STOP] Repeated tool calls exceeded the safety limit. Producing final answer with results collected so far. Report the unfinished items as not verified."
+
+_TOOL_FREQ_HARD_STOP_MSG = "[FORCED STOP] Tool {tool_name} called {count} times — exceeded the per-tool safety limit. Producing final answer with results collected so far. Report the unfinished items as not verified."
 
 
 class LoopDetectionMiddleware(AgentMiddleware[AgentState]):

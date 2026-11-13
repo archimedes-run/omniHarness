@@ -1,0 +1,89 @@
+id: T15
+title: Write a checklist file and show it (presented in the panel)
+source: 'deliverables; owner dogfooding: a file-presented-in-panel check'
+mode: pro
+prompt: Write a moving-house checklist to a markdown file and show it to me.
+tools: []
+confirm: none
+budget:
+  seconds: 300
+  est_usd: 0.06
+checks:
+- file_in_outputs:
+    glob: '*.md'
+    min_bytes: 200
+- presented:
+    glob: '*.md'
+- verified_section:
+    strict: true
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: a markdown moving checklist is in outputs/ and presented'
+          status: completed
+        - content: Write the checklist file
+          status: in_progress
+        - content: Present it
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: write_file
+      args:
+        description: moving checklist
+        path: /mnt/user-data/outputs/moving-checklist.md
+        content: '# Moving-house checklist
+
+
+          ## Six weeks before
+
+          - Book movers or a van
+
+          - Declutter room by room
+
+          - Order boxes, tape and labels
+
+
+          ## Two weeks before
+
+          - Change your address with the bank and post office
+
+          - Arrange utilities at the new place
+
+
+          ## Moving day
+
+          - Take meter readings
+
+          - Pack a first-night box
+
+          '
+  - expect:
+      tool: write_file
+    tool_calls:
+    - name: present_files
+      args:
+        filepaths:
+        - /mnt/user-data/outputs/moving-checklist.md
+  - expect:
+      tool: present_files
+      contains: Successfully
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: a markdown moving checklist is in outputs/ and presented'
+          status: completed
+        - content: Write the checklist file
+          status: completed
+        - content: Present it
+          status: completed
+  - expect:
+      tool: write_todos
+    content: 'Your moving-house checklist is ready in the file panel: three stages, from six weeks out to moving day.
+
+
+      Checked: the file exists in outputs and is presented.'

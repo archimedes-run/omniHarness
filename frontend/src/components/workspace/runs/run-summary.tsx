@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { disclosureSummary } from "@/core/disclosure";
 import { safeField } from "@/core/display/safe";
 import {
   loadRunSummary,
@@ -88,6 +89,14 @@ export function RunSummaryView({ firingId }: { firingId: string }) {
         ))}
       </ul>
       <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm" data-testid="grant-notice">
+          Ran under grant:{" "}
+          <span className="font-mono">
+            {disclosureSummary(
+              data.writes.map((w) => ({ tool: w.tool, text: "" })),
+            )}
+          </span>
+        </span>
         {data.all_undone ? (
           <span
             className="text-muted-foreground text-sm"

@@ -124,7 +124,18 @@ ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter'
 #: arguments and ids, never a stored field (a project is named as the call
 #: named it, not by its stored name: review 5). `ledger_read` is NOT here: it
 #: returns stored text that content may have put there.
-TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"})
+#:
+#: `write_todos` (spec 009 Slice 0) answers "Updated todo list to [...]",
+#: composed by the harness from the call's OWN arguments: the model's own
+#: checklist, exactly as an AI message is the model's own words (which the walk
+#: below already skips). With the checklist now written first for every
+#: multi-step task (FR-050), leaving it untrusted turned every routine write
+#: after a checklist ("add three tasks to my project") into a suggestion card.
+#: Trusting it removes no taint that came from elsewhere: any untrusted result
+#: earlier in the turn is still found by the walk. Marked by identity
+#: (middleware._mark_trusted_ack: the registered write_todos function), never
+#: by name.
+TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply", "write_todos"})
 
 #: Set on a tool result by the policy middleware at dispatch, and only when
 #: the tool that ran IS the registered built-in object (middleware.

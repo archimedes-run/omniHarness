@@ -33,9 +33,13 @@ class SubagentLimitMiddleware(AgentMiddleware[AgentState]):
             Defaults to MAX_CONCURRENT_SUBAGENTS (3). Clamped to [2, 4].
     """
 
-    def __init__(self, max_concurrent: int = MAX_CONCURRENT_SUBAGENTS):
+    def __init__(self, max_concurrent: int = MAX_CONCURRENT_SUBAGENTS, *, tool_names: tuple[str, ...] = ("task",)):
         super().__init__()
         self.max_concurrent = _clamp_subagent_limit(max_concurrent)
+        # The delegating tools this instance caps, each counted on its own:
+        # `task`, and the read-only web researcher `research` (spec 009 review
+        # M1). One instance (one graph node) for all of them.
+        self.tool_names = tuple(tool_names)
 
     def _truncate_task_calls(self, state: AgentState) -> dict | None:
         messages = state.get("messages", [])
@@ -50,17 +54,17 @@ class SubagentLimitMiddleware(AgentMiddleware[AgentState]):
         if not tool_calls:
             return None
 
-        # Count task tool calls
-        task_indices = [i for i, tc in enumerate(tool_calls) if tc.get("name") == "task"]
-        if len(task_indices) <= self.max_concurrent:
+        # Each capped tool counted on its own; the excess of each is dropped.
+        indices_to_drop: set[int] = set()
+        for tool_name in self.tool_names:
+            indices = [i for i, tc in enumerate(tool_calls) if tc.get("name") == tool_name]
+            indices_to_drop.update(indices[self.max_concurrent :])
+        if not indices_to_drop:
             return None
-
-        # Build set of indices to drop (excess task calls beyond the limit)
-        indices_to_drop = set(task_indices[self.max_concurrent :])
         truncated_tool_calls = [tc for i, tc in enumerate(tool_calls) if i not in indices_to_drop]
 
         dropped_count = len(indices_to_drop)
-        logger.warning(f"Truncated {dropped_count} excess task tool call(s) from model response (limit: {self.max_concurrent})")
+        logger.warning(f"Truncated {dropped_count} excess delegated tool call(s) from model response (limit: {self.max_concurrent} each of {', '.join(self.tool_names)})")
 
         # Replace the AIMessage with truncated tool_calls (same id triggers replacement)
         updated_msg = last_msg.model_copy(update={"tool_calls": truncated_tool_calls})

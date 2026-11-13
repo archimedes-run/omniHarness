@@ -1,0 +1,30 @@
+id: M-INTENT
+title: A reply that announces an action without a tool call is sent back once
+mock_only: true
+source: 'owner rule 2026-11-13 (preview eval T12: "I''m ready to run quick web lookups")'
+mode: pro
+prompt: Find 3 tomato varieties for a balcony, with links.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- no_menu
+- tool_called:
+    name: web_search
+- min_links:
+    n: 3
+mock:
+  lead:
+  - content: I read your request. I'm ready to run quick web lookups and return 3
+      varieties with links.
+  - expect:
+      any_contains: you made no tool call
+    tool_calls:
+    - name: web_search
+      args:
+        query: balcony tomato varieties
+  - expect:
+      tool: web_search
+    content: 'Three balcony tomatoes: [Tiny Tim](https://a.example/tiny-tim), [Patio
+      Choice](https://b.example/patio), [Sungold](https://c.example/sungold).'

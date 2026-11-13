@@ -90,6 +90,11 @@ for (const scheme of ["dark", "light"] as const) {
       await expect(writes.nth(0)).toContainText("Book the venue");
       await expect(writes.nth(0)).toContainText("from: email “Lunch Friday”");
       await expect(writes.nth(1)).toContainText("from: page “Launch notes”");
+      // One line, next to Undo all, from the run's own record (owner rule).
+      await expect(page.getByTestId("grant-notice")).toHaveText(
+        "Ran under grant: ledger_apply \u00d72",
+      );
+      await expect(page.getByText("Ran under grant:")).toHaveCount(1);
       await page.getByTestId("undo-run").click();
       await expect(page.getByTestId("undo-run-note")).toHaveText(
         "Undone: every change this run made.",

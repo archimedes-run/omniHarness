@@ -154,6 +154,11 @@ def result(name: str, spec: dict, row: dict | None) -> dict:
     return {"source": name, "state": state, "data": data, "fetched_at": iso(fetched), "stale": stale, "reason": row.get("reason") if state == "failed" else None}
 
 
+def background_tasks() -> list[asyncio.Task]:
+    """Background refreshes still in flight (stopped at shutdown)."""
+    return list(_BACKGROUND)
+
+
 def _background(app_state, repo, app: AppRecord, name: str) -> None:
     task = asyncio.create_task(fetch_and_record(app_state, repo, app, name))
     _BACKGROUND.add(task)

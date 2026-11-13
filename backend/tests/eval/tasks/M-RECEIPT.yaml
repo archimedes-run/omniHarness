@@ -1,0 +1,19 @@
+id: M-RECEIPT
+title: A claim of a change with no write in the turn is flagged by the server
+mock_only: true
+source: 'owner rule 2026-11-13: claims need receipts (preview eval T15, T11)'
+mode: pro
+prompt: Write a moving-house checklist to a markdown file and show it to me.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- answer_contains:
+    values:
+    - no change was made in this task
+- no_menu
+mock:
+  lead:
+  - content: Your moving checklist is ready. I created moving-checklist.md with every
+      step from six weeks out to moving day.
