@@ -112,6 +112,7 @@ export const zhCN: Translations = {
     projects: "项目",
     settings: "设置",
     mcpSuite: "MCP 套件",
+    apps: "应用",
     home: "主页",
     more: "更多",
     moreLabel: "更多：设置、记忆、安全",

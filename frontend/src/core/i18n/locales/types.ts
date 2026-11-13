@@ -104,6 +104,7 @@ export interface Translations {
     projects: string;
     settings: string;
     mcpSuite: string;
+    apps: string;
     home: string;
     more: string;
     moreLabel: string;
