@@ -96,12 +96,15 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
     (tools.names.canonical_tool_name): the in-process tools, whether or not
     this agent gets them, and the tools config.yaml loads. The registry
     decides built-in identity; a tool's NAME never does (review round 3)."""
+    from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
     from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
     from omniharness.tools.builtins.tool_search import tool_search
     from omniharness.tools.names import canonical_tool_name
     from omniharness.tools.skill_manage_tool import skill_manage_tool
 
-    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, preview_tool, code_job_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
+    # skill_manage is no longer offered to any model (Spec 010 FR-024), but its
+    # name stays reserved: an outside tool may never pass itself off as it.
+    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, skill_manage_tool, *BUILDER_TOOLS, preview_tool, code_job_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
     registry: dict[str, object] = {canonical_tool_name(getattr(t, "name", "")): t for t in objects}
     cfg = config
     if cfg is None:
@@ -224,12 +227,10 @@ def get_available_tools(
     loaded_tools = [t for _, t in loaded_tools_raw]
 
     # Conditionally add tools based on config
+    # Skills are created and changed through the chat builder, which only the
+    # assistant in the owner's own chat holds (Spec 010 FR-024): skill_manage
+    # is on no model's tool list, whatever skill_evolution says.
     builtin_tools = BUILTIN_TOOLS.copy()
-    skill_evolution_config = getattr(config, "skill_evolution", None)
-    if getattr(skill_evolution_config, "enabled", False):
-        from omniharness.tools.skill_manage_tool import skill_manage_tool
-
-        builtin_tools.append(skill_manage_tool)
 
     # Add preview tool only when a PreviewController is registered (gateway mode).
     from omniharness.preview.preview_controller import get_preview_controller
@@ -583,8 +584,8 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
     """EVERY tool name this process can offer an agent, whatever the conditions.
 
     `get_available_tools` decides per agent: a vision model gets view_image,
-    gateway mode gets preview and mcp_build, plan mode gets write_todos, a
-    custom agent gets update_agent. A policy coverage check (007: every tool
+    gateway mode gets preview and mcp_build, plan mode gets write_todos, the
+    assistant in the owner's own chat gets the builder tools. A policy coverage check (007: every tool
     resolves to an explicit rule) needs the UNION, because a tool reachable
     under any condition must already have a rule when that condition arises.
 
@@ -599,10 +600,9 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
     """
     from omniharness.agents.middlewares.todo_middleware import TodoMiddleware
     from omniharness.mcp.cache import loaded_mcp_tools
-    from omniharness.tools.builtins import setup_agent, update_agent
+    from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
     from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
     from omniharness.tools.builtins.tool_search import tool_search
-    from omniharness.tools.skill_manage_tool import skill_manage_tool
 
     names: list[str] = []
     for cfg in app_config.tools:
@@ -610,7 +610,7 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
             names.append(resolve_variable(cfg.use, BaseTool).name)
         except Exception:  # noqa: BLE001 — a config tool that cannot load is never offered
             logger.warning("tool %r (%s) could not be loaded, so it is not offered", cfg.name, cfg.use)
-    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, code_job_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, skill_manage_tool, setup_agent, update_agent)]
+    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, code_job_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, *BUILDER_TOOLS)]
     names += [t.name for t in TodoMiddleware().tools]
     names += [t.name for t in (loaded_mcp_tools() or [])]
     return list(dict.fromkeys(names))

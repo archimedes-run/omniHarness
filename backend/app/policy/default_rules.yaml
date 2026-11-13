@@ -266,6 +266,35 @@ policy:
     - pattern: "update_agent"
       tier: 3
       reversible: false
+    # The three above are on no model's tool list since Spec 010 (FR-024): the
+    # chat builder replaced them. Their rules stay so a card stated before the
+    # change still reads as Tier 3 until it expires.
+    #
+    # The chat builder (Spec 010 FR-026). Draft, read and diff have no side
+    # effect: a draft lives in the chat, never in the store.
+    - pattern: "builder_draft"
+      tier: 1
+      reversible: true
+    - pattern: "builder_read"
+      tier: 1
+      reversible: true
+    - pattern: "builder_diff"
+      tier: 1
+      reversible: true
+    # Saving creates or changes an agent, skill or automation (a new version,
+    # undoable, but it changes what runs from then on): the card's button, or
+    # the owner typing a clear "yes". Which typed words count, and that a
+    # grant is button-only, are code (app/policy/builder_rules.py), not here.
+    - pattern: "builder_save"
+      tier: 3
+      reversible: false
+    - pattern: "builder_undo"
+      tier: 3
+      reversible: false
+    # Tool access and standing grants: button only, never typed.
+    - pattern: "builder_grant"
+      tier: 3
+      reversible: false
 
     # ---------------------------------------------------------------------
     # Filesystem — reads are silent, writes are disclosed, deletion is not

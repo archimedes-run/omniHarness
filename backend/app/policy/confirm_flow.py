@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from .builder_rules import is_builder_card
 from .confirm import Verdict, recognise, restate
 from .models import Outcome, PendingAction
 from .pending import PendingStore
@@ -141,6 +142,15 @@ class ConfirmationFlow:
         text = self._text(message)
         supplied, stripped = self._extract_count(text)
         verdict = recognise(_Restated(message, stripped), pending, runtime_context)
+
+        if verdict.verdict is Verdict.UNRECOGNISED and verdict.revision:
+            # A builder card is open and this is not "yes" or "no": the model
+            # revises the draft (Spec 010 FR-009). Nothing is answered.
+            return FlowResult(NO_VERDICT, expired_meanwhile=expired)
+        if verdict.verdict is Verdict.CONFIRM and supplied is not None and is_builder_card(next((a.tool_name for a in pending if a.id == verdict.action_id), None)):
+            # "yes 3" is not the whole message: a builder save is confirmed by
+            # the closed list alone (FR-015), so this is a revision too.
+            return FlowResult(NO_VERDICT, expired_meanwhile=expired)
 
         if verdict.verdict is Verdict.UNRECOGNISED:
             # Silence unless the reply was ABOUT a pending action. An

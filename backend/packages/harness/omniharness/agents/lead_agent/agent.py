@@ -426,7 +426,6 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
     LookupError (AUDIT-2026-10, addendum).
     """
     from omniharness.tools import get_available_tools
-    from omniharness.tools.builtins import setup_agent, update_agent
     from omniharness.tools.tools import resolve_model_tool_cap
 
     skills_for_tool_policy = _load_enabled_skills_for_tool_policy(inputs.available_skills, app_config=app_config)
@@ -445,13 +444,16 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
 
     always_include = _dynamic_tool_names()
 
-    if inputs.is_bootstrap:
-        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config) + [setup_agent]
-        return filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include)
+    # The chat builder (Spec 010): only the assistant in the owner's own chat
+    # (the bootstrap flow included, where it replaces setup_agent). Never a
+    # custom agent, a scheduled, resumed, delegated or @-called run
+    # (omniharness.runtime.builder.surface). setup_agent, update_agent and
+    # skill_manage are on no model's tool list (FR-024).
+    extra_tools = builder_tools_for(cfg)
 
-    # Custom agents can update their own SOUL.md / config via update_agent.
-    # The default agent (no agent_name) does not see this tool.
-    extra_tools = [update_agent] if inputs.agent_name else []
+    if inputs.is_bootstrap:
+        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config) + extra_tools
+        return filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include | {t.name for t in extra_tools})
 
     # Per-conversation tool selection (namespaced source ids) + owning user, both
     # threaded through the runtime context by the gateway at launch. When present,
@@ -480,6 +482,18 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
         tool_access=tool_access,
     )
     return filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy, always_include=always_include)
+
+
+def builder_tools_for(cfg: dict) -> list[BaseTool]:
+    """The builder tools this lead run gets: all of them, or none."""
+    from omniharness.runtime.builder.controller import get_builder_controller
+    from omniharness.runtime.builder.surface import builder_refusal
+
+    if get_builder_controller() is None or builder_refusal(cfg) is not None:
+        return []
+    from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
+
+    return list(BUILDER_TOOLS)
 
 
 def lead_agent_tools(cfg: dict, *, app_config: AppConfig | None = None) -> list[BaseTool]:
@@ -582,6 +596,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 max_concurrent_subagents=max_concurrent_subagents,
                 available_skills=set(["bootstrap"]),
                 app_config=resolved_app_config,
+                builder=bool(builder_tools_for(cfg)),
             ),
             state_schema=ThreadState,
         )
@@ -598,6 +613,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             app_config=resolved_app_config,
             memory_user_id=memory_user_of(cfg),
             connectors_off=cfg.get("connectors_off"),
+            builder=bool(builder_tools_for(cfg)),
         ),
         state_schema=ThreadState,
     )

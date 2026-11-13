@@ -74,14 +74,14 @@ Once you have enough information:
 
 1. Read `templates/SOUL.template.md` if you haven't already.
 2. Generate the SOUL.md following the template structure exactly.
-3. Present it warmly and ask for confirmation. Frame it as "here's [Name] on paper — does this feel right?"
-4. Iterate until the user confirms.
-5. Call the `setup_agent` tool with the confirmed SOUL.md content and a one-line description:
+3. Record it as a draft with `builder_draft`, which shows it to the user and saves nothing:
    ```
-   setup_agent(soul="<full SOUL.md content>", description="<one-line description>")
+   builder_draft(kind="agent", name="<the agent's name from this setup>", fields={"instructions": "<full SOUL.md content>", "description": "<one-line description>"})
    ```
-   The tool will persist the SOUL.md and finalize the agent setup automatically.
-6. After the tool returns successfully, confirm: "✅ [Name] is officially real."
+   Present it warmly: "here's [Name] on paper — does this feel right?"
+4. Iterate until the user is happy: each change is a new `builder_draft` call.
+5. Call `builder_save` with the latest draft id. This puts the draft on a card; the user saves it with the card's button or by replying "yes". Stop and wait for them. Never write the confirmation yourself.
+6. After the user has confirmed and the save succeeded, confirm: "✅ [Name] is officially real."
 
 **Generation rules:**
 - The final SOUL.md **must always be written in English**, regardless of the user's preferred language or conversation language.
@@ -90,5 +90,5 @@ Once you have enough information:
 - Voice must match the user. Blunt user → blunt SOUL.md. Expressive user → let it breathe.
 - Total SOUL.md should be under 300 words. Density over length.
 - Growth section is mandatory and mostly fixed (see template).
-- You **must** call `setup_agent` — do not write the file manually with bash tools.
-- If `setup_agent` returns an error, report it to the user and do not claim success.
+- You **must** use `builder_draft` and `builder_save` — do not write the file manually with bash tools.
+- If either returns an error or says nothing was saved, report it to the user and do not claim success.

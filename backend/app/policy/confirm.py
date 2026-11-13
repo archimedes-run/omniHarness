@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .builder_rules import BUILDER_CONFIRM_FORMS, is_builder_card
 from .lineage import eligible_to_confirm
 from .models import PendingAction
 from .provenance import is_synthetic_turn
@@ -104,6 +105,10 @@ class Recognition:
     verdict: Verdict
     action_id: str | None = None
     reason: str = ""
+    #: The reply addressed a builder card and is not a verdict on it: it is a
+    #: revision of the draft, for the model (Spec 010 FR-009, FR-015), not an
+    #: unrecognised answer to restate.
+    revision: bool = False
 
 
 def _normalise(text: str) -> str:
@@ -158,6 +163,15 @@ def recognise(message, pending: list[PendingAction], runtime_context: dict | Non
         return Recognition(Verdict.UNRECOGNISED, reason="no action is pending")
 
     words = text.replace(named, "").strip()
+    action = next((a for a in pending if a.id == named), None)
+    if action is not None and is_builder_card(action.tool_name):
+        # Spec 010 FR-015: a builder card has its own closed list, matched on
+        # the whole message; anything else revises the draft.
+        if words in BUILDER_CONFIRM_FORMS:
+            return Recognition(Verdict.CONFIRM, action_id=named)
+        if words in _DECLINE_FORMS:
+            return Recognition(Verdict.DECLINE, action_id=named)
+        return Recognition(Verdict.UNRECOGNISED, action_id=named, reason="a revision of the draft, not a yes or a no", revision=True)
     if words in _CONFIRM_FORMS:
         return Recognition(Verdict.CONFIRM, action_id=named)
     if words in _DECLINE_FORMS:

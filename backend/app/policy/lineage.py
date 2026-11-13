@@ -113,6 +113,12 @@ ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
 ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter's origin applies
 
 
+def _builder_trusted() -> frozenset[str]:
+    from .builder_rules import TRUSTED_RESULT_TOOLS
+
+    return TRUSTED_RESULT_TOOLS
+
+
 #: Tool results the harness itself produced, which therefore cannot carry
 #: anyone else's words: write acknowledgements and receipts (user decision
 #: 2026-10-20). Anything not listed (mail, web, files, list cells, stored
@@ -124,7 +130,7 @@ ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter'
 #: arguments and ids, never a stored field (a project is named as the call
 #: named it, not by its stored name: review 5). `ledger_read` is NOT here: it
 #: returns stored text that content may have put there.
-TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"})
+TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply"}) | _builder_trusted()
 
 #: Set on a tool result by the policy middleware at dispatch, and only when
 #: the tool that ran IS the registered built-in object (middleware.

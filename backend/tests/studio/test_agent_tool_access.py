@@ -304,8 +304,9 @@ def test_an_agent_saved_before_006g_keeps_exactly_its_old_tools(gw) -> None:
     _say(gw, tid, "hello", agent="legacy")
     offered = _offered(gw.lead)
     # What main assembles for it: its groups, the pinned MCP server, no
-    # connector (none selected in this chat), plus update_agent.
-    expected = {t.name for t in get_available_tools(groups=["web", "file:read"], app_config=get_app_config(), selected_sources={"local:session-watcher", "local:filesystem"}, user_id=gw.user_id)} | {"update_agent"}
+    # connector (none selected in this chat). No tool that changes agents:
+    # update_agent left every model's list with Spec 010 (FR-024).
+    expected = {t.name for t in get_available_tools(groups=["web", "file:read"], app_config=get_app_config(), selected_sources={"local:session-watcher", "local:filesystem"}, user_id=gw.user_id)}
     assert {"web_search", "web_fetch", "read_file", FS_READ} <= offered, offered
     assert not {GMAIL_FETCH, NOTES_READ, "write_file"} & offered, offered
     assert offered == expected, f"an agent without an allowlist changed tools: +{sorted(offered - expected)} -{sorted(expected - offered)}"
@@ -323,7 +324,8 @@ def test_an_empty_allowlist_leaves_only_the_core_tools(gw) -> None:
     _say(gw, _thread(gw), "hello", agent="quiet")
     offered = _offered(gw.lead)
     assert not (ASSIGNED | UNASSIGNED) & offered, offered
-    assert {"present_files", "ask_clarification", "update_agent"} <= offered
+    assert {"present_files", "ask_clarification"} <= offered
+    assert not {"update_agent", "builder_save", "builder_grant"} & offered, offered
 
 
 def test_assigning_an_unruled_tool_never_makes_it_offered(gw) -> None:

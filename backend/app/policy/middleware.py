@@ -29,6 +29,7 @@ from typing import Any, cast
 
 from langchain.agents.middleware import AgentMiddleware
 
+from .builder_cards import builder_precheck
 from .classify import classify
 from .config import ConfigLoader
 from .disclose import DisclosureLedger
@@ -137,7 +138,7 @@ class PolicyMiddleware(AgentMiddleware):
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
-                return handler(request)
+                return self._mark_trusted_ack(request, handler(request))
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
@@ -173,7 +174,7 @@ class PolicyMiddleware(AgentMiddleware):
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
-                return await handler(request)
+                return self._mark_trusted_ack(request, await handler(request))
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
@@ -724,6 +725,16 @@ class PolicyMiddleware(AgentMiddleware):
                     self._record_refused_plan(request, decision, arguments, invalid, origin, origin_source)
                 return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {invalid}."))
 
+        # Spec 010: a builder proposal is checked before its card (the draft is
+        # this chat's, its base version is current, its target is not the
+        # proposer or its call chain); the card then shows the draft or diff.
+        refused, builder_note = builder_precheck(decision.tool_name, arguments, self._runtime_context(request), self.pending)
+        if refused is not None:
+            logger.info("policy: %s refused before its card: %s", decision.tool_name, refused)
+            return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {refused}"))
+        if builder_note:
+            extra_note = f"{builder_note}\n\n{extra_note}" if extra_note else builder_note
+
         if origin != "user":
             logger.warning("policy: %s was suggested by %s %s (via %s); it can only be confirmed on its card (FR-006)", decision.tool_name, origin, origin_source, origin_via or "-")
 
@@ -937,11 +948,12 @@ class PolicyMiddleware(AgentMiddleware):
         only when, the tool dispatched IS a registered built-in whose results
         are trusted (lineage.TRUSTED_TOOL_RESULTS), by object identity: an
         outside tool with the same name is never marked."""
+        from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
         from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
 
         from .lineage import TRUSTED_ACK_MARKER
 
-        if getattr(request, "tool", None) is not ledger_apply_tool:
+        if not any(getattr(request, "tool", None) is trusted for trusted in (ledger_apply_tool, *BUILDER_TOOLS)):
             return result
         messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
         for message in messages:
