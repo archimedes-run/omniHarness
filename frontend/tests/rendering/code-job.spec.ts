@@ -15,6 +15,10 @@ import { lowContrastText } from "./contrast-probe";
  * - a verified build opens in the artifact panel; an unverified job never
  *   reads as done and offers no app;
  * - a step's status comes from its exit code, never from the worker's words;
+ * - the system's layout check of a built app shows as evidence: "fits" on a
+ *   pass, each failure on a fail (and then no app is offered);
+ * - a job that finishes while the person watches keeps "Open the app" above
+ *   the floating chat bar;
  * - every piece of text reads at WCAG AA in both themes.
  *
  * NO BACKEND: the thread's history, the job route and the stop route are
@@ -118,6 +122,15 @@ const VERIFIED_RESULT = {
     log_tail: "built",
   },
   expected_files: [{ path: "dist/index.html", exists: true, bytes: 471 }],
+  layout: {
+    outcome: "pass",
+    widths: [360, 560, 1280],
+    mode: "enforce",
+    failures: [],
+    warnings: [],
+    error: null,
+    seconds: 6.2,
+  },
   files_changed: {
     added: ["package.json", "src/App.jsx", "src/main.jsx", "vite.config.js"],
     modified: [],
@@ -368,6 +381,9 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(evidence).toContainText(
         "dist/index.html exists (471 bytes)",
       );
+      await expect(card.getByTestId("code-job-layout")).toHaveText(
+        "Layout check: fits 360 / 560 / 1280 px (run by the system)",
+      );
       await expect(evidence).toContainText("4 files changed");
       await expect(evidence).toContainText("npm test: exit 1");
       // Calls that cost more than was reserved for them are shown.
@@ -455,6 +471,130 @@ for (const scheme of ["light", "dark"] as const) {
       if (SHOTS)
         await card.screenshot({
           path: `${SHOTS}/code-job-unverified-${scheme}.png`,
+        });
+    });
+
+    test("a failed layout check lists each failure, is not verified and offers no app", async ({
+      page,
+    }) => {
+      const failures = [
+        "overflows sideways at 360 px by 412 px (sticking out: div.col in div.board)",
+        "chart clipped: svg in div.donut (cut off 12 px on the left) at 360, 560 px",
+      ];
+      const reason =
+        "the layout check failed: overflows sideways at 360 px by 412 px; a chart is cut off by 12 px at 360, 560 px";
+      const result = {
+        ...VERIFIED_RESULT,
+        status: "unverified",
+        reason,
+        layout: {
+          ...VERIFIED_RESULT.layout,
+          outcome: "fail",
+          failures,
+          warnings: [
+            "chart labels may be cut: svg in div.bars (8 px past the right) at 360 px",
+          ],
+        },
+        published: null,
+      };
+      await open(
+        page,
+        scheme,
+        {
+          job: job("unverified", { result, reason }),
+          steps: STEPS,
+          month: { spent_usd: 0.31, cap_usd: 20 },
+        },
+        true,
+      );
+      const card = page.getByTestId("code-job-card");
+      await expect(card.getByTestId("code-job-status")).toHaveText(
+        "Unverified",
+      );
+      const layout = card.getByTestId("code-job-layout");
+      await expect(layout).toHaveAttribute("data-outcome", "fail");
+      await expect(layout).toContainText(
+        "Layout check failed at 360 / 560 / 1280 px (run by the system)",
+      );
+      await expect(
+        card.getByTestId("code-job-layout-failures").getByRole("listitem"),
+      ).toHaveText(failures);
+      await expect(card.getByTestId("code-job-layout-warnings")).toContainText(
+        "Warning (not counted): chart labels may be cut",
+      );
+      await expect(layout.getByLabel("failed", { exact: true })).toBeVisible();
+      await expect(card.getByTestId("code-job-open-app")).toHaveCount(0);
+      await aa(page);
+      if (SHOTS)
+        await card.screenshot({
+          path: `${SHOTS}/code-job-layout-failed-${scheme}.png`,
+        });
+    });
+
+    test("a job that finishes while watched keeps Open the app above the chat bar", async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1280, height: 560 });
+      const many = Array.from({ length: 40 }, (_, i) => ({
+        seq: 100 + i,
+        at: iso(-29 + i / 2),
+        kind: "command",
+        command: `npm run step-${i}`,
+        exit_code: 0,
+        status: "ok",
+        output: "ok",
+      }));
+      const month = { spent_usd: 0.31, cap_usd: 20 };
+      let current: unknown = {
+        job: job("running"),
+        steps: [...STEPS, ...many],
+        month,
+      };
+      await open(page, scheme, current, false);
+      await page.route("**/api/threads/*/code-jobs/by-call/cj1**", (route) => {
+        const after = Number(
+          new URL(route.request().url()).searchParams.get("after") ?? "0",
+        );
+        const body = current as { steps: { seq: number }[] };
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...body,
+            steps: body.steps.filter((s) => s.seq > after),
+          }),
+        });
+      });
+      const card = page.getByTestId("code-job-card");
+      await expect(card.getByTestId("code-job-steps")).toBeVisible();
+      // The person folds the steps and scrolls up a little while it runs.
+      await card.getByTestId("code-job-steps-toggle").click();
+      await page.waitForTimeout(600);
+      const box = (await card.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + 20);
+      await page.mouse.wheel(0, -60);
+      await page.waitForTimeout(400);
+      current = {
+        job: job("verified", { result: VERIFIED_RESULT }),
+        steps: [...STEPS, ...many],
+        month,
+      };
+      const button = card.getByTestId("code-job-open-app");
+      await expect(button).toBeVisible();
+      // Visible means clear of the floating chat bar, with no scrolling by the person.
+      await expect
+        .poll(
+          async () => {
+            const b = await button.boundingBox();
+            const bar = await page.getByTestId("chat-bar").boundingBox();
+            return b && bar ? Math.round(bar.y - (b.y + b.height)) : null;
+          },
+          { timeout: 5000 },
+        )
+        .toBeGreaterThanOrEqual(16);
+      if (SHOTS)
+        await page.screenshot({
+          path: `${SHOTS}/code-job-finished-in-view-${scheme}.png`,
         });
     });
   });

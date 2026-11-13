@@ -38,8 +38,29 @@ def sleep(seconds: float) -> dict:
     return {"kind": "sleep", "delay": seconds}
 
 
+def layout_page(width: int, **fields) -> dict:
+    """One width of the layout probe's result (layout_probe.py), passing unless changed."""
+    return {"width": width, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "overflow_px": 0, "client_width": width, "offenders": [], "rendered": True, "svgs": [], **fields}
+
+
+def layout_result(**per_width: dict) -> str:
+    """The probe's result file: `w360={...}` changes the page at 360 px."""
+    return json.dumps({"v": 1, "widths": [360, 560, 1280], "pages": [layout_page(w, **per_width.get(f"w{w}", {})) for w in (360, 560, 1280)]})
+
+
 class FakeSandbox:
-    def __init__(self, scenario: list[dict], *, container: str = "omni-harness-sandbox-test0001", verify_exit: int | None = 0, verify_log: str = "built", kill_works: bool = True, stderr: str = "") -> None:
+    def __init__(
+        self,
+        scenario: list[dict],
+        *,
+        container: str = "omni-harness-sandbox-test0001",
+        verify_exit: int | None = 0,
+        verify_log: str = "built",
+        kill_works: bool = True,
+        stderr: str = "",
+        layout: str | None = None,
+        layout_exit: int | None = 0,
+    ) -> None:
         self.container = container
         self.scenario = scenario
         self.verify_exit = verify_exit
@@ -58,7 +79,11 @@ class FakeSandbox:
         self.before_exit = None
         self.verify_runs = 0
         self.verify_env = ""
-        #: "kill", "verify", "cleanup", "publish", in the order they ran.
+        #: The layout probe's result file (empty: it leaves none) and exit code.
+        self.layout = layout_result() if layout is None else layout
+        self.layout_exit = layout_exit
+        self.layout_runs: list[str] = []
+        #: "kill", "verify", "cleanup", "layout", "publish", in the order they ran.
         self.order: list[str] = []
 
     # -- filesystem --------------------------------------------------------------
@@ -99,6 +124,18 @@ class FakeSandbox:
             if self.kill_works:
                 self.killed.set()
             return 0, "__killed__"
+        if "layout_probe.py" in command and "sha256sum" in command:
+            directory = shlex.split(command.split(";", 1)[0])[0].split("=", 1)[1].rsplit("/", 1)[0]
+            self.layout_runs.append(command)
+            self.order.append("layout")
+            if self.layout:
+                self._put(f"{directory}/result.json", self.layout)
+            return self.layout_exit, ""
+        if "__made__" in command:
+            return 0, "__made__"
+        if "__page__" in command:
+            path = shlex.split(command)[2]
+            return 0, "__page__" if self.read_text(path) else "__none__"
         if "timeout -k 5" in command and "verify.log" in command:
             log = re.search(r"> (\S+verify\.log)", command).group(1).strip("'")
             self._put(log, self.verify_log)

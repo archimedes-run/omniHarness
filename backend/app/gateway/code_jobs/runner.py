@@ -20,7 +20,10 @@ Lifecycle of one job:
      the sandbox with its exit code observed through the sandbox API, the
      expected files checked, the files changed listed. No evidence: never
      "verified".
-  8. A verified web build is copied to outputs with a static-site manifest,
+  8. A web build that passed is loaded in a headless browser in the sandbox
+     at three widths (layout.py): sideways overflow, a clipped chart or a
+     blank page makes it not verified (config: code_jobs.layout_check).
+  9. A verified web build is copied to outputs with a static-site manifest,
      so the artifact panel shows it.
 """
 
@@ -41,6 +44,7 @@ from pathlib import Path
 from omniharness.code_jobs import CodeJobBrief, CodeJobOutcome, rules_text
 from omniharness.code_jobs.controller import RULES_MARKER
 
+from . import layout as layout_mod
 from . import tokens
 from .events import Tally, permission_prompt, to_step
 from .relay import Relay
@@ -85,6 +89,8 @@ class Settings:
     wall_seconds: int
     verify_timeout_seconds: int
     model_label: str = ""
+    #: enforce | warn | off (code_jobs.layout_check).
+    layout_check: str = "enforce"
 
 
 @dataclass
@@ -126,13 +132,18 @@ def render_prompt(brief: CodeJobBrief) -> str:
         lines += ["", "After you stop, the system will " + " and ".join(checks) + ". Make sure that passes before you finish."]
     if brief.publish_dir:
         lines += [f"The folder {brief.publish_dir}/ will be shown to the person as a static site: it must work when opened from any folder (relative asset paths)."]
+        lines += [
+            "The system will then load it in a headless browser 360, 560 and 1280 px wide and check that the page never scrolls sideways, "
+            "no chart is cut off by its own box, and something renders with no uncaught error. A failure means the job is not verified."
+        ]
     lines += ["", "Follow the workspace rules (AGENTS.md). Work non-interactively. Do not start servers that never exit."]
     return "\n".join(lines)
 
 
-def decide_status(*, stopped: bool, blocked: str | None, worker_error: str | None, verify: dict | None, expected: list[dict]) -> tuple[str, str | None]:
+def decide_status(*, stopped: bool, blocked: str | None, worker_error: str | None, verify: dict | None, expected: list[dict], layout: dict | None = None) -> tuple[str, str | None]:
     """The job's status from evidence alone. `verified` needs a verification
-    command the gateway ran and saw exit 0, and every expected file present."""
+    command the gateway ran and saw exit 0, every expected file present and,
+    for a web app, no failed layout check (unless config says `warn`)."""
     if stopped:
         return "stopped", "stopped by the person"
     if blocked:
@@ -145,6 +156,8 @@ def decide_status(*, stopped: bool, blocked: str | None, worker_error: str | Non
             return "failed", f"`{verify['command']}` exited {verify.get('exit_code')}"
         if missing:
             return "failed", "missing: " + ", ".join(missing)
+        if layout_mod.counts_against(layout):
+            return "unverified", layout_mod.reason(layout)
         return "verified", None
     if missing:
         return "failed", "missing: " + ", ".join(missing)
@@ -353,6 +366,7 @@ class CodeJobManager:
         expected: list[dict] = []
         changed: dict = {"added": [], "modified": [], "deleted": [], "count": 0}
         published: dict | None = None
+        layout: dict | None = None
         if not stopped:
             changed = await self._beating(job_id, self._files_changed, ops, project, d)
             Relay(self._relay_dir, job_id).files(changed["count"])
@@ -366,6 +380,11 @@ class CodeJobManager:
                 expected.append({"path": rel, "exists": bool(size), "bytes": size or 0})
                 self.store.add_step(job_id, "check", {"path": rel, "exists": bool(size), "bytes": size or 0})
         status, why = decide_status(stopped=stopped, blocked=blocked, worker_error=worker_error, verify=verify, expected=expected)
+        if status == "verified" and brief.publish_dir and settings.layout_check in ("enforce", "warn"):
+            layout = await self._layout(running, brief, project, settings.layout_check)
+            if layout is not None:
+                self.store.add_step(job_id, "layout", layout)
+                status, why = decide_status(stopped=stopped, blocked=blocked, worker_error=worker_error, verify=verify, expected=expected, layout=layout)
         if status == "verified" and brief.publish_dir:
             published = await self._beating(job_id, self._publish, ops, brief, project)
             if published:
@@ -377,6 +396,7 @@ class CodeJobManager:
             "reason": why,
             "verify": verify,
             "expected_files": expected,
+            "layout": layout,
             "files_changed": changed,
             "worker": {
                 "exit_code": exit_code,
@@ -480,6 +500,39 @@ class CodeJobManager:
 
         timed_out = code is None or code in (124, 137)
         return {"command": command, "exit_code": code, "timed_out": timed_out, "limit_s": limit, "seconds": round(time.monotonic() - t0, 1), "log_tail": _shown(text[-3000:], 3000)}
+
+    async def _layout(self, running: Running, brief: CodeJobBrief, project: str, mode: str) -> dict | None:
+        """The layout check (layout.py) on the built site, before it is
+        published: None when there is no index.html to load."""
+        ops, job_id = running.ops, running.job_id
+        root = f"{project}/{brief.publish_dir}"
+        _, out = await asyncio.to_thread(ops.sh, f"test -s {_q(root + '/index.html')} && echo __page__ || echo __none__", timeout=15)
+        if "__page__" not in out:
+            return None
+        # Whatever the build left running goes before the page is served.
+        await asyncio.to_thread(self._cleanup, running)
+        widths = " / ".join(str(w) for w in layout_mod.WIDTHS)
+        self.store.add_step(job_id, "phase", {"phase": "layout", "text": f"The system loads the app in a headless browser at {widths} px"})
+        # Short: the browser's socket path under it must stay under 108 bytes.
+        directory = f"/tmp/omni-layout-{uuid.uuid4().hex[:12]}"
+        t0 = time.monotonic()
+        code: int | None = None
+        raw: str | None = None
+        try:
+            _, made = await asyncio.to_thread(ops.sh, f"mkdir -m 700 {_q(directory)} && echo __made__", timeout=15)
+            if "__made__" in made:
+                await asyncio.to_thread(ops.write, f"{directory}/layout_probe.py", layout_mod.SCRIPT)
+                cmd = layout_mod.command(directory, root, job_id, 'PATH="${PATH}" LANG="${LANG}"')
+                code, _ = await self._beating(job_id, lambda: ops.sh(cmd, timeout=layout_mod.TIMEOUT_SECONDS + 20))
+                raw = await asyncio.to_thread(ops.read_text, f"{directory}/result.json")
+        except Exception:  # noqa: BLE001 - the sandbox API failed: the check could not run
+            logger.exception("code job %s: layout check failed to run", job_id)
+        finally:
+            try:
+                await asyncio.to_thread(ops.sh, f"rm -rf {_q(directory)}", timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
+        return layout_mod.parse(raw, exit_code=code, mode=mode, seconds=time.monotonic() - t0)
 
     @staticmethod
     def _size(ops: SandboxOps, path: str) -> int | None:
@@ -637,6 +690,8 @@ class CodeJobManager:
             lines.append("- No verification command was run.")
         for e in r.get("expected_files") or []:
             lines.append(f"- {e['path']}: {'exists (' + str(e['bytes']) + ' bytes)' if e.get('exists') else 'MISSING or empty'}.")
+        if r.get("layout"):
+            lines += layout_mod.report_lines(r["layout"], lambda label, text: _fenced(label, text, nonce))
         changed = r.get("files_changed") or {}
         names = [*(changed.get("added") or []), *(changed.get("modified") or [])]
         lines.append(f"- Files changed: {changed.get('count', 0)}" + (" (names chosen by the worker, below)" if names else "") + ".")
@@ -666,6 +721,11 @@ class CodeJobManager:
             lines.append("Report this as verified and cite the evidence above.")
         else:
             lines.append(f"Do NOT say done, built or passed. Tell the person the result is {status}, and what was missing or failed.")
+            if layout_mod.counts_against(r.get("layout")):
+                lines.append(
+                    "The app was not published. To fix it, offer a follow-up coding job on the same project_dir, same verify_command and publish_dir, "
+                    "with the goal: fix these layout failures without changing behaviour, and the failures above quoted in its inputs as data."
+                )
         return "\n".join(lines)
 
 

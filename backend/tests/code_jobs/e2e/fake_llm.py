@@ -16,6 +16,32 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TIMEOUT = 600000
+W = "/mnt/user-data/workspace"
+#: Web apps for the layout check: one that fits, and one per failure it must catch.
+FIT_HTML = (
+    '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>'
+    "body{margin:0;font-family:sans-serif}.board{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;padding:8px}"
+    ".col{background:#eee;min-height:80px}.donut svg{width:100%;max-width:240px;height:auto}</style></head><body><h1>Board</h1>"
+    '<div class="board"><div class="col">To do</div><div class="col">Doing</div><div class="col">Done</div></div>'
+    '<div class="donut"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="45" fill="none" stroke="#36c" stroke-width="20"/>'
+    '<text x="60" y="65" text-anchor="middle">42%</text></svg></div></body></html>'
+)
+OVERFLOW_HTML = (
+    "<!doctype html><html><head><style>body{margin:0}.board{display:flex;gap:8px}.col{flex:0 0 300px;background:#eee;min-height:80px}</style></head>"
+    '<body><h1>Board</h1><div class="board"><div class="col">To do</div><div class="col">Doing</div><div class="col">Done</div></div></body></html>'
+)
+CLIPPED_HTML = (
+    '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}</style></head>'
+    '<body><p>Stats</p><div class="donut"><svg width="100" height="100" viewBox="0 0 100 100">'
+    '<circle cx="50" cy="50" r="50" fill="none" stroke="#36c" stroke-width="24"/></svg></div></body></html>'
+)
+BLANK_HTML = '<!doctype html><html><body><div id="root"></div><script>throw new Error("boom: cannot read properties of undefined")</script></body></html>'
+
+
+def app(project: str, html: str) -> list:
+    return [{"tool": "write", "args": {"filePath": f"{W}/{project}/dist/index.html", "content": html}}, {"text": "Built the app; it is responsive."}]
+
+
 SCRIPTS = {
     "egress": [
         {"tool": "bash", "args": {"command": "id -u", "description": "who runs the worker's commands"}},
@@ -47,6 +73,10 @@ SCRIPTS = {
         {"tool": "bash", "args": {"command": "sleep 1; pgrep -fc '[s]leep 999|[s]leep 888|[t]muxanything 889'", "description": "the leftovers are alive while the worker runs"}},
         {"text": "All good, verified."},
     ],
+    "layout_fit": app("layout-fit", FIT_HTML),
+    "layout_overflow": app("layout-overflow", OVERFLOW_HTML),
+    "layout_clipped": app("layout-clipped", CLIPPED_HTML),
+    "layout_blank": app("layout-blank", BLANK_HTML),
     "hold": [
         {"tool": "bash", "args": {"command": "sleep 25", "description": "hold", "timeout": TIMEOUT}},
         {"text": "held"},

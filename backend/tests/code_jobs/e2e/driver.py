@@ -16,7 +16,12 @@ Checks, each printed as `ok` or `FAIL` (exit 1 if any fails):
     E2E_SABOTAGE=nocleanup skips the cleanup after the system's check);
   * token scope: the job token works only from its own sandbox (another
     sandbox: 403; no token: 401; the proxy is unreachable off the sandbox
-    network).
+    network);
+  * the layout check, in the image's own browser: an app that fits is
+    verified and published; one that overflows sideways, one with a clipped
+    chart and a blank page are not; nothing of the check is left running
+    (sabotage: E2E_SABOTAGE=nooverflow, noclip or norender turns that part
+    of the check off).
 """
 
 from __future__ import annotations
@@ -140,6 +145,21 @@ def main() -> int:
         manager._kill = lambda running: None  # type: ignore[method-assign]
     if SABOTAGE == "nocleanup":
         manager._cleanup = lambda running: None  # type: ignore[method-assign]
+    if SABOTAGE in ("nooverflow", "noclip", "norender"):
+        # Sabotage: one part of the layout probe turned off (the gateway
+        # writes and checksums the sabotaged script, as it would the real one).
+        import hashlib
+
+        from app.gateway.code_jobs import layout as layout_mod
+
+        cut = {
+            "nooverflow": ("const overflow = Math.max(0, de.scrollWidth - cw);", "const overflow = 0;"),
+            "noclip": ("if (found) svgs.push(found);", ""),
+            "norender": ("rendered: !!body && (text > 0 || visuals > 0)", "rendered: true"),
+        }[SABOTAGE]
+        assert cut[0] in layout_mod.SCRIPT, cut[0]
+        layout_mod.SCRIPT = layout_mod.SCRIPT.replace(cut[0], cut[1])
+        layout_mod.DIGEST = hashlib.sha256(layout_mod.SCRIPT.encode()).hexdigest()
     a = names["a"]
 
     # -- the sandbox itself ---------------------------------------------------------------------
@@ -255,6 +275,31 @@ def main() -> int:
         check("the proxy is unreachable off the sandbox network", "unreachable", off)
         await manager.stop(store.by_call("a", "hold").id)
         await hold
+
+        # -- the layout check, in the image's own browser -------------------------------------
+        def web(name: str) -> CodeJobBrief:
+            return CodeJobBrief(goal=f"[scenario:layout_{name}] build the app", project_dir=f"layout-{name}", verify_command="test -s dist/index.html", expect_files=["dist/index.html"], publish_dir="dist")
+
+        laid = {}
+        for name in ("fit", "overflow", "clipped", "blank"):
+            outcome = await manager.run(thread_id="a", user_id="u", tool_call_id=f"layout-{name}", brief=web(name))
+            job = store.get(outcome.job_id)
+            laid[name] = (job.status, (job.result or {}).get("layout") or {}, (job.result or {}).get("published"))
+            print(f"      layout {name}: {job.status} | {laid[name][1].get('outcome')} {laid[name][1].get('failures')} {laid[name][1].get('error') or ''} {laid[name][1].get('seconds')} s", flush=True)
+        status, fit, published = laid["fit"]
+        check("an app that fits at 360 / 560 / 1280 px passes the layout check", ("verified", "pass", []), (status, fit.get("outcome"), fit.get("failures")))
+        check("the app that fits is published", True, bool(published) and (work / "a" / "outputs" / "layout-fit" / "index.html").is_file())
+        status, over, published = laid["overflow"]
+        check("an app that overflows sideways is not verified", ("unverified", "fail"), (status, over.get("outcome")))
+        check("the overflow is reported with its width and amount", True, any(f.startswith("overflows sideways at 360 px by ") for f in over.get("failures", [])))
+        check("the app that overflows is not published", (None, False), (published, (work / "a" / "outputs" / "layout-overflow").exists()))
+        status, clipped, _ = laid["clipped"]
+        check("an app with a clipped chart is not verified", ("unverified", True), (status, any(f.startswith("chart clipped: svg in div.donut") for f in clipped.get("failures", []))))
+        status, blank, _ = laid["blank"]
+        check("a blank page is not verified", ("unverified", True), (status, "rendered nothing at 360, 560, 1280 px" in blank.get("failures", [])))
+        check("its uncaught error is reported", True, any(f.startswith("uncaught error on load") and "boom" in f for f in blank.get("failures", [])))
+        check("nothing of the layout check is left running", "0", dexec(a, "pgrep -fc '[l]ayout_probe|[o]pt/browser/chrome'").strip() or "0")
+        check("the layout check leaves no files behind", "", dexec(a, "ls -d /tmp/omni-layout-* 2>/dev/null").strip())
 
         # -- Stop kills the process group ---------------------------------------------------------
         stop_task = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="stop", brief=CodeJobBrief(goal="[scenario:stop] long work", project_dir="e2e")))

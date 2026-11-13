@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
-from .fake_sandbox import FakeSandbox, bash, error, sleep, text, write
+from .fake_sandbox import FakeSandbox, bash, error, layout_result, sleep, text, write
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-key-code-jobs-composition-min-32")
 EXAMPLE = Path(__file__).resolve().parents[3] / "config.example.yaml"
@@ -429,6 +429,69 @@ def test_processes_the_systems_check_started_are_cleaned_up_after_it(gateway):
     assert order[0] == "kill" and "verify" in order and "publish" in order
     assert order[-1] == "cleanup", f"nothing cleaned up after the check and the copy: {order}"
     assert order.index("cleanup") > order.index("verify")
+
+
+def test_a_built_app_passes_the_layout_check_before_it_is_published(gateway):
+    SANDBOX["current"] = fake = FakeSandbox(GOOD, verify_exit=0)
+    thread_id = _thread(gateway)
+    report = _tool_result(_ask(gateway, thread_id, BRIEF))
+    assert "STATUS VERIFIED" in report and "run by the system): the page fits at every width." in report
+    payload = _job(gateway, thread_id)
+    assert payload["job"]["result"]["layout"]["outcome"] == "pass" and payload["job"]["result"]["published"]
+    assert any(s["kind"] == "layout" and s["outcome"] == "pass" for s in payload["steps"])
+    # After the build and its leftovers, before the copy; the probe gets the built folder.
+    order = fake.order
+    assert order.index("verify") < order.index("cleanup") < order.index("layout") < order.index("publish"), order
+    assert f"{P}/dist" in fake.layout_runs[0] and "env -i " in fake.layout_runs[0]
+
+
+def test_an_app_that_overflows_is_not_verified_and_not_published(gateway):
+    overflow = layout_result(w360={"overflow_px": 412, "offenders": ["div.col in div.board"]}, w560={"svgs": [{"where": "svg in div.donut", "side": "left", "px": 12, "kind": "shape"}]})
+    SANDBOX["current"] = fake = FakeSandbox(GOOD, verify_exit=0, layout=overflow)
+    thread_id = _thread(gateway)
+    report = _tool_result(_ask(gateway, thread_id, BRIEF))
+    assert "STATUS UNVERIFIED" in report and "FAILED, counted" in report
+    assert "overflows sideways at 360 px by 412 px (sticking out: div.col in div.board)" in report
+    assert "chart clipped: svg in div.donut (cut off 12 px on the left) at 560 px" in report
+    assert "fix these layout failures without changing behaviour" in report
+    job = _job(gateway, thread_id)["job"]
+    assert job["status"] == "unverified" and job["reason"].startswith("the layout check failed: overflows sideways at 360 px by 412 px")
+    assert job["result"]["published"] is None and "publish" not in fake.order
+    assert fake.read_text("/mnt/user-data/outputs/counter-app/index.html") is None
+
+
+def test_layout_check_warn_shows_the_failure_and_still_publishes_and_off_skips_it(gateway, monkeypatch):
+    from omniharness.config import get_app_config
+
+    monkeypatch.setattr(get_app_config().code_jobs, "layout_check", "warn")
+    SANDBOX["current"] = FakeSandbox(GOOD, verify_exit=0, layout=layout_result(w360={"overflow_px": 40}))
+    thread_id = _thread(gateway)
+    report = _tool_result(_ask(gateway, thread_id, BRIEF))
+    job = _job(gateway, thread_id)["job"]
+    assert job["status"] == "verified" and job["result"]["published"] and job["result"]["layout"]["mode"] == "warn"
+    assert "NOT counted (config: code_jobs.layout_check = warn)" in report
+
+    monkeypatch.setattr(get_app_config().code_jobs, "layout_check", "off")
+    SANDBOX["current"] = fake = FakeSandbox(GOOD, verify_exit=0, layout=layout_result(w360={"overflow_px": 40}))
+    _ask(gateway, thread_id, BRIEF, call_id="cj2")
+    second = gateway.client.app.state.code_job_store.by_call(thread_id, "cj2")
+    assert second.status == "verified" and second.result["layout"] is None and fake.layout_runs == []
+
+
+def test_a_layout_check_that_cannot_run_is_shown_and_not_counted(gateway):
+    SANDBOX["current"] = FakeSandbox(GOOD, verify_exit=0, layout="")
+    thread_id = _thread(gateway)
+    report = _tool_result(_ask(gateway, thread_id, BRIEF))
+    job = _job(gateway, thread_id)["job"]
+    assert job["status"] == "verified" and job["result"]["layout"]["outcome"] == "error"
+    assert "could not run (the check left no readable result); not counted either way." in report
+
+
+def test_no_layout_check_without_a_web_app_to_publish(gateway):
+    SANDBOX["current"] = fake = FakeSandbox(GOOD, verify_exit=0, layout=layout_result(w360={"overflow_px": 40}))
+    thread_id = _thread(gateway)
+    _ask(gateway, thread_id, {k: v for k, v in BRIEF.items() if k != "publish_dir"})
+    assert _job(gateway, thread_id)["job"]["status"] == "verified" and fake.layout_runs == []
 
 
 def test_publishing_never_replaces_a_folder_of_the_persons(gateway):
