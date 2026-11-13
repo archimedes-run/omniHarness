@@ -30,22 +30,23 @@ from .pending import PendingStore
 logger = logging.getLogger(__name__)
 
 
-def builder_precheck(tool_name: str, arguments: dict, context: dict | None, store: PendingStore | None) -> tuple[str | None, str]:
-    """(why it is refused, or None; the text the card adds). Not a builder
-    proposal: (None, "")."""
+def builder_precheck(tool_name: str, arguments: dict, context: dict | None, store: PendingStore | None) -> tuple[str | None, str, dict]:
+    """(why it is refused, or None; the text the card adds; the arguments the
+    card records, which pin the exact draft it shows). Not a builder
+    proposal: (None, "", the arguments unchanged)."""
     if tool_name not in PROPOSING_TOOLS:
-        return None, ""
+        return None, "", arguments
     from omniharness.runtime.builder.controller import get_builder_controller
 
     controller = get_builder_controller()
     precheck = getattr(controller, "precheck", None)
     if not callable(precheck):
-        return "the builder is not available here, so nothing can be saved.", ""
-    refused, note, replaces = precheck(tool_name, dict(arguments or {}), dict(context or {}))
+        return "the builder is not available here, so nothing can be saved.", "", arguments
+    refused, note, replaces, pinned = precheck(tool_name, dict(arguments or {}), dict(context or {}))
     if refused is None and replaces and store is not None:
         ctx = context or {}
-        refuse_open_builder_cards(store, ctx.get("thread_id"), ctx.get("user_id"), keep_draft=str(arguments.get("draft_id") or ""), reason="A newer draft replaced this one, so it was not saved.")
-    return refused, note
+        refuse_open_builder_cards(store, ctx.get("thread_id"), ctx.get("user_id"), keep_draft=str(pinned.get("draft_id") or ""), reason="A newer draft replaced this one, so it was not saved.")
+    return refused, note, pinned
 
 
 def refuse_open_builder_cards(store: PendingStore, thread_id: str | None, owner_id: str | None, *, reason: str, keep_draft: str = "") -> list[PendingAction]:

@@ -41,10 +41,11 @@ class BuilderController(Protocol):
         """Undo `version` (the current one): the version before it, as a new version (confirmed only)."""
         ...
 
-    def precheck(self, tool_name: str, arguments: dict, context: dict) -> tuple[str | None, str, bool]:
+    def precheck(self, tool_name: str, arguments: dict, context: dict) -> tuple[str | None, str, bool, dict]:
         """Before a save, grant or undo card is shown (app/policy/builder_cards):
         (why it is refused or None, the card's text, whether it replaces the
-        chat's other open builder cards)."""
+        chat's other open builder cards, the arguments the card records: a
+        save names its draft, the chat's current one when the call did not)."""
         ...
 
 

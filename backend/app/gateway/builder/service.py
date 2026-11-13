@@ -413,26 +413,32 @@ class GatewayBuilderController:
 
     # -- before the card -----------------------------------------------------------
 
-    def precheck(self, tool_name: str, arguments: dict, context: dict) -> tuple[str | None, str, bool]:
+    def precheck(self, tool_name: str, arguments: dict, context: dict) -> tuple[str | None, str, bool, dict]:
         try:
             if tool_name == "builder_save":
-                draft, live, version = self._ready_draft(context, str(arguments.get("draft_id") or ""))
-                return None, render_draft(draft, live=live, live_version=version), True
+                draft_id = str(arguments.get("draft_id") or "")
+                if not draft_id:
+                    # The chat's current draft, pinned on the card: the card
+                    # saves exactly the draft it shows.
+                    user_id, thread_id = self._guard(context)
+                    draft_id = str((drafts.active(user_id, thread_id) or {}).get("draft_id") or "")
+                draft, live, version = self._ready_draft(context, draft_id)
+                return None, render_draft(draft, live=live, live_version=version), True, {**arguments, "draft_id": draft_id}
             if tool_name == "builder_grant":
-                return None, self._grant_plan(context, arguments)[0], False
+                return None, self._grant_plan(context, arguments)[0], False, arguments
             if tool_name == "builder_undo":
-                return None, self._undo_plan(context, arguments)["text"], False
-            return f"{tool_name} is not a builder proposal.", "", False
+                return None, self._undo_plan(context, arguments)["text"], False, arguments
+            return f"{tool_name} is not a builder proposal.", "", False, arguments
         except BuilderRefused as exc:
-            return str(exc), "", False
+            return str(exc), "", False, arguments
 
     def _ready_draft(self, context: dict, draft_id: str) -> tuple[dict, dict | None, int]:
         """The draft, if it may be saved now: this chat's, the active one, not
         dropped, an allowed target, valid, and based on the current version."""
         user_id, thread_id = self._guard(context)
-        draft = drafts.get_draft(user_id, thread_id, draft_id)
+        draft = drafts.get_draft(user_id, thread_id, draft_id) if draft_id else None
         if draft is None:
-            raise BuilderRefused(f"there is no draft {draft_id!r} in this chat.")
+            raise BuilderRefused(f"there is no draft {draft_id!r} in this chat." if draft_id else "this chat has no draft to save; draft it with builder_draft first.")
         current = drafts.active(user_id, thread_id)
         if draft.get("dropped") or current is None or current.get("draft_id") != draft_id:
             raise BuilderRefused("that draft was dropped or replaced by a newer one; save the current draft instead.")

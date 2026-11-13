@@ -728,7 +728,7 @@ class PolicyMiddleware(AgentMiddleware):
         # Spec 010: a builder proposal is checked before its card (the draft is
         # this chat's, its base version is current, its target is not the
         # proposer or its call chain); the card then shows the draft or diff.
-        refused, builder_note = builder_precheck(decision.tool_name, arguments, self._runtime_context(request), self.pending)
+        refused, builder_note, arguments = builder_precheck(decision.tool_name, arguments, self._runtime_context(request), self.pending)
         if refused is not None:
             logger.info("policy: %s refused before its card: %s", decision.tool_name, refused)
             return self._mark_trusted_ack(request, self._as_tool_result(request, f"Nothing was proposed or changed: {refused}"))

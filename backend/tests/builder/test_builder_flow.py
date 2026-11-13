@@ -5,7 +5,7 @@ Assert on state, not status: every save test reads the store back.
 
 from __future__ import annotations
 
-from conftest import agent_history, agent_state, call, cards, history_records, make_agent, new_thread, offered, say, script
+from builder_helpers import agent_history, agent_state, call, cards, history_records, make_agent, new_thread, offered, say, script
 
 DRAFT_AGENT = {"kind": "agent", "name": "test-010-inbox", "fields": {"display_name": "Inbox triage", "description": "Triages my inbox", "instructions": "You triage the inbox every morning."}, "guessed": ["description"]}
 
@@ -207,3 +207,14 @@ def test_undo_from_chat_restores_as_a_new_version(gw) -> None:
     snapshot, version = agent_state(gw, "test-010-inbox")
     assert (snapshot, version) == (None, 2), (snapshot, version)
     assert [v.source for v in agent_history(gw, "test-010-inbox")] == ["chat", "undo"]
+
+
+def test_a_save_without_a_draft_id_pins_the_chats_current_draft(gw) -> None:
+    thread_id = new_thread(gw)
+    script(gw, [call("builder_draft", DRAFT_AGENT, "c1")], [call("builder_save", {}, "c2")], "Draft.")
+    say(gw, thread_id, "make me an agent")
+    [card] = cards(gw, "builder_save")
+    assert card["arguments_display"]["draft_id"] == "d-test-1", card["arguments_display"]
+    script(gw, "Saved.")
+    say(gw, thread_id, "yes")
+    assert agent_state(gw, "test-010-inbox")[1] == 1

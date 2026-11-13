@@ -102,16 +102,17 @@ def builder_diff_tool(draft_id: str, runtime: ToolRuntime[ContextT, ThreadState]
 @tool(
     "builder_save",
     description=(
-        "Save a draft from builder_draft (create, or change, as a new version). This only PROPOSES it: the user confirms "
-        "on the card, or by replying yes. Then stop and wait. Never write the confirmation yourself. A save is refused if "
-        "the live config changed since the draft: then draft it again."
+        "Save a draft from builder_draft (create, or change, as a new version). `draft_id`: the draft to save; omit it "
+        "for this chat's current draft. This only PROPOSES it: the user confirms on the card, or by replying yes. Then "
+        "stop and wait. Never write the confirmation yourself. A save is refused if the live config changed since the "
+        "draft: then draft it again."
     ),
 )
-def builder_save_tool(draft_id: str, runtime: ToolRuntime[ContextT, ThreadState]) -> str:
+def builder_save_tool(runtime: ToolRuntime[ContextT, ThreadState], draft_id: str | None = None) -> str:
     controller = get_builder_controller()
     if controller is None:
         return _UNAVAILABLE
-    return controller.save(_context(runtime), draft_id=draft_id)
+    return controller.save(_context(runtime), draft_id=str(draft_id or ""))
 
 
 @tool(
