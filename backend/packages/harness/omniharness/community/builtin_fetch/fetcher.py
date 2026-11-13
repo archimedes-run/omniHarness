@@ -50,6 +50,11 @@ PDF_TYPES = frozenset({"application/pdf", "application/x-pdf"})
 SNIFF_TYPES = frozenset({"application/octet-stream", "binary/octet-stream"})
 PDF_MAGIC = b"%PDF-"
 PDF_CONTENT_TYPE = "application/pdf"
+#: The egress proxy's own body cap (plain http only): 1 MB above the PDF cap,
+#: so the gateway's streaming cap always fires first and a too-large PDF is
+#: reported as one. A proxy refusal on a larger Content-Length comes before the
+#: real headers, so its content type is unknown: ResponseTooLarge, final.
+PROXY_MAX_BODY_MB = PDF_MAX_BYTES // (1024 * 1024) + 1
 
 #: Content the extractor can turn into text. Anything else (images, archives)
 #: is a failure, so a configured fallback can try it.
@@ -119,6 +124,10 @@ def _decoder(encoding: str):
     if encoding == "deflate":
         return zlib.decompressobj()
     raise FetchFailed(f"unsupported content encoding {encoding!r}")
+
+
+class ResponseTooLarge(FetchFailed):
+    """The egress proxy refused a body over its cap. Final: never retried elsewhere."""
 
 
 class NotPdf(Exception):
@@ -263,7 +272,7 @@ async def _fetch(
                     current = urljoin(target.url, location.strip())
                     continue
                 if "ERR_TOO_BIG" in response.headers.get("x-squid-error", ""):
-                    raise FetchFailed(f"the response is larger than the egress proxy allows ({PDF_MAX_BYTES // (1024 * 1024)} MB)")
+                    raise ResponseTooLarge(f"the response is larger than the egress proxy allows ({PROXY_MAX_BODY_MB} MB)")
                 if response.status_code >= 400:
                     raise FetchFailed(f"HTTP {response.status_code} from {target.host}")
                 media, charset = _media_type(response.headers.get("content-type", "text/html"))

@@ -4,8 +4,13 @@
 (``pdf_worker``) through the same bounded runner as HTML extraction: its own
 process group, a minimal environment, a CPU and memory limit, a hard deadline
 (what is left of the 30 s PDF budget), and the whole group killed on timeout
-or cancellation. A pathological PDF can cost a worker slot until the deadline,
-never the event loop.
+or cancellation, and at most MAX_WORKER_OUTPUT bytes of its stdout read. PDF
+workers have their own limit (PDF_MAX_WORKERS), so slow PDFs cannot take the
+page extraction slots. A pathological PDF can cost a PDF worker slot until the
+deadline, never the event loop.
+
+Text is cut to the output bound while it is extracted: a page whose content
+draws the same text many times (a small file, a huge text) stops at the bound.
 
 At most ``PDF_MAX_PAGES`` pages are read; a longer PDF is not refused, its
 header says that only the first pages were read. Encrypted PDFs, PDFs with no
@@ -21,19 +26,54 @@ import logging
 import math
 import sys
 
-from omniharness.community.builtin_fetch.extract import MAX_OUTPUT_CHARS, run_bounded
+from omniharness.community.builtin_fetch.extract import MAX_OUTPUT_CHARS, WorkerLimit, run_bounded
 from omniharness.community.builtin_fetch.fetcher import PDF_TIMEOUT_CAP, FetchResult
 from omniharness.community.builtin_fetch.guard import FetchFailed, PdfUnreadable
 
 logger = logging.getLogger(__name__)
 
 PDF_MAX_PAGES = 200
+#: PDF extraction workers at once, separate from the page extraction slots.
+PDF_MAX_WORKERS = 2
 WORKER_MODULE = "omniharness.community.builtin_fetch.pdf_worker"
 MAX_TITLE_CHARS = 200
 
 ENCRYPTED = "it is encrypted"
 NO_TEXT = "it has no extractable text (it may be scanned or image-only)"
 MALFORMED = "it is malformed or not a PDF"
+
+_PDF_LIMIT = WorkerLimit(PDF_MAX_WORKERS)
+
+
+def _pdf_limit() -> WorkerLimit:
+    return _PDF_LIMIT
+
+
+class _Enough(BaseException):
+    """Raised from the text visitor once the bound is reached. A BaseException,
+    so pypdf's per-object ``except Exception`` cannot swallow it and carry on."""
+
+
+def _page_text(page, budget: int) -> str:
+    """At most ``budget`` characters of the page's text; extraction stops as
+    soon as that much has been produced."""
+    pieces: list[str] = []
+    size = 0
+
+    def visit(text, *args) -> None:  # noqa: ARG001 - pypdf visitor signature
+        nonlocal size
+        if not text:
+            return
+        pieces.append(text[: budget - size])
+        size += len(pieces[-1])
+        if size >= budget:
+            raise _Enough
+
+    try:
+        text = page.extract_text(visitor_text=visit) or ""
+    except _Enough:
+        text = "".join(pieces)
+    return text[:budget]
 
 
 def extract_pdf_text(body: bytes, max_pages: int = PDF_MAX_PAGES, max_chars: int = MAX_OUTPUT_CHARS) -> dict:
@@ -68,7 +108,7 @@ def extract_pdf_text(body: bytes, max_pages: int = PDF_MAX_PAGES, max_chars: int
     for index in range(min(total, max_pages)):
         read += 1
         try:
-            text = reader.pages[index].extract_text() or ""
+            text = _page_text(reader.pages[index], max_chars - chars)
         except Exception:  # noqa: BLE001 - one broken page does not sink the rest
             failed += 1
             continue
@@ -80,7 +120,7 @@ def extract_pdf_text(body: bytes, max_pages: int = PDF_MAX_PAGES, max_chars: int
                 break
     if not parts:
         return {"error": MALFORMED if failed == read else NO_TEXT}
-    return {"pages": total, "read": read, "title": title, "text": "\n\n".join(parts)}
+    return {"pages": total, "read": read, "title": title, "text": "\n\n".join(parts)[:max_chars]}
 
 
 def format_result(url: str, data: dict, max_pages: int = PDF_MAX_PAGES) -> str:
@@ -97,7 +137,7 @@ async def pdf_to_markdown_bounded(result: FetchResult, timeout: float) -> str:
     for anything that yields no text, the timeout included."""
     seconds = str(max(1, math.ceil(min(timeout, PDF_TIMEOUT_CAP))))
     try:
-        out = await run_bounded([sys.executable, "-I", "-m", WORKER_MODULE, seconds], result.body, timeout)
+        out = await run_bounded([sys.executable, "-I", "-m", WORKER_MODULE, seconds], result.body, timeout, limit=_pdf_limit())
     except FetchFailed as exc:
         raise PdfUnreadable(f"it could not be read in time or the reader failed ({exc})") from None
     try:

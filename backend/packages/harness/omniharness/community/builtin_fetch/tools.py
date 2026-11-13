@@ -39,7 +39,18 @@ from dataclasses import dataclass
 from langchain.tools import tool
 
 from omniharness.community.builtin_fetch.extract import to_markdown_bounded
-from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, MAX_REDIRECTS_CAP, PDF_CONTENT_TYPE, PDF_TIMEOUT_CAP, TIMEOUT_CAP, FetchResult, FetchSettings, fetch, proxy_url_problem
+from omniharness.community.builtin_fetch.fetcher import (
+    MAX_BYTES_CAP,
+    MAX_REDIRECTS_CAP,
+    PDF_CONTENT_TYPE,
+    PDF_TIMEOUT_CAP,
+    TIMEOUT_CAP,
+    FetchResult,
+    FetchSettings,
+    ResponseTooLarge,
+    fetch,
+    proxy_url_problem,
+)
 from omniharness.community.builtin_fetch.guard import EgressProxyDown, FetchFailed, FetchRefused, PdfUnreadable, WebFetchError, check_url, parse_networks, resolve_and_check
 from omniharness.community.builtin_fetch.pdf import pdf_to_markdown_bounded
 from omniharness.config import get_app_config
@@ -114,9 +125,9 @@ async def fetch_markdown(url: str, config: WebFetchConfig) -> str:
         if result.content_type == PDF_CONTENT_TYPE:
             return await pdf_to_markdown_bounded(result, PDF_TIMEOUT_CAP - (loop.time() - start))
         return await to_markdown_bounded(result, config.fetch.timeout - (loop.time() - start))
-    except (FetchRefused, EgressProxyDown, PdfUnreadable):
-        # Policy, the only way out is down, or a PDF with no text to take:
-        # final, never retried elsewhere.
+    except (FetchRefused, EgressProxyDown, PdfUnreadable, ResponseTooLarge):
+        # Policy, the only way out is down, a PDF with no text to take, or a
+        # body over every cap: final, never retried elsewhere.
         raise
     except WebFetchError as exc:
         failure = exc

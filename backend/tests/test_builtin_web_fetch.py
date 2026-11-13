@@ -1695,7 +1695,171 @@ def test_pypdf_is_pinned_to_an_exact_version() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_body_the_proxy_finds_too_big_is_a_plain_failure(dns) -> None:
-    rec = Recorder(lambda r: httpx.Response(403, headers={"x-squid-error": "ERR_TOO_BIG 0", "content-type": "text/html"}, content=b"too big"))
-    with pytest.raises(FetchFailed, match="larger than the egress proxy allows"):
-        await fetch("http://example.com/huge.pdf", settings(), transport=rec.transport)
+async def test_a_body_the_proxy_finds_too_big_is_final_and_never_reaches_jina(tool_env, monkeypatch) -> None:
+    """Squid refuses on Content-Length before the real headers: the content
+    type is unknown, so the refusal is a final size error, not a fallback."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+    tool_env["handler"] = lambda r: httpx.Response(403, headers={"x-squid-error": "ERR_TOO_BIG 0", "content-type": "text/html"}, content=b"too big")
+    result = await web_fetch_tool.ainvoke({"url": "http://example.com/huge.pdf"})
+    assert result == "Error: the response is larger than the egress proxy allows (11 MB)"
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_a_pdf_cut_by_size_mid_stream_is_a_pdf_failure_never_jina(tool_env, monkeypatch) -> None:
+    """The proxy's cap sits above the gateway's, so a PDF body growing past
+    10 MB is stopped by the gateway and reported as a PDF over the limit."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    assert fetcher_module.PROXY_MAX_BODY_MB * 1024 * 1024 > fetcher_module.PDF_MAX_BYTES
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+    chunk = b"%PDF-1.4\n" + b"0" * 65527
+
+    async def body():
+        for _ in range(200):
+            yield chunk
+
+    tool_env["handler"] = lambda r: httpx.Response(200, headers={"content-type": "application/pdf"}, content=body())
+    result = await web_fetch_tool.ainvoke({"url": "http://example.com/big.pdf"})
+    assert result == f"{PDF_UNREADABLE} it is larger than the 10 MB limit"
+    assert tool_env["jina_calls"] == []
+
+
+def make_amplifying_pdf(draws: int = 2000, text_kb: int = 20) -> bytes:
+    """One page whose content draws one Form XObject (about ``text_kb`` KB of
+    text) ``draws`` times: a small file whose extracted text is huge."""
+    import io
+
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    fonts = DictionaryObject({NameObject("/F1"): font})
+    form = DecodedStreamObject()
+    lines = "".join(f"({'x' * 100}) Tj T* " for _ in range(text_kb * 1024 // 110))
+    form.set_data(f"BT /F1 12 Tf 14 TL {lines} ET".encode())
+    form.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(612), NumberObject(792)]),
+            NameObject("/Resources"): DictionaryObject({NameObject("/Font"): fonts}),
+        }
+    )
+    form_ref = writer._add_object(form)
+    page = writer.add_blank_page(612, 792)
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): fonts, NameObject("/XObject"): DictionaryObject({NameObject("/X1"): form_ref})})
+    content = DecodedStreamObject()
+    content.set_data(b"/X1 Do\n" * draws)
+    page[NameObject("/Contents")] = writer._add_object(content)
+    for p in writer.pages:
+        p.compress_content_streams()
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def test_an_amplifying_pdf_is_cut_while_extracting() -> None:
+    import time
+
+    from omniharness.community.builtin_fetch.pdf import extract_pdf_text
+
+    body = make_amplifying_pdf()
+    assert len(body) < 64 * 1024, "the fixture must be small"
+    started = time.monotonic()
+    data = extract_pdf_text(body)
+    assert len(data["text"]) <= 4096 and data["text"].startswith("x" * 100)
+    assert time.monotonic() - started < 5, "extraction must stop at the bound, not render every draw"
+
+
+@pytest.mark.anyio
+async def test_an_amplifying_pdf_through_the_worker_stays_bounded(monkeypatch) -> None:
+    from omniharness.community.builtin_fetch import extract
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+    from omniharness.community.builtin_fetch.pdf import pdf_to_markdown_bounded
+
+    held: list[int] = []
+    real_exchange = extract._exchange
+
+    async def spy(proc, payload, max_output):
+        out = await real_exchange(proc, payload, max_output)
+        held.append(len(out))
+        return out
+
+    monkeypatch.setattr(extract, "_exchange", spy)
+    result = FetchResult(url="https://example.com/a.pdf", status=200, content_type="application/pdf", charset=None, body=make_amplifying_pdf(), truncated=False)
+    out = await pdf_to_markdown_bounded(result, 20)
+    assert len(out) <= 4096 and "x" * 100 in out
+    assert held and held[0] <= extract.MAX_WORKER_OUTPUT
+
+
+@pytest.mark.anyio
+async def test_a_worker_writing_past_the_output_cap_is_killed_without_reading_it_all(monkeypatch) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch import extract
+
+    read = 0
+    real_read = asyncio.StreamReader.read
+
+    async def counting_read(self, n=-1):
+        nonlocal read
+        data = await real_read(self, n)
+        read += len(data)
+        return data
+
+    monkeypatch.setattr(asyncio.StreamReader, "read", counting_read)
+    # 8 MB, then a normal exit: bounded, so a broken cap fails the test
+    # instead of filling memory.
+    flood = "import sys\nfor _ in range(128): sys.stdout.buffer.write(b'x' * 65536)"
+    with pytest.raises(FetchFailed, match="more output than allowed"):
+        await extract.run_bounded([sys.executable, "-c", flood], b"", 10)
+    assert read <= extract.MAX_WORKER_OUTPUT + 65536, f"read {read} bytes past the cap"
+    assert _limit_state() == (0, 0)
+
+
+@pytest.mark.anyio
+async def test_pdf_workers_have_their_own_two_slots(tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch import extract, pdf
+
+    assert pdf.PDF_MAX_WORKERS == 2 and pdf._pdf_limit() is not extract._limit()
+    slow = [asyncio.create_task(extract.run_bounded([sys.executable, "-c", "import time; time.sleep(3)"], b"", 10, limit=pdf._pdf_limit())) for _ in range(2)]
+    try:
+        await asyncio.sleep(0.5)
+        # Both PDF slots taken: page extraction still runs at once...
+        out = await extract.run_bounded([sys.executable, "-c", "print('page')"], b"", 2)
+        assert out.strip() == b"page"
+        # ...and a third PDF waits for a PDF slot.
+        with pytest.raises(FetchFailed, match="timed out waiting"):
+            await extract.run_bounded([sys.executable, "-c", "print('pdf')"], b"", 0.3, limit=pdf._pdf_limit())
+    finally:
+        for task in slow:
+            task.cancel()
+        await asyncio.gather(*slow, return_exceptions=True)
+    limit = pdf._pdf_limit()
+    assert (limit.active, len(limit.waiters)) == (0, 0)
+
+
+@pytest.mark.anyio
+async def test_pdf_extraction_takes_a_pdf_slot(monkeypatch) -> None:
+    from omniharness.community.builtin_fetch import pdf
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+
+    limits: list = []
+    real_run_bounded = pdf.run_bounded
+
+    async def spy(*args, **kwargs):
+        limits.append(kwargs.get("limit"))
+        return await real_run_bounded(*args, **kwargs)
+
+    monkeypatch.setattr(pdf, "run_bounded", spy)
+    result = FetchResult(url="https://example.com/a.pdf", status=200, content_type="application/pdf", charset=None, body=make_pdf(["slot text"]), truncated=False)
+    assert "slot text" in await pdf.pdf_to_markdown_bounded(result, 20)
+    assert limits == [pdf._pdf_limit()]

@@ -43,6 +43,10 @@ MAX_TAG_BYTES = 16 * 1024
 #: Extraction workers running at once, per event loop (each can use hundreds
 #: of MB on a 2 MB page). A fetch waiting for a slot waits inside its deadline.
 MAX_WORKERS = 4
+#: The most a worker may write to stdout. Past it the worker is killed and the
+#: call fails: a worker's output is never held in full when it is unbounded.
+#: Far above what a well-behaved worker writes (a 4096-character result).
+MAX_WORKER_OUTPUT = 64 * 1024
 #: Memory ceiling for a worker and anything it starts (RLIMIT_DATA, Linux).
 WORKER_MEMORY_BYTES = 1024 * 1024 * 1024
 WORKER_MODULE = "omniharness.community.builtin_fetch.extract_worker"
@@ -236,16 +240,52 @@ def worker_env(tmpdir: str) -> dict[str, str]:
     }
 
 
-async def run_bounded(argv: list[str], payload: bytes, timeout: float) -> bytes:
+class WorkerOutputTooLarge(FetchFailed):
+    """The worker wrote more than MAX_WORKER_OUTPUT to stdout and was killed."""
+
+
+async def _exchange(proc: asyncio.subprocess.Process, payload: bytes, max_output: int) -> bytes:
+    """Write ``payload`` to the worker's stdin while reading its stdout, at most
+    ``max_output`` bytes of it; WorkerOutputTooLarge past that."""
+
+    async def feed() -> None:
+        assert proc.stdin is not None
+        try:
+            proc.stdin.write(payload)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the worker stopped reading: its exit status says why
+        finally:
+            proc.stdin.close()
+
+    feeder = asyncio.ensure_future(feed())
+    try:
+        assert proc.stdout is not None
+        out = bytearray()
+        while chunk := await proc.stdout.read(65536):
+            out += chunk
+            if len(out) > max_output:
+                raise WorkerOutputTooLarge("the reader produced more output than allowed")
+        await feeder
+        await proc.wait()
+        return bytes(out)
+    finally:
+        if not feeder.done():
+            feeder.cancel()
+
+
+async def run_bounded(argv: list[str], payload: bytes, timeout: float, *, limit: WorkerLimit | None = None, max_output: int = MAX_WORKER_OUTPUT) -> bytes:
     """Run ``argv`` in a new process group with ``payload`` on stdin; return its
-    stdout. At most MAX_WORKERS at once; waiting for a slot counts against
+    stdout, at most ``max_output`` bytes of it (past that the worker is killed
+    and the call fails). At most ``limit.size`` at once (default: the page
+    extraction limit, MAX_WORKERS); waiting for a slot counts against
     ``timeout``. On timeout, error or cancellation the group is killed and
     reaped, and its private temporary directory removed."""
     if timeout <= 0:
         raise FetchFailed("timed out before the page could be read")
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
-    limit = _limit()
+    limit = limit if limit is not None else _limit()
     try:
         await limit.acquire(timeout)
     except TimeoutError:
@@ -272,7 +312,7 @@ async def run_bounded(argv: list[str], payload: bytes, timeout: float) -> bytes:
         )
         try:
             async with asyncio.timeout(remaining):
-                out, _ = await proc.communicate(payload)
+                out = await _exchange(proc, payload, max_output)
         except TimeoutError:
             raise FetchFailed(f"reading the page took longer than the {timeout:.1f} s left") from None
         clean_exit = proc.returncode == 0
