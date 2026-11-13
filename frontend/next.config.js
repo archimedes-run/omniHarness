@@ -32,7 +32,7 @@ import nextra from "nextra";
  * thread's HTML), which run in the artifact iframe; frame-ancestors 'none'
  * would break that, and their own loads are not the app's.
  */
-function contentSecurityPolicy() {
+function contentSecurityPolicy({ appHost = false } = {}) {
   const dev = process.env.NODE_ENV !== "production";
   const connect = new Set(["'self'"]);
   for (const key of [
@@ -55,7 +55,10 @@ function contentSecurityPolicy() {
     "font-src 'self' data:",
     `connect-src ${[...connect].join(" ")}`,
     "media-src 'self' data: blob:",
-    "frame-src 'self' blob:",
+    // Spec 011 FR-017/FR-018: an app's host page frames only this origin
+    // (the app document is /api/apps/...): no blob:, and a frame that
+    // navigates itself elsewhere is refused.
+    appHost ? "frame-src 'self'" : "frame-src 'self' blob:",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
@@ -90,6 +93,17 @@ const config = {
           // which would also null the Origin of the app's own POSTs.
           { key: "Referrer-Policy", value: "same-origin" },
           { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+      {
+        // Spec 011: the Apps library and app host pages. Listed after the
+        // rule above so its Content-Security-Policy replaces that one.
+        source: "/workspace/apps/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: contentSecurityPolicy({ appHost: true }),
+          },
         ],
       },
     ];

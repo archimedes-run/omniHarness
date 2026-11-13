@@ -1,6 +1,11 @@
 "use client";
 
-import { MessageSquarePlus, MessagesSquare, PlugIcon } from "lucide-react";
+import {
+  LayoutGridIcon,
+  MessageSquarePlus,
+  MessagesSquare,
+  PlugIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -11,7 +16,11 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
+import { useAppPins, useApps } from "@/core/apps/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { useInboxCount } from "@/core/inbox/hooks";
 import { useToolSources } from "@/core/tool-sources/hooks";
@@ -20,7 +29,8 @@ import { useToolSources } from "@/core/tool-sources/hooks";
 const ROW = "max-md:h-11";
 
 /**
- * The sidebar (Feature 006): New chat · Chats · MCP Suite, then Recent chats;
+ * The sidebar (Feature 006): New chat · Chats · Apps (Spec 011, with pinned
+ * apps beneath it) · MCP Suite, then Recent chats;
  * the user and More in the footer. Agents, Skills, Automations and Tasks are
  * the capsule's panels; Inbox became Home (interim: /workspace/home).
  */
@@ -92,6 +102,7 @@ export function WorkspaceNavChatList() {
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        <AppsNavItem pathname={pathname} label={t.sidebar.apps} />
         <SidebarMenuItem>
           <SidebarMenuButton
             isActive={pathname.startsWith("/workspace/connections")}
@@ -127,5 +138,51 @@ export function WorkspaceNavChatList() {
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarGroup>
+  );
+}
+
+/**
+ * Spec 011 FR-029: Apps, and the apps pinned to the sidebar beneath it, in
+ * the order the per-user preference keeps. A pin whose app is not in the
+ * list (deleted, or the list cannot be read yet) shows its id.
+ */
+function AppsNavItem({ pathname, label }: { pathname: string; label: string }) {
+  const { pins } = useAppPins();
+  const { apps } = useApps();
+  const names = new Map((apps ?? []).map((a) => [a.id, a.name]));
+  const shown = (pins ?? []).filter((id) => !apps || names.has(id));
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        isActive={pathname === "/workspace/apps"}
+        className={ROW}
+        asChild
+      >
+        <Link className="text-inherit" href="/workspace/apps">
+          <LayoutGridIcon />
+          <span>{label}</span>
+        </Link>
+      </SidebarMenuButton>
+      {shown.length > 0 && (
+        <SidebarMenuSub data-testid="pinned-apps">
+          {shown.map((id) => {
+            const href = `/workspace/apps/${encodeURIComponent(id)}`;
+            return (
+              <SidebarMenuSubItem key={id}>
+                <SidebarMenuSubButton
+                  asChild
+                  isActive={pathname === href}
+                  className={ROW}
+                >
+                  <Link href={href} data-testid="pinned-app" data-app={id}>
+                    <span>{names.get(id) ?? id}</span>
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            );
+          })}
+        </SidebarMenuSub>
+      )}
+    </SidebarMenuItem>
   );
 }
