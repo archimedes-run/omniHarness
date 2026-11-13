@@ -296,7 +296,7 @@ class Cdp:
 
 
 def make_handler(root):
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class SiteHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
@@ -339,7 +339,7 @@ def make_handler(root):
                 except OSError:
                     pass
 
-    return Handler
+    return SiteHandler
 
 
 class Check:
