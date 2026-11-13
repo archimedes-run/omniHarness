@@ -154,7 +154,22 @@ async def run_agent(
 
     journal = None
 
-    journal = None
+    async def _end(status: RunStatus, *, error: str | None = None) -> None:
+        """Mark the run ended once its journal is written.
+
+        The journal is the chat's display history (and the run's record): a
+        client that sees the run end reads it at once (a reload, a poll of
+        the run's status). Its last events, the final answer among them, are
+        written before the status says the run is over, never after; ending
+        first left a window in which a finished run's journal lacked its
+        final answer (issue #180).
+        """
+        if journal is not None:
+            try:
+                await journal.flush()
+            except Exception:
+                logger.warning("Failed to flush journal for run %s", run_id, exc_info=True)
+        await run_manager.set_status(run_id, status, error=error)
 
     # Track whether "events" was requested but skipped
     if "events" in requested_modes:
@@ -306,7 +321,7 @@ async def run_agent(
         if record.abort_event.is_set():
             action = record.abort_action
             if action == "rollback":
-                await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
+                await _end(RunStatus.error, error="Rolled back by user")
                 try:
                     await _rollback_to_pre_run_checkpoint(
                         checkpointer=checkpointer,
@@ -320,14 +335,14 @@ async def run_agent(
                 except Exception:
                     logger.warning("Failed to rollback checkpoint for run %s", run_id, exc_info=True)
             else:
-                await run_manager.set_status(run_id, RunStatus.interrupted)
+                await _end(RunStatus.interrupted)
         else:
-            await run_manager.set_status(run_id, RunStatus.success)
+            await _end(RunStatus.success)
 
     except asyncio.CancelledError:
         action = record.abort_action
         if action == "rollback":
-            await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
+            await _end(RunStatus.error, error="Rolled back by user")
             try:
                 await _rollback_to_pre_run_checkpoint(
                     checkpointer=checkpointer,
@@ -341,13 +356,13 @@ async def run_agent(
             except Exception:
                 logger.warning("Run %s cancellation rollback failed", run_id, exc_info=True)
         else:
-            await run_manager.set_status(run_id, RunStatus.interrupted)
+            await _end(RunStatus.interrupted)
             logger.info("Run %s was cancelled", run_id)
 
     except Exception as exc:
         error_msg = f"{exc}"
         logger.exception("Run %s failed: %s", run_id, error_msg)
-        await run_manager.set_status(run_id, RunStatus.error, error=error_msg)
+        await _end(RunStatus.error, error=error_msg)
         await bridge.publish(
             run_id,
             "error",
@@ -358,7 +373,8 @@ async def run_agent(
         )
 
     finally:
-        # Flush any buffered journal events and persist completion data
+        # Flush what the journal took after the run's end (_end wrote the
+        # rest before it) and persist completion data
         if journal is not None:
             try:
                 await journal.flush()
