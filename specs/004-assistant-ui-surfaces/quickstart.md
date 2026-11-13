@@ -42,7 +42,7 @@ npx playwright test --config=playwright.theme.config.ts   # CI only
 The pinned browser download stalls at 448 KB on this machine against 369 MB in CI (measured).
 That blocks `npx playwright install`, not the specs: pointing a local config at an
 already-installed `chrome-headless-shell` runs the same `tests/rendering` directory, and
-that is how the run record below was produced. CI (`theme-rendering.yml`) runs the same
+that is how the run record below was produced. CI (the `theme` job in `ci.yml`) runs the same
 directory with the pinned browser and is the record of authority.
 
 Each surface must show, asserted against a rendered page:
