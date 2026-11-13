@@ -247,12 +247,28 @@ class TestCheckWebFetch:
         cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n")
         result = doctor.check_web_fetch(cfg)
         assert result.status == "warn"
-        assert "cannot fetch" in result.detail and "JINA_API_KEY" in result.fix
+        assert "cannot fetch" in result.detail and "JINA_API_KEY" not in result.fix
+        # A key alone enables nothing: web_fetch still fails closed.
         monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+        assert doctor.check_web_fetch(cfg).status == "warn"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    jina_fallback: true\n")
+        assert doctor.check_web_fetch(cfg).status == "warn", "the fallback never covers a missing proxy"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    provider: jina\n")
         assert doctor.check_web_fetch(cfg).status == "ok"
         monkeypatch.delenv("JINA_API_KEY")
         cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    proxy: http://proxy.example:3128\n")
         assert doctor.check_web_fetch(cfg).status == "ok"
+
+    def test_builtin_fetch_warns_on_an_unusable_proxy_url(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OMNI_HARNESS_FETCH_EGRESS_PROXY", raising=False)
+        cfg = tmp_path / "config.yaml"
+        for bad in ("ftp://proxy.example:3128", "http://proxy.example:notaport", "proxy.example:3128"):
+            cfg.write_text(f"config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    proxy: '{bad}'\n")
+            result = doctor.check_web_fetch(cfg)
+            assert result.status == "warn" and "egress proxy down" in result.detail, bad
+        monkeypatch.setenv("OMNI_HARNESS_FETCH_EGRESS_PROXY", "socks5://proxy.example:1080")
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n")
+        assert doctor.check_web_fetch(cfg).status == "warn"
 
     def test_jina_always_ok(self, tmp_path):
         cfg = tmp_path / "config.yaml"

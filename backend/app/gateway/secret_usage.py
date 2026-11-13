@@ -55,6 +55,20 @@ def _tool_uses(fragment: str) -> Predicate:
     return check
 
 
+def _jina_enabled(config: dict, extensions: dict) -> bool:
+    """Jina is opt-in: the jina_ai tool, or the built-in fetcher with
+    ``provider: jina`` or ``jina_fallback: true``. A key alone enables nothing."""
+    for t in config.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        use = str(t.get("use", ""))
+        if "jina_ai" in use:
+            return True
+        if "builtin_fetch" in use and (str(t.get("provider") or "").strip().lower() == "jina" or t.get("jina_fallback") is True):
+            return True
+    return False
+
+
 #: Env keys the code (or a library it calls) reads WITHOUT a config reference,
 #: each tied to the feature that must be active for the key to count as used.
 #: name -> (feature, predicate over the raw config.yaml and extensions dicts)
@@ -68,7 +82,7 @@ IMPLICIT_ENV_READS: dict[str, tuple[str, Predicate]] = {
     "CLAUDE_CODE_OAUTH_TOKEN": ("a model on omniharness.models.claude_provider", _model_uses("claude_provider")),
     "ANTHROPIC_AUTH_TOKEN": ("a model on omniharness.models.claude_provider", _model_uses("claude_provider")),
     "CLAUDE_CODE_CREDENTIALS_PATH": ("a model on omniharness.models.claude_provider", _model_uses("claude_provider")),
-    "JINA_API_KEY": ("the jina_ai web_fetch tool, or the built-in one's optional Jina fallback", lambda c, e: _tool_uses("jina_ai")(c, e) or _tool_uses("builtin_fetch")(c, e)),
+    "JINA_API_KEY": ("the jina_ai web_fetch tool, or the built-in one with provider: jina / jina_fallback: true", _jina_enabled),
     "SERPER_API_KEY": ("the serper web_search tool", _tool_uses("serper")),
     "TAVILY_API_KEY": ("a tavily tool (the client reads it implicitly)", _tool_uses("tavily")),
     "FIRECRAWL_API_KEY": ("a firecrawl tool (the client reads it implicitly)", _tool_uses("firecrawl")),
@@ -115,10 +129,15 @@ OPERATIONAL_ENV_KEYS: dict[str, str] = {
 #: Read by the FRONTEND container, never passed to the gateway.
 FRONTEND_ENV_KEYS = frozenset({"BETTER_AUTH_SECRET"})
 
+#: Read by an OPT-IN feature that is off by default: NOT passed to the gateway
+#: by the compose files. Enabling the feature means adding the key to the
+#: gateway's `environment:` (a compose override file keeps the repo files as is).
+OPT_IN_ENV_KEYS = frozenset({"JINA_API_KEY"})
+
 #: The ONLY environment keys the gateway container is given (docker compose
 #: `environment:` entries; there is no env_file). tests/security keeps the
 #: compose files equal to this list.
-GATEWAY_ENV_KEYS: tuple[str, ...] = tuple(sorted((set(IMPLICIT_ENV_READS) | set(CONFIG_REFERENCE_KEYS) | set(OPERATIONAL_ENV_KEYS)) - FRONTEND_ENV_KEYS))
+GATEWAY_ENV_KEYS: tuple[str, ...] = tuple(sorted((set(IMPLICIT_ENV_READS) | set(CONFIG_REFERENCE_KEYS) | set(OPERATIONAL_ENV_KEYS)) - FRONTEND_ENV_KEYS - OPT_IN_ENV_KEYS))
 
 
 def env_file_keys_not_passed(env_file: str | Path) -> list[str]:

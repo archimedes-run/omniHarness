@@ -24,18 +24,30 @@ version can be restored without replaying a chain:
            {"files": {path: text}} (None: deleted). Lines without a "version"
            are older history and are kept, not numbered.
 
+  automations  one history per trigger rule id (Spec 010 FR-021) under the
+           engine's state directory ({state_dir}/automation_versions/), snapshot
+           = the rule as the rules file holds it (None: deleted). Materialised
+           by app.gateway.automations_store into the rules file, which stays
+           what the trigger engine reads; this module never writes that file.
+
 A thing that existed before its first versioned write gets a baseline version
-(source "existing") first, so the first edit can be undone too.
+(source "existing") first, so the first edit can be undone too. For
+automations the rules file can also be edited by hand at any time, so every
+versioned write first records each rule whose current text differs from its
+last version as a new baseline (FR-023): a hand edit is never lost, and never
+silently undone.
 """
 
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
+import re
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -49,7 +61,7 @@ from omniharness.config.agents_config import SOUL_FILENAME, validate_agent_name
 
 logger = logging.getLogger(__name__)
 
-Kind = Literal["agent", "skill"]
+Kind = Literal["agent", "skill", "automation"]
 SOURCES = frozenset({"manual", "draft", "proposal", "chat", "undo", "existing"})
 LEAD_AGENT = "lead_agent"
 CONFIG_FILENAME = "config.yaml"
@@ -86,6 +98,10 @@ class Version:
     source: str
     changed: list[str]
     snapshot: dict | None
+    #: Automations only: which surface made the write ("page", "studio",
+    #: "chat", "agent-deleted"; "hand-edit" for a baseline recorded because the
+    #: rules file was edited by hand). Empty for agents and skills.
+    via: str = ""
 
     def summary(self) -> dict:
         return {"version": self.version, "at": self.at, "who": self.who, "source": self.source, "changed": self.changed, "deleted": self.snapshot is None}
@@ -129,7 +145,7 @@ def _read_lines(history: Path) -> list[dict]:
 
 def _versions(history: Path) -> list[Version]:
     return [
-        Version(version=int(r["version"]), at=str(r.get("at") or r.get("ts") or ""), who=str(r.get("who", "")), source=str(r.get("source", "")), changed=list(r.get("changed") or []), snapshot=r.get("snapshot"))
+        Version(version=int(r["version"]), at=str(r.get("at") or r.get("ts") or ""), who=str(r.get("who", "")), source=str(r.get("source", "")), changed=list(r.get("changed") or []), snapshot=r.get("snapshot"), via=str(r.get("via") or ""))
         for r in _read_lines(history)
         if isinstance(r.get("version"), int)
     ]
@@ -483,6 +499,150 @@ def record_installed(name: str, *, who: str, storage=None, owner_id: str | None 
         return version
 
 
+# -- automations --------------------------------------------------------------
+#
+# The rules file holds every rule; the history is per rule id. One lock covers
+# the whole file (a write replaces the file), taken by the materialiser
+# (automations_store) around read, check, write and record, so two workers
+# writing the same rule cannot both succeed.
+
+AUTOMATION_VERSIONS_DIR = "automation_versions"
+
+
+def automation_history_dir(state_dir: str | Path) -> Path:
+    """Where automation histories live: the trigger engine's own state dir."""
+    return Path(state_dir) / AUTOMATION_VERSIONS_DIR
+
+
+def _automation_file(history_dir: Path, rule_id: str) -> Path:
+    """A rule id is any non-empty string (the engine's parser), so the file name
+    is a readable slug plus a hash of the exact id: two ids that differ only by
+    case or punctuation never share a history, on any filesystem."""
+    slug = re.sub(r"[^a-z0-9-]+", "-", rule_id.lower()).strip("-")[:60] or "rule"
+    return history_dir / f"{slug}-{hashlib.sha256(rule_id.encode()).hexdigest()[:12]}.jsonl"
+
+
+@contextmanager
+def automations_locked(history_dir: Path) -> Iterator[None]:
+    """The one lock for the rules file. Not re-entrant: take it once."""
+    with _locked(history_dir / "rules.jsonl"):
+        yield
+
+
+def automation_history(history_dir: Path, rule_id: str) -> list[Version]:
+    return _versions(_automation_file(history_dir, rule_id))
+
+
+def automation_version(history_dir: Path, rule_id: str, on_file: dict | None) -> int:
+    """The rule's current version, given the rule as the file holds it now.
+
+    When the file matches the last version, that version. When it does not (a
+    rule from before versioning, or a hand edit since), the number the next
+    write will record it under as a baseline: reading never writes, and a
+    writer that read this number is refused if anything changes before it saves.
+    0: no such rule and no history."""
+    versions = automation_history(history_dir, rule_id)
+    if not versions:
+        return 0 if on_file is None else 1
+    last = versions[-1]
+    return last.version if last.snapshot == on_file else last.version + 1
+
+
+def _known_rule_ids(history_dir: Path) -> set[str]:
+    out: set[str] = set()
+    if history_dir.exists():
+        for path in history_dir.glob("*.jsonl"):
+            if path.name == "rules.jsonl":
+                continue
+            for record in _read_lines(path)[-1:]:
+                if isinstance(record.get("rule_id"), str):
+                    out.add(record["rule_id"])
+    return out
+
+
+def write_automations[R](
+    history_dir: Path,
+    before: dict[str, dict],
+    after: dict[str, dict],
+    *,
+    who: str,
+    source: str,
+    materialise: Callable[[], R],
+    base_versions: dict[str, int] | None = None,
+    via: str = "",
+) -> tuple[R, dict[str, Version]]:
+    """Record a write to the rules file as per-rule versions.
+
+    `before` / `after`: the file's rules by id, as read now and as the write
+    leaves them. The caller holds `automations_locked`, has validated `after`,
+    and passes `materialise`, which writes the file. Order:
+
+      1. each `base_versions` entry is checked against the rule's current
+         version (refused with StaleWriteError, nothing written);
+      2. every rule whose text in the file differs from its last version (one
+         from before versioning, a hand edit, a hand deletion) gets a baseline
+         version, source "existing", so nothing on disk is ever lost;
+      3. the file is written, then each rule the write changed gets its new
+         version. A failed write records nothing.
+
+    Returns what `materialise` returned and the new version of each changed rule."""
+    if source not in SOURCES:
+        raise ValueError(f"unknown version source {source!r}")
+    for rule_id, base in (base_versions or {}).items():
+        current = automation_version(history_dir, rule_id, before.get(rule_id))
+        if base != current:
+            raise StaleWriteError("automation", rule_id, base, current)
+    now = datetime.now(UTC).isoformat()
+    pending: list[tuple[Path, dict]] = []
+    made: dict[str, Version] = {}
+    for rule_id in sorted(set(before) | _known_rule_ids(history_dir)):
+        on_file = before.get(rule_id)
+        versions = automation_history(history_dir, rule_id)
+        if versions and versions[-1].snapshot == on_file:
+            continue
+        if not versions and on_file is None:
+            continue
+        last = versions[-1] if versions else None
+        record = {
+            "rule_id": rule_id,
+            "version": (last.version if last else 0) + 1,
+            "at": now,
+            "who": "unknown",
+            "source": "existing",
+            "via": "hand-edit" if last else "",
+            "changed": _changed(last.snapshot, on_file) if last else [],
+            "snapshot": on_file,
+        }
+        pending.append((_automation_file(history_dir, rule_id), record))
+    baseline = {r["rule_id"]: r["version"] for _, r in pending}
+    for rule_id in sorted(set(before) | set(after)):
+        old, new = before.get(rule_id), after.get(rule_id)
+        if old == new:
+            continue
+        current = baseline.get(rule_id) or automation_version(history_dir, rule_id, old)
+        version = Version(version=current + 1, at=now, who=who, source=source, changed=_changed(old, new), snapshot=new, via=via)
+        made[rule_id] = version
+        pending.append((_automation_file(history_dir, rule_id), {"rule_id": rule_id, "version": version.version, "at": now, "who": who, "source": source, "via": via, "changed": version.changed, "snapshot": new}))
+    result = materialise()
+    for path, record in pending:
+        _append(path, record)
+    return result, made
+
+
+def automation_target(history_dir: Path, rule_id: str, to_version: int) -> dict | None:
+    """The rule as it was at `to_version`, for undo. Version 0 is "before it
+    was created": only for a rule whose first version created it (undo of a
+    create writes a deleted version, FR-020); a rule recorded from an existing
+    file has no known state before that."""
+    versions = automation_history(history_dir, rule_id)
+    if to_version == 0 and versions and versions[0].source != "existing":
+        return None
+    target = next((v for v in versions if v.version == to_version), None)
+    if target is None:
+        raise VersionNotFoundError(f"automation '{rule_id}' has no version {to_version}")
+    return target.snapshot
+
+
 # -- undo ---------------------------------------------------------------------
 
 
@@ -491,6 +651,10 @@ def undo(kind: Kind, name: str, to_version: int, *, who: str, base_version: int 
 
     For an agent this restores its CONTENT: its grants stay as they are now
     (write_agent keeps them); changing those is the Autonomy action's alone."""
+    if kind == "automation":
+        # The rules file is materialised by app.gateway.automations_store, which
+        # this package cannot import: see app.gateway.routers.automations.undo_rule.
+        raise ValueError("undo an automation through app.gateway.routers.automations.undo_rule")
     versions = agent_history(user_id or "", name) if kind == "agent" else skill_history(name, storage)
     target = next((v for v in versions if v.version == to_version), None)
     if target is None:

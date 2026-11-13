@@ -528,25 +528,48 @@ def check_web_tool(config_path: Path, *, tool_name: str, label: str) -> CheckRes
         return CheckResult(label, "warn", str(exc))
 
 
+def _usable_proxy_url(proxy: str) -> bool:
+    """Same rule as the fetcher: http(s), a host, a valid port if any."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(proxy)
+        _ = parts.port
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
+
+
 def check_web_fetch(config_path: Path) -> CheckResult:
     result = check_web_tool(config_path, tool_name="web_fetch", label="web fetch configured")
     if result.status != "ok" or "built-in" not in (result.detail or ""):
         return result
     # The built-in fetcher fetches only through the fetch egress proxy. Docker
     # compose sets one for the gateway container; a gateway run on the host has
-    # none unless configured, and then only the Jina fallback (with a key) works.
+    # none unless configured, and then web_fetch fails closed: no direct fetch
+    # and no Jina fallback. Only an explicit provider: jina (with its key) skips
+    # the proxy.
     try:
         tools = _load_yaml_file(config_path).get("tools") or []
         entry = next((t for t in tools if t.get("name") == "web_fetch" and "builtin_fetch" in str(t.get("use", ""))), {})
     except Exception:  # noqa: BLE001 - check_web_tool already reported a config problem
         entry = {}
-    if entry.get("proxy") or os.environ.get("OMNI_HARNESS_FETCH_EGRESS_PROXY") or os.environ.get("JINA_API_KEY"):
+    jina_selected = str(entry.get("provider") or "").strip().lower() == "jina"
+    proxy = str(entry.get("proxy") or "").strip() or os.environ.get("OMNI_HARNESS_FETCH_EGRESS_PROXY", "").strip()
+    if proxy and not jina_selected and not _usable_proxy_url(proxy):
+        return CheckResult(
+            result.label,
+            "warn",
+            "the fetch egress proxy URL is not a usable http(s) URL: web_fetch will answer 'egress proxy down'",
+            fix="Set tools.web_fetch.proxy (or OMNI_HARNESS_FETCH_EGRESS_PROXY) to http://host:port",
+        )
+    if proxy or (jina_selected and os.environ.get("JINA_API_KEY")):
         return result
     return CheckResult(
         result.label,
         "warn",
-        "built-in fetcher, but no fetch egress proxy and no JINA_API_KEY: a gateway run on the host (not Docker) cannot fetch web pages",
-        fix="Run with Docker ('make docker-start' starts the proxy), or set tools.web_fetch.proxy, or set JINA_API_KEY in .env for the Jina fallback",
+        "built-in fetcher, but no fetch egress proxy: a gateway run on the host (not Docker) cannot fetch web pages",
+        fix="Run with Docker ('make docker-start' starts the proxy), or set tools.web_fetch.proxy",
     )
 
 

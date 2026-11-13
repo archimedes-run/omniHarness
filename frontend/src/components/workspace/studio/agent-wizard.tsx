@@ -608,6 +608,18 @@ export function AgentWizard({
         drafted={isNew && !!drafted}
         runs={runs}
         inner={inner}
+        versionsLocked={dirty}
+        onRuleRestored={
+          isNew
+            ? undefined
+            : () =>
+                void queryClient
+                  .invalidateQueries({ queryKey: ["studio", "runs"] })
+                  .then(() => {
+                    setOrig(null);
+                    setForm(null);
+                  })
+        }
       />
     );
   else

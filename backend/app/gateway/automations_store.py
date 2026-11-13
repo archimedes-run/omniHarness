@@ -1,7 +1,8 @@
 """Edits to the trigger rule file, made safely (Phase 2.5, Automations).
 
 Feature 004 had no rule editor on purpose (FR-036): a read surface must not
-write. This is the one write path, used only by the automations router, and it
+write. This is the one write path (write_rules, called only by the automations
+router's edit_rules, which Studio's schedules and chat go through too), and it
 keeps the guarantees the engine already gives a hand-edited file:
 
   * VALIDATE FIRST, with the engine's own parser and the same set of supported
@@ -11,6 +12,10 @@ keeps the guarantees the engine already gives a hand-edited file:
     The engine re-reads on a changed mtime, so it never sees half a file.
   * NEVER CLOBBER A HAND EDIT: every write names the version (a hash of the
     file's bytes) it was based on, and is refused if the file changed since.
+  * EVERY WRITE IS A VERSION (Spec 010 FR-021): one history per rule in the
+    versioned config store (config_versions, kind "automation"), with undo as
+    a new version and stale rule versions refused. A rule edited by hand is
+    recorded as a new baseline before the next write (FR-023).
   * KEEP EVERYTHING ELSE: quiet hours, comments and any other keys are left as
     they are; only the `rules` list changes.
   * REFUSE THE SHIPPED DEFAULTS: with no rules_path configured the engine runs
@@ -25,10 +30,12 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.trigger_engine.config import ConfigError, check_sources, parse
+from omniharness.config import config_versions
 
 
 class RulesEditError(Exception):
@@ -75,18 +82,21 @@ def validate(doc: dict, supported_types, before: dict | None = None) -> None:
                 raise RulesEditError(refused.error, 422)
 
 
-def write_rules(path: Path, doc: dict, *, expected_version: str, supported_types, writable: bool) -> str:
-    """Validate, then atomically replace the file. Returns the new version."""
-    if not writable:
-        raise RulesEditError("No rules file is configured, so the engine is running the shipped defaults, which are not edited in place. Set trigger_engine.rules_path in config.yaml to a file of your own (copy the defaults to start).", 409)
-    data = path.read_bytes()
-    if version_of(data) != expected_version:
-        raise RulesEditError("The rules file changed since this page loaded it (edited elsewhere?). Reload to see the current rules, then make the change again.", 409)
-    try:
-        before = json.loads(data)
-    except ValueError:
-        before = None
-    validate(doc, supported_types, before if isinstance(before, dict) else None)
+def rules_by_id(doc: dict | None) -> dict[str, dict]:
+    """The document's rules keyed by id (entries that are not rules are left
+    out: the engine's parser refuses a file holding them anyway)."""
+    return {r["id"]: r for r in (doc or {}).get("rules") or [] if isinstance(r, dict) and isinstance(r.get("id"), str)}
+
+
+def history_dir(trigger_cfg) -> Path:
+    """Where the per-rule histories live (config_versions kind "automation")."""
+    return config_versions.automation_history_dir(getattr(trigger_cfg, "state_dir", None) or ".omni-harness/triggers")
+
+
+def _replace_file(path: Path, doc: dict) -> str:
+    """Atomically replace the rules file with `doc`. Called ONLY as the
+    versioned store's materialiser in write_rules (the config-writes gate
+    test checks that)."""
     data = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode()
     mode = path.stat().st_mode & 0o777
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -101,6 +111,59 @@ def write_rules(path: Path, doc: dict, *, expected_version: str, supported_types
         Path(tmp).unlink(missing_ok=True)
         raise
     return version_of(data)
+
+
+def write_rules(
+    path: Path,
+    change: Callable[[dict], dict],
+    *,
+    expected_version: str | None,
+    supported_types,
+    writable: bool,
+    history: Path,
+    who: str,
+    source: str = "manual",
+    via: str = "",
+    base_versions: dict[str, int] | None = None,
+) -> str:
+    """THE write to the rules file (Spec 010 FR-021). Under the store's lock:
+    read the file, refuse a stale file version (`expected_version`, the hash
+    the caller read; None: the file as it is now), apply `change`, validate
+    with the engine's parser, then hand the write to the versioned store
+    (config_versions.write_automations), which refuses a stale rule version
+    (`base_versions`), records baselines for anything edited by hand, writes
+    the file through `_replace_file`, and records a version per changed rule.
+    Returns the file's new version (hash)."""
+    if not writable:
+        raise RulesEditError("No rules file is configured, so the engine is running the shipped defaults, which are not edited in place. Set trigger_engine.rules_path in config.yaml to a file of your own (copy the defaults to start).", 409)
+    with config_versions.automations_locked(history):
+        data = path.read_bytes()
+        if expected_version is not None and version_of(data) != expected_version:
+            raise RulesEditError("The rules file changed since this page loaded it (edited elsewhere?). Reload to see the current rules, then make the change again.", 409)
+        current = json.loads(data)
+        if not isinstance(current, dict):
+            raise RulesEditError("The rules file is not a JSON object; fix it by hand first.", 500)
+        doc = change(current)
+        validate(doc, supported_types, current)
+        try:
+            new_version, _ = config_versions.write_automations(history, rules_by_id(current), rules_by_id(doc), who=who, source=source, via=via, base_versions=base_versions, materialise=lambda: _replace_file(path, doc))
+        except config_versions.StaleWriteError as exc:
+            raise RulesEditError(str(exc), 409) from exc
+        return new_version
+
+
+def put_rule(doc: dict, rule_id: str, rule: dict | None) -> dict:
+    """`doc` with the rule `rule_id` set to `rule` wherever it is (appended if
+    absent), or removed (None). For undo, which may bring back a deleted rule."""
+    rules = [r for r in doc.get("rules") or []]
+    ids = [r.get("id") if isinstance(r, dict) else None for r in rules]
+    if rule is None:
+        return {**doc, "rules": [r for r, i in zip(rules, ids) if i != rule_id]}
+    if rule_id in ids:
+        rules[ids.index(rule_id)] = rule
+    else:
+        rules.append(rule)
+    return {**doc, "rules": rules}
 
 
 def with_rule(doc: dict, rule: dict, *, replace: str | None) -> dict:

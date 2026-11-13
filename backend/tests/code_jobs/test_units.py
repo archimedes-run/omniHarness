@@ -560,3 +560,16 @@ def test_make_daily_rebuilds_the_session_watcher_image():
     assert lines[first_start] in built, "the watcher is started before it is rebuilt"
     gateway = [line for line in lines if "up -d" in line and "gateway" in line]
     assert gateway and all("--build" not in line for line in gateway), "the gateway's start is unchanged"
+
+
+def test_the_worker_rules_and_the_leads_brief_make_web_apps_responsive_by_default() -> None:
+    """Owner rule (2026-11-13): every app built here is responsive by default.
+    The worker's standing rules and the lead's coding-job prompt both say so."""
+    from omniharness.agents.lead_agent.prompt import CODING_JOBS_SECTION
+    from omniharness.code_jobs import rules_text
+
+    rules = rules_text()
+    for needle in ("Responsive by default", "360 px", "horizontal scrolling", "viewBox", "legend"):
+        assert needle in rules, needle
+    assert "responsive by default" in CODING_JOBS_SECTION
+    assert "no horizontal page scroll" in CODING_JOBS_SECTION

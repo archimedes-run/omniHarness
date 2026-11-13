@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import os
+import re
 from unittest.mock import MagicMock
 
 import httpx
@@ -20,7 +21,7 @@ from omniharness.community.builtin_fetch import fetcher as fetcher_module
 from omniharness.community.builtin_fetch import guard
 from omniharness.community.builtin_fetch import tools as tools_module
 from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, FetchSettings, fetch
-from omniharness.community.builtin_fetch.guard import FetchFailed, FetchRefused, check_url, is_blocked_ip, resolve_and_check
+from omniharness.community.builtin_fetch.guard import EGRESS_PROXY_DOWN, PDF_UNREADABLE, EgressProxyDown, FetchFailed, FetchRefused, PdfUnreadable, check_url, is_blocked_ip, resolve_and_check
 
 PUBLIC_IP = "93.184.215.14"
 HTML = b"<html><head><title>Hello page</title></head><body><article><h1>Hello page</h1><p>" + b"Readable paragraph text for the extractor. " * 20 + b"</p></article></body></html>"
@@ -333,6 +334,8 @@ async def test_a_small_gzip_body_is_decoded(dns) -> None:
 @pytest.mark.anyio
 async def test_the_timeout_covers_the_whole_fetch(dns) -> None:
     async def slow(request: httpx.Request) -> httpx.Response:
+        # The proxy answered (as a CONNECT reply would); the site is slow.
+        await request.extensions["trace"]("http11.receive_response_headers.complete", {})
         await asyncio.sleep(0.15)
         if request.url.path == "/3":
             return page(request)
@@ -371,9 +374,202 @@ def test_the_default_timeout_is_15_seconds() -> None:
 async def test_no_proxy_configured_means_no_fetch(dns, monkeypatch) -> None:
     built = []
     monkeypatch.setattr(fetcher_module.httpx, "AsyncClient", lambda *a, **k: built.append(k))
-    with pytest.raises(FetchFailed, match="no fetch egress proxy"):
+    with pytest.raises(EgressProxyDown) as info:
         await fetch("https://example.com/", FetchSettings(proxy=None))
+    assert str(info.value).startswith(EGRESS_PROXY_DOWN)
+    assert not isinstance(info.value, FetchFailed), "never a failure a fallback may retry"
     assert built == []
+
+
+def _closed_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("url", ["https://example.com/", "http://example.com/"])
+async def test_an_unreachable_proxy_fails_closed(dns, url) -> None:
+    """A real client, a proxy on a closed localhost port: connection refused."""
+    with pytest.raises(EgressProxyDown) as info:
+        await fetch(url, FetchSettings(proxy=f"http://127.0.0.1:{_closed_port()}", timeout=5))
+    assert str(info.value).startswith(EGRESS_PROXY_DOWN)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ProxyError("502 Bad Gateway"), httpx.ProxyError("407 Proxy Authentication Required"), httpx.ConnectError("refused"), httpx.ConnectTimeout("timed out")],
+)
+async def test_a_proxy_error_fails_closed(dns, error) -> None:
+    def broken(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    with pytest.raises(EgressProxyDown) as info:
+        await fetch("https://example.com/", settings(), transport=Recorder(broken).transport)
+    assert str(info.value).startswith(EGRESS_PROXY_DOWN)
+
+
+# ── a real local fake proxy: what the proxy does decides proxy-down ─────────
+
+
+class FakeProxy:
+    """An asyncio TCP server standing in for the egress proxy. ``mode``:
+
+    * hang: accept, read the request, never answer
+    * close: accept, read the request, close without a byte
+    * garbage: answer with bytes that are not HTTP
+    * connect_ok_close: answer the CONNECT with 200, then close (the site's TLS fails)
+    * connect_ok_junk: answer the CONNECT with 200, then send non-TLS bytes (a bad handshake)
+    * connect_ok_hang: answer the CONNECT with 200, then nothing (a slow handshake)
+    """
+
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.requests: list[bytes] = []
+        self.server: asyncio.AbstractServer | None = None
+        self._writers: list[asyncio.StreamWriter] = []
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._writers.append(writer)
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+            writer.close()
+            return
+        self.requests.append(head)
+        if self.mode == "hang":
+            await asyncio.sleep(60)
+        elif self.mode == "garbage":
+            writer.write(b"\x00\x01 not http at all \xff\r\n\r\n")
+            await writer.drain()
+        elif self.mode.startswith("connect_ok"):
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+            if self.mode == "connect_ok_junk":
+                writer.write(b"definitely not a TLS server hello\r\n" * 4)
+                await writer.drain()
+                await asyncio.sleep(0.2)
+            elif self.mode == "connect_ok_hang":
+                await asyncio.sleep(60)
+        writer.close()
+
+    async def __aenter__(self) -> str:
+        self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        port = self.server.sockets[0].getsockname()[1]
+        return f"http://127.0.0.1:{port}"
+
+    async def __aexit__(self, *exc) -> None:
+        for writer in self._writers:
+            writer.close()
+        assert self.server is not None
+        self.server.close()
+
+
+@pytest.fixture
+def proxy_tool(monkeypatch, dns):
+    """The tool with the REAL fetcher (no transport), config {extra}, and the
+    Jina client replaced by a recorder."""
+    state: dict = {"extra": {}, "jina_calls": []}
+
+    def config():
+        cfg = MagicMock()
+        tool_cfg = MagicMock()
+        tool_cfg.model_extra = dict(state["extra"])
+        cfg.get_tool_config.return_value = tool_cfg
+        return cfg
+
+    async def fake_crawl(self, url, return_format="html", timeout=10):
+        state["jina_calls"].append(url)
+        return "<html><body><p>from the jina reader</p></body></html>"
+
+    from omniharness.community.jina_ai.jina_client import JinaClient
+
+    monkeypatch.setattr(tools_module, "get_app_config", config)
+    monkeypatch.setattr(JinaClient, "crawl", fake_crawl)
+    monkeypatch.delenv(tools_module.PROXY_ENV, raising=False)
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    return state
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["hang", "close", "garbage"])
+@pytest.mark.parametrize("url", ["https://example.com/", "http://example.com/"])
+async def test_a_proxy_that_never_answers_properly_is_down(proxy_tool, mode, url) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    fake = FakeProxy(mode)
+    async with fake as proxy:
+        proxy_tool["extra"] = {"proxy": proxy, "timeout": 1, "jina_fallback": True}
+        result = await web_fetch_tool.ainvoke({"url": url})
+    assert fake.requests, "the request reached the fake proxy"
+    assert result.startswith(EGRESS_PROXY_DOWN), (mode, result)
+    assert proxy_tool["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_a_blackholed_proxy_surfaces_as_a_connect_timeout(dns) -> None:
+    """Connecting gets a share of the budget, so an unreachable proxy is a
+    connect timeout, well before the whole budget runs out."""
+    assert fetcher_module._connect_timeout(FetchSettings(proxy="http://p:3128")) < fetcher_module.TIMEOUT_CAP / 2
+    assert fetcher_module._connect_timeout(FetchSettings(proxy="http://p:3128", timeout=2)) == 1.0
+
+    import httpcore
+
+    real = httpcore.AsyncConnectionPool
+    seen: list[float | None] = []
+
+    class Pool(real):  # type: ignore[misc,valid-type]
+        """A proxy address that never accepts: the connect step times out."""
+
+        async def handle_async_request(self, request):
+            seen.append(request.extensions.get("timeout", {}).get("connect"))
+            raise httpcore.ConnectTimeout("blackholed")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(httpcore, "AsyncConnectionPool", Pool)
+        mp.setattr(httpcore, "AsyncHTTPProxy", lambda *a, **k: Pool())
+        with pytest.raises(EgressProxyDown):
+            await fetch("https://example.com/", FetchSettings(proxy="http://192.0.2.1:3128", timeout=4))
+    assert seen == [2.0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "proxy",
+    ["ftp://127.0.0.1:3128", "socks9://127.0.0.1:1", "http://127.0.0.1:notaport", "http://[::1", "://", "127.0.0.1:3128"],
+)
+async def test_an_unusable_proxy_url_is_down_at_call_time(proxy_tool, proxy) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    proxy_tool["extra"] = {"proxy": proxy, "jina_fallback": True}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert result.startswith(EGRESS_PROXY_DOWN), (proxy, result)
+    assert proxy_tool["jina_calls"] == []
+    with pytest.raises(EgressProxyDown):
+        await fetch("https://example.com/", FetchSettings(proxy=proxy))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["connect_ok_close", "connect_ok_junk", "connect_ok_hang"])
+async def test_a_site_failing_after_the_proxy_answered_is_the_sites_failure(proxy_tool, mode) -> None:
+    """After a 200 CONNECT the proxy is up: a TLS failure, a bad handshake or a
+    slow one is the site's, an ordinary error (and an enabled fallback may run)."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    fake = FakeProxy(mode)
+    async with fake as proxy:
+        proxy_tool["extra"] = {"proxy": proxy, "timeout": 2}
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+        assert result.startswith("Error: request failed:"), (mode, result)
+        assert not result.startswith(EGRESS_PROXY_DOWN)
+        assert proxy_tool["jina_calls"] == []
+        proxy_tool["extra"] = {"proxy": proxy, "timeout": 2, "jina_fallback": True}
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert "from the jina reader" in result and proxy_tool["jina_calls"] == ["https://example.com/"]
+    assert all(r.startswith(b"CONNECT example.com:443") for r in fake.requests)
 
 
 @pytest.mark.anyio
@@ -435,12 +631,16 @@ async def test_a_proxy_dns_failure_is_a_refusal(dns) -> None:
 async def test_http_errors_and_binary_content_are_failures(dns) -> None:
     with pytest.raises(FetchFailed, match="HTTP 500"):
         await fetch("https://example.com/", settings(), transport=Recorder(lambda r: httpx.Response(500)).transport)
-    pdf = Recorder(lambda r: httpx.Response(200, headers={"content-type": "application/pdf"}, stream=httpx.ByteStream(b"%PDF")))
+    image = Recorder(lambda r: httpx.Response(200, headers={"content-type": "image/png"}, stream=httpx.ByteStream(b"\x89PNG\r\n")))
     with pytest.raises(FetchFailed, match="unsupported content type"):
-        await fetch("https://example.com/a.pdf", settings(), transport=pdf.transport)
+        await fetch("https://example.com/a.png", settings(), transport=image.transport)
+    # A generic binary body is a PDF only if it starts with %PDF-, whatever the URL says.
+    blob = Recorder(lambda r: httpx.Response(200, headers={"content-type": "application/octet-stream"}, stream=httpx.ByteStream(b"PK\x03\x04 not a pdf")))
+    with pytest.raises(FetchFailed, match="unsupported content type"):
+        await fetch("https://example.com/a.pdf", settings(), transport=blob.transport)
 
 
-# ── the tool: extraction, Jina only as a keyed fallback ─────────────────────
+# ── the tool: extraction, Jina only when enabled in config ──────────────────
 
 
 @pytest.fixture
@@ -488,6 +688,7 @@ async def test_the_tool_returns_readable_markdown(tool_env) -> None:
 async def test_no_jina_key_means_jina_is_never_called(tool_env) -> None:
     from omniharness.community.builtin_fetch.tools import web_fetch_tool
 
+    tool_env["extra"] = {"jina_fallback": True}
     tool_env["handler"] = lambda r: httpx.Response(503)
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert result.startswith("Error:") and "503" in result
@@ -498,19 +699,109 @@ async def test_no_jina_key_means_jina_is_never_called(tool_env) -> None:
 
 
 @pytest.mark.anyio
-async def test_jina_is_the_fallback_when_the_key_is_set_and_the_fetch_failed(tool_env, monkeypatch) -> None:
+async def test_jina_is_the_fallback_only_when_enabled_in_config(tool_env, monkeypatch) -> None:
     from omniharness.community.builtin_fetch.tools import web_fetch_tool
 
     monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["handler"] = lambda r: httpx.Response(503)
+    # The key alone (the default config) enables nothing.
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert result.startswith("Error:") and "503" in result and tool_env["jina_calls"] == []
+    for not_true in (False, "true", 1, None):
+        tool_env["extra"] = {"jina_fallback": not_true}
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+        assert result.startswith("Error:") and tool_env["jina_calls"] == [], not_true
+    tool_env["extra"] = {"jina_fallback": True}
+    tool_env["handler"] = page
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert tool_env["jina_calls"] == [], "a successful built-in fetch never calls Jina"
     tool_env["handler"] = lambda r: httpx.Response(503)
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
     assert "from the jina reader" in result and tool_env["jina_calls"] == ["https://example.com/"]
-    tool_env["jina_calls"].clear()
-    tool_env["extra"] = {"jina_fallback": False}
+
+
+@pytest.mark.anyio
+async def test_a_down_proxy_never_falls_back_even_with_jina_enabled(tool_env, monkeypatch) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+
+    def proxy_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("502 Bad Gateway")
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 61] Connection refused")
+
+    for handler in (proxy_error, refused):
+        tool_env["handler"] = handler
+        result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+        assert result.startswith(EGRESS_PROXY_DOWN), result
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.fixture
+def wire(monkeypatch, dns):
+    """The tool with the REAL fetcher and the REAL Jina client, every httpx
+    client in the process forced onto one recording transport: what would go
+    out on the wire. Config is {extra}; the proxy comes only from it."""
+    state: dict = {"extra": {}, "requests": []}
+
+    def config():
+        cfg = MagicMock()
+        tool_cfg = MagicMock()
+        tool_cfg.model_extra = dict(state["extra"])
+        cfg.get_tool_config.return_value = tool_cfg
+        return cfg
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["requests"].append(request)
+        if request.url.host == "r.jina.ai":
+            return httpx.Response(200, text="<html><body><p>from the jina reader</p></body></html>")
+        return httpx.Response(503)
+
+    real = httpx.AsyncClient
+
+    def recording_client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_client)
+    monkeypatch.setattr(tools_module, "get_app_config", config)
+    monkeypatch.delenv(tools_module.PROXY_ENV, raising=False)
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    return state
+
+
+@pytest.mark.anyio
+async def test_a_jina_key_alone_sends_nothing_to_jina(wire) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    # No proxy configured: the error, and nothing at all on the wire.
     result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
-    assert result.startswith("Error:") and tool_env["jina_calls"] == []
+    assert result.startswith(EGRESS_PROXY_DOWN), result
+    assert wire["requests"] == []
+    # Proxy configured, the site fails: the site's error, and only the site was asked.
+    wire["extra"] = {"proxy": "http://fetch-egress.test:3128"}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert result.startswith("Error:") and "503" in result
+    assert {r.url.host for r in wire["requests"]} == {"example.com"}
+
+
+@pytest.mark.anyio
+async def test_jina_enabled_in_config_goes_to_jina(wire) -> None:
+    """The control for the test above: the recorder does see Jina when enabled."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    wire["extra"] = {"proxy": "http://fetch-egress.test:3128", "jina_fallback": True}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert "from the jina reader" in result
+    assert [r.url.host for r in wire["requests"]] == ["example.com", "r.jina.ai"]
+    wire["requests"].clear()
+    wire["extra"] = {"provider": "jina"}
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/"})
+    assert "from the jina reader" in result and [r.url.host for r in wire["requests"]] == ["r.jina.ai"]
 
 
 @pytest.mark.anyio
@@ -518,6 +809,7 @@ async def test_a_refused_url_never_falls_back_to_jina(tool_env, monkeypatch) -> 
     from omniharness.community.builtin_fetch.tools import web_fetch_tool
 
     monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
     for url in ("http://169.254.169.254/", "http://gateway/", "http://localhost/"):
         result = await web_fetch_tool.ainvoke({"url": url})
         assert result.startswith("Error:"), url
@@ -568,13 +860,27 @@ def test_the_example_config_uses_the_built_in_fetcher() -> None:
     assert entry["use"] == "omniharness.community.builtin_fetch.tools:web_fetch_tool"
 
 
-def test_the_jina_key_counts_as_used_by_the_built_in_fetcher() -> None:
-    """Its fallback reads JINA_API_KEY, so the unused-secrets line must not name it."""
+def test_the_jina_key_counts_as_used_only_with_jina_enabled() -> None:
+    """A key with Jina off is a dead secret: the unused-secrets line names it."""
     from app.gateway.secret_usage import unused_secret_keys
 
-    config = {"tools": [{"name": "web_fetch", "use": "omniharness.community.builtin_fetch.tools:web_fetch_tool"}]}
-    assert unused_secret_keys(["JINA_API_KEY"], config, {}) == []
+    builtin = {"name": "web_fetch", "use": "omniharness.community.builtin_fetch.tools:web_fetch_tool"}
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [builtin]}, {}) == ["JINA_API_KEY"]
     assert unused_secret_keys(["JINA_API_KEY"], {"tools": []}, {}) == ["JINA_API_KEY"]
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [{**builtin, "jina_fallback": True}]}, {}) == []
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [{**builtin, "provider": "jina"}]}, {}) == []
+    assert unused_secret_keys(["JINA_API_KEY"], {"tools": [{"name": "web_fetch", "use": "omniharness.community.jina_ai.tools:web_fetch_tool"}]}, {}) == []
+
+
+def test_the_jina_key_is_not_passed_to_the_gateway_by_default() -> None:
+    from pathlib import Path
+
+    from app.gateway.secret_usage import GATEWAY_ENV_KEYS, OPT_IN_ENV_KEYS
+
+    assert "JINA_API_KEY" in OPT_IN_ENV_KEYS and "JINA_API_KEY" not in GATEWAY_ENV_KEYS
+    repo = Path(__file__).resolve().parents[2]
+    for compose in ("docker/docker-compose.yaml", "docker/docker-compose-dev.yaml"):
+        assert "      - JINA_API_KEY\n" not in (repo / compose).read_text(), compose
 
 
 # ── extraction: a killable child process, inside the budget ─────────────────
@@ -1145,3 +1451,415 @@ def test_only_the_result_reaches_the_worker_stdout(monkeypatch) -> None:
     assert extract_worker.main() == 0
     assert stdout.buffer.getvalue() == b"# real page"
     assert "node: some warning" in stderr.getvalue()
+
+
+# ── PDFs: same proxy path and guard, 10 MB, 200 pages, 30 s ─────────────────
+
+
+def make_pdf(pages: list[str | None], *, title: str | None = None, password: str | None = None) -> bytes:
+    """A PDF built with pypdf's writer: one page per entry, with that text in
+    Helvetica, or a blank page (no text layer, like a scan) for None."""
+    import io
+
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    for text in pages:
+        page = writer.add_blank_page(612, 792)
+        if text is None:
+            continue
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+        content = DecodedStreamObject()
+        content.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("latin-1"))
+        page[NameObject("/Contents")] = writer._add_object(content)
+    if title:
+        writer.add_metadata({"/Title": title})
+    if password:
+        writer.encrypt(user_password=password, owner_password=password, algorithm="RC4-128")
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def pdf_response(body: bytes, content_type: str = "application/pdf"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": content_type}, stream=httpx.ByteStream(body))
+
+    return handler
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("content_type", ["application/pdf", "application/octet-stream"])
+async def test_a_small_pdf_extracts_with_url_and_page_count(tool_env, content_type) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    tool_env["handler"] = pdf_response(make_pdf(["Quarterly results first page", "Second page body text"], title="Test Report"), content_type)
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/report"})
+    assert result.startswith("# Test Report\n"), result
+    assert "Source: https://example.com/report" in result and "Pages: 2\n" in result
+    assert "Quarterly results first page" in result and "Second page body text" in result
+    assert len(result) <= 4096
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_a_pdf_output_is_cut_to_the_same_bound_as_a_page(tool_env) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    tool_env["handler"] = pdf_response(make_pdf(["word " * 150] * 20))
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/long.pdf"})
+    assert result.startswith("# PDF document\n") and "Pages: 20\n" in result
+    assert len(result) == 4096
+
+
+@pytest.mark.anyio
+async def test_an_oversized_pdf_is_refused_while_streaming(dns) -> None:
+    sent = 0
+    chunk = b"%PDF-1.4\n" + b"0" * 65527
+
+    async def endless():
+        nonlocal sent
+        for _ in range(800):  # 50 MB available, no Content-Length
+            sent += len(chunk)
+            yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/pdf"}, content=endless())
+
+    with pytest.raises(PdfUnreadable) as info:
+        await fetch("https://example.com/big.pdf", settings(), transport=Recorder(handler).transport)
+    assert str(info.value) == f"{PDF_UNREADABLE} it is larger than the 10 MB limit"
+    assert sent <= fetcher_module.PDF_MAX_BYTES + len(chunk), f"read {sent} bytes, past the 10 MB cap"
+
+
+@pytest.mark.anyio
+async def test_a_pdf_announced_over_10_mb_is_refused_without_reading_it(dns) -> None:
+    sent = 0
+
+    async def body():
+        nonlocal sent
+        sent += 1
+        yield b"%PDF-1.4\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/pdf", "content-length": str(11 * 1024 * 1024)}, content=body())
+
+    with pytest.raises(PdfUnreadable, match="larger than the 10 MB limit"):
+        await fetch("https://example.com/big.pdf", settings(), transport=Recorder(handler).transport)
+    assert sent == 0
+
+
+@pytest.mark.anyio
+async def test_a_pdf_just_under_10_mb_is_read(dns) -> None:
+    body = b"%PDF-1.4\n" + b"0" * (fetcher_module.PDF_MAX_BYTES - 9)
+    result = await fetch("https://example.com/ok.pdf", settings(max_bytes=1000), transport=Recorder(pdf_response(body)).transport)
+    assert result.content_type == "application/pdf" and len(result.body) == fetcher_module.PDF_MAX_BYTES
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (make_pdf(["Secret contents"], password="hunter2"), "it is encrypted"),
+        (make_pdf([None, None, None]), "it has no extractable text (it may be scanned or image-only)"),
+        (b"%PDF-1.7\nthis is not really a pdf\n%%EOF", "it is malformed or not a PDF"),
+    ],
+    ids=["encrypted", "scanned", "malformed"],
+)
+async def test_unreadable_pdfs_fail_cleanly_and_never_reach_jina(tool_env, monkeypatch, body, reason) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+    tool_env["handler"] = pdf_response(body)
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/doc.pdf"})
+    assert result == f"{PDF_UNREADABLE} {reason}"
+    assert "Secret contents" not in result
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_an_oversized_pdf_through_the_tool_never_reaches_jina(tool_env, monkeypatch) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+    tool_env["handler"] = lambda r: httpx.Response(200, headers={"content-type": "application/pdf", "content-length": str(20 * 1024 * 1024)}, content=b"")
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/big.pdf"})
+    assert result == f"{PDF_UNREADABLE} it is larger than the 10 MB limit"
+    assert tool_env["jina_calls"] == []
+
+
+def test_only_the_first_200_pages_are_read_and_the_header_says_so() -> None:
+    from omniharness.community.builtin_fetch.pdf import PDF_MAX_PAGES, extract_pdf_text, format_result
+
+    assert PDF_MAX_PAGES == 200
+    # Text only after page 200: never read, so there is no text to return.
+    late = extract_pdf_text(make_pdf([None] * 200 + ["Page 201 text"]))
+    assert late == {"error": "it has no extractable text (it may be scanned or image-only)"}
+    data = extract_pdf_text(make_pdf(["First page text"] + [None] * 204))
+    assert data["pages"] == 205 and data["read"] == 200
+    out = format_result("https://example.com/long.pdf", data)
+    assert "Pages: 205 (text read from the first 200 only)" in out and "First page text" in out
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("location", ["http://10.0.0.5/doc.pdf", "http://169.254.169.254/latest/meta-data/", "http://private.example/doc.pdf"])
+async def test_a_pdf_url_redirecting_to_a_private_address_is_refused(tool_env, location) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    tool_env["extra"] = {}
+    requested: list[str] = []
+    pdf = make_pdf(["should never be fetched"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.host == "example.com":
+            return httpx.Response(302, headers={"location": location})
+        return pdf_response(pdf)(request)
+
+    guard_table = guard._getaddrinfo.table  # type: ignore[attr-defined]
+    guard_table["private.example"] = [["10.1.2.3"]]
+    tool_env["handler"] = handler
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/paper.pdf"})
+    assert result.startswith("Error:") and "should never be fetched" not in result, result
+    assert requested == ["https://example.com/paper.pdf"], "the private hop must never be requested"
+
+
+@pytest.mark.anyio
+async def test_a_pdf_redirect_to_a_private_address_is_a_refusal(dns) -> None:
+    rec = Recorder(lambda r: httpx.Response(302, headers={"location": "http://192.168.1.10/doc.pdf"}))
+    with pytest.raises(FetchRefused):
+        await fetch("https://example.com/paper.pdf", settings(), transport=rec.transport)
+    assert rec.urls == ["https://example.com/paper.pdf"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error", [httpx.ConnectError("[Errno 61] Connection refused"), httpx.ProxyError("502 Bad Gateway")])
+async def test_proxy_down_while_fetching_a_pdf_says_so(tool_env, monkeypatch, error) -> None:
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    tool_env["handler"] = down
+    result = await web_fetch_tool.ainvoke({"url": "https://example.com/paper.pdf"})
+    assert result.startswith(EGRESS_PROXY_DOWN), result
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_a_pdf_gets_the_longer_pdf_budget_and_no_more(dns, monkeypatch) -> None:
+    """The fetch budget moves from the page timeout to the PDF one once the
+    response says PDF, counted from the start of the fetch."""
+    monkeypatch.setattr(fetcher_module, "PDF_TIMEOUT_CAP", 1.0)
+    pdf = make_pdf(["slow but fine"])
+
+    def slow(delay: float):
+        async def body():
+            yield pdf[:10]
+            await asyncio.sleep(delay)
+            yield pdf[10:]
+
+        return lambda r: httpx.Response(200, headers={"content-type": "application/pdf"}, content=body())
+
+    # Past the 0.3 s page budget, inside the (patched) 1 s PDF budget.
+    result = await fetch("https://example.com/a.pdf", settings(timeout=0.3), transport=Recorder(slow(0.5)).transport)
+    assert result.body == pdf
+    with pytest.raises(FetchFailed, match="timed out after 1 s"):
+        await fetch("https://example.com/a.pdf", settings(timeout=0.3), transport=Recorder(slow(1.5)).transport)
+
+
+@pytest.mark.anyio
+async def test_pdf_extraction_runs_in_a_bounded_worker() -> None:
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+    from omniharness.community.builtin_fetch.pdf import pdf_to_markdown_bounded
+
+    result = FetchResult(url="https://example.com/a.pdf", status=200, content_type="application/pdf", charset=None, body=make_pdf(["worker text"]), truncated=False)
+    assert "worker text" in await pdf_to_markdown_bounded(result, 20)
+    # No time left: no worker, and the failure is a PDF failure, not a crash.
+    with pytest.raises(PdfUnreadable, match="could not be read in time"):
+        await pdf_to_markdown_bounded(result, 0)
+
+
+def test_pypdf_is_pinned_to_an_exact_version() -> None:
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "packages/harness/pyproject.toml").read_text()
+    assert re.search(r'"pypdf==\d+\.\d+\.\d+"', text)
+
+
+@pytest.mark.anyio
+async def test_a_body_the_proxy_finds_too_big_is_final_and_never_reaches_jina(tool_env, monkeypatch) -> None:
+    """Squid refuses on Content-Length before the real headers: the content
+    type is unknown, so the refusal is a final size error, not a fallback."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+    tool_env["handler"] = lambda r: httpx.Response(403, headers={"x-squid-error": "ERR_TOO_BIG 0", "content-type": "text/html"}, content=b"too big")
+    result = await web_fetch_tool.ainvoke({"url": "http://example.com/huge.pdf"})
+    assert result == "Error: the response is larger than the egress proxy allows (11 MB)"
+    assert tool_env["jina_calls"] == []
+
+
+@pytest.mark.anyio
+async def test_a_pdf_cut_by_size_mid_stream_is_a_pdf_failure_never_jina(tool_env, monkeypatch) -> None:
+    """The proxy's cap sits above the gateway's, so a PDF body growing past
+    10 MB is stopped by the gateway and reported as a PDF over the limit."""
+    from omniharness.community.builtin_fetch.tools import web_fetch_tool
+
+    assert fetcher_module.PROXY_MAX_BODY_MB * 1024 * 1024 > fetcher_module.PDF_MAX_BYTES
+    monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+    tool_env["extra"] = {"jina_fallback": True}
+    chunk = b"%PDF-1.4\n" + b"0" * 65527
+
+    async def body():
+        for _ in range(200):
+            yield chunk
+
+    tool_env["handler"] = lambda r: httpx.Response(200, headers={"content-type": "application/pdf"}, content=body())
+    result = await web_fetch_tool.ainvoke({"url": "http://example.com/big.pdf"})
+    assert result == f"{PDF_UNREADABLE} it is larger than the 10 MB limit"
+    assert tool_env["jina_calls"] == []
+
+
+def make_amplifying_pdf(draws: int = 2000, text_kb: int = 20) -> bytes:
+    """One page whose content draws one Form XObject (about ``text_kb`` KB of
+    text) ``draws`` times: a small file whose extracted text is huge."""
+    import io
+
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    fonts = DictionaryObject({NameObject("/F1"): font})
+    form = DecodedStreamObject()
+    lines = "".join(f"({'x' * 100}) Tj T* " for _ in range(text_kb * 1024 // 110))
+    form.set_data(f"BT /F1 12 Tf 14 TL {lines} ET".encode())
+    form.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(612), NumberObject(792)]),
+            NameObject("/Resources"): DictionaryObject({NameObject("/Font"): fonts}),
+        }
+    )
+    form_ref = writer._add_object(form)
+    page = writer.add_blank_page(612, 792)
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): fonts, NameObject("/XObject"): DictionaryObject({NameObject("/X1"): form_ref})})
+    content = DecodedStreamObject()
+    content.set_data(b"/X1 Do\n" * draws)
+    page[NameObject("/Contents")] = writer._add_object(content)
+    for p in writer.pages:
+        p.compress_content_streams()
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def test_an_amplifying_pdf_is_cut_while_extracting() -> None:
+    import time
+
+    from omniharness.community.builtin_fetch.pdf import extract_pdf_text
+
+    body = make_amplifying_pdf()
+    assert len(body) < 64 * 1024, "the fixture must be small"
+    started = time.monotonic()
+    data = extract_pdf_text(body)
+    assert len(data["text"]) <= 4096 and data["text"].startswith("x" * 100)
+    assert time.monotonic() - started < 5, "extraction must stop at the bound, not render every draw"
+
+
+@pytest.mark.anyio
+async def test_an_amplifying_pdf_through_the_worker_stays_bounded(monkeypatch) -> None:
+    from omniharness.community.builtin_fetch import extract
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+    from omniharness.community.builtin_fetch.pdf import pdf_to_markdown_bounded
+
+    held: list[int] = []
+    real_exchange = extract._exchange
+
+    async def spy(proc, payload, max_output):
+        out = await real_exchange(proc, payload, max_output)
+        held.append(len(out))
+        return out
+
+    monkeypatch.setattr(extract, "_exchange", spy)
+    result = FetchResult(url="https://example.com/a.pdf", status=200, content_type="application/pdf", charset=None, body=make_amplifying_pdf(), truncated=False)
+    out = await pdf_to_markdown_bounded(result, 20)
+    assert len(out) <= 4096 and "x" * 100 in out
+    assert held and held[0] <= extract.MAX_WORKER_OUTPUT
+
+
+@pytest.mark.anyio
+async def test_a_worker_writing_past_the_output_cap_is_killed_without_reading_it_all(monkeypatch) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch import extract
+
+    read = 0
+    real_read = asyncio.StreamReader.read
+
+    async def counting_read(self, n=-1):
+        nonlocal read
+        data = await real_read(self, n)
+        read += len(data)
+        return data
+
+    monkeypatch.setattr(asyncio.StreamReader, "read", counting_read)
+    # 8 MB, then a normal exit: bounded, so a broken cap fails the test
+    # instead of filling memory.
+    flood = "import sys\nfor _ in range(128): sys.stdout.buffer.write(b'x' * 65536)"
+    with pytest.raises(FetchFailed, match="more output than allowed"):
+        await extract.run_bounded([sys.executable, "-c", flood], b"", 10)
+    assert read <= extract.MAX_WORKER_OUTPUT + 65536, f"read {read} bytes past the cap"
+    assert _limit_state() == (0, 0)
+
+
+@pytest.mark.anyio
+async def test_pdf_workers_have_their_own_two_slots(tmp_path) -> None:
+    import sys
+
+    from omniharness.community.builtin_fetch import extract, pdf
+
+    assert pdf.PDF_MAX_WORKERS == 2 and pdf._pdf_limit() is not extract._limit()
+    slow = [asyncio.create_task(extract.run_bounded([sys.executable, "-c", "import time; time.sleep(3)"], b"", 10, limit=pdf._pdf_limit())) for _ in range(2)]
+    try:
+        await asyncio.sleep(0.5)
+        # Both PDF slots taken: page extraction still runs at once...
+        out = await extract.run_bounded([sys.executable, "-c", "print('page')"], b"", 2)
+        assert out.strip() == b"page"
+        # ...and a third PDF waits for a PDF slot.
+        with pytest.raises(FetchFailed, match="timed out waiting"):
+            await extract.run_bounded([sys.executable, "-c", "print('pdf')"], b"", 0.3, limit=pdf._pdf_limit())
+    finally:
+        for task in slow:
+            task.cancel()
+        await asyncio.gather(*slow, return_exceptions=True)
+    limit = pdf._pdf_limit()
+    assert (limit.active, len(limit.waiters)) == (0, 0)
+
+
+@pytest.mark.anyio
+async def test_pdf_extraction_takes_a_pdf_slot(monkeypatch) -> None:
+    from omniharness.community.builtin_fetch import pdf
+    from omniharness.community.builtin_fetch.fetcher import FetchResult
+
+    limits: list = []
+    real_run_bounded = pdf.run_bounded
+
+    async def spy(*args, **kwargs):
+        limits.append(kwargs.get("limit"))
+        return await real_run_bounded(*args, **kwargs)
+
+    monkeypatch.setattr(pdf, "run_bounded", spy)
+    result = FetchResult(url="https://example.com/a.pdf", status=200, content_type="application/pdf", charset=None, body=make_pdf(["slot text"]), truncated=False)
+    assert "slot text" in await pdf.pdf_to_markdown_bounded(result, 20)
+    assert limits == [pdf._pdf_limit()]

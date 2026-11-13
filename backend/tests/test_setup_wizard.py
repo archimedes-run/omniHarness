@@ -414,7 +414,8 @@ class TestSearchStep:
         monkeypatch.setattr(search_step, "ask_choice", lambda *_a, **_k: next(choices))
         result = search_step.run_search_step()
         assert result.fetch_provider is not None and result.fetch_provider.name == "builtin_fetch"
-        assert warnings and "host" in warnings[0] and "JINA_API_KEY" in warnings[0]
+        assert warnings and "host" in warnings[0] and "tools.web_fetch.proxy" in warnings[0]
+        assert "JINA_API_KEY" not in warnings[0], "Jina is opt-in in config, never suggested as a proxy workaround"
 
     def test_reuses_api_key_for_same_provider(self, monkeypatch):
         monkeypatch.setattr(search_step, "print_header", lambda *_args, **_kwargs: None)
