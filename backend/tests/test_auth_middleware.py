@@ -22,6 +22,7 @@ from app.gateway.auth_middleware import AuthMiddleware, _is_public
         "/api/v1/auth/logout",
         "/api/v1/auth/setup-status",
         "/api/threads/thread-1/artifacts/preview-token/signed-token/mnt/user-data/outputs/site/_next/app.js",
+        "/api/threads/thread-1/artifacts/preview-runtime/storage-shim.js",
     ],
 )
 def test_public_paths(path: str):
@@ -38,6 +39,8 @@ def test_public_paths(path: str):
         "/api/threads/123",
         "/api/threads/123/uploads",
         "/api/threads/thread-1/artifacts/preview/mnt/user-data/outputs/site/index.html",
+        "/api/threads/thread-1/artifacts/preview-runtime/storage-shim.js.map",
+        "/api/threads/thread-1/artifacts/preview-runtime/other.js",
         "/api/agents",
         "/api/channels",
         "/api/runs/stream",

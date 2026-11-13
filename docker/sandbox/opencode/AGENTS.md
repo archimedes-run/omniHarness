@@ -34,6 +34,8 @@ your results before it reports anything. Follow these rules exactly.
 - For a web app that will be shown as a static site, set `base: './'` in the
   Vite config so the built files work from any folder, and keep the build in
   `dist/` inside the project folder.
+- The preview runs the app in a sandboxed frame where `localStorage`,
+  `sessionStorage` and cookies may throw; wrap that access in `try`/`catch`.
 - Never claim an outcome you did not observe. If the build or a test fails and
   you cannot fix it, say exactly what failed and stop.
 - End with a short summary: what you changed, the commands you ran with their

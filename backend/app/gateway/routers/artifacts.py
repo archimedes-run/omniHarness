@@ -73,10 +73,53 @@ PREVIEW_TOKEN_ASSET_HEADERS = {
 }
 
 PREVIEW_TOKEN_TYPE = "artifact_preview"
+
+#: Served at ``/api/threads/{thread_id}/artifacts/<this>`` and loaded first by
+#: every previewed HTML page. The preview iframe is sandboxed without
+#: ``allow-same-origin`` (deliberately), so the page has an opaque origin and
+#: touching ``localStorage``/``sessionStorage``/``document.cookie`` throws a
+#: SecurityError. Apps that persist state that way (a to-do list) crash to a
+#: blank page. The shim installs an in-memory stand-in, only when the real
+#: thing is unavailable. It makes no requests and stores nothing outside the page.
+PREVIEW_STORAGE_SHIM_SEGMENT = "preview-runtime/storage-shim.js"
+PREVIEW_STORAGE_SHIM_JS = """(function () {
+  "use strict";
+  function blocked(read) {
+    try { read(); return false; } catch (e) { return true; }
+  }
+  function memoryStorage() {
+    var data = new Map();
+    var storage = {
+      getItem: function (k) { k = String(k); return data.has(k) ? data.get(k) : null; },
+      setItem: function (k, v) { data.set(String(k), String(v)); },
+      removeItem: function (k) { data.delete(String(k)); },
+      clear: function () { data.clear(); },
+      key: function (i) { var keys = Array.from(data.keys()); i = Math.floor(Number(i)); return i >= 0 && i < keys.length ? keys[i] : null; }
+    };
+    Object.defineProperty(storage, "length", { get: function () { return data.size; } });
+    return storage;
+  }
+  ["localStorage", "sessionStorage"].forEach(function (name) {
+    try {
+      if (blocked(function () { return window[name]; })) {
+        Object.defineProperty(window, name, { value: memoryStorage(), configurable: true, enumerable: true });
+      }
+    } catch (e) {}
+  });
+  try {
+    if (blocked(function () { return document.cookie; })) {
+      Object.defineProperty(document, "cookie", { get: function () { return ""; }, set: function () {}, configurable: true });
+    }
+  } catch (e) {}
+})();
+"""
 PREVIEW_TOKEN_TTL_SECONDS = 10 * 60
 MANIFEST_FILENAME = "artifact_manifest.json"
 
-_HEAD_TAG_RE = re.compile(r"<head(?P<attrs>[^>]*)>", re.IGNORECASE)
+# ``<head>`` or ``<head ...>`` but not ``<header>``.
+_HEAD_TAG_RE = re.compile(r"<head(?P<attrs>\s[^>]*)?>", re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"<html(?:\s[^>]*)?>", re.IGNORECASE)
+_DOCTYPE_RE = re.compile(r"^\s*<!doctype[^>]*>", re.IGNORECASE)
 _MANIFEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _ROOT_RELATIVE_ATTR_RE = re.compile(
     r"(?P<prefix>\b(?:href|src|poster)\s*=\s*[\"'])(?P<url>/(?!/)[^\"']*)(?P<suffix>[\"'])",
@@ -494,10 +537,29 @@ def _rewrite_preview_html(
         html,
     )
 
-    if _HEAD_TAG_RE.search(rewritten):
-        return _HEAD_TAG_RE.sub(lambda match: f"{match.group(0)}{base_tag}", rewritten, count=1)
+    # The storage shim goes first so it runs before any script the app ships.
+    return _insert_at_head_start(rewritten, f"{_storage_shim_tag(thread_id)}{base_tag}")
 
-    return f"{base_tag}{rewritten}"
+
+def _insert_at_head_start(html: str, snippet: str) -> str:
+    """Insert ``snippet`` as the first content of the document's head.
+
+    Documents without a ``<head>`` get it right after ``<html>``, else right
+    after the doctype (so the page stays in standards mode), else at the top.
+    """
+    for pattern in (_HEAD_TAG_RE, _HTML_TAG_RE, _DOCTYPE_RE):
+        match = pattern.search(html)
+        if match:
+            return f"{html[: match.end()]}{snippet}{html[match.end() :]}"
+    return f"{snippet}{html}"
+
+
+def _storage_shim_path(thread_id: str) -> str:
+    return f"/api/threads/{quote(thread_id, safe='')}/artifacts/{PREVIEW_STORAGE_SHIM_SEGMENT}"
+
+
+def _storage_shim_tag(thread_id: str) -> str:
+    return f'<script src="{_storage_shim_path(thread_id)}"></script>'
 
 
 def _preview_media_type(path: Path) -> str | None:
@@ -628,6 +690,21 @@ async def preview_artifact(thread_id: str, artifact_path: str, request: Request)
         artifact_path,
         request,
         user_id=get_effective_user_id(),
+    )
+
+
+@router.get(
+    "/threads/{thread_id}/artifacts/" + PREVIEW_STORAGE_SHIM_SEGMENT,
+    summary="Preview Storage Shim",
+    description="Static script loaded first by previewed HTML: an in-memory localStorage/sessionStorage for the sandboxed preview iframe.",
+)
+async def preview_storage_shim(thread_id: str) -> Response:
+    # Public (see auth_middleware): the sandboxed page fetches it from an opaque
+    # origin, the same way it fetches its token-route assets. Static content only.
+    return Response(
+        content=PREVIEW_STORAGE_SHIM_JS,
+        media_type="application/javascript",
+        headers=dict(PREVIEW_TOKEN_ASSET_HEADERS),
     )
 
 
