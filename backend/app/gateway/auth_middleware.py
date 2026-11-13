@@ -45,6 +45,8 @@ _PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
 )
 
 _PUBLIC_ARTIFACT_PREVIEW_TOKEN_RE = re.compile(r"^/api/threads/[A-Za-z0-9_-]+/artifacts/preview-token/[^/]+(?:/.*)?$")
+# Static script every previewed page loads first (see routers/artifacts.py).
+_PUBLIC_ARTIFACT_PREVIEW_SHIM_RE = re.compile(r"^/api/threads/[A-Za-z0-9_-]+/artifacts/preview-runtime/storage-shim\.js$")
 
 
 def _is_public(path: str) -> bool:
@@ -52,6 +54,8 @@ def _is_public(path: str) -> bool:
     if stripped in _PUBLIC_EXACT_PATHS:
         return True
     if _PUBLIC_ARTIFACT_PREVIEW_TOKEN_RE.match(stripped):
+        return True
+    if _PUBLIC_ARTIFACT_PREVIEW_SHIM_RE.match(stripped):
         return True
     return any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES)
 
