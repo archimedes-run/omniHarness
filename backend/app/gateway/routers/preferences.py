@@ -98,3 +98,32 @@ async def put_appearance(body: AppearanceUpdate, request: Request) -> Appearance
     user_id = _user(request)
     saved = await get_user_preference_repo(request).set_appearance(user_id=user_id, appearance=body.appearance)
     return AppearanceResponse(appearance=saved, chosen=True)  # type: ignore[arg-type]
+
+
+# -- app pins (Spec 011 FR-029) --------------------------------------------------
+
+PINS_MAX = 20
+
+
+class AppPins(BaseModel):
+    pins: list[str] = Field(default_factory=list, max_length=PINS_MAX)
+
+
+@router.get("/app-pins", response_model=AppPins)
+async def get_app_pins(request: Request) -> AppPins:
+    from app.gateway.routers.apps import owner_of, repo_of
+
+    return AppPins(pins=await repo_of(request).get_pins(user_id=owner_of(request)))
+
+
+@router.put("/app-pins", response_model=AppPins)
+async def put_app_pins(body: AppPins, request: Request) -> AppPins:
+    """The apps pinned to the sidebar, in order: each an app of this owner."""
+    from app.gateway.routers.apps import owner_of, repo_of
+    from omniharness.config.config_versions import app_ids
+
+    owner = owner_of(request)
+    known = set(app_ids(owner))
+    if len(set(body.pins)) != len(body.pins) or any(p not in known for p in body.pins):
+        raise HTTPException(status_code=422, detail={"code": "invalid_request", "message": "pins must be distinct apps of yours"})
+    return AppPins(pins=await repo_of(request).set_pins(user_id=owner, pins=body.pins))

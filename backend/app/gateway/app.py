@@ -17,6 +17,7 @@ from app.gateway.logging_filters import install_preview_token_log_filter
 from app.gateway.preview_sessions import PreviewSessionManager
 from app.gateway.routers import (
     agents,
+    apps,
     artifacts,
     assistants_compat,
     auth,
@@ -433,6 +434,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # assistant, not a precondition for it.
         app.state.trigger_engine = await _start_trigger_engine(app)
 
+        # Apps (Spec 011): keep recently opened apps' sources warm. Every
+        # worker runs the loop; a lease in the shared store lets one work.
+        from app.gateway.apps.refresher import run_forever as run_apps_refresher
+
+        apps_refresher = asyncio.create_task(run_apps_refresher(app.state))
+
         # A lead turn whose last cards expired resumes, at most once (spec
         # 009, owner decision M2; app.gateway.resume). Every worker sweeps; a
         # turn is resumed only by the caller holding all of its cards' locks.
@@ -442,6 +449,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         yield
 
+        apps_refresher.cancel()
         expiry_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await expiry_task
@@ -760,6 +768,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Workflows API is mounted at /api/workflows (feature-flagged, returns 404 when disabled)
     app.include_router(workflows.router)
+
+    # Apps (Spec 011): library, approval card, bridge, app documents.
+    app.include_router(apps.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:
