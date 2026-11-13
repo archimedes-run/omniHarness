@@ -126,6 +126,18 @@ def _restore_memory_config():
 
 
 @pytest.fixture(autouse=True)
+def _restore_title_and_summarization_config():
+    """The same leak as memory's above, for the title and summarization
+    sections: many create_app() tests load a config with them turned off,
+    and a later title test in the same worker found titles disabled."""
+    from omniharness.config import summarization_config, title_config
+
+    saved = (title_config._title_config, summarization_config._summarization_config)
+    yield
+    title_config._title_config, summarization_config._summarization_config = saved
+
+
+@pytest.fixture(autouse=True)
 def _reset_skill_storage_singleton():
     """Reset the SkillStorage singleton between tests to prevent cross-test contamination."""
     try:
