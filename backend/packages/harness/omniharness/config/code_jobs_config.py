@@ -8,6 +8,8 @@ gateway enforces, never a hint to the worker.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -28,6 +30,7 @@ class CodeJobsConfig(BaseModel):
     monthly_cap_usd: float = Field(default=20.0, gt=0, le=10_000, description="All jobs in a calendar month (UTC); reached = new jobs refused")
     wall_seconds: int = Field(default=1800, ge=60, le=4 * 3600, description="A job is stopped after this long")
     verify_timeout_seconds: int = Field(default=600, ge=30, le=600, description="Hard cap on the gateway's verification command (D4)")
+    layout_check: Literal["enforce", "warn", "off"] = Field(default="enforce", description="A built web app is loaded in a headless browser at 360/560/1280 px; enforce: a failure means not verified; warn: shown, not counted")
     rate_per_minute: int = Field(default=60, ge=1, le=600, description="Model calls per sandbox per minute through the proxy")
     max_concurrent_calls: int = Field(default=3, ge=1, le=8, description="Model calls one job may have in flight at once")
     max_request_bytes: int = Field(default=8 * 1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
