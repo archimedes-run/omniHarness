@@ -312,7 +312,8 @@ class GatewayBuilderController:
         the way the run assembles them (lead_agent.agent): config tools by
         tool group or per-tool list, the in-process built-ins and core tools,
         MCP tools, view_image for a vision model, `task` (as with subagents
-        on), then filtered by the skills' allowed-tools. Built in a copied
+        on), `research` (bound in every mode), then filtered by the skills'
+        allowed-tools. Built in a copied
         context: assembly resets per-request registries the running turn uses."""
         import contextvars
 
@@ -327,7 +328,7 @@ class GatewayBuilderController:
             fields = {k: v for k, v in config.items() if k in AgentConfig.model_fields}
             agent = AgentConfig.model_validate({**fields, "name": str(config.get("name") or "draft")})
             model_name = _resolve_model_name(agent.model, app_config=cfg)
-            tools = get_available_tools(model_name=model_name, groups=agent.tool_groups, subagent_enabled=True, app_config=cfg, user_id=user_id, tool_access=agent.tools)
+            tools = get_available_tools(model_name=model_name, groups=agent.tool_groups, subagent_enabled=True, app_config=cfg, user_id=user_id, tool_access=agent.tools, research_enabled=True)
             skills = _load_enabled_skills_for_tool_policy(set(agent.skills) if agent.skills is not None else None, app_config=cfg)
             dynamic = {t.name for t in (get_cached_mcp_tools() or [])}
             return filter_tools_by_skill_allowed_tools(tools, skills, always_include=dynamic)
@@ -879,7 +880,7 @@ class GatewayBuilderController:
                         have_i.append(source)
                         have_t.append(tool.name)
                 access = {"integrations": list(dict.fromkeys(have_i)), "tools": list(dict.fromkeys(have_t))}
-                lines.append("- its tools become a per-tool list: what its tool groups and built-ins give it now, plus what is listed here (apps a chat selects no longer add to it)")
+                lines.append("- its tools become a per-tool list: what its tool groups and built-ins give it now, plus what is listed here (apps a chat selects no longer add to it, and the web researcher is not offered on a per-tool list)")
             else:
                 access = {"integrations": list(current_access.get("integrations") or []), "tools": list(current_access.get("tools") or [])}
             for group in groups:

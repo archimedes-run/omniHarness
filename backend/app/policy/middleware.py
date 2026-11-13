@@ -1352,7 +1352,9 @@ class PolicyMiddleware(AgentMiddleware):
         """Who asked. FR-031: a subagent's call is classified identically, so
         the requester is not always the lead agent."""
         context = getattr(getattr(request, "runtime", None), "context", None) or {}
-        return context.get("invited_agent") or context.get("agent_name") or "lead_agent"
+        # The bootstrap flow is the lead setting up a new agent, not that agent
+        # (it does not exist yet): its cards are the lead's (spec 010).
+        return context.get("invited_agent") or (None if context.get("is_bootstrap") else context.get("agent_name")) or "lead_agent"
 
     @staticmethod
     def _delegation_chain(request) -> tuple[str, ...]:

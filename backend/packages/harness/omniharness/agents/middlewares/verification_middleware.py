@@ -32,7 +32,7 @@ from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
 from omniharness.agents.thread_state import ThreadState
-from omniharness.agents.working_loop import CONFIRMED_MARKER, MODEL_NOTICE_RE, VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of, unbacked_claims, unpresented_outputs
+from omniharness.agents.working_loop import CONFIRMED_MARKER, MODEL_NOTICE_RE, VERIFICATION_KEY, build_verification_record, raised_card_prompt, strip_trailing_menu, text_of, unbacked_claims, unpresented_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,9 @@ class VerificationMiddleware(AgentMiddleware):
         # The policy layer's Tier 2 notice is appended AFTER this hook (its
         # after_model runs last, on the final reply), so nothing here can
         # remove it.
-        new_body, changed = strip_trailing_menu(reply)
+        # A builder card's prompt ("save it with the button, or reply yes") is
+        # the card's own question, never a menu to strip (spec 010).
+        new_body, changed = (reply, False) if raised_card_prompt(messages) else strip_trailing_menu(reply)
         if changed:
             fixes.append("trailing_menu_removed")
             reply = new_body

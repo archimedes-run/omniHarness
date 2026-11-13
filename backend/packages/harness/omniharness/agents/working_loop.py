@@ -351,6 +351,16 @@ def _paragraphs(text: str) -> list[str]:
     return [p for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
 
 
+#: Tools whose call raises a confirmation card the reply asks the person to
+#: answer (spec 010's builder): a reply that asks for it is not a menu.
+CARD_PROMPT_TOOLS = frozenset({"builder_save", "builder_grant", "builder_undo"})
+
+
+def raised_card_prompt(messages: list[Any]) -> bool:
+    """This turn called a tool whose card the reply may ask the person to answer."""
+    return any(str(call.get("name") or "") in CARD_PROMPT_TOOLS for message in turn_messages(list(messages)) if _type(message) == "ai" for call in _tool_calls(message))
+
+
 def has_menu(reply: str) -> bool:
     """The reply ends with an offer or a menu of options (FR-056)."""
     paragraphs = _paragraphs(reply or "")
@@ -569,7 +579,7 @@ _MAKING = r"created|added|updated|saved|wrote|set up|made|filed|logged|renamed|m
 _OBJECTS = (
     r"projects?|tasks?|goals?|notes?|events?|meetings?|reminders?|invites?|invitations?|files?|documents?|calendar|ledger|entr(?:y|ies)"
     r"|automations?|rules?|tickets?|issues?|drafts?|emails?|messages?|posts?|pages?|repos?|repositor(?:y|ies)|apps?|appointments?"
-    r"|bookings?|reservations?|[\w-]+\.(?:md|txt|csv|json|pdf|html?|docx?|xlsx?|pptx?|py|js|ts|png|jpe?g|svg|zip)"
+    r"|bookings?|reservations?|agents?|skills?|[\w-]+\.(?:md|txt|csv|json|pdf|html?|docx?|xlsx?|pptx?|py|js|ts|png|jpe?g|svg|zip)"
 )
 CLAIM_RES = (
     re.compile(rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_EXTERNAL})\b(?P<rest>[^.\n]*)"),
@@ -580,6 +590,9 @@ _PAST_TURN = re.compile(r"(?i)\b(earlier|yesterday|previously|before|last (?:wee
 #: Which tools can back a claim, by the claim's words (a web_fetch receipt
 #: cannot back "I saved both places to the list").
 _FAMILIES = (
+    # Agents, skills and automations change only through the chat builder's
+    # confirmed save, grant or undo (spec 010): that confirmation is the receipt.
+    (re.compile(r"(?i)\b(agent|skill|automation|rule)"), re.compile(r"(?i)^builder_(save|grant|undo)$")),
     (re.compile(r"(?i)\b(sent|emailed|texted|messaged|email|message|draft|invit)"), re.compile(r"(?i)mail|message|send|slack|telegram|discord|draft|chat|post")),
     (re.compile(r"(?i)\b(scheduled|booked|reserved|event|meeting|calendar|appointment|reminder|booking|reservation)"), re.compile(r"(?i)calendar|event|schedul|book|reserv|remind|automation|trigger")),
     (re.compile(r"(?i)\b(project|task|goal|note|ledger|entr)"), re.compile(r"(?i)ledger")),

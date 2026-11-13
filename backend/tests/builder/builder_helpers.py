@@ -72,3 +72,22 @@ def history_records(gw, name: str) -> list[dict]:
 
     path = config_versions._agent_paths(gw.user_id, name)[0]
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+def press(gw, card: dict) -> dict:
+    """The card's Confirm button, as the owner presses it, then wait for the
+    lead's resume (spec 009 FR-058) to finish, so the chat is free again. The
+    resumed lead answers with a plain reply."""
+    import time
+
+    gw.lead_script[:] = [AIMessage(content="Ok.")]
+    body = gw.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()
+    run_id = body.get("resume_run_id") or (body.get("detail") or {}).get("resume_run_id")
+    if run_id and card.get("thread_id"):
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            status = gw.client.get(f"/api/threads/{card['thread_id']}/runs/{run_id}").json().get("status")
+            if status not in ("pending", "running"):
+                break
+            time.sleep(0.05)
+    return body

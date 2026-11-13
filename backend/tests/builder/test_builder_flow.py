@@ -5,7 +5,7 @@ Assert on state, not status: every save test reads the store back.
 
 from __future__ import annotations
 
-from builder_helpers import agent_history, agent_state, call, cards, history_records, make_agent, new_thread, offered, say, script
+from builder_helpers import agent_history, agent_state, call, cards, history_records, make_agent, new_thread, offered, press, say, script
 
 DRAFT_AGENT = {"kind": "agent", "name": "test-010-inbox", "fields": {"display_name": "Inbox triage", "description": "Triages my inbox", "instructions": "You triage the inbox every morning."}, "guessed": ["description"]}
 
@@ -109,7 +109,7 @@ def test_an_edit_after_reading_stored_config_saves_by_button_only(gw) -> None:
     script(gw, "Ok.")
     say(gw, thread_id, "apply")
     assert agent_state(gw, "test-010-standup") == before
-    assert gw.client.post(f"/api/confirmations/{card['id']}/confirm", json={}).json()["outcome"] == "executed"
+    assert press(gw, card)["outcome"] == "executed"
     assert agent_state(gw, "test-010-standup")[0]["soul"] == "Keep it to three lines."
 
 
