@@ -247,8 +247,13 @@ class TestCheckWebFetch:
         cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n")
         result = doctor.check_web_fetch(cfg)
         assert result.status == "warn"
-        assert "cannot fetch" in result.detail and "JINA_API_KEY" in result.fix
+        assert "cannot fetch" in result.detail and "JINA_API_KEY" not in result.fix
+        # A key alone enables nothing: web_fetch still fails closed.
         monkeypatch.setenv("JINA_API_KEY", "test-not-a-real-key")
+        assert doctor.check_web_fetch(cfg).status == "warn"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    jina_fallback: true\n")
+        assert doctor.check_web_fetch(cfg).status == "warn", "the fallback never covers a missing proxy"
+        cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    provider: jina\n")
         assert doctor.check_web_fetch(cfg).status == "ok"
         monkeypatch.delenv("JINA_API_KEY")
         cfg.write_text("config_version: 5\ntools:\n  - name: web_fetch\n    use: omniharness.community.builtin_fetch.tools:web_fetch_tool\n    proxy: http://proxy.example:3128\n")

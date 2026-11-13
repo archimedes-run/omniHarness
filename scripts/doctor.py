@@ -534,19 +534,22 @@ def check_web_fetch(config_path: Path) -> CheckResult:
         return result
     # The built-in fetcher fetches only through the fetch egress proxy. Docker
     # compose sets one for the gateway container; a gateway run on the host has
-    # none unless configured, and then only the Jina fallback (with a key) works.
+    # none unless configured, and then web_fetch fails closed: no direct fetch
+    # and no Jina fallback. Only an explicit provider: jina (with its key) skips
+    # the proxy.
     try:
         tools = _load_yaml_file(config_path).get("tools") or []
         entry = next((t for t in tools if t.get("name") == "web_fetch" and "builtin_fetch" in str(t.get("use", ""))), {})
     except Exception:  # noqa: BLE001 - check_web_tool already reported a config problem
         entry = {}
-    if entry.get("proxy") or os.environ.get("OMNI_HARNESS_FETCH_EGRESS_PROXY") or os.environ.get("JINA_API_KEY"):
+    jina_selected = str(entry.get("provider") or "").strip().lower() == "jina"
+    if entry.get("proxy") or os.environ.get("OMNI_HARNESS_FETCH_EGRESS_PROXY") or (jina_selected and os.environ.get("JINA_API_KEY")):
         return result
     return CheckResult(
         result.label,
         "warn",
-        "built-in fetcher, but no fetch egress proxy and no JINA_API_KEY: a gateway run on the host (not Docker) cannot fetch web pages",
-        fix="Run with Docker ('make docker-start' starts the proxy), or set tools.web_fetch.proxy, or set JINA_API_KEY in .env for the Jina fallback",
+        "built-in fetcher, but no fetch egress proxy: a gateway run on the host (not Docker) cannot fetch web pages",
+        fix="Run with Docker ('make docker-start' starts the proxy), or set tools.web_fetch.proxy",
     )
 
 

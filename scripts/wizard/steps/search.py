@@ -58,12 +58,12 @@ def run_search_step(step_label: str = "Step 3/3") -> SearchStepResult:
                 provided_keys[fetch_provider.env_var] = fetch_api_key
                 print_success(f"Key will be saved to .env as {fetch_provider.env_var}")
 
-    if fetch_provider is not None and fetch_provider.name == "builtin_fetch" and "JINA_API_KEY" not in provided_keys:
+    if fetch_provider is not None and fetch_provider.name == "builtin_fetch":
         print()
         print_warning(
             "The built-in fetcher fetches only through the fetch egress proxy, which Docker mode starts "
             "('make docker-start'). A gateway run on the host has no proxy, so web_fetch will not fetch "
-            "pages there unless you set tools.web_fetch.proxy, or JINA_API_KEY in .env for the Jina fallback."
+            "pages there unless you set tools.web_fetch.proxy."
         )
 
     return SearchStepResult(

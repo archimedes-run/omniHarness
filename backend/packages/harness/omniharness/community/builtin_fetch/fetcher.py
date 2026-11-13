@@ -18,6 +18,7 @@ from urllib.parse import urljoin
 import httpx
 
 from omniharness.community.builtin_fetch.guard import (
+    EgressProxyDown,
     FetchFailed,
     FetchRefused,
     IPNetwork,
@@ -175,9 +176,10 @@ async def _fetch(url: str, settings: FetchSettings, transport: httpx.AsyncBaseTr
 
 
 async def fetch(url: str, settings: FetchSettings, *, transport: httpx.AsyncBaseTransport | None = None) -> FetchResult:
-    """Fetch ``url``; raises FetchRefused (policy) or FetchFailed (anything else)."""
+    """Fetch ``url``; raises FetchRefused (policy), EgressProxyDown (no proxy, or
+    the proxy unreachable or failing) or FetchFailed (anything else)."""
     if transport is None and not settings.proxy:
-        raise FetchFailed("no fetch egress proxy is configured (tools.web_fetch.proxy or OMNI_HARNESS_FETCH_EGRESS_PROXY)")
+        raise EgressProxyDown("not configured: set tools.web_fetch.proxy or OMNI_HARNESS_FETCH_EGRESS_PROXY")
     try:
         async with asyncio.timeout(settings.timeout):
             return await _fetch(url, settings, transport)
@@ -191,6 +193,10 @@ async def fetch(url: str, settings: FetchSettings, *, transport: httpx.AsyncBase
             raise FetchRefused("the egress proxy refused the destination: not a public address") from None
         if str(exc).startswith("503"):
             raise FetchRefused("the page could not be fetched through the egress proxy") from None
-        raise FetchFailed(f"the egress proxy failed: {exc}") from None
+        raise EgressProxyDown(f"proxy error: {exc}") from None
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        # Every connection goes to the proxy (the proxy connects to the site),
+        # so a connection that cannot be opened means the proxy is unreachable.
+        raise EgressProxyDown(f"unreachable: {type(exc).__name__}") from None
     except httpx.HTTPError as exc:
         raise FetchFailed(f"request failed: {type(exc).__name__}: {exc}") from None
