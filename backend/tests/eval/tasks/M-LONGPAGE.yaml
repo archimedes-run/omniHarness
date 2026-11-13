@@ -1,0 +1,24 @@
+id: M-LONGPAGE
+title: A long fetched page is shortened for reading
+mock_only: true
+source: 'real-model eval 2026-11-13 (T02: whole pages filled the context; it was summarised
+  again and again)'
+mode: pro
+prompt: Summarise the long React article.
+tools: []
+confirm: none
+budget:
+  seconds: 90
+checks:
+- tool_called:
+    name: web_fetch
+mock:
+  lead:
+  - tool_calls:
+    - name: web_fetch
+      args:
+        url: https://articles.example/long-page
+  - expect:
+      tool: web_fetch
+      contains: Page shortened for reading
+    content: It covers Actions, useOptimistic and use() [the article](https://articles.example/long-page).

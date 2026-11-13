@@ -119,6 +119,8 @@ test("the section column reads as the board, the open one marked", async ({
     "Safety",
     "Notifications",
     "Activity log",
+    // The lead's eval scores (spec 009 Slice 0).
+    "Evals",
     "Appearance",
     "About",
   ]);

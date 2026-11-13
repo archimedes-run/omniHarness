@@ -34,6 +34,7 @@ import {
   type FeedbackData,
 } from "@/core/api/feedback";
 import { resolveArtifactURL } from "@/core/artifacts/utils";
+import { splitDisclosure } from "@/core/disclosure";
 import { useI18n } from "@/core/i18n/hooks";
 import { holdBackVerdictLines } from "@/core/messages/agents";
 import {
@@ -49,6 +50,7 @@ import { cn } from "@/lib/utils";
 
 import { CopyButton } from "../copy-button";
 
+import { DisclosureNote } from "./disclosure-note";
 import { MarkdownContent } from "./markdown-content";
 import {
   TruncationBadge,
@@ -263,12 +265,22 @@ function MessageContent_({
     return files as FileInMessage[];
   }, [message.additional_kwargs?.files, rawContent]);
 
+  // The policy layer's appended Tier 2 disclosure is shown as a system note
+  // under the answer, not inside the assistant's words (core/disclosure).
+  const disclosure = useMemo(
+    () =>
+      message.type === "ai"
+        ? splitDisclosure(rawContent ?? "", message.additional_kwargs)
+        : null,
+    [message.type, message.additional_kwargs, rawContent],
+  );
+
   const contentToDisplay = useMemo(() => {
     if (isHuman) {
       return rawContent ? stripUploadedFilesTag(rawContent) : "";
     }
-    return rawContent ?? "";
-  }, [rawContent, isHuman]);
+    return disclosure ? disclosure.body : (rawContent ?? "");
+  }, [rawContent, isHuman, disclosure]);
 
   const filesList =
     files && files.length > 0 ? (
@@ -362,6 +374,7 @@ function MessageContent_({
         className="my-3"
         components={components}
       />
+      {disclosure && !isLoading && <DisclosureNote items={disclosure.items} />}
     </AIElementMessageContent>
   );
 }

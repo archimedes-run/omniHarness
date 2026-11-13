@@ -31,6 +31,22 @@ def _vllm_disable_chat_template_kwargs(chat_template_kwargs: dict) -> dict:
     return disable_kwargs
 
 
+#: A model call that has not answered after this long is abandoned and tried
+#: once more, so a hung request does not hold a whole run (real eval
+#: 2026-11-13: a final answer took 80 to 134 s; none legitimately longer).
+#: A model's own `timeout` / `request_timeout` / `max_retries` in config wins.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 180
+DEFAULT_MAX_RETRIES = 1
+
+
+def _bound_request_time(model_use_path: str, model_settings_from_config: dict) -> None:
+    if model_use_path != "langchain_openai:ChatOpenAI":
+        return
+    if not any(k in model_settings_from_config for k in ("timeout", "request_timeout")):
+        model_settings_from_config["timeout"] = DEFAULT_REQUEST_TIMEOUT_SECONDS
+    model_settings_from_config.setdefault("max_retries", DEFAULT_MAX_RETRIES)
+
+
 def _enable_stream_usage_by_default(model_use_path: str, model_settings_from_config: dict) -> None:
     """Enable stream usage for OpenAI-compatible models unless explicitly configured.
 
@@ -115,6 +131,7 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
         model_settings_from_config.pop("reasoning_effort", None)
 
     _enable_stream_usage_by_default(model_config.use, model_settings_from_config)
+    _bound_request_time(model_config.use, model_settings_from_config)
 
     # For Codex Responses API models: map thinking mode to reasoning_effort
     from omniharness.models.openai_codex_provider import CodexChatModel

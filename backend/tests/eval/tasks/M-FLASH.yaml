@@ -1,0 +1,51 @@
+id: M-FLASH
+title: The checklist exists in flash mode too
+mock_only: true
+source: spec 009 FR-050, owner decision Q-S0-1 (mocked)
+mode: flash
+prompt: Find 2 bakeries in Fishtown with links.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- checklist_before_action:
+    strict: true
+- min_links:
+    n: 2
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 2 Fishtown bakeries, each with a link'
+          status: completed
+        - content: Search
+          status: in_progress
+        - content: Write the list
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: web_search
+      args:
+        query: fishtown bakery
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 2 Fishtown bakeries, each with a link'
+          status: completed
+        - content: Search
+          status: completed
+        - content: Write the list
+          status: completed
+  - expect:
+      tool: write_todos
+    content: 'Two picks: [Suraya](https://www.surayaphilly.com/) and [Kalaya](https://www.kalayaphilly.com/).
+
+
+      Checked: both links came from the search.'

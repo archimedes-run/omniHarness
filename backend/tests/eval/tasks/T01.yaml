@@ -1,0 +1,74 @@
+id: T01
+title: Philadelphia date night, 5 picks with links
+critical: true
+source: '2026-10-24 live check; owner dogfooding: Philly date-night research with links'
+mode: pro
+prompt: Find 5 great date-night restaurants in Philadelphia, with a link for each.
+tools: []
+confirm: none
+budget:
+  seconds: 420
+  est_usd: 0.08
+checks:
+- min_links:
+    n: 5
+    distinct_hosts: 3
+- tool_called:
+    name: web_search
+- no_cards
+- no_open_cards
+- no_clarification
+- no_menu
+- checklist_before_action:
+    strict: true
+- verified_section:
+    strict: true
+- trace_recorded
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 5 date-night restaurants in Philadelphia, each with a link from a search result'
+          status: completed
+        - content: Search for date-night restaurants
+          status: in_progress
+        - content: Pick 5 and write the list
+          status: pending
+  - expect:
+      tool: write_todos
+    tool_calls:
+    - name: web_search
+      args:
+        query: best date night restaurants Philadelphia
+  - expect:
+      tool: web_search
+      contains: vetricucina
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 5 date-night restaurants in Philadelphia, each with a link from a search result'
+          status: completed
+        - content: Search for date-night restaurants
+          status: completed
+        - content: Pick 5 and write the list
+          status: completed
+  - expect:
+      tool: write_todos
+    content: 'Here are 5 date-night picks in Philadelphia:
+
+
+      1. [Vetri Cucina](https://www.vetricucina.com/) - intimate Italian tasting menu.
+
+      2. [Zahav](https://www.zahavrestaurant.com/) - modern Israeli, a classic special night.
+
+      3. [Friday Saturday Sunday](https://www.fridaysaturdaysunday.com/) - Rittenhouse tasting menu.
+
+      4. [Laser Wolf](https://www.laserwolfphilly.com/) - Israeli skewers in Kensington.
+
+      5. [Her Place Supper Club](https://www.herplacesupperclub.com/) - small set-menu supper club.
+
+
+      Checked: all 5 links came from this search''s results.'

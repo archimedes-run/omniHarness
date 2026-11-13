@@ -1,0 +1,30 @@
+id: T06
+title: Relaxed Saturday in Philadelphia, with links
+source: weekend planning
+mode: pro
+prompt: 'Plan a relaxed Saturday in Philadelphia for two: morning, afternoon and evening, with links.'
+tools: []
+confirm: none
+budget:
+  seconds: 420
+  est_usd: 0.08
+checks:
+- min_links:
+    n: 3
+- no_menu
+- no_clarification
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: relaxed saturday philadelphia things to do
+  - expect:
+      tool: web_search
+    content: 'Morning: coffee and breakfast at [Reading Terminal Market](https://readingterminalmarket.org/).
+
+
+      Afternoon: the [Philadelphia Museum of Art](https://philamuseum.org/) and a walk on the river trail.
+
+
+      Evening: dinner at [Zahav](https://www.zahavrestaurant.com/).'

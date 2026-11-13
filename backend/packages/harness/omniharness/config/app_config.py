@@ -20,6 +20,7 @@ from omniharness.config.mcp_builder_config import McpBuilderConfig
 from omniharness.config.memory_config import MemoryConfig, load_memory_config_from_dict
 from omniharness.config.model_config import ModelConfig
 from omniharness.config.policy_config import PolicyConfig
+from omniharness.config.research_budget_config import ResearchBudgetConfig
 from omniharness.config.run_events_config import RunEventsConfig
 from omniharness.config.runtime_paths import existing_project_file
 from omniharness.config.sandbox_config import SandboxConfig
@@ -132,6 +133,7 @@ class AppConfig(BaseModel):
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig, description="Guardrail middleware configuration")
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig, description="LLM circuit breaker configuration")
     loop_detection: LoopDetectionConfig = Field(default_factory=LoopDetectionConfig, description="Loop detection middleware configuration")
+    research_budget: ResearchBudgetConfig = Field(default_factory=ResearchBudgetConfig, description="Per-task caps on the lead's web lookups")
     code_jobs: CodeJobsConfig = Field(default_factory=CodeJobsConfig, description="Coding jobs: OpenCode in the container sandbox (spec 009)")
     model_config = ConfigDict(extra="allow")
 

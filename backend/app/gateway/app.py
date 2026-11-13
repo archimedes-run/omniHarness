@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -25,6 +26,7 @@ from app.gateway.routers import (
     composio,
     confirmations,
     drafts,
+    evals,
     feedback,
     home,
     inbox,
@@ -431,7 +433,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # assistant, not a precondition for it.
         app.state.trigger_engine = await _start_trigger_engine(app)
 
+        # A lead turn whose last cards expired resumes, at most once (spec
+        # 009, owner decision M2; app.gateway.resume). Every worker sweeps; a
+        # turn is resumed only by the caller holding all of its cards' locks.
+        from app.gateway.resume import resume_expired_forever
+
+        expiry_task = asyncio.create_task(resume_expired_forever(app))
+
         yield
+
+        expiry_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await expiry_task
+        # Trace writes in flight end before anything they use is closed.
+        from app.gateway.services import drain_trace_tasks
+
+        await drain_trace_tasks()
 
         # Stop the trigger engine before the channel service, so a firing in
         # flight still has a destination to deliver to.
@@ -685,6 +702,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
     app.include_router(run_history.router)
+    app.include_router(evals.router)
 
     # Automations: the one write path for trigger rules (Phase 2.5).
     app.include_router(automations.router)

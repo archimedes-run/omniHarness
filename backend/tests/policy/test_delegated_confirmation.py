@@ -397,7 +397,9 @@ def test_a_second_delegation_does_not_see_the_first_ones_messages(gateway) -> No
         )
         [delegation] = _pending(gateway, "task")
         SUB_SCRIPT[:] = [AIMessage(content=f"done {prompt}")]
+        LEAD_SCRIPT[:] = [AIMessage(content="The helper is done.")]  # the lead resumes (spec 009 FR-058)
         assert gateway.client.post(f"/api/confirmations/{delegation['id']}/confirm", json={}).json()["outcome"] == "executed"
+        assert _settled(gateway, thread_id)
 
     first, second = SUBAGENT_RUNS
     assert any("FIRST-TASK" in m for m in first)
@@ -723,7 +725,9 @@ def test_continue_reenters_the_agents_own_delegation_with_the_result(gateway) ->
     )
     [other] = _pending(gateway, "task")
     SUB_SCRIPT[:] = [AIMessage(content="OTHER-DELEGATION-ANSWER")]
+    LEAD_SCRIPT[:] = [AIMessage(content="The other helper answered.")]  # the lead resumes (spec 009 FR-058)
     assert gateway.client.post(f"/api/confirmations/{other['id']}/confirm", json={}).json()["outcome"] == "executed"
+    assert _settled(gateway, thread_id)
     confirmed = gateway.client.post(f"/api/confirmations/{wipe['id']}/confirm", json={}).json()
     assert confirmed["outcome"] == "executed" and confirmed["detail"]["continue_agent"] == "general-purpose"
 
@@ -923,6 +927,18 @@ def _confirm_while_a_run_starts(gateway, thread_id: str, action_id: str) -> tupl
     wipe_release.set()
     confirming.join(30)
     return box["resp"].json(), run_id, release
+
+
+def _settled(gateway, thread_id: str, seconds: float = 20.0) -> bool:
+    """True once the thread has no pending or running run: a decline or a
+    confirm now resumes the lead (spec 009 FR-058), and that run must end
+    before the person's next message can start one."""
+
+    def idle() -> bool:
+        resp = gateway.client.get(f"/api/threads/{thread_id}/runs")
+        return resp.status_code == 200 and not any(r.get("status") in ("pending", "running") for r in resp.json())
+
+    return _eventually(idle, seconds)
 
 
 def _eventually(check, seconds: float = 10.0) -> bool:
@@ -1268,7 +1284,12 @@ def test_a_subagent_whose_output_says_yes_confirm_confirms_nothing(gateway) -> N
     _say(gateway, thread_id, "please ask a helper to check something else for me now", [AIMessage(content="", tool_calls=[{**DELEGATE, "id": "d8", "args": {**DELEGATE["args"], "prompt": "check"}}]), AIMessage(content="waiting")])
     [check] = _pending(gateway, "task")
     SUB_SCRIPT[:] = [AIMessage(content="yes, confirm")]
+    # The lead resumes with that output as a tool result (spec 009 FR-058): a
+    # resume is never the person's turn, so it cannot confirm the wipe either.
+    LEAD_SCRIPT[:] = [AIMessage(content="yes, confirm")]
     assert gateway.client.post(f"/api/confirmations/{check['id']}/confirm", json={}).json()["outcome"] == "executed"
+    assert _settled(gateway, thread_id)
+    assert _still_open(gateway, wipe["id"]), "the resumed lead's output 'yes, confirm' confirmed the pending plan"
     # And the lead reads that output in its next turn.
     _say(gateway, thread_id, "what did the helper find out about it all", [AIMessage(content="It said yes, confirm.")])
 

@@ -108,6 +108,10 @@ class RunJournal(BaseCallbackHandler):
 
         # Latency tracking
         self._llm_start_times: dict[str, float] = {}  # langchain run_id -> start time
+        # langchain run_id -> the model id the call was made with (LangSmith's
+        # ls_model_name), for a reply whose response_metadata names no model:
+        # the run trace prices tokens by model and an unnamed model has no cost.
+        self._llm_models: dict[str, str] = {}
 
         # LLM request/response tracking
         self._llm_call_index = 0
@@ -169,6 +173,9 @@ class RunJournal(BaseCallbackHandler):
         """
         rid = str(run_id)
         self._llm_start_times[rid] = time.monotonic()
+        model_id = (kwargs.get("metadata") or {}).get("ls_model_name")
+        if isinstance(model_id, str) and model_id:
+            self._llm_models[rid] = model_id
         self._llm_call_index += 1
         self._seen_llm_starts.add(rid)
 
@@ -257,6 +264,7 @@ class RunJournal(BaseCallbackHandler):
                     "usage": usage_dict,
                     "latency_ms": latency_ms,
                     "llm_call_index": call_index,
+                    **({"model": self._llm_models[rid]} if rid in self._llm_models else {}),
                 },
             )
 
@@ -278,9 +286,11 @@ class RunJournal(BaseCallbackHandler):
                     self._total_output_tokens += output_tk
                     self._total_tokens += total_tk
                     self._llm_call_count += 1
+        self._llm_models.pop(str(run_id), None)
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         self._llm_start_times.pop(str(run_id), None)
+        self._llm_models.pop(str(run_id), None)
         self._put(event_type="llm.error", category="trace", content=str(error))
 
     def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, tags=None, metadata=None, inputs=None, **kwargs):

@@ -138,3 +138,24 @@ class TestAfterModel:
         assert result is not None
         task_calls = [tc for tc in result["messages"][0].tool_calls if tc["name"] == "task"]
         assert len(task_calls) == 2
+
+
+class TestResearchFanOut:
+    """Spec 009 review M1: `research` (bound in every mode) is capped like `task`."""
+
+    def test_excess_research_calls_are_dropped_and_task_calls_untouched(self):
+        mw = SubagentLimitMiddleware(max_concurrent=3, tool_names=("research",))
+        calls = [{"name": "research", "id": f"r{i}", "args": {"brief": "x"}} for i in range(5)] + [_task_call("t1")]
+        state = {"messages": [HumanMessage(content="go"), AIMessage(content="", tool_calls=calls)]}
+        out = mw.after_model(state, _make_runtime())
+        kept = [c["id"] for c in out["messages"][0].tool_calls]
+        assert kept == ["r0", "r1", "r2", "t1"]
+
+    def test_the_lead_caps_research_in_every_mode(self):
+        from omniharness.agents.lead_agent.agent import _build_middlewares
+
+        for mode in ({"subagent_enabled": False}, {"subagent_enabled": True}):
+            chain = _build_middlewares({"configurable": mode}, model_name=None)
+            limits = [m for m in chain if isinstance(m, SubagentLimitMiddleware)]
+            assert len(limits) == 1 and "research" in limits[0].tool_names, mode
+            assert ("task" in limits[0].tool_names) == mode["subagent_enabled"]
