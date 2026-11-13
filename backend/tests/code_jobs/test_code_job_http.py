@@ -71,6 +71,15 @@ def gateway(tmp_path, monkeypatch):
     monkeypatch.setenv("OMNI_HARNESS_SANDBOX_NETWORK", "omni-test-sandboxes")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-provider-key-never-in-the-sandbox-000000")
     monkeypatch.chdir(tmp_path)
+    # Loading this test's config replaces process-wide section configs (its
+    # title and summarization are off): put them back afterwards so later
+    # tests in this worker see their own.
+    import importlib
+
+    for mod_name in ("title_config", "summarization_config", "agents_api_config", "subagents_config", "tool_search_config", "guardrails_config", "checkpointer_config", "stream_bridge_config"):
+        mod = importlib.import_module(f"omniharness.config.{mod_name}")
+        for attr in [a for a in vars(mod) if a.startswith("_") and a.endswith("_config") and not callable(getattr(mod, a))]:
+            monkeypatch.setattr(mod, attr, getattr(mod, attr))
     reset_app_config()
     reset_extensions_config()
     set_auth_config(AuthConfig(jwt_secret=os.environ["AUTH_JWT_SECRET"]))
