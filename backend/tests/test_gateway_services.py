@@ -96,7 +96,7 @@ def test_build_run_config_basic():
 
     config = build_run_config("thread-1", None, None)
     assert config["configurable"]["thread_id"] == "thread-1"
-    assert config["recursion_limit"] == 100
+    assert config["recursion_limit"] == 150
 
 
 def test_build_run_config_with_overrides():
@@ -356,7 +356,7 @@ def test_build_run_config_with_context():
     assert "context" in config
     assert config["context"]["user_id"] == "u-42"
     assert "configurable" not in config
-    assert config["recursion_limit"] == 100
+    assert config["recursion_limit"] == 150
 
 
 def test_build_run_config_null_context_becomes_empty_context():

@@ -621,7 +621,12 @@ def build_run_config(
     the LangGraph Platform-compatible HTTP API and the IM channel path behave
     identically.
     """
-    config: dict[str, Any] = {"recursion_limit": 100}
+    # 150, not 100 (spec 009 Slice 0): every middleware hook is a graph step,
+    # and Slice 0 added after_model hooks (the final-reply notice, the
+    # sent-back question, the checklist gate in every mode), so 100 cut
+    # channel and scheduled runs short after ~8 tool rounds. The web chat
+    # asks for 1000; the loop detector still stops a run that repeats itself.
+    config: dict[str, Any] = {"recursion_limit": 150}
     if request_config:
         # LangGraph >= 0.6.0 introduced ``context`` as the preferred way to
         # pass thread-level data and rejects requests that include both

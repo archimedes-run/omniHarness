@@ -432,7 +432,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # assistant, not a precondition for it.
         app.state.trigger_engine = await _start_trigger_engine(app)
 
+        # A lead turn whose last cards expired resumes (spec 009, owner
+        # decision M2; app.gateway.resume). In every worker: a turn is resumed
+        # only by the caller that holds every one of its cards' locks.
+        from app.gateway.resume import resume_expired_forever
+
+        expiry_task = asyncio.create_task(resume_expired_forever(app))
+
         yield
+
+        expiry_task.cancel()
 
         # Stop the trigger engine before the channel service, so a firing in
         # flight still has a destination to deliver to.

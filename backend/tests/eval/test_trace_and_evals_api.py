@@ -107,6 +107,7 @@ def test_the_evals_api_lists_results_and_the_baseline(tmp_path, monkeypatch) -> 
         client = trial.client
         listing = client.get("/api/evals").json()
         assert [r["id"] for r in listing["runs"]] == [result["id"]]
+        assert not listing["results_dir"].startswith("/"), "the host's absolute path reached the API"
         # main 92f6827, measured with this harness (core 5/18, strict 3/18)
         assert listing["baseline"]["passed"] == 5 and listing["baseline"]["strict_passed"] == 3 and listing["baseline"]["total"] == 18
         detail = client.get(f"/api/evals/{result['id']}").json()
@@ -117,3 +118,25 @@ def test_the_evals_api_lists_results_and_the_baseline(tmp_path, monkeypatch) -> 
         client.post("/api/v1/auth/logout")
         client.cookies.clear()
         assert client.get("/api/evals").status_code in (401, 403)
+
+
+def test_someone_elses_trace_reads_as_missing_and_a_deleted_chat_takes_its_traces() -> None:
+    from app.run_history.chat_trace import CHAT
+
+    task = _task({"lead": [{"content": "Hello."}]})
+    scripted.SCRIPT.load(task["mock"])
+    with harness.gateway(task, "mock") as trial:
+        client = trial.client
+        thread_id = client.post("/api/threads", json={}).json()["thread_id"]
+        _run(client, thread_id, "hi")
+        [mine] = _traces(client, thread_id)
+        # A trace recorded for another account, on the same thread id.
+        history = client.app.state.run_history
+        history.record(kind=CHAT, source_id="run-of-someone-else", thread_id=thread_id, body={"trace": {"steps": []}}, status="success", owner_id="another-account")
+        assert client.get("/api/run-history/traces/run-of-someone-else").status_code == 404
+        listed = client.get("/api/run-history/runs", params={"kind": "chat", "thread_id": thread_id}).json()
+        assert [r["source_id"] for r in listed] == [mine["source_id"]]
+        # Deleting the chat deletes its traces (every account's rows of that thread).
+        assert client.delete(f"/api/threads/{thread_id}").status_code == 200
+        assert client.get(f"/api/run-history/traces/{mine['source_id']}").status_code == 404
+        assert history.list(kind=CHAT, thread_id=thread_id, limit=10) == []

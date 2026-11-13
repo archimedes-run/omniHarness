@@ -26,6 +26,15 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 _SUMMARY_KEYS = ("id", "created_at", "mode", "git_sha", "model", "trials", "passed", "total", "strict_passed", "cost_usd", "seconds", "regressions")
 
 
+def _display_dir(folder: Path) -> str:
+    """Where the results are, as shown in the UI: relative to the repository
+    (never an absolute path of the host: it names the user's home)."""
+    try:
+        return folder.resolve().relative_to(_BACKEND.parent.resolve()).as_posix()
+    except ValueError:
+        return folder.name
+
+
 def results_dir() -> Path:
     return Path(os.environ.get("EVAL_RESULTS_DIR") or (_BACKEND.parent / "eval" / "results"))
 
@@ -99,7 +108,7 @@ async def list_evals(request: Request) -> dict[str, Any]:
             if data is not None:
                 runs.append({k: data.get(k) for k in _SUMMARY_KEYS})
     runs.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
-    return {"baseline": _baseline(), "runs": runs[:200], "results_dir": str(folder)}
+    return {"baseline": _baseline(), "runs": runs[:200], "results_dir": _display_dir(folder)}
 
 
 @router.get("/{eval_id}")

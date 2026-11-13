@@ -36,9 +36,6 @@ from omniharness.agents.working_loop import VERIFICATION_KEY, build_verification
 
 logger = logging.getLogger(__name__)
 
-#: How the policy layer opens its appended Tier 2 disclosure (disclose.py).
-DISCLOSURE_HEADING = "\n\nAlso, for the record:"
-
 
 def _replace_text(message: AIMessage, text: str) -> Any:
     content = message.content
@@ -65,14 +62,13 @@ class VerificationMiddleware(AgentMiddleware):
             return None
         reply = text_of(last)
         fixes: list[str] = []
-        # The policy layer's Tier 2 disclosure block (app/policy/disclose.py)
-        # is appended after the model's text and is never touched: the menu
-        # rule applies to the model's part above it.
-        body, sep, disclosure = reply.partition(DISCLOSURE_HEADING)
-        new_body, changed = strip_trailing_menu(body)
+        # The policy layer's Tier 2 notice is appended AFTER this hook (its
+        # after_model runs last, on the final reply), so nothing here can
+        # remove it.
+        new_body, changed = strip_trailing_menu(reply)
         if changed:
             fixes.append("trailing_menu_removed")
-            reply = new_body + (("\n\n" + sep.strip() + disclosure) if sep else "")
+            reply = new_body
         context = getattr(runtime, "context", None) or {}
         run_id = context.get("run_id") if isinstance(context, dict) else None
         try:

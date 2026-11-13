@@ -117,6 +117,25 @@ async def _off_loop(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return await asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, fn, *args, **kwargs))
 
 
+def _ran(result: Any) -> bool:
+    """Did the Tier 2 call actually run? Not when its result is an error, a
+    refusal or a card stated further in (spec 009 review: a refused or carded
+    call is never listed as "ran" in the notice)."""
+    messages = [result] if hasattr(result, "content") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
+    for message in messages:
+        if getattr(message, "type", None) != "tool":
+            continue
+        if getattr(message, "status", None) == "error":
+            return False
+        text = str(getattr(message, "content", "") or "").lstrip()
+        if text.startswith(("Error:", "Not run:", "Waiting for you:")):
+            return False
+        stamp = (getattr(message, "additional_kwargs", None) or {}).get(STEP_KEY)
+        if isinstance(stamp, dict) and stamp.get("outcome") in ("refused", "needs_confirmation"):
+            return False
+    return True
+
+
 def _is_registered_write_todos(tool: Any) -> bool:
     """The checklist tool the harness's TodoMiddleware registers, by the
     identity of its function (never by name): its result echoes the call's own
@@ -227,7 +246,7 @@ class PolicyMiddleware(AgentMiddleware):
             self._mark_trusted_ack(request, result)
             if grant:
                 self._record_grant_use(request, decision, grant, call.get("write_id"))
-            else:
+            elif _ran(result):
                 self.ledger.record(
                     tool_name=decision.tool_name,
                     arguments=self._arguments(request),
@@ -279,7 +298,8 @@ class PolicyMiddleware(AgentMiddleware):
             # what that branch was written for.
             arguments = self._arguments(request)
             resolved = tuple(self.resolve_targets(decision.tool_name, arguments)) if (self.resolve_targets and source_argument(arguments)) else ()
-            self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
+            if _ran(result):
+                self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
             return result
 
         # Tier 3 always asks: a standing grant never skips a confirmation.
@@ -476,7 +496,7 @@ class PolicyMiddleware(AgentMiddleware):
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(self._disclose(handler(self._offered(request, note))))
+        return self._guard_self_verdict(handler(self._offered(request, note)))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         # OFF THE EVENT LOOP, AND ONLY WHAT RUNS. A typed "yes" runs the
@@ -505,7 +525,7 @@ class PolicyMiddleware(AgentMiddleware):
             verdict, note = outcome
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(self._disclose(await handler(self._offered(request, note))))
+        return self._guard_self_verdict(await handler(self._offered(request, note)))
 
     # ---- tools with no rule are not offered (007) -------------------------
     #
@@ -623,20 +643,42 @@ class PolicyMiddleware(AgentMiddleware):
     # not. `apply` does not consume records, so disclosing on every call would
     # repeat each line once per model round trip.
 
-    def _disclose(self, response: Any) -> Any:
-        if not self.ledger.records:
-            return response
-        message = self._final_message(response)
-        if message is None:
-            return response  # still mid-loop; the user has not been spoken to yet
+    #
+    # APPLIED IN after_model, TO THE REPLY THAT IS FINAL (spec 009 review H1).
+    # It used to run in wrap_model_call on the first reply with no tool calls
+    # and clear the ledger. Since Slice 0, a later gate can send that reply
+    # back (the checklist gate, TodoMiddleware): the model then writes another
+    # reply, which is the one channels and scheduled runs deliver, and it had
+    # no disclosure. This middleware is earlier in the list than every gate
+    # that sends a reply back, so its after_model runs LAST, and only when no
+    # gate jumped back to the model: the reply it sees is the one the person
+    # gets. It also sees that reply AFTER any rewrite (the trailing-offer
+    # removal), so coverage is judged on the final text (review H2).
 
+    def after_model(self, state: Any, runtime: Any) -> dict | None:  # noqa: ARG002
+        return self._disclose_final(state)
+
+    async def aafter_model(self, state: Any, runtime: Any) -> dict | None:  # noqa: ARG002
+        return self._disclose_final(state)
+
+    def _disclose_final(self, state: Any) -> dict | None:
+        from langchain_core.messages import AIMessage
+
+        if not self.ledger.records:
+            return None
+        messages = (state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)) or []
+        message = messages[-1] if messages else None
+        if not isinstance(message, AIMessage) or getattr(message, "tool_calls", None):
+            return None  # still mid-loop; the user has not been spoken to yet
         original = str(message.content or "")
         disclosed = self.ledger.apply(original)
+        update = None
         if disclosed != message.content:
-            message.content = disclosed
-            self._mark_disclosure(message, original, disclosed)
+            final = message.model_copy(update={"content": disclosed, "additional_kwargs": dict(message.additional_kwargs or {})})
+            self._mark_disclosure(final, original, disclosed)
+            update = {"messages": [final]}
         self.ledger.clear()
-        return response
+        return update
 
     def _mark_disclosure(self, message: Any, original: str, disclosed: str) -> None:
         """Display data on the reply (DISCLOSURE_MARKER): which part of its
@@ -647,7 +689,7 @@ class PolicyMiddleware(AgentMiddleware):
         head = original.rstrip()
         if not disclosed.startswith(head):
             return
-        items = [{"tool": r.tool_name, "text": r.sentence()} for r in self.ledger.records if not r.disclosed]
+        items = [{"tool": r.tool_name, "text": r.sentence()} for r in self.ledger.records]
         if not items or not isinstance(getattr(message, "additional_kwargs", None), dict):
             return
         message.additional_kwargs[DISCLOSURE_MARKER] = {"text": disclosed[len(head) :], "items": items}

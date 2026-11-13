@@ -110,14 +110,14 @@ def test_a_tier1_action_is_not_announced(system):
     assert "calendar_read" not in replies[-1]
 
 
-def test_the_model_phrasing_it_itself_is_accepted(system):
-    """The model MAY disclose in its own words. It may not skip one — so a
-    reply that already names the action is left alone rather than duplicated."""
+def test_the_model_phrasing_it_itself_does_not_replace_the_notice(system):
+    """Owner decision (spec 009 review H1/H2): the model's own "I used X"
+    never counts as the notice. The server's line is appended anyway, once."""
     replies = _run(system, calendar_create_hold, "I used calendar_create_hold to put Lunch on your calendar.")
 
     final = replies[-1]
-    assert final.count("calendar_create_hold") == 1, f"the disclosure was appended on top of the model's own: {final!r}"
-    assert "For the record" not in final
+    assert final.endswith("Ran without asking: calendar_create_hold"), final
+    assert final.count("Ran without asking") == 1
 
 
 def _final_message(system, tool, said: str) -> AIMessage:
@@ -150,8 +150,9 @@ def test_the_appended_block_is_marked_for_display_and_still_in_the_text(system):
     assert [i["tool"] for i in marker["items"]] == ["calendar_create_hold"]
 
 
-def test_no_marker_when_nothing_was_appended(system):
-    final = _final_message(system, calendar_create_hold, "I used calendar_create_hold to put Lunch on your calendar.")
+def test_no_notice_and_no_marker_without_a_tier2_action(system):
+    final = _final_message(system, calendar_read, "There are two events.")
     from omniharness.agents.turns import DISCLOSURE_MARKER
 
     assert DISCLOSURE_MARKER not in final.additional_kwargs
+    assert "Ran without asking" not in str(final.content)

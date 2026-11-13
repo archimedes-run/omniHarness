@@ -59,7 +59,7 @@ export function splitDisclosure(
 
 /**
  * Every action of the reply on ONE line, in the order each tool first ran,
- * repeats counted: "code_job, ledger_apply ×2" (owner decision, PR #174).
+ * repeats counted: "code_job, ledger_apply ×2" (owner decision on the Slice 0 review).
  */
 export function disclosureSummary(items: DisclosureItem[]): string {
   const counts = new Map<string, number>();

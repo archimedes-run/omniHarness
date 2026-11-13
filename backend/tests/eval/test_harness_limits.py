@@ -93,13 +93,14 @@ def test_only_the_model_key_reaches_a_real_trial() -> None:
     config = yaml.safe_load((harness.REPO / "config.example.yaml").read_text())
     needed = harness.needed_keys(config["models"], config["tools"])
     assert needed == {"OPENAI_API_KEY"}
-    parent = {"PATH": "/bin", "JINA_API_KEY": "x", "GITHUB_TOKEN": "x", "OMNI_HARNESS_HOME": "/h", "OPENAI_API_KEY": "parent"}
+    parent = {"PATH": "/bin", "JINA_API_KEY": "x", "GITHUB_TOKEN": "x", "OMNI_HARNESS_HOME": "/h", "OPENAI_API_KEY": "parent", "SOME_SETTING": "1", "LC_ALL": "C"}
     env, passed = harness.trial_process_env(parent, {"OPENAI_API_KEY": "file", "JINA_API_KEY": "file", "TAVILY_API_KEY": "file", "OPENAI_BASE_URL": "http://x"}, needed)
     assert env["OPENAI_API_KEY"] == "file"
     assert env["OPENAI_BASE_URL"] == "http://x"
     assert env["PATH"] == "/bin"
-    for name in ("JINA_API_KEY", "GITHUB_TOKEN", "TAVILY_API_KEY", "OMNI_HARNESS_HOME"):
-        assert name not in env
+    assert env["LC_ALL"] == "C"
+    for name in ("JINA_API_KEY", "GITHUB_TOKEN", "TAVILY_API_KEY", "OMNI_HARNESS_HOME", "SOME_SETTING"):
+        assert name not in env, name
     assert passed == ["OPENAI_API_KEY"]
 
 
@@ -186,3 +187,17 @@ def test_make_eval_real_refuses_to_run_without_the_proxy(monkeypatch, capsys) ->
     monkeypatch.delenv("EVAL_ENV_FILE", raising=False)
     assert run.main() == 4
     assert "fetch egress proxy is not available" in capsys.readouterr().err
+
+
+def test_a_mock_trial_does_not_inherit_the_callers_omni_harness_settings(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OMNI_HARNESS_FETCH_EGRESS_PROXY", "http://caller-proxy:3128")
+    monkeypatch.setenv("OMNI_HARNESS_DATA_DIR", str(tmp_path / "callers-data"))
+    seen: dict = {}
+    with harness._patched_environ({"OMNI_HARNESS_HOME": str(tmp_path / "trial")}):
+        import os
+
+        seen = {k: v for k, v in os.environ.items() if k.startswith("OMNI_HARNESS_")}
+    assert seen == {"OMNI_HARNESS_HOME": str(tmp_path / "trial")}
+    import os
+
+    assert os.environ["OMNI_HARNESS_FETCH_EGRESS_PROXY"] == "http://caller-proxy:3128", "not restored after the trial"

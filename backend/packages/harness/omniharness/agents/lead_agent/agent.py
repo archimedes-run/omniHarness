@@ -326,9 +326,11 @@ def _build_middlewares(
 
     # Add SubagentLimitMiddleware to truncate excess parallel task calls
     subagent_enabled = cfg.get("subagent_enabled", False)
-    if subagent_enabled:
-        max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
-        middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
+    max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
+    # The read-only web researcher is bound in every mode (spec 009 FR-061):
+    # its fan-out is capped like `task`'s, in every mode (review M1), by the
+    # same single middleware.
+    middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents, tool_names=("task", "research") if subagent_enabled else ("research",)))
 
     # LoopDetectionMiddleware — detect and break repetitive tool call loops
     loop_detection_config = resolved_app_config.loop_detection

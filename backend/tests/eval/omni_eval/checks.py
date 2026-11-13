@@ -60,7 +60,9 @@ CLAIM_RE = re.compile(
     re.I,
 )
 #: The policy layer's Tier 2 disclosure block is the system's, not the model's.
-DISCLOSURE_RE = re.compile(r"\n\s*(Also, for the record|For the record):[\s\S]*$")
+#: The policy layer's one-line Tier 2 notice at the end of a reply (server text,
+#: not the model's: the linters read the model's part only).
+DISCLOSURE_RE = re.compile(r"(?:^|\n)\s*Ran without asking:[^\n]*\s*$")
 
 
 @dataclass

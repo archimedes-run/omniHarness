@@ -95,7 +95,16 @@ PROVIDER_KEYS = {
 }
 #: Endpoint settings, not secrets: passed when the env file has them.
 ENDPOINT_VARS = frozenset({"OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL"})
-SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|COOKIE|SESSION|AUTH", re.I)
+#: The only variables of the caller's environment a real-mode trial gateway
+#: inherits (an allowlist: anything else, secret or not, stays out).
+ENV_ALLOW = frozenset(
+    {
+        "PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TERM", "USER", "LOGNAME", "SHELL",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+        "VIRTUAL_ENV", "PYTHONHASHSEED", "PYTHONDONTWRITEBYTECODE", "DOCKER_HOST",
+    }
+)  # fmt: skip
 
 
 def task_seconds(task: dict) -> float:
@@ -120,11 +129,11 @@ def needed_keys(models: list[dict] | None, tools: list[dict] | None) -> set[str]
 
 
 def trial_process_env(parent: dict[str, str], env_file: dict[str, str], needed: set[str]) -> tuple[dict[str, str], list[str]]:
-    """The real-mode gateway's environment: the caller's, minus OMNI_HARNESS_*
-    and every secret-looking variable it does not need; from the env file,
-    only the needed keys (and endpoint settings). Returns the env and the
-    NAMES of the secrets passed (never their values)."""
-    env = {k: v for k, v in parent.items() if not k.startswith("OMNI_HARNESS_") and not (SECRET_NAME.search(k) and k not in needed)}
+    """The real-mode gateway's environment: from the caller's, only the
+    allowlisted variables (ENV_ALLOW, LC_*) and the needed keys; from the env
+    file, only the needed keys (and endpoint settings). Returns the env and
+    the NAMES of the secrets passed (never their values)."""
+    env = {k: v for k, v in parent.items() if k in ENV_ALLOW or k.startswith("LC_") or k in needed}
     for key, value in env_file.items():
         if key in needed or key in ENDPOINT_VARS:
             env[key] = value
@@ -221,7 +230,13 @@ def trial_env(root: Path, config_path: Path) -> dict[str, str]:
 
 @contextlib.contextmanager
 def _patched_environ(values: dict[str, str]) -> Iterator[None]:
-    old = {k: os.environ.get(k) for k in values}
+    """The trial's variables set, and every OMNI_HARNESS_* variable of the
+    caller that the trial does not set removed (a caller's data dir, proxy or
+    config must not reach the in-process gateway); all restored after."""
+    dropped = [k for k in os.environ if k.startswith("OMNI_HARNESS_") and k not in values]
+    old = {k: os.environ.get(k) for k in [*values, *dropped]}
+    for key in dropped:
+        os.environ.pop(key, None)
     os.environ.update(values)
     try:
         yield
