@@ -18,6 +18,13 @@ Config (``tools:`` entry named ``web_fetch``, all optional):
   Never for a refused URL, never when the egress proxy is down, and only when
   ``JINA_API_KEY`` is set. A key in the environment alone enables nothing.
 
+PDFs (Content-Type ``application/pdf``, or a generic binary type whose body
+starts with ``%PDF-``) come through the same proxy, guard and redirect checks,
+up to 10 MB and 30 s for fetch plus extraction; the text of the first 200
+pages is extracted with pypdf in a killable worker. An encrypted, image-only
+or malformed PDF, or one over 10 MB, answers "couldn't extract text from this
+PDF: <reason>" and is never handed to Jina.
+
 The tool keeps the name ``web_fetch``, so its output is tagged and gated
 exactly as before (public-result tool, outbound after a private read).
 """
@@ -32,8 +39,20 @@ from dataclasses import dataclass
 from langchain.tools import tool
 
 from omniharness.community.builtin_fetch.extract import to_markdown_bounded
-from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, MAX_REDIRECTS_CAP, TIMEOUT_CAP, FetchResult, FetchSettings, fetch, proxy_url_problem
-from omniharness.community.builtin_fetch.guard import EgressProxyDown, FetchFailed, FetchRefused, WebFetchError, check_url, parse_networks, resolve_and_check
+from omniharness.community.builtin_fetch.fetcher import (
+    MAX_BYTES_CAP,
+    MAX_REDIRECTS_CAP,
+    PDF_CONTENT_TYPE,
+    PDF_TIMEOUT_CAP,
+    TIMEOUT_CAP,
+    FetchResult,
+    FetchSettings,
+    ResponseTooLarge,
+    fetch,
+    proxy_url_problem,
+)
+from omniharness.community.builtin_fetch.guard import EgressProxyDown, FetchFailed, FetchRefused, PdfUnreadable, WebFetchError, check_url, parse_networks, resolve_and_check
+from omniharness.community.builtin_fetch.pdf import pdf_to_markdown_bounded
 from omniharness.config import get_app_config
 
 logger = logging.getLogger(__name__)
@@ -103,9 +122,12 @@ async def fetch_markdown(url: str, config: WebFetchConfig) -> str:
     try:
         result = await fetch(url, config.fetch)
         # Extraction runs in a killable child process, in what is left of the budget.
+        if result.content_type == PDF_CONTENT_TYPE:
+            return await pdf_to_markdown_bounded(result, PDF_TIMEOUT_CAP - (loop.time() - start))
         return await to_markdown_bounded(result, config.fetch.timeout - (loop.time() - start))
-    except (FetchRefused, EgressProxyDown):
-        # Policy, or the only way out is down: fail closed, never retried elsewhere.
+    except (FetchRefused, EgressProxyDown, PdfUnreadable, ResponseTooLarge):
+        # Policy, the only way out is down, a PDF with no text to take, or a
+        # body over every cap: final, never retried elsewhere.
         raise
     except WebFetchError as exc:
         failure = exc
@@ -120,7 +142,7 @@ async def fetch_markdown(url: str, config: WebFetchConfig) -> str:
 
 @tool("web_fetch", parse_docstring=True)
 async def web_fetch_tool(url: str) -> str:
-    """Fetch the contents of a web page at a given URL.
+    """Fetch the contents of a web page at a given URL. PDF documents are supported: their text is returned.
     Only fetch EXACT URLs that have been provided directly by the user or have been returned in results from the web_search and web_fetch tools.
     This tool can NOT access content that requires authentication, such as private Google Docs or pages behind login walls.
     Do NOT add www. to URLs that do NOT have them.
@@ -131,7 +153,7 @@ async def web_fetch_tool(url: str) -> str:
     """
     try:
         return await fetch_markdown(url, load_config())
-    except EgressProxyDown as exc:
+    except (EgressProxyDown, PdfUnreadable) as exc:
         return str(exc)
     except WebFetchError as exc:
         return f"Error: {exc}"

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from omniharness.community.builtin_fetch.fetcher import PDF_MAX_BYTES, PROXY_MAX_BODY_MB
 from omniharness.community.builtin_fetch.guard import BLOCKED_NETWORKS
 
 REPO = Path(__file__).resolve().parents[3]
@@ -74,7 +75,8 @@ def test_squid_resolves_only_through_the_rebind_filtering_resolver() -> None:
     lines = _lines(FETCH / "squid.conf")
     assert "dns_nameservers 127.0.0.1" in lines and "hosts_file none" in lines and "dns_defnames off" in lines
     assert "cache deny all" in lines and "via off" in lines and "forwarded_for delete" in lines
-    assert "reply_body_max_size 2 MB" in lines
+    # Above the gateway's largest cap (PDFs, 10 MB), so the gateway's cap fires first.
+    assert f"reply_body_max_size {PROXY_MAX_BODY_MB} MB" in lines and PROXY_MAX_BODY_MB * 1024 * 1024 > PDF_MAX_BYTES
     assert not any("ssl_bump" in line or "ssl-bump" in line for line in lines), "no TLS interception"
     entry = (FETCH / "entrypoint.sh").read_text()
     assert "stop-dns-rebind" in entry and "rebind-localhost-ok" not in entry and "rebind-domain-ok" not in entry
