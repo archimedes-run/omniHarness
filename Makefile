@@ -1,6 +1,6 @@
 # OmniHarness - Unified Development Environment
 
-.PHONY: help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
+.PHONY: help sandbox-image config config-upgrade check install setup doctor env-check dev dev-daemon start start-daemon stop up down daily daily-dev clean clean-caches docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway run-store-keys
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -31,7 +31,8 @@ help:
 	@echo "  make start           - Start all services in production mode (optimized, no hot-reloading)"
 	@echo "  make start-daemon    - Start prod services in background (daemon mode)"
 	@echo "  make stop            - Stop all running services"
-	@echo "  make clean           - Clean up processes and temporary files"
+	@echo "  make clean           - Stop services, remove caches and logs (keeps your data)"
+	@echo "  make clean-caches    - Delete tool caches and the local frontend build (never data)"
 	@echo ""
 	@echo "Docker Production Commands:"
 	@echo "  make up              - Build and start production Docker services (localhost:2026)"
@@ -149,12 +150,18 @@ stop:
 	@$(RUN_WITH_GIT_BASH) ./scripts/serve.sh --stop
 
 # Clean up
+# Stops services, then removes caches and logs. Never your data: chats,
+# memory, run history and agent state (backend/.omni-harness and the local
+# runtime's backend/.langgraph_api) survive a clean.
 clean: stop
 	@echo "Cleaning up..."
-	@-rm -rf backend/.omni-harness 2>/dev/null || true
-	@-rm -rf backend/.langgraph_api 2>/dev/null || true
+	@$(RUN_WITH_GIT_BASH) ./scripts/clean-caches.sh
 	@-rm -rf logs/*.log 2>/dev/null || true
 	@echo "✓ Cleanup complete"
+
+# Tool caches and build output only; scripts/clean-caches.sh lists what it keeps.
+clean-caches:
+	@$(RUN_WITH_GIT_BASH) ./scripts/clean-caches.sh
 
 # ==========================================
 # Docker Development Commands
@@ -210,6 +217,7 @@ run-store-keys:
 
 daily: run-store-keys
 	@./scripts/ensure-watcher-token.sh
+	@./scripts/clean-caches.sh
 	$(DAILY_COMPOSE) up -d gateway session-watcher nginx
 	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend
 
