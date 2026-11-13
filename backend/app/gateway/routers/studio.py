@@ -134,7 +134,9 @@ def _write_schedule(request: Request, change, version: str | None) -> str:
     from app.gateway.routers.automations import edit_rules
 
     try:
-        return edit_rules(request.app.state.config, change, version)
+        from omniharness.runtime.user_context import get_effective_user_id
+
+        return edit_rules(request.app.state.config, change, version, who=f"user:{get_effective_user_id()}", via="studio")
     except RulesEditError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 

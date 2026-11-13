@@ -11,14 +11,16 @@ untouched.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
-from app.gateway.automations_store import TEMPLATES, RulesEditError, read_rules, with_rule, without_rule, write_rules
+from app.gateway.automations_store import TEMPLATES, RulesEditError, history_dir, put_rule, read_rules, rules_by_id, with_rule, without_rule, write_rules
 from app.gateway.ownership import require_owner_account
+from omniharness.config import config_versions
+from omniharness.runtime.user_context import get_effective_user_id
 
 # Install-wide records: the owner account only (security baseline).
 router = APIRouter(prefix="/api/automations", tags=["automations"], dependencies=[Depends(require_owner_account)])
@@ -41,6 +43,41 @@ class WriteResult(BaseModel):
     version: str
 
 
+class RuleVersionSummary(BaseModel):
+    version: int
+    at: str
+    who: str
+    #: manual, chat, undo, existing (a baseline: the rule as it already was).
+    source: str
+    #: Which surface wrote it: page, studio, chat, agent-deleted; "hand-edit"
+    #: for a baseline recorded because the file was edited by hand.
+    via: str
+    changed: list[str]
+    deleted: bool
+
+
+class RuleVersions(BaseModel):
+    rule_id: str
+    #: Send back as base_version. One past the last listed version when the
+    #: file holds an edit not yet recorded (`unrecorded`).
+    current: int
+    #: The rule in the file differs from its last recorded version (a hand
+    #: edit, or a rule from before versioning): the next write records it.
+    unrecorded: bool
+    #: Whether the rule is in the file now.
+    exists: bool
+    #: Version 0 may be restored: the first version created the rule, so
+    #: undoing it deletes the rule (Spec 010 FR-020).
+    can_undo_create: bool
+    versions: list[RuleVersionSummary]
+
+
+class RuleUndo(BaseModel):
+    to_version: int = Field(..., ge=0, description="The version to restore, as a new version; 0 undoes the create (deletes the rule)")
+    base_version: int = Field(..., ge=0, description="RuleVersions.current when the undo was chosen")
+    via: Literal["page", "studio"] = Field("page", description="Which surface the undo was pressed on, for the history")
+
+
 class Template(BaseModel):
     template: str
     title: str
@@ -55,29 +92,63 @@ def _target(request: Request):
     return _resolve_rules_path(cfg), bool(getattr(cfg, "rules_path", "")), SUPPORTED_SOURCE_TYPES
 
 
-def edit_rules(app_config, change, version: str | None) -> str:
-    """THE rule-file write path, for this router and for Agent Studio's
-    schedules (Feature 006-F): read, apply `change` to the document, validate
-    with the engine's parser, write atomically. `version` is the one the
+def edit_rules(app_config, change, version: str | None, *, who: str, source: str = "manual", via: str = "", base_versions: dict[str, int] | None = None) -> str:
+    """THE rule-file write path, for this router, Agent Studio's schedules
+    (Feature 006-F) and the chat builder (Spec 010): under the versioned
+    store's lock, read, apply `change` to the document, validate with the
+    engine's parser, write atomically and record a version per changed rule
+    (config_versions kind "automation"). `version` is the file version the
     caller read (refused with 409 when stale); None means "the file as it is
-    now" (the agent-delete hook, which has no page). Raises RulesEditError."""
+    now" (the agent-delete hook and undo, which name a rule version instead).
+    `base_versions`: {rule id: the rule version the caller read}, refused with
+    409 when stale. Raises RulesEditError."""
     from app.gateway.trigger_engine_wiring import SUPPORTED_SOURCE_TYPES, _resolve_rules_path
 
     cfg = app_config.trigger_engine
     path, writable = _resolve_rules_path(cfg), bool(getattr(cfg, "rules_path", ""))
     try:
-        current = read_rules(path)
-        doc = change(current.doc)
-        return write_rules(path, doc, expected_version=current.version if version is None else version, supported_types=SUPPORTED_SOURCE_TYPES, writable=writable)
+        return write_rules(path, change, expected_version=version, supported_types=SUPPORTED_SOURCE_TYPES, writable=writable, history=history_dir(cfg), who=who, source=source, via=via, base_versions=base_versions)
     except (OSError, ValueError) as exc:
         if isinstance(exc, RulesEditError):
             raise
         raise RulesEditError(f"Could not read or write the rules file: {exc}", 500) from exc
 
 
+def rule_versions(app_config, rule_id: str) -> tuple[int, list[config_versions.Version], dict | None]:
+    """(current version, history oldest first, the rule as the file holds it
+    now). Reads only: a hand edit not yet recorded shows as `current` one past
+    the last recorded version (config_versions.automation_version)."""
+    from app.gateway.trigger_engine_wiring import _resolve_rules_path
+
+    cfg = app_config.trigger_engine
+    try:
+        on_file = rules_by_id(read_rules(_resolve_rules_path(cfg)).doc).get(rule_id)
+    except (OSError, ValueError) as exc:
+        raise RulesEditError(f"Could not read the rules file: {exc}", 500) from exc
+    hist = history_dir(cfg)
+    return config_versions.automation_version(hist, rule_id, on_file), config_versions.automation_history(hist, rule_id), on_file
+
+
+def undo_rule(app_config, rule_id: str, to_version: int, *, base_version: int, who: str, via: str = "page") -> str:
+    """Restore `to_version` of the rule as a NEW version (Spec 010 FR-020): the
+    history only grows. `to_version` 0 undoes a create: the rule is removed
+    and the new version is a deleted one. Refused (409) when the rule changed
+    since `base_version` was read. The one restore path for the Automations
+    page, Studio and the chat builder. Raises RulesEditError."""
+    try:
+        target = config_versions.automation_target(history_dir(app_config.trigger_engine), rule_id, to_version)
+    except config_versions.VersionNotFoundError as exc:
+        raise RulesEditError(str(exc), 404) from exc
+    return edit_rules(app_config, lambda doc: put_rule(doc, rule_id, target), None, who=who, source="undo", via=via, base_versions={rule_id: base_version})
+
+
+def _who() -> str:
+    return f"user:{get_effective_user_id()}"
+
+
 def _apply(request: Request, change, version: str) -> WriteResult:
     try:
-        return WriteResult(version=edit_rules(request.app.state.config, change, version))
+        return WriteResult(version=edit_rules(request.app.state.config, change, version, who=_who(), via="page"))
     except RulesEditError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
@@ -159,3 +230,47 @@ async def set_enabled(rule_id: str, body: EnabledWrite, request: Request) -> Wri
 @require_permission("threads", "delete")
 async def delete_rule(rule_id: str, version: str, request: Request) -> WriteResult:
     return _apply(request, lambda doc: without_rule(doc, rule_id), version)
+
+
+def _versions_view(request: Request, rule_id: str) -> RuleVersions:
+    try:
+        current, versions, on_file = rule_versions(request.app.state.config, rule_id)
+    except RulesEditError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    if not versions and on_file is None:
+        raise HTTPException(status_code=404, detail=f"No rule with id {rule_id!r}.")
+    return RuleVersions(
+        rule_id=rule_id,
+        current=current,
+        unrecorded=current != (versions[-1].version if versions else 0),
+        exists=on_file is not None,
+        can_undo_create=bool(versions) and versions[0].source != "existing",
+        versions=[RuleVersionSummary(**v.summary(), via=v.via) for v in reversed(versions)],
+    )
+
+
+@router.get("/rules/{rule_id}/versions", response_model=RuleVersions)
+@require_permission("threads", "read")
+async def rule_versions_route(rule_id: str, request: Request) -> RuleVersions:
+    """One rule's version history (Spec 010 FR-021), newest first. Reads only."""
+    return _versions_view(request, rule_id)
+
+
+@router.post("/rules/{rule_id}/undo", response_model=RuleVersions)
+@require_permission("threads", "write")
+async def undo_rule_route(rule_id: str, body: RuleUndo, request: Request) -> RuleVersions:
+    """Restore an earlier version of a rule as a new version; to_version 0
+    undoes its create. 409 when the rule changed since base_version."""
+    config = request.app.state.config
+    try:
+        target = config_versions.automation_target(history_dir(config.trigger_engine), rule_id, body.to_version)
+    except config_versions.VersionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if target is not None:
+        _require_standard_cron(target)
+        await _require_agent(target)
+    try:
+        undo_rule(config, rule_id, body.to_version, base_version=body.base_version, who=_who(), via=body.via)
+    except RulesEditError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return _versions_view(request, rule_id)
