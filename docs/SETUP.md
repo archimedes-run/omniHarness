@@ -162,6 +162,8 @@ make docker-start
 
 Access: **http://localhost:2026**
 
+> **Local mode is for development only.** `make dev` runs the services directly on your machine, for development (hot reload). It does not have the Docker stack's isolation and network hardening and is not meant for daily use: for daily use, run the Docker stack (`make daily`, or `make docker-start`).
+
 On first run, `make docker-start` creates missing `.env` and `frontend/.env` files from their examples. If `config.yaml` is also missing, it creates one from `config.example.yaml` and stops so you can add API keys and model settings before starting containers.
 
 This starts three containers:

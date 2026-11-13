@@ -29,6 +29,7 @@ from starlette.routing import Mount, Route
 
 from .adapters.claude_code import ClaudeCodeAdapter
 from .adapters.codex import CodexAdapter
+from .adapters.opencode import OpenCodeAdapter
 from .discovery import Discovery, DiscoveryConfig
 from .record_source import RecordSource
 from .redaction import Channel, redact_or_suppress
@@ -43,7 +44,7 @@ DEFAULT_PORT = 18101
 
 
 #: Spoken and displayed names, by agent.
-AGENT_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+AGENT_LABELS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
 #: Todo items and changed files carried per session in a reply.
 MAX_TODOS = 50
 MAX_FILES = 50
@@ -57,13 +58,18 @@ class WatcherService:
     read is reported as such in every reply, never as "no sessions" (FR-026).
     """
 
-    def __init__(self, root: Path, *, codex_root: Path | None = None, channel: Channel = Channel.REMOTE) -> None:
+    def __init__(self, root: Path, *, codex_root: Path | None = None, opencode_root: Path | None = None, channel: Channel = Channel.REMOTE) -> None:
         self.source = RecordSource(root=root)
         self.sources: dict[str, RecordSource] = {"claude": self.source}
         more = []
         if codex_root is not None:
             self.sources["codex"] = RecordSource(root=codex_root)
             more.append(CodexAdapter(self.sources["codex"]))
+        if opencode_root is not None:
+            # Coding jobs (spec 009): the gateway's relay of the OpenCode
+            # worker in each thread's sandbox, mounted read-only.
+            self.sources["opencode"] = RecordSource(root=opencode_root)
+            more.append(OpenCodeAdapter(self.sources["opencode"]))
         self.discovery = Discovery(ClaudeCodeAdapter(self.source), DiscoveryConfig(), more_adapters=more)
         self.registry = SessionRegistry()
         self.summarizer = MechanicalSummarizer()
@@ -454,9 +460,9 @@ def start_background_refresh(service: WatcherService, config: WatchConfig | None
     return stop, fw, mode
 
 
-def build_service(root: Path, codex_root: Path | None) -> WatcherService:
+def build_service(root: Path, codex_root: Path | None, opencode_root: Path | None = None) -> WatcherService:
     """The service exactly as `main` builds it: the production composition root."""
-    return WatcherService(root=root, codex_root=codex_root)
+    return WatcherService(root=root, codex_root=codex_root, opencode_root=opencode_root)
 
 
 def main() -> None:
@@ -466,10 +472,12 @@ def main() -> None:
     # Codex is watched only when a root is given (compose passes the read-only
     # mount). Configured but unreadable is reported, never read as "none".
     ap.add_argument("--codex-root", type=Path, default=None)
+    # Coding jobs (spec 009): the gateway's relay folder, read-only.
+    ap.add_argument("--opencode-root", type=Path, default=None)
     ap.add_argument("--log-level", default="info")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level.upper())
-    service = build_service(args.root, args.codex_root)
+    service = build_service(args.root, args.codex_root, args.opencode_root)
     service.refresh()
     start_background_refresh(service)
     # 0.0.0.0 so a containerized backend can reach us via host.docker.internal.

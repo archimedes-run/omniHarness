@@ -123,7 +123,7 @@ services:
     # developer's host .venv — the gateway service guards against exactly this
     # with a named `gateway-venv` volume, and this service had no such guard
     # because it did not need the mount in the first place.
-    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects --codex-root /root/.codex/sessions"
+    command: sh -c "cd /app/backend && PYTHONPATH=. uv run --no-sync python -m session_watcher.server --port 18101 --root /root/.claude/projects --codex-root /root/.codex/sessions --opencode-root /root/.omni-code-jobs"
     ports:
       # Loopback only; containers still reach it via host.docker.internal.
       - "127.0.0.1:18101:18101"
@@ -145,6 +145,15 @@ services:
       - type: bind
         source: ${CODEX_HOME:-${HOME:?HOME must be set}/.codex}
         target: /root/.codex
+        read_only: true
+        bind:
+          create_host_path: true
+      # Coding jobs (spec 009): the gateway relays each OpenCode job running
+      # in a thread's sandbox to this folder (app/gateway/code_jobs/relay.py);
+      # the watcher cannot reach the sandbox network. READ-ONLY.
+      - type: bind
+        source: ../backend/.omni-harness/code_jobs/watch
+        target: /root/.omni-code-jobs
         read_only: true
         bind:
           create_host_path: true

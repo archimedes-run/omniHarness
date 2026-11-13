@@ -26,8 +26,8 @@ help:
 	@echo "  make install         - Install all dependencies (frontend + backend + pre-commit hooks)"
 	@echo "  make setup-sandbox   - Pre-pull sandbox container image (recommended)"
 	@echo "  make sandbox-image   - Build the agent sandbox from docker/sandbox/Dockerfile (pinned base)"
-	@echo "  make dev             - Start all services in development mode (with hot-reloading)"
-	@echo "  make dev-daemon      - Start dev services in background (daemon mode)"
+	@echo "  make dev             - Development only: services on the host with hot reloading (not hardened; daily use: make daily)"
+	@echo "  make dev-daemon      - Development only: the same, in the background (not hardened; daily use: make daily)"
 	@echo "  make start           - Start all services in production mode (optimized, no hot-reloading)"
 	@echo "  make start-daemon    - Start prod services in background (daemon mode)"
 	@echo "  make stop            - Stop all running services"
@@ -88,7 +88,7 @@ install:
 	@echo ""
 
 # The agent's command sandbox, from our Dockerfile (base pinned by digest).
-SANDBOX_IMAGE_TAG ?= omni-harness-sandbox:1.11.0-oh4
+SANDBOX_IMAGE_TAG ?= omni-harness-sandbox:1.11.0-oh5
 sandbox-image:
 	docker build -t $(SANDBOX_IMAGE_TAG) docker/sandbox
 
@@ -215,9 +215,13 @@ SECRETS_DIR ?= $(HOME)/.omni-harness-secrets
 run-store-keys:
 	@mkdir -p "$(SECRETS_DIR)/run-store" && chmod 700 "$(SECRETS_DIR)" "$(SECRETS_DIR)/run-store" && echo "Run history key dir: $(SECRETS_DIR)/run-store (0700)"
 
+# The watcher's code is baked into its image (no source mount): `daily`
+# rebuilds it so a new watcher flag never meets an old image. The gateway runs
+# the mounted source and is started as before.
 daily: run-store-keys
 	@./scripts/ensure-watcher-token.sh
 	@./scripts/clean-caches.sh
+	$(DAILY_COMPOSE) up -d --build --no-deps session-watcher
 	$(DAILY_COMPOSE) up -d gateway session-watcher nginx
 	$(DAILY_COMPOSE) -f docker-compose-daily.yaml up -d --build --no-deps frontend
 

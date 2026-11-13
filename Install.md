@@ -49,7 +49,7 @@ Consider the setup successful when all of the following are true:
   - Run `make check`.
   - If `make check` reports missing system dependencies such as `node`, `pnpm`, `uv`, or `nginx`, stop and report the missing tools instead of attempting privileged installs.
   - If prerequisites are satisfied, run `make install`.
-  - Tell the user the recommended next command is `make dev`.
+  - Tell the user the recommended next command is `make dev`, and that it is for development only: it is not hardened like the Docker stack and is not meant for daily use (daily use is the Docker stack, `make daily` or `make docker-start`).
 - Inspect `config.yaml` only for missing model entries or referenced environment variable placeholders. Do not read `.env`, `frontend/.env`, or other secret-bearing files.
 - If no model is configured, tell the user they must add at least one entry under `models` in `config.yaml`.
 - If `config.yaml` references variables such as `$OPENAI_API_KEY`, tell the user which variable names still need real values, but do not verify them by opening secret-bearing files.

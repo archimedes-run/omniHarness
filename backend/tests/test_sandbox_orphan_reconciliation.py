@@ -77,9 +77,9 @@ def _make_inspect_entry(name: str, created: str, host_port: str | None = None) -
         "Name": f"/{name}",  # docker inspect prefixes names with "/"
         "Created": created,
         "NetworkSettings": {"Ports": ports},
-        # Started by this gateway: keyed (#98), default seccomp (#99).
+        # Started by this gateway: keyed (#98), default seccomp (#99), no-new-privileges (009).
         "Config": {"Env": [f"SANDBOX_API_KEY={sandbox_api_key(name)}"]},
-        "HostConfig": {"SecurityOpt": None},
+        "HostConfig": {"SecurityOpt": ["no-new-privileges"], "CapDrop": ["ALL"]},
     }
 
 

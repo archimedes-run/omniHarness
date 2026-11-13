@@ -208,6 +208,15 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
         except Exception:
             logger.debug("Could not stop preview sessions for %s (not critical)", sanitize_log_param(thread_id))
 
+    # Coding jobs (spec 009): stop a running one, then forget the thread's
+    # jobs, steps and watcher relay files.
+    code_jobs = getattr(request.app.state, "code_job_manager", None)
+    if code_jobs is not None:
+        try:
+            await code_jobs.forget_thread(thread_id)
+        except Exception:
+            logger.warning("Could not delete the coding jobs of thread %s", sanitize_log_param(thread_id), exc_info=True)
+
     # Clean local filesystem
     response = _delete_thread_data(thread_id, user_id=get_effective_user_id())
 

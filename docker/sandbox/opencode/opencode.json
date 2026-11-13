@@ -1,0 +1,46 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "autoupdate": false,
+  "enabled_providers": ["omni"],
+  "model": "omni/worker",
+  "small_model": "omni/worker",
+  "provider": {
+    "omni": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OmniHarness gateway",
+      "options": {
+        "baseURL": "{env:OMNI_LLM_BASE_URL}",
+        "apiKey": "{env:OMNI_LLM_TOKEN}"
+      },
+      "models": {
+        "worker": {
+          "name": "OmniHarness worker",
+          "tool_call": true,
+          "limit": { "context": 200000, "output": 32000 }
+        }
+      }
+    }
+  },
+  "permission": {
+    "*": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "bash": "allow",
+    "task": "allow",
+    "todowrite": "allow",
+    "external_directory": { "*": "deny", "/mnt/user-data/*": "allow" },
+    "webfetch": "deny",
+    "websearch": "deny",
+    "question": "deny",
+    "doom_loop": "deny"
+  },
+  "instructions": ["/etc/opencode/AGENTS.md"],
+  "mcp": {},
+  "lsp": false,
+  "formatter": false,
+  "snapshot": false
+}

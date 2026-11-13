@@ -18,6 +18,9 @@ interface AssistantClarificationGroup extends GenericMessageGroup<"assistant:cla
 
 interface AssistantSubagentGroup extends GenericMessageGroup<"assistant:subagent"> {}
 
+/** A coding job (spec 009): shown as its own card, never folded into the steps. */
+interface AssistantCodeJobGroup extends GenericMessageGroup<"assistant:code-job"> {}
+
 /** The lead handing a turn to an agent the user called in (`call_agent`). */
 interface AssistantHandoffGroup extends GenericMessageGroup<"assistant:handoff"> {}
 
@@ -28,6 +31,7 @@ export type MessageGroup =
   | AssistantPresentFilesGroup
   | AssistantClarificationGroup
   | AssistantSubagentGroup
+  | AssistantCodeJobGroup
   | AssistantHandoffGroup;
 
 export function getMessageGroups(messages: Message[]): MessageGroup[] {
@@ -101,7 +105,20 @@ export function getMessageGroups(messages: Message[]): MessageGroup[] {
         });
         continue;
       }
-      if (hasPresentFiles(message)) {
+      // A coding job gets its own card. A message that also makes other tool
+      // calls goes on to the usual group as well (pushed after the card, so
+      // the tool results join it), so those calls keep their steps and cards.
+      const codeJob = !hasPresentFiles(message) && hasCodeJob(message);
+      if (codeJob) {
+        groups.push({
+          id: message.id,
+          type: "assistant:code-job",
+          messages: [message],
+        });
+      }
+      if (codeJob && onlyCodeJobs(message)) {
+        // The card is all there is to show.
+      } else if (hasPresentFiles(message)) {
         groups.push({
           id: message.id,
           type: "assistant:present-files",
@@ -369,6 +386,18 @@ export function extractPresentFilesFromMessage(message: Message) {
 export function isHandoff(message: AIMessage) {
   const calls = message.tool_calls ?? [];
   return calls.length > 0 && calls.every((call) => call.name === "call_agent");
+}
+
+export function hasCodeJob(message: AIMessage) {
+  return (message.tool_calls ?? []).some(
+    (toolCall) => toolCall.name === "code_job",
+  );
+}
+
+/** Every tool call of the message is a coding job. */
+export function onlyCodeJobs(message: AIMessage) {
+  const calls = message.tool_calls ?? [];
+  return calls.length > 0 && calls.every((call) => call.name === "code_job");
 }
 
 export function hasSubagent(message: AIMessage) {

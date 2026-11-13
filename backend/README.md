@@ -196,6 +196,8 @@ export OPENAI_API_KEY="your-api-key-here"
 make dev  # Starts LangGraph + Gateway + Frontend + Nginx
 ```
 
+`make dev` runs the services directly on your machine, for development (hot reload). It does not have the Docker stack's isolation and network hardening and is not meant for daily use: for daily use, run the Docker stack (`make daily`, or `make docker-start`).
+
 Access at: http://localhost:2026
 
 **Backend Only** (from backend directory):

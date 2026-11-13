@@ -123,6 +123,12 @@ def test_sandboxes_run_under_the_default_seccomp_profile(monkeypatch) -> None:
     monkeypatch.setenv("OMNI_HARNESS_INTERNAL_AUTH_TOKEN", "s")
     cmd = " ".join(_run_cmd(monkeypatch))
     assert "seccomp=unconfined" not in cmd and "--privileged" not in cmd, cmd
+    # spec 009 FR-017: no privilege escalation inside the sandbox.
+    args = _run_cmd(monkeypatch)
+    assert args[args.index("--security-opt") + 1] == "no-new-privileges", args
+    assert args[args.index("--cap-drop") + 1] == "ALL", args
+    added = {args[i + 1] for i, a in enumerate(args) if a == "--cap-add"}
+    assert not added & {"NET_RAW", "MKNOD", "SYS_CHROOT", "SETFCAP", "SETPCAP", "SYS_ADMIN", "SYS_PTRACE"}, added
 
 
 # ── egress: registries only, GET/HEAD, 443 ──────────────────────────────────
@@ -213,8 +219,17 @@ def test_docker_end_to_end() -> None:
 # ── adoption: nothing unkeyed or unconfined is ever handed to a thread (review H1)
 
 
-def _inspect(name: str, *, env: list[str] | None, security_opt: list[str] | None = None) -> dict:
-    return {"Name": f"/{name}", "Created": "2026-10-23T10:00:00Z", "NetworkSettings": {"Ports": {}}, "Config": {"Env": env or []}, "HostConfig": {"SecurityOpt": security_opt}}
+def _inspect(name: str, *, env: list[str] | None, security_opt: list[str] | None = None, cap_drop: list[str] | None = None) -> dict:
+    return {
+        "Name": f"/{name}",
+        "Created": "2026-10-23T10:00:00Z",
+        "NetworkSettings": {"Ports": {}},
+        "Config": {"Env": env or []},
+        "HostConfig": {
+            "SecurityOpt": ["no-new-privileges"] if security_opt is None else security_opt,
+            "CapDrop": ["ALL"] if cap_drop is None else cap_drop,
+        },
+    }
 
 
 def _backend_with_containers(monkeypatch, entries: list[dict]):
@@ -257,11 +272,15 @@ def test_containers_without_this_gateways_key_or_with_unconfined_seccomp_are_rem
         _inspect(good, env=[f"SANDBOX_API_KEY={sandbox_api_key(good)}"]),
         _inspect("omni-harness-sandbox-0000000b", env=["PATH=/bin"]),  # started before #98
         _inspect("omni-harness-sandbox-0000000c", env=["SANDBOX_API_KEY=someone-elses"]),
-        _inspect("omni-harness-sandbox-0000000d", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000d')}"], security_opt=["seccomp=unconfined"]),
+        _inspect("omni-harness-sandbox-0000000d", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000d')}"], security_opt=["seccomp=unconfined", "no-new-privileges"]),
+        # Keyed and confined but started before spec 009: privilege escalation possible.
+        _inspect("omni-harness-sandbox-0000000e", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000e')}"], security_opt=[]),
+        # ... or with the default capability set.
+        _inspect("omni-harness-sandbox-0000000f", env=[f"SANDBOX_API_KEY={sandbox_api_key('omni-harness-sandbox-0000000f')}"], cap_drop=[]),
     ]
     backend, stopped = _backend_with_containers(monkeypatch, entries)
     assert [i.container_name for i in backend.list_running()] == [good]
-    assert sorted(stopped) == ["omni-harness-sandbox-0000000b", "omni-harness-sandbox-0000000c", "omni-harness-sandbox-0000000d"]
+    assert sorted(stopped) == ["omni-harness-sandbox-0000000b", "omni-harness-sandbox-0000000c", "omni-harness-sandbox-0000000d", "omni-harness-sandbox-0000000e", "omni-harness-sandbox-0000000f"]
 
 
 def test_discover_removes_an_unkeyed_container_instead_of_adopting_it(monkeypatch) -> None:
@@ -342,3 +361,32 @@ def test_a_container_that_only_shares_the_prefix_is_neither_adopted_nor_stopped(
 def test_the_sandbox_api_proxy_allows_long_commands() -> None:
     dockerfile = (REPO / "docker" / "sandbox" / "Dockerfile").read_text()
     assert "proxy_read_timeout 3600s;" in dockerfile and "grep -q 'proxy_read_timeout 3600s;'" in dockerfile
+
+
+# -- the sandbox network stays IPv4-only ------------------------------------------
+
+
+def _sandbox_networks(compose_path):
+    data = yaml.safe_load(compose_path.read_text()) or {}
+    return {key: (spec or {}) for key, spec in (data.get("networks") or {}).items() if "sandbox" in key or "sandbox" in str((spec or {}).get("name", ""))}
+
+
+def test_the_sandbox_networks_never_enable_ipv6():
+    """The gateway judges sandbox peers by the network's IPv4 subnets: the
+    sandbox networks must stay IPv4-only, in both compose files and in any
+    code or script that creates a sandbox network."""
+    repo = Path(__file__).resolve().parents[3]
+    for name in ("docker-compose.yaml", "docker-compose-dev.yaml"):
+        networks = _sandbox_networks(repo / "docker" / name)
+        assert networks, f"no sandbox network found in {name}"
+        for key, spec in networks.items():
+            assert spec.get("enable_ipv6") not in (True, "true", "True", "yes", 1), f"{name}: {key} enables IPv6"
+            opts = {str(k).lower(): str(v).lower() for k, v in (spec.get("driver_opts") or {}).items()}
+            assert not any("ipv6" in k and v in ("1", "true") for k, v in opts.items()), f"{name}: {key} enables IPv6 through driver_opts"
+            for pool in (spec.get("ipam") or {}).get("config") or []:
+                assert ":" not in str((pool or {}).get("subnet", "")), f"{name}: {key} has an IPv6 subnet"
+    # Code and scripts that create networks: none asks for IPv6.
+    sources = [*(repo / "backend" / "app").rglob("*.py"), *(repo / "backend" / "packages").rglob("*.py"), *(repo / "scripts").glob("*.sh"), *(repo / "docker" / "provisioner").rglob("*.py")]
+    ipv6 = re.compile(r"enable_ipv6|--ipv6|EnableIPv6", re.I)
+    offenders = [str(p.relative_to(repo)) for p in sources if ipv6.search(p.read_text(errors="ignore"))]
+    assert offenders == [], f"a network is created with IPv6: {offenders}"

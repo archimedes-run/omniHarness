@@ -172,6 +172,8 @@ make docker-start   # start the stack
 
 Then open **http://localhost:2026** and create the owner account.
 
+Use the Docker stack for daily use. `make dev` (services directly on your machine, with hot reload) is for development only: it does not have the Docker stack's isolation and network hardening.
+
 You need Docker Desktop (or OrbStack) with Compose v2, about 12 GB of free disk and 8 GB of RAM (16 GB for parallel subagents). The full guide — models, sandboxes, channels, production — is in **[docs/SETUP.md](docs/SETUP.md)**.
 
 <details>
@@ -239,10 +241,12 @@ OmniHarness is young, opinionated and moving fast — a good time to help shape 
 
 ```bash
 make install                                  # backend (uv) + frontend (pnpm)
-make dev                                      # hot reload at http://localhost:2026
+make dev                                      # development only: hot reload at http://localhost:2026 (not hardened)
 cd backend && uv run pytest tests/ -q         # backend tests
 cd frontend && pnpm exec vitest run           # frontend unit tests
 ```
+
+`make dev` runs the services directly on your machine, for development (hot reload). It does not have the Docker stack's isolation and network hardening and is not meant for daily use: for daily use, run the Docker stack (`make daily`, or `make docker-start`).
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before your first PR. Questions, ideas and design debates are welcome in [Issues](https://github.com/archimedes-run/omniHarness/issues).
 
