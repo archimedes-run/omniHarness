@@ -18,7 +18,8 @@ on:
 jobs:
   probe:
     name: Can CI run rendering assertions?
-    runs-on: ubuntu-latest
+    # Pinned: Playwright has no Chromium build for ubuntu-latest (26.04) yet.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
