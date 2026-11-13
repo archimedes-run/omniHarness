@@ -32,6 +32,7 @@ import {
   useSaveAppPins,
 } from "@/core/apps/hooks";
 import {
+  activityWords,
   ago,
   atText,
   lastStateWords,
@@ -424,6 +425,20 @@ function PermissionsPanel({ appId }: { appId: string }) {
                 {g.revoked_at
                   ? `, revoked ${atText(g.revoked_at)}`
                   : ", active"}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {data.activity && data.activity.length > 0 && (
+        <details className="text-xs" data-testid="app-activity">
+          <summary className="text-muted-foreground cursor-pointer">
+            Recent activity ({data.activity.length})
+          </summary>
+          <ul className="mt-1 flex flex-col gap-1">
+            {data.activity.map((a, n) => (
+              <li key={`${a.at}-${n}`}>
+                {atText(a.at)}: {activityWords(a)}
               </li>
             ))}
           </ul>

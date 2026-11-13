@@ -55,6 +55,27 @@ export function lastStateWords(
   }
 }
 
+const EVENTS: Record<string, string> = {
+  app_registered: "Built and registered",
+  app_approved: "Access approved",
+  app_revoked: "Access revoked",
+  app_restored: "A version was restored",
+  bridge_refused: "OmniHarness refused a read",
+  app_message_refused: "A message from the app was refused",
+};
+
+/** An audit entry, in words: the event and its reason code, never data. */
+export function activityWords(entry: {
+  event: string;
+  detail?: Record<string, unknown>;
+}): string {
+  const base = EVENTS[entry.event] ?? entry.event.replace(/_/g, " ");
+  const reason = entry.detail?.reason;
+  return typeof reason === "string" && /^[a-z][a-z0-9_]{0,47}$/.test(reason)
+    ? `${base} (${reason.replace(/_/g, " ")})`
+    : base;
+}
+
 /** Who made a version, in words. */
 export function versionSource(v: Pick<AppVersion, "source" | "restored_from">) {
   if (v.source === "undo") {

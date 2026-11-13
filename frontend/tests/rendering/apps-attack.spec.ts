@@ -17,13 +17,26 @@ import { hostileScript, selfNavigateScript } from "./apps/hostile-app";
  * reached a server), never on what the app says it managed.
  *
  * Each guard was observed failing under its sabotage (PR description):
- * the frame CSP without connect-src 'none' (APPS_SABOTAGE_FRAME_CSP), the
+ * the frame CSP with connect-src * or none at all (APPS_SABOTAGE_FRAME_CSP), the
  * sandbox attribute widened, the host page's frame-src opened, the host's
  * manifest, open-link, rate and port checks removed, the shim's parent and
  * once-only checks removed, the result builder replaced by a spread.
  */
 
-test.use({ timezoneId: "UTC" });
+test.use({
+  timezoneId: "UTC",
+  // Chromium's local-network checks would refuse the opaque frame's
+  // requests to the 127.0.0.1 listener on their own, so a removed guard
+  // would still look held: they are off, and only the guards under test
+  // stand between the frame and the listener. (CHROMIUM_EXECUTABLE: a local
+  // browser build, when the bundled one is not installed.)
+  launchOptions: {
+    executablePath: process.env.CHROMIUM_EXECUTABLE ?? undefined,
+    args: [
+      "--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,BlockInsecurePrivateNetworkRequests",
+    ],
+  },
+});
 
 let server: Server;
 let listener = "";
@@ -277,6 +290,7 @@ test("unapproved, write-ish, malformed and oversized requests are refused, answe
     send({ v: 1, type: "write", id: "a5", source: "calendar" });
   });
   await expect.poll(() => bridge.log.refused.length).toBeGreaterThanOrEqual(7);
+  // The frame is told the detail...
   const expected = [
     "source_not_approved",
     "source_not_approved",
@@ -286,10 +300,20 @@ test("unapproved, write-ish, malformed and oversized requests are refused, answe
     "unknown_type",
     "unknown_type",
   ];
-  // Reports are separate requests: they may arrive in any order.
+  // ...the audit gets codes (api.md); reports may arrive in any order.
+  const codes = [
+    "source_not_approved",
+    "source_not_approved",
+    "invalid_message",
+    "oversized",
+    "invalid_message",
+    "unknown_type",
+    "unknown_type",
+  ];
   expect(bridge.log.refused.map((r) => r.reason).sort()).toEqual(
-    [...expected].sort(),
+    [...codes].sort(),
   );
+  expect(bridge.log.invalidReports).toEqual([]);
   expect(bridge.log.refused).toContainEqual({
     reason: "source_not_approved",
     type: "data",

@@ -89,6 +89,8 @@ export interface AppPermissions {
   sentence: string;
   sources: SourceView[];
   grants: Grant[];
+  /** The app's last audit entries, newest first: events and ids, no data. */
+  activity?: { at: string; event: string; detail?: Record<string, unknown> }[];
 }
 
 export interface CatalogEntry {

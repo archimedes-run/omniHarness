@@ -217,11 +217,14 @@ test.describe("the host page", () => {
   test("the frame reloading itself is torn down: no second handshake", async ({
     page,
   }) => {
-    await installFakeBridge(page);
+    const bridge = await installFakeBridge(page);
     await page.goto("/workspace/apps/today");
     const frame = await appFrame(page);
     await frame.evaluate(() => location.reload());
     await expect(page.getByTestId("app-reloaded")).toBeVisible();
+    await expect
+      .poll(() => bridge.log.refused)
+      .toEqual([{ reason: "second_load" }]);
     await expect(page.getByTestId("app-reloaded")).toContainText(
       "This app reloaded itself. Reopen it.",
     );
