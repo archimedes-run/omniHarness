@@ -284,10 +284,10 @@ def test_refusals_reported_by_the_host_are_logged(gateway, apps) -> None:
 # -- the app document ------------------------------------------------------------------
 
 EXPECTED_CSP = (
-    "sandbox allow-scripts; default-src 'none'; script-src 'sha256-{h}'; style-src 'unsafe-inline'; "
+    "sandbox allow-scripts; default-src 'none'; script-src 'sha256-{shim}' 'sha256-{h}'; style-src 'unsafe-inline'; "
     "img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; "
     "child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; "
-    "form-action 'none'; frame-ancestors 'self'"
+    "form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'"
 )
 
 
@@ -300,7 +300,11 @@ def test_app_html_has_exactly_the_csp_and_headers(gateway, apps) -> None:
     assert resp.status_code == 200
     script = FILES["app.js"].decode()
     digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-    assert resp.headers["content-security-policy"] == EXPECTED_CSP.format(h=digest)
+    from app.gateway.apps.bundle import shim
+
+    shim_digest = base64.b64encode(hashlib.sha256(shim().encode()).digest()).decode()
+    assert resp.headers["content-security-policy"] == EXPECTED_CSP.format(shim=shim_digest, h=digest)
+    assert resp.text.index(shim()) < resp.text.index(script), "the platform shim is the first script"
     assert resp.headers["cache-control"] == "private, max-age=31536000, immutable"
     assert resp.headers["referrer-policy"] == "no-referrer"
     assert resp.headers["x-content-type-options"] == "nosniff"

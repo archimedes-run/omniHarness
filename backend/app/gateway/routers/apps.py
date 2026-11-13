@@ -14,17 +14,22 @@ not tool calls and mark no turn as a private read.
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.gateway.apps import bridge, bundle, catalog, service
+from app.gateway.apps.manifest import SOURCE_NAME
 from app.gateway.apps.service import AppNotFound, AppRecord, load_app
 from app.gateway.authz import require_permission
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
 from omniharness.config import config_versions as cv
 from omniharness.runtime.user_context import DEFAULT_USER_ID
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/apps", tags=["apps"])
 
@@ -53,9 +58,11 @@ def repo_of(request: Request):
     return repo
 
 
-def _load_or_404(owner_id: str, app_id: str, version: int | None = None) -> AppRecord:
+async def _load_or_404(repo, owner_id: str, app_id: str, version: int | None = None) -> AppRecord:
+    """Version `version`, or the version the app serves (the newest one not
+    waiting on the owner's button). 404 with a code otherwise."""
     try:
-        return load_app(owner_id, app_id, version)
+        return load_app(owner_id, app_id, version) if version is not None else await service.served(repo, owner_id, app_id)
     except AppNotFound:
         pass
     if version is not None:
@@ -85,7 +92,7 @@ async def approvals_for_thread(request: Request, thread_id: str = Query(..., min
     cards = []
     for card in await repo.cards_for_thread(owner_id=owner, thread_id=thread_id):
         try:
-            app = load_app(owner, card["app_id"])
+            app = await service.served(repo, owner, card["app_id"])
         except AppNotFound:
             app = None
         cards.append(service.card_view(card, app))
@@ -101,7 +108,7 @@ async def list_apps(request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
     pins = await repo.get_pins(user_id=owner)
-    return {"apps": [await service.summary(repo, app, pins) for app in service.list_apps(owner)]}
+    return {"apps": [await service.summary(repo, app, pins) for app in await service.list_apps(repo, owner)]}
 
 
 @router.get("/{app_id}")
@@ -109,7 +116,7 @@ async def list_apps(request: Request) -> dict:
 async def get_app(app_id: str, request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
-    return await service.detail(repo, _load_or_404(owner, app_id), await repo.get_pins(user_id=owner))
+    return await service.detail(repo, await _load_or_404(repo, owner, app_id), await repo.get_pins(user_id=owner))
 
 
 @router.get("/{app_id}/versions")
@@ -117,7 +124,7 @@ async def get_app(app_id: str, request: Request) -> dict:
 async def get_versions(app_id: str, request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
-    _load_or_404(owner, app_id)
+    await _load_or_404(repo, owner, app_id)
     restored = cv.app_restored_from(owner, app_id)
     out = []
     for v in reversed(cv.app_history(owner, app_id)):
@@ -138,14 +145,14 @@ class RestoreIn(BaseModel):
 async def restore(app_id: str, body: RestoreIn, request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
-    _load_or_404(owner, app_id)
+    await _load_or_404(repo, owner, app_id)
     try:
         cv.restore_app(owner, app_id, body.to_version, who=owner, base_version=body.base_version)
     except cv.StaleWriteError as exc:
         raise _error(409, "stale_version", str(exc)) from exc
     except cv.VersionNotFoundError as exc:
         raise _error(404, "version_not_found", str(exc)) from exc
-    app = _load_or_404(owner, app_id)
+    app = await _load_or_404(repo, owner, app_id)
     await service.raise_card_if_needed(repo, app, thread_id=None, suggestion=False, suggestion_source=None)
     await repo.audit(owner_id=owner, app_id=app_id, event="app_restored", detail={"version": app.version, "restored_from": body.to_version, "manifest_hash": app.manifest_hash})
     return await service.detail(repo, app, await repo.get_pins(user_id=owner))
@@ -156,7 +163,7 @@ async def restore(app_id: str, body: RestoreIn, request: Request) -> dict:
 async def permissions(app_id: str, request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
-    app = _load_or_404(owner, app_id)
+    app = await _load_or_404(repo, owner, app_id)
     grants = [{"manifest_hash": g["manifest_hash"], "approved_at": service.iso(g["approved_at"]), "revoked_at": service.iso(g["revoked_at"]), "version": g["version"]} for g in await repo.grants(owner_id=owner, app_id=app_id)]
     return {
         "app_id": app_id,
@@ -177,7 +184,7 @@ async def permissions(app_id: str, request: Request) -> dict:
 async def revoke(app_id: str, request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
-    app = _load_or_404(owner, app_id)
+    app = await _load_or_404(repo, owner, app_id)
     ended = await repo.revoke_all(owner_id=owner, app_id=app_id)
     deleted = await repo.delete_cache(owner_id=owner, app_id=app_id)
     if ended:
@@ -195,7 +202,7 @@ async def revoke(app_id: str, request: Request) -> dict:
 async def get_approval(app_id: str, request: Request) -> dict:
     owner = owner_of(request)
     repo = repo_of(request)
-    app = _load_or_404(owner, app_id)
+    app = await _load_or_404(repo, owner, app_id)
     card = await repo.pending_card(owner_id=owner, app_id=app_id)
     if card is None:
         raise _error(404, "no_pending_approval", "This app has no approval waiting.")
@@ -214,15 +221,19 @@ async def approve(app_id: str, body: ApproveIn, request: Request) -> dict:
     """The App access card's Allow button. The only way a grant is made."""
     owner = owner_of(request)
     repo = repo_of(request)
-    app = _load_or_404(owner, app_id)
+    await _load_or_404(repo, owner, app_id)
     card = await repo.pending_card(owner_id=owner, app_id=app_id)
     if card is None or card["id"] != body.card_id:
         raise _error(404, "no_pending_approval", "This card is no longer waiting; reload it.")
-    if body.manifest_hash != app.manifest_hash or card["manifest_hash"] != app.manifest_hash:
+    # The card is bound to the version it was drawn for (an immutable
+    # snapshot); a newer registration supersedes it.
+    drawn = await _load_or_404(repo, owner, app_id, card["version"])
+    if body.manifest_hash != card["manifest_hash"] or drawn.manifest_hash != card["manifest_hash"]:
         raise _error(409, "hash_mismatch", "The app changed after this card was drawn; reload the card and check it again.")
     if not await repo.resolve_card(card_id=card["id"], owner_id=owner, status="approved"):
         raise _error(404, "no_pending_approval", "This card is no longer waiting; reload it.")
-    grant = await repo.create_grant(owner_id=owner, app_id=app_id, manifest_hash=app.manifest_hash, version=app.version, card_id=card["id"])
+    grant = await repo.create_grant(owner_id=owner, app_id=app_id, manifest_hash=drawn.manifest_hash, version=drawn.version, card_id=card["id"])
+    app = drawn
     await repo.audit(owner_id=owner, app_id=app_id, event="app_approved", detail={"version": app.version, "manifest_hash": app.manifest_hash, "card": card["id"], "via": "button"})
     return {"status": "approved", "manifest_hash": app.manifest_hash, "approved_at": service.iso(grant["approved_at"])}
 
@@ -230,10 +241,24 @@ async def approve(app_id: str, body: ApproveIn, request: Request) -> dict:
 # -- bridge -----------------------------------------------------------------------------
 
 
+@contextmanager
+def _quiet_errors(app_id: str):
+    """A bridge failure is logged by type and answered with a fixed message:
+    an error's text or traceback (a database error with its statement, an
+    upstream error) can carry the data the bridge was handling."""
+    try:
+        yield
+    except (HTTPException, bridge.SourceRefused):
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("app %s: the bridge failed (%s)", app_id, type(exc).__name__)
+        raise _error(500, "bridge_failed", "The app's data could not be served.") from None
+
+
 async def _bridge_gate(request: Request, app_id: str) -> tuple[Any, AppRecord]:
     owner = owner_of(request)
     repo = repo_of(request)
-    app = _load_or_404(owner, app_id)
+    app = await _load_or_404(repo, owner, app_id)
     if await repo.hit(owner_id=owner, app_id=app_id) > bridge.REQUESTS_PER_MINUTE:
         raise _error(429, "rate_limited", f"At most {bridge.REQUESTS_PER_MINUTE} requests per app per minute.", headers={"Retry-After": "60"})
     if not await repo.active_grant(owner_id=owner, app_id=app_id, manifest_hash=app.manifest_hash):
@@ -246,8 +271,9 @@ async def _bridge_gate(request: Request, app_id: str) -> tuple[Any, AppRecord]:
 @require_permission("threads", "read")
 async def data_all(app_id: str, request: Request) -> dict:
     repo, app = await _bridge_gate(request, app_id)
-    await repo.mark_opened(owner_id=app.owner_id, app_id=app_id)
-    return {"app_id": app_id, "version": app.version, "results": await bridge.serve_all(request.app.state, repo, app)}
+    with _quiet_errors(app_id):
+        await repo.mark_opened(owner_id=app.owner_id, app_id=app_id)
+        return {"app_id": app_id, "version": app.version, "results": await bridge.serve_all(request.app.state, repo, app)}
 
 
 @router.get("/{app_id}/data/{source}")
@@ -255,10 +281,11 @@ async def data_all(app_id: str, request: Request) -> dict:
 async def data_one(app_id: str, source: str, request: Request, refresh: bool = Query(default=False)) -> dict:
     repo, app = await _bridge_gate(request, app_id)
     if source not in app.sources:
-        await repo.audit(owner_id=app.owner_id, app_id=app_id, event="bridge_refused", detail={"reason": "unknown_source", "source": source[:64]})
+        await repo.audit(owner_id=app.owner_id, app_id=app_id, event="bridge_refused", detail={"reason": "unknown_source", "source": source if SOURCE_NAME.match(source) else "invalid"})
         raise _error(404, "unknown_source", "That source is not in this app's approved manifest.")
     try:
-        return await bridge.serve(request.app.state, repo, app, source, force=refresh)
+        with _quiet_errors(app_id):
+            return await bridge.serve(request.app.state, repo, app, source, force=refresh)
     except bridge.SourceRefused as exc:
         await repo.audit(owner_id=app.owner_id, app_id=app_id, event="bridge_refused", detail={"reason": "source_refused", "source": source, "why": str(exc)[:200]})
         raise _error(403, "source_refused", f"This source is refused: {exc}") from exc
@@ -272,7 +299,7 @@ async def data_one(app_id: str, source: str, request: Request, refresh: bool = Q
 async def app_html(app_id: str, version: int, request: Request) -> Response:
     owner = owner_of(request)
     repo = repo_of(request)
-    app = _load_or_404(owner, app_id, version)
+    app = await _load_or_404(repo, owner, app_id, version)
     try:
         html = cv.read_app_bundle(owner, app.snapshot["bundle_hash"])
     except cv.VersionNotFoundError as exc:
@@ -299,7 +326,7 @@ async def message_refused(app_id: str, body: RefusedIn, request: Request) -> Res
     """The host page reports a frame message it dropped (FR-022)."""
     owner = owner_of(request)
     repo = repo_of(request)
-    _load_or_404(owner, app_id)
+    await _load_or_404(repo, owner, app_id)
     if await repo.hit(owner_id=owner, app_id=app_id) > bridge.REQUESTS_PER_MINUTE:
         raise _error(429, "rate_limited", f"At most {bridge.REQUESTS_PER_MINUTE} requests per app per minute.", headers={"Retry-After": "60"})
     await repo.audit(owner_id=owner, app_id=app_id, event="app_message_refused", detail=body.model_dump())

@@ -14,7 +14,7 @@ import json
 import secrets
 import time
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, insert, literal, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -54,6 +54,12 @@ class AppRepository:
         async with self._sf() as s:
             rows = await s.scalars(select(AppGrantRow).where(AppGrantRow.owner_id == owner_id, AppGrantRow.app_id == app_id).order_by(AppGrantRow.id.desc()))
             return [r.to_dict() for r in rows]
+
+    async def granted_versions(self, *, owner_id: str, app_id: str) -> set[int]:
+        """Versions the owner's button approved (a held version is served once it is one)."""
+        async with self._sf() as s:
+            rows = await s.scalars(select(AppGrantRow.version).where(AppGrantRow.owner_id == owner_id, AppGrantRow.app_id == app_id))
+            return set(rows)
 
     async def create_grant(self, *, owner_id: str, app_id: str, manifest_hash: str, version: int, card_id: str | None) -> dict:
         async with self._sf() as s:
@@ -122,33 +128,43 @@ class AppRepository:
             rows = await s.scalars(select(AppSourceCacheRow).where(AppSourceCacheRow.owner_id == owner_id, AppSourceCacheRow.app_id == app_id))
             return [r.to_dict() for r in rows]
 
+    @staticmethod
+    def _granted(owner_id: str, app_id: str, manifest_hash: str):
+        """An active grant exists: checked INSIDE each cache write, so a revoke
+        that lands mid-fetch leaves nothing to recreate or refill."""
+        return exists().where(AppGrantRow.owner_id == owner_id, AppGrantRow.app_id == app_id, AppGrantRow.manifest_hash == manifest_hash, AppGrantRow.revoked_at.is_(None))
+
     async def claim_upstream(self, *, owner_id: str, app_id: str, source: str, manifest_hash: str, min_interval_s: float) -> bool:
-        """True for exactly one caller per `min_interval_s`, across workers."""
+        """True for exactly one caller per `min_interval_s`, across workers,
+        and only while the (owner, app, hash) grant is active."""
         now = _now()
         async with self._sf() as s:
             if await s.get(AppSourceCacheRow, (owner_id, app_id, source, manifest_hash)) is None:
-                s.add(AppSourceCacheRow(owner_id=owner_id, app_id=app_id, source=source, manifest_hash=manifest_hash))
+                cols = (AppSourceCacheRow.owner_id, AppSourceCacheRow.app_id, AppSourceCacheRow.source, AppSourceCacheRow.manifest_hash)
+                row = select(literal(owner_id), literal(app_id), literal(source), literal(manifest_hash)).where(self._granted(owner_id, app_id, manifest_hash))
                 try:
+                    await s.execute(insert(AppSourceCacheRow).from_select(cols, row))
                     await s.commit()
                 except IntegrityError:
                     await s.rollback()
         async with self._sf() as s:
             key = (AppSourceCacheRow.owner_id == owner_id, AppSourceCacheRow.app_id == app_id, AppSourceCacheRow.source == source, AppSourceCacheRow.manifest_hash == manifest_hash)
-            result = await s.execute(update(AppSourceCacheRow).where(*key, (AppSourceCacheRow.attempted_at.is_(None)) | (AppSourceCacheRow.attempted_at < now - min_interval_s)).values(attempted_at=now))
+            due = (AppSourceCacheRow.attempted_at.is_(None)) | (AppSourceCacheRow.attempted_at < now - min_interval_s)
+            result = await s.execute(update(AppSourceCacheRow).where(*key, due, self._granted(owner_id, app_id, manifest_hash)).values(attempted_at=now))
             await s.commit()
             return bool(result.rowcount)
 
     async def record_answer(self, *, owner_id: str, app_id: str, source: str, manifest_hash: str, state: str, data_json: str | None, reason: str | None) -> bool:
         """Store one answer. `data_json` (projected) replaces the last good
         data only for fresh/empty; failed and not_connected keep it. False when
-        the row is gone (the app was revoked meanwhile): nothing is stored."""
+        the row is gone or the grant ended (revoked meanwhile): nothing is stored."""
         now = _now()
         values: dict = {"state": state, "answered_at": now, "reason": reason}
         if state in ("fresh", "empty"):
             values.update(data=data_json, fetched_at=now)
         async with self._sf() as s:
             key = (AppSourceCacheRow.owner_id == owner_id, AppSourceCacheRow.app_id == app_id, AppSourceCacheRow.source == source, AppSourceCacheRow.manifest_hash == manifest_hash)
-            result = await s.execute(update(AppSourceCacheRow).where(*key).values(**values))
+            result = await s.execute(update(AppSourceCacheRow).where(*key, self._granted(owner_id, app_id, manifest_hash)).values(**values))
             await s.commit()
             return bool(result.rowcount)
 

@@ -158,3 +158,11 @@ def test_tier_refuses_a_tool_an_exception_can_raise(tmp_path, flag) -> None:
     raised = ConfigLoader(path=rules).load()
     assert not raised.unreadable, raised.error
     assert checks.check_tier(GMAIL, GMAIL.arguments({"limit": 25}, NOW), raised) == "GMAIL_FETCH_EMAILS is not Tier 1 in the policy rules"
+
+
+def test_the_calendar_read_still_counts_as_a_private_read() -> None:
+    """Tier 1 lets it run silently; the result is still the owner's private data
+    (it arms the outbound tools' after-private-read card like any mail read)."""
+    from app.policy.private_reads import reads_private
+
+    assert reads_private("connector-googlecalendar_GOOGLECALENDAR_EVENTS_LIST", SHIPPED) is True

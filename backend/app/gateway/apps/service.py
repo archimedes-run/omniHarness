@@ -49,25 +49,48 @@ def iso(ts: float | None) -> str | None:
     return datetime.fromtimestamp(ts, UTC).isoformat() if ts else None
 
 
-def load_app(owner_id: str, app_id: str, version: int | None = None) -> AppRecord:
-    """The app's current version (or `version`), or AppNotFound."""
+def load_app(owner_id: str, app_id: str, version: int | None = None, *, skip: frozenset[int] | set[int] = frozenset()) -> AppRecord:
+    """Version `version`, or else the newest version not in `skip`, or AppNotFound."""
     try:
         history = cv.app_history(owner_id, app_id)
     except ValueError as exc:  # an invalid id or user id
         raise AppNotFound(app_id) from exc
     if not history:
         raise AppNotFound(app_id)
-    chosen = history[-1] if version is None else next((v for v in history if v.version == version), None)
+    if version is None:
+        chosen = ([v for v in history if v.version not in skip] or history)[-1]
+    else:
+        chosen = next((v for v in history if v.version == version), None)
     if chosen is None or not chosen.snapshot:
         raise AppNotFound(app_id)
     return AppRecord(owner_id=owner_id, app_id=app_id, version=chosen.version, at=chosen.at, snapshot=chosen.snapshot)
 
 
-def list_apps(owner_id: str) -> list[AppRecord]:
+async def unserved_versions(repo, owner_id: str, app_id: str) -> set[int]:
+    """Held versions (registered from content) the owner's button has not approved."""
+    try:
+        held = cv.app_held_versions(owner_id, app_id)
+    except ValueError as exc:
+        raise AppNotFound(app_id) from exc
+    return held - await repo.granted_versions(owner_id=owner_id, app_id=app_id) if held else set()
+
+
+async def served(repo, owner_id: str, app_id: str) -> AppRecord:
+    """The version the app serves: the newest one not waiting on the owner's button."""
+    return load_app(owner_id, app_id, skip=await unserved_versions(repo, owner_id, app_id))
+
+
+async def pending_version(repo, app: AppRecord) -> int | None:
+    """A newer version waiting on the owner's button, if any."""
+    latest = load_app(app.owner_id, app.app_id)
+    return latest.version if latest.version != app.version else None
+
+
+async def list_apps(repo, owner_id: str) -> list[AppRecord]:
     out = []
     for app_id in cv.app_ids(owner_id):
         try:
-            out.append(load_app(owner_id, app_id))
+            out.append(await served(repo, owner_id, app_id))
         except AppNotFound:
             continue
     return out
@@ -111,6 +134,22 @@ async def source_views(repo, app: AppRecord) -> list[dict]:
     return out
 
 
+SUGGESTION_SOURCE_MAX = 120
+
+
+def clean_source(text: object) -> str | None:
+    """A suggestion's source label as plain, bounded text: no control or
+    formatting characters, no quotes or angle brackets, whitespace collapsed,
+    at most SUGGESTION_SOURCE_MAX characters. Shown quoted, as text."""
+    if not text:
+        return None
+    import unicodedata
+
+    kept = "".join(" " if unicodedata.category(ch)[0] in ("C", "Z") else ch for ch in str(text) if ch not in '<>"“”`')
+    kept = " ".join(kept.split())[:SUGGESTION_SOURCE_MAX].strip()
+    return kept or None
+
+
 def card_view(card: dict, app: AppRecord | None) -> dict:
     """An approval card. Words come from the version the card was drawn for."""
     sources: list[dict] = []
@@ -132,7 +171,8 @@ def card_view(card: dict, app: AppRecord | None) -> dict:
         "sources": sources,
         "sentence": DATA_SENTENCE,
         "suggestion": bool(card["suggestion"]),
-        "suggestion_source": card.get("suggestion_source"),
+        "suggestion_source": clean_source(card.get("suggestion_source")),
+        "suggestion_words": f"Suggested after reading: “{clean_source(card.get('suggestion_source'))}”" if card["suggestion"] else None,
         "thread_id": card.get("thread_id"),
         "created_at": iso(card["created_at"]),
         "resolved_at": iso(card.get("resolved_at")),
@@ -150,6 +190,7 @@ async def summary(repo, app: AppRecord, pins: list[str]) -> dict[str, Any]:
         "pinned": app.app_id in pins,
         "updated_at": app.at,
         "last_opened_at": iso(await repo.opened_at(owner_id=app.owner_id, app_id=app.app_id)),
+        "pending_version": await pending_version(repo, app),
     }
 
 
@@ -158,8 +199,10 @@ async def detail(repo, app: AppRecord, pins: list[str]) -> dict[str, Any]:
     return {**await summary(repo, app, pins), "html_url": app.html_url, "sources": await source_views(repo, app), "approval": card_view(card, app) if card else None}
 
 
-async def raise_card_if_needed(repo, app: AppRecord, *, thread_id: str | None, suggestion: bool, suggestion_source: str | None) -> dict | None:
-    """A new App access card when the version's hash has no active grant."""
-    if await repo.active_grant(owner_id=app.owner_id, app_id=app.app_id, manifest_hash=app.manifest_hash):
+async def raise_card_if_needed(repo, app: AppRecord, *, thread_id: str | None, suggestion: bool, suggestion_source: str | None, held: bool = False) -> dict | None:
+    """A new App access card when the version's hash has no active grant, or
+    when the version is held (registered from content: even a code-only
+    change waits on the owner's button)."""
+    if not held and await repo.active_grant(owner_id=app.owner_id, app_id=app.app_id, manifest_hash=app.manifest_hash):
         return None
     return await repo.create_card(owner_id=app.owner_id, app_id=app.app_id, version=app.version, manifest_hash=app.manifest_hash, thread_id=thread_id, suggestion=suggestion, suggestion_source=suggestion_source)
