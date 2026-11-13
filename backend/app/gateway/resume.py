@@ -275,17 +275,19 @@ async def _why_not(request: Request, thread: str, card_ids: set[str]) -> str | N
     from app.gateway.deps import get_run_manager, get_thread_store
     from omniharness.agents.turns import POLICY_STEP_MARKER, USER_TURN_MARKER
 
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread, "checkpoint_ns": ""}}) if checkpointer is not None else None
     try:
-        if await get_thread_store(request).get(thread, user_id=None) is None:
+        # Deleted: no thread record AND no saved state (a record written a
+        # moment late is not a deletion).
+        if await get_thread_store(request).get(thread, user_id=None) is None and tup is None:
             return "the thread was deleted"
     except Exception:  # noqa: BLE001 - no thread store: carry on with the other checks
         pass
     runs = await get_run_manager(request).list_history(thread, user_id=None)
     if runs and getattr(getattr(runs[-1], "status", None), "value", str(getattr(runs[-1], "status", ""))) == "interrupted":
         return "the person stopped the task"
-    checkpointer = getattr(request.app.state, "checkpointer", None)
     if checkpointer is not None:
-        tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread, "checkpoint_ns": ""}})
         messages = ((getattr(tup, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or [] if tup else []
         card_at = max((i for i, m in enumerate(messages) if getattr(m, "type", None) == "tool" and str(((getattr(m, "additional_kwargs", None) or {}).get(POLICY_STEP_MARKER) or {}).get("card_id") or "") in card_ids), default=None)
         person_at = max((i for i, m in enumerate(messages) if getattr(m, "type", None) == "human" and (getattr(m, "additional_kwargs", None) or {}).get(USER_TURN_MARKER) is True), default=None)

@@ -398,3 +398,12 @@ def test_a_model_request_is_bounded_unless_the_config_says_otherwise() -> None:
     other: dict = {}
     _bound_request_time("langchain_anthropic:ChatAnthropic", other)
     assert other == {}
+
+
+def test_the_research_subagent_gets_a_smaller_budget_than_its_time_limit() -> None:
+    from omniharness.config.research_budget_config import ResearchBudgetConfig
+    from omniharness.subagents.builtins.research_agent import RESEARCH_AGENT_CONFIG
+
+    sub = ResearchBudgetConfig().for_subagent()
+    assert sub.max_searches <= 5 and sub.max_fetches <= 5 and sub.max_research <= 1
+    assert sub.max_seconds < RESEARCH_AGENT_CONFIG.timeout_seconds, "the subagent would hit its limit before its budget"

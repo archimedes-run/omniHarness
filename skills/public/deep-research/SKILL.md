@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: Use this skill for an in-depth research report or a long piece of writing that must draw on many sources (a literature-style review, a market or technical analysis, a long comparison). Do not use it for quick lookups (a list of places with links, a version number, a few facts with sources, a day plan): search directly for those. Provides a systematic multi-angle research methodology.
+description: "Use this skill for an in-depth research report or a long piece of writing that must draw on many sources (a literature-style review, a market or technical analysis, a long comparison). Do not use it for quick lookups (a list of places with links, a version number, a few facts with sources, a day plan); search directly for those. Provides a systematic multi-angle research methodology."
 ---
 
 # Deep Research Skill

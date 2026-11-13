@@ -124,6 +124,12 @@ def web_fetch(url: str) -> str:
         raise RuntimeError(page["error"])
     if page:
         return page["text"]
+    if "bigpkg/json" in url:
+        # A package index's JSON (eval M-JSONPAGE): a long README before "version", hundreds of releases.
+        return json.dumps({"info": {"description": "Read me. " * 6000, "name": "bigpkg", "version": "9.9.9"}, "releases": {f"0.{i}.0": [{"url": "u"}] for i in range(400)}})
+    if "long-page" in url:
+        # A whole long article (eval M-LONGPAGE): about 30,000 characters.
+        return "# A long article\n\n" + ("React 19 adds Actions, useOptimistic and the use() API. " * 540)
     return data["default_page"].format(url=url)
 
 

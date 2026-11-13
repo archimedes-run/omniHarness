@@ -16,8 +16,10 @@ and the runs that resume it):
    delegated research calls. Past a cap the
    lookup is not made; the result tells the lead to answer with what it has
    and to say what is still uncertain.
-3. Past `answer_after_calls` tool calls, each result carries a one-line note
-   to write the answer now.
+3. TIME. From 60% of `max_seconds` (research time per task, default 150 s)
+   each result says to write the answer now; past it no lookup is made.
+4. Past `answer_after_calls` tool calls, each result carries a one-line note
+   to write the answer now. A fetched page is shortened to `max_page_chars`.
 
 Steering only: it never runs a call and never decides a tier (the policy layer
 classifies the call before it gets here).
@@ -26,7 +28,9 @@ classifies the call before it gets here).
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
+from urllib.parse import urldefrag
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
@@ -44,9 +48,17 @@ FETCH_TOOLS = frozenset({"web_fetch"})
 CACHED_PREFIX = "[From earlier in this task: this exact call already ran; its result is repeated here, nothing was fetched again.]\n\n"
 OVER_BUDGET = 'Not run: this task has used its {what} budget ({n}). Answer now with the sources you already have (3 to 5 solid sources are enough), and say plainly what is still uncertain under "Not verified".'
 ANSWER_NOTE = '\n\n[This task has used {n} tool calls. Write the answer now with what you have; list anything still missing under "Not verified".]'
+TIME_NOTE = '\n\n[This task has spent {s} s researching. Write the answer now with the sources you have; list anything still missing under "Not verified".]'
+OUT_OF_TIME = 'Not run: this task has used its research time ({n} s). Answer now with the sources you already have, and say plainly what is still uncertain under "Not verified".'
+SHORTENED = "\n\n[Page shortened for reading: the first {n} of {total} characters.]"
 
 
 def _canonical(args: Any) -> str:
+    """A call's arguments as compared for "the same lookup". A URL's #fragment
+    is dropped: "page#whats-new" is the same page (the real eval refetched one
+    page under five anchors)."""
+    if isinstance(args, dict) and isinstance(args.get("url"), str):
+        args = {**args, "url": urldefrag(args["url"])[0]}
     try:
         return json.dumps(args or {}, sort_keys=True, default=str)
     except (TypeError, ValueError):
@@ -66,10 +78,48 @@ def _budget(app_config: Any = None) -> Any:
         return ResearchBudgetConfig()
 
 
+def _compact_json(text: str, limit: int) -> str | None:
+    """A JSON page made readable: long strings described by their length,
+    long lists and maps cut to their first and last few entries (with a
+    count). PyPI's package JSON is ~100 KB, its README sits before "version",
+    and a plain cut lost the very field asked for (real eval T13). None when
+    the text is not JSON."""
+    stripped = text.lstrip()
+    if not stripped.startswith(("{", "[")):
+        return None
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        return None
+
+    def shrink(value: Any, depth: int = 0) -> Any:
+        if isinstance(value, str):
+            return value if len(value) <= 300 else f"<{len(value)} characters>"
+        if isinstance(value, list):
+            items = [shrink(v, depth + 1) for v in value[:5]]
+            return items + ([f"<{len(value) - 5} more items>"] if len(value) > 5 else [])
+        if isinstance(value, dict):
+            keys = list(value)
+            if len(keys) > 40:
+                kept = keys[:5] + keys[-5:]
+                out = {k: shrink(value[k], depth + 1) for k in kept}
+                out["<omitted>"] = f"{len(keys) - 10} more keys"
+                return out
+            return {k: shrink(v, depth + 1) for k, v in value.items()}
+        return value
+
+    compact = json.dumps(shrink(data), ensure_ascii=False, indent=1)
+    return compact[:limit]
+
+
 class TurnBudgetMiddleware(AgentMiddleware):
-    def __init__(self, budget: Any = None) -> None:
+    def __init__(self, budget: Any = None, *, scale_to_items: bool = True, clock: Any = time.monotonic) -> None:
         super().__init__()
         self._fixed = budget
+        self._scale = scale_to_items
+        self._clock = clock
+        #: When each task's first lookup was made (by its first message's id).
+        self._started: dict[str, float] = {}
 
     @property
     def budget(self) -> Any:
@@ -89,10 +139,28 @@ class TurnBudgetMiddleware(AgentMiddleware):
         out = step["output"]
         return step["ok"] is True and not out.startswith(CACHED_PREFIX) and not out.startswith("Not run: this task has used")
 
+    def _elapsed(self, request: Any) -> float:
+        """Seconds since this task's first tool call (per task: the id of the
+        message that started it)."""
+        from omniharness.agents.working_loop import turn_messages
+
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
+        turn = turn_messages(list(messages or []))
+        first = turn[0] if turn else None
+        key = str((first.get("id") if isinstance(first, dict) else getattr(first, "id", None)) or "task")
+        now = self._clock()
+        start = self._started.setdefault(key, now)
+        if len(self._started) > 256:  # a long-lived instance: forget the oldest tasks
+            for old in list(self._started)[:128]:
+                self._started.pop(old, None)
+        return now - start
+
     def _early(self, request: Any, steps: list[dict]) -> ToolMessage | None:
         call = getattr(request, "tool_call", None) or {}
         name = str(call.get("name") or "")
         call_id = str(call.get("id") or "")
+        self._last_elapsed = self._elapsed(request)
         if name in REPEATABLE_READS:
             wanted = _canonical(call.get("args"))
             for step in steps:
@@ -102,11 +170,14 @@ class TurnBudgetMiddleware(AgentMiddleware):
         budget = self.budget
         if not getattr(budget, "enabled", True):
             return None
+        # Past the task's research time, no more lookups (the person is waiting).
+        if name in SEARCH_TOOLS | FETCH_TOOLS | {"research"} and self._last_elapsed >= budget.max_seconds:
+            return ToolMessage(content=OUT_OF_TIME.format(n=budget.max_seconds), tool_call_id=call_id, name=name)
         # Calls of the same reply made before this one count too: a reply with
         # 13 searches at once used to pass a cap of 8 whole (real eval T06).
         batch = self._earlier_in_batch(steps, call_id)
         if name in SEARCH_TOOLS:
-            cap = self._search_cap(request, budget)
+            cap = self._search_cap(request, budget) if self._scale else budget.max_searches
             used = sum(1 for s in steps if s["name"] in SEARCH_TOOLS and self._counted(s)) + sum(1 for s in batch if s["name"] in SEARCH_TOOLS)
             if used >= cap:
                 return ToolMessage(content=OVER_BUDGET.format(what="search", n=cap), tool_call_id=call_id, name=name)
@@ -148,12 +219,25 @@ class TurnBudgetMiddleware(AgentMiddleware):
         from omniharness.agents.working_loop import NON_EVIDENCE_TOOLS
 
         budget = self.budget
+        if not getattr(budget, "enabled", True) or not isinstance(result, ToolMessage) or not isinstance(result.content, str):
+            return result
+        content = result.content
+        # A fetched page is shortened for reading: whole pages filled the
+        # context, which was summarised again and again, and the page fetched
+        # again after each summary (real eval T02).
+        if result.name in FETCH_TOOLS and len(content) > budget.max_page_chars and not content.startswith(("Error", "Not run")):
+            compact = _compact_json(content, budget.max_page_chars)
+            if compact is not None:
+                content = compact + f"\n\n[JSON shortened for reading from {len(content)} characters: long text and long lists are described, not shown.]"
+            else:
+                content = content[: budget.max_page_chars] + SHORTENED.format(n=budget.max_page_chars, total=len(content))
         count = sum(1 for s in steps if s["name"] not in NON_EVIDENCE_TOOLS and s["ok"] is not None) + 1
-        if not getattr(budget, "enabled", True) or count < budget.answer_after_calls:
-            return result
-        if not isinstance(result, ToolMessage) or not isinstance(result.content, str):
-            return result
-        return result.model_copy(update={"content": result.content + ANSWER_NOTE.format(n=count)})
+        elapsed = getattr(self, "_last_elapsed", 0.0)
+        if elapsed >= 0.6 * budget.max_seconds:
+            content += TIME_NOTE.format(s=int(elapsed))
+        elif count >= budget.answer_after_calls:
+            content += ANSWER_NOTE.format(n=count)
+        return result if content == result.content else result.model_copy(update={"content": content})
 
     def wrap_tool_call(self, request, handler):
         steps = self._steps(request)

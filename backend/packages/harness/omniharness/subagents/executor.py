@@ -400,9 +400,9 @@ class SubagentExecutor:
         if self.config.name == "research":
             # The read-only web researcher keeps the same per-task search and
             # fetch budget and fetch cache as the lead (spec 009 review).
-            from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware
+            from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware, _budget
 
-            middlewares.append(TurnBudgetMiddleware())
+            middlewares.append(TurnBudgetMiddleware(_budget(app_config).for_subagent(), scale_to_items=False))
 
         # A checkpointer, for the same reason the lead agent gets one: without
         # it a middleware that suspends the run (a permission gate asking the

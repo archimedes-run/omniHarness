@@ -237,6 +237,11 @@ research_budget:
   max_fetches: 10         # web_fetch per task (distinct URLs)
   max_research: 3         # research (delegated web research) per task
   answer_after_calls: 24  # after this many tool calls, each result says "write the answer now"
+  max_seconds: 150        # research time per task: from 60% each result says "answer now"; past it no lookups
+  max_page_chars: 12000   # a fetched page is shortened to this for reading (JSON keeps its fields)
+  subagent_max_searches: 5  # the research subagent's own, smaller budget per call...
+  subagent_max_fetches: 5
+  subagent_max_seconds: 120 # ...so it answers well before its 240 s limit
 
 # ============================================================================
 # Sandbox Configuration

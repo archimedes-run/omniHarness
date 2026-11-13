@@ -162,6 +162,10 @@ def build_config(root: Path, task: dict, mode: str, *, model_config: list[dict] 
     overrides = yaml.safe_load((FIXTURES / "overrides.yaml").read_text())
     for key, value in overrides.items():
         config[key] = value
+    # A task may set config sections of its own (a mock-only device, e.g. a
+    # short research time to test the time budget), merged over the rest.
+    for key, value in (task.get("config") or {}).items():
+        config[key] = {**(config.get(key) or {}), **value} if isinstance(value, dict) else value
     config["database"] = {"backend": "sqlite", "sqlite_dir": str(root / "data")}
     config["policy"] = {"enabled": True, "state_dir": str(root / "policy")}
     tools = [t for t in config["tools"] if t["name"] not in ("web_search", "web_fetch", "image_search")] if mode == "mock" else list(config["tools"])

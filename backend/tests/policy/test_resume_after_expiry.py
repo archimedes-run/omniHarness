@@ -134,8 +134,17 @@ def test_a_turn_part_of_which_another_caller_holds_is_not_resumed_in_part(gatewa
     store.release_continue(cards[0]["id"])
     store.release_continue(cards[1]["id"])
     LEAD_SCRIPT[:] = [AIMessage(content="Done.")]
-    [run_id] = _sweep(gateway)
+    # A pass that finds the chat still busy looks again later; one resume follows.
+    started: list[str] = []
+    for _ in range(20):
+        _settle(gateway, thread_id)
+        started = _sweep(gateway)
+        if started:
+            break
+        time.sleep(0.2)
+    [run_id] = started
     assert wr._wait_run(gateway, thread_id, run_id) == "success"
+    assert _sweep(gateway) == []
     assert _run_count(gateway, thread_id) == before + 1
 
 

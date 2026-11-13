@@ -103,6 +103,14 @@ From the kept trial directories (gateway logs and run journals):
 - **T02** failed twice: once the reply cited three links all from one site (the check asks for two sites; the prompt now says to take several sources from at least two sites and that a search-result link is a valid source), and once the lead first loaded the deep-research skill with `read_file`, whose description told it to use the skill "instead of WebSearch for ANY question requiring web research". A file read is content, so the policy layer made the next search a card, and the run paused. The skill's description now limits it to in-depth reports and tells quick lookups to search directly. **Owner decision point:** whether an installed skill read with `read_file` should count as trusted (today it taints the turn like any file) is a policy-layer question; not changed.
 - Refused or cached lookups no longer appear in the summary's "already done" list.
 
+## Round 7 (2026-11-13): research time (real round on 1233fd2)
+
+T06, T07, T12, T15, T18 now pass. What the kept journals show for the rest:
+- **T02 (two 420 s timeouts, one 365 s pass):** whole fetched pages (react.dev's React 19 post is ~40 KB) filled the context, so it was summarised (30 to 60 s each) after almost every step; after each summary the lead fetched the same page again under another `#anchor`, which the fetch cache treated as a new URL. Some searches took ~31 s each. Fixes: the fetch cache and the fetch budget ignore a URL's `#fragment`; a fetched page is shortened to 12,000 characters for reading (`max_page_chars`); and a research time budget per task (`max_seconds`, 150 s): from 60% of it every tool result says to write the answer now with the sources in hand, and past it no lookup is made, so an answer always comes before the task's limit. Eval tasks M-ANCHOR, M-LONGPAGE, M-TIME.
+- **T08 (600 s timeouts):** in ultra mode each lead model call took 60 to 90 s; research subagents (now working) each ran 8+ searches and fetches for up to their full 240 s, sometimes one after another. The research subagent now has its own smaller budget (5 searches, 5 fetches, 120 s per call) so it answers well before its limit, and the lead's research time budget applies on top.
+- **T13 (timeouts):** PyPI's package JSON is ~100 KB with its README before "version"; it filled the context, was summarised, and was fetched again repeatedly. A long JSON page is now shortened structurally (long strings described by length, long lists and maps cut with a count), so its fields survive. Eval task M-JSONPAGE.
+- The deep-research skill's frontmatter edit in round 6 was invalid YAML (an unquoted ": "), so the skill did not load at all in that round; the description is now quoted.
+
 ## Scores
 
 Mock: every task passes (see the PR). Real model: run by the owner after the PR is merge-ready.
