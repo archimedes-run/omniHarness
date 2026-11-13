@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+
 import { safeLines } from "@/core/display/safe";
 import { useThreadQuestions } from "@/core/questions/hooks";
 
@@ -16,14 +18,21 @@ export function ThreadQuestion({
   questionId,
   fallbackText,
   onResumed,
+  messageCount,
 }: {
   threadId: string;
   questionId: string;
   fallbackText: string;
   /** The run the server started for the asker to carry on in. */
   onResumed?: (runId: string) => void;
+  /** The thread's message count: a new message (a typed answer, the lead's
+   *  reply) reads the card again at once instead of at the next poll. */
+  messageCount?: number;
 }) {
-  const { questions } = useThreadQuestions(threadId);
+  const { questions, refetch } = useThreadQuestions(threadId);
+  useEffect(() => {
+    if (messageCount != null) void refetch();
+  }, [messageCount, refetch]);
   const question = questions?.find((q) => q.id === questionId);
   if (!question) {
     return (

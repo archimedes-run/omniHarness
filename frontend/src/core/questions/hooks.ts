@@ -20,6 +20,7 @@ export function useThreadQuestions(threadId: string | null | undefined) {
     questions: query.data,
     isLoading: query.isLoading,
     error: query.error,
+    refetch: query.refetch,
   };
 }
 

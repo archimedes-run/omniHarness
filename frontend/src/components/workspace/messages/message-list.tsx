@@ -354,6 +354,7 @@ export function MessageList({
               questionId={questionId}
               fallbackText={extractContentFromMessage(message)}
               onResumed={(runId) => void thread.joinStream(runId)}
+              messageCount={messages.length}
             />
           </div>
         );
