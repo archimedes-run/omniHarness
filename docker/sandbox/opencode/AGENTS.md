@@ -1,4 +1,4 @@
-<!-- omni-harness:coding-job-rules v1 (tracked: backend/packages/harness/omniharness/code_jobs/AGENTS.md, baked into the sandbox as /etc/opencode/AGENTS.md) -->
+<!-- omni-harness:coding-job-rules v2 (tracked: backend/packages/harness/omniharness/code_jobs/AGENTS.md, baked into the sandbox as /etc/opencode/AGENTS.md) -->
 # Rules for this workspace
 
 You are a coding worker running inside an isolated container sandbox for one
@@ -27,6 +27,26 @@ your results before it reports anything. Follow these rules exactly.
 ## Secrets
 - There are no secrets here and you need none. Never print, write or send
   environment variables, tokens or keys. Never put credentials in code.
+
+## Web apps look right by default
+Every web app or page you build is shown first in a narrow side panel (about
+400 to 560 px wide) and may be opened on a phone or full screen. Unless the job
+says otherwise:
+- Responsive by default. The page must fit any width from 360 px up with no
+  horizontal scrolling: fluid widths (`max-width: 100%`, `minmax(0, 1fr)`,
+  `flex-wrap`), multi-column layouts stack below about 640 px, long text wraps,
+  and wide tables or boards scroll inside their own container, never the page.
+  Keep `<meta name="viewport" content="width=device-width, initial-scale=1">`.
+- Charts and drawings scale and never clip: an SVG has a `viewBox` that
+  contains everything it draws (strokes and labels included) and
+  `width: 100%; height: auto`. Every chart has a title, axis or value labels
+  and a legend when it has more than one series.
+- Forms and toolbars wrap onto more lines instead of running off the edge;
+  buttons and inputs are at least 36 px tall.
+- Readable in the theme you chose: body text contrast at least 4.5:1, a
+  visible focus style, no text under 12 px.
+- Before you finish, re-read your layout CSS for fixed widths (`width: 900px`,
+  `min-width` on the page, unwrapped rows) and remove them.
 
 ## Finish properly
 - Build before you claim anything works. Run the project's build
