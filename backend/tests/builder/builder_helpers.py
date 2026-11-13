@@ -7,6 +7,8 @@ import json
 from langchain_core.messages import AIMessage
 
 FS_READ = "filesystem_read_file"
+GMAIL_FETCH = "connector-gmail_GMAIL_FETCH_EMAILS"
+GMAIL_DRAFT = "connector-gmail_GMAIL_CREATE_EMAIL_DRAFT"
 
 
 # -- helpers the tests share ---------------------------------------------------

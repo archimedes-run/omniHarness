@@ -81,7 +81,8 @@ Once you have enough information:
    In this setup the draft always writes the agent being set up; the name you pass becomes its display name. Present it warmly: "here's [Name] on paper — does this feel right?"
 4. Iterate until the user is happy: each change is a new `builder_draft` call.
 5. Call `builder_save` with the latest draft id. This puts the draft on a card; the user saves it with the card's button or by replying "yes". Stop and wait for them. Never write the confirmation yourself.
-6. After the user has confirmed and the save succeeded, confirm: "✅ [Name] is officially real."
+6. Put the tools the agent needs in the same draft (`tool_groups`, for example `["web"]`, and `integrations`, for example `["connector:GMAIL"]`). They are not saved with it: once the save is confirmed, a permission card for exactly that access appears. Tell the user plainly that until they press that card's button the agent has none of the access it asked for, only what every agent run gets (the core and built-in tools, and in a chat the apps that chat has selected).
+7. After the user has confirmed and the save succeeded, confirm: "✅ [Name] is officially real."
 
 **Generation rules:**
 - The final SOUL.md **must always be written in English**, regardless of the user's preferred language or conversation language.

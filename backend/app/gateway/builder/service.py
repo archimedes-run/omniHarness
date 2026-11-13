@@ -48,6 +48,7 @@ import json
 import logging
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from app.gateway.builder import drafts
@@ -64,9 +65,19 @@ AGENT_FIELDS = ("display_name", "description", "instructions", "skills", "tool_g
 ACCESS_FIELDS = ("integrations", "tools")
 #: The parts of an agent's config that decide what it may use or do. Kept as
 #: they are by an undo; widened only through builder_grant.
-ACCESS_KEYS = (config_versions.TOOLS_KEY, "tool_groups", "skills", config_versions.AUTONOMY_KEY)
-#: The baseline a NEW agent is measured against: no tools at all.
+ACCESS_KEYS = (config_versions.TOOLS_KEY, "tool_groups", "skills", "model", config_versions.AUTONOMY_KEY)
+#: The config a NEW agent is saved with before its access is confirmed: no
+#: tool groups. It still has what every agent run gets (the core tools, the
+#: in-process built-ins, and in an interactive chat the sources that chat has
+#: selected); it has none of the tool groups or apps it asked for until the
+#: permission card the save raises is confirmed with its button.
 NEW_AGENT_ACCESS = {"tool_groups": [], "skills": []}
+#: Fixed wording for refusals that reach the model: never free text taken
+#: from stored config or written by a model (a scan's reason).
+INVALID = {
+    "agent": "the agent has no instructions yet (field: instructions).",
+    "skill": "the skill's SKILL.md is not valid (fields: description, body).",
+}
 #: The context key the builder_draft tool passes the turn's messages under.
 MESSAGES_KEY = "_builder_messages"
 #: The builder tools whose rules must be in force for the builder to be offered.
@@ -190,7 +201,7 @@ class GatewayBuilderController:
         try:
             version, _, on_file = rule_versions(self._config(), name)
         except RulesEditError as exc:
-            raise BuilderRefused(str(exc)) from exc
+            raise BuilderRefused("could not read the rules file.") from exc
         return on_file, version
 
     @staticmethod
@@ -244,9 +255,6 @@ class GatewayBuilderController:
             wanted = [g for g in fields["tool_groups"] if isinstance(g, str)]
             dropped += [g for g in wanted if g not in known]
             config["tool_groups"] = [g for g in dict.fromkeys(wanted) if g in known]
-        access = {key: [v for v in fields.get(key) or [] if isinstance(v, str)] for key in ACCESS_FIELDS if fields.get(key)}
-        if access:
-            notes.append("Tool access is not saved with this draft: " + "; ".join(f"{k}: {', '.join(v)}" for k, v in access.items()) + ". It needs builder_grant, which only the card's button confirms.")
         return {"config": config, "soul": soul}, dropped, notes
 
     def _compose_skill(self, name: str, fields: dict, live: dict | None) -> tuple[dict, list[str], list[str]]:
@@ -299,40 +307,53 @@ class GatewayBuilderController:
 
     # -- access --------------------------------------------------------------------
 
-    def _effective_tools(self, config: dict) -> set[str]:
-        """The configured tools an agent with this config is offered: its
-        per-tool list (006-G) or its tool groups, then only what its skills'
-        allowed-tools permit (skills.tool_policy)."""
-        from omniharness.skills.tool_policy import allowed_tool_names_for_skills
+    def _assembled_tools(self, user_id: str, config: dict) -> list:
+        """The tools a run of an agent with this config is offered, assembled
+        the way the run assembles them (lead_agent.agent): config tools by
+        tool group or per-tool list, the in-process built-ins and core tools,
+        MCP tools, view_image for a vision model, `task` (as with subagents
+        on), then filtered by the skills' allowed-tools. Built in a copied
+        context: assembly resets per-request registries the running turn uses."""
+        import contextvars
 
-        access = config.get(config_versions.TOOLS_KEY)
-        if access is not None:
-            base = set((access or {}).get("tools") or [])
-        else:
-            groups = config.get("tool_groups")
-            base = {t.name for t in self._config().tools if groups is None or t.group in groups}
-        skills = config.get("skills")
-        loaded = self._skills().load_skills(enabled_only=True)
-        chosen = loaded if skills is None else [s for s in loaded if s.name in set(skills)]
-        allowed = allowed_tool_names_for_skills(chosen)
-        return base if allowed is None else base & allowed
+        def build() -> list:
+            from omniharness.agents.lead_agent.agent import _load_enabled_skills_for_tool_policy, _resolve_model_name
+            from omniharness.config.agents_config import AgentConfig
+            from omniharness.mcp.cache import get_cached_mcp_tools
+            from omniharness.skills.tool_policy import filter_tools_by_skill_allowed_tools
+            from omniharness.tools import get_available_tools
 
-    def _split_access(self, before: dict | None, after: dict) -> tuple[dict, dict | None]:
+            cfg = self._config()
+            fields = {k: v for k, v in config.items() if k in AgentConfig.model_fields}
+            agent = AgentConfig.model_validate({**fields, "name": str(config.get("name") or "draft")})
+            model_name = _resolve_model_name(agent.model, app_config=cfg)
+            tools = get_available_tools(model_name=model_name, groups=agent.tool_groups, subagent_enabled=True, app_config=cfg, user_id=user_id, tool_access=agent.tools)
+            skills = _load_enabled_skills_for_tool_policy(set(agent.skills) if agent.skills is not None else None, app_config=cfg)
+            dynamic = {t.name for t in (get_cached_mcp_tools() or [])}
+            return filter_tools_by_skill_allowed_tools(tools, skills, always_include=dynamic)
+
+        return contextvars.copy_context().run(build)
+
+    def _effective_tools(self, user_id: str, config: dict) -> set[str]:
+        return {t.name for t in self._assembled_tools(user_id, config)}
+
+    def _split_access(self, user_id: str, before: dict | None, after: dict) -> tuple[dict, dict | None]:
         """(the config a save may write, the access it left out). A change that
-        would let the agent use more is left out (tool groups first, then
-        skills) and returned to be proposed with builder_grant."""
+        would let the agent use any tool it does not have now is left out
+        (tool groups, then skills, then model) and returned to be proposed with
+        builder_grant. Narrowing rides with the save."""
         base = dict(NEW_AGENT_ACCESS) if before is None else dict(before)
-        had = self._effective_tools(base)
-        wanted = self._effective_tools(after)
+        had = self._effective_tools(user_id, base)
+        wanted = self._effective_tools(user_id, after)
         if wanted <= had:
             return after, None
         applied = dict(after)
         left_out: dict = {}
-        for key in ("tool_groups", "skills"):
-            if self._effective_tools(applied) <= had:
+        for key in ("tool_groups", "skills", "model"):
+            if self._effective_tools(user_id, applied) <= had:
                 break
             if applied.get(key) != base.get(key):
-                left_out[key] = applied.get(key)
+                left_out[key] = after.get(key)
                 if key in base:
                     applied[key] = base[key]
                 else:
@@ -340,9 +361,52 @@ class GatewayBuilderController:
         left_out["adds"] = sorted(wanted - had)
         return applied, left_out
 
-    def _widens(self, before: dict | None, after: dict) -> bool:
+    def _widens(self, user_id: str, before: dict | None, after: dict) -> bool:
         base = dict(NEW_AGENT_ACCESS) if before is None else dict(before)
-        return not self._effective_tools(after) <= self._effective_tools(base)
+        return not self._effective_tools(user_id, after) <= self._effective_tools(user_id, base)
+
+    def _integration_tools(self, user_id: str, integration: str) -> list[tuple[str, int | None]]:
+        """(tool name, tier) of one integration's tools for this user, from the
+        same assembly a run uses; tier from the policy classifier (None: no
+        rule names it, so it is never offered)."""
+        import contextvars
+
+        from app.policy.explain import explain
+        from app.policy.registration import shared_loader
+
+        cfg = self._config()
+
+        def names() -> list[str]:
+            if integration.startswith("builtin:"):
+                from omniharness.tools import get_available_tools
+                from omniharness.tools.agent_access import integration_of
+
+                groups = {c.name: c.group for c in cfg.tools if getattr(c, "group", None)}
+                out = []
+                for tool in get_available_tools(include_mcp=False, app_config=cfg, subagent_enabled=True):
+                    try:
+                        if integration_of(tool, config_groups=groups) == integration:
+                            out.append(tool.name)
+                    except LookupError:
+                        continue
+                return out
+            if integration.startswith("local:"):
+                from omniharness.mcp.cache import get_cached_mcp_tools
+
+                prefix = f"{integration[6:]}_"
+                return [t.name for t in get_cached_mcp_tools() or [] if t.name.startswith(prefix)]
+            if integration.startswith("connector:"):
+                from omniharness.tools.tools import assemble_connector_tools
+
+                return [t.name for t in assemble_connector_tools(cfg, user_id, [integration[10:]])]
+            return []
+
+        ruleset = shared_loader(cfg.policy).load(notify=False)
+        out = []
+        for name in contextvars.copy_context().run(names):
+            decision = explain(name, {}, ruleset)
+            out.append((name, None if decision.refused else int(decision.tier)))
+        return out
 
     def _runs_as(self, user_id: str, rule: dict) -> tuple[str, list[str], list[str]]:
         """(the agent a rule runs as, that agent's standing grants, the rule's
@@ -374,21 +438,20 @@ class GatewayBuilderController:
         kind, name, snapshot = draft["kind"], draft["name"], draft["snapshot"]
         if kind == "agent":
             if not (snapshot.get("soul") or "").strip():
-                raise BuilderRefused("the agent has no instructions yet.")
+                raise BuilderRefused(INVALID["agent"])
             return
         if kind == "skill":
             storage = self._skills()
             try:
                 storage.validate_skill_markdown_content(name, snapshot["files"][SKILL_MD])
             except ValueError as exc:
-                raise BuilderRefused(f"the skill is not valid yet: {exc}") from exc
+                raise BuilderRefused(INVALID["skill"]) from exc
             return
         self._validate_rule(user_id, snapshot)
 
     def _validate_rule(self, user_id: str, rule: dict) -> None:
         from app.gateway.automations_store import RulesEditError, put_rule, read_rules, validate
         from app.gateway.trigger_engine_wiring import SUPPORTED_SOURCE_TYPES, _resolve_rules_path
-        from app.trigger_engine.config import standard_cron_problem
 
         cfg = self._config().trigger_engine
         if not getattr(cfg, "rules_path", ""):
@@ -396,7 +459,7 @@ class GatewayBuilderController:
         match = rule.get("match")
         schedule = match.get("schedule") if isinstance(match, dict) else None
         if rule.get("type") == "cron" and schedule and len(str(schedule).split()) != 5:
-            raise BuilderRefused(f"the schedule {schedule!r} {standard_cron_problem(schedule) or 'is not a five-field cron expression'}.")
+            raise BuilderRefused("the schedule is not a five-field cron expression (field: match.schedule).")
         agent = rule.get("agent")
         if isinstance(agent, str) and agent.strip().lower() not in ("", LEAD_AGENT):
             from omniharness.config.agents_config import load_agent_config
@@ -404,14 +467,14 @@ class GatewayBuilderController:
             try:
                 load_agent_config(agent.strip().lower(), user_id=user_id)
             except (FileNotFoundError, ValueError) as exc:
-                raise BuilderRefused(f"there is no agent called {agent.strip().lower()!r}; a rule runs only as an agent that exists.") from exc
+                raise BuilderRefused("the agent the rule runs as does not exist (field: agent); a rule runs only as an agent that exists.") from exc
         try:
             current = read_rules(_resolve_rules_path(cfg)).doc
             validate(put_rule(current, rule["id"], rule), SUPPORTED_SOURCE_TYPES, current)
         except RulesEditError as exc:
-            raise BuilderRefused(f"the automation engine would refuse it: {exc}") from exc
+            raise BuilderRefused("the automation engine would refuse the rule (fields: type, match, prompt, destination).") from exc
         except (OSError, ValueError) as exc:
-            raise BuilderRefused(f"could not read the rules file: {exc}") from exc
+            raise BuilderRefused("could not read the rules file.") from exc
 
     # -- the tools ---------------------------------------------------------------
 
@@ -434,18 +497,20 @@ class GatewayBuilderController:
             current = drafts.active(user_id, thread_id)
             if current and (current.get("kind"), current.get("name")) != (kind, name) and not replace_current:
                 return (
-                    f"Nothing was drafted: this chat is already building the {current.get('kind')} {current.get('title') or current.get('name')!r}. "
+                    f"Nothing was drafted: this chat is already building the {current.get('kind')} `{current.get('name')}`. "
                     "Ask the user whether to drop that draft and start this one; if they agree, call builder_draft again with replace_current=true."
                 )
             live, version = self._live(user_id, kind, name)
             snapshot, dropped, notes = self._compose(user_id, kind, name, dict(fields or {}), live)
             access_request = None
             if kind == "agent":
-                applied, access_request = self._split_access((live or {}).get("config") if live is not None else None, snapshot["config"])
+                applied, access_request = self._split_access(user_id, (live or {}).get("config") if live is not None else None, snapshot["config"])
                 snapshot = {**snapshot, "config": applied}
+                requested = {k: [v for v in fields.get(k) or [] if isinstance(v, str)] for k in ACCESS_FIELDS if (fields or {}).get(k)}
+                if requested:
+                    access_request = {**(access_request or {"adds": []}), **requested}
                 if access_request:
-                    asks = "; ".join(f"{k}: {', '.join(v) if isinstance(v, list) else 'all'}" for k, v in access_request.items() if k != "adds")
-                    notes.append(f"Tool access is not saved with this draft: it would let the agent use {', '.join(access_request['adds'])} ({asks}). Propose it with builder_grant after saving; only its button confirms it.")
+                    notes.append("Tool access is not saved with this draft: " + self._access_words(access_request) + ". Once it is saved, a permission card asks for it; only that card's button confirms it.")
             origin, origin_source = self._turn_origin(context)
             draft = {
                 "id": drafts.new_draft_id(),
@@ -485,6 +550,21 @@ class GatewayBuilderController:
         return initiation_origin(messages, synthetic=is_synthetic_turn(context))
 
     @staticmethod
+    def _access_words(request: dict) -> str:
+        """The access a draft asked for, in words (names and ids only)."""
+        parts = []
+        if "tool_groups" in request:
+            parts.append(f"tool groups: {', '.join(request['tool_groups']) if isinstance(request['tool_groups'], list) else 'all'}")
+        for key in ("integrations", "tools", "skills"):
+            if isinstance(request.get(key), list):
+                parts.append(f"{key}: {', '.join(request[key]) or '(none)'}")
+        if request.get("model"):
+            parts.append(f"model: {request['model']}")
+        if request.get("adds"):
+            parts.append(f"tools it would gain: {', '.join(request['adds'])}")
+        return "; ".join(parts)
+
+    @staticmethod
     def _model_ack(draft: dict, live: dict | None) -> str:
         """What the MODEL is told about a draft: ids, field names, counts and
         versions, never stored text (the owner reads the draft on its card)."""
@@ -500,7 +580,7 @@ class GatewayBuilderController:
             what = f"a change to the {kind} `{name}` (based on version {draft.get('base_version')}); fields changed: {', '.join(changed) or 'none'}"
         extra = []
         if draft.get("access_request"):
-            extra.append(f"Tool access left out of the draft (needs builder_grant, button only): adds {len(draft['access_request']['adds'])} tool(s).")
+            extra.append("Tool access left out of the draft: once it is saved, a permission card asks for it (button only).")
         dropped = [n for n in draft.get("notes") or [] if n.startswith("Left out (not found here)") or n.startswith("Not part of")]
         extra += dropped
         tail = (" " + " ".join(extra)) if extra else ""
@@ -642,7 +722,7 @@ class GatewayBuilderController:
         if version != draft.get("base_version") or (live is None) != (draft.get("mode") == "create"):
             raise BuilderRefused(f"the {draft['kind']} {draft['name']!r} changed since this draft was made (it was version {draft.get('base_version')}, it is now version {version}). Draft it again on the current version.")
         self._validate(user_id, draft)
-        if draft["kind"] == "agent" and self._widens((live or {}).get("config") if live is not None else None, draft["snapshot"].get("config") or {}):
+        if draft["kind"] == "agent" and self._widens(user_id, (live or {}).get("config") if live is not None else None, draft["snapshot"].get("config") or {}):
             raise BuilderRefused("this draft would widen the agent's tool access; draft it again (access is proposed separately with builder_grant).")
         return draft, live, version
 
@@ -688,9 +768,17 @@ class GatewayBuilderController:
             else:
                 new_version = self._save_rule(name, draft, version, who)
             drafts.mark_saved(user_id, thread_id, draft_id, new_version)
+            permission = self._propose_access(context, action, name, draft["access_request"]) if kind == "agent" and draft.get("access_request") else None
             logger.info("builder: saved %s %r as version %s (thread %s, card %s)", kind, name, new_version, thread_id, action.id)
             verb = "Created" if draft.get("mode") == "create" else "Saved"
-            later = " Its tool access was left out; propose it with builder_grant (button only)." if draft.get("access_request") else ""
+            later = ""
+            if permission:
+                later = (
+                    f" It has none of the access it asked for until the user confirms its permission card (action `{permission}`, button only);"
+                    " until then it has only what every agent run gets (the core and built-in tools, and in a chat the apps that chat has selected)."
+                )
+            elif draft.get("access_request"):
+                later = " The access it asked for was left out; propose it with builder_grant (button only)."
             return f"{verb} the {kind} `{name}` as version {new_version} (source: chat). To undo it, propose builder_undo with version {new_version}.{later}"
         except config_versions.StaleWriteError as exc:
             return f"Nothing was saved: {exc}"
@@ -704,7 +792,7 @@ class GatewayBuilderController:
         content = draft["snapshot"]["files"][SKILL_MD]
         scan = _run_sync(scan_skill_content(content, executable=False, location=f"{name}/{SKILL_MD}", app_config=self._config()))
         if scan.decision == "block":
-            raise BuilderRefused(f"the security scan blocked the skill: {scan.reason}")
+            raise BuilderRefused("the security scan blocked the skill; change its body and draft it again.")
         record = {
             **extra,
             "action": "create" if live is None else "edit",
@@ -730,16 +818,22 @@ class GatewayBuilderController:
             edit_rules(self._config(), lambda doc: put_rule(doc, name, rule), None, who=who, source="chat", via="chat", base_versions={name: version})
             return rule_versions(self._config(), name)[0]
         except RulesEditError as exc:
-            raise BuilderRefused(str(exc)) from exc
+            raise BuilderRefused("the rules file refused the change (it may have changed since: draft it again)." if exc.status == 409 else "the rules file refused the change.") from exc
 
     # -- grants ------------------------------------------------------------------
 
     def _grant_plan(self, context: dict, arguments: dict) -> tuple[str, dict]:
-        """The card's text and what a grant writes: an agent's per-tool list
-        (integrations, tools), its tool groups, its skills list, its standing
-        grants. Each item is listed; none is ticked for the owner."""
+        """The card's text and what a grant writes. It can add tool groups,
+        give integrations and tools (turning an agent that uses tool groups,
+        or has no access yet, into a per-tool list that keeps every tool it
+        has now), set its skills list or model, and add standing grants. An
+        integration named without tools gives its tools that read freely
+        (Tier 1); others must be named. Every tool it gains is listed; nothing
+        is ticked for the owner, and only the button confirms it."""
         from app.policy.grants import ACTION_CLASSES, grantable
         from app.policy.registration import shared_loader
+        from omniharness.config.agents_config import INTEGRATION_PREFIXES
+        from omniharness.tools.agent_access import CORE_TOOLS, integration_of
 
         user_id, _ = self._guard(context)
         agent = self._norm(context, "agent", str(arguments.get("agent") or ""))
@@ -749,38 +843,69 @@ class GatewayBuilderController:
         live, version = self._live(user_id, "agent", agent)
         if live is None:
             raise BuilderRefused(f"there is no agent called {agent!r}.")
+        cfg = self._config()
         config = dict(live.get("config") or {})
         new = json.loads(json.dumps(config))
-        integrations = [i for i in arguments.get("integrations") or [] if isinstance(i, str)]
-        tools = [t for t in arguments.get("tools") or [] if isinstance(t, str)]
-        groups = [g for g in arguments.get("tool_groups") or [] if isinstance(g, str)]
+        integrations = [i for i in dict.fromkeys(arguments.get("integrations") or []) if isinstance(i, str)]
+        tools = [t for t in dict.fromkeys(arguments.get("tools") or []) if isinstance(t, str)]
+        groups = [g for g in dict.fromkeys(arguments.get("tool_groups") or []) if isinstance(g, str)]
         skills = arguments.get("skills")
-        autonomy = [c for c in arguments.get("autonomy") or [] if isinstance(c, str)]
-        lines = [f"**Give the agent `{agent}` more** (based on version {version}). Nothing here is ticked for you; confirm only with the button:"]
+        model = arguments.get("model")
+        autonomy = [c for c in dict.fromkeys(arguments.get("autonomy") or []) if isinstance(c, str)]
+        bad = [i for i in integrations if not i.startswith(INTEGRATION_PREFIXES)]
+        if bad:
+            raise BuilderRefused(f"not an integration id: {', '.join(bad)} (they start with local:, connector: or builtin:).")
+        known_groups = {g.name for g in cfg.tool_groups}
+        unknown = [g for g in groups if g not in known_groups]
+        if unknown:
+            raise BuilderRefused(f"no such tool group: {', '.join(unknown)}.")
+        lines = [f"**Give the agent `{agent}` more** (based on version {version}). Nothing here is ticked for you; only the button confirms it:"]
         current_access = config.get(config_versions.TOOLS_KEY)
-        if integrations or tools:
-            from omniharness.config.agents_config import INTEGRATION_PREFIXES
-
+        if integrations or tools or current_access is not None and groups:
+            # A per-tool list. One the agent does not have yet starts from
+            # every tool it has now, so nothing it has is taken away.
             if current_access is None:
-                raise BuilderRefused(f"{agent!r} uses tool groups, not a per-tool list; set its tool access in Agent Studio first.")
-            bad = [i for i in integrations if not i.startswith(INTEGRATION_PREFIXES)]
-            if bad:
-                raise BuilderRefused(f"not an integration id: {', '.join(bad)} (they start with local:, connector: or builtin:).")
-            new_i = [i for i in dict.fromkeys(integrations) if i not in (current_access.get("integrations") or [])]
-            new_t = [t for t in dict.fromkeys(tools) if t not in (current_access.get("tools") or [])]
-            if new_i:
-                lines.append(f"- may use these integrations: {', '.join(new_i)}")
-            if new_t:
-                lines.append(f"- may use these tools (each keeps its own tier): {', '.join(new_t)}")
-            new[config_versions.TOOLS_KEY] = {"integrations": [*(current_access.get("integrations") or []), *new_i], "tools": [*(current_access.get("tools") or []), *new_t]}
-        if groups:
-            known = {g.name for g in self._config().tool_groups}
-            unknown = [g for g in groups if g not in known]
-            if unknown:
-                raise BuilderRefused(f"no such tool group: {', '.join(unknown)}.")
+                group_of = {c.name: c.group for c in cfg.tools if getattr(c, "group", None)}
+                have_i: list[str] = []
+                have_t: list[str] = []
+                for tool in self._assembled_tools(user_id, config):
+                    if tool.name in CORE_TOOLS:
+                        continue
+                    try:
+                        source = integration_of(tool, config_groups=group_of)
+                    except LookupError:
+                        continue
+                    if source:
+                        have_i.append(source)
+                        have_t.append(tool.name)
+                access = {"integrations": list(dict.fromkeys(have_i)), "tools": list(dict.fromkeys(have_t))}
+                lines.append("- its tools become a per-tool list: what its tool groups and built-ins give it now, plus what is listed here (apps a chat selects no longer add to it)")
+            else:
+                access = {"integrations": list(current_access.get("integrations") or []), "tools": list(current_access.get("tools") or [])}
+            for group in groups:
+                integrations.append(f"builtin:{group}")
+            for integration in dict.fromkeys(integrations):
+                listed = self._integration_tools(user_id, integration)
+                if not listed and integration.startswith("builtin:"):
+                    continue  # a tool group this install offers no tools from
+                if not listed:
+                    raise BuilderRefused(f"{integration} has no tools for this account now (an app must be connected on the Connections page first; nothing is connected from here).")
+                named = [t for t in tools if t in {n for n, _ in listed}]
+                picked = named or [n for n, tier in listed if tier == 1]
+                if integration not in access["integrations"]:
+                    access["integrations"].append(integration)
+                access["tools"] += [t for t in picked if t not in access["tools"]]
+            access["tools"] += [t for t in tools if t not in access["tools"]]
+            new[config_versions.TOOLS_KEY] = access
+            added_i = [i for i in access["integrations"] if i not in ((current_access or {}).get("integrations") or [])]
+            if current_access is not None and added_i:
+                lines.append(f"- may use these integrations: {', '.join(added_i)}")
+            elif current_access is None and integrations:
+                lines.append(f"- may use these integrations: {', '.join(dict.fromkeys(integrations))}")
+        elif groups:
             have = config.get("tool_groups")
             if have is not None:
-                added = [g for g in dict.fromkeys(groups) if g not in have]
+                added = [g for g in groups if g not in have]
                 if added:
                     lines.append(f"- tool groups added: {', '.join(added)}")
                 new["tool_groups"] = [*have, *added]
@@ -790,17 +915,23 @@ class GatewayBuilderController:
             if wanted != config.get("skills"):
                 lines.append(f"- skills set to: {', '.join(wanted) or '(none)'}")
                 new["skills"] = wanted
-        adds = sorted(self._effective_tools(new) - self._effective_tools(config))
+        if model:
+            if cfg.get_model_config(str(model)) is None:
+                raise BuilderRefused(f"no such model: {model!r}.")
+            if str(model) != config.get("model"):
+                lines.append(f"- model set to: {model}")
+                new["model"] = str(model)
+        adds = sorted(self._effective_tools(user_id, new) - self._effective_tools(user_id, config))
         if adds:
             lines.append(f"- so it may use: {', '.join(adds)}")
         if autonomy:
-            ruleset = shared_loader(self._config().policy).load(notify=False)
+            ruleset = shared_loader(cfg.policy).load(notify=False)
             labels = {a.id: a for a in ACTION_CLASSES}
             refused = [why for c in autonomy for ok, why in [grantable(c, ruleset)] if not ok]
             if refused:
                 raise BuilderRefused("not grantable: " + "; ".join(refused))
             have = set(config.get(config_versions.AUTONOMY_KEY) or [])
-            autonomy = [c for c in dict.fromkeys(autonomy) if c not in have]
+            autonomy = [c for c in autonomy if c not in have]
             for c in autonomy:
                 lines.append(f"- may, on its own in a scheduled run: {labels[c].label} ({labels[c].allows})")
             if autonomy:
@@ -811,8 +942,8 @@ class GatewayBuilderController:
         lines.append("A new app connection is never started from here: connect it on the Connections page first.")
         return "\n".join(lines), {"agent": agent, "version": version, "live": live, "config": new, "autonomy": bool(autonomy)}
 
-    def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str], tool_groups: list[str] | None = None, skills: list[str] | None = None) -> str:
-        arguments = {"agent": agent, "integrations": integrations, "tools": tools, "autonomy": autonomy, "tool_groups": tool_groups or [], "skills": skills}
+    def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str], tool_groups: list[str] | None = None, skills: list[str] | None = None, model: str | None = None) -> str:
+        arguments = {"agent": agent, "integrations": integrations, "tools": tools, "autonomy": autonomy, "tool_groups": tool_groups or [], "skills": skills, "model": model}
         try:
             action = self._confirmed("builder_grant", {"agent": agent}, button=True)
             user_id, thread_id = self._who(context)
@@ -826,6 +957,54 @@ class GatewayBuilderController:
             return f"Nothing was changed: {exc}"
         except BuilderRefused as exc:
             return f"Nothing was changed: {exc}"
+
+    def _propose_access(self, context: dict, saved_by, agent: str, request: dict) -> str | None:
+        """Right after a save that left access out: ONE permission card for the
+        access the draft asked for (a builder_grant pending action, button
+        only, its items listed). Returns its id, or None when there is
+        nothing to ask for."""
+        from datetime import UTC, datetime
+
+        from app.policy.middleware import PolicyMiddleware
+        from app.policy.models import PendingAction, Tier, default_expiry
+        from app.policy.pending import PendingStore
+        from app.policy.registration import shared_loader
+        from app.policy.targets import resolve_targets
+
+        groups = request.get("tool_groups")
+        if "tool_groups" in request and groups is None:
+            groups = [g.name for g in self._config().tool_groups]
+        arguments = {"agent": agent, "integrations": list(request.get("integrations") or []), "tools": list(request.get("tools") or []), "autonomy": [], "tool_groups": list(groups or [])}
+        if isinstance(request.get("skills"), list):
+            arguments["skills"] = list(request["skills"])
+        if request.get("model"):
+            arguments["model"] = request["model"]
+        try:
+            note, _ = self._grant_plan(context, arguments)
+        except BuilderRefused as exc:
+            logger.info("builder: no permission card after saving %s: %s", agent, exc)
+            return None
+        policy = self._config().policy
+        ruleset = shared_loader(policy).load(notify=False)
+        targets = resolve_targets("builder_grant", arguments)
+        card = PendingAction(
+            plan_text="",
+            tool_name="builder_grant",
+            arguments=arguments,
+            targets=targets,
+            tier_at_statement=Tier.TIER_3,
+            expires_at=default_expiry(datetime.now(UTC), ruleset.expires_after_seconds),
+            thread_id=saved_by.thread_id,
+            requester=saved_by.requester,
+            origin=saved_by.origin,
+            origin_source=saved_by.origin_source,
+            owner_id=saved_by.owner_id,
+            surface=dict(saved_by.surface or {}),
+            private_read=saved_by.private_read,
+        )
+        card.plan_text = f"{PolicyMiddleware._plan_text('builder_grant', targets, card.requester, (), card.id, arguments, origin_note=card.origin_note())}\n\n{note}"
+        PendingStore(directory=Path(policy.state_dir) / "pending").save(card)
+        return card.id
 
     # -- undo -----------------------------------------------------------------------
 
@@ -873,6 +1052,8 @@ class GatewayBuilderController:
             new_meta, _ = self._skill_meta(((live.get("files") or {}).get(SKILL_MD)) or "")
             if old_meta.get("allowed-tools") != new_meta.get("allowed-tools"):
                 raise BuilderRefused(f"version {target.version} of the skill allows different tools; restoring it would change what agents using it may use, so do it in Skill Studio.")
+        elif kind == "skill" and restored is None and live is not None and self._skill_meta(((live.get("files") or {}).get(SKILL_MD)) or "")[0].get("allowed-tools") is not None:
+            raise BuilderRefused("removing this skill would lift the tool limits it sets for agents that use it, so do it in Skill Studio.")
         elif kind == "automation" and restored is not None:
             line, button_only = self._automation_card(user_id, restored)
             lines.append(line)
@@ -908,7 +1089,7 @@ class GatewayBuilderController:
                 try:
                     undo_rule(self._config(), plan["name"], plan["to"], base_version=version, who=who, via="chat")
                 except RulesEditError as exc:
-                    raise BuilderRefused(str(exc)) from exc
+                    raise BuilderRefused("the rules file refused the undo (it may have changed since: read it again)." if exc.status == 409 else "the rules file refused the undo.") from exc
                 new_version = rule_versions(self._config(), plan["name"])[0]
             else:
                 # As config_versions.undo does, with version 0 (before a create)

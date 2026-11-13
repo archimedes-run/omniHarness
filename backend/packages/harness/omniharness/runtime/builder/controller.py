@@ -33,7 +33,7 @@ class BuilderController(Protocol):
         """Save a draft (only ever run as a confirmed Tier 3 action)."""
         ...
 
-    def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str], tool_groups: list[str] | None = None, skills: list[str] | None = None) -> str:
+    def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str], tool_groups: list[str] | None = None, skills: list[str] | None = None, model: str | None = None) -> str:
         """Widen an agent's tool access or standing grants (button-confirmed only)."""
         ...
 
