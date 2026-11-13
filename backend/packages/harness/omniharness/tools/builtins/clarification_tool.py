@@ -14,8 +14,9 @@ CLARIFICATION_TYPES = ("missing_info", "ambiguous_requirement")
 def ask_clarification_tool(
     question: str,
     clarification_type: Literal["missing_info", "ambiguous_requirement"],
-    context: str | None = None,
     options: list[str] | None = None,
+    recommended: int | None = None,
+    context: str | None = None,
 ) -> str:
     """Ask the person one question when information the task cannot go ahead without is missing, and no read tool (memory, files, ledger, mail, calendar, web) can find it.
 
@@ -26,13 +27,14 @@ def ask_clarification_tool(
     - let the person choose between approaches (pick a sensible default and state it);
     - ask permission to read anything (reading never needs permission).
 
-    The run pauses until the person answers.
+    The person sees a card with your options as buttons and a box to type their own answer. The run pauses until they answer; if nobody answers, this path stops (nothing is guessed).
 
     Args:
-        question: The one question to ask. Be specific.
+        question: The one question to ask, 1 to 500 characters. Be specific.
         clarification_type: missing_info (a required value is absent) or ambiguous_requirement (the request has two readings that lead to different results and nothing you can read settles it).
-        context: Optional: why the task cannot go ahead without the answer.
-        options: Optional: only for a missing value with a known small set (for example which of two calendars). Never a menu of approaches.
+        options: Required: 2 to 4 likely answers, each 1 to 60 characters and different from each other (for example the two calendars, or the three most likely cities). Never a menu of approaches. The person can always type another answer.
+        recommended: Optional: the number (1 to 4) of the option you suggest, when one is clearly the most likely.
+        context: Optional: why the task cannot go ahead without the answer (up to 500 characters).
     """
     # This is a placeholder implementation
     # The actual logic is handled by ClarificationMiddleware which intercepts this tool call

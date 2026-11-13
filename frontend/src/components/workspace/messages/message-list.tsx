@@ -26,6 +26,7 @@ import {
   hasPresentFiles,
   hasReasoning,
 } from "@/core/messages/utils";
+import { questionIdOf } from "@/core/questions/logic";
 import { rehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
 import { useUpdateSubtask } from "@/core/tasks/context";
@@ -37,6 +38,7 @@ import { ArtifactFileList } from "../artifacts/artifact-file-list";
 import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 import { CodeJobCard } from "../code-jobs/code-job-card";
 import { CopyButton } from "../copy-button";
+import { ThreadQuestion } from "../questions/thread-question";
 import { StreamingIndicator } from "../streaming-indicator";
 
 import { AgentHeader, HandoffLine } from "./agent-header";
@@ -341,6 +343,21 @@ export function MessageList({
       );
     } else if (group.type === "assistant:clarification") {
       const message = group.messages[0];
+      // A question that became a card (009 question-card.md): the shared
+      // card, answered only by the owner's click or own tagged reply.
+      const questionId = message ? questionIdOf(message) : null;
+      if (message && questionId) {
+        return (
+          <div key={groupKey} className="w-full">
+            <ThreadQuestion
+              threadId={threadId}
+              questionId={questionId}
+              fallbackText={extractContentFromMessage(message)}
+              onResumed={(runId) => void thread.joinStream(runId)}
+            />
+          </div>
+        );
+      }
       if (message && hasContent(message)) {
         return (
           <div key={groupKey} className="w-full">

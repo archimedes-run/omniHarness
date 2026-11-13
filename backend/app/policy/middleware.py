@@ -496,7 +496,8 @@ class PolicyMiddleware(AgentMiddleware):
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(handler(self._offered(request, note)))
+        outcome = self._answer_question(request)
+        return self._guard_self_verdict(handler(self._offered(request, self._question_note(request, note, outcome))))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         # OFF THE EVENT LOOP, AND ONLY WHAT RUNS. A typed "yes" runs the
@@ -525,7 +526,45 @@ class PolicyMiddleware(AgentMiddleware):
             verdict, note = outcome
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(await handler(self._offered(request, note)))
+        answered = self._answer_question(request)
+        if answered is not None and answered.answered is not None:
+            from app.gateway.questions.service import dispatch
+
+            await dispatch(answered.answered)
+        return self._guard_self_verdict(await handler(self._offered(request, self._question_note(request, note, answered))))
+
+    # ---- question cards answered by a typed reply (009 question-card.md) ----
+    #
+    # The owner's own tagged turn answers the ONLY open question card of its
+    # thread (QC-01). It is tested here because this is where
+    # confirm_flow.turn_may_answer already runs, and only after the turn was
+    # not a yes/no to a Tier 3 card (a message that confirmed or declined a
+    # card answers no question). The answer is recorded as data on the
+    # question; the message itself stays the owner's turn, unchanged.
+
+    def _answer_question(self, request: Any) -> Any:
+        messages = list(getattr(request, "messages", None) or [])
+        if not messages:
+            return None
+        try:
+            from app.gateway.questions.service import answer_from_turn
+
+            return answer_from_turn(messages[-1], self._runtime_context(request), may_answer=self._may_answer(request))
+        except Exception:  # noqa: BLE001 - a question store failure never blocks the person's turn
+            logger.exception("policy: reading the thread's open questions failed")
+            return None
+
+    @staticmethod
+    def _question_note(request: Any, note: Any, outcome: Any) -> Any:
+        """The model's input with a one-time note about the questions (this
+        model call only; nothing is saved to the thread)."""
+        text = outcome.note() if outcome is not None else None
+        if not text:
+            return note
+        from langchain_core.messages import HumanMessage
+
+        base = list(note) if note else list(getattr(request, "messages", None) or [])
+        return [*base, HumanMessage(content=text, name="question_note")]
 
     # ---- tools with no rule are not offered (007) -------------------------
     #

@@ -171,6 +171,17 @@ async def get_run(thread_id: str, run_id: str, request: Request) -> RunResponse:
     return _record_to_response(record)
 
 
+async def _end_questions(request: Request, thread_id: str, run_id: str) -> None:
+    """Stop: the questions this run asked expire as `asker_ended` (009
+    question-card.md). Never stops the cancel."""
+    try:
+        from app.gateway.questions import end_for_thread
+
+        await end_for_thread(thread_id, app=request.app, run_id=run_id)
+    except Exception:
+        logger.warning("Could not close the questions of a cancelled run", exc_info=True)
+
+
 @router.post("/{thread_id}/runs/{run_id}/cancel")
 @require_permission("runs", "cancel", owner_check=True, require_existing=True)
 async def cancel_run(
@@ -198,6 +209,7 @@ async def cancel_run(
             status_code=409,
             detail=f"Run {run_id} is not cancellable (status: {record.status.value})",
         )
+    await _end_questions(request, thread_id, run_id)
 
     if wait and record.task is not None:
         try:
@@ -254,6 +266,8 @@ async def stream_existing_run(
     # Cancel if an action was requested (stop-button / interrupt flow)
     if action is not None:
         cancelled = await run_mgr.cancel(run_id, action=action)
+        if cancelled:
+            await _end_questions(request, thread_id, run_id)
         if cancelled and wait and record.task is not None:
             try:
                 await record.task

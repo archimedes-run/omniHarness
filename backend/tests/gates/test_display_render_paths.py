@@ -34,6 +34,7 @@ RENDER_PATHS: dict[tuple[str, str], str] = {
     ("app/gateway/routers/confirmations.py", "_view"): "confirmation and suggestion cards (chat, Home's Waiting on you)",
     ("app/gateway/home_view.py", "describe_change"): "Home: what moved today (ledger)",
     ("app/gateway/home_view.py", "describe_moved"): "Home: what moved today (outside sources)",
+    ("app/gateway/questions/service.py", "public_view"): "question cards (chat, Home's Waiting on you; later the coding job and the builder)",
 }
 
 #: Formatters whose text a MODEL reads (a tool result). Defanging is a display

@@ -14,7 +14,51 @@ from langgraph.graph import END
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from omniharness.agents.questions import QUESTION_MARKER, QuestionRefused, open_question
+
 logger = logging.getLogger(__name__)
+
+
+def _options_list(raw: object) -> list[str]:
+    """The options as a list of stripped strings (some models send a JSON
+    string instead of an array)."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = [raw]
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raw = [raw]
+    return [str(o).strip() for o in raw]
+
+
+def _recommended_index(raw: object, count: int) -> int | None:
+    """The tool's 1-based `recommended` as a 0-based index, or None."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        number = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return number - 1 if 1 <= number <= count else None
+
+
+def problem_message(problem: str, call_id: str) -> ToolMessage:
+    """A question that cannot be asked as it is: the model is told why and
+    runs again (it is not a pause)."""
+    return ToolMessage(
+        content=f"Not asked: {problem}. Ask again with that fixed, or pick a sensible default, state it, and continue.",
+        tool_call_id=call_id,
+        name="ask_clarification",
+    )
+
+
+def card_questions_enabled() -> bool:
+    from omniharness.agents import questions
+
+    return questions._opener is not None
 
 
 class ClarificationMiddlewareState(AgentState):
@@ -114,10 +158,12 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             message_parts.append(f"{icon} {question}")
 
         # Add options in a cleaner format
+        recommended = _recommended_index(args.get("recommended"), len(options))
         if options and len(options) > 0:
             message_parts.append("")  # blank line for spacing
             for i, option in enumerate(options, 1):
-                message_parts.append(f"  {i}. {option}")
+                mark = " (suggested)" if recommended == i - 1 else ""
+                message_parts.append(f"  {i}. {option}{mark}")
 
         return "\n".join(message_parts)
 
@@ -173,6 +219,52 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             additional_kwargs={self.DEFERRED_MARKER: True},
         )
 
+    # -- the question card ---------------------------------------------------
+
+    def _shape_problem(self, args: dict) -> str | None:
+        """Why this question cannot be a card (2 to 4 short, distinct options,
+        a question of 1 to 500 characters), or None. Checked only when the
+        gateway makes cards; the store checks the same limits again."""
+        if not card_questions_enabled():
+            return None
+        question = str(args.get("question") or "").strip()
+        options = _options_list(args.get("options"))
+        if not 1 <= len(question) <= 500:
+            return "the question must be 1 to 500 characters"
+        if not 2 <= len(options) <= 4:
+            return "give 2 to 4 short options the person can pick from (they can still type their own answer)"
+        if any(not 1 <= len(o) <= 60 for o in options):
+            return "each option must be 1 to 60 characters"
+        if len({o.casefold() for o in options}) != len(options):
+            return "the options must be different from each other"
+        raw = args.get("recommended")
+        if raw is not None and _recommended_index(raw, len(options)) is None:
+            return f"recommended must be an option number from 1 to {len(options)}"
+        return None
+
+    def _open_card(self, request: ToolCallRequest, args: dict, tool_call_id: str) -> dict | None:
+        runtime = getattr(request, "runtime", None)
+        context = getattr(runtime, "context", None) or {}
+        state = getattr(request, "state", None) or {}
+        options = _options_list(args.get("options"))
+        card = open_question(
+            question=str(args.get("question") or ""),
+            options=options,
+            recommended=_recommended_index(args.get("recommended"), len(options)),
+            context_text=str(args.get("context") or ""),
+            tool_call_id=tool_call_id,
+            messages=list(state.get("messages") or []) if isinstance(state, dict) else [],
+            runtime_context=dict(context) if isinstance(context, dict) else {},
+        )
+        if card is not None:
+            try:
+                from langgraph.config import get_stream_writer
+
+                get_stream_writer()({"type": "question.opened", "question_id": card["id"], "tool_call_id": tool_call_id})
+            except Exception:  # noqa: BLE001 - no live stream (a test, a resume): the card is read from the API
+                pass
+        return card
+
     def _handle_clarification(self, request: ToolCallRequest) -> Command | ToolMessage:
         """Handle clarification request and return command to interrupt execution.
 
@@ -190,14 +282,31 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         args = request.tool_call.get("args", {})
         question = args.get("question", "")
 
+        # Get the tool call ID
+        tool_call_id = request.tool_call.get("id", "")
+        problem = self._shape_problem(args)
+        if problem is not None:
+            return problem_message(problem, tool_call_id)
+
         logger.info("Intercepted clarification request")
         logger.debug("Clarification question: %s", question)
 
         # Format the clarification message
         formatted_message = self._format_clarification_message(args)
 
-        # Get the tool call ID
-        tool_call_id = request.tool_call.get("id", "")
+        # The question card (009 question-card.md): recorded by the gateway,
+        # answered only by the owner's click or the owner's own tagged reply.
+        card = None
+        try:
+            card = self._open_card(request, args, tool_call_id)
+        except QuestionRefused as exc:
+            return problem_message(str(exc), tool_call_id)
+        kwargs = {}
+        if card is not None:
+            kwargs[QUESTION_MARKER] = {"id": card["id"]}
+            # Read as text where there is no card (a channel, the model's own
+            # history): how to answer.
+            formatted_message += "\n\nAnswer on the card, or reply with an option number or your own words."
 
         # Create a ToolMessage with the formatted question
         # This will be added to the message history
@@ -206,6 +315,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             content=formatted_message,
             tool_call_id=tool_call_id,
             name="ask_clarification",
+            additional_kwargs=kwargs,
         )
 
         # Return a Command that:
@@ -240,7 +350,10 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             return None
         deferred = self._deferral(messages, call.get("id", ""), call.get("args") or {})
         if deferred is None:
-            return None
+            problem = self._shape_problem(call.get("args") or {})
+            if problem is None:
+                return None
+            deferred = problem_message(problem, call.get("id", ""))
         return {"jump_to": "model", "messages": [deferred]}
 
     @hook_config(can_jump_to=["model"])
