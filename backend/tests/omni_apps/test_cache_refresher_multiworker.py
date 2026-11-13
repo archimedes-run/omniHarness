@@ -11,7 +11,7 @@ import asyncio
 import time
 from functools import partial
 
-from conftest import gmail_answer, manifest
+from _apps_helpers import gmail_answer, manifest
 
 INBOX = {"use": "gmail.unread_subjects", "fields": ["count", "subject"]}
 

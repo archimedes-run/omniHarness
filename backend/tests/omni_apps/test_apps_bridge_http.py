@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 import httpx
-from conftest import FILES, gmail_answer, manifest
+from _apps_helpers import FILES, MARKER, gmail_answer, manifest
 
 INBOX = {"use": "gmail.unread_subjects", "fields": ["count", "subject", "received_at", "link"]}
 REVIEW = {"use": "github.pr_search", "params": {"preset": "review_requested"}, "fields": ["repo", "number", "title", "link"]}
@@ -337,3 +337,14 @@ def test_library_permissions_catalog_and_pins(gateway, composio, apps) -> None:
     assert gateway.client.get("/api/preferences/app-pins").json() == {"pins": [reg.app_id]}
     assert gateway.client.get("/api/apps").json()["apps"][0]["pinned"] is True
     assert gateway.client.put("/api/preferences/app-pins", json={"pins": ["nope"]}).status_code == 422
+
+
+def test_only_the_declared_fields_are_served_and_cached(gateway, composio, apps) -> None:
+    composio.connect("GMAIL")
+    composio.fake.answers["GMAIL_FETCH_EMAILS"] = gmail_answer(subject=f"Private {MARKER}")
+    reg = apps.register(manifest(inbox={"use": "gmail.unread_subjects", "fields": ["count"]}))
+    apps.approve(reg.app_id)
+    body = gateway.client.get(f"/api/apps/{reg.app_id}/data/inbox").json()
+    assert body["data"] == {"count": 2, "count_capped": False, "items": [{}, {}]}
+    rows = _cache(apps, gateway.user_id, reg.app_id)
+    assert rows and MARKER not in rows[0]["data"], "a field the manifest did not declare is never cached"

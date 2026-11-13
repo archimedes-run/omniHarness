@@ -141,3 +141,20 @@ def test_upstream_answers_over_the_byte_cap_are_refused() -> None:
     client._transport = httpx.MockTransport(lambda r: httpx.Response(200, content=b'{"data": "' + b"x" * 2048 + b'"}'))
     with pytest.raises(ComposioError, match="larger than"):
         asyncio.run(execute_read_tool(client, slug="GMAIL_FETCH_EMAILS", connected_account_id="ca", user_id="u", arguments={}, allowed=catalog.READ_ALLOWLIST, max_bytes=1024))
+
+
+@pytest.mark.parametrize("flag", ["after_content", "after_private_read"])
+def test_tier_refuses_a_tool_an_exception_can_raise(tmp_path, flag) -> None:
+    """A read whose rule an exception lifts out of Tier 1 under some lineage is
+    not a read the bridge may run: every lineage is checked, not only the plain one."""
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(
+        RULES_FILE.read_text().replace(
+            '    - pattern: "connector-gmail_GMAIL_FETCH_EMAILS"\n      tier: 1\n      reversible: true\n',
+            f'    - pattern: "connector-gmail_GMAIL_FETCH_EMAILS"\n      tier: 1\n      reversible: true\n      exceptions:\n        - {flag}: true\n          tier: 2\n',
+            1,
+        )
+    )
+    raised = ConfigLoader(path=rules).load()
+    assert not raised.unreadable, raised.error
+    assert checks.check_tier(GMAIL, GMAIL.arguments({"limit": 25}, NOW), raised) == "GMAIL_FETCH_EMAILS is not Tier 1 in the policy rules"

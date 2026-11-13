@@ -19,7 +19,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from conftest import MARKER, gmail_answer, manifest
+from _apps_helpers import MARKER, gmail_answer, manifest
 
 BACKEND = Path(__file__).resolve().parents[2]
 APPS_MODULES = sorted((BACKEND / "app" / "gateway" / "apps").glob("*.py")) + [BACKEND / "app" / "gateway" / "routers" / "apps.py"]

@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
-from conftest import manifest
+from _apps_helpers import manifest
 
 LEDGER = {"use": "omni.ledger.today", "fields": ["bucket", "task", "project", "status", "due_date", "link"]}
 SESSIONS = {"use": "omni.sessions.active", "fields": ["tool", "title", "display_state", "known", "since"]}
