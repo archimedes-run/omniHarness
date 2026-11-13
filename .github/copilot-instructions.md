@@ -61,7 +61,7 @@ Validated results:
 
 CI parity:
 
-- `.github/workflows/backend-unit-tests.yml` runs on pull requests.
+- `.github/workflows/ci.yml` (job `backend-unit-tests`) runs on pull requests that touch the backend.
 - CI executes `uv sync --group dev`, then `make lint`, then `make test` in `backend/`.
 
 ### C. Frontend validation
@@ -139,7 +139,7 @@ Root-level orchestration and config:
 - `config.example.yaml` - primary app config template
 - `config.yaml` - local active config (gitignored)
 - `docker/docker-compose-dev.yaml` - Docker dev topology
-- `.github/workflows/backend-unit-tests.yml` - PR validation workflow
+- `.github/workflows/ci.yml` - PR validation workflow (single required check: `CI passed`)
 
 Backend core:
 

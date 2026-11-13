@@ -1,0 +1,22 @@
+# Relative Markdown links that were already broken when scripts/ci/check_docs.py
+# was added. Format: <file> -> <link target>. This list may only shrink.
+backend/CLAUDE.md -> docs/API.md
+backend/CLAUDE.md -> docs/ARCHITECTURE.md
+backend/CLAUDE.md -> docs/CONFIGURATION.md
+backend/CLAUDE.md -> docs/FILE_UPLOAD.md
+backend/CLAUDE.md -> docs/GUARDRAILS.md
+backend/CLAUDE.md -> docs/PATH_EXAMPLES.md
+backend/CLAUDE.md -> docs/SETUP.md
+backend/CLAUDE.md -> docs/STREAMING.md
+backend/CLAUDE.md -> docs/plan_mode_usage.md
+backend/CLAUDE.md -> docs/summarization.md
+backend/README.md -> docs/API.md
+backend/README.md -> docs/ARCHITECTURE.md
+backend/README.md -> docs/CONFIGURATION.md
+backend/README.md -> docs/FILE_UPLOAD.md
+backend/README.md -> docs/PATH_EXAMPLES.md
+backend/README.md -> docs/SETUP.md
+backend/README.md -> docs/plan_mode_usage.md
+backend/README.md -> docs/summarization.md
+docs/SETUP.md -> ../backend/docs/CONFIGURATION.md#sandbox
+docs/SETUP.md -> ../backend/docs/MCP_SERVER.md

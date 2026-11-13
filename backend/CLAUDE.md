@@ -103,7 +103,7 @@ Regression tests related to Docker/provisioner behavior:
 Boundary check (harness → app import firewall):
 - `tests/test_harness_boundary.py` — ensures `packages/harness/omniharness/` never imports from `app.*`
 
-CI runs these regression tests for every pull request via [.github/workflows/backend-unit-tests.yml](../.github/workflows/backend-unit-tests.yml).
+CI runs these regression tests for every pull request that touches the backend via the `backend-unit-tests` job in [.github/workflows/ci.yml](../.github/workflows/ci.yml), and for every push to main and nightly.
 
 ## Architecture
 

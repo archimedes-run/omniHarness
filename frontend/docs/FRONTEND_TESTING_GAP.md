@@ -4,7 +4,7 @@
 
 ## The measurement
 
-A standalone CI job (`.github/workflows/browser-capability.yml`) installs Chromium and runs four rendering assertions. Result:
+A standalone CI job (the `probe` job in `.github/workflows/ci.yml`, formerly `browser-capability.yml`) installs Chromium and runs four rendering assertions. Result:
 
 |                                         | local                                  | CI                             |
 | --------------------------------------- | -------------------------------------- | ------------------------------ |
