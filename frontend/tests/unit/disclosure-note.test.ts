@@ -35,17 +35,24 @@ describe("the policy layer's disclosure block (spec 009 Slice 0)", () => {
     expect(split).toEqual({ body: content, items: [] });
   });
 
-  it("summarises the tools in one line", () => {
+  it("puts every action on one line, first-occurrence order, repeats counted", () => {
     expect(disclosureSummary([{ tool: "code_job", text: "" }])).toBe(
       "code_job",
     );
     expect(
       disclosureSummary([
-        { tool: "a", text: "" },
-        { tool: "b", text: "" },
-        { tool: "c", text: "" },
-        { tool: "a", text: "" },
+        { tool: "code_job", text: "" },
+        { tool: "ledger_apply", text: "" },
+        { tool: "write_file", text: "" },
+        { tool: "ledger_apply", text: "" },
       ]),
-    ).toBe("a, b and 1 more");
+    ).toBe("code_job, ledger_apply \u00d72, write_file");
+    expect(
+      disclosureSummary([
+        { tool: "ledger_apply", text: "" },
+        { tool: "ledger_apply", text: "" },
+        { tool: "ledger_apply", text: "" },
+      ]),
+    ).toBe("ledger_apply \u00d73");
   });
 });

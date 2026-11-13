@@ -57,9 +57,15 @@ export function splitDisclosure(
   };
 }
 
-/** "code_job", "code_job and write_file", "a, b and 2 more". */
+/**
+ * Every action of the reply on ONE line, in the order each tool first ran,
+ * repeats counted: "code_job, ledger_apply ×2" (owner decision, PR #174).
+ */
 export function disclosureSummary(items: DisclosureItem[]): string {
-  const tools = [...new Set(items.map((i) => i.tool))];
-  if (tools.length <= 2) return tools.join(" and ");
-  return `${tools.slice(0, 2).join(", ")} and ${tools.length - 2} more`;
+  const counts = new Map<string, number>();
+  for (const item of items)
+    counts.set(item.tool, (counts.get(item.tool) ?? 0) + 1);
+  return [...counts]
+    .map(([tool, n]) => (n > 1 ? `${tool} \u00d7${n}` : tool))
+    .join(", ");
 }

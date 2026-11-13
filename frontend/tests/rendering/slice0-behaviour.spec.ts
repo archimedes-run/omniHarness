@@ -263,7 +263,11 @@ const evalRuns = [
   },
 ];
 
-async function mockAll(page: Page, scheme: "light" | "dark") {
+async function mockAll(
+  page: Page,
+  scheme: "light" | "dark",
+  messagesOverride?: unknown[],
+) {
   await page.addInitScript((t) => {
     try {
       localStorage.setItem("theme", t);
@@ -281,7 +285,7 @@ async function mockAll(page: Page, scheme: "light" | "dark") {
         { content: "Check each link", status: "in_progress" },
         { content: "Write the answer", status: "pending" },
       ],
-      messages: [
+      messages: messagesOverride ?? [
         { type: "human", id: "h1", content: "find 5 date-night restaurants" },
         {
           type: "ai",
@@ -354,6 +358,44 @@ async function mockAll(page: Page, scheme: "light" | "dark") {
   });
 }
 
+/** One turn whose reply the policy layer appended a disclosure block to. */
+function disclosedTurn(n: number, reply: string, items: [string, string][]) {
+  const block =
+    "\n\nAlso, for the record:\n" +
+    items.map(([, text]) => `  - ${text}`).join("\n");
+  return [
+    { type: "human", id: `dh${n}`, content: `request ${n}` },
+    {
+      type: "ai",
+      id: `da${n}`,
+      content: reply + block,
+      additional_kwargs: {
+        omniharness_disclosure: {
+          text: block,
+          items: items.map(([tool, text]) => ({ tool, text })),
+        },
+      },
+    },
+  ];
+}
+
+const DISCLOSED_TURNS = [
+  ...disclosedTurn(1, "The counter app is built.", [
+    ["code_job", "I used code_job with project_dir='vite-counter'."],
+  ]),
+  ...disclosedTurn(2, "The app is built and the tasks are added.", [
+    ["code_job", "I used code_job with project_dir='site'."],
+    ["ledger_apply", "I used ledger_apply on Eval Garden: Water seedlings."],
+    ["write_file", "I used write_file on /mnt/user-data/outputs/notes.md."],
+    ["ledger_apply", "I used ledger_apply on Eval Garden: Build trellis."],
+  ]),
+  ...disclosedTurn(3, "Three tasks are added to Eval Garden.", [
+    ["ledger_apply", "I used ledger_apply on Eval Garden: Water seedlings."],
+    ["ledger_apply", "I used ledger_apply on Eval Garden: Build trellis."],
+    ["ledger_apply", "I used ledger_apply on Eval Garden: Harvest basil."],
+  ]),
+];
+
 async function expectAA(page: Page) {
   const found = await page.evaluate(lowContrastText);
   expect(
@@ -422,6 +464,47 @@ for (const scheme of ["light", "dark"] as const) {
         "project_dir='vite-counter'",
       );
       await shot(page, `chat-plan-verification-${scheme}`);
+      await expectAA(page);
+    });
+
+    test("disclosure note: one action, several mixed, repeats, each on one line", async ({
+      page,
+    }) => {
+      await mockAll(page, scheme, DISCLOSED_TURNS);
+      await page.goto(`/workspace/chats/${THREAD}`, {
+        waitUntil: "networkidle",
+      });
+      await expect(page.getByText("Also, for the record")).toHaveCount(0);
+      const notes = page.getByTestId("disclosure-note");
+      await expect(notes).toHaveCount(3);
+      await expect(notes.nth(0).getByRole("button")).toHaveText(
+        "Ran without asking: code_job",
+      );
+      await expect(notes.nth(1).getByRole("button")).toHaveText(
+        "Ran without asking: code_job, ledger_apply \u00d72, write_file",
+      );
+      await expect(notes.nth(2).getByRole("button")).toHaveText(
+        "Ran without asking: ledger_apply \u00d73",
+      );
+      // Details list every disclosure in full (keyboard: Enter opens).
+      for (const i of [0, 1, 2]) {
+        const toggle = notes.nth(i).getByRole("button");
+        await toggle.focus();
+        await page.keyboard.press("Enter");
+        await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      }
+      await expect(
+        notes.nth(1).getByTestId("disclosure-details").getByRole("listitem"),
+      ).toHaveText([
+        "I used code_job with project_dir='site'.",
+        "I used ledger_apply on Eval Garden: Water seedlings.",
+        "I used write_file on /mnt/user-data/outputs/notes.md.",
+        "I used ledger_apply on Eval Garden: Build trellis.",
+      ]);
+      await expect(
+        notes.nth(2).getByTestId("disclosure-details").getByRole("listitem"),
+      ).toHaveCount(3);
+      await shot(page, `disclosure-notes-${scheme}`);
       await expectAA(page);
     });
 
