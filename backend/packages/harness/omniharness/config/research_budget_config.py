@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field
 class ResearchBudgetConfig(BaseModel):
     """Caps on web lookups in one task (one person's turn and its resumes).
 
-    A repeat of a fetch already made in the task is answered from the earlier
-    result: it is not fetched again and does not count."""
+    A repeat of a web search or fetch already made in the task is answered
+    from the earlier result: it is not made again and does not count. Only
+    public web lookups are cached, never a private or local read."""
 
     enabled: bool = Field(default=True, description="Whether the research budget applies")
     max_searches: int = Field(default=8, ge=1, description="web_search and image_search calls per task")
     max_fetches: int = Field(default=10, ge=1, description="web_fetch calls per task (distinct URLs)")
+    max_research: int = Field(default=3, ge=1, description="research (delegated web research) calls per task")
     answer_after_calls: int = Field(default=24, ge=1, description="After this many tool calls in a task, each result says to write the answer now")

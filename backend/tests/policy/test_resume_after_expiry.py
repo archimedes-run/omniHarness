@@ -137,3 +137,78 @@ def test_a_turn_part_of_which_another_caller_holds_is_not_resumed_in_part(gatewa
     [run_id] = _sweep(gateway)
     assert wr._wait_run(gateway, thread_id, run_id) == "success"
     assert _run_count(gateway, thread_id) == before + 1
+
+
+# -- at most once, never against the person's wishes (review H2) ------------
+
+
+def test_a_failed_resume_is_not_retried(gateway, monkeypatch):  # noqa: F811
+    import app.gateway.services as services
+
+    thread_id = _thread(gateway)
+    cards = _private_turn_with_fetches(gateway, thread_id, URLS[:1])
+    _expire(cards[0]["id"])
+    attempts = []
+
+    async def broken(*args, **kwargs):
+        attempts.append(1)
+        raise RuntimeError("the run could not start")
+
+    monkeypatch.setattr(services, "start_run", broken)
+    assert _sweep(gateway) == []
+    assert _sweep(gateway) == []
+    assert len(attempts) == 1, "a failed resume was tried again"
+
+
+def test_a_task_the_person_stopped_is_not_restarted(gateway, monkeypatch):  # noqa: F811
+    from types import SimpleNamespace
+
+    from omniharness.runtime.runs.manager import RunManager
+
+    thread_id = _thread(gateway)
+    cards = _private_turn_with_fetches(gateway, thread_id, URLS[:1])
+    real = RunManager.list_history
+
+    async def stopped_last(self, tid, **kwargs):
+        runs = await real(self, tid, **kwargs)
+        return [*runs, SimpleNamespace(status=SimpleNamespace(value="interrupted"))] if tid == thread_id else runs
+
+    before = _run_count(gateway, thread_id)
+    _expire(cards[0]["id"])
+    monkeypatch.setattr(RunManager, "list_history", stopped_last)
+    assert _sweep(gateway) == []
+    monkeypatch.setattr(RunManager, "list_history", real)
+    assert _sweep(gateway) == [], "retried after the person stopped the task"
+    assert _run_count(gateway, thread_id) == before
+
+
+def test_no_resume_once_the_person_has_moved_on(gateway):  # noqa: F811
+    thread_id = _thread(gateway)
+    cards = _private_turn_with_fetches(gateway, thread_id, URLS[:1])
+    wr._say(gateway, thread_id, "never mind, what's the weather?", [AIMessage(content="Sunny.")])
+    before = _run_count(gateway, thread_id)
+    _expire(cards[0]["id"])
+    assert _sweep(gateway) == []
+    assert _run_count(gateway, thread_id) == before
+    assert SENT == []
+
+
+def test_a_deleted_chat_is_never_resumed(gateway):  # noqa: F811
+    thread_id = _thread(gateway)
+    cards = _private_turn_with_fetches(gateway, thread_id, URLS[:1])
+    assert gateway.client.delete(f"/api/threads/{thread_id}").status_code == 200
+    _expire(cards[0]["id"])
+    assert _sweep(gateway) == []
+
+
+def test_a_card_being_executed_is_not_expired(gateway):  # noqa: F811
+    from app.policy.models import Outcome
+
+    thread_id = _thread(gateway)
+    cards = _private_turn_with_fetches(gateway, thread_id, URLS[:1])
+    store = _store()
+    assert store.claim(cards[0]["id"], "a confirm in flight") is not None
+    _expire(cards[0]["id"])
+    store.expire_due(datetime.now(UTC))
+    assert store.get(cards[0]["id"]).outcome is None, "a claimed card was marked expired"
+    assert store.get(cards[0]["id"]).outcome != Outcome.EXPIRED

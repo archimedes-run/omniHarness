@@ -21,6 +21,8 @@ export function DisclosureNote({
   const [open, setOpen] = useState(false);
   const panelId = useId();
   if (!items.length) return null;
+  const plain = items.filter((i) => !i.grant);
+  const granted = items.filter((i) => i.grant);
   return (
     <div
       className={cn("mt-1 text-xs", className)}
@@ -34,9 +36,19 @@ export function DisclosureNote({
         className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 focus-visible:ring-2 focus-visible:outline-none"
       >
         <InfoIcon className="size-3.5" aria-hidden="true" />
-        <span>
-          Ran without asking:{" "}
-          <span className="font-mono">{disclosureSummary(items)}</span>
+        <span className="flex flex-col items-start gap-0.5 text-left">
+          {plain.length > 0 && (
+            <span data-testid="disclosure-plain">
+              Ran without asking:{" "}
+              <span className="font-mono">{disclosureSummary(plain)}</span>
+            </span>
+          )}
+          {granted.length > 0 && (
+            <span data-testid="disclosure-grant">
+              Ran under grant:{" "}
+              <span className="font-mono">{disclosureSummary(granted)}</span>
+            </span>
+          )}
         </span>
         <ChevronDownIcon
           aria-hidden="true"

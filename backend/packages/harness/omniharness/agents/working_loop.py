@@ -535,25 +535,73 @@ INTENT_RE = re.compile(
 )
 
 
+#: An intent that waits on the person is not "intent without action": it is
+#: a correct stop ("once you confirm", "I'll need your API key", a question).
+_WAITS_ON_PERSON = re.compile(
+    r"(?i)\b(once you|after you|when you|if you|until you|you(?:'ll| will)? need to|your (?:approval|confirmation|answer|key|password|token|permission)|"
+    r"need your|need you to|please (?:approve|confirm|provide|send|share|connect|tell)|let me know|confirm|approve)\b"
+)
+
+
 def announces_without_acting(reply: str) -> bool:
+    """The reply's last paragraph says the agent is about to do something it
+    can do on its own ("I'll now search the menus") and no tool was called.
+    Not when it waits on the person or asks them something."""
     paragraphs = _paragraphs(reply or "")
-    return bool(paragraphs) and bool(INTENT_RE.search(paragraphs[-1]))
+    if not paragraphs:
+        return False
+    last = paragraphs[-1]
+    return bool(INTENT_RE.search(last)) and "?" not in last and not _WAITS_ON_PERSON.search(last)
 
 
-#: "I created / updated / sent / scheduled ... X": a claim that something was
-#: changed, which needs a receipt.
-RECEIPT_CLAIM_RE = re.compile(r"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+)?(created|updated|sent|scheduled|posted|saved|wrote|written|added|deleted|removed|booked|published|built|deployed)\b[^.\n]*")
+#: A "Ran without asking:" line the MODEL wrote (imitating the server's
+#: notice): removed from its text, the server appends the real one.
+MODEL_NOTICE_RE = re.compile(r"(?im)^[ \t>*_-]*Ran without asking:.*(?:\n|$)")
+
+
+#: Claims of an EXTERNAL change, which need a receipt (owner rule; narrowed on
+#: review: "I added the links", "I wrote a summary below", "I updated the
+#: list" are about the reply itself, not a change anywhere).
+_EXTERNAL = r"sent|emailed|texted|messaged|posted|published|scheduled|booked|reserved|paid|shared|deleted|removed|deployed|invited|cancell?ed"
+_MAKING = r"created|added|updated|saved|wrote|set up|made|filed|logged|renamed|moved"
+_OBJECTS = (
+    r"projects?|tasks?|goals?|notes?|events?|meetings?|reminders?|invites?|invitations?|files?|documents?|calendar|ledger|entr(?:y|ies)"
+    r"|automations?|rules?|tickets?|issues?|drafts?|emails?|messages?|posts?|pages?|repos?|repositor(?:y|ies)|apps?|appointments?"
+    r"|bookings?|reservations?|[\w-]+\.(?:md|txt|csv|json|pdf|html?|docx?|xlsx?|pptx?|py|js|ts|png|jpe?g|svg|zip)"
+)
+CLAIM_RES = (
+    re.compile(rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_EXTERNAL})\b(?P<rest>[^.\n]*)"),
+    re.compile(rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_MAKING})\b(?P<rest>[^.\n]{{0,80}}?\b(?:{_OBJECTS})\b[^.\n]*)"),
+)
+_NEGATED_REST = re.compile(r"(?i)^\s*(nothing|no\b|none|anything)")
+_PAST_TURN = re.compile(r"(?i)\b(earlier|yesterday|previously|before|last (?:week|time|turn|month)|in a previous)\b")
+#: Which tools can back a claim, by the claim's words (a web_fetch receipt
+#: cannot back "I saved both places to the list").
+_FAMILIES = (
+    (re.compile(r"(?i)\b(sent|emailed|texted|messaged|email|message|draft|invit)"), re.compile(r"(?i)mail|message|send|slack|telegram|discord|draft|chat|post")),
+    (re.compile(r"(?i)\b(scheduled|booked|reserved|event|meeting|calendar|appointment|reminder|booking|reservation)"), re.compile(r"(?i)calendar|event|schedul|book|reserv|remind|automation|trigger")),
+    (re.compile(r"(?i)\b(project|task|goal|note|ledger|entr)"), re.compile(r"(?i)ledger")),
+    (re.compile(r"(?i)\b(file|document|page)|\.(?:md|txt|csv|json|pdf|html?|docx?|xlsx?|pptx?|py|js|ts|png|jpe?g|svg|zip)\b"), re.compile(r"(?i)write_file|str_replace|filesystem_write|code_job")),
+    (re.compile(r"(?i)\b(posted|published|post|shared)"), re.compile(r"(?i)post|publish|share|slack|telegram|discord|social|notes_publish")),
+    (re.compile(r"(?i)\b(deployed|app|repo)"), re.compile(r"(?i)code_job|deploy|github|preview_deploy")),
+)
+#: Never a receipt: lookups, previews and research change nothing.
+NEVER_RECEIPTS = frozenset({"research", "task", "preview", "web_search", "web_fetch", "image_search", "ledger_read", "read_file", "ls", "bash", "present_files", "write_todos", "view_image", "tool_search"})
 #: Tools whose successful run is a change (a receipt) even at Tier 1.
 WRITE_TOOLS = frozenset({"write_file", "str_replace", "ledger_apply", "code_job", "filesystem_write_file"})
 #: Set on a resume run's tool result by app.gateway.resume: the confirmed
 #: call's outcome ("executed", "declined", "expired"...). Display data.
 RESUME_OUTCOME_MARKER = "omniharness_resume_outcome"
+#: Set by the policy layer on its reply to a typed confirmation ("yes"): the
+#: outcome and the tool. Display data.
+CONFIRMED_MARKER = "omniharness_confirmed"
 
 
 def receipts(messages: list[Any]) -> list[str]:
     """The changes this turn made, per the server: a tool result the policy
-    layer stamped as RAN at Tier 2 or 3, or of a write tool; or a confirmed
-    call the resume reports as executed. Never from the reply's words."""
+    layer stamped as RAN at Tier 2 or 3, or of a write tool; a confirmed call
+    the resume reports as executed; a typed confirmation that executed. Never
+    from the reply's words; never a lookup, preview or research."""
     turn = turn_messages(list(messages))
     names: dict[str, str] = {}
     for message in turn:
@@ -562,11 +610,17 @@ def receipts(messages: list[Any]) -> list[str]:
                 names[str(call.get("id") or "")] = str(call.get("name") or "")
     out: list[str] = []
     for message in turn:
+        kwargs = _kwargs(message)
+        confirmed = kwargs.get(CONFIRMED_MARKER)
+        if _type(message) == "ai" and isinstance(confirmed, dict) and confirmed.get("outcome") == "executed":
+            out.append(str(confirmed.get("tool") or ""))
+            continue
         if _type(message) != "tool":
             continue
-        kwargs = _kwargs(message)
         call_id = str((message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", "")) or "")
         name = str(_name(message) or names.get(call_id) or "")
+        if name in NEVER_RECEIPTS:
+            continue
         if kwargs.get(RESUME_OUTCOME_MARKER) == "executed":
             out.append(name)
             continue
@@ -579,9 +633,42 @@ def receipts(messages: list[Any]) -> list[str]:
     return out
 
 
+def _model_prose(reply: str) -> str:
+    """The reply without quoted material: code blocks, quoted lines and text
+    in quotation marks are not the model's claims."""
+    text = re.sub(r"```[\s\S]*?```", " ", reply or "")
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(">"))
+    return re.sub(r"\u201c[^\u201d]*\u201d|\"[^\"\n]*\"", " ", text)
+
+
+def claims_in(reply: str) -> list[str]:
+    """Claims of an external change made in THIS turn (not negated, not about
+    an earlier turn, not quoted)."""
+    prose = _model_prose(reply)
+    found: list[str] = []
+    for pattern in CLAIM_RES:
+        for match in pattern.finditer(prose):
+            if _NEGATED_REST.match(match.group("rest") or ""):
+                continue
+            start = max(prose.rfind(".", 0, match.start()), prose.rfind("\n", 0, match.start())) + 1
+            end = len(prose) if (stop := re.search(r"[.\n]", prose[match.end() :])) is None else match.end() + stop.start()
+            if _PAST_TURN.search(prose[start:end]):
+                continue
+            claim = match.group(0).strip()
+            if claim not in found:
+                found.append(claim)
+    return found
+
+
+def _backed(claim: str, have: list[str]) -> bool:
+    families = [tools for words, tools in _FAMILIES if words.search(claim)]
+    if not families:
+        return bool(have)
+    return any(tools.search(name) for tools in families for name in have)
+
+
 def unbacked_claims(reply: str, messages: list[Any]) -> list[str]:
-    """Claims of a change in the reply when this turn has no receipt at all."""
-    claims = [m.group(0).strip() for m in RECEIPT_CLAIM_RE.finditer(reply or "")]
-    if not claims or receipts(messages):
-        return []
-    return claims[:3]
+    """Claims of an external change in the reply that no receipt of this turn
+    (of the matching kind of tool) backs."""
+    have = receipts(messages)
+    return [c for c in claims_in(reply) if not _backed(c, have)][:3]

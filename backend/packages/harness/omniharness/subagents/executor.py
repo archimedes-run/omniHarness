@@ -70,6 +70,9 @@ class SubagentResult:
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    #: Its policy layer's Tier 2 records (turns.DELEGATED_DISCLOSURE_MARKER on
+    #: its final reply), carried back to the inviting agent's final reply.
+    disclosures: list = field(default_factory=list)
     ai_messages: list[dict[str, Any]] | None = None
     #: The run ended on a failed model call (the error middleware's message),
     #: not on an answer: COMPLETED in form, a failure in fact.
@@ -394,6 +397,12 @@ class SubagentExecutor:
 
         # Reuse shared middleware composition with lead agent.
         middlewares = build_subagent_runtime_middlewares(app_config=app_config, model_name=self.model_name, lazy_init=True)
+        if self.config.name == "research":
+            # The read-only web researcher keeps the same per-task search and
+            # fetch budget and fetch cache as the lead (spec 009 review).
+            from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware
+
+            middlewares.append(TurnBudgetMiddleware())
 
         # A checkpointer, for the same reason the lead agent gets one: without
         # it a middleware that suspends the run (a permission gate asking the
@@ -680,6 +689,11 @@ class SubagentExecutor:
 
                 if last_ai_message is not None:
                     from omniharness.agents.middlewares.llm_error_handling_middleware import LLM_ERROR_KEY
+                    from omniharness.agents.turns import DELEGATED_DISCLOSURE_MARKER
+
+                    delegated = (last_ai_message.additional_kwargs or {}).get(DELEGATED_DISCLOSURE_MARKER)
+                    if isinstance(delegated, list):
+                        result.disclosures = list(delegated)
 
                     result.model_failed = bool((last_ai_message.additional_kwargs or {}).get(LLM_ERROR_KEY))
                     content = last_ai_message.content

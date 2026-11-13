@@ -15,6 +15,10 @@ export const DISCLOSURE_MARKER = "omniharness_disclosure";
 export interface DisclosureItem {
   tool: string;
   text: string;
+  /** The specialist that ran it ("(via <agent>)"); none for the agent itself. */
+  agent?: string;
+  /** Ran under a standing grant (a scheduled run). */
+  grant?: boolean;
 }
 
 export interface SplitDisclosure {
@@ -26,9 +30,16 @@ function asItems(value: unknown): DisclosureItem[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
-    const { tool, text } = item as Record<string, unknown>;
+    const { tool, text, agent, grant } = item as Record<string, unknown>;
     return typeof tool === "string" && tool
-      ? [{ tool, text: typeof text === "string" ? text : "" }]
+      ? [
+          {
+            tool,
+            text: typeof text === "string" ? text : "",
+            ...(typeof agent === "string" && agent ? { agent } : {}),
+            ...(grant === true ? { grant: true } : {}),
+          },
+        ]
       : [];
   });
 }
@@ -59,13 +70,21 @@ export function splitDisclosure(
 
 /**
  * Every action of the reply on ONE line, in the order each tool first ran,
- * repeats counted: "code_job, ledger_apply ×2" (owner decision on the Slice 0 review).
+ * repeats counted, a specialist's named: "code_job, ledger_apply ×2 (via Repo
+ * analyst)" (owner decision on the Slice 0 review).
  */
 export function disclosureSummary(items: DisclosureItem[]): string {
-  const counts = new Map<string, number>();
-  for (const item of items)
-    counts.set(item.tool, (counts.get(item.tool) ?? 0) + 1);
-  return [...counts]
-    .map(([tool, n]) => (n > 1 ? `${tool} \u00d7${n}` : tool))
+  const counts = new Map<string, { tool: string; agent?: string; n: number }>();
+  for (const item of items) {
+    const key = `${item.tool}\u0000${item.agent ?? ""}`;
+    const entry = counts.get(key);
+    if (entry) entry.n += 1;
+    else counts.set(key, { tool: item.tool, agent: item.agent, n: 1 });
+  }
+  return [...counts.values()]
+    .map(
+      ({ tool, agent, n }) =>
+        `${n > 1 ? `${tool} \u00d7${n}` : tool}${agent ? ` (via ${agent})` : ""}`,
+    )
     .join(", ");
 }

@@ -7,10 +7,13 @@ and the runs that resume it):
 
 1. FETCH CACHE. A web_fetch of a URL already fetched successfully in the task
    is answered with that result: no network call, and it does not count
-   against the budget. An identical repeat of another read (a search with the
-   same query, a ledger or file read) is answered the same way.
+   against the budget; an identical web search the same way. Public web
+   lookups only (never a ledger, file or private read), and never a result
+   that was an error, a refusal or a card. The cache is the task's own
+   messages: one thread, one turn, one person.
 2. BUDGET. At most `research_budget.max_searches` searches (web_search,
-   image_search) and `max_fetches` fetches (distinct URLs). Past a cap the
+   image_search), `max_fetches` fetches (distinct URLs) and `max_research`
+   delegated research calls. Past a cap the
    lookup is not made; the result tells the lead to answer with what it has
    and to say what is still uncertain.
 3. Past `answer_after_calls` tool calls, each result carries a one-line note
@@ -28,8 +31,13 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-#: Reads whose identical repeat in one task is answered from the earlier result.
-REPEATABLE_READS = frozenset({"web_search", "web_fetch", "image_search", "ledger_read", "read_file", "ls"})
+#: Lookups whose identical repeat in one task is answered from the earlier
+#: result: ONLY public web lookups, which do not change within a task. Never a
+#: ledger, file or other private or local read: a write in the task (or a
+#: confirmed card's resume) changes those, and a cached answer would be stale.
+REPEATABLE_READS = frozenset({"web_search", "web_fetch", "image_search"})
+#: A result that is not a lookup's answer is never served from the cache.
+_NOT_CACHEABLE = ("Error", "Not run", "Waiting for you", "Refused", "Tool '")
 SEARCH_TOOLS = frozenset({"web_search", "image_search"})
 FETCH_TOOLS = frozenset({"web_fetch"})
 
@@ -88,7 +96,7 @@ class TurnBudgetMiddleware(AgentMiddleware):
         if name in REPEATABLE_READS:
             wanted = _canonical(call.get("args"))
             for step in steps:
-                if step["name"] == name and step["id"] != call_id and step["ok"] is True and _canonical(step["args"]) == wanted:
+                if step["name"] == name and step["id"] != call_id and step["ok"] is True and _canonical(step["args"]) == wanted and not step["output"].lstrip().startswith(_NOT_CACHEABLE):
                     earlier = step["output"].removeprefix(CACHED_PREFIX)
                     return ToolMessage(content=CACHED_PREFIX + earlier, tool_call_id=call_id, name=name)
         budget = self.budget
@@ -98,6 +106,10 @@ class TurnBudgetMiddleware(AgentMiddleware):
             used = sum(1 for s in steps if s["name"] in SEARCH_TOOLS and self._counted(s))
             if used >= budget.max_searches:
                 return ToolMessage(content=OVER_BUDGET.format(what="search", n=budget.max_searches), tool_call_id=call_id, name=name)
+        if name == "research":
+            used = sum(1 for s in steps if s["name"] == "research" and self._counted(s))
+            if used >= getattr(budget, "max_research", 3):
+                return ToolMessage(content=OVER_BUDGET.format(what="research", n=budget.max_research), tool_call_id=call_id, name=name)
         if name in FETCH_TOOLS:
             used = len({_canonical(s["args"]) for s in steps if s["name"] in FETCH_TOOLS and self._counted(s)})
             if used >= budget.max_fetches:

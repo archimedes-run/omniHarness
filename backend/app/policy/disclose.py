@@ -35,6 +35,10 @@ class ExecutionRecord:
     result: Any
     targets: tuple[str, ...] = ()
     disclosed: bool = False
+    #: Ran under a standing grant (scheduled runs): its own line.
+    grant: bool = False
+    #: The specialist that ran it ("" for the agent itself): "(via <agent>)".
+    agent: str = ""
 
     def sentence(self) -> str:
         """Generated from the record. Never from the reply.
@@ -79,23 +83,44 @@ def _render(arguments: dict) -> str:
 NOTICE_PREFIX = "Ran without asking:"
 
 
-def notice_line(records: list[ExecutionRecord]) -> str:
-    """One line: each tool in the order it first ran, repeats counted, and its
-    resolved targets when there are any (FR-040's specifics, on every channel):
-    "Ran without asking: calendar_create_hold (Tue 3pm), ledger_apply ×2"."""
-    counts: dict[str, int] = {}
-    targets: dict[str, list[str]] = {}
+GRANT_PREFIX = "Ran under grant:"
+
+
+def _line(prefix: str, records: list[ExecutionRecord]) -> str:
+    counts: dict[tuple[str, str], int] = {}
+    targets: dict[tuple[str, str], list[str]] = {}
     for record in records:
-        counts[record.tool_name] = counts.get(record.tool_name, 0) + 1
-        seen = targets.setdefault(record.tool_name, [])
+        key = (record.tool_name, record.agent)
+        counts[key] = counts.get(key, 0) + 1
+        seen = targets.setdefault(key, [])
         seen.extend(str(t) for t in record.targets if str(t) not in seen)
     parts = []
-    for tool, n in counts.items():
+    for (tool, agent), n in counts.items():
         part = f"{tool} \u00d7{n}" if n > 1 else tool
-        if targets[tool]:
-            part += f" ({', '.join(targets[tool])})"
-        parts.append(part)
-    return f"{NOTICE_PREFIX} " + ", ".join(" ".join(p.split()) for p in parts)
+        if targets[(tool, agent)]:
+            part += f" ({', '.join(targets[(tool, agent)])})"
+        if agent:
+            part += f" (via {agent})"
+        parts.append(" ".join(part.split()))
+    return f"{prefix} " + ", ".join(parts)
+
+
+def notice_lines(records: list[ExecutionRecord]) -> list[str]:
+    """One line for what ran without asking (each tool in the order it first
+    ran, repeats counted, resolved targets in brackets, a specialist's named
+    "(via <agent>)"), and one for what ran under a standing grant."""
+    lines = []
+    plain = [r for r in records if not r.grant]
+    granted = [r for r in records if r.grant]
+    if plain:
+        lines.append(_line(NOTICE_PREFIX, plain))
+    if granted:
+        lines.append(_line(GRANT_PREFIX, granted))
+    return lines
+
+
+def notice_line(records: list[ExecutionRecord]) -> str:
+    return "\n".join(notice_lines(records))
 
 
 @dataclass
@@ -105,19 +130,21 @@ class DisclosureLedger:
 
     records: list[ExecutionRecord] = field(default_factory=list)
 
-    def record(self, tool_name: str, arguments: dict, result: Any, targets: tuple[str, ...] = ()) -> ExecutionRecord:
-        entry = ExecutionRecord(tool_name=tool_name, arguments=arguments or {}, result=result, targets=targets)
+    def record(self, tool_name: str, arguments: dict, result: Any, targets: tuple[str, ...] = (), *, grant: bool = False, agent: str = "") -> ExecutionRecord:
+        entry = ExecutionRecord(tool_name=tool_name, arguments=arguments or {}, result=result, targets=targets, grant=grant, agent=agent)
         self.records.append(entry)
         return entry
 
-    def apply(self, reply: str) -> str:
-        """The reply with the notice appended: every record, whatever the reply
+    def apply(self, reply: str, extra: list[ExecutionRecord] | None = None) -> str:
+        """The reply with the notice appended: every record (and `extra`: the
+        specialists' records rolled up onto this reply), whatever the reply
         says (the model's own words never count as the notice)."""
-        if not self.records:
+        records = [*self.records, *(extra or [])]
+        if not records:
             return reply
-        for record in self.records:
+        for record in records:
             record.disclosed = True
-        line = notice_line(self.records)
+        line = notice_line(records)
         return f"{reply.rstrip()}\n\n{line}" if reply and reply.strip() else line
 
     def clear(self) -> None:

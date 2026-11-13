@@ -32,7 +32,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 from .classify import classify
 from .config import ConfigLoader
-from .disclose import DisclosureLedger
+from .disclose import DisclosureLedger, ExecutionRecord
 from .grants import GrantedCall
 from .limits import describe_expiry
 from .lineage import initiation_origin
@@ -451,7 +451,7 @@ class PolicyMiddleware(AgentMiddleware):
             )
         # Disclosed in the run's reply like a Tier 2 write: the person reading
         # it later sees what was done without them.
-        self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets))
+        self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets), grant=True)
         logger.info("policy: %s ran %s on its own under a standing grant (%s; %d actions, %d in this run; origin %s)", self._requester(request), decision.tool_name, ", ".join(grant.classes), grant.actions, grant.total, origin)
 
     @classmethod
@@ -655,44 +655,83 @@ class PolicyMiddleware(AgentMiddleware):
     # gets. It also sees that reply AFTER any rewrite (the trailing-offer
     # removal), so coverage is judged on the final text (review H2).
 
-    def after_model(self, state: Any, runtime: Any) -> dict | None:  # noqa: ARG002
-        return self._disclose_final(state)
+    def after_model(self, state: Any, runtime: Any) -> dict | None:
+        return self._disclose_final(state, runtime)
 
-    async def aafter_model(self, state: Any, runtime: Any) -> dict | None:  # noqa: ARG002
-        return self._disclose_final(state)
+    async def aafter_model(self, state: Any, runtime: Any) -> dict | None:
+        return self._disclose_final(state, runtime)
 
-    def _disclose_final(self, state: Any) -> dict | None:
+    def _disclose_final(self, state: Any, runtime: Any = None) -> dict | None:
+        """EXACTLY ONCE, on the final reply of the turn that caused it (owner
+        principle). A specialist's (an invited agent's) records are not put in
+        its own reply: they go on it as display data, ride its result back to
+        the agent that invited it, and are rolled up onto that agent's final
+        reply, "(via <agent>)", in the same single line."""
         from langchain_core.messages import AIMessage
 
-        if not self.ledger.records:
-            return None
+        from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+        from omniharness.agents.turns import DELEGATED_DISCLOSURE_MARKER, DISCLOSURE_MARKER
+        from omniharness.agents.working_loop import turn_messages
+
         messages = (state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)) or []
         message = messages[-1] if messages else None
         if not isinstance(message, AIMessage) or getattr(message, "tool_calls", None):
             return None  # still mid-loop; the user has not been spoken to yet
+        context = getattr(runtime, "context", None) or {}
+        invited = isinstance(context, dict) and (INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY)))
+        if invited:
+            if not self.ledger.records:
+                return None
+            items = [{"tool": r.tool_name, "text": r.sentence(), "targets": list(r.targets), "grant": r.grant} for r in self.ledger.records]
+            self.ledger.clear()
+            final = message.model_copy(update={"additional_kwargs": {**(message.additional_kwargs or {}), DELEGATED_DISCLOSURE_MARKER: items}})
+            return {"messages": [final]}
+        # The specialists' records of this turn not yet disclosed on an earlier
+        # final reply of the turn (a resume continues the turn).
+        turn = turn_messages(list(messages))
+        done: set[str] = set()
+        for m in turn[:-1]:
+            marker = (getattr(m, "additional_kwargs", None) or {}).get(DISCLOSURE_MARKER) if isinstance(m, AIMessage) else None
+            if isinstance(marker, dict):
+                done.update(str(i) for i in marker.get("sources") or [])
+        extra: list[ExecutionRecord] = []
+        sources: list[str] = []
+        for m in turn:
+            kwargs = getattr(m, "additional_kwargs", None) or {}
+            delegated = kwargs.get(DELEGATED_DISCLOSURE_MARKER) if getattr(m, "type", None) == "tool" else None
+            call_id = str(getattr(m, "tool_call_id", "") or "")
+            if not isinstance(delegated, dict) or call_id in done:
+                continue
+            agent = str(delegated.get("agent") or "a specialist")
+            for item in delegated.get("items") or []:
+                if isinstance(item, dict) and item.get("tool"):
+                    extra.append(ExecutionRecord(tool_name=str(item["tool"]), arguments={}, result=None, targets=tuple(str(t) for t in item.get("targets") or []), grant=bool(item.get("grant")), agent=agent))
+            sources.append(call_id)
+        if not self.ledger.records and not extra:
+            return None
         original = str(message.content or "")
-        disclosed = self.ledger.apply(original)
-        update = None
-        if disclosed != message.content:
-            final = message.model_copy(update={"content": disclosed, "additional_kwargs": dict(message.additional_kwargs or {})})
-            self._mark_disclosure(final, original, disclosed)
-            update = {"messages": [final]}
+        records = [*self.ledger.records, *extra]
+        disclosed = self.ledger.apply(original, extra)
+        final = message.model_copy(update={"content": disclosed, "additional_kwargs": dict(message.additional_kwargs or {})})
+        self._mark_disclosure(final, original, disclosed, records, sources)
         self.ledger.clear()
-        return update
+        return {"messages": [final]}
 
-    def _mark_disclosure(self, message: Any, original: str, disclosed: str) -> None:
+    def _mark_disclosure(self, message: Any, original: str, disclosed: str, records: list | None = None, sources: list | None = None) -> None:
         """Display data on the reply (DISCLOSURE_MARKER): which part of its
-        text is the appended block, and the records it lists. Added after the
-        decision, read by nothing here; the text above is unchanged."""
+        text is the appended block, the records it lists (each with its agent),
+        and the specialists' results it rolled up. Added after the decision,
+        read by nothing here; the text above is unchanged."""
         from omniharness.agents.turns import DISCLOSURE_MARKER
 
         head = original.rstrip()
         if not disclosed.startswith(head):
             return
-        items = [{"tool": r.tool_name, "text": r.sentence()} for r in self.ledger.records]
+        records = list(self.ledger.records) if records is None else records
+        items = [{"tool": r.tool_name, "text": r.sentence() + (f" (via {r.agent})" if r.agent else ""), "agent": r.agent, "grant": r.grant} for r in records]
         if not items or not isinstance(getattr(message, "additional_kwargs", None), dict):
             return
-        message.additional_kwargs[DISCLOSURE_MARKER] = {"text": disclosed[len(head) :], "items": items}
+        message.additional_kwargs[DISCLOSURE_MARKER] = {"text": disclosed[len(head) :], "items": items, "sources": list(sources or [])}
 
     @staticmethod
     def _final_message(response: Any) -> Any:
@@ -751,15 +790,23 @@ class PolicyMiddleware(AgentMiddleware):
             return None, note
 
         logger.info("policy: confirmation resolved as %s (%s)", result.outcome, result.action_id)
-        if result.outcome == confirm_flow.EXECUTED and result.action_id:
-            action = self.pending.get(result.action_id)
-            if action is not None and action.surface:
-                # Posted in the thread, attributed to the agent that proposed
-                # it, with the result; an invited agent's says it stopped.
-                from .surface_run import report_message
+        stored = self.pending.get(result.action_id) if result.action_id else None
+        verdict = None
+        if result.outcome == confirm_flow.EXECUTED and stored is not None and stored.surface:
+            # Posted in the thread, attributed to the agent that proposed
+            # it, with the result; an invited agent's says it stopped.
+            from .surface_run import report_message
 
-                return report_message(action, result.detail.get("result")), None
-        return AIMessage(content=result.message), None
+            verdict = report_message(stored, result.detail.get("result"))
+        if verdict is None:
+            verdict = AIMessage(content=result.message)
+        # Display data only (spec 009: a typed confirmation that executed is a
+        # receipt for the turn's claims); no decision reads it.
+        from omniharness.agents.working_loop import CONFIRMED_MARKER
+
+        if isinstance(getattr(verdict, "additional_kwargs", None), dict):
+            verdict.additional_kwargs[CONFIRMED_MARKER] = {"outcome": "executed" if result.outcome == confirm_flow.EXECUTED else str(result.outcome), "tool": getattr(stored, "tool_name", "") or ""}
+        return verdict, None
 
     @staticmethod
     def _runner(request: Any) -> Callable[[str, dict], Any]:

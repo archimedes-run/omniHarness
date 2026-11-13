@@ -275,3 +275,112 @@ def test_a_claim_with_a_receipt_stands_and_without_one_is_flagged() -> None:
     declined = ToolMessage(content="The user declined this call.", tool_call_id="confirmed-a1", name="ledger_apply", additional_kwargs={RESUME_OUTCOME_MARKER: "declined"})
     assert unbacked_claims("I created the project Eval Kitchen Reno.", _turn(confirmed, executed)) == []
     assert unbacked_claims("I created the project Eval Kitchen Reno.", _turn(confirmed, declined))
+
+
+# -- review round 3 (6892ac5..a61308b) ---------------------------------------
+
+
+def _budget_request(name: str, args: dict, earlier: list[tuple[str, dict, str]]):
+    from types import SimpleNamespace
+
+    msgs = [HumanMessage(content="go", additional_kwargs={USER_TURN_MARKER: True})]
+    for n, (tool, a, out) in enumerate(earlier):
+        msgs += [AIMessage(content="", tool_calls=[{"name": tool, "args": a, "id": f"e{n}"}]), ToolMessage(content=out, tool_call_id=f"e{n}", name=tool)]
+    msgs.append(AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": "now"}]))
+    return SimpleNamespace(state={"messages": msgs}, tool_call={"name": name, "args": args, "id": "now"})
+
+
+def test_private_and_local_reads_are_never_served_from_the_cache() -> None:
+    from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware
+
+    mw = TurnBudgetMiddleware()
+    calls: list[str] = []
+
+    def handler(req):
+        calls.append(req.tool_call["name"])
+        return ToolMessage(content="fresh", tool_call_id="now", name=req.tool_call["name"])
+
+    # create -> read sees it: a repeated ledger_read runs again (no stale "(none)").
+    out = mw.wrap_tool_call(_budget_request("ledger_read", {}, [("ledger_read", {}, "Projects: (none)"), ("ledger_apply", {"op": "create"}, "Created Foo")]), handler)
+    assert out.content == "fresh"
+    # read -> edit -> read sees the edit.
+    out = mw.wrap_tool_call(_budget_request("read_file", {"path": "/a.md"}, [("read_file", {"path": "/a.md"}, "old"), ("str_replace", {"path": "/a.md"}, "OK")]), handler)
+    assert out.content == "fresh"
+    assert calls == ["ledger_read", "read_file"]
+
+
+def test_a_refused_or_carded_lookup_is_not_served_from_the_cache() -> None:
+    from omniharness.agents.middlewares.turn_budget_middleware import CACHED_PREFIX, TurnBudgetMiddleware
+
+    mw = TurnBudgetMiddleware()
+    handler = lambda req: ToolMessage(content="fresh results", tool_call_id="now", name="web_search")  # noqa: E731
+    for earlier in ("Waiting for you: confirm action `a1` on the card.", "Not run: the person declined this exact call."):
+        out = mw.wrap_tool_call(_budget_request("web_search", {"query": "q"}, [("web_search", {"query": "q"}, earlier)]), handler)
+        assert out.content == "fresh results", earlier
+    cached = mw.wrap_tool_call(_budget_request("web_search", {"query": "q"}, [("web_search", {"query": "q"}, "[results]")]), handler)
+    assert cached.content.startswith(CACHED_PREFIX)
+
+
+def test_research_is_capped_per_task() -> None:
+    from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware
+
+    mw = TurnBudgetMiddleware()
+    handler = lambda req: ToolMessage(content="Task Succeeded.", tool_call_id="now", name="research")  # noqa: E731
+    earlier = [("research", {"brief": f"b{i}"}, "Task Succeeded.") for i in range(3)]
+    assert mw.wrap_tool_call(_budget_request("research", {"brief": "b3"}, earlier), handler).content.startswith("Not run: this task has used its research budget")
+    assert mw.wrap_tool_call(_budget_request("research", {"brief": "b2"}, earlier[:2]), handler).content == "Task Succeeded."
+
+
+NOT_CLAIMS = [
+    "I added the links below.",
+    "I wrote a summary below.",
+    "I updated the list with two more places.",
+    "I built a table comparing them.",
+    "I scheduled nothing yet.",
+    "Earlier I created the project Kitchen Reno.",
+    "Yesterday I sent the email to Dana.",
+    "> I sent the email to Dana.",
+    'The page says "I created the project for you".',
+]
+CLAIMS = ["I sent the email to Dana.", "I created the project Kitchen Reno.", "I scheduled the meeting for 3pm.", "I saved the file to outputs."]
+
+
+def test_only_claims_of_an_external_change_need_a_receipt() -> None:
+    from omniharness.agents.working_loop import unbacked_claims
+
+    for sentence in NOT_CLAIMS:
+        assert unbacked_claims(sentence, _turn()) == [], sentence
+    for sentence in CLAIMS:
+        assert unbacked_claims(sentence, _turn()), sentence
+
+
+def test_a_receipt_backs_only_its_own_kind_of_claim() -> None:
+    from omniharness.agents.working_loop import CONFIRMED_MARKER, unbacked_claims
+
+    def ran(name, tier):
+        call = AIMessage(content="", tool_calls=[{"name": name, "args": {}, "id": f"r-{name}"}])
+        return [call, ToolMessage(content="OK", tool_call_id=f"r-{name}", name=name, additional_kwargs={POLICY_STEP_MARKER: {"tier": tier, "outcome": "ran"}})]
+
+    assert unbacked_claims("I created the project Kitchen Reno.", _turn(*ran("write_file", 2))), "a file write backed a project claim"
+    assert unbacked_claims("I created the project Kitchen Reno.", _turn(*ran("ledger_apply", 1))) == []
+    assert unbacked_claims("I saved the file to outputs.", _turn(*ran("web_fetch", 1))), "a lookup backed a claim"
+    assert unbacked_claims("I created the project Kitchen Reno.", _turn(*ran("research", 2))), "research backed a claim"
+    # A typed "yes" that executed the confirmed call is a receipt.
+    verdict = AIMessage(content="Done.", additional_kwargs={CONFIRMED_MARKER: {"outcome": "executed", "tool": "ledger_apply"}})
+    assert unbacked_claims("I created the project Kitchen Reno.", _turn(verdict)) == []
+
+
+def test_intent_push_back_only_for_self_contained_intents() -> None:
+    from omniharness.agents.working_loop import announces_without_acting
+
+    assert announces_without_acting("I read the brief. I'll now search the menus.")
+    assert announces_without_acting("I'm ready to run quick web lookups and return 3 varieties with links.")
+    for waits in ("Once you confirm, I'll run the lookups.", "I'll need your API key to continue.", "I'm ready to run the lookups. Shall I go ahead?", "I'm ready to run the lookups; please approve the card."):
+        assert not announces_without_acting(waits), waits
+
+
+def test_a_notice_line_the_model_wrote_is_removed() -> None:
+    from omniharness.agents.working_loop import MODEL_NOTICE_RE
+
+    reply = "Lunch is held.\n\nRan without asking: calendar_create_hold"
+    assert MODEL_NOTICE_RE.sub("", reply).rstrip() == "Lunch is held."

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -432,9 +433,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # assistant, not a precondition for it.
         app.state.trigger_engine = await _start_trigger_engine(app)
 
-        # A lead turn whose last cards expired resumes (spec 009, owner
-        # decision M2; app.gateway.resume). In every worker: a turn is resumed
-        # only by the caller that holds every one of its cards' locks.
+        # A lead turn whose last cards expired resumes, at most once (spec
+        # 009, owner decision M2; app.gateway.resume). Every worker sweeps; a
+        # turn is resumed only by the caller holding all of its cards' locks.
         from app.gateway.resume import resume_expired_forever
 
         expiry_task = asyncio.create_task(resume_expired_forever(app))
@@ -442,6 +443,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
 
         expiry_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await expiry_task
         # Trace writes in flight end before anything they use is closed.
         from app.gateway.services import drain_trace_tasks
 

@@ -370,9 +370,23 @@ class PendingStore:
         expired = []
         for path in sorted(self.directory.glob("*.json")):
             action = self.get(path.stem)
-            if action and action.outcome is None and action.is_expired(now):
-                self.resolve(action, Outcome.EXPIRED, f"not confirmed before {action.expires_at.isoformat()}")
-                expired.append(action)
+            if not (action and action.outcome is None and action.is_expired(now)):
+                continue
+            # Never one that is being executed: expiry takes the claim itself
+            # (the same atomic link `claim` uses), so a confirm that claimed it
+            # first keeps it, and a confirm that comes after finds it taken.
+            source, claim = self._path(action.id), self._claim_path(action.id)
+            try:
+                os.link(source, claim)
+            except FileExistsError:
+                continue
+            except OSError:
+                continue
+            current = self.get(action.id)
+            if current is None or current.outcome is not None:
+                continue
+            self.resolve(current, Outcome.EXPIRED, f"not confirmed before {current.expires_at.isoformat()}")
+            expired.append(current)
         return expired
 
 

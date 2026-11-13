@@ -32,7 +32,7 @@ from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
 from omniharness.agents.thread_state import ThreadState
-from omniharness.agents.working_loop import VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of, unbacked_claims, unpresented_outputs
+from omniharness.agents.working_loop import CONFIRMED_MARKER, MODEL_NOTICE_RE, VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of, unbacked_claims, unpresented_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +69,17 @@ class VerificationMiddleware(AgentMiddleware):
         if changed:
             fixes.append("trailing_menu_removed")
             reply = new_body
+        # The model may not write the server's Tier 2 notice itself.
+        if CONFIRMED_MARKER not in (last.additional_kwargs or {}) and MODEL_NOTICE_RE.search(reply):
+            reply = MODEL_NOTICE_RE.sub("", reply).rstrip()
+            fixes.append("model_notice_removed")
+            changed = True
         # Claims need receipts (owner rule): "I created / sent / scheduled X"
         # with no change made in this turn (per the policy layer's stamps and
         # the resume's outcomes) gets the server's correction appended.
-        claims = unbacked_claims(reply, messages)
+        # Not on the policy layer's own reply to a typed confirmation (server
+        # text, never the model's claim).
+        claims = [] if CONFIRMED_MARKER in (last.additional_kwargs or {}) else unbacked_claims(reply, messages)
         if claims:
             fixes.append("unbacked_claim_flagged")
             quoted = "; ".join(f"\u201c{c}\u201d" for c in claims)

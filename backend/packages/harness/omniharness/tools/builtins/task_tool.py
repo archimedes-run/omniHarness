@@ -305,7 +305,9 @@ async def task_tool(
                 writer({"type": "task_completed", "task_id": task_id, "result": result.result})
                 logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
                 cleanup_background_task(background_id)
-                return f"Task Succeeded. Result: {result.result}"
+                from omniharness.agents.turns import delegated_result
+
+                return delegated_result(f"Task Succeeded. Result: {result.result}", result, agent=subagent_type, tool_call_id=tool_call_id, name="research" if subagent_type == "research" else "task")
             elif result.status == SubagentStatus.FAILED:
                 writer({"type": "task_failed", "task_id": task_id, "error": result.error})
                 logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")

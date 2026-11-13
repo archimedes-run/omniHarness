@@ -359,7 +359,11 @@ async function mockAll(
 }
 
 /** One turn whose reply the policy layer appended a disclosure block to. */
-function disclosedTurn(n: number, reply: string, items: [string, string][]) {
+function disclosedTurn(
+  n: number,
+  reply: string,
+  items: [string, string, string?, boolean?][],
+) {
   const block =
     "\n\nAlso, for the record:\n" +
     items.map(([, text]) => `  - ${text}`).join("\n");
@@ -372,7 +376,12 @@ function disclosedTurn(n: number, reply: string, items: [string, string][]) {
       additional_kwargs: {
         omniharness_disclosure: {
           text: block,
-          items: items.map(([tool, text]) => ({ tool, text })),
+          items: items.map(([tool, text, agent, grant]) => ({
+            tool,
+            text,
+            ...(agent ? { agent } : {}),
+            ...(grant ? { grant } : {}),
+          })),
         },
       },
     },
@@ -388,6 +397,15 @@ const DISCLOSED_TURNS = [
     ["ledger_apply", "I used ledger_apply on Eval Garden: Water seedlings."],
     ["write_file", "I used write_file on /mnt/user-data/outputs/notes.md."],
     ["ledger_apply", "I used ledger_apply on Eval Garden: Build trellis."],
+  ]),
+  ...disclosedTurn(4, "The repo is summarised and two tasks are added.", [
+    ["code_job", "code_job with project_dir='site'"],
+    ["ledger_apply", "ledger_apply (via Repo analyst)", "Repo analyst"],
+    ["ledger_apply", "ledger_apply (via Repo analyst)", "Repo analyst"],
+  ]),
+  ...disclosedTurn(5, "Morning brief: two tasks added.", [
+    ["ledger_apply", "ledger_apply on Eval Garden: Water", "", true],
+    ["ledger_apply", "ledger_apply on Eval Garden: Prune", "", true],
   ]),
   ...disclosedTurn(3, "Three tasks are added to Eval Garden.", [
     ["ledger_apply", "I used ledger_apply on Eval Garden: Water seedlings."],
@@ -476,7 +494,7 @@ for (const scheme of ["light", "dark"] as const) {
       });
       await expect(page.getByText("Also, for the record")).toHaveCount(0);
       const notes = page.getByTestId("disclosure-note");
-      await expect(notes).toHaveCount(3);
+      await expect(notes).toHaveCount(5);
       await expect(notes.nth(0).getByRole("button")).toHaveText(
         "Ran without asking: code_job",
       );
@@ -484,10 +502,16 @@ for (const scheme of ["light", "dark"] as const) {
         "Ran without asking: code_job, ledger_apply \u00d72, write_file",
       );
       await expect(notes.nth(2).getByRole("button")).toHaveText(
+        "Ran without asking: code_job, ledger_apply \u00d72 (via Repo analyst)",
+      );
+      await expect(notes.nth(3).getByRole("button")).toHaveText(
+        "Ran under grant: ledger_apply \u00d72",
+      );
+      await expect(notes.nth(4).getByRole("button")).toHaveText(
         "Ran without asking: ledger_apply \u00d73",
       );
       // Details list every disclosure in full (keyboard: Enter opens).
-      for (const i of [0, 1, 2]) {
+      for (const i of [0, 1, 2, 3, 4]) {
         const toggle = notes.nth(i).getByRole("button");
         await toggle.focus();
         await page.keyboard.press("Enter");
@@ -502,8 +526,11 @@ for (const scheme of ["light", "dark"] as const) {
         "I used ledger_apply on Eval Garden: Build trellis.",
       ]);
       await expect(
-        notes.nth(2).getByTestId("disclosure-details").getByRole("listitem"),
+        notes.nth(4).getByTestId("disclosure-details").getByRole("listitem"),
       ).toHaveCount(3);
+      await expect(
+        notes.nth(2).getByTestId("disclosure-details"),
+      ).toContainText("(via Repo analyst)");
       await shot(page, `disclosure-notes-${scheme}`);
       await expectAA(page);
     });

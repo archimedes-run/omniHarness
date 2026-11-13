@@ -55,4 +55,14 @@ describe("the policy layer's disclosure block (spec 009 Slice 0)", () => {
       ]),
     ).toBe("ledger_apply \u00d73");
   });
+
+  it("names a specialist's actions in the same line", () => {
+    expect(
+      disclosureSummary([
+        { tool: "code_job", text: "" },
+        { tool: "ledger_apply", text: "", agent: "Repo analyst" },
+        { tool: "ledger_apply", text: "", agent: "Repo analyst" },
+      ]),
+    ).toBe("code_job, ledger_apply \u00d72 (via Repo analyst)");
+  });
 });

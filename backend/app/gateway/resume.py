@@ -148,10 +148,7 @@ async def resume_after_confirm(request: Request, action_ids: list[str]) -> str |
     # answers, or two workers) can close the same turn at once. Under the
     # turn's lock (an flock, across workers) the first caller takes every
     # card of the turn; a later one finds them taken or continued and stops.
-    import hashlib
-
-    keys = sorted({a.group_key or a.id for a in seeds})
-    turn_lock = "resume-" + hashlib.sha256("|".join([str(thread), *keys]).encode()).hexdigest()[:24]
+    turn_lock = _turn_lock_id(thread, seeds)
     taken: list[Any] = []
 
     def give_back() -> None:
@@ -216,16 +213,34 @@ async def resume_after_confirm(request: Request, action_ids: list[str]) -> str |
 #
 # Cards expire lazily, when the store is read, and nobody answers an expired
 # card, so nothing used to resume a turn whose remaining cards expired: the
-# lead was stranded mid-task. The gateway now sweeps once a minute (one
-# worker: the one that runs the trigger engine): it expires due cards and
-# resumes every lead turn that has no open card left and has not been resumed,
-# telling the lead which cards were answered and which expired (and did not
-# run). The request it resumes with is the owner's, built here: a resume is
-# server-started and its input comes from the server's records only.
+# lead was stranded mid-task. The gateway sweeps once a minute: it expires due
+# cards (never one that is being executed) and resumes each lead turn with no
+# open card left, telling the lead which cards were answered and which expired
+# (and did not run). The request it resumes with is the owner's, built here: a
+# resume is server-started and its input comes from the server's records only.
+#
+# AT MOST ONCE PER TURN (review H2). The sweep records its attempt for a turn
+# before it makes it, whatever the outcome: a failed or refused resume is
+# never retried. It never resumes a turn the person has moved on from (a newer
+# message of theirs in the thread), a task they stopped (the thread's latest
+# run was interrupted), or a deleted thread; those are recorded and left. Every
+# worker sweeps; a turn is resumed only by the caller holding all of its cards
+# (resume_after_confirm's turn lock), so two workers never resume it twice.
 
 #: Expired cards older than this are not swept (an old install's leftovers).
 SWEEP_WINDOW_SECONDS = 24 * 3600
 SWEEP_INTERVAL_SECONDS = 60
+
+
+def _turn_lock_id(thread: str, actions: list[Any]) -> str:
+    import hashlib
+
+    keys = sorted({a.group_key or a.id for a in actions})
+    return "resume-" + hashlib.sha256("|".join([str(thread), *keys]).encode()).hexdigest()[:24]
+
+
+def _swept_path(store: Any, thread: str, actions: list[Any]) -> Any:
+    return store.directory / f"{_turn_lock_id(thread, actions)}.swept"
 
 
 async def _owner_request(app: Any) -> Request | None:
@@ -255,52 +270,100 @@ async def _owner_request(app: Any) -> Request | None:
     return request
 
 
-async def resume_expired(app: Any, *, now: Any = None) -> list[str]:
-    """Expire due cards and resume each lead turn they closed. Returns the
-    resume run ids started."""
+async def _why_not(request: Request, thread: str, card_ids: set[str]) -> str | None:
+    """Why this turn must not be resumed by the sweep, or None."""
+    from app.gateway.deps import get_run_manager, get_thread_store
+    from omniharness.agents.turns import POLICY_STEP_MARKER, USER_TURN_MARKER
+
+    try:
+        if await get_thread_store(request).get(thread, user_id=None) is None:
+            return "the thread was deleted"
+    except Exception:  # noqa: BLE001 - no thread store: carry on with the other checks
+        pass
+    runs = await get_run_manager(request).list_history(thread, user_id=None)
+    if runs and getattr(getattr(runs[-1], "status", None), "value", str(getattr(runs[-1], "status", ""))) == "interrupted":
+        return "the person stopped the task"
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    if checkpointer is not None:
+        tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread, "checkpoint_ns": ""}})
+        messages = ((getattr(tup, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or [] if tup else []
+        card_at = max((i for i, m in enumerate(messages) if getattr(m, "type", None) == "tool" and str(((getattr(m, "additional_kwargs", None) or {}).get(POLICY_STEP_MARKER) or {}).get("card_id") or "") in card_ids), default=None)
+        person_at = max((i for i, m in enumerate(messages) if getattr(m, "type", None) == "human" and (getattr(m, "additional_kwargs", None) or {}).get(USER_TURN_MARKER) is True), default=None)
+        if card_at is not None and person_at is not None and person_at > card_at:
+            return "the person has moved on to a newer message"
+    return None
+
+
+async def resume_expired(app: Any, *, now: Any = None, middleware: Any = None) -> list[str]:
+    """Expire due cards and resume each lead turn they closed, at most once
+    per turn. Returns the resume run ids started."""
     from datetime import UTC, datetime, timedelta
 
+    from app.gateway.deps import get_run_manager
     from app.policy.models import Outcome
-    from app.policy.registration import build
-    from omniharness.config import get_app_config
 
-    middleware = build(get_app_config())
+    if middleware is None:
+        from app.policy.registration import build
+        from omniharness.config import get_app_config
+
+        middleware = build(get_app_config())
     if middleware is None:
         return []
     store = middleware.pending
     now = now or datetime.now(UTC)
     store.expire_due(now)
-    seeds: dict[str, list[str]] = {}
+    groups: dict[str, list[Any]] = {}
     for path in sorted(store.directory.glob("*.json")):
         action = store.get(path.stem)
         if action is None or action.outcome != Outcome.EXPIRED or action.continued or not _is_lead_card(action):
             continue
         if now - action.expires_at > timedelta(seconds=SWEEP_WINDOW_SECONDS):
             continue
-        seeds.setdefault(action.thread_id, []).append(action.id)
-    if not seeds:
+        groups.setdefault(action.thread_id, []).append(action)
+    if not groups:
         return []
     request = await _owner_request(app)
     if request is None:
         return []
     started = []
-    for ids in seeds.values():
+    for thread, seeds in groups.items():
+        group = _group(store, seeds)
+        marker = _swept_path(store, thread, group or seeds)
+        if marker.exists():
+            continue
+        if await get_run_manager(request).thread_busy(thread):
+            continue  # the chat is replying: look again next pass, nothing recorded
+        reason = await _why_not(request, thread, {a.id for a in group or seeds})
+        # Recorded BEFORE the attempt: an attempt that fails is never retried.
+        marker.write_text(reason or "attempted")
+        if reason:
+            logger.info("resume: not resuming thread %s after expiry (%s)", thread, reason)
+            continue
         try:
-            run_id = await resume_after_confirm(request, ids)
+            run_id = await resume_after_confirm(request, [a.id for a in seeds])
         except Exception:  # noqa: BLE001 - one thread's failure never stops the sweep
             logger.exception("resume after expiry failed to start")
             continue
         if run_id:
             started.append(run_id)
+        else:
+            # Nothing was attempted (another caller holds the turn, or the chat
+            # started replying meanwhile): not an attempt, look again later.
+            marker.unlink(missing_ok=True)
     return started
 
 
 async def resume_expired_forever(app: Any, *, interval: float = SWEEP_INTERVAL_SECONDS) -> None:
     import asyncio
 
+    from app.policy.registration import build
+    from omniharness.config import get_app_config
+
+    middleware = None
     while True:
         await asyncio.sleep(interval)
         try:
-            await resume_expired(app)
+            middleware = middleware or build(get_app_config())
+            await resume_expired(app, middleware=middleware)
         except Exception:  # noqa: BLE001
             logger.exception("expiry sweep failed")
