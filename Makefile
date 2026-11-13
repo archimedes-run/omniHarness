@@ -31,7 +31,7 @@ help:
 	@echo "  make start           - Start all services in production mode (optimized, no hot-reloading)"
 	@echo "  make start-daemon    - Start prod services in background (daemon mode)"
 	@echo "  make stop            - Stop all running services"
-	@echo "  make clean           - Clean up processes and temporary files"
+	@echo "  make clean           - Stop services, remove caches and logs (keeps your data)"
 	@echo "  make clean-caches    - Delete tool caches and the local frontend build (never data)"
 	@echo ""
 	@echo "Docker Production Commands:"
@@ -150,10 +150,12 @@ stop:
 	@$(RUN_WITH_GIT_BASH) ./scripts/serve.sh --stop
 
 # Clean up
+# Stops services, then removes caches and logs. Never your data: chats,
+# memory, run history and agent state (backend/.omni-harness and the local
+# runtime's backend/.langgraph_api) survive a clean.
 clean: stop
 	@echo "Cleaning up..."
-	@-rm -rf backend/.omni-harness 2>/dev/null || true
-	@-rm -rf backend/.langgraph_api 2>/dev/null || true
+	@$(RUN_WITH_GIT_BASH) ./scripts/clean-caches.sh
 	@-rm -rf logs/*.log 2>/dev/null || true
 	@echo "✓ Cleanup complete"
 
