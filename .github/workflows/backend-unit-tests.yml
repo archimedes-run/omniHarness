@@ -16,7 +16,9 @@ permissions:
 jobs:
   backend-unit-tests:
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    # Pinned: tests/security/test_logs_and_binds.py's nginx log rotation fails
+    # on ubuntu-latest (26.04); move with the Playwright jobs.
+    runs-on: ubuntu-24.04
     # The suite runs on all runner cores (pytest-xdist, `make test`), well
     # under this; the margin is for a slow runner, not for the suite growing.
     timeout-minutes: 40
