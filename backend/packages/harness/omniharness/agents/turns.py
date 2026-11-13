@@ -44,6 +44,15 @@ def mark_user_turn(message: Any) -> Any:
 POLICY_STEP_MARKER = "omniharness_policy_step"
 
 
+#: On the final reply, set by the policy layer when it appended its Tier 2
+#: disclosure block (app.policy.disclose): {"text": the appended block,
+#: "items": [{"tool", "text"}]}. Display data only, so the chat can show the
+#: block as a compact system note under the answer instead of as the
+#: assistant's own words. The reply's text still carries the block (channels,
+#: history, every test of the disclosure guarantee); no decision reads this.
+DISCLOSURE_MARKER = "omniharness_disclosure"
+
+
 #: On the summary message that replaces history (summarization_middleware):
 #: what the summarized part of the CURRENT turn was, so the policy's
 #: private-read walk (app.policy.private_reads) can still judge it once the

@@ -457,3 +457,11 @@ Mock-only harness tasks (CI, no model judgement): **M-RETRY** (a scripted tool e
 - **Q-S0-3**: Build the per-run trace page (FR-084) in Slice 0, or rely on the steps section (D8) plus the API until 007's Improve tab needs it?
 - **Q-S0-4**: Which model is "the real model" for the recorded baseline: the configured default (today a hosted model), and should the eval also be run on the "fast" model as a second column?
 - **Q-S0-5**: Is $5 the right default ceiling for one real-model run (FR-078)? The 2026-10-24 baseline cost is in research.md R13.
+
+**Answers (owner: take the recommended defaults; recorded 2026-11-13, details in `slice0-as-built.md`)**:
+
+- **Q-S0-1**: Yes. `write_todos` is bound in every mode (flash, thinking, pro, ultra, scheduled runs); the prompt keeps "skip it for one- or two-step requests". Held by eval task M-FLASH.
+- **Q-S0-2**: The recommended split. `task` stays Tier 3. A new `research` tool delegates to a read-only web researcher (tools: `web_search`, `web_fetch`, `image_search` only): Tier 2 while the turn has read no private data, Tier 3 (a card) after a private read. Reverting is one rule line (`research` → `tier: 3`).
+- **Q-S0-3**: Yes, built: `/workspace/traces/<run id>`, reached from "Open trace" under each answer and from Settings → Activity log.
+- **Q-S0-4**: The configured default model (gpt-5), pro mode, T08 in ultra. A fast-model column is optional (`EVAL_MODEL_NAME`) and not part of the gate.
+- **Q-S0-5**: Yes, $5 (`EVAL_BUDGET_USD`). An unknown trial cost counts at the task's estimate, so the cap holds.

@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -69,6 +70,68 @@ MOCK_WEB = [
 ]
 
 
+#: Wall-clock limit per task (owner rule, 2026-11-13): 300 s unless the task's
+#: `budget.seconds` says otherwise, never more than 600 s, enforced by the
+#: harness whatever the gateway does.
+DEFAULT_TASK_SECONDS = 300
+MAX_TASK_SECONDS = 600
+#: A run with no new journal event for this long is stalled and stopped.
+#: Not 60: one high-effort model call on a long context can pass a minute.
+STALL_SECONDS = 120
+#: ... except while a delegation or coding job it started is still out: the
+#: lead writes nothing until its result returns (the research subagent's own
+#: limit is 240 s). The wall clock still bounds it.
+LONG_TOOL_STALL_SECONDS = 300
+LONG_TOOLS = frozenset({"task", "research", "code_job"})
+ACTIVE = ("pending", "running")
+
+#: The provider SDK's default key variable, by the model class's package. A
+#: key named in the model's config (`$VAR`) is passed too; nothing else is.
+PROVIDER_KEYS = {
+    "langchain_openai": ("OPENAI_API_KEY",),
+    "langchain_anthropic": ("ANTHROPIC_API_KEY",),
+    "langchain_google_genai": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "langchain_deepseek": ("DEEPSEEK_API_KEY",),
+}
+#: Endpoint settings, not secrets: passed when the env file has them.
+ENDPOINT_VARS = frozenset({"OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL"})
+SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|COOKIE|SESSION|AUTH", re.I)
+
+
+def task_seconds(task: dict) -> float:
+    """The task's wall-clock limit: budget.seconds (default 300), capped at 600."""
+    budget = (task.get("budget") or {}).get("seconds")
+    return float(min(float(budget) if budget else DEFAULT_TASK_SECONDS, MAX_TASK_SECONDS))
+
+
+def needed_keys(models: list[dict] | None, tools: list[dict] | None) -> set[str]:
+    """The secrets a real-mode trial needs: its model's key (the SDK default
+    for the model class, and any `$VAR` its config names), and JINA_API_KEY
+    only when a web_fetch tool explicitly selects that reader."""
+    names: set[str] = set()
+    for model in models or []:
+        use = str(model.get("use") or "")
+        names.update(PROVIDER_KEYS.get(use.split(":", 1)[0].split(".", 1)[0], ()))
+        names.update(re.findall(r"\$([A-Z][A-Z0-9_]*)", json.dumps(model)))
+    for tool in tools or []:
+        if tool.get("name") == "web_fetch" and str(tool.get("provider") or "") == "jina":
+            names.add("JINA_API_KEY")
+    return names
+
+
+def trial_process_env(parent: dict[str, str], env_file: dict[str, str], needed: set[str]) -> tuple[dict[str, str], list[str]]:
+    """The real-mode gateway's environment: the caller's, minus OMNI_HARNESS_*
+    and every secret-looking variable it does not need; from the env file,
+    only the needed keys (and endpoint settings). Returns the env and the
+    NAMES of the secrets passed (never their values)."""
+    env = {k: v for k, v in parent.items() if not k.startswith("OMNI_HARNESS_") and not (SECRET_NAME.search(k) and k not in needed)}
+    for key, value in env_file.items():
+        if key in needed or key in ENDPOINT_VARS:
+            env[key] = value
+    passed = sorted(k for k in env if k in needed)
+    return env, passed
+
+
 def load_tasks(selected: list[str] | None = None) -> list[dict]:
     tasks = []
     for path in sorted(TASKS_DIR.glob("*.yaml")):
@@ -90,6 +153,11 @@ def build_config(root: Path, task: dict, mode: str, *, model_config: list[dict] 
     config["database"] = {"backend": "sqlite", "sqlite_dir": str(root / "data")}
     config["policy"] = {"enabled": True, "state_dir": str(root / "policy")}
     tools = [t for t in config["tools"] if t["name"] not in ("web_search", "web_fetch", "image_search")] if mode == "mock" else list(config["tools"])
+    if mode == "real":
+        # The page reader is the built-in fetcher through the fetch egress
+        # proxy (fetch_egress.py), as on the live stack; never a fallback
+        # reader the env happens to have a key for.
+        tools = [{**t, "jina_fallback": False} if t.get("name") == "web_fetch" and str(t.get("provider") or "builtin") == "builtin" else t for t in tools]
     if mode == "mock":
         tools = MOCK_WEB + tools
         config["models"] = [{"name": "default", "display_name": "Scripted", "use": "omni_eval.scripted:ScriptedChatModel", "model": "scripted", "supports_thinking": True, "supports_reasoning_effort": True, "supports_vision": False}]
@@ -123,6 +191,7 @@ class Trial:
     env: dict = field(default_factory=dict)
     proc: Any = None
     base_url: str | None = None
+    passed_keys: list[str] = field(default_factory=list)
 
 
 def _free_port() -> int:
@@ -184,10 +253,12 @@ def _wire_real_executor() -> None:
 
 
 @contextlib.contextmanager
-def gateway(task: dict, mode: str, *, model_config: list[dict] | None = None, env_extra: dict | None = None, keep: Path | None = None) -> Iterator[Trial]:
+def gateway(task: dict, mode: str, *, model_config: list[dict] | None = None, env_extra: dict | None = None, keep: Path | None = None, fetch_proxy: str | None = None) -> Iterator[Trial]:
     root = Path(tempfile.mkdtemp(prefix=f"omni-eval-{task['id']}-"))
     config_path = build_config(root, task, mode, model_config=model_config)
     env = trial_env(root, config_path)
+    if fetch_proxy:
+        env["OMNI_HARNESS_FETCH_EGRESS_PROXY"] = fetch_proxy
     trial = Trial(task=task, mode=mode, root=root, env=env)
     try:
         if mode == "mock":
@@ -252,10 +323,12 @@ def _subprocess(trial: Trial, env_extra: dict):
     import httpx
 
     port = _free_port()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("OMNI_HARNESS_")}
-    env.update(env_extra)
+    config = yaml.safe_load(Path(trial.env["OMNI_HARNESS_CONFIG_PATH"]).read_text())
+    env, trial.passed_keys = trial_process_env(dict(os.environ), env_extra, needed_keys(config.get("models"), config.get("tools")))
     env.update(trial.env)
-    env["PYTHONPATH"] = os.pathsep.join([str(BACKEND), str(EVAL_DIR)])
+    # This checkout's code, ahead of whatever an editable install in the venv
+    # points at (another checkout's packages would be scored instead).
+    env["PYTHONPATH"] = os.pathsep.join([str(BACKEND), str(BACKEND / "packages" / "harness"), str(BACKEND / "packages" / "session_watcher"), str(EVAL_DIR)])
     log = open(trial.root / "gateway.log", "w")  # noqa: SIM115 - closed below
     proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.gateway.app:app", "--host", "127.0.0.1", "--port", str(port)], cwd=str(trial.root), env=env, stdout=log, stderr=subprocess.STDOUT)
     trial.proc = proc
@@ -272,7 +345,9 @@ def _subprocess(trial: Trial, env_extra: dict):
                 time.sleep(0.5)
         else:
             raise RuntimeError("the eval gateway did not start within 90 s")
-        with httpx.Client(base_url=trial.base_url, timeout=900) as client:
+        # Runs are started in the background and watched (run_trial), so no
+        # request waits long; a gateway that stops answering fails the trial.
+        with httpx.Client(base_url=trial.base_url, timeout=60) as client:
             trial.client = client
             _login(client, first=True)
             yield trial
@@ -315,14 +390,81 @@ def _project(client: Any, name: str) -> dict | None:
     return None
 
 
-def _wait_idle(client: Any, thread_id: str, timeout: float) -> None:
-    deadline = time.time() + timeout
+class Stop(Exception):
+    """The trial is stopped: timeout, stall or a pause nobody will answer."""
+
+
+def _activity(client: Any, thread_id: str, runs: list[dict]) -> tuple[int, bool]:
+    """(journal events so far over the active runs, whether a delegation or
+    coding job the lead started is still out)."""
+    count = 0
+    outstanding = False
+    for run in runs:
+        resp = client.get(f"/api/threads/{thread_id}/runs/{run['run_id']}/events", params={"limit": 2000})
+        events = resp.json() if resp.status_code == 200 else []
+        count += len(events)
+        started: set[str] = set()
+        finished: set[str] = set()
+        for event in events:
+            content = event.get("content") if isinstance(event.get("content"), dict) else {}
+            if event.get("event_type") == "llm.ai.response":
+                started.update(str(c.get("id")) for c in content.get("tool_calls") or [] if c.get("name") in LONG_TOOLS)
+            elif event.get("event_type") == "llm.tool.result":
+                finished.add(str(content.get("tool_call_id")))
+        outstanding = outstanding or bool(started - finished)
+    return count, outstanding
+
+
+def _cancel_active(client: Any, thread_id: str) -> None:
+    with contextlib.suppress(Exception):
+        for run in client.get(f"/api/threads/{thread_id}/runs").json():
+            if run.get("status") in ACTIVE:
+                client.post(f"/api/threads/{thread_id}/runs/{run['run_id']}/cancel", params={"action": "interrupt"})
+
+
+def _watch(client: Any, thread_id: str, deadline: float, *, stall: float | None = None) -> None:
+    """Wait until no run of the thread is active (resume runs included).
+
+    Raises Stop on the task's wall clock ("timeout") or when the active runs
+    write no journal event for `stall` seconds ("stalled"); the active runs are
+    cancelled first. Never waits past the deadline, whatever the gateway does."""
+    stall = float(os.environ.get("EVAL_STALL_SECONDS") or STALL_SECONDS) if stall is None else stall
+    last_count = -1
+    last_change = time.time()
     time.sleep(0.2)
-    while time.time() < deadline:
-        runs = client.get(f"/api/threads/{thread_id}/runs").json()
-        if not any(r.get("status") in ("pending", "running") for r in runs):
+    while True:
+        now = time.time()
+        if now >= deadline:
+            _cancel_active(client, thread_id)
+            raise Stop("timeout: the task's wall-clock limit was reached")
+        runs = [r for r in client.get(f"/api/threads/{thread_id}/runs").json() if r.get("status") in ACTIVE]
+        if not runs:
             return
+        count, outstanding = _activity(client, thread_id, runs)
+        if count != last_count:
+            last_count, last_change = count, now
+        limit = max(stall, LONG_TOOL_STALL_SECONDS) if outstanding else stall
+        if now - last_change > limit:
+            _cancel_active(client, thread_id)
+            raise Stop(f"stalled: no activity for {int(limit)} s")
         time.sleep(0.5)
+
+
+def _paused(client: Any, thread_id: str, task: dict, seen: dict[str, dict]) -> str | None:
+    """Why the thread is waiting on the person, if it is and nobody will
+    answer: a question (ask_clarification), or a card the task's confirm
+    policy does not answer (a task whose checks expect a card is not paused,
+    it is done)."""
+    values = client.get(f"/api/threads/{thread_id}/state").json()
+    messages = (values.get("values", values) or {}).get("messages") or []
+    last = messages[-1] if messages else {}
+    if isinstance(last, dict) and last.get("type") == "tool" and last.get("name") == "ask_clarification":
+        return "paused: waiting on clarification"
+    expects_card = any((next(iter(c)) if isinstance(c, dict) else c) in ("card_raised", "open_card") for c in task.get("checks") or [])
+    cards = _open_cards(client, thread_id)
+    if cards and not expects_card and task.get("confirm", "none") in (None, "none"):
+        return f"paused: waiting on a card ({', '.join(sorted({c.get('tool_name') or '?' for c in cards}))})"
+    return None
 
 
 def _open_cards(client: Any, thread_id: str) -> list[dict]:
@@ -330,7 +472,7 @@ def _open_cards(client: Any, thread_id: str) -> list[dict]:
     return [a for a in body.get("actions") or [] if a.get("thread_id") == thread_id]
 
 
-def _answer_cards(client: Any, thread_id: str, policy: str, seen: dict[str, dict], timeout: float) -> None:
+def _answer_cards(client: Any, thread_id: str, policy: str, seen: dict[str, dict], deadline: float) -> None:
     """Apply the task's confirm policy until no card it covers is open (each
     round bounded). Only ever inside the isolated gateway."""
     if policy in (None, "none"):
@@ -370,7 +512,7 @@ def _answer_cards(client: Any, thread_id: str, policy: str, seen: dict[str, dict
                     seen[card["id"]]["answered"] = "confirm"
             if not handled and not cards:
                 return
-        _wait_idle(client, thread_id, timeout)
+        _watch(client, thread_id, deadline)
 
 
 def _confirm(client: Any, card: dict) -> None:
@@ -386,8 +528,8 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
     stubs.reset()
     if mode == "mock":
         scripted.SCRIPT.load(task.get("mock"))
-    budget = task.get("budget") or {}
-    timeout = float(budget.get("seconds", 600 if mode == "real" else 60))
+    limit = task_seconds(task) if (task.get("budget") or {}).get("seconds") or mode == "real" else 60.0
+    deadline = started + limit
     with gateway(task, mode, **gateway_kwargs) as trial:
         client = trial.client
         _seed(client, task.get("fixtures") or {})
@@ -396,17 +538,26 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
         turns = task["prompt"] if isinstance(task["prompt"], list) else [task["prompt"]]
         seen: dict[str, dict] = {}
         error = None
+        stopped = None
         for text in turns:
             body = {"assistant_id": "lead_agent", "input": {"messages": [{"type": "human", "content": [{"type": "text", "text": text}]}]}, "config": {"recursion_limit": 200}, "context": context}
             try:
-                resp = client.post(f"/api/threads/{thread_id}/runs/wait", json=body, timeout=timeout)
+                # Started in the background and watched, never waited on:
+                # a run that pauses, stalls or overruns stops the trial.
+                resp = client.post(f"/api/threads/{thread_id}/runs", json=body)
                 if resp.status_code != 200:
                     error = f"run failed: HTTP {resp.status_code}: {resp.text[:200]}"
+                    break
+                _watch(client, thread_id, deadline)
+                _answer_cards(client, thread_id, task.get("confirm", "none"), seen, deadline)
+                _watch(client, thread_id, deadline)
+                stopped = _paused(client, thread_id, task, seen)
+            except Stop as stop:
+                stopped = str(stop)
             except Exception as exc:  # noqa: BLE001
                 error = f"run failed: {type(exc).__name__}: {exc}"[:300]
-            _wait_idle(client, thread_id, timeout)
-            _answer_cards(client, thread_id, task.get("confirm", "none"), seen, timeout)
-            _wait_idle(client, thread_id, timeout)
+            if stopped or error:
+                break
         time.sleep(0.3)  # the last trace write is fire-and-forget
         state = client.get(f"/api/threads/{thread_id}/state").json()
         values = state.get("values", state) or {}
@@ -443,9 +594,10 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
         checks = run_checks(outcome, specs, mode=mode)
         if error and not any(c["name"] == "run_ok" for c in checks):
             checks.append({"name": "run_ok", "pass": False, "reason": error, "strict": False})
-        tokens = {"input": sum((t.get("tokens") or {}).get("input", 0) for t in traces), "output": sum((t.get("tokens") or {}).get("output", 0) for t in traces)}
-        costs = [t.get("cost_usd") for t in traces]
-        cost = round(sum(c for c in costs if c), 6) if traces and all(c is not None for c in costs) else (None if mode == "real" else 0.0)
+        if stopped and not (stopped.startswith("paused") and task.get("allow_pause")):
+            reason = stopped + (f" after {int(limit)} s" if stopped.startswith("timeout") else "")
+            checks.append({"name": "run_ok", "pass": False, "reason": reason, "strict": False})
+        tokens, cost, cost_source = trial_cost(client, thread_id, traces, mode=mode, model_config=gateway_kwargs.get("model_config"))
         core = [c for c in checks if not c["strict"]]
         return {
             "id": task["id"],
@@ -457,6 +609,9 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
             "seconds": round(time.time() - started, 1),
             "tokens": tokens,
             "cost_usd": cost,
+            "cost_source": cost_source,
+            "stopped": stopped,
+            "keys_passed": trial.passed_keys,
             "thread_id": thread_id,
             "final": outcome.final[:4000],
             "tools": outcome.names,
@@ -464,6 +619,37 @@ def run_trial(task: dict, mode: str, **gateway_kwargs: Any) -> dict:
             "verification": outcome.final_verification,
             "trace_count": len(traces),
         }
+
+
+def trial_cost(client: Any, thread_id: str, traces: list[dict], *, mode: str, model_config: list[dict] | None) -> tuple[dict, float | None, str | None]:
+    """(tokens, cost in USD, where the cost came from) for one trial.
+
+    1. The run traces (each run's tokens by model at list price): exact per
+       model, and what the trace view shows.
+    2. Otherwise (a trace missing, or a model the price table cannot name):
+       the thread's run totals (/token-usage, written by the run journal) at
+       the configured model's list price, labelled as such.
+    None only when no tokens were counted at all, or the model has no price."""
+    from app.run_history.chat_trace import price_of
+
+    tokens = {"input": sum((t.get("tokens") or {}).get("input", 0) for t in traces), "output": sum((t.get("tokens") or {}).get("output", 0) for t in traces)}
+    costs = [t.get("cost_usd") for t in traces]
+    if traces and all(c is not None for c in costs):
+        return tokens, round(sum(costs), 6), "trace"
+    if mode == "mock":
+        return tokens, 0.0, "scripted"
+    usage = {}
+    with contextlib.suppress(Exception):
+        usage = client.get(f"/api/threads/{thread_id}/token-usage").json()
+    total_in, total_out = int(usage.get("total_input_tokens") or 0), int(usage.get("total_output_tokens") or 0)
+    if total_in or total_out:
+        tokens = {"input": max(tokens["input"], total_in), "output": max(tokens["output"], total_out)}
+    model = str(((model_config or [{}])[0] or {}).get("model") or "")
+    price = price_of(model)
+    if price is None or not (tokens["input"] or tokens["output"]):
+        return tokens, None, None
+    # No cached-token split in the run totals: priced as uncached (an upper bound).
+    return tokens, round((tokens["input"] * price[0] + tokens["output"] * price[2]) / 1e6, 6), f"run totals at {model} list price"
 
 
 def _resolve_answer(task: dict, mode: str) -> list:

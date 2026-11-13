@@ -8,7 +8,8 @@ from typing import override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
+from langchain.agents.middleware.types import hook_config
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
@@ -129,26 +130,43 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         once (spec 009 FR-056/FR-057): the model is told to pick a default and
         continue, or to stop as blocked. Before any work, or the second time in
         a turn, the question goes to the person as usual."""
-        from omniharness.agents.working_loop import NON_EVIDENCE_TOOLS, tool_steps, turn_messages
-
         state = getattr(request, "state", None) or {}
         messages = state.get("messages") if isinstance(state, dict) else None
+        return self._deferral(messages, request.tool_call.get("id", ""), request.tool_call.get("args") or {})
+
+    #: Sent back for a question asked before any work whose kind is
+    #: "ambiguous_requirement" (owner rule, 2026-11-13: a research request is
+    #: researched, not answered with a question). "missing_info" before work
+    #: still goes to the person.
+    AMBIGUOUS_TEXT = (
+        "Not asked: an open word in the request (latest, best, which kind) is not a reason to stop before working. "
+        "Take the most common reading, state it in one line in your reply, and do the work with your read tools. "
+        "Ask only if a required value is missing that no read can find."
+    )
+
+    def _deferral(self, messages: list | None, call_id: str, args: dict | None = None) -> ToolMessage | None:
+        from omniharness.agents.working_loop import NON_EVIDENCE_TOOLS, tool_steps, turn_messages
+
         if not messages:
             return None
         turn = turn_messages(list(messages))
-        call_id = request.tool_call.get("id", "")
         started = [s for s in tool_steps(turn) if s["name"] not in NON_EVIDENCE_TOOLS and s["id"] != call_id and s["ok"] is not None]
-        if not started:
+        ambiguous = str((args or {}).get("clarification_type") or "") == "ambiguous_requirement"
+        if not started and not ambiguous:
             return None
         for message in turn:
             if isinstance(message, ToolMessage) and (message.additional_kwargs or {}).get(self.DEFERRED_MARKER):
                 return None
-        logger.info("Clarification asked mid-task; sent back once with the default rule")
+        logger.info("Clarification sent back once with the default rule (%s)", "mid-task" if started else "ambiguous, before work")
         return ToolMessage(
             content=(
-                "Not asked: work on this task has already started. Do not ask the person to choose mid-task. "
-                "Pick the most sensible default, state the assumption in one line, and continue. If the task truly "
-                "cannot go ahead, stop and say what is done, the exact blocker and what the person needs to do."
+                (
+                    "Not asked: work on this task has already started. Do not ask the person to choose mid-task. "
+                    "Pick the most sensible default, state the assumption in one line, and continue. If the task truly "
+                    "cannot go ahead, stop and say what is done, the exact blocker and what the person needs to do."
+                )
+                if started
+                else self.AMBIGUOUS_TEXT
             ),
             tool_call_id=call_id,
             name="ask_clarification",
@@ -199,6 +217,39 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             update={"messages": [tool_message]},
             goto=END,
         )
+
+    # -- a question that is the reply's ONLY call --------------------------
+    #
+    # ask_clarification is `return_direct`: when it is the only tool call of a
+    # model reply, the agent ends after the tool node whatever the tool
+    # returned. So a mid-task question sent back from wrap_tool_call (below)
+    # ended the run on the "Not asked" result and the task never continued
+    # (eval M-MIDASK passed on its checks while its final reply was empty).
+    # That case is handled here, before the tool node: the "Not asked" result
+    # is added for the call and the model runs again. A question asked
+    # together with other calls goes through the tool node, which loops on
+    # (not every call is return_direct), and is sent back in wrap_tool_call.
+
+    def _defer_sole_question(self, state: dict) -> dict | None:
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        if not isinstance(last, AIMessage) or len(last.tool_calls or []) != 1:
+            return None
+        call = last.tool_calls[0]
+        if call.get("name") != "ask_clarification":
+            return None
+        deferred = self._deferral(messages, call.get("id", ""), call.get("args") or {})
+        if deferred is None:
+            return None
+        return {"jump_to": "model", "messages": [deferred]}
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state: ClarificationMiddlewareState, runtime) -> dict | None:  # noqa: ARG002
+        return self._defer_sole_question(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state: ClarificationMiddlewareState, runtime) -> dict | None:  # noqa: ARG002
+        return self._defer_sole_question(state)
 
     @override
     def wrap_tool_call(

@@ -60,6 +60,9 @@ const verification = {
   evidence_count: 4,
 };
 
+const DISCLOSURE_BLOCK =
+  "\n\nAlso, for the record:\n  - I used code_job with goal=<412 chars>, project_dir='vite-counter'.";
+
 const trace = {
   version: 1,
   run_id: RUN,
@@ -284,8 +287,21 @@ async function mockAll(page: Page, scheme: "light" | "dark") {
           type: "ai",
           id: "a1",
           content:
-            "Here are five picks: [Vetri](https://a.example/1), [Zahav](https://e.example/5).\n\nChecked: 4 of 5 links came from search results.",
-          additional_kwargs: { omniharness_verification: verification },
+            "Here are five picks: [Vetri](https://a.example/1), [Zahav](https://e.example/5).\n\nChecked: 4 of 5 links came from search results." +
+            DISCLOSURE_BLOCK,
+          additional_kwargs: {
+            omniharness_verification: verification,
+            // The policy layer's appended Tier 2 disclosure, marked for display.
+            omniharness_disclosure: {
+              text: DISCLOSURE_BLOCK,
+              items: [
+                {
+                  tool: "code_job",
+                  text: "I used code_job with goal=<412 chars>, project_dir='vite-counter'.",
+                },
+              ],
+            },
+          },
         },
       ],
     },
@@ -392,6 +408,18 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(page.getByTestId("open-trace")).toHaveAttribute(
         "href",
         `/workspace/traces/${RUN}`,
+      );
+      // The disclosure block is a system note under the answer, not the
+      // assistant narrating its tool calls.
+      await expect(page.getByText("Also, for the record")).toHaveCount(0);
+      const note = page.getByTestId("disclosure-note");
+      await expect(note).toContainText("Ran without asking: code_job");
+      const noteToggle = note.getByRole("button");
+      await noteToggle.focus();
+      await page.keyboard.press("Enter");
+      await expect(noteToggle).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByTestId("disclosure-details")).toContainText(
+        "project_dir='vite-counter'",
       );
       await shot(page, `chat-plan-verification-${scheme}`);
       await expectAA(page);

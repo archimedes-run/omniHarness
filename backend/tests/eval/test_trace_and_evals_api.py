@@ -107,7 +107,8 @@ def test_the_evals_api_lists_results_and_the_baseline(tmp_path, monkeypatch) -> 
         client = trial.client
         listing = client.get("/api/evals").json()
         assert [r["id"] for r in listing["runs"]] == [result["id"]]
-        assert listing["baseline"]["passed"] == 7 and listing["baseline"]["total"] == 18
+        # main 92f6827, measured with this harness (core 5/18, strict 3/18)
+        assert listing["baseline"]["passed"] == 5 and listing["baseline"]["strict_passed"] == 3 and listing["baseline"]["total"] == 18
         detail = client.get(f"/api/evals/{result['id']}").json()
         assert detail["tasks"][0]["checks"][0]["reason"] == "5 links"
         assert "final" not in detail["tasks"][0]

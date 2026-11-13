@@ -207,6 +207,14 @@ def presented(o: Outcome, glob: str = "*") -> tuple[bool, str]:
     return bool(hits), f"presented {hits[:3]}" if hits else f"no presented file matches {glob}"
 
 
+def auto_presented(o: Outcome, glob: str = "*") -> tuple[bool, str]:
+    """The final reply's record lists the file as presented by the server
+    (VerificationMiddleware), not by a present_files call."""
+    shown = ((o.final_verification or {}).get("auto_presented")) or []
+    hits = [a for a in shown if fnmatch.fnmatch(Path(a).name, glob)]
+    return bool(hits), f"auto-presented {hits[:3]}" if hits else f"no auto-presented file matches {glob} (record: {shown[:3]})"
+
+
 def answer_contains(o: Outcome, values: list[str] | None = None, any_of: list[str] | None = None, min_count: int | None = None) -> tuple[bool, str]:
     text = o.final.lower()
     if any_of:
@@ -330,7 +338,14 @@ def message_count(o: Outcome, name: str, n: int) -> tuple[bool, str]:
 
 def deferred_question(o: Outcome) -> tuple[bool, str]:
     hits = [s for s in o.steps if s["name"] == "ask_clarification" and (s.get("output") or "").startswith("Not asked:")]
-    return bool(hits), f"{len(hits)} mid-task question(s) sent back"
+    if not hits:
+        return False, "no mid-task question was sent back"
+    # Sent back AND carried on: the run must reach a reply after the "Not
+    # asked" result (it used to end on it, return_direct).
+    last = o.messages[-1] if o.messages else {}
+    if (last.get("type") or last.get("role")) != "ai" or last.get("tool_calls") or not text_of(last).strip():
+        return False, f"{len(hits)} question(s) sent back, but the run ended without a reply after it"
+    return True, f"{len(hits)} mid-task question(s) sent back, then a reply"
 
 
 def style_fixed(o: Outcome, fix: str) -> tuple[bool, str]:
@@ -355,6 +370,7 @@ CHECKS: dict[str, Callable[..., tuple[bool, str]]] = {
         ledger_has,
         file_in_outputs,
         presented,
+        auto_presented,
         answer_contains,
         error_then_changed_success,
         blocker_stated,

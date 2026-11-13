@@ -58,6 +58,11 @@ MENU_RE = re.compile(
     r"(reply|answer) (with )?(yes|no|a|b|1|2)\b|\b(yes/no|y/n)\b|pick (one|an option)|choose (one|an option|between))",
     re.I,
 )
+#: A line that is only an offer: it starts like one and ends in a question.
+OFFER_LINE_RE = re.compile(
+    r"(?i)^\s*(?:[-*]|\d+[.)])?\s*(?:\*\*)?(?:suggestion|next steps?|tip)?(?:\*\*)?\s*:?\s*"
+    r"(?:would you like me|do you want me|want me to|let me know if|i can also\b).*\?\s*(?:\*\*)?\s*$"
+)
 #: Tool-call narration (owner rule: replies do not narrate tool calls).
 NARRATION_RE = re.compile(
     r"\b(i\s+(used|called|ran|invoked|executed)\s+(the\s+)?`?(write_file|read_file|str_replace|web_search|web_fetch|image_search|"
@@ -362,17 +367,30 @@ def strip_trailing_menu(reply: str, *, min_kept: int = 160) -> tuple[str, bool]:
     """Remove a trailing offer/menu paragraph (and an options list right after
     it) when enough of the reply stays to stand on its own. Returns (text,
     changed). A reply that IS only a question is left alone."""
-    if not has_menu(reply):
-        return reply, False
-    paragraphs = _paragraphs(reply)
-    cut = len(paragraphs) - 1
-    # An options list after the question: drop it too.
-    if cut >= 1 and re.match(r"^\s*([-*]|\d+[.)]|[a-c][.)])\s+", paragraphs[cut]) and MENU_RE.search(paragraphs[cut - 1]):
-        cut -= 1
-    kept = "\n\n".join(paragraphs[:cut]).rstrip()
-    if len(kept) < min_kept:
-        return reply, False
-    return kept, True
+    text, changed = reply, False
+    # A reply can end with more than one offer ("...planting window?" then
+    # "Would you like me to: - ..."): each trailing one goes, up to three.
+    for _ in range(3):
+        if not has_menu(text):
+            break
+        paragraphs = _paragraphs(text)
+        cut = len(paragraphs) - 1
+        # An options list after the question: drop it too.
+        if cut >= 1 and re.match(r"^\s*([-*]|\d+[.)]|[a-c][.)])\s+", paragraphs[cut]) and MENU_RE.search(paragraphs[cut - 1]):
+            cut -= 1
+        kept = "\n\n".join(paragraphs[:cut]).rstrip()
+        if len(kept) < min_kept:
+            # The offer is inside the last block (a list whose items end in
+            # "Suggestion: Want me to...?"): drop only the offer lines.
+            lines = paragraphs[-1].splitlines()
+            content = [ln for ln in lines if not OFFER_LINE_RE.match(ln)]
+            if len(content) == len(lines) or not content:
+                break
+            kept = "\n\n".join([*paragraphs[:-1], "\n".join(content)]).rstrip()
+            if len(kept) < min_kept:
+                break
+        text, changed = kept, True
+    return text, changed
 
 
 def narrates_tools(reply: str) -> bool:
@@ -461,3 +479,34 @@ def plan_record_text(record: dict) -> str:
         lines.extend(f"- {b['tool']}: {b.get('ref') or ''}: {b.get('error') or ''}" for b in blockers)
     lines.append("</plan_record>")
     return "\n".join(lines)
+
+
+#: The file tools whose successful calls leave a file the person asked for.
+FILE_WRITE_TOOLS = frozenset({"write_file", "str_replace"})
+OUTPUTS_PREFIX = "/mnt/user-data/outputs/"
+
+
+def unpresented_outputs(messages: list[Any], artifacts: list[str] | None, outputs_path: str | None) -> list[str]:
+    """Files this turn wrote into outputs/ (by a successful write_file or
+    str_replace) that still exist and were not presented. The final reply
+    presents them (FR-018, owner rule: a file the agent writes for the person
+    is shown in the file panel, never left as a path in the reply)."""
+    if not outputs_path:
+        return []
+    from pathlib import Path
+
+    root = Path(outputs_path).resolve()
+    shown = set(artifacts or [])
+    out: list[str] = []
+    for step in tool_steps(turn_messages(messages)):
+        if step["name"] not in FILE_WRITE_TOOLS or step["ok"] is not True:
+            continue
+        path = str((step["args"] or {}).get("path") or "")
+        if not path.startswith(OUTPUTS_PREFIX) or path in shown or path in out:
+            continue
+        relative = path[len(OUTPUTS_PREFIX) :]
+        actual = (root / relative).resolve()
+        if not actual.is_relative_to(root) or not actual.is_file():
+            continue
+        out.append(path)
+    return out

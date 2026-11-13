@@ -630,11 +630,27 @@ class PolicyMiddleware(AgentMiddleware):
         if message is None:
             return response  # still mid-loop; the user has not been spoken to yet
 
-        disclosed = self.ledger.apply(str(message.content or ""))
+        original = str(message.content or "")
+        disclosed = self.ledger.apply(original)
         if disclosed != message.content:
             message.content = disclosed
+            self._mark_disclosure(message, original, disclosed)
         self.ledger.clear()
         return response
+
+    def _mark_disclosure(self, message: Any, original: str, disclosed: str) -> None:
+        """Display data on the reply (DISCLOSURE_MARKER): which part of its
+        text is the appended block, and the records it lists. Added after the
+        decision, read by nothing here; the text above is unchanged."""
+        from omniharness.agents.turns import DISCLOSURE_MARKER
+
+        head = original.rstrip()
+        if not disclosed.startswith(head):
+            return
+        items = [{"tool": r.tool_name, "text": r.sentence()} for r in self.ledger.records if not r.disclosed]
+        if not items or not isinstance(getattr(message, "additional_kwargs", None), dict):
+            return
+        message.additional_kwargs[DISCLOSURE_MARKER] = {"text": disclosed[len(head) :], "items": items}
 
     @staticmethod
     def _final_message(response: Any) -> Any:

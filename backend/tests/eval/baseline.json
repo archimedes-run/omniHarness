@@ -1,44 +1,56 @@
 {
- "_comment": "The latest ACCEPTED real-model result (spec 009 FR-077): a task that passed here and fails in a new real-model run is a regression and blocks the merge (D10). Recorded before any Slice 0 change. Replace only with a result the owner accepts.",
- "id": "baseline-2026-10-25-e31fd85",
- "date": "2026-10-24/25",
- "code": "main e31fd85 (#148 + #149)",
+ "_comment": "The latest ACCEPTED real-model result (spec 009 FR-077). A task that passed here and fails in a new real-model run is a regression (D10). Replace only with a result the owner accepts. `history` keeps the earlier baselines.",
+ "id": "baseline-2026-11-13-92f6827",
+ "date": "2026-11-13",
+ "code": "main 92f6827 (#170, Slice 1 merged), before any Slice 0 change",
  "model": "configured default (gpt-5), pro mode, T08 ultra",
+ "harness": "this suite (backend/tests/eval), real mode: one run of all 18 tasks, plus a 3-trial rerun of T01, T02, T06, T08, T18",
+ "result_files": [
+  "eval/results/20261113T043002-real-92f6827.json",
+  "eval/results/20261113T045457-real-92f6827.json"
+ ],
  "score": {
-  "core": "7/18",
-  "strict": "4/18"
+  "core": "5/18",
+  "strict": "3/18"
  },
- "cost_usd": 0.97,
+ "cost_usd": null,
+ "cost_note": "not recorded: main has no run trace, so the harness had no token count",
  "tasks": {
   "T01": {
-   "core": true,
+   "core": false,
    "strict": false,
-   "note": "strict fail: no write_todos"
+   "note": "core fails ONLY on trace_recorded (main has no run trace); strict: no checklist, no Checked line | checklist_before_action: no checklist; verified_section: no Checked line; trace_recorded: no trace recorded",
+   "trials": "0/3",
+   "trials_core": false
   },
   "T02": {
-   "core": true,
-   "strict": true,
-   "note": "was fail on 2026-10-24"
+   "core": false,
+   "strict": false,
+   "note": "asks which React release is meant instead of researching | min_links: 0 link(s), 0 host(s) (need 3/2); no_clarification: asked: Do you want the main features of the latest major version React 19 overall, or specifically the newest point release (cu",
+   "trials": "1/3",
+   "trials_core": false
   },
   "T03": {
    "core": false,
    "strict": false,
-   "note": "asked to authorize access; no calendar read (live)"
+   "note": "tool_called: calendar_read called 0x (need 1); answer_contains: 0/3 of ['Team standup', 'Dentist appointment', 'Quarterly planning review', 'Gym with Sam', 'Call with the landlord', 'Book club'] found; no_clarification: "
   },
   "T04": {
    "core": false,
    "strict": false,
-   "note": "one permission question, no reads (live)"
+   "note": "tool_called: calendar_read called 0x (need 1); tool_called: mail_read called 0x (need 1); tool_called: ledger_read called 0x (need 1); answer_contains: 0/1 of ['Team standup', 'Dentist appointment', 'Quarterly planning r"
   },
   "T05": {
    "core": false,
    "strict": false,
-   "note": "asked for the 'needs a reply' rule; no mail read (live)"
+   "note": "tool_called: mail_read called 0x (need 1); answer_contains: 0/1 of ['Saturday dinner', 'still on for 7', 'Priya'] found; answer_contains: 0/1 of ['Q3 budget', 'budget draft', 'Dana'] found; no_clarification: asked: To ma"
   },
   "T06": {
-   "core": true,
-   "strict": true,
-   "note": "menu regex false positive on 'Option A/B' inside the itinerary"
+   "core": false,
+   "strict": false,
+   "note": "ends with an offer/menu (1/3 pass) | min_links: 0 link(s), 0 host(s) (need 3/0); no_clarification: asked: Great choice. What vibe should the day lean into? Pick one (or mix two) so I can tailor the plan and links: \n- Cozy cafe",
+   "trials": "1/3",
+   "trials_core": false
   },
   "T07": {
    "core": true,
@@ -48,57 +60,197 @@
   "T08": {
    "core": false,
    "strict": false,
-   "note": "7 task calls all carded; a confirmed subagent hung 900 s"
+   "note": "never delegates (needs 2); each trial ~900 s: web_fetch fell back to a paid reader that returned 402 in the eval environment, then the lead asked a question | tool_called: delegation called 1x (need 2); min_links: 0 link(s), 0 host(s) (need 3/0)",
+   "trials": "0/3",
+   "trials_core": false
   },
   "T09": {
-   "core": false,
-   "strict": false,
-   "note": "ledger_read first made the write content-originated: a card"
+   "core": true,
+   "strict": true,
+   "note": ""
   },
   "T10": {
    "core": true,
    "strict": false,
-   "note": "strict fail: no write_todos"
+   "note": "checklist_before_action: no checklist; verified_section: no Checked line"
   },
   "T11": {
    "core": false,
    "strict": false,
-   "note": "asked for the exact goal date; no card"
+   "note": "card_raised: 0 ledger_apply card(s) raised; ledger_has: project 'Eval Kitchen Reno' not found; resumed: 0 resume run(s); verified_section: no Checked line"
   },
   "T12": {
-   "core": false,
-   "strict": false,
-   "note": "2 links, 3 open cards, a mid-task question"
+   "core": true,
+   "strict": true,
+   "note": ""
   },
   "T13": {
    "core": false,
    "strict": false,
-   "note": "asked instead of correcting the URL"
+   "note": "web_fetch had no fetch proxy in the eval environment (fallback reader returned 402) | answer_contains: missing ['0.28.1']"
   },
   "T14": {
    "core": false,
    "strict": false,
-   "note": "option menu instead of a stated blocker"
+   "note": "blocker_stated: blocker=no needs(connect|set up|integration|enable|install|add)=no"
   },
   "T15": {
    "core": true,
    "strict": false,
-   "note": "strict fail: no 'Checked' line"
+   "note": "verified_section: no Checked line"
   },
   "T16": {
    "core": false,
    "strict": false,
-   "note": "hand-written 'simulated' dist and a success claim"
+   "note": "blocker_stated: blocker=no needs(container|sandbox)=no"
   },
   "T17": {
    "core": false,
    "strict": false,
-   "note": "multi-part question"
+   "note": "blocker_stated: blocker=no needs(automation|schedul|settings|rule)=no; no_clarification: asked: I can set this up \u2014 a couple quick choices to confirm: 1) What timezone should 9:00 AM use? 2) Where should I deliver th"
   },
   "T18": {
-   "core": true,
-   "strict": true,
-   "note": ""
+   "core": false,
+   "strict": false,
+   "note": "ends with \"Would you like me to...?\" every trial (also 2/3 on e31fd85) | no_menu: reply ends with an offer or menu",
+   "trials": "0/3",
+   "trials_core": false
   }
- }
+ },
+ "gate": {
+  "rule": "Slice 0 merges only when the real-model run beats this baseline (core > 5/18 AND strict > 3/18) AND every task in must_pass passes. Tasks in flaky get 3 trials; a majority (2 of 3) counts as a pass. A must_pass task that is not flaky is judged on a single run.",
+  "beat": {
+   "core": 5,
+   "strict": 3,
+   "total": 18
+  },
+  "must_pass": [
+   "T01",
+   "T02",
+   "T06",
+   "T07",
+   "T09",
+   "T10",
+   "T12",
+   "T15",
+   "T18"
+  ],
+  "must_pass_source": "the union of the tasks that passed (core) in the 2026-10-25 baseline (T01, T02, T06, T07, T10, T15, T18) and in this run (T07, T09, T10, T12, T15)",
+  "flaky": [
+   "T01",
+   "T02",
+   "T06",
+   "T08",
+   "T18"
+  ],
+  "flaky_trials": 3,
+  "majority": 2
+ },
+ "history": [
+  {
+   "id": "baseline-2026-10-25-e31fd85",
+   "date": "2026-10-24/25",
+   "code": "main e31fd85 (#148 + #149)",
+   "model": "configured default (gpt-5), pro mode, T08 ultra",
+   "score": {
+    "core": "7/18",
+    "strict": "4/18"
+   },
+   "cost_usd": 0.97,
+   "tasks": {
+    "T01": {
+     "core": true,
+     "strict": false,
+     "note": "strict fail: no write_todos"
+    },
+    "T02": {
+     "core": true,
+     "strict": true,
+     "note": "was fail on 2026-10-24"
+    },
+    "T03": {
+     "core": false,
+     "strict": false,
+     "note": "asked to authorize access; no calendar read (live)"
+    },
+    "T04": {
+     "core": false,
+     "strict": false,
+     "note": "one permission question, no reads (live)"
+    },
+    "T05": {
+     "core": false,
+     "strict": false,
+     "note": "asked for the 'needs a reply' rule; no mail read (live)"
+    },
+    "T06": {
+     "core": true,
+     "strict": true,
+     "note": "menu regex false positive on 'Option A/B' inside the itinerary"
+    },
+    "T07": {
+     "core": true,
+     "strict": true,
+     "note": ""
+    },
+    "T08": {
+     "core": false,
+     "strict": false,
+     "note": "7 task calls all carded; a confirmed subagent hung 900 s"
+    },
+    "T09": {
+     "core": false,
+     "strict": false,
+     "note": "ledger_read first made the write content-originated: a card"
+    },
+    "T10": {
+     "core": true,
+     "strict": false,
+     "note": "strict fail: no write_todos"
+    },
+    "T11": {
+     "core": false,
+     "strict": false,
+     "note": "asked for the exact goal date; no card"
+    },
+    "T12": {
+     "core": false,
+     "strict": false,
+     "note": "2 links, 3 open cards, a mid-task question"
+    },
+    "T13": {
+     "core": false,
+     "strict": false,
+     "note": "asked instead of correcting the URL"
+    },
+    "T14": {
+     "core": false,
+     "strict": false,
+     "note": "option menu instead of a stated blocker"
+    },
+    "T15": {
+     "core": true,
+     "strict": false,
+     "note": "strict fail: no 'Checked' line"
+    },
+    "T16": {
+     "core": false,
+     "strict": false,
+     "note": "hand-written 'simulated' dist and a success claim"
+    },
+    "T17": {
+     "core": false,
+     "strict": false,
+     "note": "multi-part question"
+    },
+    "T18": {
+     "core": true,
+     "strict": true,
+     "note": ""
+    }
+   },
+   "superseded_by": "baseline-2026-11-13-92f6827",
+   "note": "7/18 on e31fd85; T18 failed 2 of 3 on a later rerun of e31fd85, so its pass here was a lucky trial"
+  }
+ ]
 }

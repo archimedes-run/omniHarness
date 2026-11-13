@@ -14,6 +14,10 @@ gate sends the model back, this hook does not run for that message.
    results and checklist (working_loop.build_verification_record), never from
    the reply's claims. The chat shows it as a Verified/Unverified badge; the
    per-run trace and the eval read it.
+3. Files left unpresented (FR-018, owner rule): a file this turn wrote into
+   outputs/ that is not in the file panel is presented with the reply (the
+   same state update present_files makes), and listed in the record as
+   `auto_presented`.
 
 The record is display and measurement data. No policy decision reads it.
 """
@@ -28,7 +32,7 @@ from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
 from omniharness.agents.thread_state import ThreadState
-from omniharness.agents.working_loop import VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of
+from omniharness.agents.working_loop import VERIFICATION_KEY, build_verification_record, strip_trailing_menu, text_of, unpresented_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +82,20 @@ class VerificationMiddleware(AgentMiddleware):
             return None
         if fixes:
             record["style_fixes"] = fixes
+        try:
+            unshown = unpresented_outputs(messages, state.get("artifacts") or [], (state.get("thread_data") or {}).get("outputs_path"))
+        except Exception:  # noqa: BLE001 - presenting is a convenience; the reply stands without it
+            logger.warning("could not check for unpresented outputs", exc_info=True)
+            unshown = []
+        if unshown:
+            record["auto_presented"] = unshown
         kwargs = {**(last.additional_kwargs or {}), VERIFICATION_KEY: record}
         update: dict[str, Any] = {"additional_kwargs": kwargs}
         if changed:
             update["content"] = _replace_text(last, reply)
         out: dict[str, Any] = {"messages": [last.model_copy(update=update)]}
+        if unshown:
+            out["artifacts"] = unshown
         if last.id:
             out["verifications"] = {last.id: record}
         return out

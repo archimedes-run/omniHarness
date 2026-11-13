@@ -2,7 +2,7 @@
 
 **Supplements**: `spec.md`, `plan.md` and `research.md` of 009-orchestration (branch `009-slice-0-spec`, also carried by PR #154). This file is separate on purpose: it changes none of their text, so it merges cleanly with whichever copy of them lands first. Where it records a decision, that decision answers an open question of `spec.md` ("Open questions (Slice 0)").
 
-**Built on**: main `1dab1e2` (after #155). Branch `009-slice-0-behaviour`.
+**Built on**: main `1dab1e2` (after #155), branch `009-slice-0-behaviour`; rebased onto main `26e371b` (after #170 Slice 1, #171, #172) and finished as branch `009-slice-0-r2`.
 
 ## Owner decisions on the open questions
 
@@ -45,6 +45,22 @@ Live-only: T03, T04 and T05 against the owner's REAL calendar and mail are not r
 
 AgentTrail (open-source, MIT; cited in the owner's brief of 2026-10-19/20 as the reference for coding-session evidence) watches terminal coding agents' session logs: discovery, turn state, tool activity, subagent links, native todos, opt-in hooks for "waiting on you", declared-vs-observed drift. Already in OmniHarness: session_watcher (codex adapter, todo parsing confirmed by tool results), the run store (RunRow tokens/calls/status) and run_events journals (persisted since #155), the encrypted run history for automations (#55), the Activity log. Missing: opt-in hooks (so "waiting on you" is observed, not inferred), declared-vs-observed (the ledger's `declared_files` is unused), and a per-run trace view of chat runs. It is not the per-run trace of this assistant's lead; the owner asked for that view anyway, and Slice 0 builds it (above).
 
+## Round 2 (2026-11-13): finished on main after Slice 1
+
+**Behaviour fixes**
+- *A mid-task question that was "sent back" ended the run.* `ask_clarification` is `return_direct`, so when it was a reply's only call the agent ended after the tool node whatever the middleware returned: the "Not asked, pick a default" result was the last thing in the thread and the task never continued (M-MIDASK passed its checks with an empty final reply). The send-back now happens in `after_model`, before the tool node, and jumps back to the model; `deferred_question` now also requires a reply after it.
+- *Research requests are researched.* A question of kind `ambiguous_requirement` asked before any work is sent back once ("take the most common reading, say which, and do the work"); `missing_info` before work still goes to the person. Owner rule from the baseline's T02 ("do you want the latest major or minor?"). Eval task M-AMBIG.
+- *Offers at the end.* The trailing-offer removal now removes up to three trailing offers and, when the offer is inside the last list ("- Suggestion: Want me to ...?"), only the offer lines. Checked against the baseline's T06 and T18 replies; a content question ("Should I bring ID?") stays.
+- *Files are presented.* A file the turn wrote into `outputs/` (successful `write_file`/`str_replace`) that is not in the file panel is presented with the final reply (the same state update `present_files` makes) and listed as `auto_presented` in the verification record. Eval task M-PRESENT.
+- *No tool narration in the reply.* The "Also, for the record: I used code_job with goal=<n chars>, ..." line is the policy layer's Tier 2 disclosure (FR-039 to FR-041), appended when the reply does not name an action that ran without a card. The guarantee is unchanged: the text is still appended (channels, history, every disclosure test). The policy layer now only ADDS a display marker (`omniharness_disclosure`: the appended block and its records); the chat moves that block out of the answer into a one-line system note under it ("Ran without asking: code_job", details on click). Nothing in the backend reads the marker. **Owner decision point**: removing the disclosure for actions the steps section already shows (code_job) would change a policy output and is not done here.
+
+**Eval harness**
+- Real mode runs the fetch egress proxy: the compose `fetch-egress` service's own local image, entrypoint and Squid config, on its own network, published on 127.0.0.1, started once per run and removed at the end (also on failure and Ctrl-C; a killed run's leftover is removed by label at the next start). If it cannot start or cannot fetch a public page, real mode refuses to run. Each trial's web_fetch has no fallback reader.
+- Only the model's key reaches a trial gateway (the provider SDK's key for the model class, and any `$VAR` its config names; `JINA_API_KEY` only if a web_fetch tool selects that reader); every other secret-looking variable is dropped. The trial gateway imports this checkout's packages (PYTHONPATH), not whatever an editable install points at.
+- Runs start in the background and are watched: a task stops at its wall clock (`budget.seconds`, default 300, cap 600) with "timeout", after 120 s with no journal event with "stalled" (300 s while a delegation or coding job is out; `EVAL_STALL_SECONDS`), and when it waits on a question or an unanswered card with "paused". The baseline's T08 spent 900 s per trial on such a wait.
+- Cost per trial: from the run traces (tokens by model at list price); when a trace is missing or names an unpriced model, from the thread's run totals at the configured model's list price (`cost_source` says which). The journal now records the model id each call was made with, so a reply without a provider model name is still priced.
+- Baseline: `baseline.json` is main `92f6827` measured with this harness (core 5/18, strict 3/18; T01, T02, T06, T08, T18 rerun 3 times); the 7/18 baseline is kept under `history`. Its `gate` holds the owner's rule (beat 5/18 and 3/18; T01, T02, T06, T07, T09, T10, T12, T15, T18 must pass; flaky tasks 3 trials, majority). `make eval` prints the gate; `make eval-gate EVAL_FILES="full.json rerun.json"` judges a full run plus a rerun together.
+
 ## Scores
 
-See "Real-model score" below (filled from the run recorded on this branch).
+Mock: every task passes (see the PR). Real model: run by the owner after the PR is merge-ready.

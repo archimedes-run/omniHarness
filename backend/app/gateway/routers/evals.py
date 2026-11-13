@@ -51,6 +51,8 @@ def _baseline() -> dict | None:
         "cost_usd": raw.get("cost_usd"),
         "seconds": None,
         "regressions": [],
+        # The owner's merge gate (must-pass tasks, scores to beat, trials rule).
+        "gate": raw.get("gate"),
         "tasks": [
             {
                 "id": k,

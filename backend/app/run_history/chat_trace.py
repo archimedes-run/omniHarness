@@ -147,7 +147,9 @@ def build_trace(
         if kind == "llm.ai.response":
             caller = str(meta.get("caller") or "lead_agent")
             usage = meta.get("usage") or {}
-            model = ((content.get("response_metadata") or {}).get("model_name")) or "unknown"
+            # The provider's own name for the model, else the id the call was
+            # made with (journal: ls_model_name), else unknown (no price).
+            model = ((content.get("response_metadata") or {}).get("model_name")) or meta.get("model") or "unknown"
             if usage:
                 llm_calls += 1
                 bucket = by_model.setdefault(model, {"input": 0, "output": 0, "cached": 0})

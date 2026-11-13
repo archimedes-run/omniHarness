@@ -27,7 +27,12 @@ test-serial:
 # default 5). See tests/eval/omni_eval/run.py for EVAL_TASKS, EVAL_TRIALS,
 # EVAL_ENV_FILE.
 eval:
-	PYTHONPATH=.:tests/eval uv run python -m omni_eval.run
+	PYTHONPATH=.:packages/harness:packages/session_watcher:tests/eval uv run python -m omni_eval.run
+
+# The owner's Slice 0 merge gate over one or more real-mode result files (a
+# full run plus a 3-trial rerun of the flaky tasks): EVAL_FILES="a.json b.json".
+eval-gate:
+	PYTHONPATH=.:packages/harness:packages/session_watcher:tests/eval uv run python -m omni_eval.gate $(EVAL_FILES)
 
 # `uv run`, not `uvx`. uvx resolves the LATEST ruff every invocation, so a new
 # release adds rules and turns CI red without anyone changing code — which is

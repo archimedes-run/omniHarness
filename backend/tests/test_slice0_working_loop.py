@@ -150,3 +150,34 @@ def test_the_plan_record_keeps_findings_and_blockers() -> None:
     assert record["blockers"][0]["tool"] == "web_fetch"
     text = plan_record_text(record)
     assert "Already done and verified" in text and "surayaphilly" in text and "[in_progress] Search" in text
+
+
+# -- trailing offers seen in the 2026-11-13 baseline (T06, T18) -------------
+
+_BODY = "Here is how your projects stand.\n\n- Eval Garden: 2 open tasks, none overdue\n  - Buy soil\n  - Plant tomato seedlings\n- Eval Bike Tour: 1 open task\n  - Tune up the bike"
+
+
+def test_two_trailing_offers_are_both_removed():
+    from omniharness.agents.working_loop import has_menu, strip_trailing_menu
+
+    reply = _BODY + "\n\nShould I shift the garden tasks to the next planting window?\n\nWould you like me to:\n- Set due dates,\n- Mark anything done?"
+    text, changed = strip_trailing_menu(reply)
+    assert changed and not has_menu(text)
+    assert text == _BODY
+
+
+def test_offer_lines_inside_the_last_list_are_removed_and_the_list_stays():
+    from omniharness.agents.working_loop import has_menu, strip_trailing_menu
+
+    reply = _BODY + "\n  - Suggestion: Want me to set a target date and add a tune-up task?"
+    text, changed = strip_trailing_menu(reply)
+    assert changed and not has_menu(text)
+    assert text == _BODY
+
+
+def test_a_question_that_is_content_stays():
+    from omniharness.agents.working_loop import strip_trailing_menu
+
+    reply = "Museum day FAQ.\n\n" + "Should I bring ID?\nYes, a passport or a driving licence works at the desk.\n" * 4
+    text, _ = strip_trailing_menu(reply)
+    assert text.count("Should I bring ID?") == 4

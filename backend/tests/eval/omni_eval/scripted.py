@@ -16,6 +16,7 @@ Which queue a call reads:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import uuid
@@ -108,7 +109,8 @@ def to_message(step: dict) -> AIMessage:
     for index, call in enumerate(step.get("tool_calls") or []):
         calls.append({"name": call["name"], "args": call.get("args") or {}, "id": call.get("id") or f"call_{uuid.uuid4().hex[:10]}_{index}", "type": "tool_call"})
     usage = step.get("usage") or {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100}
-    return AIMessage(content=step.get("content", ""), tool_calls=calls, usage_metadata=usage, response_metadata={"model_name": "scripted"})
+    # `model`: the name the reply reports (a priced name tests the trace's cost).
+    return AIMessage(content=step.get("content", ""), tool_calls=calls, usage_metadata=usage, response_metadata={"model_name": step.get("model") or "scripted"})
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -134,14 +136,33 @@ class ScriptedChatModel(BaseChatModel):
             return None
         return "lead" if "write_todos" in self.bound_tools else "sub"
 
-    def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any) -> ChatResult:
+    def _step(self, messages: list[BaseMessage]) -> dict | None:
         who = self._who()
-        if who is None:
+        return None if who is None else SCRIPT.next(who, messages)
+
+    @staticmethod
+    def _result(step: dict | None) -> ChatResult:
+        if step is None:
             # The summariser (or any tool-less helper call).
             summary = "Summary of the work so far: the task is in progress (scripted summary)."
             return ChatResult(generations=[ChatGeneration(message=AIMessage(content=summary, response_metadata={"model_name": "scripted"}))])
-        step = SCRIPT.next(who, messages)
         return ChatResult(generations=[ChatGeneration(message=to_message(step))])
+
+    def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None, run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any) -> ChatResult:
+        step = self._step(messages)
+        if step and step.get("sleep"):
+            import time
+
+            time.sleep(float(step["sleep"]))
+        return self._result(step)
+
+    async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None, run_manager: Any = None, **kwargs: Any) -> ChatResult:
+        # `sleep`: a model call that takes this long (the harness's timeout
+        # and stall tests); cancellable, unlike a thread.
+        step = self._step(messages)
+        if step and step.get("sleep"):
+            await asyncio.sleep(float(step["sleep"]))
+        return self._result(step)
 
 
 def dump_script() -> str:

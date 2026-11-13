@@ -8,19 +8,26 @@
     EVAL_ENV_FILE=path              real mode: KEY=VALUE file the model key is read from, into the
                                     isolated gateway process only (never printed, never written)
     EVAL_MODEL_NAME=default         real mode: which configured model (default: the first)
+    EVAL_STALL_SECONDS=120          a run with no new event for this long is stopped (default 120)
+
+Real mode starts the fetch egress proxy (fetch_egress.py) for the run and removes
+it at the end; it refuses to run when the proxy cannot start. Each task has a
+wall-clock limit (budget.seconds, default 300, cap 600); a run that pauses on
+the person, stalls or overruns stops its trial with the reason.
 
 Exits non-zero when any task fails (mock) or any baseline task regresses (real).
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
 import time
 from pathlib import Path
 
-from . import harness, report
+from . import fetch_egress, harness, report
 
 DEFAULT_TASK_COST_USD = 0.08
 
@@ -72,6 +79,33 @@ def main(argv: list[str] | None = None) -> int:
     keep = os.environ.get("EVAL_KEEP_DIR")
     if keep:
         gateway_kwargs["keep"] = Path(keep)
+    environment: dict = {}
+    with contextlib.ExitStack() as stack:
+        if mode == "real":
+            try:
+                gateway_kwargs["fetch_proxy"] = stack.enter_context(fetch_egress.proxy(harness.REPO))
+            except fetch_egress.EgressUnavailable as exc:
+                print(f"refusing to start: the fetch egress proxy is not available, and research tasks are never scored without it.\n{exc}", file=sys.stderr)
+                return 4
+            environment["fetch"] = "fetch egress proxy (public internet only), started for this run"
+            print(f"fetch egress proxy up at {gateway_kwargs['fetch_proxy']}", flush=True)
+        results, started = _run_all(tasks, mode, trials, budget, gateway_kwargs)
+    if mode == "real":
+        passed = sorted({k for r in results for k in r.get("keys_passed") or []})
+        environment["keys passed to the gateway"] = ", ".join(passed) or "none"
+    summary = report.summarise(results, mode=mode, model=model, trials=trials, seconds=time.time() - started, environment=environment)
+    path = report.write(summary)
+    print()
+    print(report.table(summary))
+    print(f"\nresult written to {path}")
+    if os.environ.get("EVAL_JSON"):
+        print(json.dumps({k: summary[k] for k in ("id", "passed", "strict_passed", "total", "regressions", "cost_usd")}))
+    if mode == "mock":
+        return 0 if summary["passed"] == summary["total"] and summary["strict_passed"] == summary["total"] else 1
+    return 1 if summary["regressions"] else 0
+
+
+def _run_all(tasks: list[dict], mode: str, trials: int, budget: float, gateway_kwargs: dict) -> tuple[list[dict], float]:
     started = time.time()
     results: list[dict] = []
     spent = 0.0
@@ -107,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
                     "cost_usd": None,
                     "live_only": bool(task.get("live_only")),
                 }
-            spent += float(result.get("cost_usd") or 0)
+            # An unknown cost counts at the task's estimate, so the cap holds.
+            cost = result.get("cost_usd")
+            spent += float(cost) if cost is not None else float((task.get("budget") or {}).get("est_usd", DEFAULT_TASK_COST_USD))
             results.append(result)
             failed = [c for c in result["checks"] if not c["pass"] and not c.get("strict")]
             print(
@@ -115,16 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                 + ("; ".join(f"{c['name']}: {c['reason']}" for c in failed)[:200] or "ok"),
                 flush=True,
             )
-    summary = report.summarise(results, mode=mode, model=model, trials=trials, seconds=time.time() - started)
-    path = report.write(summary)
-    print()
-    print(report.table(summary))
-    print(f"\nresult written to {path}")
-    if os.environ.get("EVAL_JSON"):
-        print(json.dumps({k: summary[k] for k in ("id", "passed", "strict_passed", "total", "regressions", "cost_usd")}))
-    if mode == "mock":
-        return 0 if summary["passed"] == summary["total"] and summary["strict_passed"] == summary["total"] else 1
-    return 1 if summary["regressions"] else 0
+    return results, started
 
 
 if __name__ == "__main__":
