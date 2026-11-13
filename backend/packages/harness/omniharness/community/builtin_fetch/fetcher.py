@@ -22,6 +22,7 @@ from omniharness.community.builtin_fetch.guard import (
     FetchFailed,
     FetchRefused,
     IPNetwork,
+    WebFetchError,
     check_url,
     resolve_and_check,
 )
@@ -29,6 +30,10 @@ from omniharness.community.builtin_fetch.guard import (
 MAX_BYTES_CAP = 2 * 1024 * 1024
 TIMEOUT_CAP = 15.0
 MAX_REDIRECTS_CAP = 5
+#: Opening the connection to the proxy (and, inside a CONNECT tunnel, the
+#: site's TLS handshake) gets at most this, well inside the overall budget, so
+#: an unreachable proxy shows up as a connect timeout, not the whole budget.
+CONNECT_TIMEOUT_CAP = 5.0
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 #: Content the extractor can turn into text. Anything else (PDF, images,
@@ -137,10 +142,43 @@ def _proxy_denied(response: httpx.Response) -> bool:
     return response.status_code in (403, 503) and any(code in error for code in _PROXY_REFUSALS)
 
 
+def proxy_url_problem(proxy: str) -> str | None:
+    """Why ``proxy`` is not a usable proxy URL (no hostnames in the answer), or None."""
+    try:
+        url = httpx.URL(proxy)
+    except (httpx.InvalidURL, ValueError, TypeError):
+        return "the proxy URL cannot be parsed"
+    if url.scheme not in ("http", "https"):
+        return "the proxy URL must be http:// or https://"
+    if not url.host:
+        return "the proxy URL has no host"
+    return None
+
+
+@dataclass
+class _Progress:
+    """Where the current hop is. ``waiting``: the request went to the proxy
+    and the proxy has not answered yet (no response headers: no CONNECT reply
+    for https, no response for http). A failure while waiting is the proxy's;
+    after the proxy answered (a 200 CONNECT included) it is the site's."""
+
+    waiting: bool = False
+
+    async def trace(self, name: str, info: dict) -> None:
+        # httpcore reports the proxy's CONNECT reply (and a forward-proxied
+        # response) as http11.receive_response_headers.complete.
+        if name.endswith("receive_response_headers.complete"):
+            self.waiting = False
+
+
+def _connect_timeout(settings: FetchSettings) -> float:
+    return min(CONNECT_TIMEOUT_CAP, settings.timeout / 2)
+
+
 def _client(settings: FetchSettings, transport: httpx.AsyncBaseTransport | None) -> httpx.AsyncClient:
     common = {
         "headers": _HEADERS,
-        "timeout": httpx.Timeout(settings.timeout),
+        "timeout": httpx.Timeout(settings.timeout, connect=_connect_timeout(settings)),
         "follow_redirects": False,
         "trust_env": False,
     }
@@ -150,13 +188,20 @@ def _client(settings: FetchSettings, transport: httpx.AsyncBaseTransport | None)
     return httpx.AsyncClient(proxy=settings.proxy, **common)
 
 
-async def _fetch(url: str, settings: FetchSettings, transport: httpx.AsyncBaseTransport | None) -> FetchResult:
+async def _fetch(url: str, settings: FetchSettings, transport: httpx.AsyncBaseTransport | None, progress: _Progress) -> FetchResult:
     current = url
-    async with _client(settings, transport) as client:
+    try:
+        client = _client(settings, transport)
+    except (ValueError, TypeError):
+        raise EgressProxyDown("the proxy URL is not usable") from None
+    async with client:
         for _hop in range(settings.max_redirects + 1):
+            progress.waiting = False
             target = check_url(current, settings.extra_blocked)
             await resolve_and_check(target, settings.extra_blocked)
-            async with client.stream("GET", target.url) as response:
+            progress.waiting = True
+            async with client.stream("GET", target.url, extensions={"trace": progress.trace}) as response:
+                progress.waiting = False
                 if _proxy_denied(response):
                     raise FetchRefused(f"the egress proxy refused {target.host}: not a public destination, or it does not resolve to one")
                 if response.status_code in REDIRECT_STATUSES:
@@ -176,14 +221,22 @@ async def _fetch(url: str, settings: FetchSettings, transport: httpx.AsyncBaseTr
 
 
 async def fetch(url: str, settings: FetchSettings, *, transport: httpx.AsyncBaseTransport | None = None) -> FetchResult:
-    """Fetch ``url``; raises FetchRefused (policy), EgressProxyDown (no proxy, or
-    the proxy unreachable or failing) or FetchFailed (anything else)."""
-    if transport is None and not settings.proxy:
-        raise EgressProxyDown("not configured: set tools.web_fetch.proxy or OMNI_HARNESS_FETCH_EGRESS_PROXY")
+    """Fetch ``url``; raises FetchRefused (policy), EgressProxyDown (no proxy, a
+    bad proxy URL, or any failure before the proxy answered) or FetchFailed
+    (anything else, including the site failing after the proxy answered)."""
+    if transport is None:
+        if not settings.proxy:
+            raise EgressProxyDown("not configured: set tools.web_fetch.proxy or OMNI_HARNESS_FETCH_EGRESS_PROXY")
+        problem = proxy_url_problem(settings.proxy)
+        if problem:
+            raise EgressProxyDown(problem)
+    progress = _Progress()
     try:
         async with asyncio.timeout(settings.timeout):
-            return await _fetch(url, settings, transport)
+            return await _fetch(url, settings, transport, progress)
     except TimeoutError:
+        if progress.waiting:
+            raise EgressProxyDown(f"no answer from the proxy within {settings.timeout:g} s") from None
         raise FetchFailed(f"timed out after {settings.timeout:g} s") from None
     except httpx.ProxyError as exc:
         # A CONNECT the proxy denied ("403 Forbidden") or could not resolve
@@ -194,9 +247,14 @@ async def fetch(url: str, settings: FetchSettings, *, transport: httpx.AsyncBase
         if str(exc).startswith("503"):
             raise FetchRefused("the page could not be fetched through the egress proxy") from None
         raise EgressProxyDown(f"proxy error: {exc}") from None
-    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-        # Every connection goes to the proxy (the proxy connects to the site),
-        # so a connection that cannot be opened means the proxy is unreachable.
-        raise EgressProxyDown(f"unreachable: {type(exc).__name__}") from None
+    except WebFetchError:
+        raise
     except httpx.HTTPError as exc:
+        if progress.waiting:
+            # Refused, timed out, closed, or not HTTP: before the proxy answered.
+            raise EgressProxyDown(f"no response from the proxy: {type(exc).__name__}") from None
         raise FetchFailed(f"request failed: {type(exc).__name__}: {exc}") from None
+    except Exception as exc:
+        if progress.waiting:
+            raise EgressProxyDown(f"no response from the proxy: {type(exc).__name__}") from None
+        raise

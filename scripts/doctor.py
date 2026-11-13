@@ -528,6 +528,18 @@ def check_web_tool(config_path: Path, *, tool_name: str, label: str) -> CheckRes
         return CheckResult(label, "warn", str(exc))
 
 
+def _usable_proxy_url(proxy: str) -> bool:
+    """Same rule as the fetcher: http(s), a host, a valid port if any."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(proxy)
+        _ = parts.port
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
+
+
 def check_web_fetch(config_path: Path) -> CheckResult:
     result = check_web_tool(config_path, tool_name="web_fetch", label="web fetch configured")
     if result.status != "ok" or "built-in" not in (result.detail or ""):
@@ -543,7 +555,15 @@ def check_web_fetch(config_path: Path) -> CheckResult:
     except Exception:  # noqa: BLE001 - check_web_tool already reported a config problem
         entry = {}
     jina_selected = str(entry.get("provider") or "").strip().lower() == "jina"
-    if entry.get("proxy") or os.environ.get("OMNI_HARNESS_FETCH_EGRESS_PROXY") or (jina_selected and os.environ.get("JINA_API_KEY")):
+    proxy = str(entry.get("proxy") or "").strip() or os.environ.get("OMNI_HARNESS_FETCH_EGRESS_PROXY", "").strip()
+    if proxy and not jina_selected and not _usable_proxy_url(proxy):
+        return CheckResult(
+            result.label,
+            "warn",
+            "the fetch egress proxy URL is not a usable http(s) URL: web_fetch will answer 'egress proxy down'",
+            fix="Set tools.web_fetch.proxy (or OMNI_HARNESS_FETCH_EGRESS_PROXY) to http://host:port",
+        )
+    if proxy or (jina_selected and os.environ.get("JINA_API_KEY")):
         return result
     return CheckResult(
         result.label,

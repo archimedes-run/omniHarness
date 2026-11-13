@@ -3,10 +3,12 @@
 Config (``tools:`` entry named ``web_fetch``, all optional):
 
 * ``proxy``: the fetch egress proxy URL; defaults to
-  ``$OMNI_HARNESS_FETCH_EGRESS_PROXY``. With neither, or with the proxy
-  unreachable or failing, nothing is fetched: the tool answers
-  "page fetching unavailable: egress proxy down" and tries nothing else
-  (no direct fetch, no Jina, whatever ``jina_fallback`` says).
+  ``$OMNI_HARNESS_FETCH_EGRESS_PROXY``. With neither, with an unusable proxy
+  URL, or with any failure before the proxy answers, nothing is fetched: the
+  tool answers "page fetching unavailable: egress proxy down" and tries
+  nothing else (no direct fetch, no Jina, whatever ``jina_fallback`` says).
+  After the proxy answered (for https, its CONNECT reply) a failure is the
+  site's, an ordinary error.
 * ``timeout`` (s, at most 15), ``max_bytes`` (at most 2 MB),
   ``max_redirects`` (at most 5): caps can be lowered, never raised.
 * ``blocked_networks``: extra CIDRs to refuse, on top of the built-in list.
@@ -30,7 +32,7 @@ from dataclasses import dataclass
 from langchain.tools import tool
 
 from omniharness.community.builtin_fetch.extract import to_markdown_bounded
-from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, MAX_REDIRECTS_CAP, TIMEOUT_CAP, FetchResult, FetchSettings, fetch
+from omniharness.community.builtin_fetch.fetcher import MAX_BYTES_CAP, MAX_REDIRECTS_CAP, TIMEOUT_CAP, FetchResult, FetchSettings, fetch, proxy_url_problem
 from omniharness.community.builtin_fetch.guard import EgressProxyDown, FetchFailed, FetchRefused, WebFetchError, check_url, parse_networks, resolve_and_check
 from omniharness.config import get_app_config
 
@@ -63,6 +65,10 @@ def load_config() -> WebFetchConfig:
         )
     except (TypeError, ValueError) as exc:
         raise FetchFailed(f"tools.web_fetch is misconfigured: {exc}") from None
+    if provider == "builtin" and settings.proxy:
+        problem = proxy_url_problem(settings.proxy)
+        if problem:
+            raise EgressProxyDown(problem)
     return WebFetchConfig(fetch=settings, provider=provider, jina_fallback=extra.get("jina_fallback", False) is True)
 
 

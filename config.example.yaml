@@ -111,9 +111,10 @@ tools:
   # egress proxy (docker/fetch-egress: public internet only, ports 80/443, every
   # redirect hop re-checked) and extracts readable markdown with trafilatura.
   # Hard caps: 2 MB body, 15 s per fetch, 5 redirects; the options below can
-  # lower them, never raise them. With no proxy configured, or the proxy
-  # unreachable, nothing is fetched: the tool answers "page fetching unavailable:
-  # egress proxy down" and never falls back to a direct fetch or to Jina.
+  # lower them, never raise them. With no proxy configured, an unusable proxy
+  # URL, or any failure before the proxy answers, nothing is fetched: the tool
+  # answers "page fetching unavailable: egress proxy down" and never falls back
+  # to a direct fetch or to Jina.
   # NOTE: Only one web_fetch provider can be active at a time.
   - name: web_fetch
     group: web
