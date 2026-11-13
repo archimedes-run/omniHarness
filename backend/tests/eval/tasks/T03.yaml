@@ -1,0 +1,42 @@
+id: T03
+title: Summarise my calendar for this week (read-only)
+critical: true
+source: 'daily brief; owner dogfooding: read-only weekly calendar summary'
+live_only_note: Against the owner's real calendar this is live-only (run by the orchestrator); here the calendar is the fixture stub under its real tool name.
+mode: pro
+prompt: Summarise my calendar for this week.
+tools:
+- calendar
+confirm: none
+budget:
+  seconds: 300
+  est_usd: 0.05
+checks:
+- tool_called:
+    name: calendar_read
+- answer_contains:
+    any_of:
+    - Team standup
+    - Dentist appointment
+    - Quarterly planning review
+    - Gym with Sam
+    - Call with the landlord
+    - Book club
+    - Design critique
+    - Farmers market volunteering
+    - Dinner with Priya
+    min_count: 3
+- no_clarification
+- tool_not_called:
+    name: write
+- no_cards
+- no_open_cards
+mock:
+  lead:
+  - tool_calls:
+    - name: googlecalendar_list-events
+      args: {}
+  - expect:
+      tool: googlecalendar_list-events
+      contains: Book club
+    content: 'This week you have 9 events: Team standup and a Dentist appointment on Monday, the Quarterly planning review on Tuesday, Gym with Sam and a Call with the landlord on Wednesday, Book club on Thursday, a Design critique on Friday, Farmers market volunteering on Saturday and Dinner with Priya on Sunday.'

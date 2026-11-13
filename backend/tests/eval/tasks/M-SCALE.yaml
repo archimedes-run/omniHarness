@@ -1,0 +1,82 @@
+id: M-SCALE
+title: The search budget scales with the number of items asked for
+mock_only: true
+source: 'real-model eval 2026-11-13 (T07: 12 restaurants, one search each)'
+mode: pro
+prompt: Find 12 date-night restaurants in Philadelphia across 4 neighbourhoods, a
+  link and a line each.
+tools: []
+confirm: none
+budget:
+  seconds: 90
+checks:
+- tool_called:
+    name: web_search
+    min: 12
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: date night restaurant 0 official site
+    - name: web_search
+      args:
+        query: date night restaurant 1 official site
+    - name: web_search
+      args:
+        query: date night restaurant 2 official site
+    - name: web_search
+      args:
+        query: date night restaurant 3 official site
+    - name: web_search
+      args:
+        query: date night restaurant 4 official site
+    - name: web_search
+      args:
+        query: date night restaurant 5 official site
+    - name: web_search
+      args:
+        query: date night restaurant 6 official site
+    - name: web_search
+      args:
+        query: date night restaurant 7 official site
+    - name: web_search
+      args:
+        query: date night restaurant 8 official site
+    - name: web_search
+      args:
+        query: date night restaurant 9 official site
+    - name: web_search
+      args:
+        query: date night restaurant 10 official site
+    - name: web_search
+      args:
+        query: date night restaurant 11 official site
+  - expect:
+      tool: web_search
+      not_contains: budget
+    content: 'Twelve picks:
+
+      - [Place 0](https://place0.example/)
+
+      - [Place 1](https://place1.example/)
+
+      - [Place 2](https://place2.example/)
+
+      - [Place 3](https://place3.example/)
+
+      - [Place 4](https://place4.example/)
+
+      - [Place 5](https://place5.example/)
+
+      - [Place 6](https://place6.example/)
+
+      - [Place 7](https://place7.example/)
+
+      - [Place 8](https://place8.example/)
+
+      - [Place 9](https://place9.example/)
+
+      - [Place 10](https://place10.example/)
+
+      - [Place 11](https://place11.example/)'

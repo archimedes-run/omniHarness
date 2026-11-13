@@ -231,6 +231,29 @@ loop_detection:
   #     hard_limit: 300
 
 # ============================================================================
+# Research Budget
+# ============================================================================
+# Caps on the lead's web lookups in one task (one message and the runs that
+# resume it after a confirmation). Past a cap the lookup is not made and the
+# lead is told to answer with what it has and say what is still uncertain. A
+# repeat of a public web search or fetch already made in the task is answered
+# from that result: no network call, and it does not count. Ledger, file and
+# other private reads are never cached. The research subagent has the same
+# search and fetch caps.
+
+research_budget:
+  enabled: true
+  max_searches: 8         # web_search + image_search per task
+  max_fetches: 10         # web_fetch per task (distinct URLs)
+  max_research: 3         # research (delegated web research) per task
+  answer_after_calls: 24  # after this many tool calls, each result says "write the answer now"
+  max_seconds: 150        # research time per task: from 60% each result says "answer now"; past it no lookups
+  max_page_chars: 12000   # a fetched page is shortened to this for reading (JSON keeps its fields)
+  subagent_max_searches: 5  # the research subagent's own, smaller budget per call...
+  subagent_max_fetches: 5
+  subagent_max_seconds: 120 # ...so it answers well before its 240 s limit
+
+# ============================================================================
 # Sandbox Configuration
 # ============================================================================
 # Choose between local sandbox (direct execution) or Docker-based AIO sandbox

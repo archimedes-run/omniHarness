@@ -1,0 +1,78 @@
+id: M-BUDGET
+title: Past the search budget a lookup is not made and the lead answers
+mock_only: true
+source: 'owner rule 2026-11-13: per-task research budget (8 searches, 10 fetches by
+  default)'
+mode: pro
+prompt: Find Saturday museums in Philadelphia.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- tool_called:
+    name: web_search
+    min: 9
+- no_menu
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 0
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 1
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 2
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 3
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 4
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 5
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 6
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 7
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 8
+  - expect:
+      tool: web_search
+      contains: search budget
+    content: 'Two museums open on Saturdays: the [Philadelphia Museum of Art](https://philamuseum.org/)
+      and the [Franklin Institute](https://www.fi.edu/).
+
+
+      Not verified: opening hours for the holiday weekend.'

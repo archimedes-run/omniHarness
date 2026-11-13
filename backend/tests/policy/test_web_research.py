@@ -717,7 +717,10 @@ def test_the_model_reads_search_results_compact(gateway):
 #: Every tool the shipped rules mark as NOT a private read. Anything added here
 #: is a decision: a tool marked public by mistake lets outbound calls run
 #: freely after reading it.
-PUBLIC = {"web_search", "web_fetch", "image_search", "ask_clarification", "present_files", "tool_search", "write_todos"}
+#: `research` (spec 009 FR-061): the read-only web researcher, whose only
+#: tools are the three web lookups; its result is public web content. In a turn
+#: that read private data it is a card (and the turn is private already).
+PUBLIC = {"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos"}
 
 
 def _shipped():

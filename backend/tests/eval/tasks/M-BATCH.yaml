@@ -1,0 +1,55 @@
+id: M-BATCH
+title: Searches made all at once still count against the search budget
+mock_only: true
+source: 'real-model eval 2026-11-13 (T06: 13 searches in one reply passed a cap of
+  8)'
+mode: pro
+prompt: Find 3 Saturday museums in Philadelphia with links.
+tools: []
+confirm: none
+budget:
+  seconds: 90
+checks:
+- tool_called:
+    name: web_search
+    min: 10
+- min_links:
+    n: 3
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: philly museum 0
+    - name: web_search
+      args:
+        query: philly museum 1
+    - name: web_search
+      args:
+        query: philly museum 2
+    - name: web_search
+      args:
+        query: philly museum 3
+    - name: web_search
+      args:
+        query: philly museum 4
+    - name: web_search
+      args:
+        query: philly museum 5
+    - name: web_search
+      args:
+        query: philly museum 6
+    - name: web_search
+      args:
+        query: philly museum 7
+    - name: web_search
+      args:
+        query: philly museum 8
+    - name: web_search
+      args:
+        query: philly museum 9
+  - expect:
+      tool: web_search
+      contains: search budget
+    content: 'Three Saturday museums: [Philadelphia Museum of Art](https://philamuseum.org/),
+      [Franklin Institute](https://www.fi.edu/) and [Barnes Foundation](https://www.barnesfoundation.org/).'

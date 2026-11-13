@@ -2,27 +2,21 @@
 
 Disclosure left to prompt guidance is unverifiable, and its failure is
 invisible: a turn where the model forgets is indistinguishable from a turn where
-nothing happened. That makes Tier 2 into Tier 1 with good intentions — and with
-the workers in this feature, a silently forgotten disclosure is a calendar hold
-the user never learns was created.
+nothing happened. That makes Tier 2 into Tier 1 with good intentions.
 
-THE COVERAGE CHECK IS BIASED TOWARD APPENDING (FR-040). Stating the direction is
-required, because without it the check gets tuned the wrong way: duplicates are
-the visible failure and omissions the invisible one, so anyone adjusting it
-feels pressure toward not-appending. A redundant disclosure is clumsy; a missing
-one is the defect this exists to prevent.
-
-"UNCERTAIN" HAS AN OPERATIONAL DEFINITION, because an untestable acceptance
-criterion on a disclosure guarantee is the failure shape this project keeps
-finding. A Tier 2 execution counts as already disclosed ONLY when the reply
-names the tool's effect on the SPECIFIC resolved target. Anything less —
-mentioning the tool but not the target, or the target but not what happened to
-it — is uncertain, and appends.
+THE NOTICE IS THE SERVER'S, ALWAYS (owner decision, spec 009 review H1/H2).
+Every Tier 2 action that ran is listed in one line the server appends to the
+final reply: "Ran without asking: code_job, ledger_apply ×2". It is built from
+the execution records only, never from the model's text, and the model's text
+never "covers" a record any more: the earlier coverage check (skip the record
+when the reply named the tool and its target) let a model-written sentence
+stand in for the system's notice, and that sentence could then be removed by
+later text processing (the trailing-offer removal) or be wrong. A redundant
+mention is clumsy; a missing notice is the defect this exists to prevent.
 
 APPENDED TEXT COMES FROM THE EXECUTION RECORD, never the model's account
-(FR-041). A model that misdescribes what it did would otherwise produce a
-disclosure that satisfies the check and misinforms the user, which is worse than
-silence because it carries the system's authority rather than the model's.
+(FR-041). Each record also keeps a compact sentence (`sentence()`), shown as
+the notice's details in the web chat.
 """
 
 from __future__ import annotations
@@ -41,6 +35,10 @@ class ExecutionRecord:
     result: Any
     targets: tuple[str, ...] = ()
     disclosed: bool = False
+    #: Ran under a standing grant (scheduled runs): its own line.
+    grant: bool = False
+    #: The specialist that ran it ("" for the agent itself): "(via <agent>)".
+    agent: str = ""
 
     def sentence(self) -> str:
         """Generated from the record. Never from the reply.
@@ -56,10 +54,10 @@ class ExecutionRecord:
         become a size, because their length is the only part that matters here.
         """
         if self.targets:
-            return f"I used {self.tool_name} on {', '.join(self.targets)}."
+            return f"{self.tool_name} on {', '.join(self.targets)}"
         if self.arguments:
-            return f"I used {self.tool_name} with {_render(self.arguments)}."
-        return f"I used {self.tool_name}."
+            return f"{self.tool_name} with {_render(self.arguments)}"
+        return self.tool_name
 
 
 #: Longer than this and a value is described rather than repeated. 80 is A
@@ -80,72 +78,74 @@ def _render(arguments: dict) -> str:
     return ", ".join(parts)
 
 
+#: How the notice line starts (the chat and the eval recognise the block by
+#: the server's marker, not by this text).
+NOTICE_PREFIX = "Ran without asking:"
+
+
+GRANT_PREFIX = "Ran under grant:"
+
+
+def _line(prefix: str, records: list[ExecutionRecord]) -> str:
+    counts: dict[tuple[str, str], int] = {}
+    targets: dict[tuple[str, str], list[str]] = {}
+    for record in records:
+        key = (record.tool_name, record.agent)
+        counts[key] = counts.get(key, 0) + 1
+        seen = targets.setdefault(key, [])
+        seen.extend(str(t) for t in record.targets if str(t) not in seen)
+    parts = []
+    for (tool, agent), n in counts.items():
+        part = f"{tool} \u00d7{n}" if n > 1 else tool
+        if targets[(tool, agent)]:
+            part += f" ({', '.join(targets[(tool, agent)])})"
+        if agent:
+            part += f" (via {agent})"
+        parts.append(" ".join(part.split()))
+    return f"{prefix} " + ", ".join(parts)
+
+
+def notice_lines(records: list[ExecutionRecord]) -> list[str]:
+    """One line for what ran without asking (each tool in the order it first
+    ran, repeats counted, resolved targets in brackets, a specialist's named
+    "(via <agent>)"), and one for what ran under a standing grant."""
+    lines = []
+    plain = [r for r in records if not r.grant]
+    granted = [r for r in records if r.grant]
+    if plain:
+        lines.append(_line(NOTICE_PREFIX, plain))
+    if granted:
+        lines.append(_line(GRANT_PREFIX, granted))
+    return lines
+
+
+def notice_line(records: list[ExecutionRecord]) -> str:
+    return "\n".join(notice_lines(records))
+
+
 @dataclass
 class DisclosureLedger:
-    """Accumulates Tier 2 executions for the turn, then guarantees the reply
-    covers them."""
+    """Accumulates the Tier 2 actions that ran in the turn, then guarantees the
+    final reply carries the server's notice of them."""
 
     records: list[ExecutionRecord] = field(default_factory=list)
 
-    def record(self, tool_name: str, arguments: dict, result: Any, targets: tuple[str, ...] = ()) -> ExecutionRecord:
-        entry = ExecutionRecord(tool_name=tool_name, arguments=arguments or {}, result=result, targets=targets)
+    def record(self, tool_name: str, arguments: dict, result: Any, targets: tuple[str, ...] = (), *, grant: bool = False, agent: str = "") -> ExecutionRecord:
+        entry = ExecutionRecord(tool_name=tool_name, arguments=arguments or {}, result=result, targets=targets, grant=grant, agent=agent)
         self.records.append(entry)
         return entry
 
-    def covered(self, reply: str, record: ExecutionRecord) -> bool:
-        """Is this execution already disclosed by the reply?
-
-        THE OPERATIONAL DEFINITION (FR-040). Coverage requires the reply to name
-        BOTH the tool's effect and the specific target. Naming one without the
-        other is uncertain, and uncertain means append.
-        """
-        text = (reply or "").lower()
-        if record.tool_name.lower() not in text:
-            return False
-        if record.targets:
-            # SUBSTRING MATCH, DELIBERATELY, AND DO NOT "IMPROVE" IT.
-            #
-            # This is exact containment, so a reply saying "Tuesday afternoon"
-            # does NOT cover a target of "Tue 3pm with Darcy" — it appends. That
-            # near miss looks like a false positive and is the whole point.
-            #
-            # The obvious improvement is fuzzy or semantic matching, so a reply
-            # that gestures at the right thing counts as covered. That change
-            # moves the bias from append toward silence, which is the wrong
-            # direction: a redundant disclosure is clumsy, a missing one is the
-            # defect FR-039 exists to prevent. Duplicates are the VISIBLE
-            # failure and omissions the INVISIBLE one, so anyone tuning this
-            # feels pressure toward not-appending — which is why FR-040 states
-            # the direction rather than leaving it to judgement.
-            #
-            # A similarity score also reintroduces the thing Gate B removed:
-            # a threshold is a judgement, and a judgement about whether the
-            # model said enough is exactly what "system-guaranteed, never
-            # model-judged" rules out.
-            #
-            # tests/policy/test_disclosure_bias.py pins the near-miss case.
-            return all(str(target).lower() in text for target in record.targets)
-        # No resolved targets to name: the tool alone is the whole of the effect.
-        return True
-
-    def apply(self, reply: str) -> str:
-        """Return the reply with any missing disclosures appended.
-
-        The model MAY phrase a disclosure itself — `covered` accepts that. It
-        may not skip one.
-        """
-        missing = [record for record in self.records if not self.covered(reply, record)]
-        for record in missing:
-            record.disclosed = False
-        for record in self.records:
-            if record not in missing:
-                record.disclosed = True
-        if not missing:
+    def apply(self, reply: str, extra: list[ExecutionRecord] | None = None) -> str:
+        """The reply with the notice appended: every record (and `extra`: the
+        specialists' records rolled up onto this reply), whatever the reply
+        says (the model's own words never count as the notice)."""
+        records = [*self.records, *(extra or [])]
+        if not records:
             return reply
-
-        lines = [reply.rstrip(), "", "Also, for the record:"] if reply and reply.strip() else ["For the record:"]
-        lines += [f"  - {record.sentence()}" for record in missing]
-        return "\n".join(lines)
+        for record in records:
+            record.disclosed = True
+        line = notice_line(records)
+        return f"{reply.rstrip()}\n\n{line}" if reply and reply.strip() else line
 
     def clear(self) -> None:
         self.records.clear()

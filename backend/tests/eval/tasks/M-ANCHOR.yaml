@@ -1,0 +1,30 @@
+id: M-ANCHOR
+title: 'The same page under another #anchor is served from the earlier fetch'
+mock_only: true
+source: 'real-model eval 2026-11-13 (T02: one page fetched under five anchors)'
+mode: pro
+prompt: What does the React 19 post say about document metadata?
+tools: []
+confirm: none
+budget:
+  seconds: 90
+checks:
+- tool_called:
+    name: web_fetch
+    min: 2
+mock:
+  lead:
+  - tool_calls:
+    - name: web_fetch
+      args:
+        url: https://react.dev/blog/2024/12/05/react-19
+  - expect:
+      tool: web_fetch
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://react.dev/blog/2024/12/05/react-19#document-metadata
+  - expect:
+      tool: web_fetch
+      contains: From earlier in this task
+    content: It adds native title and meta tags [React v19](https://react.dev/blog/2024/12/05/react-19).

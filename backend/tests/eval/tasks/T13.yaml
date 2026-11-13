@@ -1,0 +1,38 @@
+id: T13
+title: Retry after an error (wrong PyPI JSON URL)
+critical: true
+source: 'retry; owner dogfooding: a retry-after-error task'
+mode: pro
+prompt: What is the latest version of the httpx package? Get it from PyPI's JSON API at https://pypi.org/pypi/httpx/jsonx
+tools: []
+confirm: none
+answer_from_url:
+  url: https://pypi.org/pypi/httpx/json
+  path:
+  - info
+  - version
+  mock: 0.28.1
+budget:
+  seconds: 300
+  est_usd: 0.05
+checks:
+- answer_contains:
+    values:
+    - '{answer}'
+- error_then_changed_success
+mock:
+  lead:
+  - tool_calls:
+    - name: web_fetch
+      args:
+        url: https://pypi.org/pypi/httpx/jsonx
+  - expect:
+      contains: '404'
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://pypi.org/pypi/httpx/json
+  - expect:
+      tool: web_fetch
+      contains: 0.28.1
+    content: The latest httpx version on PyPI is 0.28.1. The URL you gave returned 404; the JSON API lives at https://pypi.org/pypi/httpx/json.

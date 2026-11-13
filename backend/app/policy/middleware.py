@@ -23,6 +23,7 @@ import logging
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -31,7 +32,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 from .classify import classify
 from .config import ConfigLoader
-from .disclose import DisclosureLedger
+from .disclose import DisclosureLedger, ExecutionRecord
 from .grants import GrantedCall
 from .limits import describe_expiry
 from .lineage import initiation_origin
@@ -71,6 +72,81 @@ def _proposing(owner_id: Any, thread_id: Any) -> threading.Lock:
 #: Tools of which one turn has at most ONE open card per agent: delegating
 #: (eval E-2). Any other tool is held only on an exact repeat.
 ONE_OPEN_CARD_PER_TURN = frozenset({"task"})
+
+
+#: Per tool call: what the policy decided, for the per-run trace (spec 009
+#: FR-080): {"tier", "outcome", "card_id"}. Stamped on the call's tool result
+#: as display data (STEP_KEY); no decision ever reads it back.
+_STEP: ContextVar[dict | None] = ContextVar("policy_step", default=None)
+
+
+def _step() -> dict:
+    """This call's step record, or a throwaway outside a tool call."""
+    step = _STEP.get()
+    return step if step is not None else {}
+
+
+from omniharness.agents.turns import POLICY_STEP_MARKER as STEP_KEY  # noqa: E402
+
+
+def _stamp_step(result: Any, step: dict) -> Any:
+    if not step:
+        return result
+    messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
+    for message in messages:
+        if getattr(message, "type", None) == "tool" and isinstance(getattr(message, "additional_kwargs", None), dict):
+            message.additional_kwargs[STEP_KEY] = {"tier": step.get("tier"), "outcome": step.get("outcome") or "ran", **({"card_id": step["card_id"]} if step.get("card_id") else {})}
+    return result
+
+
+async def _off_loop(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a card's statement off the event loop, in this context.
+
+    Stating a card checks a ledger plan with a DRY-RUN write transaction
+    (LedgerService.validate), synchronously. On the run's event loop that
+    waited for SQLite's write lock while the lock's holder (the run journal's
+    async writer on the same database) needed that very loop to commit: the
+    check timed out with "database is locked", fell back to proposing the plan
+    unchecked, and an invalid plan reached a card and failed after the person
+    confirmed it (eval T11, 2026-10-24 and 2026-10-26)."""
+    import asyncio
+    import contextvars
+    import functools
+
+    context = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, fn, *args, **kwargs))
+
+
+def _ran(result: Any) -> bool:
+    """Did the Tier 2 call actually run? Not when its result is an error, a
+    refusal or a card stated further in (spec 009 review: a refused or carded
+    call is never listed as "ran" in the notice)."""
+    messages = [result] if hasattr(result, "content") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
+    for message in messages:
+        if getattr(message, "type", None) != "tool":
+            continue
+        if getattr(message, "status", None) == "error":
+            return False
+        text = str(getattr(message, "content", "") or "").lstrip()
+        if text.startswith(("Error:", "Not run:", "Waiting for you:")):
+            return False
+        stamp = (getattr(message, "additional_kwargs", None) or {}).get(STEP_KEY)
+        if isinstance(stamp, dict) and stamp.get("outcome") in ("refused", "needs_confirmation"):
+            return False
+    return True
+
+
+def _is_registered_write_todos(tool: Any) -> bool:
+    """The checklist tool the harness's TodoMiddleware registers, by the
+    identity of its function (never by name): its result echoes the call's own
+    arguments (lineage.TRUSTED_TOOL_RESULTS)."""
+    try:
+        from langchain.agents.middleware import todo as todo_module
+    except ImportError:  # pragma: no cover
+        return False
+    func = getattr(tool, "func", None)
+    coroutine = getattr(tool, "coroutine", None)
+    return bool(getattr(tool, "name", None) == "write_todos" and (func is getattr(todo_module, "_write_todos", object()) or coroutine is getattr(todo_module, "_awrite_todos", object())))
 
 
 def canonical_arguments(arguments: Any) -> str:
@@ -126,18 +202,38 @@ class PolicyMiddleware(AgentMiddleware):
     # -- the chokepoint ----------------------------------------------------
 
     def wrap_tool_call(self, request, handler):
+        token = _STEP.set({})
+        try:
+            return _stamp_step(self._wrap_tool_call(request, handler), _step())
+        finally:
+            _STEP.reset(token)
+
+    async def awrap_tool_call(self, request, handler):
+        token = _STEP.set({})
+        try:
+            return _stamp_step(await self._awrap_tool_call(request, handler), _step())
+        finally:
+            _STEP.reset(token)
+
+    def _wrap_tool_call(self, request, handler):
         from omniharness.agents.invitation import inviting_turn
 
         # Whatever tier it gets, a call runs without any pin its model wrote
         # (a pin is the server's: _check_ledger_plan).
         request = self._without_model_pins(request)
         decision = self._classify(request)
+        _step()["tier"] = int(decision.tier) if not decision.refused else None
         if decision.refused:
+            _step()["outcome"] = "refused"
             return self._refuse_unruled(request, decision)
+        declined = self._declined_this_turn(request)
+        if declined is not None:
+            _step()["outcome"] = "refused"
+            return declined
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
-                return handler(request)
+                return self._mark_trusted_ack(request, handler(request))
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
@@ -150,7 +246,7 @@ class PolicyMiddleware(AgentMiddleware):
             self._mark_trusted_ack(request, result)
             if grant:
                 self._record_grant_use(request, decision, grant, call.get("write_id"))
-            else:
+            elif _ran(result):
                 self.ledger.record(
                     tool_name=decision.tool_name,
                     arguments=self._arguments(request),
@@ -161,26 +257,32 @@ class PolicyMiddleware(AgentMiddleware):
         # Tier 3 always asks: a standing grant never skips a confirmation.
         return self._require_confirmation(request, decision)
 
-    async def awrap_tool_call(self, request, handler):
+    async def _awrap_tool_call(self, request, handler):
         # Any agent this call invites (the `task` tool) starts from this
         # call's provenance, not as the user (omniharness.agents.invitation).
         from omniharness.agents.invitation import inviting_turn
 
         request = self._without_model_pins(request)
         decision = self._classify(request)
+        _step()["tier"] = int(decision.tier) if not decision.refused else None
         if decision.refused:
+            _step()["outcome"] = "refused"
             return self._refuse_unruled(request, decision)
+        declined = self._declined_this_turn(request)
+        if declined is not None:
+            _step()["outcome"] = "refused"
+            return declined
 
         if decision.tier is Tier.TIER_1:
             with inviting_turn(self._inviting_for(request)):
-                return await handler(request)
+                return self._mark_trusted_ack(request, await handler(request))
 
         if decision.tier is Tier.TIER_2:
             grant = self._scheduled_hold(request, decision)
             if grant is None:
                 grant = self._chat_suggestion(request, decision)
             if isinstance(grant, str):
-                return self._require_confirmation(request, decision, extra_note=grant)
+                return await _off_loop(self._require_confirmation, request, decision, extra_note=grant)
             with inviting_turn(self._inviting_for(request)), executed_as(GRANTED if grant else DISCLOSED, new_write_id()) as call, self._reserved(grant, call):
                 result = await handler(request)
             self._mark_trusted_ack(request, result)
@@ -196,11 +298,12 @@ class PolicyMiddleware(AgentMiddleware):
             # what that branch was written for.
             arguments = self._arguments(request)
             resolved = tuple(self.resolve_targets(decision.tool_name, arguments)) if (self.resolve_targets and source_argument(arguments)) else ()
-            self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
+            if _ran(result):
+                self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
             return result
 
         # Tier 3 always asks: a standing grant never skips a confirmation.
-        return self._require_confirmation(request, decision)
+        return await _off_loop(self._require_confirmation, request, decision)
 
     # -- standing grants (Feature 006, app/policy/grants.py) ----------------
     #
@@ -348,7 +451,7 @@ class PolicyMiddleware(AgentMiddleware):
             )
         # Disclosed in the run's reply like a Tier 2 write: the person reading
         # it later sees what was done without them.
-        self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets))
+        self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=None, targets=tuple(targets), grant=True)
         logger.info("policy: %s ran %s on its own under a standing grant (%s; %d actions, %d in this run; origin %s)", self._requester(request), decision.tool_name, ", ".join(grant.classes), grant.actions, grant.total, origin)
 
     @classmethod
@@ -393,7 +496,7 @@ class PolicyMiddleware(AgentMiddleware):
         verdict, note = self._complete_confirmation(request)
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(self._disclose(handler(self._offered(request, note))))
+        return self._guard_self_verdict(handler(self._offered(request, note)))
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         # OFF THE EVENT LOOP, AND ONLY WHAT RUNS. A typed "yes" runs the
@@ -422,7 +525,7 @@ class PolicyMiddleware(AgentMiddleware):
             verdict, note = outcome
         if verdict is not None:
             return verdict
-        return self._guard_self_verdict(self._disclose(await handler(self._offered(request, note))))
+        return self._guard_self_verdict(await handler(self._offered(request, note)))
 
     # ---- tools with no rule are not offered (007) -------------------------
     #
@@ -445,6 +548,41 @@ class PolicyMiddleware(AgentMiddleware):
                 unruled = set(report.unruled)
                 changes["tools"] = [t for t in tools if getattr(t, "name", None) not in unruled]
         return request.override(**changes) if changes else request
+
+    #: What the model is told when it repeats a call the person declined in
+    #: this turn (spec 009 FR-058a). Nothing ran.
+    DECLINED_REPEAT_TEXT = "Not run: the person declined this exact call earlier in this task. Do not try it again. Finish what you can without it, and say in your reply what was not done because of the decline."
+
+    def _declined_this_turn(self, request: Any) -> Any:
+        """A call identical (tool + canonical arguments) to one the person
+        DECLINED in this same turn is refused, whatever its tier (FR-058a): a
+        resume after a decline never makes the declined call again. Only a
+        refusal, never a run: this check can only stop calls.
+
+        Checked in a run resumed after a confirmation (the only way a decline
+        and a later call share a turn: the card ends the run that raised it),
+        so an ordinary call does not read the pending store."""
+        from omniharness.agents.called_agents import RESUME_ACTION_KEY
+
+        context = self._runtime_context(request) or {}
+        if not isinstance(context.get(RESUME_ACTION_KEY), dict):
+            return None
+        thread_id = self._thread_id(request)
+        if not thread_id:
+            return None
+        name = self._tool_name(request)
+        declined = [a for a in self.pending.declined_in_thread(thread_id, self._owner_id(request)) if a.tool_name == name]
+        if not declined:
+            return None
+        turn_key = self._private_read(request).turn_key
+        if not turn_key:
+            return None
+        wanted = canonical_arguments(self._arguments(request))
+        for action in declined:
+            if action.group_key == turn_key and canonical_arguments(action.arguments) == wanted:
+                logger.info("policy: %s repeats declined action %s in the same turn; refused", name, action.id)
+                return self._as_tool_result(request, self.DECLINED_REPEAT_TEXT)
+        return None
 
     def _refuse_unruled(self, request: Any, decision: Any) -> Any:
         from .coverage import refusal_text
@@ -505,18 +643,95 @@ class PolicyMiddleware(AgentMiddleware):
     # not. `apply` does not consume records, so disclosing on every call would
     # repeat each line once per model round trip.
 
-    def _disclose(self, response: Any) -> Any:
-        if not self.ledger.records:
-            return response
-        message = self._final_message(response)
-        if message is None:
-            return response  # still mid-loop; the user has not been spoken to yet
+    #
+    # APPLIED IN after_model, TO THE REPLY THAT IS FINAL (spec 009 review H1).
+    # It used to run in wrap_model_call on the first reply with no tool calls
+    # and clear the ledger. Since Slice 0, a later gate can send that reply
+    # back (the checklist gate, TodoMiddleware): the model then writes another
+    # reply, which is the one channels and scheduled runs deliver, and it had
+    # no disclosure. This middleware is earlier in the list than every gate
+    # that sends a reply back, so its after_model runs LAST, and only when no
+    # gate jumped back to the model: the reply it sees is the one the person
+    # gets. It also sees that reply AFTER any rewrite (the trailing-offer
+    # removal), so coverage is judged on the final text (review H2).
 
-        disclosed = self.ledger.apply(str(message.content or ""))
-        if disclosed != message.content:
-            message.content = disclosed
+    def after_model(self, state: Any, runtime: Any) -> dict | None:
+        return self._disclose_final(state, runtime)
+
+    async def aafter_model(self, state: Any, runtime: Any) -> dict | None:
+        return self._disclose_final(state, runtime)
+
+    def _disclose_final(self, state: Any, runtime: Any = None) -> dict | None:
+        """EXACTLY ONCE, on the final reply of the turn that caused it (owner
+        principle). A specialist's (an invited agent's) records are not put in
+        its own reply: they go on it as display data, ride its result back to
+        the agent that invited it, and are rolled up onto that agent's final
+        reply, "(via <agent>)", in the same single line."""
+        from langchain_core.messages import AIMessage
+
+        from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
+        from omniharness.agents.turns import DELEGATED_DISCLOSURE_MARKER, DISCLOSURE_MARKER
+        from omniharness.agents.working_loop import turn_messages
+
+        messages = (state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)) or []
+        message = messages[-1] if messages else None
+        if not isinstance(message, AIMessage) or getattr(message, "tool_calls", None):
+            return None  # still mid-loop; the user has not been spoken to yet
+        context = getattr(runtime, "context", None) or {}
+        invited = isinstance(context, dict) and (INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY)))
+        if invited:
+            if not self.ledger.records:
+                return None
+            items = [{"tool": r.tool_name, "text": r.sentence(), "targets": list(r.targets), "grant": r.grant} for r in self.ledger.records]
+            self.ledger.clear()
+            final = message.model_copy(update={"additional_kwargs": {**(message.additional_kwargs or {}), DELEGATED_DISCLOSURE_MARKER: items}})
+            return {"messages": [final]}
+        # The specialists' records of this turn not yet disclosed on an earlier
+        # final reply of the turn (a resume continues the turn).
+        turn = turn_messages(list(messages))
+        done: set[str] = set()
+        for m in turn[:-1]:
+            marker = (getattr(m, "additional_kwargs", None) or {}).get(DISCLOSURE_MARKER) if isinstance(m, AIMessage) else None
+            if isinstance(marker, dict):
+                done.update(str(i) for i in marker.get("sources") or [])
+        extra: list[ExecutionRecord] = []
+        sources: list[str] = []
+        for m in turn:
+            kwargs = getattr(m, "additional_kwargs", None) or {}
+            delegated = kwargs.get(DELEGATED_DISCLOSURE_MARKER) if getattr(m, "type", None) == "tool" else None
+            call_id = str(getattr(m, "tool_call_id", "") or "")
+            if not isinstance(delegated, dict) or call_id in done:
+                continue
+            agent = str(delegated.get("agent") or "a specialist")
+            for item in delegated.get("items") or []:
+                if isinstance(item, dict) and item.get("tool"):
+                    extra.append(ExecutionRecord(tool_name=str(item["tool"]), arguments={}, result=None, targets=tuple(str(t) for t in item.get("targets") or []), grant=bool(item.get("grant")), agent=agent))
+            sources.append(call_id)
+        if not self.ledger.records and not extra:
+            return None
+        original = str(message.content or "")
+        records = [*self.ledger.records, *extra]
+        disclosed = self.ledger.apply(original, extra)
+        final = message.model_copy(update={"content": disclosed, "additional_kwargs": dict(message.additional_kwargs or {})})
+        self._mark_disclosure(final, original, disclosed, records, sources)
         self.ledger.clear()
-        return response
+        return {"messages": [final]}
+
+    def _mark_disclosure(self, message: Any, original: str, disclosed: str, records: list | None = None, sources: list | None = None) -> None:
+        """Display data on the reply (DISCLOSURE_MARKER): which part of its
+        text is the appended block, the records it lists (each with its agent),
+        and the specialists' results it rolled up. Added after the decision,
+        read by nothing here; the text above is unchanged."""
+        from omniharness.agents.turns import DISCLOSURE_MARKER
+
+        head = original.rstrip()
+        if not disclosed.startswith(head):
+            return
+        records = list(self.ledger.records) if records is None else records
+        items = [{"tool": r.tool_name, "text": r.sentence() + (f" (via {r.agent})" if r.agent else ""), "agent": r.agent, "grant": r.grant} for r in records]
+        if not items or not isinstance(getattr(message, "additional_kwargs", None), dict):
+            return
+        message.additional_kwargs[DISCLOSURE_MARKER] = {"text": disclosed[len(head) :], "items": items, "sources": list(sources or [])}
 
     @staticmethod
     def _final_message(response: Any) -> Any:
@@ -575,15 +790,23 @@ class PolicyMiddleware(AgentMiddleware):
             return None, note
 
         logger.info("policy: confirmation resolved as %s (%s)", result.outcome, result.action_id)
-        if result.outcome == confirm_flow.EXECUTED and result.action_id:
-            action = self.pending.get(result.action_id)
-            if action is not None and action.surface:
-                # Posted in the thread, attributed to the agent that proposed
-                # it, with the result; an invited agent's says it stopped.
-                from .surface_run import report_message
+        stored = self.pending.get(result.action_id) if result.action_id else None
+        verdict = None
+        if result.outcome == confirm_flow.EXECUTED and stored is not None and stored.surface:
+            # Posted in the thread, attributed to the agent that proposed
+            # it, with the result; an invited agent's says it stopped.
+            from .surface_run import report_message
 
-                return report_message(action, result.detail.get("result")), None
-        return AIMessage(content=result.message), None
+            verdict = report_message(stored, result.detail.get("result"))
+        if verdict is None:
+            verdict = AIMessage(content=result.message)
+        # Display data only (spec 009: a typed confirmation that executed is a
+        # receipt for the turn's claims); no decision reads it.
+        from omniharness.agents.working_loop import CONFIRMED_MARKER
+
+        if isinstance(getattr(verdict, "additional_kwargs", None), dict):
+            verdict.additional_kwargs[CONFIRMED_MARKER] = {"outcome": "executed" if result.outcome == confirm_flow.EXECUTED else str(result.outcome), "tool": getattr(stored, "tool_name", "") or ""}
+        return verdict, None
 
     @staticmethod
     def _runner(request: Any) -> Callable[[str, dict], Any]:
@@ -775,6 +998,7 @@ class PolicyMiddleware(AgentMiddleware):
             logger.info("policy: %s repeats open proposal %s; no new card", tool_name, earlier.id)
             return self._mark_trusted_ack(request, self._as_tool_result(request, duplicate_proposal_text(earlier)))
         logger.info("policy: %s requires confirmation (%s)", tool_name, action.id)
+        _step().update({"outcome": "needs_confirmation", "card_id": action.id, "tier": int(action.tier_at_statement)})
         if self._is_invited(request):
             from omniharness.agents.invitation import STOPPED_AT_KEY
 
@@ -941,7 +1165,8 @@ class PolicyMiddleware(AgentMiddleware):
 
         from .lineage import TRUSTED_ACK_MARKER
 
-        if getattr(request, "tool", None) is not ledger_apply_tool:
+        tool = getattr(request, "tool", None)
+        if tool is not ledger_apply_tool and not _is_registered_write_todos(tool):
             return result
         messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
         for message in messages:

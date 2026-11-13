@@ -158,11 +158,12 @@ def test_the_appended_text_comes_from_the_record_not_the_reply():
     assert out.index("lunch") < out.index("calendar_delete")
 
 
-def test_a_model_phrased_disclosure_is_accepted():
-    """The model MAY phrase it. It may not skip it."""
+def test_a_model_phrased_disclosure_does_not_replace_the_notice():
+    """Owner decision (spec 009 review H1/H2): the model may mention it, but
+    its words never stand in for the server's notice, which is appended once."""
     ledger = DisclosureLedger()
     ledger.record("calendar_create_hold", {}, "ok", targets=("Tue 3pm",))
 
     reply = "I ran calendar_create_hold and held Tue 3pm for you."
 
-    assert ledger.apply(reply) == reply
+    assert ledger.apply(reply) == reply + "\n\nRan without asking: calendar_create_hold (Tue 3pm)"

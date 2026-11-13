@@ -255,6 +255,16 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
         except Exception:
             logger.warning("Could not delete the runs of thread %s", sanitize_log_param(thread_id), exc_info=True)
 
+    # The chat's per-run traces (spec 009 FR-080) go with it.
+    history = getattr(request.app.state, "run_history", None)
+    if history is not None:
+        try:
+            from app.run_history.chat_trace import CHAT
+
+            history.delete_thread(thread_id, kind=CHAT)
+        except Exception:
+            logger.warning("Could not delete the run traces of thread %s", sanitize_log_param(thread_id), exc_info=True)
+
     # Remove thread_meta row (best-effort) — required for sqlite backend
     # so the deleted thread no longer appears in /threads/search.
     try:

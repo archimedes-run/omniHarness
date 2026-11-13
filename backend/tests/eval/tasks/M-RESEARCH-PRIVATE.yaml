@@ -1,0 +1,39 @@
+id: M-RESEARCH-PRIVATE
+title: Delegated research after a private read is a card
+mock_only: true
+source: spec 009 FR-061, Q-S0-2 (mocked)
+mode: pro
+prompt: Read my Eval Garden project, then research tomato varieties that suit it.
+tools: []
+confirm: none
+fixtures:
+  ledger:
+  - name: Eval Garden
+    why: Grow vegetables on a sunny balcony in Philadelphia (zone 7b)
+    tasks:
+    - Buy soil
+    - Plant tomato seedlings
+budget:
+  seconds: 60
+checks:
+- card_raised:
+    tool: research
+- tool_called:
+    name: ledger_read
+mock:
+  lead:
+  - tool_calls:
+    - name: ledger_read
+      args:
+        project: Eval Garden
+  - expect:
+      tool: ledger_read
+    tool_calls:
+    - name: research
+      args:
+        description: tomato varieties
+        brief: 'Goal: tomato varieties for a balcony in zone 7b. Inputs: the Eval Garden project. Constraints: public web. Done when: 3 varieties with sources. Return: 3 items with URLs.'
+  - expect:
+      tool: research
+      contains: confirm
+    content: The research waits for your confirmation on its card.

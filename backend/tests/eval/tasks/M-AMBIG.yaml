@@ -1,0 +1,45 @@
+id: M-AMBIG
+title: An ambiguity question before any work is sent back once, and the research happens
+mock_only: true
+source: 'owner rule 2026-11-13 (baseline T02: "Do you want the latest major or minor?" instead of researching)'
+mode: pro
+prompt: Main new features of the latest stable React release; cite 3 sources.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- no_clarification
+- deferred_question
+- tool_called:
+    name: web_search
+- min_links:
+    n: 3
+    distinct_hosts: 2
+mock:
+  lead:
+  - tool_calls:
+    - name: ask_clarification
+      args:
+        question: Do you mean the latest major version or the latest minor release?
+        clarification_type: ambiguous_requirement
+  - expect:
+      tool: ask_clarification
+      contains: Not asked
+    tool_calls:
+    - name: web_search
+      args:
+        query: latest stable React release features
+  - expect:
+      tool: web_search
+      contains: react.dev
+    content: 'I took "latest stable" to mean the newest major release. It adds Actions for async transitions, the `use()` API and refs as props [citation:React 19](https://react.dev/blog/2024/12/05/react-19).
+
+
+      Sources:
+
+      - [React 19 release notes](https://react.dev/blog/2024/12/05/react-19)
+
+      - [React versions](https://react.dev/versions)
+
+      - [React releases on GitHub](https://github.com/facebook/react/releases)'
