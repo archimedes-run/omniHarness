@@ -18,8 +18,9 @@ import { DEMO_BODY, DEMO_SCRIPT, DEMO_SOURCES, DEMO_STYLE } from "./demo-app";
  * The shim is read from src/core/apps/shim/omni-shim.js at each request, so
  * a shim edit takes effect without a rebuild of the app.
  *
- * APPS_SABOTAGE_FRAME_CSP (sabotage runs only): "drop-connect-src" serves the
- * frame without connect-src 'none'; "no-csp" without any CSP.
+ * APPS_SABOTAGE_FRAME_CSP (sabotage runs only): "open-connect-src" serves the
+ * frame with connect-src * (dropping the directive alone changes nothing:
+ * it falls back to default-src 'none'); "no-csp" serves it without a CSP.
  */
 
 const SHIM_PATH = new URL(
@@ -79,8 +80,10 @@ export function appDocument({
   let policy = directives;
   if (csp === "no-sandbox-directive") policy = directives.slice(1);
   const sabotage = process.env.APPS_SABOTAGE_FRAME_CSP;
-  if (sabotage === "drop-connect-src") {
-    policy = policy.filter((d) => !d.startsWith("connect-src"));
+  if (sabotage === "open-connect-src") {
+    policy = policy.map((d) =>
+      d.startsWith("connect-src") ? "connect-src *" : d,
+    );
   }
   const headers: Record<string, string> = {
     "Content-Type": "text/html; charset=utf-8",
@@ -289,6 +292,8 @@ export interface BridgeLog {
   restores: unknown[];
   revokes: string[];
   pinWrites: string[][];
+  /** Refusal reports the gateway would refuse (422): must stay empty. */
+  invalidReports: unknown[];
   /** Requests the APP FRAME made to this origin (must stay empty). */
   fromFrame: string[];
 }
@@ -354,6 +359,7 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
     restores: [],
     revokes: [],
     pinWrites: [],
+    invalidReports: [],
     fromFrame: [],
   };
   const wait = () =>
@@ -495,7 +501,28 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
       return json(route, result(app, source));
     }
     if (rest === "/refused" && method === "POST") {
-      log.refused.push(req.postDataJSON() as BridgeLog["refused"][number]);
+      // api.md: codes only; anything else is 422 (and not logged).
+      const body = req.postDataJSON() as Record<string, unknown>;
+      const name = /^[a-z][a-z0-9_]{0,31}$/;
+      const ok =
+        typeof body.reason === "string" &&
+        /^[a-z][a-z0-9_]{0,47}$/.test(body.reason) &&
+        Object.keys(body).every((k) =>
+          ["reason", "type", "source"].includes(k),
+        ) &&
+        (body.type === undefined ||
+          (typeof body.type === "string" && name.test(body.type))) &&
+        (body.source === undefined ||
+          (typeof body.source === "string" && name.test(body.source)));
+      if (!ok) {
+        log.invalidReports.push(body);
+        return json(
+          route,
+          { detail: [{ msg: "invalid refusal report" }] },
+          422,
+        );
+      }
+      log.refused.push(body as BridgeLog["refused"][number]);
       return route.fulfill({ status: 204, body: "" });
     }
     if (rest === "/approval") {
@@ -574,6 +601,18 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
         status: app.status,
         sentence: "Data is shown in the app only; the assistant never sees it.",
         sources: app.sources.map(sourceView),
+        activity: [
+          {
+            at: minutesAgo(30),
+            event: "app_message_refused",
+            detail: { reason: "source_not_approved" },
+          },
+          {
+            at: "2026-11-12T09:00:00+00:00",
+            event: "app_approved",
+            detail: { version: app.version, via: "button" },
+          },
+        ],
         grants:
           app.status === "needs_approval"
             ? []

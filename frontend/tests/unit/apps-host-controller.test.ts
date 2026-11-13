@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AppHostController,
+  reportOf,
   type HostControllerOptions,
   type Refusal,
 } from "@/core/apps/host-controller";
@@ -125,6 +126,7 @@ describe("the handshake", () => {
     expect(h.frameWindow.postMessage).toHaveBeenCalledTimes(1);
     expect(h.torn.count).toBe(1);
     expect(h.controller.state).toBe("torn-down");
+    expect(h.refusals).toEqual([{ reason: "second_load" }]);
     // The old port is dead: a request on it gets nothing back.
     h.port().postMessage({ v: 1, type: "data", id: "r1", source: "calendar" });
     await settle();
@@ -206,10 +208,11 @@ describe("messages on the port", () => {
       reason: "not_an_object",
     });
     expect(h.fetches).toEqual([]);
-    expect(h.refusals.map((r) => r.reason)).toEqual([
-      "unknown_key:params",
-      "too_large",
-      "not_an_object",
+    // The frame is told the detail; the audit gets codes only (api.md).
+    expect(h.refusals).toEqual([
+      { reason: "invalid_message", type: "refresh", source: "calendar" },
+      { reason: "oversized", type: "open" },
+      { reason: "invalid_message" },
     ]);
   });
 
@@ -347,5 +350,53 @@ describe("theme and updates", () => {
         state: "fresh",
       }),
     ]);
+  });
+});
+
+describe("refusal reports", () => {
+  it("carry codes only: no free text from the frame reaches the audit", () => {
+    expect(
+      reportOf({
+        reason: "unknown_key:<script>",
+        type: "data",
+        source: "calendar",
+      }),
+    ).toEqual({
+      reason: "invalid_message",
+      type: "data",
+      source: "calendar",
+    });
+    expect(reportOf({ reason: "too_large" })).toEqual({ reason: "oversized" });
+    expect(
+      reportOf({
+        reason: "source_not_approved",
+        type: "data",
+        source: "inbox_bodies",
+      }),
+    ).toEqual({
+      reason: "source_not_approved",
+      type: "data",
+      source: "inbox_bodies",
+    });
+    // A type or source that is not a valid name is left out, not cleaned up.
+    expect(
+      reportOf({
+        reason: "unknown_type",
+        type: "Hello World",
+        source: "../../etc",
+      }),
+    ).toEqual({
+      reason: "unknown_type",
+    });
+    for (const r of [
+      "rate_limited",
+      "url_not_allowed",
+      "not_on_port",
+      "wrong_window",
+      "transfer_refused",
+      "second_load",
+    ]) {
+      expect(reportOf({ reason: r }).reason).toMatch(/^[a-z][a-z0-9_]{0,47}$/);
+    }
   });
 });

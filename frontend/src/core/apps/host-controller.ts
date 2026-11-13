@@ -53,6 +53,8 @@ export interface HostControllerOptions {
   prefetch: Promise<Record<string, SourceResult> | null> | null;
   /** One source from the bridge; `refresh` asks for a refetch. */
   fetchSource(source: string, refresh: boolean): Promise<SourceResult>;
+  /** To the gateway's audit (`app_message_refused`): codes only, never
+   * free text from the frame (api.md, POST /refused). */
   reportRefusal(refusal: Refusal): void;
   openExternal(url: string): void;
   openInternal(path: string): void;
@@ -171,6 +173,8 @@ export class AppHostController {
   private tearDown(): void {
     this.closePort();
     this.phase = "torn-down";
+    if (this.reports.allow())
+      this.opts.reportRefusal({ reason: "second_load" });
     this.opts.onTornDown();
   }
 
@@ -198,7 +202,7 @@ export class AppHostController {
         reason: refusal.reason.slice(0, 300),
       });
     }
-    if (this.reports.allow()) this.opts.reportRefusal(refusal);
+    if (this.reports.allow()) this.opts.reportRefusal(reportOf(refusal));
   }
 
   private handlePortMessage(event: MessageEvent): void {
@@ -306,4 +310,31 @@ function idOf(data: unknown): string | undefined {
   return typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id)
     ? id
     : undefined;
+}
+
+const NAME = /^[a-z][a-z0-9_]{0,31}$/;
+
+/**
+ * The audit entry for a refusal: a code from a fixed set (the frame's own
+ * words never reach the log), and its type and source only when each is a
+ * valid name. The frame itself is told the detailed reason.
+ */
+export function reportOf(refusal: Refusal): Refusal {
+  const r = refusal.reason;
+  const reason =
+    r === "too_large"
+      ? "oversized"
+      : r === "not_an_object" ||
+          r === "not_json" ||
+          r.startsWith("unknown_key:") ||
+          r.startsWith("missing_key:") ||
+          r.startsWith("bad_value:")
+        ? "invalid_message"
+        : /^[a-z][a-z0-9_]{0,47}$/.test(r)
+          ? r
+          : "invalid_message";
+  const out: Refusal = { reason };
+  if (refusal.type && NAME.test(refusal.type)) out.type = refusal.type;
+  if (refusal.source && NAME.test(refusal.source)) out.source = refusal.source;
+  return out;
 }
