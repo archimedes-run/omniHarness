@@ -72,7 +72,7 @@ async def get_builder(thread_id: str, request: Request) -> BuilderState:
 
 
 @router.delete("/threads/{thread_id}/builder", response_model=DropResult, summary="Drop this chat's draft (writes nothing to the config store)")
-@require_permission("threads", "write", owner_check=True)
+@require_permission("threads", "delete", owner_check=True, require_existing=True)
 async def drop_builder(thread_id: str, request: Request) -> DropResult:
     user_id = _user_id(request)
     try:

@@ -237,3 +237,13 @@ def test_a_save_without_a_draft_id_pins_the_chats_current_draft(gw) -> None:
     script(gw, "Saved.")
     say(gw, thread_id, "yes")
     assert agent_state(gw, "test-010-inbox")[1] == 1
+
+
+def test_drop_answers_only_for_the_callers_own_existing_thread(gw) -> None:
+    thread_id = new_thread(gw)
+    _build(gw, thread_id)
+    # A thread that does not exist (or is not the caller's) never answers 200,
+    # and nothing is dropped.
+    assert gw.client.delete("/api/threads/no-such-thread/builder").status_code in (403, 404)
+    assert gw.client.get(f"/api/threads/{thread_id}/builder").json()["building"] is not None
+    assert gw.client.delete(f"/api/threads/{thread_id}/builder").status_code == 200
