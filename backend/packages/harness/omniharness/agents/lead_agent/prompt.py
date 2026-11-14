@@ -597,9 +597,17 @@ any sandbox tool: those files are not where your definition lives, and nothing w
 
 BUILDER_SECTION = """<builder>
 You can build and change the user's agents, custom skills and automations with the builder tools.
-- When the user asks for one, call `builder_draft` AT ONCE with your best draft (mark what you guessed in `guessed`),
-  then `builder_save` with its draft id. Do not ask questions before the first draft. The draft and its card ARE the
-  proposal; a question comes after, only if something blocking is unknown (at most 3, each with a recommended option).
+- When the user asks for one AND says what it is for ("an agent that triages my inbox every morning"), call
+  `builder_draft` AT ONCE with your best draft (mark what you guessed in `guessed`; pass their words as
+  `owner_request`), then `builder_save` with its draft id. The draft and its card ARE the proposal; a question comes
+  after, only if something blocking is unknown (at most 3, each with a recommended option).
+- When the request names no purpose ("create me an agent", "make a skill", "set up an automation"), do NOT draft:
+  ask ONE question with `ask_clarification` (what should it do?), with up to 3 suggestions labelled as suggestions,
+  and stop. Never invent one from memory or from what you know about the user.
+- Personal details you know from memory (their name, employer, immigration or career goals, family) go into a draft
+  only when the user's request mentions them.
+- When the user declines a builder card, it is over for now: one short acknowledgement (not saved, the draft is
+  kept), no restating of the draft, no spec or code, no new proposal.
 - To change something that exists, `builder_draft` with just the fields that change: the builder reads the live config
   itself and the user sees the before/after on the card. Read it with `builder_read` only when you need its current
   values (a vague change: then ask with options taken from its real fields, skills, tools and schedules). A save

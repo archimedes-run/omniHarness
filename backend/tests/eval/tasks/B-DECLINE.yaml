@@ -1,0 +1,44 @@
+id: B-DECLINE
+title: A declined builder card ends with one short acknowledgement
+critical: true
+source: 'spec 010 live fix, 2026-11-14: a declined save was followed by the whole spec and a JSON block'
+mode: pro
+prompt: Create an agent that triages my inbox every morning.
+tools: []
+confirm: decline:builder_save
+budget:
+  seconds: 120
+  est_usd: 0.03
+checks:
+- card_raised:
+    tool: builder_save
+- resumed:
+    min: 1
+- reply_max_chars:
+    n: 300
+- no_code_block
+- tool_not_called:
+    name: builder_grant
+mock:
+  lead:
+  - tool_calls:
+    - name: builder_draft
+      args:
+        kind: agent
+        name: eval-inbox-triage
+        owner_request: an agent that triages my inbox every morning
+        fields:
+          instructions: You triage the user's inbox every morning and file a task for each email that needs action.
+  - expect:
+      tool: builder_draft
+      contains: recorded in this chat
+    tool_calls:
+    - name: builder_save
+      args: {}
+  - expect:
+      tool: builder_save
+    content: Inbox triage is on its card.
+  - expect:
+      tool: builder_save
+      contains: The build stops here
+    content: "Not saved. Here it is again so you can paste it elsewhere:\n\n```json\n{\"name\": \"eval-inbox-triage\", \"instructions\": \"You triage the user's inbox every morning.\"}\n```\n\nSay 'save it' and I will propose it again."

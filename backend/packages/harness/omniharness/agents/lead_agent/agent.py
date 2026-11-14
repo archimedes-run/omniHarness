@@ -519,21 +519,38 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
 
 
 def builder_tools_for(cfg: dict) -> list[BaseTool]:
-    """The builder tools this lead run gets: all of them, or none."""
+    """The builder tools this lead run gets: all of them; draft and save only
+    in a run resumed on Question-card answers; or none. Not offered at all
+    (no <builder> prompt section either) when the install cannot use it: see
+    GET /api/builder/status for why."""
     from omniharness.runtime.builder.controller import get_builder_controller
     from omniharness.runtime.builder.surface import builder_refusal
 
     controller = get_builder_controller()
-    if controller is None or builder_refusal(cfg) is not None:
+    if controller is None:
         return []
-    unavailable = getattr(controller, "unavailable_reason", None)
-    if callable(unavailable) and unavailable() is not None:
-        # Not offered at all (no <builder> prompt section either): see
-        # GET /api/builder/status for why.
+    if builder_refusal(cfg) is not None:
+        return _builder_question_resume_tools(cfg) if _builder_ready(controller) else []
+    if not _builder_ready(controller):
         return []
     from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
 
     return list(BUILDER_TOOLS)
+
+
+def _builder_ready(controller) -> bool:
+    unavailable = getattr(controller, "unavailable_reason", None)
+    return not (callable(unavailable) and unavailable() is not None)
+
+
+def _builder_question_resume_tools(cfg: dict) -> list[BaseTool]:
+    """In a run resumed on Question-card answers: draft and save (a card) only."""
+    from omniharness.runtime.builder.surface import QUESTION_RESUME_TOOLS, builder_refusal, question_resume
+    from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
+
+    if not question_resume(cfg) or builder_refusal(cfg, "builder_draft") is not None:
+        return []
+    return [t for t in BUILDER_TOOLS if t.name in QUESTION_RESUME_TOOLS]
 
 
 def lead_agent_tools(cfg: dict, *, app_config: AppConfig | None = None) -> list[BaseTool]:

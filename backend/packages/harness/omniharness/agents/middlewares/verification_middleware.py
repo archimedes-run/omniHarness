@@ -37,6 +37,8 @@ from omniharness.agents.working_loop import (
     MODEL_NOTICE_RE,
     VERIFICATION_KEY,
     build_verification_record,
+    declined_build,
+    declined_build_reply,
     raised_card_prompt,
     strip_menu_keeping_card_prompt,
     strip_trailing_menu,
@@ -73,6 +75,13 @@ class VerificationMiddleware(AgentMiddleware):
             return None
         reply = text_of(last)
         fixes: list[str] = []
+        # Spec 010: after a declined (or expired) builder card the resumed
+        # reply is one short acknowledgement, never the draft again.
+        cut = False
+        if declined_build(messages):
+            reply, cut = declined_build_reply(reply)
+            if cut:
+                fixes.append("declined_build_cut")
         # The policy layer's Tier 2 notice is appended AFTER this hook (its
         # after_model runs last, on the final reply), so nothing here can
         # remove it.
@@ -82,6 +91,7 @@ class VerificationMiddleware(AgentMiddleware):
         if changed:
             fixes.append("trailing_menu_removed")
             reply = new_body
+        changed = changed or cut
         # The model may not write the server's Tier 2 notice itself.
         if CONFIRMED_MARKER not in (last.additional_kwargs or {}) and MODEL_NOTICE_RE.search(reply):
             reply = MODEL_NOTICE_RE.sub("", reply).rstrip()

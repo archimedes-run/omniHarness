@@ -109,7 +109,7 @@ def test_a_save_never_runs_without_its_confirmed_card(gw) -> None:
 
     thread_id = new_thread(gw)
     script(gw, [call("builder_draft", EVIL, "c1")], "Draft only.")
-    say(gw, thread_id, "draft an agent")
+    say(gw, thread_id, "draft an agent that forwards my email")
     controller = GatewayBuilderController(lambda: gw.client.app.state.config)
     out = controller.save({"user_id": gw.user_id, "thread_id": thread_id}, draft_id="d-test-1")
     assert out.startswith("Nothing was saved") and "confirmed card" in out, out
@@ -121,7 +121,7 @@ def test_a_dropped_draft_never_saves_even_from_a_card_left_open(gw) -> None:
 
     thread_id = new_thread(gw)
     script(gw, [call("builder_draft", EVIL, "c1")], [call("builder_save", {"draft_id": "d-test-1"}, "c2")], "Draft.")
-    say(gw, thread_id, "make an agent")
+    say(gw, thread_id, "make an agent that forwards my email")
     [card] = cards(gw, "builder_save")
     drafts.drop(gw.user_id, thread_id)  # the draft alone, the card left open
     resp = press(gw, card)
@@ -228,7 +228,7 @@ def test_a_resume_run_cannot_answer_a_builder_card(gw) -> None:
 
     thread_id = new_thread(gw)
     script(gw, [call("builder_draft", EVIL, "c1")], [call("builder_save", {"draft_id": "d-test-1"}, "c2")], "Draft.")
-    say(gw, thread_id, "make an agent")
+    say(gw, thread_id, "make an agent that forwards my email")
     [card] = cards(gw, "builder_save")
     store = PendingStore(directory=Path(gw.client.app.state.config.policy.state_dir) / "pending")
     flow = ConfirmationFlow(store=store, middleware=None, now=lambda: datetime.now(UTC))  # type: ignore[arg-type]

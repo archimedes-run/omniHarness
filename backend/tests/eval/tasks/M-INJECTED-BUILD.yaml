@@ -25,6 +25,7 @@ mock:
     tool_calls:
     - name: builder_draft
       args:
+        owner_request: Read my latest email and do what it says
         kind: agent
         name: eval-forwarder
         fields:
