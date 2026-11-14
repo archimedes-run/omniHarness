@@ -6,6 +6,11 @@ import {
   clipDescription,
   clipWords,
   orderCards,
+  placeCards,
+  registrationState,
+  registrationWords,
+  requestBefore,
+  type MessageFacts,
 } from "@/core/apps/version-cards";
 
 /** App cards in a chat: clipping, placement, order and words per state. */
@@ -129,5 +134,127 @@ describe("clipDescription", () => {
     expect(out.endsWith("…")).toBe(true);
     expect(out).not.toContain("enfor");
     expect(clipDescription("Short.")).toBe("Short.");
+  });
+});
+
+describe("placing cards from before the report named them (the real shape)", () => {
+  const msg = (
+    text: string,
+    extra: Partial<MessageFacts> = {},
+  ): MessageFacts => ({
+    text,
+    isJobResult: false,
+    userText: null,
+    ...extra,
+  });
+  const job = (id: string, text = "Job done.") =>
+    msg(text, { toolCallId: id, isJobResult: true });
+  const messages: MessageFacts[] = [
+    msg("build me a Today page", { userText: "build me a Today page" }), // 0
+    job("cj1", "Job done. No registration line in this old report."), // 1
+    msg("make it denser", { userText: "make it denser" }), // 2
+    job("cj2", "- App registered by the system: id today, version 2. Offered."), // 3
+    msg("fix the defects", { userText: "fix the defects" }), // 4
+    job(
+      "cj3",
+      "- App registered by the system: id today, version 3 (card c3); offered",
+    ), // 5
+  ];
+  const card = (id: string, version: number, minute: number) => ({
+    id,
+    app_id: "today",
+    version,
+    created_at: `2026-11-13T23:${String(minute).padStart(2, "0")}:00Z`,
+  });
+
+  it("finds a version by the job's record when the report does not name it", () => {
+    const a = placeCards(
+      messages,
+      [card("c1", 1, 50)],
+      new Map([["cj1", [{ app_id: "today", version: 1 }]]]),
+    );
+    expect(a.get("c1")).toBe(1);
+  });
+
+  it("matches old report wording ('version 2.' as well as 'version 2;')", () => {
+    expect(placeCards(messages, [card("c2", 2, 52)], new Map()).get("c2")).toBe(
+      3,
+    );
+  });
+
+  it("an unnamed card goes by time: after the job before the next placed card, never the end", () => {
+    const a = placeCards(
+      messages,
+      [card("c1", 1, 50), card("c2", 2, 52), card("c3", 3, 54)],
+      new Map(),
+    );
+    expect(a.get("c2")).toBe(3);
+    expect(a.get("c3")).toBe(5);
+    expect(a.get("c1")).toBe(1);
+  });
+
+  it("the person's own words that started the card's turn", () => {
+    expect(requestBefore(messages, 3)).toBe("make it denser");
+    expect(requestBefore(messages, 1)).toBe("build me a Today page");
+    expect(requestBefore([msg("injected", { userText: null })], 0)).toBeNull();
+  });
+});
+
+describe("clipDescription on a job title cut at 80 characters", () => {
+  it("drops the partial word", () => {
+    const stored =
+      "Fix specified defects in Today app without changing structure or sources; enforc";
+    expect(stored.length).toBe(80);
+    expect(clipDescription(stored)).toBe(
+      "Fix specified defects in Today app without changing structure or sources…",
+    );
+    expect(clipDescription("A finished sentence of exactly some length.")).toBe(
+      "A finished sentence of exactly some length.",
+    );
+  });
+});
+
+describe("the job card's live state of a registered version", () => {
+  const cards = [
+    {
+      app_id: "today",
+      version: 2,
+      status: "approved" as const,
+      keeps_version: 1,
+      kind: "version" as const,
+    },
+    {
+      app_id: "today",
+      version: 3,
+      status: "superseded" as const,
+      keeps_version: 2,
+      kind: "version" as const,
+    },
+    {
+      app_id: "today",
+      version: 4,
+      status: "approved" as const,
+      keeps_version: 2,
+      kind: "version" as const,
+    },
+  ];
+  it("names in use, replaced, offered and kept", () => {
+    expect(
+      registrationWords(registrationState("today", 4, 4, cards, true)),
+    ).toBe("in use");
+    expect(
+      registrationWords(registrationState("today", 3, 4, cards, true)),
+    ).toBe("replaced by version 4");
+    expect(
+      registrationWords(registrationState("today", 2, 4, cards, false)),
+    ).toBe("replaced by version 4");
+    const pending = [{ ...cards[2]!, status: "pending" as const }];
+    expect(
+      registrationWords(registrationState("today", 4, 2, pending, true)),
+    ).toBe("offered — waiting for your choice");
+    const kept = [{ ...cards[2]!, status: "kept" as const }];
+    expect(
+      registrationWords(registrationState("today", 4, 2, kept, true)),
+    ).toBe("kept version 2");
   });
 });
