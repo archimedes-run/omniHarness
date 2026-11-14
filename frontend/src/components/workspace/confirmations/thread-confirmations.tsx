@@ -12,7 +12,7 @@ import type { PostedResult } from "@/core/confirmations/logic";
 import { anchorActions } from "@/core/messages/agents";
 
 import { PendingConfirmations } from "./pending-confirmations";
-import { ThreadAppApprovals } from "./thread-app-approvals";
+import { AppCardStack, useThreadAppCards } from "./thread-app-approvals";
 
 /**
  * A chat's confirmation cards, each IN the thread at the point it was raised
@@ -60,9 +60,12 @@ export function useThreadConfirmations(
     return [...sticky.current.keys()];
   }, [messages, ids]);
 
+  // Spec 011: app cards, each after the turn that registered its version.
+  const appCards = useThreadAppCards(threadId, messages);
+
   const afterGroup = useCallback(
     (group: Message[]) => {
-      if (!enabled || anchored.length === 0) return null;
+      if (!enabled) return null;
       const keys = new Set(
         group.map(
           (message) => message.id ?? `index-${messages.indexOf(message)}`,
@@ -71,24 +74,47 @@ export function useThreadConfirmations(
       const here = anchored.filter((id) =>
         keys.has(sticky.current.get(id) ?? ""),
       );
-      if (here.length === 0) return null;
+      const cards = [...keys].flatMap((k) => appCards.placed.get(k) ?? []);
+      if (here.length === 0 && cards.length === 0) return null;
       return (
-        <div
-          className="-mt-4 w-full pl-[42px]"
-          data-testid="inline-confirmations"
-        >
-          <PendingConfirmations
-            threadId={threadId}
-            only={here}
-            quietWhenEmpty
-            onContinue={onContinue}
-            onResumed={onResumed}
-            onPickUp={onPickUp}
-          />
-        </div>
+        <>
+          {here.length > 0 && (
+            <div
+              className="-mt-4 w-full pl-[42px]"
+              data-testid="inline-confirmations"
+            >
+              <PendingConfirmations
+                threadId={threadId}
+                only={here}
+                quietWhenEmpty
+                onContinue={onContinue}
+                onResumed={onResumed}
+                onPickUp={onPickUp}
+              />
+            </div>
+          )}
+          {cards.length > 0 && (
+            <div className="-mt-4 w-full pl-[42px]">
+              <AppCardStack
+                cards={cards}
+                wordsOf={appCards.wordsOf}
+                testId="inline-app-cards"
+              />
+            </div>
+          )}
+        </>
       );
     },
-    [anchored, enabled, messages, onContinue, onResumed, onPickUp, threadId],
+    [
+      anchored,
+      appCards,
+      enabled,
+      messages,
+      onContinue,
+      onResumed,
+      onPickUp,
+      threadId,
+    ],
   );
 
   const footer = enabled ? (
@@ -101,8 +127,8 @@ export function useThreadConfirmations(
         onResumed={onResumed}
         onPickUp={onPickUp}
       />
-      {/* Spec 011: App access cards raised in this chat (button only). */}
-      <ThreadAppApprovals threadId={threadId} />
+      {/* Spec 011: app cards no turn names yet (button only), oldest first. */}
+      <AppCardStack cards={appCards.rest} wordsOf={appCards.wordsOf} />
     </>
   ) : null;
 
