@@ -203,6 +203,7 @@ SVG_ELEMENTS = frozenset(
     feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feGaussianBlur feMerge feMergeNode
     feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence""".split()
 )
+#: `name` and `transform-origin` are inert; mermaid's own output uses them.
 SVG_ATTRIBUTES = frozenset(
     """id class style transform x y x1 y1 x2 y2 cx cy r rx ry fx fy fr width height d points viewBox
     preserveAspectRatio version baseProfile fill fill-opacity fill-rule stroke stroke-width stroke-opacity
@@ -218,7 +219,7 @@ SVG_ATTRIBUTES = frozenset(
     edgeMode preserveAlpha surfaceScale diffuseConstant specularConstant specularExponent azimuth elevation z
     pointsAtX pointsAtY pointsAtZ limitingConeAngle kernelUnitLength href lang role media vector-effect
     shape-rendering text-rendering image-rendering color-interpolation color-interpolation-filters paint-order
-    mix-blend-mode isolation pathLength""".split()
+    mix-blend-mode isolation pathLength name transform-origin""".split()
 )
 _ATTR_PREFIXES = ("aria-", "data-")
 _URL = re.compile(r"url\s*\(\s*(['\"]?)(.*?)\1\s*\)", re.I | re.S)

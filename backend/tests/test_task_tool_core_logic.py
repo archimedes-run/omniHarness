@@ -236,7 +236,7 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     # by SubagentExecutor and injected as conversation items (Codex pattern).
     assert captured["executor_kwargs"]["config"].system_prompt == "Base system prompt"
 
-    get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False)
+    get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False, artifact_tools=False)
 
     event_types = [e["type"] for e in events]
     assert event_types == ["task_started", "task_running", "task_running", "task_completed"]
@@ -287,7 +287,7 @@ def test_task_tool_propagates_tool_groups_to_subagent(monkeypatch):
 
     assert output == "Task Succeeded. Result: done"
     # The key assertion: groups should be propagated from parent metadata
-    get_available_tools.assert_called_once_with(model_name="ark-model", groups=parent_tool_groups, subagent_enabled=False)
+    get_available_tools.assert_called_once_with(model_name="ark-model", groups=parent_tool_groups, subagent_enabled=False, artifact_tools=False)
 
 
 def test_task_tool_uses_subagent_model_override_for_tool_loading(monkeypatch):
@@ -337,6 +337,7 @@ def test_task_tool_uses_subagent_model_override_for_tool_loading(monkeypatch):
         model_name="vision-subagent-model",
         groups=None,
         subagent_enabled=False,
+        artifact_tools=False,
     )
 
 
@@ -461,7 +462,51 @@ def test_task_tool_no_tool_groups_passes_none(monkeypatch):
 
     assert output == "Task Succeeded. Result: ok"
     # No tool_groups in metadata → groups=None (default behavior preserved)
-    get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False)
+    get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False, artifact_tools=False)
+
+
+@pytest.mark.parametrize("flag,expected", [(True, True), (False, False), ("true", False), (None, False)])
+def test_task_tool_artifact_tools_follow_the_delegating_agent(monkeypatch, flag, expected):
+    """Spec 012: a delegate of the built-in assistant (the lead's metadata says
+    artifact_tools: True) keeps the artifact tools; anything else, including a
+    value that is not exactly True, gives none."""
+    config = _make_subagent_config()
+    # Default _make_runtime() has no tool_groups in metadata
+    runtime = _make_runtime()
+    runtime.config["metadata"]["artifact_tools"] = flag
+    events = []
+    get_available_tools = MagicMock(return_value=[])
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        def execute_async(self, prompt, task_id=None):
+            return task_id or "generated-task-id"
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(
+        task_tool_module,
+        "get_background_task_result",
+        lambda _: _make_result(FakeSubagentStatus.COMPLETED, result="ok"),
+    )
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("omniharness.tools.get_available_tools", get_available_tools)
+
+    output = _run_task_tool(
+        runtime=runtime,
+        description="执行任务",
+        prompt="normal work",
+        subagent_type="general-purpose",
+        tool_call_id="tc-no-groups",
+    )
+
+    assert output == "Task Succeeded. Result: ok"
+    # No tool_groups in metadata → groups=None (default behavior preserved)
+    get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False, artifact_tools=expected)
 
 
 def test_task_tool_runtime_none_passes_groups_none(monkeypatch):
@@ -505,6 +550,7 @@ def test_task_tool_runtime_none_passes_groups_none(monkeypatch):
         model_name="default-model",
         groups=None,
         subagent_enabled=False,
+        artifact_tools=False,
         app_config=fallback_app_config,
     )
 

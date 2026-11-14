@@ -251,6 +251,8 @@ def test_make_lead_agent_reads_runtime_options_from_context(monkeypatch):
     assert kwargs["groups"] is None
     assert kwargs["subagent_enabled"] is True
     assert kwargs["app_config"] is app_config
+    # Spec 012: the built-in assistant (no custom agent) gets the artifact tools.
+    assert kwargs["artifact_tools"] is True
     assert result["model"] is not None
 
 

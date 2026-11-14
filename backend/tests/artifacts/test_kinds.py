@@ -182,3 +182,10 @@ def test_mermaid_config_cannot_inject_css_or_fonts():
     for src in ('%%{init: {"themeCSS": ".node{background:url(x)}"}}%%\ngraph TD; A-->B', '%%{init: {"fontFamily": "x"}}%%\ngraph TD; A-->B'):
         with pytest.raises(InvalidContent):
             kinds.canonical("mermaid", src)
+
+
+def test_mermaid_output_attributes_are_accepted():
+    """Mermaid's own SVG uses the inert `name` and `transform-origin`."""
+    kinds.canonical("svg", '<svg xmlns="http://www.w3.org/2000/svg"><g name="node" transform-origin="10 10"><rect width="1" height="1"/></g></svg>')
+    with pytest.raises(InvalidContent):
+        kinds.canonical("svg", '<svg xmlns="http://www.w3.org/2000/svg"><g transform-origin="url(https://evil.example/a)"/></svg>')
