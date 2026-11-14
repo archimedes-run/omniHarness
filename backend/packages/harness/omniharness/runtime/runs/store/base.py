@@ -84,6 +84,16 @@ class RunStore(abc.ABC):
     async def list_pending(self, *, before: str | None = None) -> list[dict[str, Any]]:
         pass
 
+    async def list_active(self) -> list[dict[str, Any]]:
+        """Every run still recorded "pending" or "running", every user's and
+        every worker's (the restart sweep, app.gateway.run_recovery)."""
+        return []
+
+    async def mark_interrupted_if_active(self, run_id: str, *, error: str) -> bool:
+        """Atomically mark a still-active run interrupted; True only for the
+        caller that changed it (one notice per interrupted run)."""
+        return False
+
     @abc.abstractmethod
     async def aggregate_tokens_by_thread(self, thread_id: str) -> dict[str, Any]:
         """Aggregate token usage for completed runs in a thread.

@@ -302,6 +302,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Starting API Gateway; uvicorn binds %s:%s%s", bind[0], bind[1], "" if bind[0] in ("127.0.0.1", "::1", "localhost") else " (NOT loopback: reachable beyond this machine unless a container network isolates it)")
 
+    recovery_lease = None  # app.gateway.run_recovery.WorkerLease, set inside
     # Initialize LangGraph runtime components (StreamBridge, RunManager, checkpointer, store)
     async with langgraph_runtime(app):
         logger.info("LangGraph runtime initialised")
@@ -452,11 +453,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         question_task = asyncio.create_task(question_sweep_forever(app))
 
+        # A reply cut off by a restart leaves a trace (app.gateway.run_recovery):
+        # this worker's lease, then a sweep now and every minute that ends a
+        # dead worker's in-flight runs as interrupted, with a notice.
+        recovery_task = None
+        try:
+            from app.gateway.run_recovery import WorkerLease, recover_forever
+            from omniharness.config.paths import get_paths
+
+            recovery_lease = WorkerLease(get_paths().base_dir)
+            app.state.run_manager.worker_id = recovery_lease.worker_id
+            recovery_task = asyncio.create_task(recover_forever(app.state, lease=recovery_lease, base_dir=get_paths().base_dir))
+        except Exception:
+            logger.exception("Run recovery could not start; interrupted runs are not swept in this worker")
+
         yield
 
         # ONE deadline for the whole shutdown, the data closes' share reserved
         # (app.gateway.shutdown, issue #192): every step below is bounded.
         shutdown.begin()
+
+        # In-flight replies end as interrupted by the restart, with their
+        # notice written now (a data step: within the data closes' reserve,
+        # before the database closes), so it exists before the next start.
+        if recovery_task is not None:
+            recovery_task.cancel()
+            await shutdown.service_step(recovery_task, "the run recovery sweep", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
+        if recovery_lease is not None:
+            from app.gateway.run_recovery import interrupt_live_runs
+            from omniharness.config.paths import get_paths
+
+            await shutdown.data_step(interrupt_live_runs(app.state, base_dir=get_paths().base_dir), "marking in-flight runs interrupted")
 
         # Apps refresher and bridge refreshes end (cancelled and awaited,
         # bounded) before anything they use, the database above all, closes.
@@ -504,6 +531,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # past their bound are cancelled again and, if still running, detached so
     # the process's exit cannot wait on them (app.gateway.shutdown).
     await shutdown.finish()
+    if recovery_lease is not None:
+        recovery_lease.release()
     logger.info("Shutting down API Gateway")
 
 

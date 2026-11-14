@@ -225,7 +225,7 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
 _CLIENT_CONTEXT_KEYS: frozenset[str] = _CONTEXT_CONFIGURABLE_KEYS - SERVER_OWNED_RUN_KEYS
 
 #: Metadata keys a client may never set on a run or a thread.
-_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id", "invited_agent", "delegation_chain", "sandbox_id", "run_id"}
+_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id", "invited_agent", "delegation_chain", "sandbox_id", "run_id", "worker_id"}
 
 #: ALLOWLISTS (security baseline, review round): what a client may put in each
 #: run-config container. Everything else is dropped before the server writes

@@ -154,6 +154,20 @@ class RunRepository(RunStore):
             await session.delete(row)
             await session.commit()
 
+    async def list_active(self):
+        stmt = select(RunRow).where(RunRow.status.in_(("pending", "running"))).order_by(RunRow.created_at.asc())
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return [self._row_to_dict(r) for r in result.scalars()]
+
+    async def mark_interrupted_if_active(self, run_id, *, error):
+        """One conditional UPDATE: of several workers sweeping at once, exactly
+        one changes the row (rowcount 1) and writes the notice."""
+        async with self._sf() as session:
+            result = await session.execute(update(RunRow).where(RunRow.run_id == run_id, RunRow.status.in_(("pending", "running"))).values(status="interrupted", error=error, updated_at=datetime.now(UTC)))
+            await session.commit()
+            return (result.rowcount or 0) == 1
+
     async def list_pending(self, *, before=None):
         if before is None:
             before_dt = datetime.now(UTC)

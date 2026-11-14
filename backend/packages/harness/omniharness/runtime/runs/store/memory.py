@@ -59,6 +59,18 @@ class MemoryRunStore(RunStore):
                 self._runs[run_id]["error"] = error
             self._runs[run_id]["updated_at"] = datetime.now(UTC).isoformat()
 
+    async def list_active(self):
+        return [dict(r) for r in self._runs.values() if r.get("status") in ("pending", "running")]
+
+    async def mark_interrupted_if_active(self, run_id, *, error):
+        row = self._runs.get(run_id)
+        if row is None or row.get("status") not in ("pending", "running"):
+            return False
+        row["status"] = "interrupted"
+        row["error"] = error
+        row["updated_at"] = datetime.now(UTC).isoformat()
+        return True
+
     async def delete(self, run_id, *, user_id=None):
         self._runs.pop(run_id, None)
 
