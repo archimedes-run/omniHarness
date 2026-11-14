@@ -230,3 +230,31 @@ def test_restore_keeps_the_restored_versions_lineage(store):
     store.restore(OWNER, a["id"], version=1, base_version=2)
     v3 = store.versions(OWNER, a["id"])[0]
     assert v3["origin"] == "restore" and v3["lineage"] == "content" and v3["lineage_source"] == "web_fetch"
+
+
+def test_read_under_refuses_each_unsafe_shape_on_its_own(tmp_path, monkeypatch):
+    """Each guard of safe_open, without the listing's inode check behind it."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "outside.md").write_text("# outside")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "a.md").write_text("# elsewhere")
+    (root / "linked").symlink_to(elsewhere)
+    os.mkfifo(root / "pipe")
+    (root / "ok.md").write_text("# ok")
+    for rel in ("../outside.md", "linked/a.md", "pipe"):
+        with pytest.raises(safe_open.Refused):
+            safe_open.read_under(root, rel, 1000)
+    # A file that grows after fstat: the read itself stops at cap + 1.
+    real_fstat = os.fstat
+
+    def small_fstat(fd):
+        info = real_fstat(fd)
+        return os.stat_result((info.st_mode, info.st_ino, info.st_dev, info.st_nlink, info.st_uid, info.st_gid, 1, info.st_atime, info.st_mtime, info.st_ctime))
+
+    (root / "grown.md").write_bytes(b"x" * 500)
+    monkeypatch.setattr(os, "fstat", small_fstat)
+    with pytest.raises(safe_open.Refused):
+        safe_open.read_under(root, "grown.md", 100)
+    assert safe_open.read_under(root, "ok.md", 100) == b"# ok"
