@@ -5,14 +5,17 @@ input is capped before anything is parsed."""
 
 from __future__ import annotations
 
+import gc
+import math
 import time
 
 import pytest
 
 from app.gateway.apps import bundle
 
-#: Linear: x4 input is about x4 time; quadratic would be about x16.
-RATIO = 8.0
+#: The growth exponent across sizes: time ~ size**k. Linear is k = 1, a
+#: quadratic reading k = 2; the fit allows timing noise, not a quadratic.
+MAX_EXPONENT = 1.5
 ABSOLUTE_S = 20.0
 N = bundle.BUNDLE_MAX_BYTES - 64
 
@@ -31,32 +34,63 @@ ADVERSARIAL = {
 }
 
 
-def _cpu_seconds(unit: str, size: int) -> float:
-    """Best of three, in process CPU time (a loaded runner's wall clock
-    is not the code's speed)."""
+def _document(unit: str, size: int) -> dict[str, bytes]:
     doc = ("<html><head></head><body>" + unit * (size // len(unit)))[:size].encode()
-    files = {"index.html": doc, "a.js": b"1", "s.css": b"p{}", "x": b"x"}
+    return {"index.html": doc, "a.js": b"1", "s.css": b"p{}", "x": b"x"}
+
+
+def _inline(files: dict[str, bytes]) -> None:
+    try:
+        bundle.inline(files)
+    except bundle.BundleError:
+        pass
+
+
+def _cpu_seconds(unit: str, size: int) -> float:
+    """The least of three, in THIS thread's CPU time, with the garbage
+    collector paused: what the scanner itself costs.
+
+    Not the process's CPU time: under xdist the worker carries threads left
+    by earlier tests (event loops, database workers), and their CPU counted
+    too; a burst of it landing in the larger run read as superlinear growth
+    (CI: 0.055 s at N/4, 0.97 s at N). Reproduced with three busy threads
+    beside the test: 0.048 s and 0.86 s. Not with the collector running: a
+    full collection walks every live object in the process (the worker's
+    whole heap), and locally the same case reads 0.046, 0.092, 0.184 s
+    across N/4, N/2, N with it paused but bends upward with it running."""
+    files = _document(unit, size)
     best = float("inf")
-    for _ in range(3):
-        t0 = time.process_time()
-        try:
-            bundle.inline(files)
-        except bundle.BundleError:
-            pass
-        best = min(best, time.process_time() - t0)
+    gc.collect()
+    gc.disable()
+    try:
+        for _ in range(3):
+            t0 = time.thread_time()
+            _inline(files)
+            best = min(best, time.thread_time() - t0)
+    finally:
+        gc.enable()
     return best
+
+
+def _growth_exponent(sizes: list[int], seconds: list[float]) -> float:
+    """The least-squares slope of log(time) against log(size)."""
+    xs = [math.log(s) for s in sizes]
+    ys = [math.log(max(t, 1e-4)) for t in seconds]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sum((x - mx) ** 2 for x in xs)
 
 
 @pytest.mark.parametrize("name", list(ADVERSARIAL))
 def test_adversarial_markup_takes_linear_time(name):
-    """Four times the input takes about four times as long (a quadratic
-    reading takes sixteen), and the full size stays far under the minutes a
-    backtracking reading needs."""
+    """Time grows with the input as size**k with k near 1 across four sizes
+    (N/8 to N, N the input cap; a quadratic reading has k = 2), and the full
+    size stays far under the minutes a backtracking reading needs."""
     unit = ADVERSARIAL[name]
-    small = _cpu_seconds(unit, N // 4)
-    large = _cpu_seconds(unit, N)
-    assert large < ABSOLUTE_S, (name, large)
-    assert large / max(small, 0.02) < RATIO, (name, small, large)
+    sizes = [N // 8, N // 4, N // 2, N]
+    seconds = [_cpu_seconds(unit, size) for size in sizes]
+    exponent = _growth_exponent(sizes, seconds)
+    assert seconds[-1] < ABSOLUTE_S, (name, seconds[-1])
+    assert exponent < MAX_EXPONENT, (name, round(exponent, 2), [round(t, 4) for t in seconds])
 
 
 def test_the_input_is_capped_before_parsing():
