@@ -17,6 +17,9 @@ BINARY_VERSION_BYTES = 10 * MB
 VERSIONS_PER_ARTIFACT = 200
 #: Distinct blobs per owner.
 OWNER_BYTES = 1024 * MB
+#: A saved web app (a chat's static site): its whole file set.
+WEBAPP_BYTES = 20 * MB
+WEBAPP_FILES = 500
 #: Display-sanitised title and note lengths.
 TITLE_CHARS = 120
 NOTE_CHARS = 300

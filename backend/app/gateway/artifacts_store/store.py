@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, distinct, func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.gateway.artifacts_store import blobs, caps
 from app.gateway.artifacts_store.kinds import SEARCH_KINDS, Canonical
 from app.gateway.display_safe import model_line
-from omniharness.persistence.artifacts.model import ArtifactImportRow, ArtifactRow, ArtifactVersionRow
+from omniharness.persistence.artifacts.model import ArtifactBundleFileRow, ArtifactImportRow, ArtifactRow, ArtifactVersionRow
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +113,11 @@ def clean_note(value: Any) -> str | None:
     return note or None
 
 
-def _version_dict(row: ArtifactVersionRow) -> dict:
+def _version_dict(row: ArtifactVersionRow, kind: str | None = None) -> dict:
+    from app.gateway.artifacts_store.kinds import render_of
+
     return {
+        "render": render_of(kind, row.media_type, row.stored) if kind else None,
         "n": row.n,
         "content_hash": row.content_hash,
         "size": row.size,
@@ -178,6 +181,8 @@ class ArtifactStore:
             "latest_version": row.latest_version,
             "version_count": int(count),
             "pinned": bool(row.pinned),
+            "saved": bool(row.saved),
+            "saved_at": iso(row.saved_at),
             "archived": row.archived_at is not None,
             "archived_at": iso(row.archived_at),
             "origin_thread_id": row.origin_thread_id,
@@ -206,7 +211,7 @@ class ArtifactStore:
     @staticmethod
     def _versions(s: Session, row: ArtifactRow) -> list[dict]:
         rows = s.execute(select(ArtifactVersionRow).where(ArtifactVersionRow.artifact_id == row.id).order_by(ArtifactVersionRow.n.desc())).scalars()
-        return [_version_dict(v) for v in rows]
+        return [_version_dict(v, row.kind) for v in rows]
 
     def versions(self, owner_id: str, artifact_id: str) -> list[dict]:
         with self._read() as s:
@@ -217,13 +222,19 @@ class ArtifactStore:
         with self._read() as s:
             row = self._artifact(s, owner_id, artifact_id)
             v = self._version(s, owner_id, artifact_id, n)
-            return self._summary(s, row), _version_dict(v), v
+            return self._summary(s, row), _version_dict(v, row.kind), v
 
     def content(self, owner_id: str, version: ArtifactVersionRow) -> bytes:
         return blobs.read(owner_id, version.content_hash)
 
-    def list(self, owner_id: str, *, kind: str | None = None, pinned: bool | None = None, archived: str = "false", thread: str | None = None, q: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    def list(
+        self, owner_id: str, *, saved: str = "all", kind: str | None = None, pinned: bool | None = None, archived: str = "false", thread: str | None = None, q: str | None = None, limit: int = 50, offset: int = 0
+    ) -> tuple[list[dict], int]:
         where = [ArtifactRow.owner_id == owner_id]
+        if saved == "true":
+            where.append(ArtifactRow.saved.is_(True))
+        elif saved == "false":
+            where.append(ArtifactRow.saved.is_(False))
         if kind:
             where.append(ArtifactRow.kind == kind)
         if pinned is not None:
@@ -263,8 +274,19 @@ class ArtifactStore:
 
     @staticmethod
     def _usage(s: Session, owner_id: str) -> int:
-        pairs = select(distinct(ArtifactVersionRow.content_hash).label("h"), ArtifactVersionRow.size).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.stored == "blob").subquery()
-        return int(s.execute(select(func.coalesce(func.sum(pairs.c.size), 0))).scalar_one())
+        """Bytes of distinct blobs: versions' content and webapp bundle files."""
+        versions = select(ArtifactVersionRow.content_hash.label("h"), ArtifactVersionRow.size.label("size")).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.stored == "blob")
+        files = select(ArtifactBundleFileRow.content_hash.label("h"), ArtifactBundleFileRow.size.label("size")).where(ArtifactBundleFileRow.owner_id == owner_id)
+        both = versions.union_all(files).subquery()
+        sized = select(both.c.h, func.max(both.c.size).label("size")).group_by(both.c.h).subquery()
+        return int(s.execute(select(func.coalesce(func.sum(sized.c.size), 0))).scalar_one())
+
+    @staticmethod
+    def _refs(s: Session, owner_id: str, content_hash: str) -> int:
+        """How many stored things of this owner use this blob."""
+        versions = s.execute(select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.content_hash == content_hash, ArtifactVersionRow.stored == "blob")).scalar_one()
+        files = s.execute(select(func.count()).select_from(ArtifactBundleFileRow).where(ArtifactBundleFileRow.owner_id == owner_id, ArtifactBundleFileRow.content_hash == content_hash)).scalar_one()
+        return int(versions) + int(files)
 
     # -- writes --------------------------------------------------------------------------
 
@@ -272,7 +294,7 @@ class ArtifactStore:
         """Quota check, then the blob (written before the row commits; made
         sure of again after it commits, see _settle). Returns (hash, newly written)."""
         content_hash = blobs.sha256(data)
-        known = s.execute(select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.content_hash == content_hash, ArtifactVersionRow.stored == "blob")).scalar_one()
+        known = self._refs(s, owner_id, content_hash)
         if not known:
             used = self._usage(s, owner_id)
             if used + len(data) > caps.OWNER_BYTES:
@@ -367,10 +389,7 @@ class ArtifactStore:
             if gc:
                 with self._read() as s:
                     for content_hash in gc:
-                        still = s.execute(
-                            select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.content_hash == content_hash, ArtifactVersionRow.stored == "blob")
-                        ).scalar_one()
-                        if not still:
+                        if not self._refs(s, owner_id, content_hash):
                             blobs.delete(owner_id, content_hash)
 
     def _commit_or_cleanup(self, owner_id: str, work) -> Any:
@@ -411,18 +430,39 @@ class ArtifactStore:
         tool_call_id: str | None = None,
         imported_from: str | None = None,
         chat_ref: tuple[str, int, str] | None = None,
+        saved: bool = False,
+        bundle: dict[str, tuple[bytes, str]] | None = None,
     ) -> tuple[dict, dict]:
+        """A new artifact. Unsaved unless `saved` (only the owner's own actions
+        pass it: duplicate, "Save to artifacts"). `bundle` ({path: (bytes,
+        media_type)}) is a webapp's file set; `canon` is then its manifest."""
         clean = clean_title(title)
 
         def work(s: Session, post: dict) -> tuple[dict, dict]:
             now = time.time()
-            row = ArtifactRow(id=new_id(), owner_id=owner_id, kind=kind, title=clean, origin_thread_id=thread_id, origin_turn_id=turn_id, imported_from=imported_from, latest_version=1, pinned=False, created_at=now, updated_at=now)
+            row = ArtifactRow(
+                id=new_id(),
+                owner_id=owner_id,
+                kind=kind,
+                title=clean,
+                origin_thread_id=thread_id,
+                origin_turn_id=turn_id,
+                imported_from=imported_from,
+                latest_version=1,
+                pinned=False,
+                saved=bool(saved),
+                saved_at=now if saved else None,
+                created_at=now,
+                updated_at=now,
+            )
             s.add(row)
             s.flush()
+            if bundle:
+                self._store_bundle(s, row, 1, bundle, post)
             version = self._insert_version(
                 s, row, canon, n=1, base_version=None, lineage=lineage, lineage_source=lineage_source, origin=origin, note=note, thread_id=thread_id, turn_id=turn_id, tool_call_id=tool_call_id, chat_ref=chat_ref, post=post
             )
-            return self._summary(s, row), _version_dict(version)
+            return self._summary(s, row), _version_dict(version, row.kind)
 
         return self._commit_or_cleanup(owner_id, work)
 
@@ -475,7 +515,7 @@ class ArtifactStore:
                 post=post,
             )
             self._prune(s, row, post)
-            return self._summary(s, row), _version_dict(version)
+            return self._summary(s, row), _version_dict(version, row.kind)
 
         return self._commit_or_cleanup(owner_id, work)
 
@@ -494,6 +534,8 @@ class ArtifactStore:
             lineage, lineage_source = source.lineage, source.lineage_source
 
         def build(s: Session, row: ArtifactRow) -> Canonical:
+            if row.kind == "webapp":
+                raise InvalidRequest("A web app is saved once and has no other versions to restore.")
             old = self._version(s, owner_id, artifact_id, version)
             if old.stored != "blob":
                 raise InvalidRequest("This version lives in its chat and cannot be restored here.")
@@ -516,6 +558,8 @@ class ArtifactStore:
                 if row.archived_at is not None and pinned:
                     raise Archived("An archived artifact cannot be pinned.")
                 row.pinned = bool(pinned)
+                if pinned and not row.saved:  # a pinned item is one the owner keeps
+                    row.saved, row.saved_at = True, time.time()
             row.updated_at = time.time()
             s.flush()
             return self._summary(s, row)
@@ -537,8 +581,8 @@ class ArtifactStore:
         with self._read() as s:
             row = self._artifact(s, owner_id, artifact_id)
             v = self._version(s, owner_id, artifact_id, version if version is not None else row.latest_version)
-            if v.stored != "blob":
-                raise InvalidRequest("This version lives in its chat and cannot be copied here.")
+            if v.stored != "blob" or row.kind == "webapp":
+                raise InvalidRequest("This version cannot be copied here.")
             data = blobs.read(owner_id, v.content_hash)
             kind, src_title, lineage, source, n = row.kind, row.title, v.lineage, v.lineage_source, v.n
             canon = Canonical(data, v.media_type, v.language)
@@ -549,9 +593,93 @@ class ArtifactStore:
             search = text_of(kind, data)
         canon = Canonical(canon.data, canon.media_type, canon.language, search)
         summary, _ = self.create(
-            owner_id, kind=kind, title=title if title is not None else f"{src_title} (copy)"[: caps.TITLE_CHARS], canon=canon, lineage=lineage, lineage_source=source, origin="duplicate", note=f"Copied from version {n} of another artifact"
+            owner_id,
+            kind=kind,
+            title=title if title is not None else f"{src_title} (copy)"[: caps.TITLE_CHARS],
+            canon=canon,
+            lineage=lineage,
+            lineage_source=source,
+            origin="duplicate",
+            note=f"Copied from version {n} of another artifact",
+            saved=True,
         )
         return summary
+
+    def set_saved(self, owner_id: str, artifact_id: str, saved: bool) -> dict:
+        """The owner's Save / Unsave (owner session routes only; no tool)."""
+        with self._write() as s:
+            row = self._artifact(s, owner_id, artifact_id)
+            if saved and not row.saved:
+                if row.archived_at is not None:
+                    raise Archived("An archived artifact cannot be saved; restore it from the archive first.")
+                row.saved, row.saved_at = True, time.time()
+            elif not saved and row.saved:
+                row.saved, row.saved_at, row.pinned = False, None, False
+            s.flush()
+            return self._summary(s, row)
+
+    @staticmethod
+    def _purge(s: Session, row: ArtifactRow) -> set[str]:
+        """Remove a record, its versions and bundle rows; the blob hashes to
+        re-check after the commit."""
+        hashes = {h for (h,) in s.execute(select(ArtifactVersionRow.content_hash).where(ArtifactVersionRow.artifact_id == row.id, ArtifactVersionRow.stored == "blob"))}
+        hashes |= {h for (h,) in s.execute(select(ArtifactBundleFileRow.content_hash).where(ArtifactBundleFileRow.artifact_id == row.id))}
+        s.execute(delete(ArtifactVersionRow).where(ArtifactVersionRow.artifact_id == row.id))
+        s.execute(delete(ArtifactBundleFileRow).where(ArtifactBundleFileRow.artifact_id == row.id))
+        for imp in s.execute(select(ArtifactImportRow).where(ArtifactImportRow.owner_id == row.owner_id, ArtifactImportRow.artifact_id == row.id)).scalars():
+            imp.artifact_id = None
+        s.delete(row)
+        s.flush()
+        return hashes
+
+    def delete_unsaved_for_thread(self, owner_id: str, thread_id: str) -> int:
+        """The owner deleted this chat (its own confirmation): its UNSAVED
+        artifacts go with it. Saved ones stay in the store."""
+        hashes: set[str] = set()
+        with self._write() as s:
+            rows = s.execute(select(ArtifactRow).where(ArtifactRow.owner_id == owner_id, ArtifactRow.origin_thread_id == thread_id, ArtifactRow.saved.is_(False))).scalars().all()
+            for row in rows:
+                hashes |= self._purge(s, row)
+        self._settle(owner_id, ensure={}, gc=hashes)
+        return len(rows)
+
+    def prune_unsaved(self, owner_id: str, *, older_than_days: float, now: float | None = None) -> int:
+        """The optional sweep (OFF unless configured): unsaved, unpinned,
+        unarchived artifacts not changed for `older_than_days`. Never a saved one."""
+        cutoff = (now if now is not None else time.time()) - older_than_days * 86400
+        hashes: set[str] = set()
+        with self._write() as s:
+            rows = s.execute(select(ArtifactRow).where(ArtifactRow.owner_id == owner_id, ArtifactRow.saved.is_(False), ArtifactRow.pinned.is_(False), ArtifactRow.archived_at.is_(None), ArtifactRow.updated_at < cutoff)).scalars().all()
+            for row in rows:
+                hashes |= self._purge(s, row)
+        self._settle(owner_id, ensure={}, gc=hashes)
+        return len(rows)
+
+    def owners(self) -> list[str]:
+        with self._read() as s:
+            return [o for (o,) in s.execute(select(ArtifactRow.owner_id).distinct())]
+
+    def _store_bundle(self, s: Session, row: ArtifactRow, n: int, bundle: dict[str, tuple[bytes, str]], post: dict) -> None:
+        """A webapp's files: one quota check for the new bytes, then each blob
+        and its row (made sure of again after the commit, like any blob)."""
+        new = {}
+        for path, (data, _) in bundle.items():
+            h = blobs.sha256(data)
+            if h not in new and not self._refs(s, row.owner_id, h):
+                new[h] = len(data)
+        used = self._usage(s, row.owner_id)
+        if used + sum(new.values()) > caps.OWNER_BYTES:
+            raise QuotaExceeded("Your artifact store is full.", used=used, cap=caps.OWNER_BYTES, size=sum(new.values()))
+        for path, (data, media_type) in sorted(bundle.items()):
+            h = blobs.write(row.owner_id, data)
+            post["ensure"][h] = data
+            s.add(ArtifactBundleFileRow(owner_id=row.owner_id, artifact_id=row.id, n=n, path=path, content_hash=h, size=len(data), media_type=media_type[:100]))
+        s.flush()
+
+    def bundle_files(self, owner_id: str, artifact_id: str, n: int) -> list[dict]:
+        with self._read() as s:
+            rows = s.execute(select(ArtifactBundleFileRow).where(ArtifactBundleFileRow.owner_id == owner_id, ArtifactBundleFileRow.artifact_id == artifact_id, ArtifactBundleFileRow.n == n).order_by(ArtifactBundleFileRow.path)).scalars()
+            return [{"path": r.path, "size": r.size, "media_type": r.media_type, "content_hash": r.content_hash} for r in rows]
 
     def delete(self, owner_id: str, artifact_id: str, *, confirm_id: str, version_count: int) -> None:
         # Blobs are unlinked only AFTER the delete commits, each re-checked
@@ -563,38 +691,22 @@ class ArtifactStore:
             count = s.execute(select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.artifact_id == row.id)).scalar_one()
             if confirm_id != row.id or version_count != count:
                 raise Mismatch("The confirmation does not match this artifact; nothing was deleted.", version_count=int(count))
-            hashes = {h for (h,) in s.execute(select(ArtifactVersionRow.content_hash).where(ArtifactVersionRow.artifact_id == row.id, ArtifactVersionRow.stored == "blob"))}
-            s.execute(delete(ArtifactVersionRow).where(ArtifactVersionRow.artifact_id == row.id))
-            for imp in s.execute(select(ArtifactImportRow).where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.artifact_id == row.id)).scalars():
-                imp.artifact_id = None
-            s.delete(row)
-            s.flush()
+            hashes = self._purge(s, row)
         self._settle(owner_id, ensure={}, gc=hashes)
 
     # -- importer bookkeeping (FR-037) ------------------------------------------------
 
-    def import_known(self, owner_id: str, thread_id: str, path: str, content_hash: str) -> bool:
+    def import_existing(self, owner_id: str, thread_id: str, path: str, content_hash: str) -> dict | None:
+        """The live artifact an earlier "Save to artifacts" of this exact file made."""
         with self._read() as s:
-            q = select(func.count()).select_from(ArtifactImportRow).where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path, ArtifactImportRow.content_hash == content_hash)
-            return s.execute(q).scalar_one() > 0
-
-    def import_unchanged(self, owner_id: str, thread_id: str, path: str, size: int, mtime_ns: int) -> bool:
-        """An import of this path was recorded with this size and mtime."""
-        with self._read() as s:
-            q = (
-                select(func.count())
-                .select_from(ArtifactImportRow)
-                .where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path, ArtifactImportRow.size == size, ArtifactImportRow.mtime_ns == mtime_ns)
+            q = select(ArtifactImportRow.artifact_id).where(
+                ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path, ArtifactImportRow.content_hash == content_hash, ArtifactImportRow.artifact_id.is_not(None)
             )
-            return s.execute(q).scalar_one() > 0
-
-    def import_target(self, owner_id: str, thread_id: str, path: str) -> str | None:
-        """The live artifact an earlier import of this path made, if any."""
-        with self._read() as s:
-            rows = s.execute(select(ArtifactImportRow).where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path).order_by(ArtifactImportRow.id.desc())).scalars().all()
-            if any(r.artifact_id is None for r in rows):
-                return "deleted"
-            return rows[0].artifact_id if rows else None
+            for (artifact_id,) in s.execute(q):
+                row = s.execute(select(ArtifactRow).where(ArtifactRow.id == artifact_id, ArtifactRow.owner_id == owner_id)).scalar_one_or_none()
+                if row is not None:
+                    return self._summary(s, row)
+        return None
 
     def record_import(self, owner_id: str, thread_id: str, path: str, content_hash: str, artifact_id: str | None, *, size: int | None = None, mtime_ns: int | None = None) -> None:
         try:

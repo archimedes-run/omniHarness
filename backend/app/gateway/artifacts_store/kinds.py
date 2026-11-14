@@ -19,8 +19,9 @@ from app.gateway.artifacts_store import caps
 
 #: Kinds the chat tools make in Slice 1.
 TOOL_KINDS = ("markdown", "code", "svg", "mermaid", "chart", "image")
-#: Kinds a stored artifact may have in Slice 1 (`file`: the importer only).
-STORED_KINDS = (*TOOL_KINDS, "file")
+#: Kinds a stored artifact may have (`file` and `webapp`: only the owner's
+#: "Save to artifacts" on a chat's output makes them).
+STORED_KINDS = (*TOOL_KINDS, "file", "webapp")
 TEXT_KINDS = frozenset({"markdown", "code", "svg", "mermaid", "chart"})
 #: Kinds the owner edits in place in Slice 1 (FR-010; document and spreadsheet arrive in S4).
 OWNER_EDIT_KINDS = frozenset({"markdown", "code", "mermaid"})
@@ -29,7 +30,7 @@ EDIT_KINDS = frozenset({"markdown", "code", "mermaid", "svg"})
 #: Kinds whose latest text is kept for search.
 SEARCH_KINDS = frozenset({"markdown", "code", "mermaid"})
 
-MEDIA_TYPES = {"markdown": "text/markdown", "mermaid": "text/vnd.mermaid", "code": "text/plain", "svg": "image/svg+xml", "chart": "application/json", "file": "application/octet-stream"}
+MEDIA_TYPES = {"markdown": "text/markdown", "mermaid": "text/vnd.mermaid", "code": "text/plain", "svg": "image/svg+xml", "chart": "application/json", "file": "application/octet-stream", "webapp": "application/vnd.omni-webapp+json"}
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 _LANGUAGE = re.compile(r"^[a-z0-9+#._-]{1,32}$")
 
@@ -132,6 +133,19 @@ def canonical(kind: str, content: Any, *, language: str | None = None) -> Canoni
         _check_size(kind, len(data))
         return Canonical(data, MEDIA_TYPES[kind])
     raise InvalidContent("this kind cannot be made this way.")
+
+
+#: How the store shows each kind (api.md "Rendering in the store").
+RENDER = {"markdown": "markdown", "code": "code", "svg": "image", "mermaid": "mermaid", "chart": "chart", "image": "image", "webapp": "frame", "html": "frame", "react": "frame"}
+
+
+def render_of(kind: str, media_type: str, stored: str = "blob") -> str:
+    """`file`: text when it is UTF-8 text, else a download card."""
+    if stored != "blob":
+        return "download"
+    if kind == "file":
+        return "text" if media_type == "text/plain" else "download"
+    return RENDER.get(kind, "download")
 
 
 def text_of(kind: str, data: bytes) -> str:
