@@ -77,7 +77,7 @@ mock:
   - expect:
       tool: web_search
       contains: 'Budget spent: answer now'
-      any_contains: research for this question has stopped
+      any_contains: no more web lookups for this question
     tool_calls:
     - name: web_search
       args:

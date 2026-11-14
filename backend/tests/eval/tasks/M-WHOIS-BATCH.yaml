@@ -43,6 +43,6 @@ mock:
       args:
         query: jane roe news
   - expect:
-      any_contains: research for this question has stopped
+      any_contains: no more web lookups for this question
     content: Jane Roe is an example person used in this test. [Profile](https://example.org/jane-roe)
       and [News](https://news.example.com/jane-roe).

@@ -56,9 +56,11 @@ REPEATED = 'Not run: this search repeats one already made in this task ("{q}"): 
 REFUSED_PREFIXES = ("Not run: this task has used", "Not run: this search repeats")
 #: The hard ceiling: the last model call of a turn whose lookups ended.
 ANSWER_NOW = (
-    "[System: research for this question has stopped ({why} spent). Do not call any more tools. Write the final answer now "
-    'from the results you already have, cite the sources you used, and list what is still unverified under "Not verified".]'
+    "[System: no more web lookups for this question ({why} spent): web_search, web_fetch and research will not run. "
+    'Continue the rest of the request with what you have; if nothing else is left to do, write the answer now, cite the sources you used, and list what is unverified under "Not verified".]'
 )
+#: A lookup asked for after the stop.
+LOOKUPS_STOPPED = "Not run: this task has used its research budget; no more lookups. Budget spent: answer now from what you have and continue the rest of the request, and say what is unverified."
 STOPPED_EARLY_PREFIX = "Stopped early:"
 STOPPED_EARLY = "Stopped early: the {why} for this question ran out ({searches} searches, {seconds} s), so some details above may be unverified."
 #: On the final reply (and the reminder): research stopped for this turn.
@@ -134,8 +136,13 @@ class TurnBudgetMiddleware(AgentMiddleware):
     subagent (its lookups count in the ledger the lead opened for the thread's
     current turn, beside its own per-call budget)."""
 
-    def __init__(self, budget: Any = None, *, scale_to_items: bool = True, clock: Any = time.monotonic, shared: str = "open") -> None:
+    def __init__(self, budget: Any = None, *, scale_to_items: bool = True, clock: Any = time.monotonic, shared: str = "open", notes: bool = True, floor: tuple[int, int] = (0, 0)) -> None:
         super().__init__()
+        #: Time and "answer now" notes on lookup results (off for a subagent
+        #: that is not a researcher: a coding subagent's work is not research).
+        self._notes = notes
+        #: A subagent call's guaranteed lookups when the turn's budget is spent.
+        self._floor = floor
         self._fixed = budget
         self._scale = scale_to_items
         self._clock = clock
@@ -231,16 +238,31 @@ class TurnBudgetMiddleware(AgentMiddleware):
             from omniharness.agents.research_ledger import TurnLedger
 
             if self._own is None:
-                self._own = TurnLedger(thread_id=thread_id, turn_key="subagent-call", caps=self._caps(request, budget), started=self._clock())
-            return ledgers().current(thread_id), self._own
+                self._own = TurnLedger(thread_id=thread_id, turn_key="subagent-call", caps=self._caps(request, budget), floor=self._floor)
+            return self._joined_turn(context, thread_id), self._own
         ledger = ledgers().open(thread_id, self._turn_key(request), self._caps(request, budget), run_id=str(context.get("run_id") or ""), seed=self._seed(request, steps))
         return ledger, None
+
+    @staticmethod
+    def _joined_turn(context: dict, thread_id: str) -> Any:
+        """The ledger of the turn that started this subagent: the thread's
+        current one, and only if it is the same turn (its key was passed to
+        the subagent by the delegating call)."""
+        from omniharness.agents.research_ledger import TURN_KEY_CONTEXT, ledgers
+
+        current = ledgers().current(thread_id)
+        wanted = context.get(TURN_KEY_CONTEXT)
+        if current is not None and wanted and current.turn_key != wanted:
+            return None
+        return current
 
     def _refusal(self, outcome: str, detail: str, call_id: str, name: str, ledger: Any, own: Any) -> ToolMessage:
         from omniharness.agents import research_ledger as rl
 
         if outcome == rl.REPEAT:
             text = REPEATED.format(q=detail)
+        elif outcome == rl.STOPPED:
+            text = LOOKUPS_STOPPED
         elif outcome == rl.OUT_OF_TIME:
             text = OUT_OF_TIME.format(n=detail)
         else:
@@ -248,7 +270,7 @@ class TurnBudgetMiddleware(AgentMiddleware):
         budget = self.budget
         hard = getattr(budget, "hard_stop_after_refusals", 2)
         for one in (ledger, own):
-            if one is not None and (one.budget_refusals >= hard or one.refusals >= hard + 1):
+            if one is not None and one.budget_refusals >= hard:
                 rl.ledgers().stop(one, "research time" if outcome == rl.OUT_OF_TIME else f"{outcome} budget")
         return ToolMessage(content=text, tool_call_id=call_id, name=name)
 
@@ -275,21 +297,24 @@ class TurnBudgetMiddleware(AgentMiddleware):
                     earlier = step["output"].removeprefix(CACHED_PREFIX)
                     return ToolMessage(content=CACHED_PREFIX + earlier, tool_call_id=call_id, name=name)
         budget = self.budget
+        self._last_elapsed = 0.0
+        self._last_caps = None
         if not getattr(budget, "enabled", True):
-            self._last_elapsed = 0.0
             return None
+        from omniharness.agents.research_ledger import LOOKUP_TOOLS
+
+        if name not in LOOKUP_TOOLS:
+            return None  # the budget, its clock and its stop are for lookups only
         ledger, own = self._ledger(request, steps)
         if ledger is not None or own is not None:
-            from omniharness.agents.research_ledger import LOOKUP_TOOLS, OK, ledgers
+            from omniharness.agents.research_ledger import OK, ledgers
 
             turn = ledger if ledger is not None else own
             extra = own if ledger is not None else None
-            self._last_elapsed = max(one.elapsed(self._clock()) for one in (ledger, own) if one is not None)
-            self._last_caps = turn.caps
-            if name not in LOOKUP_TOOLS:
-                return None
             args = call.get("args") if isinstance(call.get("args"), dict) else {}
             outcome, detail = ledgers().reserve(turn, name, args, extra=extra)
+            self._last_elapsed = max(one.elapsed(self._clock()) for one in (ledger, own) if one is not None)
+            self._last_caps = turn.caps
             if outcome != OK:
                 return self._refusal(outcome, detail, call_id, name, ledger, own)
             self._reserved = (turn, extra, name, args)
@@ -383,6 +408,12 @@ class TurnBudgetMiddleware(AgentMiddleware):
                 content = compact + f"\n\n[JSON shortened for reading from {len(content)} characters: long text and long lists are described, not shown.]"
             else:
                 content = content[: budget.max_page_chars] + SHORTENED.format(n=budget.max_page_chars, total=len(content))
+        from omniharness.agents.research_ledger import LOOKUP_TOOLS
+
+        if not self._notes or result.name not in LOOKUP_TOOLS:
+            # Notes are about research: only on a lookup's result, and never in
+            # a subagent that is not a researcher.
+            return result if content == result.content else result.model_copy(update={"content": content})
         count = sum(1 for s in steps if s["name"] not in NON_EVIDENCE_TOOLS and s["ok"] is not None) + 1
         elapsed = getattr(self, "_last_elapsed", 0.0)
         caps = getattr(self, "_last_caps", None)
@@ -393,12 +424,27 @@ class TurnBudgetMiddleware(AgentMiddleware):
             content += ANSWER_NOTE.format(n=count)
         return result if content == result.content else result.model_copy(update={"content": content})
 
+    def _turn_token(self, request: Any) -> Any:
+        """The lead's turn key, visible to a subagent the call starts."""
+        if self._shared != "open":
+            return None
+        from omniharness.agents.research_ledger import CURRENT_TURN_KEY
+
+        return CURRENT_TURN_KEY.set(self._turn_key(request))
+
     def wrap_tool_call(self, request, handler):
         steps = self._steps(request)
         early = self._early(request, steps)
         if early is not None:
             return early
-        result = handler(request)
+        token = self._turn_token(request)
+        try:
+            result = handler(request)
+        finally:
+            if token is not None:
+                from omniharness.agents.research_ledger import CURRENT_TURN_KEY
+
+                CURRENT_TURN_KEY.reset(token)
         self._settle(result)
         return self._with_note(result, steps)
 
@@ -407,7 +453,14 @@ class TurnBudgetMiddleware(AgentMiddleware):
         early = self._early(request, steps)
         if early is not None:
             return early
-        result = await handler(request)
+        token = self._turn_token(request)
+        try:
+            result = await handler(request)
+        finally:
+            if token is not None:
+                from omniharness.agents.research_ledger import CURRENT_TURN_KEY
+
+                CURRENT_TURN_KEY.reset(token)
         self._settle(result)
         return self._with_note(result, steps)
 
@@ -421,7 +474,7 @@ class TurnBudgetMiddleware(AgentMiddleware):
         if not thread_id or not getattr(self.budget, "enabled", True):
             return None, ""
         if self._shared == "join":
-            for one in (self._own, ledgers().current(thread_id)):
+            for one in (self._own, self._joined_turn(self._context(request), thread_id)):
                 if one is not None and one.stopped:
                     return one, one.stopped
             return None, ""
@@ -440,23 +493,36 @@ class TurnBudgetMiddleware(AgentMiddleware):
             return request
 
     def _final(self, response: Any, request: Any, ledger: Any, why: str) -> Any:
-        """The reply with its tool calls dropped (no more lookups in this turn),
-        never empty, and saying that research stopped early."""
+        """After the stop: the reply's LOOKUP calls are dropped; every other
+        tool call (a card, a file, an email, a delegation) goes through. Only
+        when nothing is left to do is the reply final: never empty (a
+        server-written list of the sources found, only then), and saying that
+        research stopped early."""
         from langchain_core.messages import AIMessage
+
+        from omniharness.agents.research_ledger import LOOKUP_TOOLS
 
         messages = list(getattr(response, "result", None) or ([response] if isinstance(response, AIMessage) else []))
         index = next((i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], AIMessage)), None)
         if index is None:
             return response
         message = messages[index]
-        text = message.text if isinstance(message.content, list) else str(message.content or "")
-        if not text.strip():
-            text = self._fallback_answer(request)
-        if STOPPED_EARLY_PREFIX not in text:
-            text = f"{text.rstrip()}\n\n{STOPPED_EARLY.format(why=why, searches=ledger.searches, seconds=int(ledger.elapsed(self._clock())))}"
+        calls = list(message.tool_calls or [])
+        kept = [c for c in calls if str(c.get("name") or "") not in LOOKUP_TOOLS]
+        invalid = [c for c in (message.invalid_tool_calls or []) if str(c.get("name") or "") not in LOOKUP_TOOLS]
         kwargs = {k: v for k, v in (message.additional_kwargs or {}).items() if k != "tool_calls"}
-        kwargs[RESEARCH_STOP_KEY] = {"why": why, "searches": ledger.searches, "fetches": len(ledger.fetches)}
-        final = message.model_copy(update={"content": text, "tool_calls": [], "invalid_tool_calls": [], "additional_kwargs": kwargs})
+        if kept or invalid:
+            if len(kept) == len(calls):
+                return response
+            final = message.model_copy(update={"tool_calls": kept, "invalid_tool_calls": invalid, "additional_kwargs": kwargs})
+        else:
+            text = message.text if isinstance(message.content, list) else str(message.content or "")
+            if not text.strip():
+                text = self._fallback_answer(request)
+            if STOPPED_EARLY_PREFIX not in text:
+                text = f"{text.rstrip()}\n\n{STOPPED_EARLY.format(why=why, searches=ledger.searches, seconds=int(ledger.elapsed(self._clock())))}"
+            kwargs[RESEARCH_STOP_KEY] = {"why": why, "searches": ledger.searches, "fetches": len(ledger.fetches)}
+            final = message.model_copy(update={"content": text, "tool_calls": [], "invalid_tool_calls": [], "additional_kwargs": kwargs})
         messages[index] = final
         if isinstance(response, AIMessage):
             return final

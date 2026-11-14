@@ -26,6 +26,7 @@ import re
 import threading
 import time
 import unicodedata
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,17 +35,30 @@ FETCH_TOOLS = frozenset({"web_fetch"})
 RESEARCH_TOOLS = frozenset({"research"})
 LOOKUP_TOOLS = SEARCH_TOOLS | FETCH_TOOLS | RESEARCH_TOOLS
 
+#: The lead's current turn key while one of its tool calls runs: a subagent
+#: started by that call joins THAT turn's ledger only (subagent context key).
+CURRENT_TURN_KEY: ContextVar[str | None] = ContextVar("research_turn_key", default=None)
+TURN_KEY_CONTEXT = "research_turn_key"
+
 #: Words that do not change what a search looks for.
-_STOPWORDS = frozenset("a an the of in on at to for from by with and or is are was were be who whom whose what which about info information details detail please find search look up lookup me tell more latest recent".split())
+_STOPWORDS = frozenset("a an the of in on at for by with and or is are was were be who whom whose what which about info information details detail please find search look up lookup me tell more".split())
 
 
 def query_terms(query: str) -> str:
-    """A search's normalised terms: case, accents, punctuation, word order and
-    filler words ignored. "Who is Jane Roe?" and "jane roe" are the same search."""
+    """A search's normalised terms: case, accents, punctuation and filler
+    words ignored. "Who is Jane Roe?" and "jane roe" are the same search.
+    Word order counts for a short query ("new york to boston" is not
+    "boston to new york"); a longer one is compared as a set of terms."""
     text = unicodedata.normalize("NFKD", query or "").encode("ascii", "ignore").decode().lower()
     words = re.findall(r"[a-z0-9]+", text)
-    kept = sorted({w for w in words if w not in _STOPWORDS})
-    return " ".join(kept) or " ".join(sorted(set(words)))
+    kept = [w for w in words if w not in _STOPWORDS] or words
+    if len(kept) <= SHORT_QUERY_WORDS:
+        return " ".join(kept)
+    return " ".join(sorted(set(kept)))
+
+
+#: Up to this many terms, a query's word order counts.
+SHORT_QUERY_WORDS = 4
 
 
 @dataclass
@@ -61,19 +75,25 @@ class TurnLedger:
     turn_key: str
     caps: Caps
     run_id: str = ""
-    started: float = 0.0
+    #: When this run's first LOOKUP was made (None: none yet). The research
+    #: clock is lookup time: a long coding or writing turn that looks
+    #: something up late is not out of research time.
+    started: float | None = None
     searches: int = 0
     fetches: set[str] = field(default_factory=set)
     research: int = 0
-    #: normalised terms -> the query as first asked
+    #: (tool, normalised terms) -> the query as first asked
     queries: dict[str, str] = field(default_factory=dict)
+    #: A subagent call's floor (searches, fetches) it may make even when the
+    #: turn's budget is spent (parallel research is not squeezed out).
+    floor: tuple[int, int] = (0, 0)
     budget_refusals: int = 0
     refusals: int = 0
     #: Why tool calls ended for this turn ("search budget", "research time", ...), or "".
     stopped: str = ""
 
     def elapsed(self, now: float) -> float:
-        return max(0.0, now - self.started)
+        return 0.0 if self.started is None else max(0.0, now - self.started)
 
 
 #: Reservation outcomes.
@@ -83,6 +103,7 @@ OVER_FETCHES = "fetch"
 OVER_RESEARCH = "research"
 OUT_OF_TIME = "time"
 REPEAT = "repeat"
+STOPPED = "stopped"
 
 
 class ResearchLedgers:
@@ -99,11 +120,10 @@ class ResearchLedgers:
         resume after a confirmation) keeps the counts and starts its own
         research clock: the time the person spent answering a card is not
         research time."""
-        now = self._clock()
         with self._lock:
             ledger = self._by_thread.get(thread_id)
             if ledger is None or ledger.turn_key != turn_key:
-                ledger = TurnLedger(thread_id=thread_id, turn_key=turn_key, caps=caps, run_id=run_id, started=now)
+                ledger = TurnLedger(thread_id=thread_id, turn_key=turn_key, caps=caps, run_id=run_id)
                 if seed:
                     ledger.searches = int(seed.get("searches") or 0)
                     ledger.fetches = set(seed.get("fetches") or ())
@@ -119,7 +139,7 @@ class ResearchLedgers:
                 # person's message); a later call never rescales them.
                 if run_id and ledger.run_id != run_id:
                     ledger.run_id = run_id
-                    ledger.started = now
+                    ledger.started = None
                     ledger.stopped = ""
                     ledger.budget_refusals = 0
                     ledger.refusals = 0
@@ -131,13 +151,19 @@ class ResearchLedgers:
 
     def reserve(self, ledger: TurnLedger, name: str, args: dict, *, extra: TurnLedger | None = None) -> tuple[str, str]:
         """Check and count one lookup, atomically. Returns (outcome, detail).
-        `extra`: a second ledger the call must also fit (a subagent's own,
-        per-call budget beside the turn's)."""
+        `extra`: a subagent call's own ledger, which the call must also fit;
+        within its floor the turn's caps (not its stop or repeats) are waived."""
+        if name not in LOOKUP_TOOLS:
+            return OK, ""
         now = self._clock()
         with self._lock:
             ledgers = [ledger] + ([extra] if extra is not None else [])
+            within_floor = extra is not None and _within_floor(extra, name)
             for one in ledgers:
-                outcome = self._check(one, name, args, now)
+                if one.started is None:
+                    one.started = now  # the research clock starts at the first lookup
+            for one in ledgers:
+                outcome = self._check(one, name, args, now, caps=not (within_floor and one is ledger))
                 if outcome[0] != OK:
                     self._refused(ledgers, outcome[0])
                     return outcome
@@ -145,15 +171,20 @@ class ResearchLedgers:
                 self._count(one, name, args)
             return OK, ""
 
-    def _check(self, ledger: TurnLedger, name: str, args: dict, now: float) -> tuple[str, str]:
+    def _check(self, ledger: TurnLedger, name: str, args: dict, now: float, *, caps: bool = True) -> tuple[str, str]:
         if name not in LOOKUP_TOOLS:
+            return OK, ""
+        if ledger.stopped:
+            return STOPPED, ledger.stopped
+        if name in SEARCH_TOOLS:
+            key = _repeat_key(name, args)
+            if key and key in ledger.queries:
+                return REPEAT, ledger.queries[key]
+        if not caps:
             return OK, ""
         if ledger.elapsed(now) >= ledger.caps.seconds:
             return OUT_OF_TIME, str(int(ledger.caps.seconds))
         if name in SEARCH_TOOLS:
-            terms = query_terms(str((args or {}).get("query") or ""))
-            if terms and terms in ledger.queries:
-                return REPEAT, ledger.queries[terms]
             if ledger.searches >= ledger.caps.searches:
                 return OVER_SEARCHES, str(ledger.caps.searches)
         if name in FETCH_TOOLS:
@@ -168,10 +199,9 @@ class ResearchLedgers:
     def _count(ledger: TurnLedger, name: str, args: dict) -> None:
         if name in SEARCH_TOOLS:
             ledger.searches += 1
-            query = str((args or {}).get("query") or "")
-            terms = query_terms(query)
-            if terms:
-                ledger.queries.setdefault(terms, query)
+            key = _repeat_key(name, args)
+            if key:
+                ledger.queries.setdefault(key, str((args or {}).get("query") or ""))
         elif name in FETCH_TOOLS:
             ledger.fetches.add(_url_key(args))
         elif name in RESEARCH_TOOLS:
@@ -179,9 +209,11 @@ class ResearchLedgers:
 
     @staticmethod
     def _refused(ledgers: list[TurnLedger], outcome: str) -> None:
+        # A repeat is answered, not a sign the budget is spent: it never
+        # counts toward the stop.
         for one in ledgers:
             one.refusals += 1
-            if outcome != REPEAT:
+            if outcome not in (REPEAT, STOPPED):
                 one.budget_refusals += 1
 
     def release(self, ledger: TurnLedger, name: str, args: dict) -> None:
@@ -190,9 +222,9 @@ class ResearchLedgers:
         with self._lock:
             if name in SEARCH_TOOLS and ledger.searches > 0:
                 ledger.searches -= 1
-                terms = query_terms(str((args or {}).get("query") or ""))
-                if ledger.queries.get(terms) == str((args or {}).get("query") or ""):
-                    ledger.queries.pop(terms, None)
+                key = _repeat_key(name, args)
+                if ledger.queries.get(key) == str((args or {}).get("query") or ""):
+                    ledger.queries.pop(key, None)
             elif name in FETCH_TOOLS:
                 ledger.fetches.discard(_url_key(args))
             elif name in RESEARCH_TOOLS and ledger.research > 0:
@@ -201,6 +233,21 @@ class ResearchLedgers:
     def stop(self, ledger: TurnLedger, why: str) -> None:
         with self._lock:
             ledger.stopped = ledger.stopped or why
+
+
+def _repeat_key(name: str, args: Any) -> str:
+    """Repeats are per tool: an image search is not a web search."""
+    terms = query_terms(str((args or {}).get("query") or "")) if isinstance(args, dict) else ""
+    return f"{name}:{terms}" if terms else ""
+
+
+def _within_floor(own: TurnLedger, name: str) -> bool:
+    searches, fetches = own.floor
+    if name in SEARCH_TOOLS:
+        return own.searches < searches
+    if name in FETCH_TOOLS:
+        return len(own.fetches) < fetches
+    return False
 
 
 def _url_key(args: Any) -> str:
