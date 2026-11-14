@@ -18,9 +18,8 @@ def _store(request: Request):
     store = getattr(request.app.state, "code_job_store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="Coding jobs are not available")
-    # A job whose runner died with its process (a gateway restart) is shown
-    # as interrupted, never left "running".
-    store.reap_stale()
+    # Read routes never write: a job whose runner is gone is SHOWN stopped
+    # (as_seen); reap_stale records it only from the job manager.
     return store
 
 

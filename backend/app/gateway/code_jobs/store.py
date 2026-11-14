@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -104,6 +105,8 @@ class Job:
     created_at: float
     updated_at: float
     finished_at: float | None
+    #: The process running the job: "pid:start" (see OWNER).
+    owner: str = ""
 
     def public(self) -> dict:
         return {
@@ -136,12 +139,89 @@ def month_start(now: float | None = None) -> float:
     return datetime(d.year, d.month, 1, tzinfo=UTC).timestamp()
 
 
+#: A running job whose heartbeat is older than this may be stale.
+STALE_SECONDS = 90.0
+
+
+def _process_start(pid: int) -> str | None:
+    """A process's start time (clock ticks since boot, from /proc), or None
+    when /proc is not there (not Linux) or the process is gone."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as f:
+            return f.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+#: This process, as the owner of the jobs it runs: its pid and start time,
+#: so a reused pid after a restart is not mistaken for it.
+OWNER = f"{os.getpid()}:{_process_start(os.getpid()) or ''}"
+#: Jobs whose runner is alive in THIS process (their heartbeat is running).
+_LIVE: set[str] = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def mark_live(job_id: str) -> None:
+    with _LIVE_LOCK:
+        _LIVE.add(job_id)
+
+
+def mark_done(job_id: str) -> None:
+    with _LIVE_LOCK:
+        _LIVE.discard(job_id)
+
+
+def is_live_here(job_id: str) -> bool:
+    with _LIVE_LOCK:
+        return job_id in _LIVE
+
+
+def owner_alive(owner: str) -> bool | None:
+    """True when the owning process is running, False when it is gone, None
+    when it cannot be told (no owner recorded)."""
+    pid_text, _, start = (owner or "").partition(":")
+    if not pid_text.isdigit():
+        return None
+    pid = int(pid_text)
+    now_start = _process_start(pid)
+    if now_start is not None or os.path.isdir("/proc"):
+        return now_start is not None and (not start or now_start == start)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stale_reason(job: Job, max_age: float | None = None) -> str | None:
+    """Why a "running" job is not running any more, or None while it may be.
+    Stale needs BOTH an old heartbeat and no live runner: a runner alive in
+    this process, or in another live process, is never called stopped."""
+    limit = STALE_SECONDS if max_age is None else max_age
+    if job.status != RUNNING or time.time() - job.updated_at <= limit or is_live_here(job.id):
+        return None
+    if job.owner == OWNER:
+        return "the job's runner stopped responding"
+    alive = owner_alive(job.owner)
+    if alive is True:
+        return None  # another live process runs it; it writes its own end
+    if alive is False:
+        return "the gateway restarted while the job ran"
+    return "the job's runner stopped responding"
+
+
 class CodeJobStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._conn().executescript(_SCHEMA)
+        try:
+            self._conn().execute("ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         for column in ("actual_cost_usd REAL", "reserved_usd REAL"):
             try:
                 # cost_usd: what counts against the budget and the cap (the
@@ -178,8 +258,8 @@ class CodeJobStore:
         now = time.time()
         with self._tx() as db:
             db.execute(
-                "INSERT INTO jobs (id, thread_id, user_id, tool_call_id, title, project_dir, model, status, budget_usd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (job_id, thread_id, user_id, tool_call_id, title, project_dir, model, RUNNING, budget_usd, now, now),
+                "INSERT INTO jobs (id, thread_id, user_id, tool_call_id, title, project_dir, model, status, budget_usd, created_at, updated_at, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (job_id, thread_id, user_id, tool_call_id, title, project_dir, model, RUNNING, budget_usd, now, now, OWNER),
             )
         job = self.get(job_id)
         assert job is not None
@@ -225,26 +305,27 @@ class CodeJobStore:
             )
             return cur.rowcount == 1
 
-    def reap_stale(self, max_age: float = 90.0) -> list[str]:
-        """Jobs still "running" whose runner stopped beating (its process ended):
-        reported as interrupted, never resumed silently or called done."""
-        reason = "the gateway restarted while the job ran"
-        cutoff = time.time() - max_age
-        stale = [r["id"] for r in self._conn().execute("SELECT id FROM jobs WHERE status = ? AND updated_at < ?", (RUNNING, cutoff)).fetchall()]
-        for job_id in stale:
-            job = self.get(job_id)
+    def reap_stale(self, max_age: float | None = None) -> list[str]:
+        """Record as ended the "running" jobs whose runner is gone (stale_reason:
+        an old heartbeat AND no live runner). Never called from a read route."""
+        cutoff = time.time() - (STALE_SECONDS if max_age is None else max_age)
+        reaped = []
+        for row in self._conn().execute("SELECT id FROM jobs WHERE status = ? AND updated_at < ?", (RUNNING, cutoff)).fetchall():
+            job = self.get(row["id"])
+            reason = stale_reason(job, max_age) if job else None
+            if reason is None:
+                continue
             # An automatic fix stays one: its fix_of survives the rewrite (the cap reads it).
-            kept = {k: (job.result or {}).get(k) for k in ("fix_of", "app")} if job else {}
-            self.finish(job_id, status="blocked", reason=reason, result={"status": "blocked", "reason": reason, **{k: v for k, v in kept.items() if v}})
-        return stale
+            kept = {k: (job.result or {}).get(k) for k in ("fix_of", "app")}
+            if self.finish(job.id, status="blocked", reason=reason, result={"status": "blocked", "reason": reason, **{k: v for k, v in kept.items() if v}}):
+                reaped.append(job.id)
+        return reaped
 
     @staticmethod
-    def as_seen(job: Job, max_age: float = 90.0) -> Job:
-        """A job whose runner stopped beating, shown as what it is (read
-        surfaces do not write; reap_stale records it at the next job)."""
-        if job.status == RUNNING and time.time() - job.updated_at > max_age:
-            return dataclasses.replace(job, status="blocked", reason="the job's runner stopped (the gateway restarted or the run ended) before it finished")
-        return job
+    def as_seen(job: Job, max_age: float | None = None) -> Job:
+        """A job whose runner is gone, shown as what it is. Writes nothing."""
+        reason = stale_reason(job, max_age)
+        return dataclasses.replace(job, status="blocked", reason=reason) if reason else job
 
     def beat(self, job_id: str) -> None:
         with self._tx() as db:
@@ -458,4 +539,5 @@ def _job(row: sqlite3.Row) -> Job:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         finished_at=row["finished_at"],
+        owner=row["owner"] if "owner" in row.keys() else "",
     )

@@ -166,7 +166,8 @@ def test_a_job_whose_runner_stopped_beating_is_reported_interrupted(tmp_path):
     store = _store(tmp_path)
     store.create(job_id="old", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=1, model="m")
     store.create(job_id="live", thread_id="t2", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=1, model="m")
-    store._conn().execute("UPDATE jobs SET updated_at = ? WHERE id = 'old'", (time.time() - 600,))
+    # Its process is gone (a restart): the owner recorded on the row is a dead pid.
+    store._conn().execute("UPDATE jobs SET updated_at = ?, owner = '999999:1' WHERE id = 'old'", (time.time() - 600,))
     assert store.reap_stale() == ["old"]
     assert store.get("old").status == "blocked" and "restarted" in store.get("old").reason
     assert store.get("live").status == "running", "another worker's live job is left alone"
