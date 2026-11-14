@@ -128,6 +128,7 @@ def test_a_stale_base_version_is_refused_and_nothing_is_overwritten(gw) -> None:
     snapshot, version = agent_state(gw, "test-010-standup")
     assert (snapshot["soul"], version) == ("From Studio.", studio_version), "a stale chat save overwrote the Studio edit"
     assert "changed since this draft was made" in str(out["messages"]), out["messages"][-1]
+    assert "could not complete it" in str(out["messages"][-1]["content"]), "a refused confirmed save must read as failed"
     # Proposing it again is refused before any card.
     script(gw, [call("builder_save", {"draft_id": "d-test-1"}, "c3")], "Ok.")
     say(gw, thread_id, "save it again")

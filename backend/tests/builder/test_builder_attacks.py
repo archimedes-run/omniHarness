@@ -125,8 +125,17 @@ def test_a_dropped_draft_never_saves_even_from_a_card_left_open(gw) -> None:
     [card] = cards(gw, "builder_save")
     drafts.drop(gw.user_id, thread_id)  # the draft alone, the card left open
     resp = press(gw, card)
-    assert resp["outcome"] == "executed", resp
+    # Approved and not done: the card says it FAILED (never "executed", so it
+    # is no receipt), with the builder's fixed reason.
+    assert resp["outcome"] == "failed" and "Nothing was saved" in resp["message"], resp
     assert agent_state(gw, "test-010-evil") == (None, 0)
+    from pathlib import Path
+
+    from app.policy.models import Outcome
+    from app.policy.pending import PendingStore
+
+    store = PendingStore(directory=Path(gw.client.app.state.config.policy.state_dir) / "pending")
+    assert store.get(card["id"]).outcome == Outcome.FAILED
 
 
 # -- no agent edits itself or its chain ----------------------------------------------

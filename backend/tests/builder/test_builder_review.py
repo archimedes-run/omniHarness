@@ -460,33 +460,89 @@ def _turn(claim_tool_result: dict | None):
 def test_a_confirmed_builder_save_is_the_receipt_for_i_created_the_agent() -> None:
     from omniharness.agents.working_loop import RESUME_OUTCOME_MARKER, unbacked_claims
 
-    reply = "I created the agent test-010-x and saved its schedule automation."
+    reply = "I've saved the agent `test-010-x` and its schedule automation."
     assert unbacked_claims(reply, _turn({RESUME_OUTCOME_MARKER: "executed"})) == []
     assert unbacked_claims(reply, _turn(None)), "a claim with no confirmed save must be flagged"
     assert unbacked_claims(reply, _turn({RESUME_OUTCOME_MARKER: "declined"})), "a declined save is not a receipt"
 
 
-def test_a_builder_cards_prompt_is_not_stripped_as_a_menu() -> None:
+def _final(messages):
     from types import SimpleNamespace
 
+    from omniharness.agents.middlewares.verification_middleware import VerificationMiddleware
+
+    out = VerificationMiddleware()._apply({"messages": messages}, SimpleNamespace(context={}))
+    return str((out["messages"][-1] if out else messages[-1]).content)
+
+
+def _card_turn(result_text: str, reply: str, *, resumed: bool = False):
     from langchain_core.messages import AIMessage, ToolMessage
 
     from app.policy.lineage import user_turn
-    from omniharness.agents.middlewares.verification_middleware import VerificationMiddleware
+    from omniharness.agents.working_loop import RESUME_OUTCOME_MARKER
 
-    prompt = "Here is Inbox triage on its card: it reads your inbox each morning, files a task for every email that needs action, and leaves the rest alone. " * 2 + "\n\nWould you like me to save it? Press the button, or reply yes."
-    messages = [
+    extra = {RESUME_OUTCOME_MARKER: "executed"} if resumed else {}
+    return [
         user_turn("make me an agent"),
         AIMessage(content="", tool_calls=[{"name": "builder_save", "args": {}, "id": "s1"}]),
-        ToolMessage(content="Before I do this, please confirm.", tool_call_id="s1", name="builder_save"),
-        AIMessage(content=prompt, id="final"),
+        ToolMessage(content=result_text, tool_call_id="s1", name="builder_save", additional_kwargs=extra),
+        AIMessage(content=reply, id="final"),
     ]
-    out = VerificationMiddleware()._apply({"messages": messages}, SimpleNamespace(context={}))
-    final = out["messages"][-1] if out else messages[-1]
-    assert "Would you like me to save it?" in str(final.content), final.content
+
+
+BODY = "Here is Inbox triage on its card: it reads your inbox each morning, files a task for every email that needs action, and leaves the rest alone. " * 2
+CARD_ASK = "Would you like me to save it? Press the button on its card, or reply yes."
+MENU = "Would you like me to also research other triage tools?"
+
+
+def test_a_builder_cards_prompt_is_kept_and_other_menus_still_go() -> None:
+    from langchain_core.messages import AIMessage
+
+    from app.policy.lineage import user_turn
+
+    plan = "Before I do this, please confirm."
+    kept = _final(_card_turn(plan, f"{BODY}\n\n{CARD_ASK}"))
+    assert CARD_ASK in kept, kept
+    both = _final(_card_turn(plan, f"{BODY}\n\n{MENU}\n\n{CARD_ASK}"))
+    assert CARD_ASK in both and MENU not in both, both
+    refused = _final(_card_turn("Nothing was proposed or changed: the draft was dropped.", f"{BODY}\n\n{CARD_ASK}"))
+    assert CARD_ASK not in refused, "a refusal before any card left the card prompt in"
+    resumed = _final(_card_turn(plan, f"{BODY}\n\n{CARD_ASK}", resumed=True))
+    assert CARD_ASK not in resumed, "a resumed reply kept a card prompt for a card already answered"
     plain = [user_turn("hi"), AIMessage(content="A long enough answer about something else entirely, " * 4 + "\n\nWould you like me to look into more options?", id="f2")]
-    out = VerificationMiddleware()._apply({"messages": plain}, SimpleNamespace(context={}))
-    assert "Would you like me" not in str(out["messages"][-1].content), "menus elsewhere are still stripped"
+    assert "Would you like me" not in _final(plain), "menus elsewhere are still stripped"
+
+
+ORDINARY = [
+    "I've created a comparison of the top AI agents below.",
+    "I made a table of the skills each role needs.",
+    "I've created a list of agents that can browse the web.",
+    "I wrote a summary of the skills a data engineer needs.",
+    "I've put together and created an overview of open-source agent frameworks.",
+    "I made a short guide to the soft skills interviewers look for.",
+    "I created a ranking of coding agents by benchmark score.",
+    "I've added a section on which agents support tool calling below.",
+]
+
+
+def test_ordinary_replies_about_agents_and_skills_are_not_claims() -> None:
+    from langchain_core.messages import AIMessage
+
+    from app.policy.lineage import user_turn
+    from omniharness.agents.working_loop import unbacked_claims
+
+    for reply in ORDINARY:
+        assert unbacked_claims(reply, [user_turn("research AI agents"), AIMessage(content=reply)]) == [], reply
+
+
+def test_a_named_builder_claim_without_a_save_is_flagged() -> None:
+    from langchain_core.messages import AIMessage
+
+    from app.policy.lineage import user_turn
+    from omniharness.agents.working_loop import unbacked_claims
+
+    reply = "I've saved the agent `inbox-triage`."
+    assert unbacked_claims(reply, [user_turn("save it"), AIMessage(content=reply)]), "a named builder claim with no confirmed save"
 
 
 def test_bootstrap_cards_are_the_leads_and_resume_it(gw) -> None:

@@ -108,6 +108,16 @@ def _run_sync(coro) -> Any:
     return box.get("value")
 
 
+def _not_done(lead: str, exc: Exception, confirmed: bool) -> str:
+    """A builder write that did not happen. Once its card was confirmed this
+    RAISES, so the action is recorded FAILED (the card shows it did not
+    happen, and it is no receipt), as the ledger does
+    (app.ledger.controller); before that, it is the tool's answer."""
+    if confirmed:
+        raise RuntimeError(f"{lead}: {exc}") from exc
+    return f"{lead}: {exc}"
+
+
 class GatewayBuilderController:
     """The BuilderController the gateway registers (app/gateway/deps.py)."""
 
@@ -746,7 +756,9 @@ class GatewayBuilderController:
 
     def save(self, context: dict, *, draft_id: str) -> str:
         try:
+            confirmed = False
             action = self._confirmed("builder_save", {"draft_id": draft_id})
+            confirmed = True
             user_id, thread_id = self._who(context)
             draft, live, version = self._ready_draft(context, draft_id)
             extra = {"via": "chat", "thread_id": thread_id, "card_id": action.id}
@@ -781,10 +793,8 @@ class GatewayBuilderController:
             elif draft.get("access_request"):
                 later = " The access it asked for was left out; propose it with builder_grant (button only)."
             return f"{verb} the {kind} `{name}` as version {new_version} (source: chat). To undo it, propose builder_undo with version {new_version}.{later}"
-        except config_versions.StaleWriteError as exc:
-            return f"Nothing was saved: {exc}"
-        except BuilderRefused as exc:
-            return f"Nothing was saved: {exc}"
+        except (config_versions.StaleWriteError, BuilderRefused) as exc:
+            return _not_done("Nothing was saved", exc, confirmed)
 
     def _save_skill(self, user_id: str, name: str, draft: dict, live: dict | None, version: int, who: str, extra: dict) -> int:
         from omniharness.skills.security_scanner import scan_skill_content
@@ -946,7 +956,9 @@ class GatewayBuilderController:
     def grant(self, context: dict, *, agent: str, integrations: list[str], tools: list[str], autonomy: list[str], tool_groups: list[str] | None = None, skills: list[str] | None = None, model: str | None = None) -> str:
         arguments = {"agent": agent, "integrations": integrations, "tools": tools, "autonomy": autonomy, "tool_groups": tool_groups or [], "skills": skills, "model": model}
         try:
+            confirmed = False
             action = self._confirmed("builder_grant", {"agent": agent}, button=True)
+            confirmed = True
             user_id, thread_id = self._who(context)
             _, plan = self._grant_plan(context, arguments)
             snapshot = {**json.loads(json.dumps(plan["live"])), "config": plan["config"]}
@@ -954,10 +966,8 @@ class GatewayBuilderController:
                 user_id, plan["agent"], snapshot, who=f"user:{user_id}", source="chat", base_version=plan["version"], sets_autonomy=plan["autonomy"], extra={"via": "chat", "thread_id": thread_id, "card_id": action.id}
             )
             return f"Gave `{plan['agent']}` what the card listed, as version {made.version} (source: chat)."
-        except config_versions.StaleWriteError as exc:
-            return f"Nothing was changed: {exc}"
-        except BuilderRefused as exc:
-            return f"Nothing was changed: {exc}"
+        except (config_versions.StaleWriteError, BuilderRefused) as exc:
+            return _not_done("Nothing was changed", exc, confirmed)
 
     def _propose_access(self, context: dict, saved_by, agent: str, request: dict) -> str | None:
         """Right after a save that left access out: ONE permission card for the
@@ -1079,7 +1089,9 @@ class GatewayBuilderController:
 
     def undo(self, context: dict, *, kind: str, name: str, version: int) -> str:
         try:
+            confirmed = False
             self._confirmed("builder_undo", {"kind": kind, "name": name, "version": version})
+            confirmed = True
             user_id, _ = self._who(context)
             plan = self._undo_plan(context, {"kind": kind, "name": name, "version": version})
             who = f"user:{user_id}"
@@ -1104,7 +1116,5 @@ class GatewayBuilderController:
                     made = config_versions.write_skill(plan["name"], files, who=who, source="undo", base_version=version, replace_all=True, storage=self._skills())
                 new_version = made.version
             return f"Undone: the {plan['kind']} `{plan['name']}` is now version {new_version} (source: undo)."
-        except config_versions.StaleWriteError as exc:
-            return f"Nothing was undone: {exc}"
-        except BuilderRefused as exc:
-            return f"Nothing was undone: {exc}"
+        except (config_versions.StaleWriteError, BuilderRefused) as exc:
+            return _not_done("Nothing was undone", exc, confirmed)
