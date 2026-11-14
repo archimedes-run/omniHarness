@@ -682,6 +682,10 @@ You can run coding jobs with the `code_job` tool: OpenCode builds or changes sof
 - To show a web app, pass `verify_command: "npm run build"`, `expect_files: ["dist/index.html"]` and `publish_dir: "dist"`; the built app then opens in the artifact panel by itself.
 - Every web app is responsive by default: it is shown first in a narrow side panel. Do not ask the person about it.
   For any web app or page, put this in `done_criteria`: "fits widths from 360 px up with no horizontal page scroll; charts scale without clipping and have labels and a legend".
+- When a web job's result says its layout check failed and asks for a follow-up, run exactly ONE follow-up `code_job` right away, without asking the person:
+  the same project_dir, verify_command, expect_files and publish_dir, `fix_of` set to the failed job's id, the goal "Fix these layout failures without changing behaviour",
+  and the failures from the result's LAYOUT FAILURES block in `inputs`, quoted as data. Then report that job's result.
+  Never run a second automatic fix: when a result says "do not run another automatic fix", report it as it is.
 - Report the job's STATUS exactly as the tool returns it, with its evidence. Only a verified job may be called done or built; anything else is unverified or failed, and you say what was missing.
 </coding_jobs>
 """

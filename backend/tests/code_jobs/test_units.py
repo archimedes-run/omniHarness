@@ -172,6 +172,15 @@ def test_a_job_whose_runner_stopped_beating_is_reported_interrupted(tmp_path):
     assert store.get("live").status == "running", "another worker's live job is left alone"
 
 
+def test_an_interrupted_automatic_fix_still_counts_as_the_fix(tmp_path):
+    store = _store(tmp_path)
+    store.create(job_id="fix", thread_id="t", user_id="u", tool_call_id="c", title="x", project_dir="p", budget_usd=1, model="m")
+    store.update("fix", result={"fix_of": "a" * 16})
+    store._conn().execute("UPDATE jobs SET updated_at = ? WHERE id = 'fix'", (time.time() - 600,))
+    assert store.reap_stale() == ["fix"]
+    assert store.get("fix").status == "blocked" and store.get("fix").result["fix_of"] == "a" * 16
+
+
 # -- prices --------------------------------------------------------------------
 
 
@@ -263,9 +272,9 @@ def test_opencode_runs_with_a_clean_environment_in_its_own_process_group(tmp_pat
     manager = CodeJobManager(store=_store(tmp_path), settings=lambda: None, unavailable=lambda: None, sandbox_for=lambda t, u: None, relay_dir=tmp_path)
     settings = Settings(proxy_url="http://172.20.0.2:8790/v1", proxy_host="172.20.0.2", budget_usd=1, monthly_cap_usd=20, wall_seconds=600, verify_timeout_seconds=600)
     script = manager._run_script("job1", "/tmp/omni-jobs/job1", CodeJobBrief(goal="g", project_dir="p"), settings)
-    assert "exec setsid env -i " in script, "own process group, empty environment"
+    assert "exec /usr/bin/setsid /usr/bin/env -i " in script, "own process group, empty environment"
     assert "SANDBOX_API_KEY" not in script, "the sandbox's API key never reaches the worker"
-    assert 'OMNI_LLM_TOKEN="$TOKEN"' in script and "rm -f /tmp/omni-jobs/job1/token" in script
+    assert 'OMNI_LLM_TOKEN="$TOKEN"' in script and "/usr/bin/rm -f /tmp/omni-jobs/job1/token" in script
     assert "NO_PROXY=localhost,127.0.0.1,172.20.0.2" in script
     for flag in ("OPENCODE_DISABLE_AUTOUPDATE=1", "OPENCODE_DISABLE_MODELS_FETCH=1", "OPENCODE_DISABLE_DEFAULT_PLUGINS=1", "OPENCODE_DISABLE_CLAUDE_CODE=1"):
         assert flag in script
@@ -503,7 +512,11 @@ def test_the_sweep_kills_only_what_the_job_started_and_a_detached_process_from_b
     for f in ("ps", "kill"):
         (bindir / f).chmod((bindir / f).stat().st_mode | stat.S_IEXEC)
     script = tmp_path / "sweep.sh"
-    script.write_text(leftover_sweep(snapshot))
+    # The sweep names its tools by absolute path: point ps and kill at the fakes.
+    sweep = leftover_sweep(snapshot)
+    assert "/usr/bin/ps -eo" in sweep and "/usr/bin/xargs -r /usr/bin/kill -KILL" in sweep
+    awk = shutil.which("awk")
+    script.write_text(sweep.replace("/usr/bin/ps ", f"{bindir}/ps ").replace("/usr/bin/kill ", f"{bindir}/kill ").replace("/usr/bin/awk ", f"{awk} "))
     env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
     subprocess.run(["bash", str(script)], env=env, check=True, timeout=20)
     victims = set(killed.read_text().split()) if killed.exists() else set()
@@ -573,3 +586,76 @@ def test_the_worker_rules_and_the_leads_brief_make_web_apps_responsive_by_defaul
         assert needle in rules, needle
     assert "responsive by default" in CODING_JOBS_SECTION
     assert "no horizontal page scroll" in CODING_JOBS_SECTION
+
+
+def test_the_lead_runs_exactly_one_automatic_layout_fix_without_asking() -> None:
+    from omniharness.agents.lead_agent.prompt import CODING_JOBS_SECTION
+
+    assert "run exactly ONE follow-up `code_job` right away, without asking the person" in CODING_JOBS_SECTION
+    assert "`fix_of` set to the failed job's id" in CODING_JOBS_SECTION and "quoted as data" in CODING_JOBS_SECTION
+    assert 'Never run a second automatic fix: when a result says "do not run another automatic fix"' in CODING_JOBS_SECTION
+
+
+def test_the_systems_own_commands_never_look_up_a_tool_on_the_sessions_path(tmp_path):
+    """A program the sandbox user put earlier on PATH is never what the
+    gateway's own commands run: every tool is named by absolute path."""
+    from app.gateway.code_jobs import layout
+    from app.gateway.code_jobs.runner import SNAPSHOT_CMD, CodeJobManager, Running, Settings, leftover_sweep, snapshot_keys
+    from omniharness.code_jobs import CodeJobBrief
+
+    tools = r"(?<![/\w.-])(ps|awk|xargs|tr|grep|sha256sum|cut|bash|sh|env|timeout|mkdir|rm|cat|sleep|stat|find|head|tail|cp|setsid|chmod|python3(?:\.10)?|node)(?=\s)"
+    seen: list[str] = []
+
+    class Recorder:
+        container = "c"
+
+        def sh(self, command, *, timeout=30):
+            seen.append(command)
+            return 0, "__killed__"
+
+        def write(self, path, content):
+            if path.endswith(".sh"):
+                seen.append(content)
+
+    manager = CodeJobManager(store=_store(tmp_path), settings=lambda: None, unavailable=lambda: None, sandbox_for=lambda t, u: None, relay_dir=tmp_path)
+    running = Running(job_id="job1", ops=Recorder(), snapshot=snapshot_keys("1 Sun Oct 25 11:30:00 2026"))
+    manager._kill(running)
+    manager._cleanup(running)
+    settings = Settings(proxy_url="http://x/v1", proxy_host="x", budget_usd=1, monthly_cap_usd=20, wall_seconds=600, verify_timeout_seconds=600)
+    run_sh = manager._run_script("job1", "/tmp/omni-jobs/job1", CodeJobBrief(goal="g", project_dir="p"), settings)
+    outer = run_sh.split("bash -c ")[0]  # the worker's own command line inside is its business
+    commands = [*seen, outer, SNAPSHOT_CMD, leftover_sweep(running.snapshot), layout.command("/tmp/omni-layout-x", "/w/p/dist", "job1"), manager._listing_cmd("/w/p", "/tmp/o")]
+    assert seen and any("sha256sum" in c for c in seen), "the sweep ran through its checksum"
+    for command in commands:
+        bare = re.findall(tools, command)
+        assert not bare, f"looked up on PATH: {bare} in {command[:200]}"
+    assert "PATH=/usr/bin:/bin" in layout.command("/tmp/omni-layout-x", "/w/p/dist", "job1")
+    assert '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/bash "$f"' in "".join(seen), "the sweep runs with a fixed PATH"
+
+
+def test_the_control_session_runs_on_a_fixed_path_and_the_build_check_gets_the_users():
+    from app.gateway.code_jobs.runner import CodeJobManager
+    from app.gateway.code_jobs.sandbox_ops import CTL_SETUP, AioJobSandbox
+
+    calls: list[tuple[str, str]] = []
+
+    class Result:
+        data = type("D", (), {"status": "completed", "exit_code": 0, "output": ""})()
+
+    class Shell:
+        def create_session(self, **kw):
+            calls.append(("create", kw["id"]))
+
+        def exec_command(self, **kw):
+            calls.append(("exec", kw["command"]))
+            return Result()
+
+    sandbox = type("S", (), {"_client": type("C", (), {"shell": Shell()})()})()
+    ops = AioJobSandbox(sandbox=sandbox, container="c")
+    ops.sh("echo one")
+    ops.sh("echo two")
+    assert [c for c in calls if c[0] == "exec"][:2] == [("exec", CTL_SETUP), ("exec", "echo one")], calls
+    assert sum(1 for c in calls if c == ("exec", CTL_SETUP)) == 1, "once per session"
+    assert "PATH=/usr/bin:/bin" in CTL_SETUP and 'OMNI_USER_PATH="$PATH"' in CTL_SETUP and "hash -r" in CTL_SETUP
+    env = CodeJobManager._pass_env(None)  # type: ignore[arg-type]
+    assert 'PATH="${OMNI_USER_PATH:-$PATH}"' in env

@@ -231,7 +231,10 @@ class CodeJobStore:
         cutoff = time.time() - max_age
         stale = [r["id"] for r in self._conn().execute("SELECT id FROM jobs WHERE status = ? AND updated_at < ?", (RUNNING, cutoff)).fetchall()]
         for job_id in stale:
-            self.finish(job_id, status="blocked", reason=reason, result={"status": "blocked", "reason": reason})
+            job = self.get(job_id)
+            # An automatic fix stays one: its fix_of survives the rewrite (the cap reads it).
+            fix_of = (job.result or {}).get("fix_of") if job else None
+            self.finish(job_id, status="blocked", reason=reason, result={"status": "blocked", "reason": reason, **({"fix_of": fix_of} if fix_of else {})})
         return stale
 
     def beat(self, job_id: str) -> None:
