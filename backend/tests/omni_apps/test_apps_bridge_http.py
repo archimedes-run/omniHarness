@@ -245,10 +245,16 @@ def test_bridge_requests_are_limited_per_app_per_minute(gateway, composio, apps)
     composio.connect("GMAIL")
     reg = apps.register(manifest(inbox=INBOX))
     apps.approve(reg.app_id)
+    now = [1_800_000_000.0]  # the start of a minute window, fixed: no boundary is crossed by accident
+    apps.repo.clock = lambda: now[0]
     codes = [gateway.client.get(f"/api/apps/{reg.app_id}/data/inbox").status_code for _ in range(61)]
     assert codes[:60] == [200] * 60 and codes[60] == 429
     limited = gateway.client.get(f"/api/apps/{reg.app_id}/data")
     assert limited.status_code == 429 and limited.headers["Retry-After"] == "60"
+    now[0] += 59
+    assert gateway.client.get(f"/api/apps/{reg.app_id}/data/inbox").status_code == 429, "same window"
+    now[0] += 1
+    assert gateway.client.get(f"/api/apps/{reg.app_id}/data/inbox").status_code == 200, "the next minute's window starts at zero"
 
 
 def test_unknown_source_is_refused_and_logged(gateway, apps) -> None:
