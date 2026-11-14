@@ -7,6 +7,8 @@ import CodeMirror, { EditorView, type Extension } from "@uiw/react-codemirror";
 import { useTheme } from "next-themes";
 import { useEffect, useMemo, useState } from "react";
 
+import { cn } from "@/lib/utils";
+
 /**
  * Spec 012: a code artifact in CodeMirror, read only, highlighted for its
  * language (loaded on demand from @codemirror/language-data). The text is
@@ -78,7 +80,13 @@ export function ArtifactCode({
           highlightActiveLineGutter: false,
           lineNumbers: true,
         }}
-        className="max-h-[70vh] overflow-auto font-mono text-sm"
+        // The light palette's token colours fall below AA on this
+        // background: in light mode tokens take the text colour (dark mode
+        // keeps its highlighting, which passes).
+        className={cn(
+          "max-h-[70vh] overflow-auto font-mono text-sm",
+          resolvedTheme !== "dark" && "[&_.cm-content_span]:!text-foreground",
+        )}
       />
     </div>
   );

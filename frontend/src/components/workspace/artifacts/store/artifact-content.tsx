@@ -1,11 +1,14 @@
 "use client";
 
 import {
+  AppWindowIcon,
   BarChart3Icon,
   Code2Icon,
   FileIcon,
   FileTextIcon,
+  GlobeIcon,
   ImageIcon,
+  LayoutTemplateIcon,
   type LucideIcon,
   NetworkIcon,
   ShapesIcon,
@@ -54,6 +57,9 @@ export const KIND_ICONS: Record<ArtifactKind, LucideIcon> = {
   mermaid: NetworkIcon,
   chart: BarChart3Icon,
   image: ImageIcon,
+  html: GlobeIcon,
+  react: AppWindowIcon,
+  webapp: LayoutTemplateIcon,
   file: FileIcon,
 };
 

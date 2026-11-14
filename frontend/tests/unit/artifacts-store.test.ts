@@ -80,7 +80,12 @@ describe("the card from a tool message", () => {
         version: 1.5,
         kind: "markdown",
       },
-      { type: "omni_artifact", artifact_id: ID, version: 1, kind: "html" },
+      {
+        type: "omni_artifact",
+        artifact_id: ID,
+        version: 1,
+        kind: "whiteboard",
+      },
       { type: "omni_artifact", artifact_id: ID, version: "1", kind: "code" },
     ]) {
       expect(artifactBindingOf(tool(a))).toBeNull();

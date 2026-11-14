@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type ArtifactDetail,
   archiveArtifact,
+  checkAgain,
+  type ReactSource,
+  rebuildArtifact,
   deleteArtifact,
   duplicateArtifact,
   getArtifact,
@@ -35,7 +39,32 @@ export function useStoreArtifact(id: string | null) {
     retry: retryUnless4xx,
     staleTime: 10_000,
     refetchOnWindowFocus: false,
+    // Slice 2: while a code version's checks or a Rebuild run, poll (bounded
+    // by the gateway's own liveness: a stale run reads not checked / interrupted).
+    refetchInterval: (query) => (codeBusy(query.state.data) ? 2500 : false),
   });
+}
+
+/** A check pending or a build running on this artifact. */
+export function codeBusy(data: ArtifactDetail | undefined): boolean {
+  if (!data?.code) return false;
+  if (data.code.build?.state === "running") return true;
+  return data.versions.some((v) => v.code?.check?.state === "pending");
+}
+
+export function useCodeActions(id: string) {
+  const invalidate = useInvalidate();
+  return {
+    rebuild: useMutation({
+      mutationFn: (body: { base_version: number; content: ReactSource }) =>
+        rebuildArtifact(id, body),
+      onSettled: invalidate,
+    }),
+    checkAgain: useMutation({
+      mutationFn: (n: number) => checkAgain(id, n),
+      onSettled: invalidate,
+    }),
+  };
 }
 
 /** A version never changes: read once. */
