@@ -48,7 +48,7 @@ def _measure(expected: dict, marked: list[tuple[str, str]]) -> dict:
     out = []
     for title, shown in marked:
         e = by_title[title]
-        clock = (re.search(r"\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?", shown) or [""])[0]
+        clock = (re.search(r"\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?", shown.replace(title, " ")) or [""])[0]
         out.append({"kind": "marked", "title": title, "shown": clock, "ok": bool(re.search(e["local_re"], shown)), "wrong": bool(e["shifted_re"] and re.search(e["shifted_re"], shown))})
     return {"marked": out, "near": []}
 
@@ -81,13 +81,53 @@ def test_the_message_names_roadmap_planning_when_only_it_is_shifted():
     assert "the event 'Roadmap planning' shows 7:00 PM; expected 2:00 PM (America/New_York; light)" in r["failures"]
 
 
+def _rows(tz: str, shape) -> tuple[dict, list[tuple[str, str]]]:
+    """Each event's row text as an app built on the kit's Row shows it."""
+    data = app_kit.fixtures(_manifest(tz))
+    items = [i for i in data["sources"]["calendar"]["fresh"]["items"] if not i["all_day"]]
+    return app_kit.expected_times(data), [(i["title"], shape(i["title"], _clock(i["start"], tz), _clock(i["end"], tz))) for i in items]
+
+
+ROW_SHAPES = {
+    "start left, end right": lambda t, a, b: f"{a} {t} {b}",
+    "a range in the meta": lambda t, a, b: f"{t} {a.rsplit(' ', 1)[0]}–{b}",
+    "start and duration": lambda t, a, b: f"{t} {a} · 15 min",
+}
+
+
+@pytest.mark.parametrize("shape", list(ROW_SHAPES))
+@pytest.mark.parametrize("tz", ["America/New_York", "Asia/Kolkata"])
+def test_a_row_with_the_start_and_an_end_time_or_range_passes(tz, shape):
+    expected, rows = _rows(tz, ROW_SHAPES[shape])
+    r = _parse(_measure(expected, rows), expected)
+    assert r["outcome"] == "pass" and not r["design"], (r["failures"], r["design"])
+
+
+def test_a_row_with_only_the_end_time_is_a_design_finding():
+    expected, marked = _starter_page("America/New_York")
+    _, ends = _rows("America/New_York", lambda t, a, b: f"{t} ends {b}")
+    r = _parse(_measure(expected, ends + marked[len(ends) :]), expected)  # the Timeline still shows each start
+    assert r["outcome"] == "pass"
+    assert "the event 'Team standup' shows no start time (shows 9:45 AM); expected 9:30 AM somewhere in its row" in r["design"]
+
+
+def test_a_utc_range_still_fails():
+    expected, rows = _rows("America/New_York", lambda t, a, b: f"{t} {a}–{b}")
+    ev = {e["title"]: e for e in expected["events"]}
+    utc = [(t, f"{t} {_clock(ev[t]['iso'], 'UTC')}–{_clock(ev[t]['iso'], 'UTC')}") for t, _ in rows]
+    r = _parse(_measure(expected, utc), expected)
+    assert r["outcome"] == "fail" and "the event 'Team standup' shows 2:30 PM; expected 9:30 AM (America/New_York; light)" in r["failures"]
+
+
 def test_the_kit_marks_event_times_and_its_hour_axis():
     files = app_kit.kit_files(_manifest("America/New_York"))
     react = files["omni-kit/omni-react.tsx"]
     assert "data-omni-time={time ?? undefined}" in react  # Row meta
     assert "<title data-omni-time={e.start!}>" in react  # Timeline event
     assert 'className="omni-timeline-hour" data-omni-axis=""' in react
-    assert "time={item.start ?? null}" in files["omni-kit/starter/App.tsx"]
+    starter = files["omni-kit/starter/App.tsx"]
+    assert "time={item.all_day ? null : (item.start ?? null)}" in starter
+    assert 'meta={item.all_day ? "All day" : item.start ? z.formatTime(item.start) : undefined}' in starter
 
 
 def test_heartbeat_lines_reach_the_console_and_the_daily_log_file(tmp_path, capsys):

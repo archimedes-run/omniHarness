@@ -114,9 +114,10 @@ def test_times_pass_when_the_shown_ones_are_local_and_fail_on_a_shifted_or_none(
     assert r["outcome"] == "fail" and any(f.startswith("the calendar's sample times are not shown in the app's time zone (expected 9:30 AM for 'Team standup'") for f in r["failures"])
     mixed = _fresh(_times(near=[ok, {"kind": "near", "title": "Lunch with Sam", "found": True, "ok": False, "wrong": True}]))
     assert "the event 'Lunch with Sam' shows 5:30 PM; expected 12:30 PM (America/New_York; light)" in parse(mixed, time_events=expected)["failures"]
-    # A kit-marked time is compared with that event's local time, whatever it shows.
-    off = _fresh(_times(marked=[{"kind": "marked", "title": "Team standup", "shown": "10:30 AM", "ok": False, "wrong": False}]))
-    assert "the event 'Team standup' shows 10:30 AM; expected 9:30 AM (America/New_York; light)" in parse(off, time_events=expected)["failures"]
+    # A kit-marked row without its local start (only an end time, say): a design finding, not a failure.
+    off = _fresh(_times(marked=[ok, {"kind": "marked", "title": "Team standup", "shown": "9:45 AM", "ok": False, "wrong": False}]))
+    r = parse(off, time_events=expected)
+    assert r["outcome"] == "pass" and "the event 'Team standup' shows no start time (shows 9:45 AM); expected 9:30 AM somewhere in its row" in r["design"]
 
 
 def test_a_utc_time_equal_to_a_local_one_is_never_counted_as_shifted():
