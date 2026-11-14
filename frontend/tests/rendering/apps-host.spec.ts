@@ -671,7 +671,8 @@ for (const [scheme, width] of [
   }) => {
     await setTheme(page, scheme);
     await page.setViewportSize({ width, height: 800 });
-    await installFakeBridge(page);
+    // The app serves version 1; version 2 is offered.
+    await installFakeBridge(page, { apps: [demoApp({ version: 1 })] });
     const json = (body: unknown) => ({
       status: 200,
       contentType: "application/json",
