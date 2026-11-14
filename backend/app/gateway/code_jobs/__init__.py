@@ -112,6 +112,7 @@ def start(app: FastAPI) -> None:
             wall_seconds=current.wall_seconds,
             verify_timeout_seconds=current.verify_timeout_seconds,
             model_label=up.model if up else "",
+            layout_check=current.layout_check,
         )
 
     def record_history(body: dict) -> None:

@@ -16,12 +16,24 @@ Checks, each printed as `ok` or `FAIL` (exit 1 if any fails):
     E2E_SABOTAGE=nocleanup skips the cleanup after the system's check);
   * token scope: the job token works only from its own sandbox (another
     sandbox: 403; no token: 401; the proxy is unreachable off the sandbox
-    network).
+    network);
+  * the layout check, in the image's own browser: an app that fits is
+    verified and published; one that overflows sideways and one with a
+    clipped chart are unverified but still shown; a blank page is unverified
+    and not shown; nothing of the check is left running
+    (sabotage: E2E_SABOTAGE=nooverflow, noclip or norender turns that part
+    of the check off);
+  * programs the sandbox user planted earlier on PATH (env, timeout, ps, ...)
+    are never run by the system's commands: a planted timeout cannot forge a
+    pass, a planted ps cannot switch the sweep off, and the control session
+    runs on a fixed PATH (sabotage: E2E_SABOTAGE=nofixedpath keeps the user's
+    PATH in the session; pathprobe or pathps also put a PATH lookup back).
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import subprocess
@@ -51,12 +63,47 @@ OUTSIDER = os.environ["E2E_OUTSIDER"]
 PROVIDER_KEY = os.environ["E2E_PROVIDER_KEY"]
 SECRET = os.environ["OMNI_HARNESS_INTERNAL_AUTH_TOKEN"]
 SABOTAGE = os.environ.get("E2E_SABOTAGE", "")
+#: E2E_ONLY=layout runs the layout check's part alone (the sandbox checks still run).
+ONLY = os.environ.get("E2E_ONLY", "")
 PORT = 8790
 #: The check exits 9 if any leftover the worker started is still alive, else 3.
 #: It also leaves a detached process of its own (sleep 666) behind, which the
 #: cleanup after the check must end.
 LEFTOVER_CHECK = "(setsid env -i sh -c 'sleep 666' >/dev/null 2>&1 &); pgrep -f '[s]leep 999|[s]leep 888|[t]muxanything 889' >/dev/null && exit 9; exit 3"
 failed = False
+
+#: Programs the sandbox user plants earlier on PATH (a later job's session finds
+#: them first). If the gateway's own commands ever ran one: it records its name
+#: (outside a worker), `ps` lists no process (no sweep), `timeout` forges a
+#: passing layout result.
+PLANTED = ("env", "sha256sum", "cut", "timeout", "ps", "awk", "xargs", "tr", "grep", "mkdir", "rm", "stat", "tail", "head", "find", "cp", "chmod")
+_PASS = json.dumps({"v": 1, "pages": [{"width": w, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "overflow_px": 0, "client_width": w, "offenders": [], "rendered": True, "svgs": []} for w in (360, 560, 1280)]})
+_FORGE = r"""#!/bin/sh
+# Records its name and its caller, unless the worker started it (OpenCode and
+# its commands are the worker's business, not the system's).
+worker=no; pid=$PPID
+while [ "${pid:-1}" -gt 1 ]; do
+  case "$(/usr/bin/tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)" in *opencode*) worker=yes ;; esac
+  pid=$(/usr/bin/awk '{print $4}' /proc/$pid/stat 2>/dev/null)
+done
+if [ -z "$OMNI_JOB_ID" ] && [ "$worker" = no ]; then
+  chain=""; pid=$PPID
+  while [ "${pid:-1}" -gt 1 ]; do chain="$chain <- $(/usr/bin/tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | /usr/bin/head -c 120)"; pid=$(/usr/bin/awk '{print $4}' /proc/$pid/stat 2>/dev/null); done
+  echo "$(basename "$0") $*$chain" >> /tmp/planted-hits
+fi
+case "$(basename "$0")" in
+  ps) exit 0 ;;
+  timeout) for a; do last="$a"; done; printf %s 'PASS_JSON' > "$last"; exit 0 ;;
+esac
+exit 0
+""".replace("PASS_JSON", _PASS)
+PLANT_CMD = (
+    "/usr/bin/mkdir -p /home/gem/.fnm_shell/bin && cd /home/gem/.fnm_shell/bin && echo "
+    + base64.b64encode(_FORGE.encode()).decode()
+    + " | /usr/bin/base64 -d > forge && /usr/bin/chmod +x forge"
+    + "".join(f" && /usr/bin/ln -sf forge {t}" for t in PLANTED)
+    + " && echo planted"
+)
 
 
 def check(name: str, expected, actual) -> None:
@@ -140,6 +187,37 @@ def main() -> int:
         manager._kill = lambda running: None  # type: ignore[method-assign]
     if SABOTAGE == "nocleanup":
         manager._cleanup = lambda running: None  # type: ignore[method-assign]
+    if SABOTAGE in ("nofixedpath", "pathps", "pathprobe"):
+        # Sabotage: the control session keeps the sandbox user's PATH.
+        import app.gateway.code_jobs.sandbox_ops as ops_mod
+
+        ops_mod.CTL_SETUP = "true"
+    if SABOTAGE == "pathps":
+        # Sabotage: the process snapshot looks ps up on the session's PATH.
+        import app.gateway.code_jobs.runner as runner_mod
+
+        runner_mod.SNAPSHOT_CMD = "ps -u gem -o pid=,lstart="
+    if SABOTAGE == "pathprobe":
+        # Sabotage: the probe command looks timeout and env up on the session's PATH.
+        from app.gateway.code_jobs import layout as layout_cmd
+
+        original = layout_cmd.command
+        layout_cmd.command = lambda *args: original(*args).replace("/usr/bin/timeout ", "timeout ").replace("/usr/bin/env -i PATH=/usr/bin:/bin", 'env -i PATH="${PATH}"')
+    if SABOTAGE in ("nooverflow", "noclip", "norender"):
+        # Sabotage: one part of the layout probe turned off (the gateway
+        # writes and checksums the sabotaged script, as it would the real one).
+        import hashlib
+
+        from app.gateway.code_jobs import layout as layout_mod
+
+        cut = {
+            "nooverflow": ("const overflow = Math.max(0, de.scrollWidth - cw);", "const overflow = 0;"),
+            "noclip": ("if (found) svgs.push(found);", ""),
+            "norender": ("rendered: !!body && (text > 0 || visuals > 0)", "rendered: true"),
+        }[SABOTAGE]
+        assert cut[0] in layout_mod.SCRIPT, cut[0]
+        layout_mod.SCRIPT = layout_mod.SCRIPT.replace(cut[0], cut[1])
+        layout_mod.DIGEST = hashlib.sha256(layout_mod.SCRIPT.encode()).hexdigest()
     a = names["a"]
 
     # -- the sandbox itself ---------------------------------------------------------------------
@@ -156,7 +234,54 @@ def main() -> int:
     }
     (work / "a" / "workspace" / "opencode.json").write_text(json.dumps(hostile))
 
+    async def layout_check() -> None:
+        # -- the layout check, in the image's own browser -------------------------------------
+        def web(name: str) -> CodeJobBrief:
+            return CodeJobBrief(goal=f"[scenario:layout_{name}] build the app", project_dir=f"layout-{name}", verify_command="test -s dist/index.html", expect_files=["dist/index.html"], publish_dir="dist")
+
+        laid = {}
+        for name in ("fit", "overflow", "clipped", "blank"):
+            outcome = await manager.run(thread_id="a", user_id="u", tool_call_id=f"layout-{name}", brief=web(name))
+            job = store.get(outcome.job_id)
+            laid[name] = (job.status, (job.result or {}).get("layout") or {}, (job.result or {}).get("published"))
+            print(f"      layout {name}: {job.status} | {laid[name][1].get('outcome')} {laid[name][1].get('failures')} {laid[name][1].get('error') or ''} {laid[name][1].get('seconds')} s", flush=True)
+        status, fit, published = laid["fit"]
+        check("an app that fits at 360 / 560 / 1280 px passes the layout check", ("verified", "pass", []), (status, fit.get("outcome"), fit.get("failures")))
+        check("the app that fits is published", True, bool(published) and (work / "a" / "outputs" / "layout-fit" / "index.html").is_file())
+        status, over, published = laid["overflow"]
+        check("an app that overflows sideways is not verified", ("unverified", "fail"), (status, over.get("outcome")))
+        check("the overflow is reported with its width and amount", True, any(f.startswith("overflows sideways at 360 px by ") for f in over.get("failures", [])))
+        check("the app that overflows is still shown, marked as unverified", True, bool(published) and (work / "a" / "outputs" / "layout-overflow" / "index.html").is_file())
+        status, clipped, published = laid["clipped"]
+        check("an app with a clipped chart is not verified", ("unverified", True), (status, any(f.startswith("chart clipped: svg in div.donut") for f in clipped.get("failures", []))))
+        check("the app with a clipped chart is still shown", True, bool(published))
+        status, blank, published = laid["blank"]
+        check("a blank page is not verified", ("unverified", True), (status, "rendered nothing at 360, 560, 1280 px" in blank.get("failures", [])))
+        check("a blank page is not shown", (None, False), (published, (work / "a" / "outputs" / "layout-blank").exists()))
+        check("its uncaught error is reported", True, any(f.startswith("uncaught error on load") and "boom" in f for f in blank.get("failures", [])))
+        # -- programs planted earlier on PATH are never what the system runs --------------
+        # Placed by the sandbox user, as an earlier job or the lead's own command could.
+        dexec(a, PLANT_CMD, user="gem")
+        session_path = ops["a"].sh("echo $PATH")[1].strip().splitlines()[-1]
+        found = ops["a"].sh('PATH="$OMNI_USER_PATH" command -v timeout ps env sha256sum rm | /usr/bin/head -n 5')[1]
+        ops["a"].close()  # the next job opens a fresh session, as in production
+        check("positive control: the sandbox user's PATH finds the planted programs first", 5, found.count("/home/gem/.fnm_shell/bin/"))
+        check("the system's control session runs on a fixed PATH", "/usr/bin:/bin", session_path)
+        outcome = await manager.run(thread_id="a", user_id="u", tool_call_id="layout-planted", brief=web("planted"))
+        job = store.get(outcome.job_id)
+        lay = (job.result or {}).get("layout") or {}
+        print(f"      layout planted: {job.status} | {lay.get('outcome')} {lay.get('failures')} {lay.get('error') or ''}", flush=True)
+        check("a planted timeout cannot forge a passing layout check", ("unverified", "fail"), (job.status, lay.get("outcome")))
+        check("a planted ps cannot switch the sweep off: the unmarked leftover is gone", "0", dexec(a, "pgrep -fc '[s]leep 777'", user="gem").strip() or "0")
+        check("no planted program was run by the system's commands", "", dexec(a, "cat /tmp/planted-hits 2>/dev/null").strip())
+        dexec(a, "cd /home/gem/.fnm_shell/bin && rm -f forge env sha256sum cut timeout ps awk xargs tr grep mkdir rm stat tail head find cp chmod; rm -f /tmp/planted-hits; pkill -f '[s]leep 777'")
+        check("nothing of the layout check is left running", "0", dexec(a, "pgrep -fc '[l]ayout_probe|[o]pt/browser/chrome'").strip() or "0")
+        check("the layout check leaves no files behind", "", dexec(a, "ls -d /tmp/omni-layout-* 2>/dev/null").strip())
+
     async def scenario() -> None:
+        if ONLY == "layout":
+            await layout_check()
+            return
         # -- egress and secrets, while a real job runs ------------------------------------
         brief = CodeJobBrief(goal="[scenario:egress] check the network and write hello.txt", project_dir="e2e", verify_command="test -s hello.txt", expect_files=["hello.txt"])
         task = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="egress", brief=brief))
@@ -255,6 +380,8 @@ def main() -> int:
         check("the proxy is unreachable off the sandbox network", "unreachable", off)
         await manager.stop(store.by_call("a", "hold").id)
         await hold
+
+        await layout_check()
 
         # -- Stop kills the process group ---------------------------------------------------------
         stop_task = asyncio.create_task(manager.run(thread_id="a", user_id="u", tool_call_id="stop", brief=CodeJobBrief(goal="[scenario:stop] long work", project_dir="e2e")))
