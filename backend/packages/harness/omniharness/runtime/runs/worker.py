@@ -38,6 +38,10 @@ from .schemas import RunStatus
 logger = logging.getLogger(__name__)
 
 # Valid stream_mode values for LangGraph's graph.astream()
+#: How long a run's end waits for its journal's last write before it is marked
+#: ended anyway (a store that hangs never leaves a run unended).
+JOURNAL_FLUSH_TIMEOUT_SECONDS = 30.0
+
 _VALID_LG_MODES = {"values", "updates", "checkpoints", "tasks", "debug", "messages", "custom"}
 
 
@@ -154,7 +158,53 @@ async def run_agent(
 
     journal = None
 
-    journal = None
+    #: The journal write _end started, when it outlived its bound: the
+    #: finally block never starts a second write beside it.
+    end_flush: asyncio.Future | None = None
+
+    async def _end(status: RunStatus, *, error: str | None = None) -> None:
+        """Mark the run ended once its journal is written.
+
+        The journal is the chat's display history (and the run's record): a
+        client that sees the run end reads it at once (a reload, a poll of
+        the run's status). Its last events, the final answer among them, are
+        written before the status says the run is over, never after; ending
+        first left a window in which a finished run's journal lacked its
+        final answer (issue #180).
+
+        The write is shielded and bounded. The run is still ``running`` while
+        it is written, so a Stop or an interrupting message can cancel the
+        task meanwhile: that cancel does not undo an outcome already reached
+        (a finished run stays finished, with its answer journaled; on main the
+        status was set first and such a cancel was refused), so it is
+        absorbed here. A store that hangs never leaves the run unended: past
+        the bound the status is set anyway.
+        """
+        nonlocal end_flush
+        if journal is not None:
+            flush = asyncio.ensure_future(journal.flush())
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + JOURNAL_FLUSH_TIMEOUT_SECONDS
+            task = asyncio.current_task()
+            while True:
+                try:
+                    await asyncio.wait_for(asyncio.shield(flush), timeout=max(0.0, deadline - loop.time()))
+                    break
+                except asyncio.CancelledError:
+                    if flush.cancelled():
+                        break
+                    # A cancel of the run, not of the write: absorb it.
+                    if task is not None:
+                        task.uncancel()
+                    logger.info("Run %s: a cancel arrived while its outcome (%s) was being written; the outcome stands", run_id, status.value)
+                except TimeoutError:
+                    end_flush = flush
+                    logger.warning("Run %s: its journal write did not finish in %.0f s; marking it %s anyway", run_id, JOURNAL_FLUSH_TIMEOUT_SECONDS, status.value)
+                    break
+                except Exception:
+                    logger.warning("Failed to flush journal for run %s", run_id, exc_info=True)
+                    break
+        await run_manager.set_status(run_id, status, error=error)
 
     # Track whether "events" was requested but skipped
     if "events" in requested_modes:
@@ -306,7 +356,7 @@ async def run_agent(
         if record.abort_event.is_set():
             action = record.abort_action
             if action == "rollback":
-                await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
+                await _end(RunStatus.error, error="Rolled back by user")
                 try:
                     await _rollback_to_pre_run_checkpoint(
                         checkpointer=checkpointer,
@@ -320,14 +370,14 @@ async def run_agent(
                 except Exception:
                     logger.warning("Failed to rollback checkpoint for run %s", run_id, exc_info=True)
             else:
-                await run_manager.set_status(run_id, RunStatus.interrupted)
+                await _end(RunStatus.interrupted)
         else:
-            await run_manager.set_status(run_id, RunStatus.success)
+            await _end(RunStatus.success)
 
     except asyncio.CancelledError:
         action = record.abort_action
         if action == "rollback":
-            await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
+            await _end(RunStatus.error, error="Rolled back by user")
             try:
                 await _rollback_to_pre_run_checkpoint(
                     checkpointer=checkpointer,
@@ -341,13 +391,13 @@ async def run_agent(
             except Exception:
                 logger.warning("Run %s cancellation rollback failed", run_id, exc_info=True)
         else:
-            await run_manager.set_status(run_id, RunStatus.interrupted)
+            await _end(RunStatus.interrupted)
             logger.info("Run %s was cancelled", run_id)
 
     except Exception as exc:
         error_msg = f"{exc}"
         logger.exception("Run %s failed: %s", run_id, error_msg)
-        await run_manager.set_status(run_id, RunStatus.error, error=error_msg)
+        await _end(RunStatus.error, error=error_msg)
         await bridge.publish(
             run_id,
             "error",
@@ -358,12 +408,16 @@ async def run_agent(
         )
 
     finally:
-        # Flush any buffered journal events and persist completion data
+        # Flush what the journal took after the run's end (_end wrote the
+        # rest before it) and persist completion data
         if journal is not None:
-            try:
-                await journal.flush()
-            except Exception:
-                logger.warning("Failed to flush journal for run %s", run_id, exc_info=True)
+            if end_flush is not None and not end_flush.done():
+                logger.warning("Run %s: its journal write is still running; not starting another beside it", run_id)
+            else:
+                try:
+                    await journal.flush()
+                except Exception:
+                    logger.warning("Failed to flush journal for run %s", run_id, exc_info=True)
 
             try:
                 # Persist token usage + convenience fields to RunStore
