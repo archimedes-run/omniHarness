@@ -156,3 +156,15 @@ def test_text_caps_refuse_before_anything_is_stored(monkeypatch):
     monkeypatch.setattr(caps, "BINARY_VERSION_BYTES", 50)
     with pytest.raises(TooLarge):
         kinds.canonical_image(b"\x89PNG\r\n\x1a\n" + b"0" * 60)
+
+
+def test_event_attributes_are_refused_even_if_the_allowlist_named_one(monkeypatch):
+    """The on* check stands on its own, not only on the attribute allowlist."""
+    monkeypatch.setattr(kinds, "SVG_ATTRIBUTES", kinds.SVG_ATTRIBUTES | {"onload"})
+    with pytest.raises(InvalidContent):
+        kinds.canonical("svg", '<svg xmlns="http://www.w3.org/2000/svg" onload="x()"></svg>')
+
+
+def test_any_doctype_is_refused():
+    with pytest.raises(InvalidContent):
+        kinds.canonical("svg", '<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg"/>')

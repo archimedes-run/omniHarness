@@ -424,21 +424,18 @@ class ArtifactStore:
         thread_id: str | None = None,
         turn_id: str | None = None,
         tool_call_id: str | None = None,
-        kind: str | None = None,
         chat_ref: tuple[str, int, str] | None = None,
     ) -> tuple[dict, dict]:
         """A new version on top of `base_version`, which must be the latest.
 
-        `build(kind, latest_bytes)` may compute the content from the latest
-        version inside the same transaction (edits, restore); `kind` (when
-        given) must equal the artifact's kind."""
+        `build(session, row)` may compute the content from the latest
+        version inside the same transaction (edits, restore, owner edits), always
+        validated as the artifact's own kind, so a kind never changes."""
 
         def work(s: Session, fresh: list[str]) -> tuple[dict, dict]:
             row = self._artifact(s, owner_id, artifact_id)
             if row.archived_at is not None:
                 raise Archived("This artifact is archived; restore it from the archive first.")
-            if kind is not None and kind != row.kind:
-                raise InvalidRequest(f"This artifact is a {row.kind}; its kind cannot change.")
             if base_version != row.latest_version:
                 raise Stale(f"This artifact changed: the latest version is {row.latest_version}.", current_version=row.latest_version)
             content = canon

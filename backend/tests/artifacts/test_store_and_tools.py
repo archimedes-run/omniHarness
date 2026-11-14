@@ -230,6 +230,9 @@ def test_image_comes_only_from_the_chats_outputs(tools, store, tmp_path):
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     (outputs / "chart.png").write_bytes(png)
     (outputs / "fake.png").write_bytes(b"<svg onload=alert(1)>")
+    workspace = get_paths().sandbox_user_data_dir("thread-a", user_id=OWNER) / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "x.png").write_bytes(png)
     secret = tmp_path / "secret.png"
     secret.write_bytes(png)
     _, card = _create(tools, kind="image", content=None, source_path="/mnt/user-data/outputs/chart.png")
