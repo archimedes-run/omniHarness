@@ -55,6 +55,9 @@ export interface ApprovalCard {
   /** Version cards: the assistant's own description of the change (model
    * text, shown quoted and labelled as such). */
   description?: string | null;
+  /** The person's own message that started the job (plain text; null for
+   * a content-led version, which shows its suggestion words instead). */
+  request_words?: string | null;
   /** Version cards: the version passed the system's checks. */
   checks_passed?: boolean | null;
   /** Version cards: themes of the system's check screenshots stored with it. */

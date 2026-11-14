@@ -62,6 +62,29 @@ def turn_origin(turn: dict | None) -> tuple[str, str]:
     return "content", (f"content read earlier in the chat ({source})" if source else "an unknown source")[:200]
 
 
+#: The owner's request shown on the version card ("You asked:"), clipped.
+REQUEST_MAX = 2000
+
+
+def request_of(turn: dict | None) -> str:
+    """The person's own message that led to the job: the last real user turn
+    (lineage.is_user_turn: server-marked, never an injected or model message),
+    only when the policy layer says the person's own message led to the call.
+    "" otherwise (a content-led or automated job shows its suggestion words)."""
+    from app.policy.lineage import is_user_turn
+
+    if turn_origin(turn)[0] != "user":
+        return ""
+    for message in reversed((turn or {}).get("messages") or []):
+        if not is_user_turn(message):
+            continue
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+        if isinstance(content, list):
+            content = " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        return " ".join(str(content or "").split())[:REQUEST_MAX]
+    return ""
+
+
 def asked_for_pass(target) -> bool:
     """The job's own result told the lead to run a design pass at once: its
     app checks did not pass, its registration was refused, or its build failed
@@ -104,9 +127,11 @@ class AppContext:
     #: The project an update works on (the one that built the app).
     project_dir: str | None = None
     extra: dict = field(default_factory=dict)
+    #: The person's own words that started this job chain (request_of).
+    request: str = ""
 
     def stored(self, job_id: str) -> dict:
-        return {"root": self.root or job_id, "spec": self.spec, "origin": list(self.origin), "app_id": self.app_id, "design_pass": self.design_pass, "update": self.update}
+        return {"root": self.root or job_id, "spec": self.spec, "origin": list(self.origin), "app_id": self.app_id, "design_pass": self.design_pass, "update": self.update, "request": self.request}
 
 
 #: The kit's render check, run after every app build (no browser needed).
@@ -186,7 +211,7 @@ def update_context(store, thread_id: str, owner_id: str, app_id: str, turn: dict
         manifest = app_kit.manifest_from_spec(spec)
     except app_kit.AppSpecError as exc:
         return None, f"the app's sources are no longer valid ({exc})"
-    return AppContext(root=None, spec=spec, manifest=manifest, origin=turn_origin(turn), app_id=app_id, update=True, project_dir=built.project_dir), None
+    return AppContext(root=None, spec=spec, manifest=manifest, origin=turn_origin(turn), app_id=app_id, update=True, project_dir=built.project_dir, request=request_of(turn)), None
 
 
 def context_for(store, thread_id: str, brief, turn: dict | None, owner_id: str = "") -> tuple[AppContext | None, str | None]:
@@ -202,7 +227,9 @@ def context_for(store, thread_id: str, brief, turn: dict | None, owner_id: str =
             except (app_kit.AppSpecError, KeyError) as exc:
                 return None, f"the app's sources are no longer valid ({exc})"
             app_id = stored.get("app_id") or latest_app_id(store, thread_id, stored.get("root") or target.id)
-            return AppContext(root=stored.get("root") or target.id, spec=stored["spec"], manifest=manifest, origin=follow_origin(turn, root_origin, target), app_id=app_id, design_pass=True), None
+            return AppContext(
+                root=stored.get("root") or target.id, spec=stored["spec"], manifest=manifest, origin=follow_origin(turn, root_origin, target), app_id=app_id, design_pass=True, request=str(stored.get("request") or "")[:REQUEST_MAX]
+            ), None
     if brief.app is None:
         return None, None
     if brief.app.get("update"):
@@ -211,7 +238,7 @@ def context_for(store, thread_id: str, brief, turn: dict | None, owner_id: str =
         manifest = app_kit.manifest_from_spec(brief.app)
     except app_kit.AppSpecError as exc:
         return None, f"the app is not valid: {exc}"
-    return AppContext(root=None, spec=brief.app, manifest=manifest, origin=turn_origin(turn)), None
+    return AppContext(root=None, spec=brief.app, manifest=manifest, origin=turn_origin(turn), request=request_of(turn)), None
 
 
 def latest_app_id(store, thread_id: str, root: str) -> str | None:
@@ -609,7 +636,7 @@ async def register(register_app, *, owner_id: str, thread_id: str, ctx: AppConte
         thread_id=thread_id,
         origin=ctx.origin,
         hold=offered,
-        note={"description": description, "checks": "passed"},
+        note={"description": description, "checks": "passed", "request": ctx.request if ctx.origin[0] == "user" else ""},
         shots=run.shot_bytes or None,
     )
     return {
@@ -647,7 +674,8 @@ def report_lines(job, r: dict, fenced) -> list[str]:
             approval = "it needs the person's approval: an App access card is in this chat"
         else:
             approval = "its data access was already approved, so it is live"
-        lines.append(f"- App registered by the system: id {reg['app_id']}, version {reg['version']}; {approval}. Open it at {reg['url']}.")
+        card = f" (card {reg['card_id']})" if reg.get("card_id") else ""
+        lines.append(f"- App registered by the system: id {reg['app_id']}, version {reg['version']}{card}; {approval}. Open it at {reg['url']}.")
         if reg.get("suggestion"):
             lines.append("  The card is marked as a suggestion: content read earlier in this chat led to the request.")
         if reg.get("offered"):

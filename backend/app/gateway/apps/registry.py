@@ -43,14 +43,27 @@ class RegistrationResult:
 
 
 NOTE_TEXT_MAX = 300
+#: The person's own request shown on the card ("You asked:").
+NOTE_REQUEST_MAX = 2000
 
 
-def clean_note(note: dict) -> dict:
-    """The version card's note: fixed keys, plain short text only."""
+def clean_note(note: dict, *, user_led: bool = False) -> dict:
+    """The version card's note: fixed keys, plain short text only. The
+    person's request is kept only for a version their own message led to."""
     out: dict = {}
+    request = note.get("request")
+    if user_led and isinstance(request, str):
+        words = " ".join("".join(c if c.isprintable() else " " for c in request).split())[:NOTE_REQUEST_MAX]
+        if words:
+            out["request"] = words
     text = note.get("description")
     if isinstance(text, str):
-        out["description"] = "".join(c if c.isprintable() else " " for c in text)[:NOTE_TEXT_MAX].strip()
+        flat = " ".join("".join(c if c.isprintable() else " " for c in text).split())
+        if len(flat) > NOTE_TEXT_MAX:
+            # At a word boundary, with an ellipsis: never "...; enforc".
+            head = flat[:NOTE_TEXT_MAX].rsplit(" ", 1)[0].rstrip(" ,;:.-")
+            flat = head + "…"
+        out["description"] = flat
     if note.get("checks") == "passed":
         out["checks"] = "passed"
     if isinstance(note.get("keeps"), int):
@@ -125,7 +138,7 @@ async def register_app(
         # Same sources, already granted: the card offers the version itself.
         note = {**(note or {}), "kind": "version", "keeps": (await served(repo, owner_id, app_id)).version}
     if note:
-        snapshot["note"] = clean_note(note)
+        snapshot["note"] = clean_note(note, user_led=kind == "user")
     stored_shots = {}
     for theme, png in (shots or {}).items():
         if theme in ("light", "dark") and isinstance(png, bytes):
