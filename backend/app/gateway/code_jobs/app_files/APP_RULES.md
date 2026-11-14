@@ -106,6 +106,9 @@ Listen for `omni.onUpdate` and re-render that tile.
 
 ## What the system checks after your build
 
+The app's CSP and sandbox are what enforce the rules above; the system's
+source scan is an early warning on top of them, not the guard.
+
 1. `npm run build` exits 0 and `dist/index.html` exists.
 2. The build inlines into one file of at most 2 MB, with no remote reference.
 3. Your source files contain none of the "Never" APIs above.

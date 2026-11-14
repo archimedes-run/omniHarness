@@ -282,7 +282,7 @@ def test_measured_design_findings_do_not_block():
 def test_a_broken_page_is_not_published_and_no_answer_is_an_error():
     r = parse(app_result({("light", "fresh"): {"run": {"loaded": False, "load_error": "slow"}}}))
     assert r["outcome"] == "fail" and not r["publishable"] and "did not load (light/fresh: it did not finish loading within 10 s)" in r["failures"]
-    assert parse(None, exit_code=None)["outcome"] == "error" and not layout_mod.counts_against(parse(None, exit_code=None))
+    assert parse(None, exit_code=None)["outcome"] == "error" and app_checks.blocks(parse(None, exit_code=None))
     assert parse("{}")["error_code"] == "unreadable" and layout_mod.counts_against(parse("{}"))
     assert parse("", exit_code=97)["error_code"] == "checksum"
     assert parse(app_result()[:-30])["error_code"] == "unreadable"
@@ -336,10 +336,27 @@ def test_the_persons_request_is_user_led_and_content_makes_it_a_suggestion():
     assert app_mode.turn_origin({"messages": [], "context": {}})[0] == "content"
 
 
-def test_a_design_pass_keeps_its_apps_origin_unless_other_content_came_in():
-    assert app_mode.follow_origin(_turn("code_job", "view_image"), ("user", "")) == ("user", "")
-    assert app_mode.follow_origin(_turn("code_job"), ("content", "content read earlier in the chat (web_fetch)"))[0] == "content"
-    assert app_mode.follow_origin(_turn("code_job", "gmail_fetch"), ("user", ""))[0] == "content"
+def test_only_the_system_prompted_pass_of_a_persons_app_is_user_led():
+    from types import SimpleNamespace
+
+    failed = SimpleNamespace(status="unverified", result={"app_checks": {"outcome": "fail"}})
+    passed = SimpleNamespace(status="verified", result={"app_checks": {"outcome": "pass"}})
+    build_failed = SimpleNamespace(status="failed", result={})
+    turn = _turn("code_job", "view_image")
+    assert app_mode.follow_origin(turn, ("user", ""), failed) == ("user", "")
+    assert app_mode.follow_origin(turn, ("user", ""), build_failed) == ("user", "")
+    # An optional pass after a passing result, led by what the lead read: content.
+    kind, source = app_mode.follow_origin(turn, ("user", ""), passed)
+    assert kind == "content" and "code_job" in source
+    assert app_mode.follow_origin(turn, ("content", "content read earlier in the chat (web_fetch)"), failed)[0] == "content"
+
+
+def test_app_checks_fail_closed_on_any_outcome_but_a_clean_pass():
+    assert not app_checks.blocks(parse(app_result()))
+    for raw, code in ((None, None), ("{}", 0), ("", 97), (json.dumps({"v": 1, "setup_error": "browser"}), 0), (json.dumps({"v": 1, "setup_error": "server"}), 0)):
+        assert app_checks.blocks(parse(raw, exit_code=code)), (raw, code)
+    unwatched = parse(app_result({("light", "fresh"): {"run": {"watched": False}}}))
+    assert app_checks.blocks(unwatched) and "could not watch" in " ".join(unwatched["failures"])
 
 
 # -- the lead's report ------------------------------------------------------------------------

@@ -164,7 +164,7 @@ def test_an_app_that_uses_the_network_or_is_too_large_never_reaches_the_probe(ga
     assert "the source uses APIs apps may not use" in reports[0] and "a network call" in reports[0] and "src/main.js:4" in reports[0]
     assert fakes[0].app_probes  # the scan alone already fails it; the page is still checked
     assert "(forbidden_api)" in reports[1] and not fakes[1].app_probes
-    assert "(bundle_too_large)" in reports[2] and not fakes[2].app_probes
+    assert ("(bundle_too_large)" in reports[2] or "is larger than" in reports[2]) and not fakes[2].app_probes
     assert all("STATUS UNVERIFIED" in r for r in reports) and apps(gateway) == []
 
 
@@ -183,7 +183,7 @@ def test_the_two_megabyte_cap_counts_the_platform_shim(gateway):  # noqa: F811
     assert "(bundle_too_large)" in report and not fake.app_probes and apps(gateway) == []
 
 
-def _greedy_lead():
+def _greedy_lead(max_results: int = 6):
     """A lead that keeps asking for design passes of the first app job."""
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.messages import ToolMessage
@@ -203,7 +203,7 @@ def _greedy_lead():
             results = [str(m.content) for m in messages if isinstance(m, ToolMessage)]
             if not results:
                 call = {"name": "code_job", "args": BRIEF, "id": "cj1"}
-            elif len(results) < 6 and (m := FIX_RE.search(results[0])):
+            elif len(results) < max_results and (m := FIX_RE.search(results[0])):
                 call = {"name": "code_job", "args": {"goal": "Design pass", "project_dir": "today", "fix_of": m.group(1), "inputs": "Items (data): spacing"}, "id": f"cj{len(results) + 1}"}
             else:
                 call = None
@@ -223,11 +223,13 @@ def test_design_passes_are_capped_at_three_per_app_server_side_and_add_versions_
     jobs = sorted(store.for_thread(thread_id), key=lambda j: j.created_at)
     assert len(jobs) == 4 and [bool((j.result or {}).get("fix_of")) for j in jobs] == [False, True, True, True]
     assert all(j.status == "verified" for j in jobs), [(j.status, j.reason) for j in jobs]
-    # One app; each verified pass is a new version of it (a code-only change).
+    # One app. Passes the lead chose after a passing result were led by what it
+    # read (content): their versions wait on the person's button, as suggestions.
     (app,) = apps(gateway)
-    assert app["id"] == "today" and app["current_version"] == 4
+    assert app["id"] == "today" and app["current_version"] == 1
     cards = gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"]
-    assert [c["status"] for c in cards].count("pending") == 1 and all(c["suggestion"] is False for c in cards)
+    pending = [c for c in cards if c["status"] == "pending"]
+    assert len(pending) == 1 and pending[0]["suggestion"] is True and pending[0]["version"] == 4
     messages = gateway.client.get(f"/api/threads/{thread_id}/state").json()["values"]["messages"]
     refused = [str(m["content"]) for m in messages if m.get("type") == "tool" and "design passes" in str(m["content"]) and "not started" in str(m["content"])]
     assert refused and "this app has had its 3 design passes" in refused[0]
@@ -274,3 +276,77 @@ def test_a_build_that_carries_the_mock_shim_fails(gateway):  # noqa: F811
     _, messages = ask(gateway)
     report = _tool_result(messages)
     assert "the build includes the kit's mock shim" in report and not fake.app_probes and apps(gateway) == []
+
+
+def test_the_automatic_pass_after_a_failure_is_the_persons_request(gateway, monkeypatch):  # noqa: F811
+    overflow = app_result({("light", "fresh"): {360: {"overflow_px": 400}}})
+    SANDBOX["queue"] = [AppFake(build(), probe=overflow), AppFake(build())]
+    monkeypatch.setattr("omniharness.agents.lead_agent.agent.create_chat_model", lambda **_: _greedy_lead(max_results=2))
+    thread_id = _thread(gateway)
+    resp = gateway.client.post(f"/api/threads/{thread_id}/runs/wait", json={"assistant_id": "lead_agent", "input": {"messages": [{"role": "user", "content": "Build me a Today page."}]}, "context": {"mode": "pro"}})
+    assert resp.status_code == 200, resp.text
+    (app,) = apps(gateway)
+    (card,) = gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"]
+    assert app["current_version"] == 1 and card["suggestion"] is False and card["status"] == "pending"
+
+
+class ThrowingFake(AppFake):
+    def sh(self, command: str, *, timeout: int = 30):
+        if " app <" in command and "layout_probe.py" in command:
+            raise RuntimeError("the sandbox API failed")
+        return super().sh(command, timeout=timeout)
+
+
+class NoDirFake(AppFake):
+    def sh(self, command: str, *, timeout: int = 30):
+        if "mkdir -m 700" in command:
+            return 1, ""
+        return super().sh(command, timeout=timeout)
+
+
+import pytest  # noqa: E402
+
+OUTCOMES = {
+    "no answer": dict(probe="", layout_exit=None),
+    "browser did not start": dict(probe=json.dumps({"v": 1, "setup_error": "browser"})),
+    "server did not start": dict(probe=json.dumps({"v": 1, "setup_error": "server"})),
+    "site missing": dict(probe=json.dumps({"v": 1, "setup_error": "site_missing"})),
+    "unreadable": dict(probe="not json"),
+    "oversized": dict(probe="x" * 140_000),
+    "checksum": dict(layout_exit=97),
+    "unwatched": dict(probe=app_result({("dark", "failed"): {"run": {"watched": False}}})),
+}
+
+
+@pytest.mark.parametrize("name", [*OUTCOMES, "sandbox call throws", "no probe folder"])
+def test_any_outcome_but_a_clean_pass_registers_nothing(gateway, name):  # noqa: F811
+    if name == "sandbox call throws":
+        SANDBOX["current"] = ThrowingFake(build())
+    elif name == "no probe folder":
+        SANDBOX["current"] = NoDirFake(build())
+    else:
+        SANDBOX["current"] = AppFake(build(), **OUTCOMES[name])
+    thread_id, messages = ask(gateway)
+    report = _tool_result(messages)
+    assert "STATUS UNVERIFIED" in report, report
+    assert apps(gateway) == [] and gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"] == []
+
+
+def test_a_preview_that_fails_to_publish_never_changes_a_failure(gateway, monkeypatch):  # noqa: F811
+    def boom(*a, **k):
+        raise RuntimeError("publish failed")
+
+    monkeypatch.setattr("app.gateway.code_jobs.app_mode.publish_preview", boom)
+    SANDBOX["current"] = AppFake(build(), probe=app_result({("light", "fresh"): {360: {"overflow_px": 400}}}))
+    _, messages = ask(gateway)
+    report = _tool_result(messages)
+    assert "overflows sideways at 360 px by 400 px" in report and "gave no answer" not in report and apps(gateway) == []
+
+
+def test_sources_other_than_the_requested_ones_are_never_registered(gateway):  # noqa: F811
+    changed = {"schema": 1, "name": "Today", "sources": {"calendar": {"use": "googlecalendar.events_today", "params": {"tz": "UTC"}, "fields": ["title"]}}}
+    SANDBOX["current"] = AppFake([write(f"{P}/omni-app.json", json.dumps(changed)), *build()])
+    thread_id, messages = ask(gateway)
+    report = _tool_result(messages)
+    assert "its sources differ from the ones requested" in report and "(sources_changed)" in report
+    assert apps(gateway) == [] and gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"] == []

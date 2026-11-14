@@ -458,7 +458,7 @@ Before the worker starts, the gateway writes into the project:
 `omni.d.ts` (`OmniSources` generated from the sources), `graphite.css` (the
 Graphite tokens of `globals.css`, both themes, plus dashboard primitives),
 `mock-data.json` (every source in the four states), `omni-app.schema.json`
-and a read-only copy of the shim. The worker's standing rules point at
+and `omni-mock.js`, the mock shim with the sample data (never the platform shim). The worker's standing rules point at
 `omni-kit/APP_RULES.md`.
 
 After a passing build the gateway, not the worker:
@@ -475,14 +475,17 @@ After a passing build the gateway, not the worker:
    served with the app CSP plus `require-trusted-types-for 'script';
    trusted-types 'none'`; it measures overflow, clipped charts, AA contrast
    (computed styles, composited backgrounds), text under 12 px, touch targets
-   under 24 px, nested frames, CSP violations (watched from an isolated
-   world), the tile words of each state and that every source's sample data
+   under 24 px, nested frames, CSP violations (the browser's own reports to
+   the probe's local server, plus a listener in an isolated world), the tile words of each state and that every source's sample data
    shows when fresh, and saves a PNG per theme and width (fresh state);
 5. publishes the mock build to outputs as a preview, with the screenshots in
    `checks/`, for the artifact panel, the job card and the lead's image tool.
 
-Layout, contrast, state, safety, bundle and scan failures block: the job is
-`unverified` and nothing is registered. Text size, touch targets and an empty
+Only a clean pass registers: any other outcome (a failure, no answer, a check
+that could not run or be read) leaves the job `unverified` and registers
+nothing. The registered manifest's sources must equal the requested ones
+(`sources_changed` otherwise). The CSP and the sandbox are the guard; the
+source scan and the mock-literal check are defence in depth. Text size, touch targets and an empty
 state without "Nothing today" are design findings (not blocking). A verified
 job calls `register_app` with the job's owner, thread and origin: `user` when
 the person's own message led to the call, else `content` (the card is then a

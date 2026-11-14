@@ -46,7 +46,7 @@ MAX_SHOTS = 6
 SHOT_MAX_BYTES = 1_500_000
 #: The build output read into the gateway for inlining.
 DIST_MAX_FILES = 300
-DIST_MAX_BYTES = 8 * 1024 * 1024
+DIST_MAX_BYTES = 2 * 1024 * 1024  # = the bundle cap: inlining only grows it
 TEXT_EXTENSIONS = (".html", ".htm", ".js", ".mjs", ".cjs", ".css", ".json", ".svg", ".txt", ".webmanifest")
 
 #: The fixed design checklist (FR-027): (key, words, measured by the system?).
@@ -428,7 +428,7 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
     if own_empty_words:
         design.append('the empty state does not say "Nothing today": check that every tile has its own wording of nothing')
     if unwatched:
-        warnings.append("the check could not watch the page for blocked requests in every run")
+        add("the check could not watch the page for blocked requests in every run")
 
     shots = []
     for shot in (data.get("shots") or [])[:MAX_SHOTS]:
@@ -451,6 +451,13 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
 
 
 # -- the lead's report ---------------------------------------------------------------
+
+
+def blocks(result: dict | None) -> bool:
+    """App mode fails closed: anything but a clean pass blocks registration
+    (no answer, a browser or server that did not start, an unreadable or
+    oversized result, a checksum mismatch, an unwatched run)."""
+    return not result or result.get("outcome") != "pass"
 
 
 def reason(result: dict) -> str:

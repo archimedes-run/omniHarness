@@ -1249,24 +1249,10 @@ class PolicyMiddleware(AgentMiddleware):
         content. Either way provenance only degrades; an invited context with
         no origin recorded is "unknown", never "user".
         """
-        from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY, INVITED_SOURCE_KEY, INVITED_VIA_KEY
-
-        from .provenance import is_synthetic_turn
-
         context = self._runtime_context(request) or {}
         state = getattr(request, "state", None) or {}
         messages = state.get("messages") if isinstance(state, dict) else None
-        own, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
-        invited = INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
-        if own == "invitation" and not invited:
-            # An invitation message outside an invited context: can't tell.
-            return "unknown", "", ""
-        if not invited or own not in ("user", "invitation"):
-            return own, source, ""
-        inherited = context.get(INVITED_ORIGIN_KEY) or "unknown"
-        if inherited == "user":
-            return "user", "", ""
-        return inherited, context.get(INVITED_SOURCE_KEY) or "", context.get(INVITED_VIA_KEY) or ""
+        return call_origin(messages, context)
 
     def _inviting(self, origin: str, source: str, via: str, requester: str, chain: tuple[str, ...], run_markers: tuple[tuple[str, str], ...] = (), private_read: bool = True) -> Any:
         """The mark an agent invited during this call starts from."""
@@ -1445,3 +1431,26 @@ def _with_injected(tool: Any, arguments: dict, runtime: Any, state: Any) -> dict
         store=cast("Any", getattr(runtime, "store", None)),
     )
     return {**arguments, "runtime": built}
+
+
+def call_origin(messages, context: dict | None) -> tuple[str, str, str]:
+    """What caused a call made with these turn `messages` and run `context`:
+    (origin, source, via). THE one place this is decided (the middleware's
+    dispatch and anything else that needs to know, such as a coding job's app
+    registration, call it)."""
+    from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY, INVITED_SOURCE_KEY, INVITED_VIA_KEY
+
+    from .provenance import is_synthetic_turn
+
+    context = context or {}
+    own, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
+    invited = INVITED_ORIGIN_KEY in context or bool(context.get(DELEGATION_CHAIN_KEY))
+    if own == "invitation" and not invited:
+        # An invitation message outside an invited context: can't tell.
+        return "unknown", "", ""
+    if not invited or own not in ("user", "invitation"):
+        return own, source, ""
+    inherited = context.get(INVITED_ORIGIN_KEY) or "unknown"
+    if inherited == "user":
+        return "user", "", ""
+    return inherited, context.get(INVITED_SOURCE_KEY) or "", context.get(INVITED_VIA_KEY) or ""

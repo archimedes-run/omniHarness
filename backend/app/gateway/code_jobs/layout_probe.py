@@ -496,10 +496,31 @@ class Cdp:
         return slot[1].get("result") or {}
 
 
-def make_handler(root, csp=None):
+REPORT_PATH = "/__omni_csp_report"
+
+
+def make_handler(root, csp=None, reports=None):
     class SiteHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def do_POST(self):
+            """The browser's own CSP violation reports (app mode): a second
+            signal beside the isolated-world listener, which page code cannot
+            reach either way."""
+            ok = reports is not None and urllib.parse.urlsplit(self.path).path == REPORT_PATH
+            try:
+                length = min(int(self.headers.get("content-length") or 0), 16384)
+                body = self.rfile.read(length) if ok else b""
+                data = json.loads(body or b"{}") if ok else {}
+                item = data.get("csp-report") if isinstance(data, dict) else None
+                if isinstance(item, dict) and len(reports) < 200:
+                    reports.append((clip(item.get("document-uri"), 300), clip(item.get("effective-directive") or item.get("violated-directive"), 40).split(" ")[0]))
+            except (ValueError, OSError):
+                pass
+            self.send_response(204 if ok else 404)
+            self.send_header("content-length", "0")
+            self.end_headers()
 
         def do_GET(self):
             self._serve(True)
@@ -527,7 +548,7 @@ def make_handler(root, csp=None):
             self.send_header("cache-control", "no-store")
             # WebSockets are not paused by Fetch (below): this keeps them, and
             # every other connection the page makes, on this server.
-            self.send_header("content-security-policy", csp or "connect-src 'self'")
+            self.send_header("content-security-policy", (csp[0] if isinstance(csp, list) else csp) or "connect-src 'self'")
             self.end_headers()
             if body:
                 try:
@@ -549,6 +570,7 @@ class Check:
         self.out = out
         self.app = app
         self.config = {}
+        self.reports = []
         if app:
             self.result = {"v": 1, "mode": "app", "widths": list(WIDTHS), "themes": list(APP_THEMES), "states": list(APP_STATES), "runs": [], "shots": []}
         else:
@@ -808,11 +830,17 @@ class Check:
         try:
             http.server.ThreadingHTTPServer.daemon_threads = True
             csp = self.config.get("csp") if self.app and isinstance(self.config.get("csp"), str) else None
-            self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, csp))
+            if self.app and not csp:
+                # Never a weaker policy than the app's: no CSP, no check.
+                return self.finish(setup_error="unreadable")
+            holder = [csp]
+            self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, holder, self.reports if self.app else None))
         except OSError:
             return self.finish(setup_error="server")
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
+        if self.app:
+            holder[0] = holder[0] + f"; report-uri {self.origin}{REPORT_PATH}"
         # Short paths: the browser puts a Unix socket under its temp folder,
         # and a socket path longer than 107 bytes stops it from starting.
         work = os.path.dirname(os.path.abspath(self.out))
@@ -862,6 +890,12 @@ class Check:
                         self.result["runs"].append(self.check_app_run(theme, state))
                     except CdpError:
                         return self.finish(browser_exit=True)
+            time.sleep(1.0)  # reports are sent after the fact
+            for run in self.result["runs"]:
+                key = f"state={run['state']}&theme={run['theme']}"
+                for uri, directive in list(self.reports):
+                    if key in uri and directive and directive not in run["violations"] and len(run["violations"]) < 20:
+                        run["violations"].append(directive)
             return self.finish()
         for width in WIDTHS:
             if self.cdp.dead:

@@ -418,9 +418,9 @@ class CodeJobManager:
             if status == "verified":
                 app_run = await app_mode.run_checks(self, running, brief, project, app)
                 self.store.add_step(job_id, "app_checks", _card_view(app_run.result))
-                status, why = decide_status(stopped=stopped, blocked=blocked, worker_error=worker_error, verify=verify, expected=expected, layout=app_run.result)
-                if status == "unverified" and app_run.result.get("outcome") == "fail":
-                    why = app_checks_reason(app_run.result)
+                if app_checks_blocks(app_run.result):
+                    # Fail closed: only a clean pass may register.
+                    status, why = "unverified", app_checks_reason(app_run.result)
                 app_extra["app_checks"] = app_run.result
                 published = app_run.published
                 if published:
@@ -478,6 +478,11 @@ class CodeJobManager:
         """Register a verified app (FR-028). A refusal leaves the job unverified."""
         from app.gateway.apps.registry import AppRegistrationError
 
+        if app_run.manifest is None or app_run.manifest["sources"] != app.manifest["sources"]:
+            # The sources (names and params) are the ones the person asked for:
+            # the request's for a new app, the stored ones for a design pass.
+            extra["app_registration_error"] = {"code": "sources_changed", "message": "the app's sources differ from the ones requested"}
+            return "unverified", "the app could not be registered: its sources differ from the ones requested"
         if self._register_app is None:
             extra["app_registration_error"] = {"code": "apps_unavailable", "message": "apps are not wired in this gateway"}
             return "unverified", "the app could not be registered: apps are not available here"
@@ -905,6 +910,12 @@ def _fenced(label: str, text: str, nonce: str) -> list[str]:
     nonce in the text is removed, so the text cannot close the block."""
     clean = str(text).replace(nonce, "")
     return [f"<<<BEGIN {label} {nonce}>>>", clean, f"<<<END {label} {nonce}>>>"]
+
+
+def app_checks_blocks(result: dict) -> bool:
+    from .app_checks import blocks
+
+    return blocks(result)
 
 
 def app_checks_reason(result: dict) -> str:
