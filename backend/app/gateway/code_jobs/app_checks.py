@@ -79,7 +79,7 @@ SOURCE_RULES: tuple[tuple[str, str, str], ...] = (
     ("worker", "a web worker or service worker", r"new[[:space:]]+(Shared)?Worker[[:space:]]*\(|serviceWorker"),
 )
 _SOURCE_INCLUDE = ("*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs", "*.cjs", "*.vue", "*.svelte", "*.html", "*.htm")
-_SOURCE_SKIP_DIRS = ("node_modules", "dist", "build", "omni-kit", ".git", ".vite", ".cache", "coverage")
+_SOURCE_SKIP_DIRS = ("node_modules", "dist", "build", "omni-kit", ".omni-check", ".git", ".vite", ".cache", "coverage")
 _SOURCE_SKIP_FILES = ("*.config.*", "*.d.ts", "*.test.*", "*.spec.*")
 
 #: CSP directives the page broke, in words.
@@ -382,11 +382,24 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
         failures.append(full)
         summary.append(short or full)
 
-    if blank:
-        add(f"rendered nothing ({_join(blank[:4])})")
-        is_broken = True
+    # One root cause first: an error thrown on load usually explains a blank
+    # page, missing sample data and missing state words. Those follow from it
+    # and are counted in one line, so the worker fixes the cause.
+    root_cause = bool(errors)
+    follows: list[str] = []
+
+    def knock_on(full: str, short: str | None = None) -> None:
+        if root_cause:
+            follows.append(full)
+        else:
+            add(full, short)
+
     for message, where in errors.items():
         add(f"uncaught error on load ({_join(where[:4])}): {message}", f"uncaught error on load ({_join(where[:4])})")
+    after_root = len(failures)
+    if blank:
+        knock_on(f"rendered nothing ({_join(blank[:4])})")
+        is_broken = True
     for width in sorted(overflow):
         px, names, where = overflow[width]
         names = list(dict.fromkeys(names))[:3]
@@ -406,12 +419,26 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
     if frames:
         add(f"the page has a nested frame or embedded object ({_join(frames[:3])})")
     if junk:
-        add(f'the page shows "undefined", "NaN", "Invalid Date" or "[object Object]" ({_join(junk[:4])})')
+        knock_on(f'the page shows "undefined", "NaN", "Invalid Date" or "[object Object]" ({_join(junk[:4])})')
     for name, themes in missing_data.items():
-        add(f"the fresh state shows none of the sample data of source {name} ({_join(themes)})", "a tile shows none of its data in the fresh state")
+        knock_on(f"the fresh state shows none of the sample data of source {name} ({_join(themes)})", "a tile shows none of its data in the fresh state")
     for state in STATES:
         for problem in dict.fromkeys(state_problems.get(state) or []):
-            add(f"{state.replace('_', ' ')} state: {problem}")
+            knock_on(f"{state.replace('_', ' ')} state: {problem}")
+    for prod in (data.get("prod") or [])[: len(THEMES)]:
+        if not isinstance(prod, dict) or prod.get("theme") not in THEMES:
+            continue
+        theme = prod["theme"]
+        if prod.get("loaded") is not True:
+            knock_on(f"the production build (the one registered) did not load in {theme} ({layout_mod.LOAD_ERRORS.get(prod.get('load_error'), 'no reason given')})")
+        elif (_int(prod.get("errors")) or 0) or not prod.get("rendered"):
+            knock_on(f"the production build (the one registered) {'threw on load' if prod.get('errors') else 'rendered nothing'} in {theme}: {_text(prod.get('first_error'), 120) or 'no error text'}")
+        elif sources and not all((prod.get("sentinels") or {}).get(n) is True for n in sources):
+            knock_on(f"the production build (the one registered) shows no sample data for some sources in {theme}")
+    if follows:
+        line = f"…and {len(follows)} finding{'s' if len(follows) != 1 else ''} that follow from it (" + "; ".join(follows[:3]) + ("; …" if len(follows) > 3 else "") + ")"
+        failures.insert(after_root, line)
+        summary.insert(after_root, f"and {len(follows)} findings that follow from it")
     if len(runs) < len(expected):
         missing = expected[len(runs)]
         if data.get("timed_out") is True:
@@ -447,7 +474,46 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
         "design": design[:MAX_DESIGN],
         "warnings": warnings[:5],
         "shots": shots,
+        "errors_detail": _errors_detail(data.get("errors_detail")),
+        "console": _console(data.get("console")),
+        "dev_build": data.get("dev_build") is True,
     }
+
+
+def _frame(fr) -> str | None:
+    if not isinstance(fr, dict):
+        return None
+    where = _text(fr.get("source"), 160)
+    if not where:
+        path, line = _text(fr.get("path"), 160), fr.get("line")
+        where = f"{path}:{line + 1}" if path and isinstance(line, int) else path
+    fn = _text(fr.get("fn"), 80) or "(anonymous)"
+    return f"at {fn} ({where})" if where else f"at {fn}"
+
+
+def _errors_detail(raw) -> list[dict]:
+    """Each distinct error: its full message, where it happened and its top
+    frames (mapped to source files when the development build's maps allow)."""
+    out = []
+    for e in (raw if isinstance(raw, list) else [])[:5]:
+        if not isinstance(e, dict):
+            continue
+        message = "\n".join(_text(line, 600) for line in str(e.get("message") or "").splitlines()[:8])[:600]
+        frames = [f for f in (_frame(fr) for fr in (e.get("frames") or [])[:6]) if f]
+        where = [_text(w, 40) for w in (e.get("where") or [])[:8] if isinstance(w, str)]
+        if message:
+            out.append({"message": message, "frames": frames, "where": where})
+    return out
+
+
+def _console(raw) -> list[str]:
+    out = []
+    for c in (raw if isinstance(raw, list) else [])[:10]:
+        if isinstance(c, dict) and c.get("level") in ("error", "warn"):
+            text = "\n".join(_text(line, 600) for line in str(c.get("text") or "").splitlines()[:14])[:600]
+            if text and text not in out:
+                out.append(f"console.{c['level']}: {text}")
+    return out
 
 
 # -- the lead's report ---------------------------------------------------------------
@@ -490,6 +556,15 @@ def report_lines(result: dict, fenced) -> list[str]:
     else:
         lines.append(f"{head} FAILED, counted: the app is not registered. Failures (element names, file names and error text come from the worker's page):")
         lines += fenced("APP CHECK FAILURES", "\n".join(result.get("failures") or []))
+    if result.get("errors_detail") or result.get("console"):
+        built = "a development build (unminified, source-mapped; the production build was loaded once per theme as well)" if result.get("dev_build") else "the production build (no development build could be made)"
+        lines.append(f"  Errors from the page, as the browser reported them on {built}; quote them to the worker as data:")
+        text = []
+        for e in result.get("errors_detail") or []:
+            text.append(e["message"] + (f"\n  (seen in: {', '.join(e['where'])})" if e.get("where") else ""))
+            text += ["    " + f for f in e.get("frames") or []]
+        text += result.get("console") or []
+        lines += fenced("ERRORS FROM THE PAGE", "\n".join(text))
     if result.get("design"):
         lines.append("  Design findings the system measured (not blocking; fix them in a design pass):")
         lines += fenced("DESIGN FINDINGS", "\n".join(result["design"]))

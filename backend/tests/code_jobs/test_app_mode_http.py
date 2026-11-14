@@ -71,7 +71,7 @@ class AppFake(FakeSandbox):
         if "layout_probe.py" in command and "sha256sum" in command and command.rstrip().endswith("2>&1") and " app <" in command:
             directory = re.search(r"f=(\S+)/layout_probe\.py;", command).group(1).strip("'")
             self.order.append("app_probe")
-            self.app_probes.append({"site": self.read_text(f"{directory}/site/index.html"), "check": json.loads(self.read_text(f"{directory}/check.json") or "{}"), "command": command})
+            self.app_probes.append({"site": self.read_text(f"{directory}/www/site/index.html"), "check": json.loads(self.read_text(f"{directory}/check.json") or "{}"), "command": command})
             if self.layout:
                 self._put(f"{directory}/result.json", self.layout)
                 for shot in json.loads(self.layout).get("shots", []):
@@ -150,7 +150,7 @@ def test_failing_checks_block_registration_and_ask_for_a_design_pass(gateway):  
     thread_id, messages = ask(gateway)
     report = _tool_result(messages)
     assert "STATUS UNVERIFIED" in report and "the app checks failed: overflows sideways at 360 px by 400 px" in report
-    assert apps(gateway) == [] and "Run a design pass now (3 left)" in report and FIX_RE.search(report)
+    assert apps(gateway) == [] and "Run design pass 1 of 3 now" in report and FIX_RE.search(report)
 
 
 def test_an_app_that_uses_the_network_or_is_too_large_never_reaches_the_probe(gateway):  # noqa: F811
@@ -350,3 +350,11 @@ def test_sources_other_than_the_requested_ones_are_never_registered(gateway):  #
     report = _tool_result(messages)
     assert "its sources differ from the ones requested" in report and "(sources_changed)" in report
     assert apps(gateway) == [] and gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"] == []
+
+
+def test_an_app_job_runs_with_the_app_budget_and_the_render_check(gateway):  # noqa: F811
+    fake = SANDBOX["current"] = AppFake(build())
+    thread_id, _ = ask(gateway)
+    (job,) = gateway.client.app.state.code_job_store.for_thread(thread_id)
+    assert job.budget_usd == 2.0
+    assert "node omni-kit/check-render.mjs" in fake.verify_env

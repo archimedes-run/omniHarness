@@ -554,7 +554,9 @@ for (const scheme of ["light", "dark"] as const) {
       const result = {
         ...VERIFIED_RESULT,
         layout: null,
-        app: { root: "job0123456789abc", design_pass: false },
+        app: { root: "job0123456789abc", design_pass: true },
+        fix_of: "0123456789abcdef",
+        design_passes_used: 2,
         app_checks: {
           outcome: "pass",
           summary: [],
@@ -586,7 +588,7 @@ for (const scheme of ["light", "dark"] as const) {
       const checks = card.getByTestId("code-job-app-checks");
       await expect(checks).toHaveAttribute("data-outcome", "pass");
       await expect(checks).toContainText(
-        "App checks passed: every theme, state and width · one file, 47 KB",
+        "App checks passed: every theme, state and width · inlined into one app file of 47 KB",
       );
       await expect(checks).toContainText(
         "Design findings (not blocking): touch targets under 24 px",
@@ -594,6 +596,13 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(
         card.getByTestId("code-job-app-shots").getByRole("link"),
       ).toHaveText(["light 360 px", "dark 1280 px"]);
+      await expect(card.getByTestId("code-job-fix-of")).toHaveText(
+        "Design pass 2 of 3 for an earlier app job.",
+      );
+      await expect(card.getByTestId("code-job-evidence")).toContainText(
+        "the build's entry file, 471 bytes; inlined into one app file below",
+      );
+      await expect(card).not.toContainText("run once, by the system");
       const registered = card.getByTestId("code-job-app-registered");
       await expect(registered).toContainText(
         "App registered: Today v2 — needs your approval",

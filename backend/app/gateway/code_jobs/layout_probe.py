@@ -55,6 +55,107 @@ SHOT_MAX_BYTES = 1_500_000
 SHOT_MAX_HEIGHT = 2400
 PNG = b"\x89PNG\r\n\x1a\n"
 WORLD = "omni-app-check"
+MAX_ERROR_DETAILS = 5
+MAX_FRAMES = 6
+MAX_CONSOLE = 10
+MAX_MAP_BYTES = 24 << 20
+_B64 = {c: i for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")}
+
+
+def _vlq(segment):
+    """One source-map segment's numbers (base64 VLQ)."""
+    out, value, shift = [], 0, 0
+    for ch in segment:
+        digit = _B64.get(ch)
+        if digit is None:
+            return out
+        value += (digit & 31) << shift
+        if digit & 32:
+            shift += 5
+            continue
+        out.append(-(value >> 1) if value & 1 else value >> 1)
+        value, shift = 0, 0
+    return out
+
+
+def _clean_source(name):
+    name = str(name)
+    for prefix in ("webpack://", "vite://", "/@fs"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+    if "node_modules/" in name:
+        return "node_modules/" + name.split("node_modules/")[-1]
+    while name.startswith(("../", "./")):
+        name = name[3:] if name.startswith("../") else name[2:]
+    return clip(name, 120)
+
+
+def map_frames(www, wanted):
+    """{(path, line, col): "src/file.tsx:42"} for frames of the development
+    build, from its own source maps (one linear pass per map)."""
+    found = {}
+    for path, points in wanted.items():
+        try:
+            real = os.path.realpath(os.path.join(www, path + ".map"))
+            if not real.startswith(www + os.sep) or os.path.getsize(real) > MAX_MAP_BYTES:
+                continue
+            with open(real, encoding="utf-8") as f:
+                data = json.load(f)
+            sources, mappings = data["sources"], data["mappings"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        need = {line for line, _ in points}
+        last = max(need)
+        src = orig = 0
+        by_line = {}
+        for number, text in enumerate(mappings.split(";")):
+            if number > last:
+                break
+            col, segs = 0, ([] if number in need else None)
+            for seg in text.split(","):
+                vals = _vlq(seg) if seg else []
+                if not vals:
+                    continue
+                col += vals[0]
+                if len(vals) >= 4:
+                    src += vals[1]
+                    orig += vals[2]
+                    if segs is not None:
+                        segs.append((col, src, orig))
+            if segs is not None:
+                by_line[number] = segs
+        for line, col in points:
+            best = None
+            for seg in by_line.get(line, []):
+                if seg[0] <= col:
+                    best = seg
+            if best is not None and 0 <= best[1] < len(sources):
+                found[(path, line, col)] = f"{_clean_source(sources[best[1]])}:{best[2] + 1}"
+    return found
+
+
+def _console_text(args):
+    parts = []
+    for a in args or []:
+        if not isinstance(a, dict):
+            continue
+        v = a.get("value")
+        parts.append(v if isinstance(v, str) else clip(a.get("description") if a.get("description") is not None else v, 300))
+    if parts and "%" in parts[0]:
+        head, rest = parts[0], parts[1:]
+        out, i = [], 0
+        while i < len(head):
+            if head[i] == "%" and i + 1 < len(head) and head[i + 1] in "sdoOifc":
+                value = str(rest.pop(0)) if rest else ""
+                out.append("" if head[i + 1] == "c" else value)
+                i += 2
+                continue
+            out.append(head[i])
+            i += 1
+        parts = ["".join(out), *rest]
+    return clip(" ".join(str(p) for p in parts if p != ""), 600)
+
+
 TYPES = {
     ".html": "text/html; charset=utf-8",
     ".htm": "text/html; charset=utf-8",
@@ -548,7 +649,10 @@ def make_handler(root, csp=None, reports=None):
             self.send_header("cache-control", "no-store")
             # WebSockets are not paused by Fetch (below): this keeps them, and
             # every other connection the page makes, on this server.
-            self.send_header("content-security-policy", (csp[0] if isinstance(csp, list) else csp) or "connect-src 'self'")
+            policy = csp[0] if isinstance(csp, list) else csp
+            if isinstance(policy, dict):
+                policy = policy["prod"] if rel.startswith("prod/") else policy["site"]
+            self.send_header("content-security-policy", policy or "connect-src 'self'")
             self.end_headers()
             if body:
                 try:
@@ -571,6 +675,8 @@ class Check:
         self.app = app
         self.config = {}
         self.reports = []
+        self.errors = {}
+        self.console = []
         if app:
             self.result = {"v": 1, "mode": "app", "widths": list(WIDTHS), "themes": list(APP_THEMES), "states": list(APP_STATES), "runs": [], "shots": []}
         else:
@@ -657,12 +763,29 @@ class Check:
             page["_loaded"].set()
         elif method == "Runtime.exceptionThrown":
             d = p.get("exceptionDetails") or {}
-            text = clip(((d.get("exception") or {}).get("description")) or d.get("text") or "error", 120).split("  ")[0].strip()
+            full = str(((d.get("exception") or {}).get("description")) or d.get("text") or "error")
+            text = clip(full, 120).split("  ")[0].strip()
             if text.startswith("ResizeObserver loop"):
                 return  # reported by browsers for a harmless resize loop
             page["errors"] += 1
             if not page["first_error"]:
                 page["first_error"] = text
+            if self.app:
+                message = clip("\n".join(ln for ln in full.splitlines() if not ln.lstrip().startswith("at ")), 600)
+                entry = self.errors.get(message)
+                if entry is None and len(self.errors) < MAX_ERROR_DETAILS:
+                    frames = []
+                    for fr in ((d.get("stackTrace") or {}).get("callFrames") or [])[:MAX_FRAMES]:
+                        path = urllib.parse.urlsplit(str(fr.get("url") or "")).path.lstrip("/")
+                        frames.append({"fn": clip(fr.get("functionName"), 80), "path": clip(path, 200), "line": fr.get("lineNumber"), "col": fr.get("columnNumber")})
+                    entry = self.errors[message] = {"message": message, "frames": frames, "where": []}
+                if entry is not None and len(entry["where"]) < 8:
+                    entry["where"].append(page.get("label", ""))
+        elif method == "Runtime.consoleAPICalled":
+            if self.app and p.get("type") in ("error", "warning", "assert") and len(self.console) < MAX_CONSOLE:
+                text = _console_text(p.get("args"))
+                if text and text not in [c["text"] for c in self.console]:
+                    self.console.append({"level": "warn" if p.get("type") == "warning" else "error", "text": text})
         elif method == "Page.javascriptDialogOpening":
             self.cdp.send("Page.handleJavaScriptDialog", {"accept": False}, session)
         elif method == "Runtime.executionContextCreated":
@@ -751,7 +874,7 @@ class Check:
 
     def check_app_run(self, theme, state):
         """One theme and state of the mock build, measured at every width."""
-        run = {"theme": theme, "state": state, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False}
+        run = {"theme": theme, "state": state, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False, "label": f"{theme}/{state}"}
         cdp = self.cdp
         target = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
         session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
@@ -765,7 +888,7 @@ class Check:
             cdp.call("Runtime.enable", None, session)
             cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": APP_WATCH, "worldName": WORLD}, session)
             cdp.call("Emulation.setDeviceMetricsOverride", {"width": WIDTHS[0], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
-            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/?state={state}&theme={theme}"}, session)
+            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/site/?state={state}&theme={theme}"}, session)
             if nav.get("errorText"):
                 run["load_error"] = "nav"
                 return run
@@ -812,6 +935,49 @@ class Check:
             except CdpError:
                 pass
 
+    def check_prod(self, theme):
+        """The production build, fresh state, one theme: it loads, renders,
+        throws nothing and shows the sample data."""
+        run = {"theme": theme, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "label": f"production/{theme}"}
+        cdp = self.cdp
+        target = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+        session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
+        run["_loaded"] = threading.Event()
+        self.pages[session] = run
+        cfg = json.dumps({"theme": theme, "sentinels": self.config.get("sentinels") or {}, "reason": ""})
+        expression = "(function () { const base = " + MEASURE.strip() + "; base.app = " + APP_MEASURE.strip() + "(" + cfg + "); return base; })()"
+        try:
+            cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, session)
+            cdp.call("Page.enable", None, session)
+            cdp.call("Runtime.enable", None, session)
+            cdp.call("Emulation.setDeviceMetricsOverride", {"width": WIDTHS[-1], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
+            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/prod/?state=fresh&theme={theme}"}, session)
+            if nav.get("errorText") or not run["_loaded"].wait(LOAD_S) or run["crashed"]:
+                run["load_error"] = "crashed" if run["crashed"] else "slow"
+                return run
+            time.sleep(SETTLE_S)
+            frame = cdp.call("Page.getFrameTree", None, session)["frameTree"]["frame"]["id"]
+            world = cdp.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": WORLD + "-prod"}, session)["executionContextId"]
+            value = self._evaluate(expression, world, session)
+            if not isinstance(value, dict) or not isinstance(value.get("app"), dict):
+                run["load_error"] = "unmeasurable"
+                return run
+            run["rendered"] = bool(value.get("rendered"))
+            run["sentinels"] = value["app"].get("sentinels") or {}
+            run["loaded"] = True
+            return run
+        except (CdpError, KeyError, TypeError):
+            run["load_error"] = "crashed" if run["crashed"] else "no_response"
+            return run
+        finally:
+            self.pages.pop(session, None)
+            run.pop("_loaded", None)
+            run.pop("label", None)
+            try:
+                cdp.call("Target.closeTarget", {"targetId": target}, timeout=3)
+            except CdpError:
+                pass
+
     def run(self):
         if self.app:
             try:
@@ -833,6 +999,9 @@ class Check:
             if self.app and not csp:
                 # Never a weaker policy than the app's: no CSP, no check.
                 return self.finish(setup_error="unreadable")
+            if self.app:
+                site = self.config.get("csp_site") if isinstance(self.config.get("csp_site"), str) else csp
+                csp = {"site": site, "prod": csp}
             holder = [csp]
             self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, holder, self.reports if self.app else None))
         except OSError:
@@ -840,7 +1009,7 @@ class Check:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
         if self.app:
-            holder[0] = holder[0] + f"; report-uri {self.origin}{REPORT_PATH}"
+            holder[0] = {k: v + f"; report-uri {self.origin}{REPORT_PATH}" for k, v in holder[0].items()}
         # Short paths: the browser puts a Unix socket under its temp folder,
         # and a socket path longer than 107 bytes stops it from starting.
         work = os.path.dirname(os.path.abspath(self.out))
@@ -890,12 +1059,34 @@ class Check:
                         self.result["runs"].append(self.check_app_run(theme, state))
                     except CdpError:
                         return self.finish(browser_exit=True)
+            # The production build (the one registered) must render too: the
+            # runs above load the development build when there is one.
+            self.result["prod"] = []
+            for theme in APP_THEMES:
+                if self.cdp.dead:
+                    return self.finish(browser_exit=True)
+                try:
+                    self.result["prod"].append(self.check_prod(theme))
+                except CdpError:
+                    return self.finish(browser_exit=True)
             time.sleep(1.0)  # reports are sent after the fact
             for run in self.result["runs"]:
-                key = f"state={run['state']}&theme={run['theme']}"
+                run.pop("label", None)
+                key = f"/site/?state={run['state']}&theme={run['theme']}"
                 for uri, directive in list(self.reports):
                     if key in uri and directive and directive not in run["violations"] and len(run["violations"]) < 20:
                         run["violations"].append(directive)
+            wanted = {}
+            for entry in self.errors.values():
+                for fr in entry["frames"]:
+                    if isinstance(fr["line"], int) and isinstance(fr["col"], int) and fr["path"].endswith((".js", ".mjs")):
+                        wanted.setdefault(fr["path"], set()).add((fr["line"], fr["col"]))
+            mapped = map_frames(os.path.realpath(self.root), wanted) if wanted else {}
+            for entry in self.errors.values():
+                for fr in entry["frames"]:
+                    fr["source"] = mapped.get((fr["path"], fr["line"], fr["col"]), "")
+            self.result["errors_detail"] = list(self.errors.values())
+            self.result["console"] = self.console
             return self.finish()
         for width in WIDTHS:
             if self.cdp.dead:

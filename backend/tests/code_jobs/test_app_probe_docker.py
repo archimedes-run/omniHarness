@@ -52,8 +52,9 @@ def _site(root: Path, name: str, js_change, css_change) -> list[str]:
     data = app_kit.fixtures(manifest)
     mock, hashes = bundle_mod.inline({"index.html": html}, platform_shim=app_kit.mock_script(data))
     d = root / name
-    (d / "site").mkdir(parents=True)
-    (d / "site" / "index.html").write_bytes(mock)
+    for part in ("site", "prod"):
+        (d / "www" / part).mkdir(parents=True)
+        (d / "www" / part / "index.html").write_bytes(mock)
     (d / "check.json").write_text(json.dumps({"csp": app_checks.probe_csp(hashes), "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}))
     shutil.copy(Path(layout.__file__).with_name("layout_probe.py"), d / "layout_probe.py")
     return list(manifest["sources"])
@@ -67,9 +68,9 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     for name, (js, css, _why) in BROKEN.items():
         _site(root, name, js, css)
     os.chmod(root, 0o777)
-    for d in root.iterdir():
+    for d in root.rglob("*"):
         os.chmod(d, 0o777)
-    loop = "for d in /w/*/; do cd $d && /usr/bin/timeout -k 5 115 /usr/bin/python3.10 -I -S layout_probe.py $d/site $d/result.json app < /dev/null > /dev/null 2>&1; echo $d $?; done"
+    loop = "for d in /w/*/; do cd $d && /usr/bin/timeout -k 5 115 /usr/bin/python3.10 -I -S layout_probe.py $d/www $d/result.json app < /dev/null > /dev/null 2>&1; echo $d $?; done"
     name = f"oh-app-probe-e2e-{uuid.uuid4().hex[:8]}"
     try:
         run = subprocess.run(
@@ -91,6 +92,9 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     assert len(good["shots"]) == 6
     for shot in good["shots"]:
         assert (root / "pass" / shot["file"]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert not good["errors_detail"]
+    crash = results["uses_innerhtml"]["errors_detail"]
+    assert crash and "TrustedHTML" in crash[0]["message"] and crash[0]["frames"]
     for name, (_js, _css, why) in BROKEN.items():
         r = results[name]
         assert r["outcome"] == "fail" and any(why in f for f in r["failures"]), (name, r["failures"], r.get("error"))

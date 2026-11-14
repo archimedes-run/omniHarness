@@ -65,7 +65,7 @@ OUTPUTS = "/mnt/user-data/outputs"
 JOBS_DIR = "/tmp/omni-jobs"
 POLL_SECONDS = 0.7
 EVENT_BATCH = 200
-_EXCLUDE = ("node_modules", ".git", "dist", "build", ".next", "coverage", ".cache", ".vite", "__pycache__", ".venv")
+_EXCLUDE = ("node_modules", ".omni-check", ".git", "dist", "build", ".next", "coverage", ".cache", ".vite", "__pycache__", ".venv")
 _ARTIFACT_ID = re.compile(r"[^A-Za-z0-9._-]+")
 #: OpenCode's environment switches: nothing fetched, nothing auto-installed,
 #: nothing shared, no other agent's settings read.
@@ -101,6 +101,8 @@ class Settings:
     model_label: str = ""
     #: enforce | warn | off (code_jobs.layout_check).
     layout_check: str = "enforce"
+    #: The budget of an app-mode job or design pass (code_jobs.app_budget_usd).
+    app_budget_usd: float | None = None
 
 
 @dataclass
@@ -228,9 +230,12 @@ class CodeJobManager:
         app, why = app_mode.context_for(self.store, thread_id, brief, turn)
         if why:
             return CodeJobOutcome(job_id="", status="blocked", report=f"Coding job not started: {why}. Fix the app argument and call code_job again.")
+        if app is not None:
+            brief = app_mode.with_app_defaults(brief)
 
         job_id = uuid.uuid4().hex[:16]
-        self.store.create(job_id=job_id, thread_id=thread_id, user_id=user_id, tool_call_id=tool_call_id, title=brief.title or brief.goal[:80], project_dir=brief.project_dir, budget_usd=settings.budget_usd, model=settings.model_label)
+        budget = (settings.app_budget_usd or settings.budget_usd) if app is not None else settings.budget_usd
+        self.store.create(job_id=job_id, thread_id=thread_id, user_id=user_id, tool_call_id=tool_call_id, title=brief.title or brief.goal[:80], project_dir=brief.project_dir, budget_usd=budget, model=settings.model_label)
         if brief.fix_of or app is not None:
             # Recorded before anything runs, so the caps hold whatever happens next.
             early: dict = {"fix_of": brief.fix_of} if brief.fix_of else {}

@@ -290,6 +290,11 @@ def _inject_first(html: str, script: str) -> str:
     return html[:at] + tag + html[at:]
 
 
+def inject_first(html: str, script: str) -> str:
+    """`script` (already safe to inline) as the document's first script."""
+    return _inject_first(html, script.replace("</script", "<\\/script"))
+
+
 def _scan_frames(html: str) -> None:
     for t in _tags(html):
         if t.name in _FRAME_TAGS:

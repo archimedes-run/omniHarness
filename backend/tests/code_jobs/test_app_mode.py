@@ -113,7 +113,7 @@ def test_the_projects_manifest_is_read_back_strictly():
 
 def test_the_kit_has_every_file_and_types_generated_from_the_sources():
     files = app_kit.kit_files(today_manifest())
-    assert sorted(files) == sorted(f"omni-kit/{n}" for n in ("APP_RULES.md", "omni.d.ts", "graphite.css", "mock-data.json", "omni-app.schema.json", "omni-mock.js"))
+    assert set(files) >= set(f"omni-kit/{n}" for n in ("APP_RULES.md", "omni.d.ts", "graphite.css", "mock-data.json", "omni-app.schema.json", "omni-mock.js"))
     dts = files["omni-kit/omni.d.ts"]
     assert 'calendar: CatalogData["googlecalendar.events_today"];' in dts and 'inbox: CatalogData["gmail.unread_subjects"];' in dts
     assert "export interface OmniSources {}" not in dts
@@ -377,7 +377,7 @@ def test_the_report_fences_page_text_and_states_the_checklist_and_the_approval_r
     assert "shot-light-360.png" in text and "view_image" in text
     for _key, words, _ in app_checks.CHECKLIST:
         assert words in text
-    assert "Run a design pass now (2 left)" in text and 'fix_of: "' + "a" * 16 + '"' in text
+    assert "Run design pass 2 of 3 now" in text and 'fix_of: "' + "a" * 16 + '"' in text
     reg = {"app_id": "today", "version": 2, "needs_approval": True, "url": "/workspace/apps/today", "suggestion": False}
     r = {"app": {"root": "a" * 16}, "app_checks": parse(app_result()), "app_registration": reg, "design_passes_used": 3}
     text = "\n".join(app_mode.report_lines(SimpleNamespace(id="b" * 16, project_dir="today"), r, lambda label, t: _fenced(label, t, "n")))

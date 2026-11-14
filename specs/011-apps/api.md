@@ -503,3 +503,27 @@ Job steps added: `app_checks` (`outcome`, `summary`, `design_count`, `error`,
 `needs_approval`, `suggestion`, `url`). The job result gains `app`,
 `app_checks`, `app_registration` or `app_registration_error`, and
 `design_passes_used`.
+
+### Round 2: errors the worker can act on
+
+- The kit adds `omni-kit/omni-react.tsx` (`useSource`, `<Tile source title empty View>`:
+  the four states with the standard words), `omni-kit/starter/` (`App.tsx`
+  generated from the sources, `main.tsx`, `vite.config.ts`) and a render check,
+  `node omni-kit/check-render.mjs`: it bundles `src/App.tsx` with the project's
+  Vite and renders it with react-dom in a small in-memory DOM in every mock
+  state, printing React's own error and component. App jobs always verify with
+  `npm run build && node omni-kit/check-render.mjs` (appended when missing).
+- The probe loads a DEVELOPMENT build (`vite build --mode development
+  --minify false --sourcemap`, same app CSP minus the sandbox, with the build's
+  own files allowed) for every theme, state and width, then the production
+  build (the one registered, exact app CSP) once per theme. Each distinct
+  error comes back with its full message, its top frames mapped to source
+  lines through the build's own source maps, and the first console errors and
+  warnings, all fenced as data; an error on load is reported first and the
+  findings that follow from it are counted in one line. When no development
+  build can be made, the production build is checked as before.
+- Failed checks or a failed build: the result says "Run design pass N of 3 now
+  with fix_of=…; do not ask the person first", and "stop and report" only when
+  the 3 passes are used.
+- `code_jobs.app_budget_usd` (default 2.00) is the budget of an app-mode job
+  or design pass, still under the monthly cap.

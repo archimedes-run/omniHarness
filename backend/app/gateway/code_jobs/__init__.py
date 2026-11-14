@@ -108,6 +108,7 @@ def start(app: FastAPI) -> None:
             proxy_url=f"http://{proxy_host}:{current.proxy_port}/v1" if proxy_host else None,
             proxy_host=proxy_host,
             budget_usd=current.budget_usd,
+            app_budget_usd=current.app_budget_usd,
             monthly_cap_usd=current.monthly_cap_usd,
             wall_seconds=current.wall_seconds,
             verify_timeout_seconds=current.verify_timeout_seconds,
