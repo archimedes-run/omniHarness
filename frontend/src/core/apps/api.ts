@@ -57,6 +57,8 @@ export interface ApprovalCard {
   description?: string | null;
   /** Version cards: the version passed the system's checks. */
   checks_passed?: boolean | null;
+  /** Version cards: themes of the system's check screenshots stored with it. */
+  shots?: ("light" | "dark")[];
   sentence: string;
   suggestion: boolean;
   suggestion_source: string | null;
@@ -260,6 +262,11 @@ export async function approveApp(
       card_id: cardId,
     }),
   );
+}
+
+/** One of the system's check screenshots of a version (owner only, PNG). */
+export function versionShotUrl(id: string, version: number, theme: string) {
+  return `${base()}/${enc(id)}/versions/${version}/shots/${enc(theme)}.png`;
 }
 
 /** A version card's "Keep version M": the offered version is not served. */

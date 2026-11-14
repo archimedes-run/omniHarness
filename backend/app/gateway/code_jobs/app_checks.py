@@ -216,7 +216,33 @@ def failed_before_probe(why: str, detail: str | None = None, *, publishable: boo
     return out
 
 
-def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seconds: float = 0.0, data_sources: list[str] | None = None, nonce: str | None = None, prod_sha256: str | None = None) -> dict:
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def parse(raw: str | None, **kw) -> dict:
+    """The app probe's result (see _parse); a malformed value anywhere in it
+    is "unreadable" (counted), never an exception."""
+    try:
+        return _parse(raw, **kw)
+    except (TypeError, AttributeError, KeyError, ValueError, IndexError):
+        out = base_result(mode=kw.get("mode", "enforce"))
+        wording, counted = layout_mod.ERRORS["unreadable"]
+        return {**out, "outcome": "error", "error": wording, "error_code": "unreadable", "counted": counted}
+
+
+def _parse(
+    raw: str | None,
+    *,
+    exit_code: int | None,
+    mode: str = "enforce",
+    seconds: float = 0.0,
+    data_sources: list[str] | None = None,
+    nonce: str | None = None,
+    prod_sha256: str | None = None,
+    item_counts: dict[str, int] | None = None,
+    times_expected: int = 0,
+) -> dict:
     """`nonce`: the one the gateway gave this run of the probe; `prod_sha256`:
     the production page it wrote. A result without them, or with others, was
     not made by this run of the probe on these bytes: it counts as tampered."""
@@ -278,6 +304,11 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
     state_problems: dict[str, list[str]] = {}
     own_empty_words: list[str] = []
     unwatched = False
+    spill: dict[str, list[str]] = {}
+    cut: set[str] = set()
+    empty_cards: set[str] = set()
+    times_seen: list[tuple] = []
+    few_items: set[str] = set()
 
     expected = [(t, s) for t in THEMES for s in STATES]
     prod_runs = data.get("prod") if isinstance(data.get("prod"), list) else []
@@ -351,10 +382,28 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
                     frames.append(label)
                 if (_int(words.get("junk")) or 0) > 0:
                     junk.append(label)
+                if not prod:
+                    for w in _list(app.get("spill"))[:4]:
+                        spill.setdefault(_where(w), []).append(f"{width} px")
+                    if width == layout_mod.WIDTHS[-1]:
+                        cut.update(_where(w) for w in _list(app.get("cut"))[:4])
+                        empty_cards.update(_where(w) for w in _list(app.get("empty_cards"))[:4])
+                        if state == "fresh":
+                            t = app.get("times") if isinstance(app.get("times"), dict) else {}
+                            times_seen.append((theme, _int(t.get("local_found")) or 0, _text(t.get("first_missing"), 20), _text(t.get("shifted_found"), 20)))
+                            more = app.get("more") is True
+                            totals = app.get("totals") if isinstance(app.get("totals"), dict) else {}
+                            for name in sources:
+                                c, need = app["sentinels"].get(name), (item_counts or {}).get(name, 0)
+                                if not isinstance(c, int) or isinstance(c, bool) or need < 2 or c * 2 >= need or more:
+                                    continue
+                                if c >= 2 and totals.get(name) is True:
+                                    continue  # at least two rows and the total: a summary tile
+                                few_items.add(name)
                 if j != 0:
                     continue  # the words are read once per theme and state (at 360 px)
                 n = {k: _int(words.get(k)) or 0 for k in ("updated", "ago", "nothing", "not_connected", "cant_tell", "connect")}
-                shown = {k: v is True for k, v in app["sentinels"].items()}
+                shown = {k: v is True or (isinstance(v, int) and not isinstance(v, bool) and v > 0) for k, v in app["sentinels"].items()}
                 problems = state_problems.setdefault(("production " if prod else "") + state, [])
                 if state == "fresh":
                     for name in sources:
@@ -430,6 +479,18 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
         add(f"the page has a nested frame or embedded object ({_join(frames[:3])})")
     if junk:
         knock_on(f'the page shows "undefined", "NaN", "Invalid Date" or "[object Object]" ({_join(junk[:4])})')
+    for theme, local_found, first_missing, shifted_found in times_seen:
+        # Wrong only when a sample event's time shows in another zone, or none shows at all.
+        if times_expected and (shifted_found or local_found == 0):
+            found = f", found {shifted_found}" if shifted_found else ""
+            knock_on(f"times are not in the app's time zone (expected {first_missing or 'the sample times'}{found}; {theme})", "times are not in the app's time zone")
+            break
+    for where in sorted(cut)[:3]:
+        add(f"a row's title is cut to almost nothing: {where}", "a row's title is cut to almost nothing")
+    for where, at in list(spill.items())[:3]:
+        add(f"chart label overflows its block: {where} ({_join(at)})", "a chart label overflows its block")
+    for name in sorted(few_items):
+        knock_on(f"a tile shows fewer than half of its sample items (source {name}) and no 'N more' line", "a tile shows fewer than half of its sample items")
     for name, themes in missing_data.items():
         knock_on(f"the fresh state shows none of the sample data of source {name} ({_join(themes)})", "a tile shows none of its data in the fresh state")
     for key in [*STATES, *(f"production {st}" for st in STATES)]:
@@ -451,6 +512,8 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
         else:
             return error("unreadable")
         is_broken = True
+    if empty_cards:
+        design.append("card is mostly empty next to a fuller card in its row: " + ", ".join(sorted(empty_cards)[:3]))
     if small_text:
         design.append("text under 12 px: " + ", ".join(f"{w} ({px:g} px)" for w, px in list(small_text.items())[:4]))
     if small_targets:

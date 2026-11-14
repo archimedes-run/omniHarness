@@ -82,6 +82,7 @@ async def register_app(
     origin: tuple[Literal["user", "content"], str | None] = ("user", None),
     hold: bool = False,
     note: dict | None = None,
+    shots: dict[str, bytes] | None = None,
 ) -> RegistrationResult:
     """`hold`: a new version of an existing app waits on the owner's button
     whatever led to it (an update, or a design pass on a registered app);
@@ -125,6 +126,15 @@ async def register_app(
         note = {**(note or {}), "kind": "version", "keeps": (await served(repo, owner_id, app_id)).version}
     if note:
         snapshot["note"] = clean_note(note)
+    stored_shots = {}
+    for theme, png in (shots or {}).items():
+        if theme in ("light", "dark") and isinstance(png, bytes):
+            try:
+                stored_shots[theme] = cv.write_app_shot(owner_id, png)
+            except ValueError:
+                continue  # not a PNG of the allowed size: left out
+    if stored_shots:
+        snapshot["shots"] = stored_shots
     if thread_id and not existing:
         snapshot["thread_id"] = thread_id  # the chat that built the app (updates must come from it)
     elif thread_id and existing:

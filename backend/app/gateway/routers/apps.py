@@ -329,6 +329,31 @@ async def app_html(app_id: str, version: int, request: Request) -> Response:
     return Response(content=html, media_type="text/html; charset=utf-8", headers=headers)
 
 
+@router.get("/{app_id}/versions/{version}/shots/{theme}.png")
+@require_permission("threads", "read")
+async def version_shot(app_id: str, version: int, theme: str, request: Request) -> Response:
+    """One of the system's own check screenshots of a version (sample data,
+    1280 px), stored with the version at registration. Owner only, PNG only."""
+    if theme not in ("light", "dark"):
+        raise _error(404, "version_not_found", "No such screenshot.")
+    owner = owner_of(request)
+    repo = repo_of(request)
+    app = await _load_or_404(repo, owner, app_id, version)
+    digest = (app.snapshot.get("shots") or {}).get(theme)
+    try:
+        png = cv.read_app_shot(owner, digest)
+    except cv.VersionNotFoundError as exc:
+        raise _error(404, "version_not_found", "No such screenshot.") from exc
+    headers = {
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Content-Disposition": "inline",
+    }
+    return Response(content=png, media_type="image/png", headers=headers)
+
+
 class RefusedIn(BaseModel):
     """Codes only, no free text: a frame's message cannot carry data into the
     audit log through a refusal report (the host sends the code, the message

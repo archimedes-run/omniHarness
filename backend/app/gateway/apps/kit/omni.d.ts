@@ -152,6 +152,9 @@ export interface Omni {
   /** The host refused a message (the reason code). */
   onError(fn: (reason: string) => void): () => void;
   readonly theme: Theme | null;
+  /** The app's "now": read it from here, never from `new Date()` or
+   * `Date.now()` (the system's checks fix it to the sample now). */
+  now(): Date;
   /** "just now", "4 min ago", "3 h ago", "2 days ago". */
   ago(iso: string | null): string;
   /** The standard words for a tile in its state. */

@@ -5,7 +5,8 @@
  * built page, and the system's checks load that page once per theme and
  * state. It has the real shim's `window.omni` API (omni.d.ts) and the same
  * tile words (`ago`, `describe`: a test keeps them identical), and answers
- * every source from the sample data instead of the host page:
+ * every source from the sample data instead of the host page, and its
+ * omni.now() is the sample now the data is written for:
  *
  *   ?state=fresh|empty|not_connected|failed   every source in that state
  *   ?theme=light|dark                          <html> gets .dark for dark
@@ -35,53 +36,19 @@
   }
   var theme = query.theme === "dark" ? "dark" : "light";
   var MINUTE = 60000;
-  var DAY = 86400000;
-
-  // Sample times are written for a reference day; they move to today,
-  // keeping their time of day.
-  var shiftDays = 0;
-  if (MOCK.reference) {
-    var ref = new Date(MOCK.reference).getTime();
-    if (!isNaN(ref)) {
-      var today = new Date();
-      today.setUTCHours(0, 0, 0, 0);
-      var refDay = new Date(ref);
-      refDay.setUTCHours(0, 0, 0, 0);
-      shiftDays = Math.round((today.getTime() - refDay.getTime()) / DAY);
-    }
-  }
-  var STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
-  var DATE = /^\d{4}-\d{2}-\d{2}$/;
+  // The sample data is written for a fixed sample now in the app's time zone
+  // (a Wednesday, 10:20 local); omni.now() returns it, so timelines and
+  // countdowns read the same in every check and screenshot.
+  var SAMPLE_NOW = new Date(MOCK.now || Date.now()).getTime();
+  if (isNaN(SAMPLE_NOW)) SAMPLE_NOW = Date.now();
   function moved(value) {
-    if (typeof value === "string") {
-      if (STAMP.test(value)) {
-        var t = new Date(value).getTime();
-        return isNaN(t) ? value : new Date(t + shiftDays * DAY).toISOString();
-      }
-      if (DATE.test(value)) {
-        var d = new Date(value + "T00:00:00Z").getTime();
-        return isNaN(d)
-          ? value
-          : new Date(d + shiftDays * DAY).toISOString().slice(0, 10);
-      }
-      return value;
-    }
-    if (Array.isArray(value)) return value.map(moved);
-    if (value && typeof value === "object") {
-      var out = {};
-      for (var k in value) {
-        if (Object.prototype.hasOwnProperty.call(value, k))
-          out[k] = moved(value[k]);
-      }
-      return out;
-    }
-    return value;
+    return JSON.parse(JSON.stringify(value));
   }
 
   function result(source) {
     var entry = MOCK.sources[source];
     var state = stateOf(source);
-    var now = Date.now();
+    var now = nowMs();
     if (state === "fresh") {
       return {
         source: source,
@@ -163,12 +130,16 @@
     });
   }
 
+  function nowMs() {
+    return SAMPLE_NOW;
+  }
+
   /** "just now", "4 min ago", "3 h ago", "2 days ago". */
   function ago(iso) {
     if (!iso) return "";
     var t = new Date(iso).getTime();
     if (isNaN(t)) return "";
-    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    var s = Math.max(0, Math.round((nowMs() - t) / 1000));
     if (s < 45) return "just now";
     var min = Math.round(s / 60);
     if (min < 60) return min + " min ago";
@@ -225,6 +196,9 @@
     },
     get theme() {
       return theme;
+    },
+    now: function () {
+      return new Date(nowMs());
     },
     ago: ago,
     describe: describe,

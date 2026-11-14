@@ -460,12 +460,18 @@
     };
   }
 
+  /** The app's "now" (omni.now()): the real time here; the mock build's
+   * fixed sample now in the system's checks. */
+  function nowMs() {
+    return Date.now();
+  }
+
   /** "just now", "4 min ago", "3 h ago", "2 days ago". */
   function ago(iso) {
     if (!iso) return "";
     var t = new Date(iso).getTime();
     if (isNaN(t)) return "";
-    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    var s = Math.max(0, Math.round((nowMs() - t) / 1000));
     if (s < 45) return "just now";
     var min = Math.round(s / 60);
     if (min < 60) return min + " min ago";
@@ -530,6 +536,9 @@
     },
     get theme() {
       return theme;
+    },
+    now: function () {
+      return new Date(nowMs());
     },
     ago: ago,
     describe: describe,
