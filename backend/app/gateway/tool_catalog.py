@@ -43,6 +43,7 @@ BUILTIN_NAMES: dict[str, tuple[str, str]] = {
     "builtin:bash": ("Shell", "Run commands in the sandbox"),
     "builtin:ledger": ("Tasks and notes", "Your projects, tasks and decisions"),
     "builtin:workspace": ("Workspace", "Previews, coding jobs, MCP building and skill editing"),
+    "builtin:artifacts": ("Artifacts", "Make, change and read your artifacts"),
 }
 
 #: The tools people reach for first in each app, most common first (the
@@ -131,7 +132,8 @@ def _builtins(config: Any, ruleset: Any) -> list[CatalogIntegration]:
     from omniharness.tools.agent_access import integration_of
     from omniharness.tools.tools import get_available_tools
 
-    tools = get_available_tools(include_mcp=False, app_config=config)
+    # Every grantable built-in, artifacts included (Spec 012).
+    tools = get_available_tools(include_mcp=False, app_config=config, artifact_tools=True)
     groups = {cfg.name: cfg.group for cfg in config.tools if getattr(cfg, "group", None)}
     by_integration: dict[str, list[Any]] = {}
     for tool in tools:
@@ -283,4 +285,5 @@ async def integration_choices(request: Any, config: Any, user_id: str | None) ->
     groups = [g.name for g in config.tool_groups]
     out += [(f"builtin:{g}", BUILTIN_NAMES.get(f"builtin:{g}", (_label(g), ""))[0]) for g in groups]
     out.append(("builtin:ledger", BUILTIN_NAMES["builtin:ledger"][0]))
+    out.append(("builtin:artifacts", BUILTIN_NAMES["builtin:artifacts"][0]))
     return out

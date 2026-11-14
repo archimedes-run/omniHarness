@@ -141,7 +141,14 @@ def _builder_trusted() -> frozenset[str]:
 #: earlier in the turn is still found by the walk. Marked by identity
 #: (middleware._mark_trusted_ack: the registered write_todos function), never
 #: by name.
-TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply", "write_todos"}) | _builder_trusted()
+#: `artifact_create` and `artifact_update` (Spec 012) answer with ids, kinds,
+#: version numbers and fixed refusal wording composed by the gateway
+#: (app/gateway/artifacts_store/service.py), never stored text or a stored
+#: title. `artifact_read` and `artifact_list` are NOT here (FR-008): they
+#: return stored text, so a turn that read an artifact is content-led.
+ARTIFACT_ACK_TOOLS = frozenset({"artifact_create", "artifact_update"})
+
+TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply", "write_todos"}) | _builder_trusted() | ARTIFACT_ACK_TOOLS
 
 #: Set on a tool result by the policy middleware at dispatch, and only when
 #: the tool that ran IS the registered built-in object (middleware.
