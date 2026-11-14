@@ -392,18 +392,45 @@ def declined_build_reply(reply: str) -> tuple[str, bool]:
 INTERNAL_NAMES_RE = re.compile(r"\b(owner_request|draft_id|replace_current|builder_(?:draft|save|grant|undo|read|diff))\b")
 
 
+#: Plain words for the builder's internal names, when removing the sentence
+#: that names one would leave nothing.
+INTERNAL_PLAIN = {
+    "owner_request": "your description",
+    "draft_id": "draft",
+    "replace_current": "replacing the current draft",
+    "builder_draft": "the draft",
+    "builder_save": "the save step",
+    "builder_grant": "the permission step",
+    "builder_undo": "the undo step",
+    "builder_read": "a look at the current setup",
+    "builder_diff": "the change",
+}
+
+
 def strip_internal_names(reply: str) -> tuple[str, bool]:
-    """The reply without the sentences that name a builder tool or parameter."""
+    """The reply without the sentences that name a builder tool or parameter.
+    Code blocks are left exactly as they are. A reply that would be left
+    empty keeps its sentences, with each name replaced by plain words."""
     if not INTERNAL_NAMES_RE.search(reply or ""):
         return reply, False
-    lines = []
-    for line in (reply or "").split("\n"):
-        parts = re.split(r"(?<=[.!?])\s+", line)
-        kept = [p for p in parts if not INTERNAL_NAMES_RE.search(p)]
-        if kept or not line.strip():
-            lines.append(" ".join(kept))
-    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
-    return text, True
+    parts = re.split(r"(```[\s\S]*?```)", reply or "")
+
+    def drop(prose: str) -> str:
+        lines = []
+        for line in prose.split("\n"):
+            pieces = re.split(r"(?<=[.!?])\s+", line)
+            kept = [p for p in pieces if not INTERNAL_NAMES_RE.search(p)]
+            if kept or not line.strip():
+                lines.append(" ".join(kept))
+        return "\n".join(lines)
+
+    dropped = [part if part.startswith("```") else drop(part) for part in parts]
+    prose_left = "".join(p for p in dropped if not p.startswith("```")).strip()
+    if prose_left:
+        text = re.sub(r"\n{3,}", "\n\n", "".join(dropped)).strip()
+    else:
+        text = "".join(part if part.startswith("```") else INTERNAL_NAMES_RE.sub(lambda m: INTERNAL_PLAIN[m.group(1)], part) for part in parts).strip()
+    return text, text != reply
 
 
 def called_builder(messages: list[Any]) -> bool:

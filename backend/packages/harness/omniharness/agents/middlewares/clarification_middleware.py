@@ -87,22 +87,32 @@ def builder_ask(turn: list, call_id: str) -> bool:
     if index is None:
         return False
     following = next((m for m in turn[index + 1 :] if getattr(m, "tool_calls", None)), None)
-    return following is not None and any(c.get("id") == call_id for c in following.tool_calls)
+    # The FIRST call after the refusal, made on its own: an off-topic question
+    # bundled with other calls is not the builder's question.
+    calls = list(getattr(following, "tool_calls", None) or [])
+    return len(calls) == 1 and calls[0].get("name") == "ask_clarification" and calls[0].get("id") == call_id
 
 
 def builder_answered(turn: list, context: dict | None) -> bool:
     """A run resumed on the owner's answer to the builder's question, with no
     new "ask first" refusal since: the owner has said what it is for, so it is
     drafted now, not asked about again (spec 010)."""
-    from omniharness.runtime.builder.surface import QUESTION_ANSWER_KEY, question_resume
+    from omniharness.runtime.builder.surface import BUILDER_QUESTION_MARKER, QUESTION_ANSWER_KEY, question_resume
 
     if not question_resume(context):
         return False
     index = _builder_refusal_index(turn)
     if index is None:
         return False
-    answered = [i for i, m in enumerate(turn) if isinstance(m, ToolMessage) and (m.additional_kwargs or {}).get(QUESTION_ANSWER_KEY)]
-    return bool(answered) and index < answered[-1]
+    # The builder's own question (marked when it was asked), by its card id.
+    builder_qids = {str(((m.additional_kwargs or {}).get(QUESTION_MARKER) or {}).get("id") or "") for m in turn[index + 1 :] if isinstance(m, ToolMessage) and (m.additional_kwargs or {}).get(BUILDER_QUESTION_MARKER)}
+    answered = [i for i, m in enumerate(turn) if isinstance(m, ToolMessage) and str((m.additional_kwargs or {}).get(QUESTION_ANSWER_KEY) or "") in builder_qids - {""}]
+    if not answered or index > answered[-1]:
+        return False
+    # Only until the draft is made: a later, unrelated question follows the
+    # usual rules.
+    drafted = any(getattr(m, "tool_calls", None) and any(c.get("name") == "builder_draft" for c in m.tool_calls) for m in turn[answered[-1] + 1 :])
+    return not drafted
 
 
 def answered_refusal(call_id: str) -> ToolMessage:
@@ -117,8 +127,10 @@ def answered_refusal(call_id: str) -> ToolMessage:
 
 def _memory_on(context: dict | None) -> bool:
     """Memory informs this chat: on in the install, and not switched off for
-    the chat (the run context's `memory_off`, when the gateway sets it)."""
-    if (context or {}).get("memory_off"):
+    the chat (the run context's server-owned `memory_off`, spec 007 #207)."""
+    from omniharness.agents.memory_switch import MEMORY_OFF_KEY
+
+    if (context or {}).get(MEMORY_OFF_KEY):
         return False
     try:
         from omniharness.config import get_app_config
@@ -362,7 +374,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         context = getattr(runtime, "context", None) or {}
         return dict(context) if isinstance(context, dict) else {}
 
-    def _open_card(self, request: ToolCallRequest, args: dict, tool_call_id: str) -> dict | None:
+    def _open_card(self, request: ToolCallRequest, args: dict, tool_call_id: str, purpose: str = "") -> dict | None:
         runtime = getattr(request, "runtime", None)
         context = getattr(runtime, "context", None) or {}
         state = getattr(request, "state", None) or {}
@@ -373,6 +385,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             recommended=_recommended_index(args.get("recommended"), len(options)),
             context_text=str(args.get("context") or ""),
             tool_call_id=tool_call_id,
+            purpose=purpose,
             messages=list(state.get("messages") or []) if isinstance(state, dict) else [],
             runtime_context=dict(context) if isinstance(context, dict) else {},
         )
@@ -426,11 +439,16 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         # The question card (009 question-card.md): recorded by the gateway,
         # answered only by the owner's click or the owner's own tagged reply.
         card = None
+        builder_question = builder_ask(self._turn_of(state), tool_call_id)
         try:
-            card = self._open_card(request, args, tool_call_id)
+            card = self._open_card(request, args, tool_call_id, purpose="builder" if builder_question else "")
         except QuestionRefused as exc:
             return problem_message(str(exc), tool_call_id)
         kwargs = {}
+        if builder_question:
+            from omniharness.runtime.builder.surface import BUILDER_QUESTION_MARKER
+
+            kwargs[BUILDER_QUESTION_MARKER] = True
         if card is not None:
             kwargs[QUESTION_MARKER] = {"id": card["id"]}
             # Read as text where there is no card (a channel, the model's own

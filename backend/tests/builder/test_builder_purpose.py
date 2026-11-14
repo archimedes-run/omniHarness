@@ -36,7 +36,7 @@ ACCEPTED = [
     "make me something that summarizes podcasts",
     "a daily standup agent",
     "set up a weekly report automation",
-    "create an agent called Scout",
+    "create an agent called Scout that tracks my packages",
     "an assistant for my calendar",
     "build a helper that renames files",
     "make an agent that watches github issues",
@@ -62,6 +62,21 @@ REFUSED = [
     "build an assistant for me",
     "set up a workflow",
     "help me make an agent",
+    "please create me an agent thanks",
+    "make me a new agent, thank you!",
+    "create an agent called Bob",
+    "crea un agente",
+]
+#: Spanish and German: (says what it is for, does not).
+OTHER_LANGUAGES = [
+    ("crea un agente que ordene mi correo cada mañana", "crea un agente"),
+    ("hazme un bot que publique en slack mis tareas", "hazme un bot por favor"),
+    ("créame un asistente para mis facturas mensuales", "créame un asistente nuevo"),
+    ("crea una automatización que me resuma las noticias", "crea una automatización por favor"),
+    ("erstelle einen Agenten, der meine E-Mails sortiert", "erstelle einen Agenten"),
+    ("mach mir einen Bot, der meine Termine zusammenfasst", "mach mir einen neuen Bot bitte"),
+    ("baue einen Assistenten für meine Steuerunterlagen jedes Jahr", "baue einen Assistenten"),
+    ("erstelle eine Automatisierung, die jeden Freitag Berichte schickt", "erstelle bitte einen Agenten, danke"),
 ]
 SCRIPTS = [
     "मेरे इनबॉक्स को छाँटने वाला एजेंट बनाओ",
@@ -90,6 +105,24 @@ def test_a_request_that_names_a_subject_is_accepted(phrase) -> None:
 @pytest.mark.parametrize("phrase", REFUSED)
 def test_a_bare_request_is_refused(phrase) -> None:
     assert _problem(phrase, phrase), phrase
+
+
+@pytest.mark.parametrize(("says", "bare"), OTHER_LANGUAGES)
+def test_other_languages_need_a_real_sentence(says, bare) -> None:
+    assert _problem(says, says) is None, says
+    assert _problem(bare, bare), bare
+
+
+def test_a_name_is_kept_and_the_owner_is_still_asked(gw) -> None:
+    from langchain_core.messages import AIMessage
+
+    from app.gateway.builder.service import MESSAGES_KEY, GatewayBuilderController
+    from app.policy.lineage import user_turn
+
+    controller = GatewayBuilderController(lambda: gw.client.app.state.config)
+    messages = [user_turn("create an agent called Bob"), AIMessage(content="", tool_calls=[{"name": "builder_draft", "args": {}, "id": "c1"}])]
+    out = controller.draft({"user_id": gw.user_id, "thread_id": new_thread(gw), MESSAGES_KEY: messages}, kind="agent", name="bob", fields={"instructions": "x"}, guessed=[], replace_current=False)
+    assert out.startswith("Nothing was drafted") and "'Bob'" in out, out
 
 
 @pytest.mark.parametrize("phrase", SCRIPTS)
