@@ -258,3 +258,53 @@ describe("the job card's live state of a registered version", () => {
     ).toBe("kept version 2");
   });
 });
+
+describe("cards whose turn is behind Load more", () => {
+  const msg = (
+    text: string,
+    extra: Partial<MessageFacts> = {},
+  ): MessageFacts => ({
+    text,
+    isJobResult: false,
+    userText: null,
+    ...extra,
+  });
+  // Only the newest turn is loaded: it registered version 3.
+  const loaded: MessageFacts[] = [
+    msg("make it denser", { userText: "make it denser" }),
+    msg("- App registered by the system: id today, version 3; offered", {
+      toolCallId: "j3",
+      isJobResult: true,
+    }),
+  ];
+  const card = (id: string, version: number, minute: number) => ({
+    id,
+    app_id: "today",
+    version,
+    created_at: `2026-11-14T00:${String(minute).padStart(2, "0")}:00Z`,
+  });
+  const cards = [card("c1", 1, 1), card("c2", 2, 2), card("c3", 3, 3)];
+
+  it("are left out while older turns are not loaded, never guessed into the newer ones", () => {
+    const a = placeCards(loaded, cards, new Map(), false);
+    expect(a.get("c3")).toBe(1);
+    expect(a.has("c1")).toBe(false);
+    expect(a.has("c2")).toBe(false);
+  });
+
+  it("with every turn loaded, an unnamed card still goes by time", () => {
+    const a = placeCards(loaded, cards, new Map(), true);
+    expect(a.get("c1")).toBe(1);
+    expect(a.get("c2")).toBe(1);
+  });
+
+  it("a card newer than the placed ones is placed after them even while loading", () => {
+    const a = placeCards(
+      loaded,
+      [card("c3", 3, 3), card("c4", 4, 9)],
+      new Map(),
+      false,
+    );
+    expect(a.get("c4")).toBe(1);
+  });
+});
