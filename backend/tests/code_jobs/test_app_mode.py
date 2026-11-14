@@ -214,23 +214,30 @@ STATE_WORDS = {
 }
 
 
-def app_result(change: dict | None = None, **top) -> str:
-    """A passing app probe result; `change[(theme, state)] = {width or 'all': page fields, 'run': run fields}`."""
-    change = change or {}
+def _runs(change: dict, widths) -> list[dict]:
     runs = []
     for theme in app_checks.THEMES:
         for state in app_checks.STATES:
             c = change.get((theme, state), {})
             pages = []
-            for w in layout_mod.WIDTHS:
+            for w in widths:
                 fields = json.loads(json.dumps(STATE_WORDS[state]))
                 for key in ("all", w):
                     for k, v in c.get(key, {}).items():
                         fields[k] = {**fields.get(k, {}), **v} if isinstance(v, dict) and k in ("words", "sentinels") else v
                 pages.append(page(w, **fields))
             runs.append({"theme": theme, "state": state, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "pages": pages, "violations": [], "watched": True, **c.get("run", {})})
+    return runs
+
+
+def app_result(change: dict | None = None, prod_change: dict | None = None, **top) -> str:
+    """A passing app probe result. `change[(theme, state)] = {width or 'all':
+    page fields, 'run': run fields}` changes the development runs;
+    `prod_change` the production runs (every theme and state, at 1280 px)."""
+    runs = _runs(change or {}, layout_mod.WIDTHS)
+    prod = _runs(prod_change or {}, (layout_mod.WIDTHS[-1],))
     shots = [{"theme": t, "width": w, "file": f"shot-{t}-{w}.png", "bytes": 1000, "height": 900} for t in app_checks.THEMES for w in layout_mod.WIDTHS]
-    return json.dumps({"v": 1, "mode": "app", "runs": runs, "shots": shots, **top})
+    return json.dumps({"v": 1, "mode": "app", "runs": runs, "prod": prod, "shots": shots, **top})
 
 
 def parse(raw, exit_code=0):

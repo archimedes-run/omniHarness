@@ -513,17 +513,32 @@ Job steps added: `app_checks` (`outcome`, `summary`, `design_count`, `error`,
   Vite and renders it with react-dom in a small in-memory DOM in every mock
   state, printing React's own error and component. App jobs always verify with
   `npm run build && node omni-kit/check-render.mjs` (appended when missing).
-- The probe loads a DEVELOPMENT build (`vite build --mode development
-  --minify false --sourcemap`, same app CSP minus the sandbox, with the build's
-  own files allowed) for every theme, state and width, then the production
-  build (the one registered, exact app CSP) once per theme. Each distinct
-  error comes back with its full message, its top frames mapped to source
-  lines through the build's own source maps, and the first console errors and
-  warnings, all fenced as data; an error on load is reported first and the
-  findings that follow from it are counted in one line. When no development
-  build can be made, the production build is checked as before.
+- Order: every step that runs the worker's code (the build, the render check,
+  the development build into the project's `.omni-check/dev`) runs first, then
+  the cleanup of leftover processes, and only then is a fresh probe folder
+  with an unguessable name made, into which the gateway copies plain files
+  (no links or special files, capped). The probe refuses a folder that already
+  holds a result or a screenshot, and never fails to write silently; its
+  result must carry the nonce the gateway gave that run and the SHA-256 of
+  the production page it served, which must equal the page the gateway
+  wrote. Anything else counts as `tampered` and registers nothing.
+- The probe loads the DEVELOPMENT build (`vite build --mode development
+  --minify false --sourcemap`, the app CSP minus the sandbox, with the
+  build's own files allowed) for every theme, state and width: layout,
+  contrast, screenshots and readable errors. It loads the PRODUCTION build
+  (the registered bytes, the exact app CSP) in every theme and state too:
+  blocked requests (listener and `report-uri`), nested frames, Trusted Types,
+  errors, rendering, sample data and the state words are all checked there;
+  a missing production run fails the job. Each distinct error comes back with
+  its full message, its top frames mapped to source lines through the
+  build's own source maps, and the first console errors and warnings, all
+  fenced as data (at most 8000 characters of such text per report); an error
+  on load is reported first and the findings that follow from it are counted
+  in one line. When no development build can be made, the production build
+  is used for both.
 - Failed checks or a failed build: the result says "Run design pass N of 3 now
   with fix_of=…; do not ask the person first", and "stop and report" only when
   the 3 passes are used.
 - `code_jobs.app_budget_usd` (default 2.00) is the budget of an app-mode job
-  or design pass, still under the monthly cap.
+  or design pass, still under the monthly cap. It applies when set, or when
+  `budget_usd` is at its default; an owner who lowered `budget_usd` keeps it.

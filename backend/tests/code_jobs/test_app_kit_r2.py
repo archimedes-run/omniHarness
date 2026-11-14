@@ -61,16 +61,57 @@ def test_without_an_error_every_finding_is_listed():
     assert not any("follow from it" in f for f in r["failures"]) and any("source inbox" in f for f in r["failures"])
 
 
-def test_the_production_build_must_render_too():
-    prod = [
-        {"theme": "light", "loaded": True, "errors": 1, "first_error": "Error: Minified React error #310", "rendered": False},
-        {"theme": "dark", "loaded": True, "errors": 0, "rendered": True, "sentinels": {"calendar": True, "inbox": True, "gh_review": True}},
-    ]
-    r = parse(app_result(prod=prod))
-    assert r["outcome"] == "fail" and any("the production build (the one registered) threw on load in light" in f for f in r["failures"])
-    shown = dict.fromkeys(("calendar", "inbox", "gh_review"), True)
-    ok = [{"theme": t, "loaded": True, "errors": 0, "rendered": True, "sentinels": shown} for t in ("light", "dark")]
-    assert parse(app_result(prod=ok))["outcome"] == "pass"
+def test_the_production_build_is_checked_in_every_theme_and_state():
+    # Only the production build tries the network and makes a frame (a
+    # development-only guard in the app): it fails.
+    bad = {("dark", "empty"): {"run": {"violations": ["connect-src"]}, "all": {"frames": 1}}}
+    r = parse(app_result(prod_change=bad))
+    assert r["outcome"] == "fail"
+    assert any("which the app's CSP blocks (connect-src; production/dark/empty)" in f for f in r["failures"])
+    assert any("nested frame or embedded object (production/dark/empty)" in f for f in r["failures"])
+    crash = {("light", "failed"): {"run": {"errors": 1, "first_error": "Error: Minified React error #310"}, "all": {"rendered": False}}}
+    assert any("production/light/failed" in f for f in parse(app_result(prod_change=crash))["failures"])
+    words = {("light", "failed"): {"all": {"words": {"nothing": 1}}}}
+    assert any(f.startswith("production failed state: says") for f in parse(app_result(prod_change=words))["failures"])
+    unwatched = {("dark", "fresh"): {"run": {"watched": False}}}
+    assert parse(app_result(prod_change=unwatched))["outcome"] == "fail"
+
+
+def test_an_incomplete_production_check_fails_closed():
+    data = json.loads(app_result())
+    for cut in (data["prod"][:7], [], None):
+        broken = {**data, "prod": cut} if cut is not None else {k: v for k, v in data.items() if k != "prod"}
+        r = parse(json.dumps(broken))
+        assert r["outcome"] == "fail" and any("not checked in every theme and state" in f for f in r["failures"]), cut
+    timed = {**data, "prod": data["prod"][:3], "timed_out": True}
+    assert parse(json.dumps(timed))["outcome"] == "fail"
+
+
+def test_a_result_that_is_not_this_runs_counts_as_tampered():
+    raw = app_result(nonce="n" * 32, prod_sha256="a" * 64)
+    ok = app_checks.parse(raw, exit_code=0, data_sources=["calendar", "inbox"], nonce="n" * 32, prod_sha256="a" * 64)
+    assert ok["outcome"] == "pass"
+    for nonce, sha in (("x" * 32, "a" * 64), ("n" * 32, "b" * 64), ("n" * 32, None)):
+        r = app_checks.parse(raw if sha is not None else app_result(nonce="n" * 32), exit_code=0, data_sources=["calendar", "inbox"], nonce=nonce, prod_sha256=sha or "a" * 64)
+        assert r["outcome"] == "error" and r["error_code"] == "tampered" and app_checks.blocks(r)
+    r = app_checks.parse(raw, exit_code=98, nonce="n" * 32, prod_sha256="a" * 64)
+    assert r["error_code"] == "tampered" and r["counted"] is True
+
+
+def test_the_render_check_counts_only_as_a_whole_command():
+    from omniharness.code_jobs import CodeJobBrief
+
+    brief = app_mode.with_app_defaults(CodeJobBrief(goal="x", project_dir="today", verify_command="echo node omni-kit/check-render.mjs"))
+    assert brief.verify_command.endswith("&& node omni-kit/check-render.mjs")
+
+
+def test_the_app_budget_never_raises_a_lowered_budget():
+    from app.gateway.code_jobs import app_budget
+    from omniharness.config.code_jobs_config import CodeJobsConfig
+
+    assert app_budget(CodeJobsConfig()) == 2.0
+    assert app_budget(CodeJobsConfig(budget_usd=0.5)) == 0.5
+    assert app_budget(CodeJobsConfig(budget_usd=0.5, app_budget_usd=3.0)) == 3.0
 
 
 def test_error_details_are_fenced_in_the_report_with_the_full_message():

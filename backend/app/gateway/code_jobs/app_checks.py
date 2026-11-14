@@ -116,9 +116,9 @@ def probe_csp(script_hashes: list[str]) -> str:
     return policy
 
 
-def probe_command(directory: str, root: str, job_id: str) -> str:
-    """layout.command in app mode, with its longer hard stop."""
-    return layout_mod.command(directory, root, job_id, app=True)
+def probe_command(directory: str, root: str, job_id: str, nonce: str) -> str:
+    """layout.command in app mode, with its longer hard stop and this run's nonce."""
+    return layout_mod.command(directory, root, job_id, app=True, nonce=nonce)
 
 
 # -- the source scan ---------------------------------------------------------------
@@ -216,7 +216,10 @@ def failed_before_probe(why: str, detail: str | None = None, *, publishable: boo
     return out
 
 
-def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seconds: float = 0.0, data_sources: list[str] | None = None) -> dict:
+def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seconds: float = 0.0, data_sources: list[str] | None = None, nonce: str | None = None, prod_sha256: str | None = None) -> dict:
+    """`nonce`: the one the gateway gave this run of the probe; `prod_sha256`:
+    the production page it wrote. A result without them, or with others, was
+    not made by this run of the probe on these bytes: it counts as tampered."""
     """The app probe's result file, checked field by field."""
     base = base_result(mode=mode, seconds=seconds)
 
@@ -229,6 +232,8 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
 
     if exit_code == 97:
         return error("checksum")
+    if exit_code == 98:
+        return error("tampered")
     data = None
     if raw is not None and len(raw) <= MAX_RESULT_CHARS:
         try:
@@ -246,6 +251,8 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
     if data.get("setup_error") is not None:
         code = data.get("setup_error")
         return error(code if isinstance(code, str) and code in layout_mod.ERRORS and code not in ("no_answer", "no_python", "checksum") else "unreadable")
+    if (nonce is not None and data.get("nonce") != nonce) or (prod_sha256 is not None and data.get("prod_sha256") != prod_sha256):
+        return error("tampered")
     runs = data.get("runs")
     if data.get("mode") != "app" or not isinstance(runs, list) or len(runs) > len(THEMES) * len(STATES):
         return error("unreadable")
@@ -273,110 +280,113 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
     unwatched = False
 
     expected = [(t, s) for t in THEMES for s in STATES]
-    for i, run in enumerate(runs):
-        if not isinstance(run, dict) or (run.get("theme"), run.get("state")) != expected[i]:
-            return error("unreadable")
-        theme, state = expected[i]
-        label = f"{theme}/{state.replace('_', ' ')}"
-        if run.get("crashed") is True:
-            failures.append(f"the page crashed the browser ({label})")
-            summary.append(failures[-1])
-            is_broken = True
-            continue
-        if run.get("loaded") is not True:
-            failures.append(f"did not load ({label}: {layout_mod.LOAD_ERRORS.get(run.get('load_error'), 'no reason given')})")
-            summary.append(f"did not load ({label})")
-            is_broken = True
-            continue
-        pages = run.get("pages")
-        if not isinstance(pages, list) or len(pages) != len(layout_mod.WIDTHS):
-            return error("unreadable")
-        if run.get("watched") is not True:
-            unwatched = True
-        for v in run.get("violations") or []:
-            directive = _text(v, 40)
-            if directive:
-                violations.setdefault(directive, []).append(label)
-        count = _int(run.get("errors")) or 0
-        if count:
-            errors.setdefault(_text(run.get("first_error"), 120) or "an error", []).append(label)
-        for j, page in enumerate(pages):
-            width = layout_mod.WIDTHS[j]
-            if not isinstance(page, dict) or page.get("width") != width or not isinstance(page.get("app"), dict):
+    prod_runs = data.get("prod") if isinstance(data.get("prod"), list) else []
+    for prod, site_runs in ((False, runs), (True, prod_runs[: len(expected)])):
+        widths = (layout_mod.WIDTHS[-1],) if prod else layout_mod.WIDTHS
+        for i, run in enumerate(site_runs):
+            if not isinstance(run, dict) or (run.get("theme"), run.get("state")) != expected[i]:
                 return error("unreadable")
-            app = page["app"]
-            px = _int(page.get("overflow_px"))
-            words = app.get("words")
-            if px is None or not isinstance(page.get("rendered"), bool) or not isinstance(words, dict) or not isinstance(app.get("sentinels"), dict):
+            theme, state = expected[i]
+            label = ("production/" if prod else "") + f"{theme}/{state.replace('_', ' ')}"
+            if run.get("crashed") is True:
+                failures.append(f"the page crashed the browser ({label})")
+                summary.append(failures[-1])
+                is_broken = True
+                continue
+            if run.get("loaded") is not True:
+                failures.append(f"did not load ({label}: {layout_mod.LOAD_ERRORS.get(run.get('load_error'), 'no reason given')})")
+                summary.append(f"did not load ({label})")
+                is_broken = True
+                continue
+            pages = run.get("pages")
+            if not isinstance(pages, list) or len(pages) != len(widths):
                 return error("unreadable")
-            if not page["rendered"]:
-                blank.append(f"{label} at {width} px")
-            if px > 1:
-                slot = overflow.setdefault(width, [0, [], []])
-                slot[0] = max(slot[0], px)
-                slot[1] += [_where(o) for o in (page.get("offenders") or [])[:3] if isinstance(o, str)]
-                slot[2].append(label)
-            for svg in (page.get("svgs") or [])[:5]:
-                if not isinstance(svg, dict) or _int(svg.get("px")) is None or svg.get("side") not in ("left", "right", "top", "bottom"):
-                    continue
-                bucket = labels if svg.get("kind") == "text" else clipped
-                found = bucket.setdefault(_where(svg.get("where")), [(svg["side"], svg["px"]), []])
-                found[0] = max(found[0], (svg["side"], svg["px"]), key=lambda e: e[1])
-                found[1].append(f"{width} px")
-            low = _int(app.get("contrast_low")) or 0
-            if low:
-                slot = contrast.setdefault(theme, [99.0, 4.5, "", 0])
-                slot[3] = max(slot[3], low)
-                for c in (app.get("contrast") or [])[:6]:
-                    ratio = _num(c.get("ratio")) if isinstance(c, dict) else None
-                    if ratio is not None and ratio < slot[0]:
-                        slot[0], slot[1], slot[2] = ratio, _num(c.get("need")) or 4.5, _where(c.get("where"))
-            for s in (app.get("small_text_where") or [])[:4]:
-                if isinstance(s, dict) and _num(s.get("px")) is not None:
-                    small_text.setdefault(_where(s.get("where")), float(s["px"]))
-            for s in (app.get("small_targets_where") or [])[:4]:
-                if isinstance(s, dict) and _int(s.get("w")) is not None and _int(s.get("h")) is not None:
-                    small_targets.setdefault(_where(s.get("where")), (s["w"], s["h"]))
-            if (_int(app.get("frames")) or 0) > 0:
-                frames.append(label)
-            if (_int(words.get("junk")) or 0) > 0:
-                junk.append(label)
-            if j != 0:
-                continue  # the words are read once per theme and state (at 360 px)
-            n = {k: _int(words.get(k)) or 0 for k in ("updated", "ago", "nothing", "not_connected", "cant_tell", "connect")}
-            shown = {k: v is True for k, v in app["sentinels"].items()}
-            problems = state_problems.setdefault(state, [])
-            if state == "fresh":
-                for name in sources:
-                    if not shown.get(name):
-                        missing_data.setdefault(name, []).append(theme)
-                if not n["ago"]:
-                    problems.append('no "updated N min ago"')
-            elif state == "empty":
-                if any(shown.values()):
-                    problems.append("still shows sample data")
-                if n["cant_tell"] or n["not_connected"]:
-                    problems.append('says "Can\'t tell" or "Not connected"')
-                if not n["nothing"]:
-                    own_empty_words.append(theme)
-            elif state == "not_connected":
-                if not n["not_connected"]:
-                    problems.append('no "Not connected"')
-                if not n["connect"]:
-                    problems.append("no Connect button")
-                if n["nothing"]:
-                    problems.append('says "Nothing today"')
-                if any(shown.values()):
-                    problems.append("shows sample data")
-            elif state == "failed":
-                if not n["cant_tell"]:
-                    problems.append('no "Can\'t tell"')
-                if words.get("reason") is not True:
-                    problems.append("the failure reason is not shown")
-                if n["nothing"]:
-                    problems.append('says "Nothing today"')
-                if any(shown.values()):
-                    problems.append("shows sample data")
+            if run.get("watched") is not True:
+                unwatched = True
+            for v in run.get("violations") or []:
+                directive = _text(v, 40)
+                if directive:
+                    violations.setdefault(directive, []).append(label)
+            count = _int(run.get("errors")) or 0
+            if count:
+                errors.setdefault(_text(run.get("first_error"), 120) or "an error", []).append(label)
+            for j, page in enumerate(pages):
+                width = widths[j]
+                if not isinstance(page, dict) or page.get("width") != width or not isinstance(page.get("app"), dict):
+                    return error("unreadable")
+                app = page["app"]
+                px = _int(page.get("overflow_px"))
+                words = app.get("words")
+                if px is None or not isinstance(page.get("rendered"), bool) or not isinstance(words, dict) or not isinstance(app.get("sentinels"), dict):
+                    return error("unreadable")
+                if not page["rendered"]:
+                    blank.append(f"{label} at {width} px")
+                if px > 1 and not prod:
+                    slot = overflow.setdefault(width, [0, [], []])
+                    slot[0] = max(slot[0], px)
+                    slot[1] += [_where(o) for o in (page.get("offenders") or [])[:3] if isinstance(o, str)]
+                    slot[2].append(label)
+                for svg in [] if prod else (page.get("svgs") or [])[:5]:
+                    if not isinstance(svg, dict) or _int(svg.get("px")) is None or svg.get("side") not in ("left", "right", "top", "bottom"):
+                        continue
+                    bucket = labels if svg.get("kind") == "text" else clipped
+                    found = bucket.setdefault(_where(svg.get("where")), [(svg["side"], svg["px"]), []])
+                    found[0] = max(found[0], (svg["side"], svg["px"]), key=lambda e: e[1])
+                    found[1].append(f"{width} px")
+                low = 0 if prod else (_int(app.get("contrast_low")) or 0)
+                if low:
+                    slot = contrast.setdefault(theme, [99.0, 4.5, "", 0])
+                    slot[3] = max(slot[3], low)
+                    for c in (app.get("contrast") or [])[:6]:
+                        ratio = _num(c.get("ratio")) if isinstance(c, dict) else None
+                        if ratio is not None and ratio < slot[0]:
+                            slot[0], slot[1], slot[2] = ratio, _num(c.get("need")) or 4.5, _where(c.get("where"))
+                for s in [] if prod else (app.get("small_text_where") or [])[:4]:
+                    if isinstance(s, dict) and _num(s.get("px")) is not None:
+                        small_text.setdefault(_where(s.get("where")), float(s["px"]))
+                for s in [] if prod else (app.get("small_targets_where") or [])[:4]:
+                    if isinstance(s, dict) and _int(s.get("w")) is not None and _int(s.get("h")) is not None:
+                        small_targets.setdefault(_where(s.get("where")), (s["w"], s["h"]))
+                if (_int(app.get("frames")) or 0) > 0:
+                    frames.append(label)
+                if (_int(words.get("junk")) or 0) > 0:
+                    junk.append(label)
+                if j != 0:
+                    continue  # the words are read once per theme and state (at 360 px)
+                n = {k: _int(words.get(k)) or 0 for k in ("updated", "ago", "nothing", "not_connected", "cant_tell", "connect")}
+                shown = {k: v is True for k, v in app["sentinels"].items()}
+                problems = state_problems.setdefault(("production " if prod else "") + state, [])
+                if state == "fresh":
+                    for name in sources:
+                        if not shown.get(name):
+                            missing_data.setdefault(name, []).append(("production " if prod else "") + theme)
+                    if not n["ago"]:
+                        problems.append('no "updated N min ago"')
+                elif state == "empty":
+                    if any(shown.values()):
+                        problems.append("still shows sample data")
+                    if n["cant_tell"] or n["not_connected"]:
+                        problems.append('says "Can\'t tell" or "Not connected"')
+                    if not n["nothing"] and not prod:
+                        own_empty_words.append(theme)
+                elif state == "not_connected":
+                    if not n["not_connected"]:
+                        problems.append('no "Not connected"')
+                    if not n["connect"]:
+                        problems.append("no Connect button")
+                    if n["nothing"]:
+                        problems.append('says "Nothing today"')
+                    if any(shown.values()):
+                        problems.append("shows sample data")
+                elif state == "failed":
+                    if not n["cant_tell"]:
+                        problems.append('no "Can\'t tell"')
+                    if words.get("reason") is not True:
+                        problems.append("the failure reason is not shown")
+                    if n["nothing"]:
+                        problems.append('says "Nothing today"')
+                    if any(shown.values()):
+                        problems.append("shows sample data")
 
     def add(full: str, short: str | None = None) -> None:
         failures.append(full)
@@ -422,19 +432,12 @@ def parse(raw: str | None, *, exit_code: int | None, mode: str = "enforce", seco
         knock_on(f'the page shows "undefined", "NaN", "Invalid Date" or "[object Object]" ({_join(junk[:4])})')
     for name, themes in missing_data.items():
         knock_on(f"the fresh state shows none of the sample data of source {name} ({_join(themes)})", "a tile shows none of its data in the fresh state")
-    for state in STATES:
-        for problem in dict.fromkeys(state_problems.get(state) or []):
-            knock_on(f"{state.replace('_', ' ')} state: {problem}")
-    for prod in (data.get("prod") or [])[: len(THEMES)]:
-        if not isinstance(prod, dict) or prod.get("theme") not in THEMES:
-            continue
-        theme = prod["theme"]
-        if prod.get("loaded") is not True:
-            knock_on(f"the production build (the one registered) did not load in {theme} ({layout_mod.LOAD_ERRORS.get(prod.get('load_error'), 'no reason given')})")
-        elif (_int(prod.get("errors")) or 0) or not prod.get("rendered"):
-            knock_on(f"the production build (the one registered) {'threw on load' if prod.get('errors') else 'rendered nothing'} in {theme}: {_text(prod.get('first_error'), 120) or 'no error text'}")
-        elif sources and not all((prod.get("sentinels") or {}).get(n) is True for n in sources):
-            knock_on(f"the production build (the one registered) shows no sample data for some sources in {theme}")
+    for key in [*STATES, *(f"production {st}" for st in STATES)]:
+        for problem in dict.fromkeys(state_problems.get(key) or []):
+            knock_on(f"{key.replace('_', ' ')} state: {problem}")
+    if len(prod_runs) < len(expected) or any(not isinstance(r, dict) for r in prod_runs):
+        # Fail closed: the registered bytes were not checked everywhere.
+        add("the production build (the one registered) was not checked in every theme and state")
     if follows:
         line = f"…and {len(follows)} finding{'s' if len(follows) != 1 else ''} that follow from it (" + "; ".join(follows[:3]) + ("; …" if len(follows) > 3 else "") + ")"
         failures.insert(after_root, line)

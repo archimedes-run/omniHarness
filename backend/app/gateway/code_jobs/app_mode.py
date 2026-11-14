@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import logging
+import secrets
 import shlex
 import time
 import uuid
@@ -114,7 +115,7 @@ def with_app_defaults(brief):
     import dataclasses
 
     verify = (brief.verify_command or "").strip() or "npm run build"
-    if RENDER_CHECK not in verify:
+    if RENDER_CHECK not in [part.strip() for part in verify.split("&&")]:
         verify = f"{verify} && {RENDER_CHECK}"
     return dataclasses.replace(brief, verify_command=verify, expect_files=brief.expect_files or ["dist/index.html"], publish_dir=brief.publish_dir or "dist")
 
@@ -312,7 +313,15 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
     data = app_kit.fixtures(manifest)
     mock_html, mock_hashes = await asyncio.to_thread(lambda: bundle_mod.inline({bundle_mod.ENTRY: html}, platform_shim=app_kit.mock_script(data)))
     mock_text = mock_html.decode("utf-8")
-    directory = f"/tmp/omni-app-{uuid.uuid4().hex[:12]}"
+    # Every step that runs the worker's code (the build, the render check, the
+    # development build) runs BEFORE the probe's folder exists, and whatever it
+    # left running is killed. Only then is a fresh, unguessable folder made,
+    # into which the gateway copies plain files; nothing of the worker's runs
+    # after that but the page itself, in the probe's browser.
+    dev = await build_dev(manager, running, project)
+    await asyncio.to_thread(manager._cleanup, running)
+    nonce = secrets.token_hex(16)
+    directory = f"/tmp/omni-app-{secrets.token_hex(16)}"
     www = f"{directory}/www"
     site, prod = f"{www}/site", f"{www}/prod"
     code: int | None = None
@@ -326,14 +335,15 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
             await asyncio.to_thread(ops.write, f"{directory}/layout_probe.py", layout_mod.SCRIPT)
             await asyncio.to_thread(ops.write, f"{prod}/index.html", mock_text)
             prod_csp = app_checks.probe_csp(mock_hashes)
-            site_csp, dev = await dev_build(manager, running, project, site, data)
+            site_csp = await install_dev(ops, project, site, data) if dev else None
+            dev = site_csp is not None
             if not dev:
                 await asyncio.to_thread(ops.sh, f"{B}/mkdir -p -m 755 {_q(site)}", timeout=15)
                 await asyncio.to_thread(ops.write, f"{site}/index.html", mock_text)
                 site_csp = prod_csp
-            check = {"csp": prod_csp, "csp_site": site_csp, "dev_build": dev, "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}
+            check = {"csp": prod_csp, "csp_site": site_csp, "dev_build": dev, "nonce": nonce, "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}
             await asyncio.to_thread(ops.write, f"{directory}/check.json", json.dumps(check))
-            cmd = app_checks.probe_command(directory, www, job_id)
+            cmd = app_checks.probe_command(directory, www, job_id, nonce)
             code, _ = await beat(job_id, lambda: ops.sh(cmd, timeout=app_checks.TIMEOUT_SECONDS + 20))
             _, size = await asyncio.to_thread(ops.sh, f"{B}/stat -c %s {_q(directory + '/result.json')} 2>/dev/null || echo none", timeout=15)
             size = size.strip().splitlines()[-1] if size.strip() else ""
@@ -341,7 +351,14 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
                 raw = await asyncio.to_thread(ops.read_text, f"{directory}/result.json")
             elif size.isdigit():
                 raw = ""
-        result = app_checks.parse(raw, exit_code=code, seconds=time.monotonic() - t0, data_sources=list(manifest["sources"]))
+        result = app_checks.parse(
+            raw,
+            exit_code=code,
+            seconds=time.monotonic() - t0,
+            data_sources=list(manifest["sources"]),
+            nonce=nonce,
+            prod_sha256=hashlib.sha256(mock_text.encode("utf-8")).hexdigest(),
+        )
     except Exception:  # noqa: BLE001 - the sandbox API failed: the checks could not run (blocks: fail closed)
         logger.exception("code job %s: app checks failed to run", job_id)
         result = app_checks.parse(None, exit_code=None)
@@ -378,31 +395,54 @@ DEV_BUILD = "NODE_ENV=development ./node_modules/.bin/vite build --mode developm
 DEV_BUILD_SECONDS = 300
 
 
-async def dev_build(manager, running, project: str, site: str, data: dict) -> tuple[str | None, bool]:
-    """(its CSP, True) when a development build was made into `site` with the
-    mock shim first; (None, False) otherwise (the checks then load the
-    production build). Only ever loaded inside the sandbox, never registered."""
+DEV_DIR = ".omni-check/dev"
+DEV_MAX_FILES = 500
+DEV_MAX_BYTES = 24 * 1024 * 1024
+
+
+async def build_dev(manager, running, project: str) -> bool:
+    """The development build into the project's own .omni-check/dev (the
+    worker's code: it runs before the probe's folder exists)."""
     from .runner import JOBS_DIR
 
     ops, job_id = running.ops, running.job_id
     _, has = await asyncio.to_thread(ops.sh, f"test -x {_q(project + '/node_modules/.bin/vite')} && echo __vite__ || echo __none__", timeout=15)
     if "__vite__" not in has:
-        return None, False
-    built = await manager._verify(ops, job_id, f"{JOBS_DIR}/{job_id}", project, DEV_BUILD + _q(site), DEV_BUILD_SECONDS)
-    await asyncio.to_thread(manager._cleanup, running)
-    index = await asyncio.to_thread(ops.read_text, f"{site}/index.html") if built.get("exit_code") == 0 else None
+        return False
+    built = await manager._verify(ops, job_id, f"{JOBS_DIR}/{job_id}", project, DEV_BUILD + DEV_DIR, DEV_BUILD_SECONDS)
+    return built.get("exit_code") == 0
+
+
+async def install_dev(ops, project: str, site: str, data: dict) -> str | None:
+    """Copy the development build's plain files (no links, no special files,
+    capped) into the fresh `site` folder and put the mock shim first in its
+    page. Returns the CSP to serve it with, or None (then the production build
+    is loaded instead)."""
+    src = f"{project}/{DEV_DIR}"
+    q = _q
+    _, out = await asyncio.to_thread(
+        ops.sh,
+        f'cd {q(src)} 2>/dev/null && [ -z "$({B}/find . ! -type f ! -type d -print -quit)" ] '
+        f'&& [ "$({B}/find . -type f | {B}/wc -l)" -le {DEV_MAX_FILES} ] && [ "$({B}/du -sb . | {B}/cut -f1)" -le {DEV_MAX_BYTES} ] '
+        f"&& {B}/mkdir -p -m 755 {q(site)} && {B}/cp -R --no-dereference --no-preserve=mode,ownership,timestamps . {q(site)}/ "
+        f'&& [ -z "$({B}/find {q(site)} ! -type f ! -type d -print -quit)" ] && echo __copied__',
+        timeout=60,
+    )
+    if "__copied__" not in out:
+        return None
+    index = await asyncio.to_thread(_read_small, ops, f"{site}/index.html", app_checks.DIST_MAX_BYTES)
     if not index:
-        return None, False
+        return None
     script = app_kit.mock_script(data)
     await asyncio.to_thread(ops.write, f"{site}/index.html", bundle_mod.inject_first(index, script))
     digest = base64.b64encode(hashlib.sha256(script.replace("</script", "<\\/script").encode()).digest()).decode()
     # The app CSP, with the build's own files allowed ('self') and no sandbox:
     # the development build is not inlined. The production build is checked
-    # under the exact app CSP.
+    # under the exact app CSP, in every theme and state.
     policy = app_checks.probe_csp([digest]).replace("sandbox allow-scripts; ", "")
     for directive in ("script-src ", "style-src ", "img-src ", "font-src "):
         policy = policy.replace(directive, directive + "'self' ", 1)
-    return policy, True
+    return policy
 
 
 def publish_preview(ops, brief, mock_html: str, directory: str, shots: list[dict]) -> dict | None:

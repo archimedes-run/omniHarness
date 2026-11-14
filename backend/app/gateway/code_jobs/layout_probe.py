@@ -48,7 +48,7 @@ MAX_MESSAGE = 4 << 20
 MAX_RESULT = 16384
 APP_THEMES = ("light", "dark")
 APP_STATES = ("fresh", "empty", "not_connected", "failed")
-APP_OVERALL_S = 100.0
+APP_OVERALL_S = 150.0
 APP_MAX_RESULT = 98304
 RESIZE_S = 0.35
 SHOT_MAX_BYTES = 1_500_000
@@ -63,8 +63,10 @@ _B64 = {c: i for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
 
 
 def _vlq(segment):
-    """One source-map segment's numbers (base64 VLQ)."""
+    """One source-map segment's numbers (base64 VLQ), bounded."""
     out, value, shift = [], 0, 0
+    if len(segment) > 64:
+        return out
     for ch in segment:
         digit = _B64.get(ch)
         if digit is None:
@@ -72,6 +74,8 @@ def _vlq(segment):
         value += (digit & 31) << shift
         if digit & 32:
             shift += 5
+            if shift > 60:
+                return []
             continue
         out.append(-(value >> 1) if value & 1 else value >> 1)
         value, shift = 0, 0
@@ -675,6 +679,8 @@ class Check:
         self.app = app
         self.config = {}
         self.reports = []
+        self.tampered = False
+        self.nonce = ""
         self.errors = {}
         self.console = []
         if app:
@@ -696,12 +702,13 @@ class Check:
         text = json.dumps(self.result)
         if len(text) > (APP_MAX_RESULT if self.app else MAX_RESULT):
             text = json.dumps({"v": 1, "setup_error": "too_large"})
+        failed = False
         try:
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(text)
         except OSError:
-            pass  # the gateway reads "no result"
+            failed = True  # never silent: exit 98, the gateway counts it
         if self.pid:
             try:
                 os.killpg(self.pid, signal.SIGKILL)
@@ -725,7 +732,7 @@ class Check:
                 os.rmdir(self.profile)
             except OSError:
                 pass
-        os._exit(0)
+        os._exit(98 if failed or self.tampered else 0)
 
     def why_not_started(self, exc):
         """Its exit status and the last line it logged (it has loaded no page yet)."""
@@ -869,12 +876,18 @@ class Check:
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
         except OSError:
+            # Something else made this file: the check's folder is not its own.
+            self.tampered = True
             return {**entry, "skipped": "failed"}
         return {**entry, "file": name, "bytes": len(data), "height": height}
 
-    def check_app_run(self, theme, state):
-        """One theme and state of the mock build, measured at every width."""
-        run = {"theme": theme, "state": state, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False, "label": f"{theme}/{state}"}
+    def check_app_run(self, theme, state, site="site"):
+        """One theme and state of the mock build. `site`: the development
+        build ("site", every width, screenshots) or the production build
+        ("prod", the registered bytes under the exact app CSP, one width)."""
+        prod = site == "prod"
+        widths = (WIDTHS[-1],) if prod else WIDTHS
+        run = {"theme": theme, "state": state, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False, "label": f"{'production/' if prod else ''}{theme}/{state}"}
         cdp = self.cdp
         target = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
         session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
@@ -887,8 +900,8 @@ class Check:
             cdp.call("Page.enable", None, session)
             cdp.call("Runtime.enable", None, session)
             cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": APP_WATCH, "worldName": WORLD}, session)
-            cdp.call("Emulation.setDeviceMetricsOverride", {"width": WIDTHS[0], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
-            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/site/?state={state}&theme={theme}"}, session)
+            cdp.call("Emulation.setDeviceMetricsOverride", {"width": widths[0], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
+            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/{site}/?state={state}&theme={theme}"}, session)
             if nav.get("errorText"):
                 run["load_error"] = "nav"
                 return run
@@ -906,7 +919,7 @@ class Check:
                 run["watched"] = True
             else:
                 world = cdp.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": WORLD + "-late"}, session)["executionContextId"]
-            for i, width in enumerate(WIDTHS):
+            for i, width in enumerate(widths):
                 if i:
                     cdp.call("Emulation.setDeviceMetricsOverride", {"width": width, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
                     time.sleep(RESIZE_S)
@@ -916,7 +929,7 @@ class Check:
                     return run
                 value["width"] = width
                 run["pages"].append(value)
-                if state == "fresh":
+                if state == "fresh" and not prod:
                     self.result["shots"].append(self._shot(session, theme, width, value["app"].get("doc_height")))
             if run["watched"]:
                 found = self._evaluate("(window.__omniViolations || []).slice(0, 20)", world, session)
@@ -935,51 +948,13 @@ class Check:
             except CdpError:
                 pass
 
-    def check_prod(self, theme):
-        """The production build, fresh state, one theme: it loads, renders,
-        throws nothing and shows the sample data."""
-        run = {"theme": theme, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "label": f"production/{theme}"}
-        cdp = self.cdp
-        target = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
-        session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
-        run["_loaded"] = threading.Event()
-        self.pages[session] = run
-        cfg = json.dumps({"theme": theme, "sentinels": self.config.get("sentinels") or {}, "reason": ""})
-        expression = "(function () { const base = " + MEASURE.strip() + "; base.app = " + APP_MEASURE.strip() + "(" + cfg + "); return base; })()"
-        try:
-            cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, session)
-            cdp.call("Page.enable", None, session)
-            cdp.call("Runtime.enable", None, session)
-            cdp.call("Emulation.setDeviceMetricsOverride", {"width": WIDTHS[-1], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
-            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/prod/?state=fresh&theme={theme}"}, session)
-            if nav.get("errorText") or not run["_loaded"].wait(LOAD_S) or run["crashed"]:
-                run["load_error"] = "crashed" if run["crashed"] else "slow"
-                return run
-            time.sleep(SETTLE_S)
-            frame = cdp.call("Page.getFrameTree", None, session)["frameTree"]["frame"]["id"]
-            world = cdp.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": WORLD + "-prod"}, session)["executionContextId"]
-            value = self._evaluate(expression, world, session)
-            if not isinstance(value, dict) or not isinstance(value.get("app"), dict):
-                run["load_error"] = "unmeasurable"
-                return run
-            run["rendered"] = bool(value.get("rendered"))
-            run["sentinels"] = value["app"].get("sentinels") or {}
-            run["loaded"] = True
-            return run
-        except (CdpError, KeyError, TypeError):
-            run["load_error"] = "crashed" if run["crashed"] else "no_response"
-            return run
-        finally:
-            self.pages.pop(session, None)
-            run.pop("_loaded", None)
-            run.pop("label", None)
-            try:
-                cdp.call("Target.closeTarget", {"targetId": target}, timeout=3)
-            except CdpError:
-                pass
-
     def run(self):
         if self.app:
+            here = os.path.dirname(os.path.abspath(self.out))
+            if os.path.lexists(self.out) or any(n.startswith("shot-") for n in os.listdir(here)):
+                # Its folder is fresh and its own: anything already there
+                # was put there by something else.
+                os._exit(98)
             try:
                 with open(os.path.join(os.path.dirname(os.path.abspath(self.out)), "check.json"), encoding="utf-8") as f:
                     raw = json.load(f)
@@ -1061,21 +1036,25 @@ class Check:
                         return self.finish(browser_exit=True)
             # The production build (the one registered) must render too: the
             # runs above load the development build when there is one.
+            # Every theme and state again on the production build: the bytes
+            # that are registered, under the exact app CSP.
             self.result["prod"] = []
             for theme in APP_THEMES:
-                if self.cdp.dead:
-                    return self.finish(browser_exit=True)
-                try:
-                    self.result["prod"].append(self.check_prod(theme))
-                except CdpError:
-                    return self.finish(browser_exit=True)
+                for state in APP_STATES:
+                    if self.cdp.dead:
+                        return self.finish(browser_exit=True)
+                    try:
+                        self.result["prod"].append(self.check_app_run(theme, state, "prod"))
+                    except CdpError:
+                        return self.finish(browser_exit=True)
             time.sleep(1.0)  # reports are sent after the fact
-            for run in self.result["runs"]:
-                run.pop("label", None)
-                key = f"/site/?state={run['state']}&theme={run['theme']}"
-                for uri, directive in list(self.reports):
-                    if key in uri and directive and directive not in run["violations"] and len(run["violations"]) < 20:
-                        run["violations"].append(directive)
+            for site, runs in (("site", self.result["runs"]), ("prod", self.result["prod"])):
+                for run in runs:
+                    run.pop("label", None)
+                    key = f"/{site}/?state={run['state']}&theme={run['theme']}"
+                    for uri, directive in list(self.reports):
+                        if key in uri and directive and directive not in run["violations"] and len(run["violations"]) < 20:
+                            run["violations"].append(directive)
             wanted = {}
             for entry in self.errors.values():
                 for fr in entry["frames"]:
@@ -1085,6 +1064,14 @@ class Check:
             for entry in self.errors.values():
                 for fr in entry["frames"]:
                     fr["source"] = mapped.get((fr["path"], fr["line"], fr["col"]), "")
+            self.result["nonce"] = self.nonce
+            try:
+                import hashlib
+
+                with open(os.path.join(os.path.realpath(self.root), "prod", "index.html"), "rb") as f:
+                    self.result["prod_sha256"] = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                self.result["prod_sha256"] = ""
             self.result["errors_detail"] = list(self.errors.values())
             self.result["console"] = self.console
             return self.finish()
@@ -1101,6 +1088,8 @@ class Check:
 
 if __name__ == "__main__":
     try:
-        Check(sys.argv[1], sys.argv[2], app=len(sys.argv) > 3 and sys.argv[3] == "app").run()
+        check = Check(sys.argv[1], sys.argv[2], app=len(sys.argv) > 3 and sys.argv[3] == "app")
+        check.nonce = sys.argv[4] if len(sys.argv) > 4 else ""
+        check.run()
     except Exception:  # noqa: BLE001 - the gateway reads "no result"
         os._exit(0)

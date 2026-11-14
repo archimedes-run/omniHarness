@@ -11,7 +11,9 @@ import pytest
 
 from app.gateway.apps import bundle
 
-BUDGET_S = 3.0
+#: Linear: x4 input is about x4 time; quadratic would be about x16.
+RATIO = 8.0
+ABSOLUTE_S = 20.0
 N = bundle.BUNDLE_MAX_BYTES - 64
 
 ADVERSARIAL = {
@@ -29,17 +31,32 @@ ADVERSARIAL = {
 }
 
 
-@pytest.mark.parametrize("name", list(ADVERSARIAL))
-def test_adversarial_markup_finishes_within_the_budget(name):
-    unit = ADVERSARIAL[name]
-    doc = ("<html><head></head><body>" + unit * (N // len(unit)))[:N].encode()
+def _cpu_seconds(unit: str, size: int) -> float:
+    """Best of three, in process CPU time (a loaded runner's wall clock
+    is not the code's speed)."""
+    doc = ("<html><head></head><body>" + unit * (size // len(unit)))[:size].encode()
     files = {"index.html": doc, "a.js": b"1", "s.css": b"p{}", "x": b"x"}
-    t0 = time.monotonic()
-    try:
-        bundle.inline(files)
-    except bundle.BundleError:
-        pass
-    assert time.monotonic() - t0 < BUDGET_S, name
+    best = float("inf")
+    for _ in range(3):
+        t0 = time.process_time()
+        try:
+            bundle.inline(files)
+        except bundle.BundleError:
+            pass
+        best = min(best, time.process_time() - t0)
+    return best
+
+
+@pytest.mark.parametrize("name", list(ADVERSARIAL))
+def test_adversarial_markup_takes_linear_time(name):
+    """Four times the input takes about four times as long (a quadratic
+    reading takes sixteen), and the full size stays far under the minutes a
+    backtracking reading needs."""
+    unit = ADVERSARIAL[name]
+    small = _cpu_seconds(unit, N // 4)
+    large = _cpu_seconds(unit, N)
+    assert large < ABSOLUTE_S, (name, large)
+    assert large / max(small, 0.02) < RATIO, (name, small, large)
 
 
 def test_the_input_is_capped_before_parsing():
