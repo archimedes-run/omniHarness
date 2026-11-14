@@ -21,6 +21,9 @@ measure and refuses to register an app that breaks them.
 | `check-render.mjs` | The render check: `node omni-kit/check-render.mjs` renders `src/App.tsx` in every mock state WITHOUT a browser and prints React's own error and the component that threw. |
 | `omni-mock.js` | The MOCK shim with the sample data, for trying the page by hand. Never reference it from `index.html`: the system adds it to its own mock build, and registration adds the real platform shim as the first script (you never get, copy or write the real one). |
 
+An update of an existing app keeps its sources exactly and is offered to the
+person as a new version, which they switch to with one click.
+
 `omni-app.json` (in the project folder) is the app's manifest: its name and
 the data sources it reads. The system wrote a starter. You may change `name`
 and `description`; change `sources` only if the job asks for it, and only to

@@ -238,6 +238,26 @@ async def approve(app_id: str, body: ApproveIn, request: Request) -> dict:
     return {"status": "approved", "manifest_hash": app.manifest_hash, "approved_at": service.iso(grant["approved_at"])}
 
 
+class KeepIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    card_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+@router.post("/{app_id}/keep")
+@require_permission("threads", "write")
+async def keep(app_id: str, body: KeepIn, request: Request) -> dict:
+    """A version card's "Keep version M" button: the offered version is not
+    served; the served one keeps running. Owner's button only, like approve."""
+    owner = owner_of(request)
+    repo = repo_of(request)
+    await _load_or_404(repo, owner, app_id)
+    card = await repo.pending_card(owner_id=owner, app_id=app_id)
+    if card is None or card["id"] != body.card_id or not await repo.resolve_card(card_id=card["id"], owner_id=owner, status="kept"):
+        raise _error(404, "no_pending_approval", "This card is no longer waiting; reload it.")
+    await repo.audit(owner_id=owner, app_id=app_id, event="app_version_kept", detail={"version": card["version"], "card": card["id"], "via": "button"})
+    return {"status": "kept", "version": card["version"]}
+
+
 # -- bridge -----------------------------------------------------------------------------
 
 

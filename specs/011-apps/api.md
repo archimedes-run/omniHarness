@@ -542,3 +542,33 @@ Job steps added: `app_checks` (`outcome`, `summary`, `design_count`, `error`,
 - `code_jobs.app_budget_usd` (default 2.00) is the budget of an app-mode job
   or design pass, still under the monthly cap. It applies when set, or when
   `budget_usd` is at its default; an owner who lowered `budget_usd` keeps it.
+
+### Updating an existing app
+
+`code_job` takes `app: {"update": "<app id>"}` (alone) to change one of the
+owner's apps. The gateway works on the project that built the app, in the chat
+that created it (anywhere else it refuses and says so), keeps the stored app's
+sources exactly (a change of sources is refused with `sources_changed`: that
+needs a new app and its own approval), gives the request a fresh budget of 3
+design passes, and registers the next version of the same app id.
+
+An update is offered as a new version; the owner switches to it with one
+click. Every version registered by an update, or by a design pass on an app
+that is already registered, is HELD whatever led to it: the served version
+keeps running, and a version card ("Today: use version N?") shows the
+system's check result, the assistant's description of the change (quoted and
+labelled as such, at most 300 characters) and the buttons "Use version N"
+(`POST /api/apps/{id}/approve`) and "Keep version M"
+(`POST /api/apps/{id}/keep {"card_id"}`). Both are button only (owner
+session, CSRF) and bound to the card's app, version and manifest hash. Only
+the newest offered version has an open card: a newer registration supersedes
+the older card, and pressing a card that is no longer pending answers
+`404 no_pending_approval` and changes nothing (no roll forward or back).
+Content-led versions keep the Suggestion label. The automatic fix passes
+before an app's first registration are unchanged (that first version has its
+own App access card). An unknown id is refused with the owner's apps listed
+by id, name and source names, fenced as data (never their data). Every
+version stays in History and can be restored from the Apps page.
+
+`ApprovalCard` gains `kind` (`access` | `version`), and for version cards
+`keeps_version`, `description` and `checks_passed`; `status` may be `kept`.

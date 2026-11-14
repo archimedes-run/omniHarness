@@ -615,6 +615,51 @@ for (const scheme of ["light", "dark"] as const) {
         await card.screenshot({ path: `${SHOTS}/code-job-app-${scheme}.png` });
     });
 
+    test("a job whose runner stopped turns from Running to its final state without a reload", async ({
+      page,
+    }) => {
+      await open(
+        page,
+        scheme,
+        {
+          job: job("running"),
+          steps: [],
+          month: { spent_usd: 0, cap_usd: 20 },
+        },
+        true,
+      );
+      let calls = 0;
+      await page.route("**/api/threads/*/code-jobs/by-call/cj1**", (route) => {
+        calls += 1;
+        const body =
+          calls === 0
+            ? {
+                job: job("running"),
+                steps: [],
+                month: { spent_usd: 0, cap_usd: 20 },
+              }
+            : {
+                job: job("blocked", {
+                  reason:
+                    "the job's runner stopped (the gateway restarted or the run ended) before it finished",
+                }),
+                steps: [],
+                month: { spent_usd: 0, cap_usd: 20 },
+              };
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(body),
+        });
+      });
+      await expect(page.getByTestId("code-job-status")).toHaveText("Blocked", {
+        timeout: 10_000,
+      });
+      await expect(page.getByTestId("code-job-card")).toContainText(
+        "runner stopped",
+      );
+    });
+
     test("a layout check whose result could not be read is counted and says so", async ({
       page,
     }) => {

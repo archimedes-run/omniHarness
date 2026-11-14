@@ -2,13 +2,15 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckIcon, LayoutGridIcon, Loader2Icon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { AppsApiError, type ApprovalCard } from "@/core/apps/api";
-import { useApproveApp } from "@/core/apps/hooks";
+import { useApproveApp, useKeepAppVersion } from "@/core/apps/hooks";
 import { hashGroups, writeError } from "@/core/apps/wording";
 import { cn } from "@/lib/utils";
+
+import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 
 /**
  * Spec 011 FR-006, FR-007: the App access card. Each source in the gateway's
@@ -26,15 +28,27 @@ export function AppApprovalCard({
   card,
   heading = "App access",
   className,
+  reveal = false,
 }: {
   card: ApprovalCard;
   heading?: string;
   className?: string;
+  /** In a chat: scroll a pending card fully into view, above the composer. */
+  reveal?: boolean;
 }) {
+  const ref = useRef<HTMLElement>(null);
   const approve = useApproveApp();
+  const keep = useKeepAppVersion();
   const client = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const resolved = card.status !== "pending";
+  useEffect(() => {
+    if (reveal && !resolved) {
+      ref.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
+    // Once per card, when it is raised.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.id, reveal]);
 
   const onAllow = () => {
     setError(null);
@@ -54,9 +68,144 @@ export function AppApprovalCard({
   };
 
   const titleId = `app-card-${card.id}`;
+  if (card.kind === "version") {
+    const keeps = card.keeps_version ?? card.version - 1;
+    const onKeep = () => {
+      setError(null);
+      keep.mutate(
+        { id: card.app_id, cardId: card.id },
+        { onError: (err) => setError(writeError("error", err.message)) },
+      );
+    };
+    return (
+      <section
+        ref={ref}
+        aria-labelledby={titleId}
+        style={{
+          scrollMarginBottom: `calc(var(${COMPOSER_INSET_VAR}, 200px) + 24px)`,
+        }}
+        data-testid="app-approval-card"
+        data-kind="version"
+        data-card-id={card.id}
+        data-status={card.status}
+        className={cn(
+          "bg-card border-border w-full max-w-[640px] rounded-xl border px-[18px] py-4 text-sm",
+          className,
+        )}
+      >
+        <div className="flex items-start gap-3">
+          <span
+            aria-hidden
+            className="bg-primary-subtle text-primary flex size-8 shrink-0 items-center justify-center rounded-lg"
+          >
+            <LayoutGridIcon className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+              New version
+            </p>
+            <h3 id={titleId} className="text-[15px] font-semibold break-words">
+              {`${card.app_name}: use version ${card.version}?`}
+            </h3>
+          </div>
+        </div>
+        {card.suggestion && (
+          <p
+            className="border-warning/40 bg-warning/10 text-foreground mt-3 rounded-md border px-3 py-2 text-xs"
+            data-testid="app-card-suggestion"
+          >
+            <strong className="font-semibold">Suggestion.</strong>{" "}
+            {card.suggestion_words ? `${card.suggestion_words} ` : ""}
+            It was not your own request.
+          </p>
+        )}
+        {card.description ? (
+          <div className="mt-3" data-testid="app-card-description">
+            <p className="text-muted-foreground text-xs">
+              The assistant&apos;s description of the change:
+            </p>
+            <blockquote className="border-border mt-1 border-l-2 pl-3 break-words">
+              {card.description}
+            </blockquote>
+          </div>
+        ) : null}
+        <p className="mt-3" data-testid="app-card-checks">
+          {card.checks_passed
+            ? "It passed the system's checks. It reads the same data as the version you use now."
+            : "It reads the same data as the version you use now."}
+        </p>
+        <p className="text-muted-foreground mt-1 text-xs">
+          {`Version ${keeps} keeps running until you choose.`}
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          {card.status === "pending" ? (
+            <>
+              <Button
+                type="button"
+                onClick={onAllow}
+                disabled={
+                  approve.isPending || approve.isSuccess || keep.isPending
+                }
+                data-testid="app-card-use-version"
+                className="max-md:min-h-11"
+              >
+                {approve.isPending && <Loader2Icon className="animate-spin" />}
+                {approve.isSuccess
+                  ? `Using version ${card.version}`
+                  : `Use version ${card.version}`}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onKeep}
+                disabled={approve.isPending || keep.isPending || keep.isSuccess}
+                data-testid="app-card-keep-version"
+                className="max-md:min-h-11"
+              >
+                {keep.isSuccess
+                  ? `Kept version ${keeps}`
+                  : `Keep version ${keeps}`}
+              </Button>
+            </>
+          ) : (
+            <p
+              className="text-muted-foreground inline-flex items-center gap-1.5"
+              data-testid="app-card-resolved"
+            >
+              {card.status === "approved" ? (
+                <>
+                  <CheckIcon className="text-success size-4" aria-hidden />
+                  {`Using version ${card.version}`}
+                </>
+              ) : card.status === "kept" ? (
+                `Kept version ${keeps}`
+              ) : (
+                "Replaced by a newer version of this app"
+              )}
+            </p>
+          )}
+          {!resolved && (
+            <p className="text-muted-foreground text-xs">
+              Only these buttons decide. Typing in chat does not.
+            </p>
+          )}
+        </div>
+        {error && (
+          <p className="text-destructive mt-2 text-xs" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+    );
+  }
   return (
     <section
+      ref={ref}
       aria-labelledby={titleId}
+      // The composer floats over the bottom of the thread: stop above it.
+      style={{
+        scrollMarginBottom: `calc(var(${COMPOSER_INSET_VAR}, 200px) + 24px)`,
+      }}
       data-testid="app-approval-card"
       data-card-id={card.id}
       data-status={card.status}

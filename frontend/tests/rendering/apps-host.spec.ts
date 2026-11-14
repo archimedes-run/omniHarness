@@ -436,6 +436,67 @@ test.describe("the library", () => {
       "CI board",
     );
   });
+
+  test("a card raised under a long thread is scrolled fully into view, above the composer, when it is raised", async ({
+    page,
+  }) => {
+    await installFakeBridge(page);
+    const json = (body: unknown) => ({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+    const messages = Array.from({ length: 24 }, (_, i) =>
+      i % 2
+        ? { type: "ai", id: `a${i}`, content: `Reply ${i}. `.repeat(30) }
+        : { type: "human", id: `h${i}`, content: `Question ${i}` },
+    );
+    const state = {
+      values: { title: "Long chat", messages },
+      next: [],
+      tasks: [],
+      metadata: {},
+      created_at: new Date().toISOString(),
+      checkpoint: { thread_id: "t1", checkpoint_id: "c1", checkpoint_ns: "" },
+      parent_checkpoint: null,
+    };
+    await page.route("**/api/langgraph/**", (route) => {
+      const url = route.request().url();
+      if (url.includes("/history")) return route.fulfill(json([state]));
+      if (url.includes("/runs") || url.includes("/search"))
+        return route.fulfill(json([]));
+      return route.fulfill(json(state));
+    });
+    await page.route("**/api/confirmations", (route) =>
+      route.fulfill(json({ actions: [], readable: true, error: "" })),
+    );
+    // The card is raised after the thread has loaded and scrolled.
+    await page.route("**/api/apps/approvals**", async (route) => {
+      await new Promise((r) => setTimeout(r, 2500));
+      await route.fallback();
+    });
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.goto("/workspace/chats/t1");
+    // The person is reading a little higher up when the card is raised.
+    await expect(page.getByText("Question 22")).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.mouse.move(640, 300);
+    await page.mouse.wheel(0, -500);
+    const card = page
+      .locator('[data-testid="app-approval-card"][data-status="pending"]')
+      .first();
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => {
+        const c = await card.boundingBox();
+        const composer = await page.getByTestId("composer").boundingBox();
+        return (
+          !!c && !!composer && c.y >= 0 && c.y + c.height <= composer.y + 1
+        );
+      })
+      .toBe(true);
+  });
 });
 
 for (const scheme of ["light", "dark"] as const) {
@@ -599,3 +660,98 @@ test.describe("matches the bridge (api.md)", () => {
     ).toBe(expected);
   });
 });
+
+for (const [scheme, width] of [
+  ["light", 1280],
+  ["dark", 1280],
+  ["light", 390],
+] as const) {
+  test(`a new version of an approved app is offered with one click (${scheme}, ${width} px)`, async ({
+    page,
+  }) => {
+    await setTheme(page, scheme);
+    await page.setViewportSize({ width, height: 800 });
+    await installFakeBridge(page);
+    const json = (body: unknown) => ({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+    const card = {
+      id: "c".repeat(32),
+      app_id: "today",
+      app_name: "Today",
+      version: 2,
+      manifest_hash: "a".repeat(64),
+      status: "pending",
+      sources: [],
+      sentence: "Data is shown in the app only; the assistant never sees it.",
+      suggestion: false,
+      suggestion_source: null,
+      suggestion_words: null,
+      thread_id: "t1",
+      created_at: new Date().toISOString(),
+      resolved_at: null,
+      kind: "version",
+      keeps_version: 1,
+      description: "Make the calendar tile span two columns",
+      checks_passed: true,
+    };
+    const presses: unknown[] = [];
+    await page.route("**/api/apps/approvals**", (route) =>
+      route.fulfill(json({ cards: [card] })),
+    );
+    await page.route("**/api/apps/today/approve", (route) => {
+      presses.push(route.request().postDataJSON());
+      return route.fulfill(
+        json({
+          status: "approved",
+          manifest_hash: card.manifest_hash,
+          approved_at: new Date().toISOString(),
+        }),
+      );
+    });
+    await page.route("**/api/langgraph/**", (route) => {
+      const url = route.request().url();
+      if (
+        url.includes("/history") ||
+        url.includes("/runs") ||
+        url.includes("/search")
+      )
+        return route.fulfill(json([]));
+      return route.fulfill(
+        json({ thread_id: "t1", values: { messages: [] }, metadata: {} }),
+      );
+    });
+    await page.route("**/api/confirmations", (route) =>
+      route.fulfill(json({ actions: [], readable: true, error: "" })),
+    );
+    await page.goto("/workspace/chats/t1");
+    const el = page.locator(
+      '[data-testid="app-approval-card"][data-kind="version"]',
+    );
+    await expect(el).toBeVisible({ timeout: 15_000 });
+    await expect(el).toContainText("Today: use version 2?");
+    await expect(el.getByTestId("app-card-description")).toContainText(
+      "The assistant's description of the change:",
+    );
+    await expect(el.getByTestId("app-card-checks")).toContainText(
+      "It passed the system's checks.",
+    );
+    await expect(el).toContainText("Version 1 keeps running until you choose.");
+    await expect(el.getByTestId("app-card-keep-version")).toHaveText(
+      "Keep version 1",
+    );
+    // Nothing overflows sideways at phone width.
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+      ),
+    ).toBe(true);
+    await contrast(page);
+    await el.getByTestId("app-card-use-version").click();
+    await expect
+      .poll(() => presses)
+      .toEqual([{ manifest_hash: card.manifest_hash, card_id: card.id }]);
+  });
+}

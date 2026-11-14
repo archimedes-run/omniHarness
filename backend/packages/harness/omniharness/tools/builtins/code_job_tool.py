@@ -45,6 +45,8 @@ Arguments:
   The system writes an app kit into project_dir (types, Graphite styles, sample data, rules), builds against sample data, checks every tile state
   in both themes at three widths, returns screenshots, and registers a passing app; the person approves its data access with a button.
   verify_command, expect_files and publish_dir default to the build plus the kit's render check, dist/index.html and dist: leave them empty.
+  To CHANGE an existing app, pass app: {"update": "<app id>"} instead (the id is in the result of the job that registered it), in the chat that built it:
+  the system works on the same project, keeps the app's sources, and offers the result as a new version: the person switches to it with one click.
 
 The person sees live progress and can stop the job. The result's STATUS is decided by the system from evidence:
 verified (the verify command exited 0 and every expected file exists), unverified (no evidence), failed (the check failed), stopped, or blocked (budget, network or time limit).
@@ -108,9 +110,15 @@ def normalize_app(value) -> dict | None:
         raise ValueError("app must be plain JSON") from None
     if len(text) > APP_MAX_CHARS:
         raise ValueError(f"app is larger than {APP_MAX_CHARS} characters")
-    unknown = sorted(set(value) - {"name", "description", "timezone", "sources"})
+    unknown = sorted(set(value) - {"name", "description", "timezone", "sources", "update"})
     if unknown:
-        raise ValueError(f"app has unknown key(s) {', '.join(unknown)}; use name, description, timezone and sources")
+        raise ValueError(f"app has unknown key(s) {', '.join(unknown)}; use name, description, timezone and sources, or update")
+    if "update" in value:
+        if set(value) != {"update"}:
+            raise ValueError("app.update stands alone: an update keeps the app's name and sources")
+        if not isinstance(value["update"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", value["update"]):
+            raise ValueError("app.update must be the id of one of the person's apps (from the result of the job that registered it)")
+        return {"update": value["update"]}
     if not isinstance(value.get("name"), str) or not value["name"].strip():
         raise ValueError("app.name is required")
     if not isinstance(value.get("sources"), (list, dict)) or not value["sources"]:
