@@ -108,6 +108,21 @@ def _restore_policy_builder():
 
 
 @pytest.fixture(autouse=True)
+def _restore_question_opener():
+    """The same leak as the policy builder's, for the question-card hook
+    (omniharness.agents.questions): create_app() registers it process-wide,
+    and a later harness test would get cards (and the card's option limits)
+    only because a gateway test ran first in the same worker. Each test
+    starts with none; a test whose gateway starts registers its own."""
+    from omniharness.agents import questions
+
+    saved = (questions._opener, questions._refusal, questions._applies)
+    questions._opener = questions._refusal = questions._applies = None
+    yield
+    questions._opener, questions._refusal, questions._applies = saved
+
+
+@pytest.fixture(autouse=True)
 def _restore_memory_config():
     """Keep the memory configuration from leaking between tests.
 

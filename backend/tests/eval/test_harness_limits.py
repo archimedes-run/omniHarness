@@ -52,13 +52,13 @@ def test_a_run_with_no_activity_is_stopped_as_stalled(monkeypatch) -> None:
 
 def test_a_question_to_the_person_stops_the_trial_with_that_reason() -> None:
     # Asked before any work: it goes to the person, and nobody will answer.
-    task = _task("H-ASK", [{"tool_calls": [{"name": "ask_clarification", "args": {"question": "Which city?", "clarification_type": "missing_info"}}]}])
+    task = _task("H-ASK", [{"tool_calls": [{"name": "ask_clarification", "args": {"question": "Which city?", "clarification_type": "missing_info", "options": ["Philadelphia", "New York"]}}]}])
     result = harness.run_trial(task, "mock")
     assert _reason(result) == "paused: waiting on clarification", result["checks"]
 
 
 def test_a_task_may_declare_that_it_ends_on_a_question() -> None:
-    task = {**_task("H-ASK-OK", [{"tool_calls": [{"name": "ask_clarification", "args": {"question": "Which city?", "clarification_type": "missing_info"}}]}]), "allow_pause": True}
+    task = {**_task("H-ASK-OK", [{"tool_calls": [{"name": "ask_clarification", "args": {"question": "Which city?", "clarification_type": "missing_info", "options": ["Philadelphia", "New York"]}}]}]), "allow_pause": True}
     result = harness.run_trial(task, "mock")
     assert not _reason(result), result["checks"]
 
