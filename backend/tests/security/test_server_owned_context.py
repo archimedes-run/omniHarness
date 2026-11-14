@@ -131,6 +131,10 @@ def _internal_client(sec, headers: dict):
     from fastapi.testclient import TestClient
 
     client = TestClient(sec.app)
+    # On the app's own event loop (issue #192): a client without a portal serves
+    # each request on a short-lived loop of its own, and a run it starts is left
+    # with that loop closed under it (a database connection's thread dies).
+    client.portal = sec.owner.portal
     client.cookies.set("csrf_token", "csrf-pair")
     client.headers.update({**headers, "X-CSRF-Token": "csrf-pair"})
     return client
@@ -156,6 +160,9 @@ def engine_http(sec, monkeypatch):
     class _InApp(TestClient):
         def __init__(self, *args, **kwargs):
             super().__init__(sec.app)
+            # The app's own loop, as the real engine's calls reach the one
+            # gateway loop (issue #192).
+            self.portal = sec.owner.portal
 
         def __enter__(self):
             return self

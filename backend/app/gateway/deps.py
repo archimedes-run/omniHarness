@@ -8,9 +8,11 @@ Initialization is handled directly in ``app.py`` via :class:`AsyncExitStack`.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from fastapi import FastAPI, HTTPException, Request
 from langgraph.types import Checkpointer
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+logger = logging.getLogger(__name__)
+
 
 def get_config(request: Request) -> AppConfig:
     """Return the app-scoped ``AppConfig`` stored on ``app.state``."""
@@ -36,6 +40,64 @@ def get_config(request: Request) -> AppConfig:
     if config is None:
         raise HTTPException(status_code=503, detail="Configuration not available")
     return config
+
+
+#: How long each runtime resource (the stream bridge, the checkpointer, the
+#: store, the database engine) gets to close at shutdown. A close can wait on
+#: something outside the gateway's control: a database connection whose
+#: worker thread has died never answers again (issue #192). Past the bound
+#: the close is logged and the shutdown carries on, so a worker's exit or a
+#: reload never hangs.
+RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+
+
+async def bounded_shutdown_step(step: Any, what: str, timeout: float) -> bool:
+    """Run one shutdown step for at most ``timeout`` seconds; True if it finished.
+
+    NOT asyncio.wait_for: that cancels a step past its bound and then waits
+    for the cancelled step to finish, and a step stuck on a dead connection
+    does not finish when cancelled either (aiosqlite's close awaits its stop
+    in a finally, on the same dead thread). Past the bound the step is
+    cancelled and left behind; the shutdown carries on.
+    """
+    task = asyncio.ensure_future(step)
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if not done:
+        task.cancel()
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        logger.warning("Shutdown: %s exceeded %.1fs; proceeding without it.", what, timeout)
+        return False
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("Shutdown: %s failed: %r", what, task.exception())
+    return True
+
+
+async def _bounded_close(close: Any, what: str) -> None:
+    """Await one runtime resource's close, within RUNTIME_SHUTDOWN_TIMEOUT_SECONDS."""
+    await bounded_shutdown_step(close, f"closing the {what}", RUNTIME_SHUTDOWN_TIMEOUT_SECONDS)
+
+
+@asynccontextmanager
+async def _bounded_context(cm: Any, what: str) -> AsyncGenerator[Any, None]:
+    """Enter ``cm`` as usual; its exit is bounded (_bounded_close)."""
+    value = await cm.__aenter__()
+    try:
+        yield value
+    except BaseException as exc:
+        await _bounded_close(cm.__aexit__(type(exc), exc, exc.__traceback__), what)
+        raise
+    else:
+        await _bounded_close(cm.__aexit__(None, None, None), what)
+
+
+async def _close_engine_bounded(close_engine: Any) -> None:
+    await _bounded_close(close_engine(), "database engine")
+    from omniharness.persistence import engine as engine_module
+
+    # A dispose cut off by the bound leaves the module pointing at an engine
+    # that is going away; the next startup initialises its own.
+    engine_module._engine = None
+    engine_module._session_factory = None
 
 
 @asynccontextmanager
@@ -57,14 +119,14 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         if config is None:
             raise RuntimeError("langgraph_runtime() requires app.state.config to be initialized")
 
-        app.state.stream_bridge = await stack.enter_async_context(make_stream_bridge(config))
+        app.state.stream_bridge = await stack.enter_async_context(_bounded_context(make_stream_bridge(config), "stream bridge"))
 
         # Initialize persistence engine BEFORE checkpointer so that
         # auto-create-database logic runs first (postgres backend).
         await init_engine_from_config(config.database)
 
-        app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
-        app.state.store = await stack.enter_async_context(make_store(config))
+        app.state.checkpointer = await stack.enter_async_context(_bounded_context(make_checkpointer(config), "checkpointer"))
+        app.state.store = await stack.enter_async_context(_bounded_context(make_store(config), "store"))
 
         # Initialize repositories — one get_session_factory() call for all.
         sf = get_session_factory()
@@ -231,7 +293,7 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             yield
         finally:
-            await close_engine()
+            await _close_engine_bounded(close_engine)
 
 
 # ---------------------------------------------------------------------------
