@@ -219,6 +219,15 @@ export interface Translations {
   // Chats
   chats: {
     searchChats: string;
+    archive: string;
+    unarchive: string;
+    moveToTests: string;
+    active: string;
+    archived: string;
+    allFolders: string;
+    noFolder: string;
+    archivedBanner: string;
+    noArchived: string;
   };
 
   // Page titles (document title)

@@ -11,6 +11,7 @@ import {
   useSpecificChatMode,
   useThreadChat,
 } from "@/components/workspace/chats";
+import { ArchivedBanner } from "@/components/workspace/chats/archived-banner";
 import { useThreadConfirmations } from "@/components/workspace/confirmations/thread-confirmations";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
@@ -196,6 +197,11 @@ export default function ChatPage() {
               <ArtifactTrigger />
             </div>
           </header>
+          {!isNewThread && (
+            <div className="absolute top-12 right-0 left-0 z-20">
+              <ArchivedBanner threadId={threadId} />
+            </div>
+          )}
           <main ref={mainRef} className="flex min-h-0 max-w-full grow flex-col">
             <div className="flex size-full justify-center">
               <MessageList

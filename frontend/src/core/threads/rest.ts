@@ -14,7 +14,13 @@ import { getLangGraphBaseURL } from "../config";
 
 import type { AgentThread, AgentThreadState } from "./types";
 
-type SearchParams = Parameters<ThreadsClient["search"]>[0];
+/** The SDK's search, plus the gateway's archive filters: `archived` false
+ * (the default: archived chats hidden), true (archived only) or "all", and
+ * `folder`. */
+export type SearchParams = Parameters<ThreadsClient["search"]>[0] & {
+  archived?: boolean | "all";
+  folder?: string;
+};
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getLangGraphBaseURL().replace(/\/+$/, "");
@@ -45,6 +51,8 @@ export function searchThreads(
       sort_order: query?.sortOrder,
       select: query?.select,
       values: query?.values,
+      archived: query?.archived,
+      folder: query?.folder,
     }),
   });
 }

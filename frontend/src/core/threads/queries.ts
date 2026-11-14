@@ -5,17 +5,22 @@
  * page, and importing these from ./hooks pulled `useStream` and with it
  * @langchain/core (~370 KB) into every page, chat or not.
  */
-import type { ThreadsClient } from "@langchain/langgraph-sdk/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetch } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
 
-import { deleteThread, searchThreads, updateThreadState } from "./rest";
+import type { OrganisePatch } from "./organise";
+import {
+  deleteThread,
+  searchThreads,
+  updateThreadState,
+  type SearchParams,
+} from "./rest";
 import type { AgentThread } from "./types";
 
 export function useThreads(
-  params: Parameters<ThreadsClient["search"]>[0] = {
+  params: SearchParams = {
     limit: 50,
     sortBy: "updated_at",
     sortOrder: "desc",
@@ -154,6 +159,54 @@ export function useRenameThread() {
           });
         },
       );
+    },
+  });
+}
+
+/** A chat's own record (its metadata: archived, folder), by id. */
+export function useThreadRecord(threadId: string | undefined) {
+  return useQuery<{ thread_id: string; metadata: Record<string, unknown> }>({
+    queryKey: ["threads", "record", threadId],
+    enabled: !!threadId && threadId !== "new",
+    retry: false,
+    queryFn: async () => {
+      const response = await fetch(
+        `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId!)}`,
+      );
+      if (!response.ok) throw new Error(`thread ${response.status}`);
+      return (await response.json()) as {
+        thread_id: string;
+        metadata: Record<string, unknown>;
+      };
+    },
+  });
+}
+
+/** Archive, unarchive or file a chat (PATCH /api/threads/{id}: metadata). */
+export function useOrganiseThread() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      threadId,
+      patch,
+    }: {
+      threadId: string;
+      patch: OrganisePatch;
+    }) => {
+      const response = await fetch(
+        `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ metadata: patch }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`Could not update the chat (${response.status}).`);
+      }
+    },
+    onSettled() {
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
 }
