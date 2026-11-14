@@ -20,6 +20,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   type CodeJob,
+  type CodeJobLayout,
   CodeJobNotFound,
   type CodeJobStatus,
   type CodeJobStep,
@@ -29,6 +30,7 @@ import { safeField, safeLines } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../artifacts";
+import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 import { useNow } from "../home/use-now";
 
 /**
@@ -59,7 +61,7 @@ const STATUS: Record<
     label: "Unverified",
     className: "bg-warning text-warning-foreground",
     describe:
-      "Nothing was built or tested by the system, so the result is not verified.",
+      "The system's checks did not confirm the result, so it is not verified.",
   },
   failed: {
     label: "Failed",
@@ -195,6 +197,8 @@ function JobView({
   const { select, setOpen } = useArtifacts();
   const queryClient = useQueryClient();
   const stepsId = useId();
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const finishedHere = useRef(false);
 
   // The steps are open while the job runs and fold away when it ends; the
   // person can open them again (spec 009 FR-041).
@@ -203,6 +207,7 @@ function JobView({
   useEffect(() => {
     if (wasRunning.current && !running) {
       setOpenSteps(false);
+      finishedHere.current = true;
       // A published build is a new artifact: refresh the panel's list.
       void queryClient.invalidateQueries({
         queryKey: ["artifact-manifests", threadId],
@@ -213,6 +218,27 @@ function JobView({
 
   const result = job.result;
   const published = result?.published;
+  // An app whose layout check failed is still shown, and says so.
+  const layoutFailed = result?.layout?.outcome === "fail";
+  const layoutNoAnswer = !!result?.layout && countedNoAnswer(result.layout);
+
+  // A job that finished while the person watched: its steps fold, the card
+  // shrinks, and "Open the app" can land under the chat bar that floats over
+  // the thread. Bring the actions into view once (the scroll margin keeps
+  // them above the bar), only if the card is on screen.
+  useEffect(() => {
+    if (running || !published || !finishedHere.current) return;
+    finishedHere.current = false;
+    const frame = requestAnimationFrame(() => {
+      const actions = actionsRef.current;
+      const card = actions?.closest<HTMLElement>("[data-testid=code-job-card]");
+      if (!actions || !card) return;
+      const box = card.getBoundingClientRect();
+      if (box.bottom < 0 || box.top > window.innerHeight) return;
+      actions.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [running, published]);
   const visibleSteps = useMemo(
     () => steps.filter((s) => s.kind !== "phase" || s.phase !== "working"),
     [steps],
@@ -301,7 +327,14 @@ function JobView({
       )}
 
       {!running && published ? (
-        <div className="border-t px-3 py-2">
+        <div
+          ref={actionsRef}
+          className="border-t px-3 py-2"
+          style={{
+            scrollMarginBottom: `calc(var(${COMPOSER_INSET_VAR}, 200px) + 40px)`,
+          }}
+          data-testid="code-job-actions"
+        >
           <Button
             size="sm"
             onClick={() => {
@@ -312,7 +345,11 @@ function JobView({
             data-testid="code-job-open-app"
           >
             <AppWindowIcon className="size-3.5" aria-hidden />
-            Open the app
+            {layoutFailed
+              ? "Open the app (layout check failed)"
+              : layoutNoAnswer
+                ? "Open the app (layout not checked)"
+                : "Open the app"}
           </Button>
         </div>
       ) : null}
@@ -357,6 +394,15 @@ function Evidence({ job }: { job: CodeJob }) {
   const names = [...(changed?.added ?? []), ...(changed?.modified ?? [])];
   return (
     <div className="border-t px-3 py-2 text-sm" data-testid="code-job-evidence">
+      {r?.fix_of ? (
+        <p
+          className="text-muted-foreground mb-1 text-xs"
+          data-testid="code-job-fix-of"
+        >
+          The automatic fix of an earlier job&apos;s layout failures (run once,
+          by the system&apos;s rule).
+        </p>
+      ) : null}
       {job.reason ? (
         <p className="text-foreground-2 mb-1 [overflow-wrap:anywhere]">
           {safeField(job.reason)}
@@ -393,6 +439,7 @@ function Evidence({ job }: { job: CodeJob }) {
             </span>
           </li>
         ))}
+        {r?.layout ? <LayoutEvidence layout={r.layout} /> : null}
         <li className="flex items-start gap-2">
           <Mark ok={null} />
           <span className="[overflow-wrap:anywhere]">
@@ -437,6 +484,108 @@ function Evidence({ job }: { job: CodeJob }) {
         </li>
       </ul>
     </div>
+  );
+}
+
+function layoutWidths(layout: CodeJobLayout) {
+  return `${(layout.widths ?? []).join(" / ")} px`;
+}
+
+/** No answer from the check that still counts against "verified" (its
+ * result could not be read), as opposed to one the system could not run. */
+function countedNoAnswer(layout: CodeJobLayout) {
+  return (
+    layout.outcome === "error" &&
+    layout.counted === true &&
+    layout.mode !== "warn"
+  );
+}
+
+function layoutSummary(layout: CodeJobLayout) {
+  if (layout.outcome === "pass")
+    return `Layout check: fits ${layoutWidths(layout)}`;
+  if (layout.outcome === "fail") {
+    const n = layout.failures?.length ?? 0;
+    return `Layout check failed: ${n} problem${n === 1 ? "" : "s"}`;
+  }
+  return countedNoAnswer(layout)
+    ? "Layout check gave no answer"
+    : "Layout check could not run";
+}
+
+/** The system's layout check (a headless browser at each width). The
+ * failure lines name elements the worker's page chose: shown as text. */
+function LayoutEvidence({ layout }: { layout: CodeJobLayout }) {
+  const failures = layout.failures ?? [];
+  const warnings = layout.warnings ?? [];
+  const counted = layout.mode !== "warn";
+  const noAnswer = countedNoAnswer(layout);
+  return (
+    <li
+      className="flex items-start gap-2"
+      data-testid="code-job-layout"
+      data-outcome={layout.outcome}
+    >
+      {layout.outcome === "fail" && !counted ? (
+        <CircleAlertIcon
+          className="text-warning mt-0.5 size-4 shrink-0"
+          aria-label="failed, not counted"
+        />
+      ) : (
+        <Mark
+          ok={
+            layout.outcome === "pass"
+              ? true
+              : layout.outcome === "fail" || noAnswer
+                ? false
+                : null
+          }
+        />
+      )}
+      <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+        {layout.outcome === "pass" ? (
+          <>Layout check: fits {layoutWidths(layout)} </>
+        ) : layout.outcome === "fail" ? (
+          <>Layout check failed at {layoutWidths(layout)} </>
+        ) : noAnswer ? (
+          <>Layout check gave no answer </>
+        ) : (
+          <>Layout check could not run </>
+        )}
+        <span className="text-muted-foreground">
+          {layout.outcome === "error"
+            ? `(${safeField(layout.error ?? "no reason given")}; ${noAnswer ? "counted: not verified" : "not counted"})`
+            : counted
+              ? "(run by the system)"
+              : "(run by the system; not counted: config says warn)"}
+        </span>
+        {failures.length ? (
+          <p className="text-muted-foreground mt-1 text-xs">
+            Element names and error text below come from the page.
+          </p>
+        ) : null}
+        {failures.length ? (
+          <ul
+            className="text-foreground-2 mt-1 flex list-disc flex-col gap-0.5 pl-4 text-xs"
+            data-testid="code-job-layout-failures"
+          >
+            {failures.map((f) => (
+              <li key={f}>{safeField(f)}</li>
+            ))}
+          </ul>
+        ) : null}
+        {warnings.length ? (
+          <ul
+            className="text-muted-foreground mt-1 flex list-disc flex-col gap-0.5 pl-4 text-xs"
+            data-testid="code-job-layout-warnings"
+          >
+            {warnings.map((w) => (
+              <li key={w}>Warning (not counted): {safeField(w)}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </li>
   );
 }
 
@@ -574,6 +723,22 @@ function StepRow({ step }: { step: CodeJobStep }) {
           check: <code>{safeField(step.path)}</code>{" "}
           {step.exists ? `exists (${step.bytes} bytes)` : "is missing"}
         </span>
+      </li>
+    );
+  }
+  if (step.kind === "layout") {
+    return (
+      <li className="flex items-start gap-2 px-1 text-xs">
+        <Mark
+          ok={
+            step.outcome === "pass"
+              ? true
+              : step.outcome === "fail"
+                ? false
+                : null
+          }
+        />
+        <span>{layoutSummary(step)}</span>
       </li>
     );
   }

@@ -16,6 +16,10 @@ from typing import Protocol
 logger = logging.getLogger(__name__)
 
 
+#: Run once when the control session opens.
+CTL_SETUP = 'export OMNI_USER_PATH="$PATH" PATH=/usr/bin:/bin; hash -r'
+
+
 class SandboxOps(Protocol):
     container: str
 
@@ -56,6 +60,11 @@ class AioJobSandbox:
     def _ensure_ctl(self) -> None:
         if not self._ctl_ready:
             self._client.shell.create_session(id=self._ctl, exec_dir="/tmp", no_change_timeout=120)
+            # The control session runs on a fixed PATH: nothing the sandbox user
+            # put earlier on PATH runs in it, whoever looks a program up there.
+            # The user's PATH is kept for the commands that run the project's
+            # own tools (the build check).
+            self._client.shell.exec_command(id=self._ctl, command=CTL_SETUP, no_change_timeout=30, hard_timeout=35.0, truncate=False)
             self._ctl_ready = True
 
     def _fresh_ctl(self) -> None:
