@@ -2,7 +2,7 @@ id: M-WHOIS
 title: A who-is question is answered with 2+ sources inside the small research budget
 source: live chat 2026-11-14 (19 web searches over 7+ minutes for "who is <person>", no answer)
 mode: thinking
-prompt: Who is Tim Berners-Lee?
+prompt: Who is Tim Berners-Lee? Look it up and give me two sources with links from different sites.
 tools: []
 confirm: none
 budget:
@@ -16,7 +16,7 @@ checks:
     name: web_search
 - max_lookups:
     searches: 6
-    fetches: 4
+    fetches: 6
 - no_cards
 - no_clarification
 - no_menu
