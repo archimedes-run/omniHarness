@@ -433,6 +433,78 @@ def strip_internal_names(reply: str) -> tuple[str, bool]:
     return text, text != reply
 
 
+def raised_save_card(messages: list[Any]) -> str | None:
+    """The name of the new item whose save card the builder raised itself in
+    THIS turn (spec 010), or None; not in a resume (the card was answered)."""
+    from omniharness.runtime.builder.surface import SAVE_CARD_SHOWN
+
+    turn = turn_messages(list(messages))
+    if any(_kwargs(m).get(RESUME_OUTCOME_MARKER) for m in turn):
+        return None
+    name = None
+    for message in turn:
+        if _type(message) == "tool" and (_name(message) or "") == "builder_draft":
+            found = re.search(re.escape(SAVE_CARD_SHOWN) + r" for `([^`]+)`", text_of(message))
+            name = found.group(1) if found else name
+    return name
+
+
+#: The longest reply that may follow a save card the builder raised.
+SAVE_CARD_REPLY_MAX = 300
+
+
+def save_card_reply(reply: str, name: str) -> tuple[str, bool]:
+    """After the builder raised a save card: one short line. A longer reply (a
+    spec, a "what I need from you" list) is replaced: the card has the detail."""
+    if len(reply or "") <= SAVE_CARD_REPLY_MAX and "```" not in (reply or "") and not re.search(r"(?i)what i need from you", reply or ""):
+        return reply, False
+    return f"I drafted {name}. Review the card below and press Save, or tell me what to change.", True
+
+
+#: Asking the person to put a secret into the chat (any flow): a request verb
+#: and a secret, in one sentence, not negated.
+_SECRET_ASK_RE = re.compile(
+    r"(?i)\b(paste|provide|share|send|give|enter|type|post|drop|include|supply)\b[^.!?\n]{0,120}?\b(tokens?|api[ -]?keys?|keys?|passwords?|passcodes?|secrets?|credentials?|private keys?|access keys?)\b"
+    r"|\b(tokens?|api[ -]?keys?|passwords?|secrets?|credentials?)\b[^.!?\n]{0,60}?\b(paste|provide|share|send)\b"
+)
+_NEGATED = re.compile(r"(?i)\b(never|don't|do not|not|no need|without)\b")
+#: What replaces such a sentence.
+NO_SECRETS_LINE = "Connect it from Integrations; never paste keys into the chat."
+
+
+def strip_secret_requests(reply: str) -> tuple[str, bool]:
+    """Replace every sentence (or list item) that asks the person to paste a
+    token, key, password or secret into the chat. Code blocks are left as
+    they are. The replacement appears once."""
+    if not _SECRET_ASK_RE.search(reply or ""):
+        return reply, False
+    parts = re.split(r"(```[\s\S]*?```)", reply or "")
+    changed = False
+    said = False
+    out = []
+    for part in parts:
+        if part.startswith("```"):
+            out.append(part)
+            continue
+        lines = []
+        for line in part.split("\n"):
+            pieces = re.split(r"(?<=[.!?])\s+", line)
+            kept = []
+            for piece in pieces:
+                if _SECRET_ASK_RE.search(piece) and not _NEGATED.search(piece) and piece.strip() != NO_SECRETS_LINE:
+                    changed = True
+                    if not said:
+                        prefix = re.match(r"^\s*(?:[-*]|\d+[.)])?\s*", piece).group(0)
+                        kept.append(prefix + NO_SECRETS_LINE)
+                        said = True
+                    continue
+                kept.append(piece)
+            if kept or not line.strip():
+                lines.append(" ".join(kept))
+        out.append("\n".join(lines))
+    return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip(), changed
+
+
 def called_builder(messages: list[Any]) -> bool:
     """This turn called any chat-builder tool (spec 010)."""
     return any(str(call.get("name") or "").startswith("builder_") for message in turn_messages(list(messages)) if _type(message) == "ai" for call in _tool_calls(message))

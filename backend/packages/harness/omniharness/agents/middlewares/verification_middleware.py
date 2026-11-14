@@ -41,8 +41,11 @@ from omniharness.agents.working_loop import (
     declined_build,
     declined_build_reply,
     raised_card_prompt,
+    raised_save_card,
+    save_card_reply,
     strip_internal_names,
     strip_menu_keeping_card_prompt,
+    strip_secret_requests,
     strip_trailing_menu,
     text_of,
     unbacked_claims,
@@ -80,10 +83,24 @@ class VerificationMiddleware(AgentMiddleware):
         # Spec 010: after a declined (or expired) builder card the resumed
         # reply is one short acknowledgement, never the draft again.
         cut = False
+        # Any flow: never ask the person to paste a secret into the chat.
+        reply, secret_cut = strip_secret_requests(reply)
+        if secret_cut:
+            fixes.append("secret_request_replaced")
+            cut = True
+        # Spec 010: the builder raised a save card itself; the reply is one
+        # short line (the card carries the draft).
+        card_for = raised_save_card(messages)
+        if card_for:
+            reply, card_cut = save_card_reply(reply, card_for)
+            if card_cut:
+                fixes.append("save_card_reply_cut")
+                cut = True
         if called_builder(messages) or declined_build(messages):
-            reply, cut = strip_internal_names(reply)
-            if cut:
+            reply, names_cut = strip_internal_names(reply)
+            if names_cut:
                 fixes.append("internal_name_removed")
+                cut = True
         if declined_build(messages):
             reply, cut_reply = declined_build_reply(reply)
             cut = cut or cut_reply

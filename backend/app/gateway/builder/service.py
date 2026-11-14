@@ -54,7 +54,7 @@ from typing import Any
 from app.gateway.builder import drafts
 from app.gateway.builder.render import render_draft, render_live
 from omniharness.config import config_versions
-from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX, LEAD_AGENT, bootstrap_target, builder_refusal, forbidden_targets
+from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX, LEAD_AGENT, SAVE_CARD_SHOWN, bootstrap_target, builder_refusal, forbidden_targets
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +119,15 @@ def _not_done(lead: str, exc: Exception, confirmed: bool) -> str:
 
 
 def _names_subject(text: str) -> bool:
-    """The text says what the new thing is for (app.gateway.builder.purpose)."""
-    from app.gateway.builder.purpose import states_purpose
+    """The text says what the new thing is for (omniharness.runtime.builder.purpose)."""
+    from omniharness.runtime.builder.purpose import states_purpose
 
     return states_purpose(text)[0]
 
 
 def _given_name(context: dict) -> str | None:
     """A name the owner gave it ("an agent called Bob"), to keep."""
-    from app.gateway.builder.purpose import states_purpose
+    from omniharness.runtime.builder.purpose import states_purpose
 
     for text in _owner_words(context):
         name = states_purpose(text)[1]
@@ -155,8 +155,17 @@ def _owner_words(context: dict) -> list[str]:
     messages = context.get(MESSAGES_KEY)
     turn = turn_messages(list(messages)) if isinstance(messages, list) else []
     words = [_message_text(m) for m in turn if is_user_turn(m)]
-    asked = _asked_after_refusal(turn)
-    if not asked:
+    from omniharness.agents.questions import QUESTION_MARKER
+    from omniharness.runtime.builder.surface import BUILDER_QUESTION_MARKER
+
+    def kwargs_of(message: Any) -> dict:
+        kw = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+        return kw if isinstance(kw, dict) else {}
+
+    # The builder's own question in this turn (marked by the clarification
+    # middleware when it was asked), by its card id.
+    builder_qids = {str((kwargs_of(m).get(QUESTION_MARKER) or {}).get("id") or "") for m in turn if kwargs_of(m).get(BUILDER_QUESTION_MARKER)} - {""}
+    if not builder_qids:
         return words
     from app.gateway.questions.service import get_store
     from app.gateway.questions.store import VIA_BUTTON
@@ -176,7 +185,7 @@ def _owner_words(context: dict) -> list[str]:
             or q.thread_id != str(context.get("thread_id"))
             or q.owner_id != str(context.get("user_id"))
             or answer.get("via") != VIA_BUTTON
-            or str((q.asker.get("ref") or {}).get("tool_call_id") or "") not in asked
+            or q.id not in builder_qids
             or q.asker_data.get("purpose") != "builder"
         ):
             continue
@@ -185,25 +194,6 @@ def _owner_words(context: dict) -> list[str]:
         elif answer.get("text"):
             words.append(str(answer["text"]))
     return words
-
-
-def _asked_after_refusal(turn: list[Any]) -> set[str]:
-    """Ids of the ask_clarification call made directly after the builder's
-    "ask first" refusal (one question per refusal)."""
-    out: set[str] = set()
-    for index, message in enumerate(turn):
-        name = message.get("name") if isinstance(message, dict) else getattr(message, "name", None)
-        kind = message.get("type") if isinstance(message, dict) else getattr(message, "type", None)
-        if kind == "tool" and name == "builder_draft" and _message_text(message).startswith(ASK_FIRST_PREFIX):
-            for later in turn[index + 1 :]:
-                calls = later.get("tool_calls") if isinstance(later, dict) else getattr(later, "tool_calls", None)
-                later_type = later.get("type") if isinstance(later, dict) else getattr(later, "type", None)
-                if later_type == "ai" and calls:
-                    # The first call after the refusal, made on its own.
-                    if len(calls) == 1 and calls[0].get("name") == "ask_clarification":
-                        out.add(str(calls[0].get("id")))
-                    break
-    return out
 
 
 class GatewayBuilderController:
@@ -645,6 +635,11 @@ class GatewayBuilderController:
             except BuilderRefused as exc:
                 problem = str(exc)
             drafts.put_draft(user_id, thread_id, draft)
+            if problem is None and draft["mode"] == "create" and self._raise_save_card(context, draft):
+                # Something new: the builder raises its save card itself (the
+                # model is not relied on to propose it).
+                nxt = f"{SAVE_CARD_SHOWN} for `{draft['name']}`. Say one short line (that it is drafted and the card is below) and stop: the card has the details."
+                return f"{self._model_ack(draft, live)}\n\n{nxt}"
             nxt = f"Not ready to save: {problem} Revise it with builder_draft." if problem else f"To propose saving it, call builder_save with draft_id {draft['id']!r}."
             return f"{self._model_ack(draft, live)}\n\n{nxt}"
         except BuilderRefused as exc:
@@ -789,6 +784,8 @@ class GatewayBuilderController:
                     user_id, thread_id = self._guard(context, "builder_save")
                     draft_id = str((drafts.active(user_id, thread_id) or {}).get("draft_id") or "")
                 draft, live, version = self._ready_draft(context, draft_id, tool="builder_save")
+                if self._open_save_cards(context, draft_id):
+                    raise BuilderRefused("its save card is already shown to the person; wait for their answer.")
                 note = render_draft(draft, live=live, live_version=version)
                 if draft["kind"] == "automation":
                     line, why = self._automation_card(self._who(context)[0], draft["snapshot"])
@@ -1082,6 +1079,69 @@ class GatewayBuilderController:
             return f"Gave `{plan['agent']}` what the card listed, as version {made.version} (source: chat)."
         except (config_versions.StaleWriteError, BuilderRefused) as exc:
             return _not_done("Nothing was changed", exc, confirmed)
+
+    def _open_save_cards(self, context: dict, draft_id: str) -> list:
+        """Open builder save cards in this chat for this draft."""
+        from datetime import UTC, datetime
+
+        from app.policy.pending import PendingStore
+
+        policy = getattr(self._config(), "policy", None)
+        if policy is None or not getattr(policy, "enabled", True) or not context.get("thread_id"):
+            return []
+        store = PendingStore(directory=Path(policy.state_dir) / "pending")
+        return [a for a in store.open_in_thread(str(context["thread_id"]), datetime.now(UTC)) if a.tool_name == "builder_save" and str((a.arguments or {}).get("draft_id") or "") == draft_id]
+
+    def _raise_save_card(self, context: dict, draft: dict) -> str | None:
+        """The save card for a NEW item's draft, raised by the builder itself:
+        the draft in plain words, Save or Decline, typed yes by the usual rules
+        (the draft's own origin decides: a draft caused by content is a
+        suggestion). Replaces the chat's other open builder cards. Returns its
+        id, or None when the policy layer is off (no card can be shown)."""
+        from datetime import UTC, datetime
+
+        from app.policy.builder_cards import refuse_open_builder_cards
+        from app.policy.middleware import PolicyMiddleware
+        from app.policy.models import PendingAction, Tier, default_expiry
+        from app.policy.pending import PendingStore
+        from app.policy.registration import shared_loader
+        from app.policy.targets import resolve_targets
+        from omniharness.agents.tool_surface import surface_of
+
+        policy = getattr(self._config(), "policy", None)
+        if policy is None or not getattr(policy, "enabled", True):
+            return None
+        user_id, thread_id = self._who(context)
+        store = PendingStore(directory=Path(policy.state_dir) / "pending")
+        refuse_open_builder_cards(store, thread_id, user_id, keep_draft="", reason="A newer draft replaced this one, so it was not saved.")
+        arguments = {"draft_id": draft["id"]}
+        targets = resolve_targets("builder_save", arguments)
+        origin = str(draft.get("origin") or "unknown")
+        card = PendingAction(
+            plan_text="",
+            tool_name="builder_save",
+            arguments=arguments,
+            targets=targets,
+            tier_at_statement=Tier.TIER_3,
+            expires_at=default_expiry(datetime.now(UTC), shared_loader(policy).load(notify=False).expires_after_seconds),
+            thread_id=thread_id,
+            requester="lead_agent",
+            origin=origin if origin in ("user", "content", "automation", "unknown") else "unknown",
+            origin_source=str(draft.get("origin_source") or ""),
+            owner_id=user_id,
+            surface=surface_of(context),
+            group_key=f"run:{context['run_id']}" if context.get("run_id") else "",
+        )
+        detail = render_draft(draft, live=None, live_version=draft.get("base_version") or 0)
+        if draft["kind"] == "agent":
+            detail += "\n\nWhat it can use: nothing beyond what every agent run gets, until you grant more."
+        if draft["kind"] == "automation":
+            # Who it runs as, and button only when that agent holds grants.
+            line, card.button_only_reason = self._automation_card(user_id, draft["snapshot"])
+            detail += f"\n\n{line}"
+        card.plan_text = f"{PolicyMiddleware._plan_text('builder_save', targets, 'lead_agent', (), card.id, arguments, origin_note=card.origin_note())}\n\n{detail}"
+        store.save(card)
+        return card.id
 
     def _propose_access(self, context: dict, saved_by, agent: str, request: dict) -> str | None:
         """Right after a save that left access out: ONE permission card for the

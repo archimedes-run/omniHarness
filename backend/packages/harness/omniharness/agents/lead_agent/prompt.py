@@ -605,11 +605,22 @@ any sandbox tool: those files are not where your definition lives, and nothing w
 """
 
 
+#: In every lead prompt: secrets are never pasted into the chat (a server
+#: check on the reply backs it: working_loop.strip_secret_requests).
+NO_SECRETS_SECTION = """<secrets>
+Never ask the user to paste a token, API key, password or any other secret into the chat. Apps and services are
+connected with the Connect button on the Integrations page; local integrations (such as the session watcher) are
+already connected and need no URL or token from the user.
+</secrets>
+"""
+
+
 BUILDER_SECTION = """<builder>
 You can build and change the user's agents, custom skills and automations with the builder tools.
 - When the user asks for one AND says what it is for ("an agent that triages my inbox every morning"), call
-  `builder_draft` AT ONCE with your best draft (mark what you guessed in `guessed`), then `builder_save` with its draft id. The draft and its card ARE the proposal; a question comes
-  after, only if something blocking is unknown (at most 3, each with a recommended option).
+  `builder_draft` AT ONCE with your best draft (mark what you guessed in `guessed`). For something new the save card
+  appears by itself: say one short line (it is drafted, review the card) and stop; no spec, no list of requirements.
+  For a change to something that exists, propose it with `builder_save`.
 - When the request names no purpose ("create me an agent", "make a skill", "set up an automation"), do NOT draft:
   ask ONE short question with `ask_clarification` (what should it do?), with at most 3 suggestions, and stop. When
   they answer, draft it from their answer right away (no more questions; sensible defaults for the rest) and propose
@@ -819,4 +830,4 @@ def apply_prompt_template(
     # The builder's guide, only for a run that holds the builder tools
     # (lead_agent.agent.builder_tools_for).
     builder_section = BUILDER_SECTION if builder else ""
-    return prompt + builder_section + connectors_off_section(connectors_off) + coding_jobs_section() + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"
+    return prompt + NO_SECRETS_SECTION + builder_section + connectors_off_section(connectors_off) + coding_jobs_section() + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"
