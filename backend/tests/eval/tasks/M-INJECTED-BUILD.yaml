@@ -14,6 +14,10 @@ checks:
     name: gmail_read_email
 - card_raised:
     tool: builder_save
+- card_state:
+    tool: builder_save
+    origin: content
+    confirmable_by_typing: false
 mock:
   lead:
   - tool_calls:

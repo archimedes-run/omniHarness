@@ -635,6 +635,10 @@ class GatewayBuilderController:
             except BuilderRefused as exc:
                 problem = str(exc)
             drafts.put_draft(user_id, thread_id, draft)
+            if draft["mode"] == "create":
+                self._close_open_cards(context)  # a newer draft, valid or not, replaces them
+            if problem is None and draft["mode"] == "create" and self._raised_this_turn(context) >= self.MAX_RAISED_PER_TURN:
+                return f"{self._model_ack(draft, live)}\n\nThis turn has already shown {self.MAX_RAISED_PER_TURN} save cards: stop now and let the person answer the card."
             if problem is None and draft["mode"] == "create" and self._raise_save_card(context, draft):
                 # Something new: the builder raises its save card itself (the
                 # model is not relied on to propose it).
@@ -1092,55 +1096,64 @@ class GatewayBuilderController:
         store = PendingStore(directory=Path(policy.state_dir) / "pending")
         return [a for a in store.open_in_thread(str(context["thread_id"]), datetime.now(UTC)) if a.tool_name == "builder_save" and str((a.arguments or {}).get("draft_id") or "") == draft_id]
 
-    def _raise_save_card(self, context: dict, draft: dict) -> str | None:
-        """The save card for a NEW item's draft, raised by the builder itself:
-        the draft in plain words, Save or Decline, typed yes by the usual rules
-        (the draft's own origin decides: a draft caused by content is a
-        suggestion). Replaces the chat's other open builder cards. Returns its
-        id, or None when the policy layer is off (no card can be shown)."""
-        from datetime import UTC, datetime
+    #: Save cards the builder raises in one turn, at most (then the model is
+    #: told to stop and let the person answer).
+    MAX_RAISED_PER_TURN = 3
 
-        from app.policy.builder_cards import refuse_open_builder_cards
-        from app.policy.middleware import PolicyMiddleware
-        from app.policy.models import PendingAction, Tier, default_expiry
+    def _raised_this_turn(self, context: dict) -> int:
         from app.policy.pending import PendingStore
-        from app.policy.registration import shared_loader
-        from app.policy.targets import resolve_targets
-        from omniharness.agents.tool_surface import surface_of
+        from app.policy.server_cards import turn_key_of
+
+        policy = getattr(self._config(), "policy", None)
+        key = turn_key_of(context)
+        if policy is None or not key or not context.get("thread_id"):
+            return 0
+        store = PendingStore(directory=Path(policy.state_dir) / "pending")
+        return sum(1 for a in store.in_thread(str(context["thread_id"])) if a.tool_name == "builder_save" and a.group_key == key and a.requester == "lead_agent" and (a.arguments or {}).get("draft_id"))
+
+    def _close_open_cards(self, context: dict) -> None:
+        """Close this chat's open builder save and undo cards (a newer draft,
+        valid or not, replaces them)."""
+        from app.policy.builder_cards import refuse_open_builder_cards
+        from app.policy.pending import PendingStore
+
+        policy = getattr(self._config(), "policy", None)
+        if policy is None or not getattr(policy, "enabled", True) or not context.get("thread_id"):
+            return
+        store = PendingStore(directory=Path(policy.state_dir) / "pending")
+        refuse_open_builder_cards(store, str(context["thread_id"]), str(context.get("user_id") or "") or None, keep_draft="", reason="A newer draft replaced this one, so it was not saved.")
+
+    def _raise_save_card(self, context: dict, draft: dict) -> str | None:
+        """The save card for a NEW item's draft, raised by the builder itself
+        (through app.policy.server_cards, the same fields and lock as a
+        proposed card): the draft in plain words, Save or Decline, typed yes by
+        the usual rules (the draft's own origin decides: a draft caused by
+        content is a suggestion). Returns its id, or None when the policy layer
+        is off (no card can be shown)."""
+        from app.policy.server_cards import raise_card
 
         policy = getattr(self._config(), "policy", None)
         if policy is None or not getattr(policy, "enabled", True):
             return None
-        user_id, thread_id = self._who(context)
-        store = PendingStore(directory=Path(policy.state_dir) / "pending")
-        refuse_open_builder_cards(store, thread_id, user_id, keep_draft="", reason="A newer draft replaced this one, so it was not saved.")
-        arguments = {"draft_id": draft["id"]}
-        targets = resolve_targets("builder_save", arguments)
-        origin = str(draft.get("origin") or "unknown")
-        card = PendingAction(
-            plan_text="",
-            tool_name="builder_save",
-            arguments=arguments,
-            targets=targets,
-            tier_at_statement=Tier.TIER_3,
-            expires_at=default_expiry(datetime.now(UTC), shared_loader(policy).load(notify=False).expires_after_seconds),
-            thread_id=thread_id,
-            requester="lead_agent",
-            origin=origin if origin in ("user", "content", "automation", "unknown") else "unknown",
-            origin_source=str(draft.get("origin_source") or ""),
-            owner_id=user_id,
-            surface=surface_of(context),
-            group_key=f"run:{context['run_id']}" if context.get("run_id") else "",
-        )
+        user_id, _ = self._who(context)
         detail = render_draft(draft, live=None, live_version=draft.get("base_version") or 0)
+        button_only = ""
         if draft["kind"] == "agent":
             detail += "\n\nWhat it can use: nothing beyond what every agent run gets, until you grant more."
         if draft["kind"] == "automation":
             # Who it runs as, and button only when that agent holds grants.
-            line, card.button_only_reason = self._automation_card(user_id, draft["snapshot"])
+            line, button_only = self._automation_card(user_id, draft["snapshot"])
             detail += f"\n\n{line}"
-        card.plan_text = f"{PolicyMiddleware._plan_text('builder_save', targets, 'lead_agent', (), card.id, arguments, origin_note=card.origin_note())}\n\n{detail}"
-        store.save(card)
+        card = raise_card(
+            policy=policy,
+            tool_name="builder_save",
+            arguments={"draft_id": draft["id"]},
+            note=detail,
+            context=context,
+            origin=str(draft.get("origin") or "unknown"),
+            origin_source=str(draft.get("origin_source") or ""),
+            button_only_reason=button_only,
+        )
         return card.id
 
     def _propose_access(self, context: dict, saved_by, agent: str, request: dict) -> str | None:
@@ -1148,13 +1161,6 @@ class GatewayBuilderController:
         access the draft asked for (a builder_grant pending action, button
         only, its items listed). Returns its id, or None when there is
         nothing to ask for."""
-        from datetime import UTC, datetime
-
-        from app.policy.middleware import PolicyMiddleware
-        from app.policy.models import PendingAction, Tier, default_expiry
-        from app.policy.pending import PendingStore
-        from app.policy.registration import shared_loader
-        from app.policy.targets import resolve_targets
 
         groups = request.get("tool_groups")
         if "tool_groups" in request and groups is None:
@@ -1169,26 +1175,9 @@ class GatewayBuilderController:
         except BuilderRefused as exc:
             logger.info("builder: no permission card after saving %s: %s", agent, exc)
             return None
-        policy = self._config().policy
-        ruleset = shared_loader(policy).load(notify=False)
-        targets = resolve_targets("builder_grant", arguments)
-        card = PendingAction(
-            plan_text="",
-            tool_name="builder_grant",
-            arguments=arguments,
-            targets=targets,
-            tier_at_statement=Tier.TIER_3,
-            expires_at=default_expiry(datetime.now(UTC), ruleset.expires_after_seconds),
-            thread_id=saved_by.thread_id,
-            requester=saved_by.requester,
-            origin=saved_by.origin,
-            origin_source=saved_by.origin_source,
-            owner_id=saved_by.owner_id,
-            surface=dict(saved_by.surface or {}),
-            private_read=saved_by.private_read,
-        )
-        card.plan_text = f"{PolicyMiddleware._plan_text('builder_grant', targets, card.requester, (), card.id, arguments, origin_note=card.origin_note())}\n\n{note}"
-        PendingStore(directory=Path(policy.state_dir) / "pending").save(card)
+        from app.policy.server_cards import raise_card
+
+        card = raise_card(policy=self._config().policy, tool_name="builder_grant", arguments=arguments, note=note, origin=saved_by.origin, origin_source=saved_by.origin_source, like=saved_by)
         return card.id
 
     # -- undo -----------------------------------------------------------------------

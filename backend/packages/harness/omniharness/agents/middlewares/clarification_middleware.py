@@ -84,14 +84,14 @@ def _bare_build_request(turn: list) -> bool:
     """The owner's message that started this turn asks for an agent, skill or
     automation without saying what it is for ("please create me an agent")."""
     from omniharness.agents.turns import USER_TURN_MARKER
-    from omniharness.runtime.builder.purpose import NOUNS, states_purpose, tokens
+    from omniharness.runtime.builder.purpose import is_build_request, states_purpose
 
     first = turn[0] if turn else None
     kwargs = getattr(first, "additional_kwargs", None) or {}
     if getattr(first, "type", None) != "human" or kwargs.get(USER_TURN_MARKER) is not True:
         return False
     text = str(getattr(first, "content", "") or "")
-    return bool(set(tokens(text)) & (NOUNS - {"something", "one", "thing"})) and not states_purpose(text)[0]
+    return is_build_request(text) and not states_purpose(text)[0]
 
 
 def builder_ask(turn: list, call_id: str, context: dict | None = None) -> bool:

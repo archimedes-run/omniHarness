@@ -92,7 +92,7 @@ class VerificationMiddleware(AgentMiddleware):
         # short line (the card carries the draft).
         card_for = raised_save_card(messages)
         if card_for:
-            reply, card_cut = save_card_reply(reply, card_for)
+            reply, card_cut = save_card_reply(reply, card_for, messages)
             if card_cut:
                 fixes.append("save_card_reply_cut")
                 cut = True

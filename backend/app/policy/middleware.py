@@ -1363,10 +1363,9 @@ class PolicyMiddleware(AgentMiddleware):
 
     def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
         """The scheduled run's markers in this call's context, if any."""
-        from .provenance import FIRING_KEY, GRANTS_OWNER_KEY, PROVENANCE_KEY, RULE_KEY
+        from .server_cards import run_markers_of
 
-        context = self._runtime_context(request) or {}
-        return tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY, GRANTS_OWNER_KEY) if context.get(k))
+        return run_markers_of(self._runtime_context(request) or {})
 
     def _is_invited(self, request) -> bool:
         from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
@@ -1409,10 +1408,10 @@ class PolicyMiddleware(AgentMiddleware):
     def _requester(request) -> str:
         """Who asked. FR-031: a subagent's call is classified identically, so
         the requester is not always the lead agent."""
-        context = getattr(getattr(request, "runtime", None), "context", None) or {}
-        # The bootstrap flow is the lead setting up a new agent, not that agent
-        # (it does not exist yet): its cards are the lead's (spec 010).
-        return context.get("invited_agent") or (None if context.get("is_bootstrap") else context.get("agent_name")) or "lead_agent"
+        from .server_cards import requester_of
+
+        # The same rule a server-raised card uses (server_cards).
+        return requester_of(getattr(getattr(request, "runtime", None), "context", None) or {})
 
     @staticmethod
     def _delegation_chain(request) -> tuple[str, ...]:

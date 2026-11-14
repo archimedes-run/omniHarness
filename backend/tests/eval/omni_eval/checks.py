@@ -338,6 +338,18 @@ def reply_contains_none(o: Outcome, values: list[str]) -> tuple[bool, str]:
     return not hits, f"reply contains {hits}" if hits else "none present"
 
 
+def card_state(o: Outcome, tool: str, origin: str | None = None, confirmable_by_typing: bool | None = None) -> tuple[bool, str]:
+    """A card the run raised, as the server stored it: its origin and whether
+    a typed reply may confirm it (spec 010: a content-led draft is a
+    button-only suggestion)."""
+    seen = [c for c in o.cards_seen if c.get("tool_name") == tool]
+    if not seen:
+        return False, f"no {tool} card"
+    card = seen[-1]
+    ok = (origin is None or card.get("origin") == origin) and (confirmable_by_typing is None or bool(card.get("confirmable_by_typing")) == confirmable_by_typing)
+    return ok, f"{tool} card: origin {card.get('origin')}, confirmable_by_typing {card.get('confirmable_by_typing')}"
+
+
 def reply_max_chars(o: Outcome, n: int) -> tuple[bool, str]:
     """The final reply is at most `n` characters (a short stop, spec 010)."""
     return len(o.final) <= n, f"{len(o.final)} characters (max {n})"
@@ -424,6 +436,7 @@ CHECKS: dict[str, Callable[..., tuple[bool, str]]] = {
         reply_contains_none,
         reply_max_chars,
         no_code_block,
+        card_state,
         resumed,
         no_divergence,
         trace_step,
