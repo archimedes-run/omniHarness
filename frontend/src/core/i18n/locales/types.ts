@@ -105,6 +105,7 @@ export interface Translations {
     settings: string;
     mcpSuite: string;
     apps: string;
+    artifacts: string;
     home: string;
     more: string;
     moreLabel: string;

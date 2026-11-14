@@ -35,6 +35,7 @@ import { findTurnVerification } from "@/core/verification";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
+import { ArtifactCards } from "../artifacts/store/artifact-cards";
 import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 import { CodeJobCard } from "../code-jobs/code-job-card";
 import { CopyButton } from "../copy-button";
@@ -581,6 +582,7 @@ export function MessageList({
           )}
           showTokenDebugSummaries={tokenUsageInlineMode === "step_debug"}
         />
+        <ArtifactCards messages={group.messages} />
         {renderTokenUsage({
           messages: group.messages,
           turnUsageMessages,

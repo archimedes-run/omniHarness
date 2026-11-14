@@ -8,6 +8,7 @@ import {
   type AgentForm,
   type SchedRow,
 } from "@/components/workspace/studio/agent-form";
+import { integrationName } from "@/components/workspace/studio/parts";
 import {
   AVATARS,
   LEAD_AGENT_ID,
@@ -288,6 +289,37 @@ describe("tool ticks", () => {
     expect(Object.keys(legacySelection(null, CATALOG))).toContain(
       "builtin:bash",
     );
+  });
+
+  it("Artifacts is never ticked for a legacy agent: the owner ticks it (grants are never silent)", () => {
+    const withArtifacts = {
+      ...CATALOG,
+      integrations: [
+        ...CATALOG.integrations,
+        {
+          id: "builtin:artifacts",
+          name: "Artifacts",
+          kind: "builtin" as const,
+          status: "connected" as const,
+          detail: "",
+          tools: [T("artifact_create", 2), T("artifact_read", 1)],
+        },
+      ],
+    };
+    expect(legacySelection(null, withArtifacts)).not.toHaveProperty(
+      "builtin:artifacts",
+    );
+    expect(legacySelection(["artifacts"], withArtifacts)).not.toHaveProperty(
+      "builtin:artifacts",
+    );
+    // Shown in the picker, with a plain name, so the owner can tick it.
+    expect(integrationName("builtin:artifacts")).toBe("Artifacts");
+    expect(
+      selectionOf(
+        { integrations: ["builtin:artifacts"], tools: ["artifact_read"] },
+        withArtifacts,
+      ),
+    ).toEqual({ "builtin:artifacts": ["artifact_read"] });
   });
 
   it("saving keeps a choice the catalog cannot show right now", () => {

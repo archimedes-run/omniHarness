@@ -33,7 +33,9 @@ const config = {
   async headers() {
     return [
       {
-        source: "/((?!api/|mock/api/).*)",
+        // Not /mermaid-frame/: that isolated frame sets its own, stricter
+        // policy (src/app/mermaid-frame/[file]/route.ts).
+        source: "/((?!api/|mock/api/|mermaid-frame/).*)",
         headers: [
           { key: "Content-Security-Policy", value: contentSecurityPolicy() },
           // No referrer to other sites; "same-origin", not "no-referrer",
