@@ -306,6 +306,21 @@ class RunManager:
         out.extend(r for r in live if r.run_id not in seen)
         return out[-limit:]
 
+    async def get_stored(self, run_id: str) -> RunRecord | None:
+        """A run this process does not hold (another worker's, or one from
+        before a restart), as the run store recorded it; None if unknown."""
+        if self._store is None:
+            return None
+        try:
+            try:
+                row = await self._store.get(run_id, user_id=None)
+            except TypeError:  # the in-memory store takes no user
+                row = await self._store.get(run_id)
+        except Exception:
+            logger.warning("Could not read run %s from the run store", run_id, exc_info=True)
+            return None
+        return _record_from_row(row) if row else None
+
     async def set_status(self, run_id: str, status: RunStatus, *, error: str | None = None) -> None:
         """Transition a run to a new status."""
         async with self._lock:

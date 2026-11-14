@@ -167,12 +167,30 @@ async def list_runs(thread_id: str, request: Request) -> list[RunResponse]:
 @router.get("/{thread_id}/runs/{run_id}", response_model=RunResponse)
 @require_permission("runs", "read", owner_check=True)
 async def get_run(thread_id: str, run_id: str, request: Request) -> RunResponse:
-    """Get details of a specific run."""
+    """Get details of a specific run: this process's live record, else the
+    run store's (a run from before a restart, or another worker's)."""
     run_mgr = get_run_manager(request)
-    record = run_mgr.get(run_id)
+    record = run_mgr.get(run_id) or await run_mgr.get_stored(run_id)
     if record is None or record.thread_id != thread_id:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     return _record_to_response(record)
+
+
+async def _ended_stream(thread_id: str, run_id: str, request: Request) -> StreamingResponse | None:
+    """Joining a run this process does not hold: when the run store knows it,
+    the stream ends at once (the chat then reads the thread's state, where an
+    interrupted run's notice already is), instead of a 404 the chat would show
+    as an error after every reload that follows a restart. None if unknown."""
+    from app.gateway.services import format_sse
+
+    stored = await get_run_manager(request).get_stored(run_id)
+    if stored is None or stored.thread_id != thread_id:
+        return None
+
+    async def ended():
+        yield format_sse("end", None)
+
+    return StreamingResponse(ended(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 async def _end_questions(request: Request, thread_id: str, run_id: str) -> None:
@@ -236,6 +254,9 @@ async def join_run(thread_id: str, run_id: str, request: Request) -> StreamingRe
     run_mgr = get_run_manager(request)
     record = run_mgr.get(run_id)
     if record is None or record.thread_id != thread_id:
+        ended = await _ended_stream(thread_id, run_id, request) if record is None else None
+        if ended is not None:
+            return ended
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     return StreamingResponse(
@@ -268,6 +289,9 @@ async def stream_existing_run(
     run_mgr = get_run_manager(request)
     record = run_mgr.get(run_id)
     if record is None or record.thread_id != thread_id:
+        ended = await _ended_stream(thread_id, run_id, request) if record is None else None
+        if ended is not None:
+            return ended
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     # Cancel if an action was requested (stop-button / interrupt flow)
