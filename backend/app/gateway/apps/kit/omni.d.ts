@@ -51,6 +51,7 @@ export interface CatalogData {
   "googlecalendar.events_today": {
     items: Partial<{
       title: string;
+      /** A time with its offset, or a date ("2026-11-13") when all_day. */
       start: string;
       end: string;
       all_day: boolean;
@@ -65,6 +66,10 @@ export interface CatalogData {
       merged_at: string | null;
       link: string;
     }>[];
+    /** The search had more results than the cap: say "20+". */
+    more?: boolean;
+    /** Results left out because their repository could not be placed. */
+    dropped?: number;
   };
   "omni.ledger.today": {
     items: Partial<{
@@ -89,8 +94,11 @@ export interface CatalogData {
     items: Partial<{
       rule: string;
       last_run: string | null;
+      /** delivered | suppressed | queued | expired | failed, or null. */
       outcome: string | null;
+      /** Null for a rule that runs on events (trigger "event"). */
       next_run: string | null;
+      trigger: "schedule" | "event";
     }>[];
   };
   "gmail.unread_subjects": {

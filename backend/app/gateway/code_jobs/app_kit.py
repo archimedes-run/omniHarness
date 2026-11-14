@@ -393,7 +393,10 @@ def _sample(entry_id: str, params: dict) -> dict:
             ]
         }
     if entry_id == "github.pr_search":
-        return {"items": copy.deepcopy(_GITHUB_SAMPLES.get(params.get("preset"), _GITHUB_SAMPLES["review_requested"]))}
+        items = copy.deepcopy(_GITHUB_SAMPLES.get(params.get("preset"), _GITHUB_SAMPLES["review_requested"]))
+        # `more`: the search had more than the cap (show "20+"); `dropped`:
+        # results without a placeable repository, left out.
+        return {"items": items, "more": str(params.get("preset", "")).startswith("merged"), "dropped": 0}
     if entry_id == "gmail.unread_subjects":
         subjects = [
             ("Contract renewal: two questions before Friday", "08:41"),
@@ -423,9 +426,10 @@ def _sample(entry_id: str, params: dict) -> dict:
     if entry_id == "omni.automations.recent":
         return {
             "items": [
-                {"rule": "Inbox triage", "last_run": _t("08:00"), "outcome": "done", "next_run": _t("12:00")},
-                {"rule": "Morning brief", "last_run": _t("07:00"), "outcome": "done", "next_run": _t("07:00", "2026-01-16")},
-                {"rule": "Weekly report", "last_run": _t("09:00", "2026-01-12"), "outcome": "failed", "next_run": _t("09:00", "2026-01-19")},
+                {"rule": "Inbox triage", "last_run": _t("08:00"), "outcome": "delivered", "next_run": _t("12:00"), "trigger": "schedule"},
+                {"rule": "Morning brief", "last_run": _t("07:00"), "outcome": "delivered", "next_run": _t("07:00", "2026-01-16"), "trigger": "schedule"},
+                {"rule": "Weekly report", "last_run": _t("09:00", "2026-01-12"), "outcome": "failed", "next_run": _t("09:00", "2026-01-19"), "trigger": "schedule"},
+                {"rule": "Blocked session", "last_run": _t("10:15", "2026-01-14"), "outcome": "suppressed", "next_run": None, "trigger": "event"},
             ]
         }
     return {"items": []}
@@ -443,7 +447,7 @@ def fixtures(manifest: dict) -> dict:
         limit = spec["params"].get("limit")
         if isinstance(limit, int):
             fresh["items"] = fresh["items"][:limit]
-        empty = {"items": [], **({"count": 0, "count_capped": False} if "count" in entry.top_fields else {})}
+        empty = {"items": [], **({"count": 0, "count_capped": False} if "count" in entry.top_fields else {}), **({"more": False, "dropped": 0} if entry.meta_fields else {})}
         sources[name] = {"use": entry.id, "fresh": select(fresh, entry, spec["fields"]), "empty": select(empty, entry, spec["fields"])}
     return {"reference": REFERENCE, "reason": MOCK_REASON, "sources": sources}
 
