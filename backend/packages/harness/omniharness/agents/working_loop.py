@@ -367,8 +367,10 @@ def declined_build(messages: list[Any]) -> bool:
     expired, and no builder card it raised ran (spec 010)."""
     from omniharness.runtime.builder.surface import BUILDER_CARD_TOOLS
 
-    outcomes = [_kwargs(m).get(RESUME_OUTCOME_MARKER) for m in turn_messages(list(messages)) if _type(m) == "tool" and (_name(m) or "") in BUILDER_CARD_TOOLS]
-    return bool(outcomes) and any(o in ("declined", "expired") for o in outcomes) and "executed" not in outcomes
+    resumed = [(_name(m) or "", _kwargs(m).get(RESUME_OUTCOME_MARKER)) for m in turn_messages(list(messages)) if _type(m) == "tool" and _kwargs(m).get(RESUME_OUTCOME_MARKER)]
+    # Only when EVERY action resumed here is a declined or expired builder
+    # card: if anything else in the group ran, the lead reports that work.
+    return bool(resumed) and all(name in BUILDER_CARD_TOOLS and outcome in ("declined", "expired") for name, outcome in resumed)
 
 
 #: The longest reply a resumed lead may give after a declined build before it

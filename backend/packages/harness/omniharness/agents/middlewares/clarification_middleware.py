@@ -199,10 +199,14 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         turn = turn_messages(list(messages))
         from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX
 
-        if any(isinstance(m, ToolMessage) and m.name == "builder_draft" and str(m.content).startswith(ASK_FIRST_PREFIX) for m in turn):
-            # The builder refused to draft something new with no purpose and
-            # asked for this question (spec 010): it is the sanctioned ask.
-            return None
+        for index, message in enumerate(turn):
+            if isinstance(message, ToolMessage) and message.name == "builder_draft" and str(message.content).startswith(ASK_FIRST_PREFIX):
+                # The builder refused to draft something new with no purpose
+                # and asked for ONE question (spec 010): the call made right
+                # after that refusal is the sanctioned ask, and only it.
+                following = next((m for m in turn[index + 1 :] if getattr(m, "tool_calls", None)), None)
+                if following is not None and any(c.get("id") == call_id for c in following.tool_calls):
+                    return None
         started = [s for s in tool_steps(turn) if s["name"] not in NON_EVIDENCE_TOOLS and s["id"] != call_id and s["ok"] is not None]
         ambiguous = str((args or {}).get("clarification_type") or "") == "ambiguous_requirement"
         if not started and not ambiguous:

@@ -109,8 +109,12 @@ def test_a_question_after_the_refusal_is_not_sent_back(gw) -> None:
         user_turn("create me an agent"),
         AIMessage(content="", tool_calls=[{"name": "builder_draft", "args": {}, "id": "c1"}]),
         ToolMessage(content=f"{ASK_FIRST_PREFIX} the agent is for.", tool_call_id="c1", name="builder_draft"),
+        AIMessage(content="", tool_calls=[{"name": "ask_clarification", "args": {}, "id": "q1"}]),
     ]
     assert ClarificationMiddleware()._deferral(turn, "q1", {"clarification_type": "missing_info"}) is None
+    # Exactly that one question: a later one in the same turn is sent back.
+    later = [*turn, ToolMessage(content="Answered.", tool_call_id="q1", name="ask_clarification"), AIMessage(content="", tool_calls=[{"name": "ask_clarification", "args": {}, "id": "q2"}])]
+    assert ClarificationMiddleware()._deferral(later, "q2", {"clarification_type": "missing_info"}) is not None
 
 
 # -- 2. a decline ends it ---------------------------------------------------------------

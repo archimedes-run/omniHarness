@@ -44,9 +44,25 @@ NOT_THE_OWNERS_CHAT_KEYS: tuple[str, ...] = (
 LEAD_AGENT = "lead_agent"
 
 
-def builder_refusal(context: dict | None) -> str | None:
-    """None when this run may use the builder; otherwise why not, in words."""
+#: The builder tools a run resumed on the owner's Question-card answer may
+#: use (spec 010): the answer to the builder's own "what should it do?" can
+#: become a draft and its save CARD; nothing in that run writes.
+QUESTION_RESUME_TOOLS = frozenset({"builder_draft", "builder_save"})
+
+
+def question_resume(context: dict | None) -> bool:
+    """This run is the lead resumed on Question-card answers only (no card
+    outcomes in it)."""
+    record = (context or {}).get(RESUME_ACTION_KEY)
+    return isinstance(record, dict) and bool(record.get("question_ids")) and not record.get("ids")
+
+
+def builder_refusal(context: dict | None, tool: str | None = None) -> str | None:
+    """None when this run may use the builder (or `tool` of it); otherwise
+    why not, in words."""
     ctx = context or {}
+    if tool in QUESTION_RESUME_TOOLS and question_resume(ctx):
+        ctx = {k: v for k, v in ctx.items() if k != RESUME_ACTION_KEY}
     if ctx.get("turn_provenance") == "synthetic-trigger" or any(ctx.get(key) for key in NOT_THE_OWNERS_CHAT_KEYS) or INVITED_ORIGIN_KEY in ctx:
         return "Agents, skills and automations can only be built or changed from your own chat with the assistant, not from a scheduled, delegated, resumed or @-called run."
     if ctx.get("agent_name") and not ctx.get("is_bootstrap"):
