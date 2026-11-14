@@ -386,6 +386,11 @@ class RunJournal(BaseCallbackHandler):
     async def _flush_async(self, batch: list[dict]) -> bool:
         try:
             await self._store.put_batch(batch)
+        except asyncio.CancelledError:
+            # Cancelled mid-write: back to the buffer, for the next flush.
+            with self._buffer_lock:
+                self._buffer = batch + self._buffer
+            raise
         except Exception:
             logger.warning(
                 "Failed to flush %d events for run %s — returning to buffer",
@@ -478,7 +483,8 @@ class RunJournal(BaseCallbackHandler):
                     del self._buffer[: self._flush_threshold]
                 try:
                     await self._store.put_batch(batch)
-                except Exception:
+                except BaseException:
+                    # Failed OR cancelled: back to the buffer, never dropped.
                     with self._buffer_lock:
                         self._buffer = batch + self._buffer
                     raise

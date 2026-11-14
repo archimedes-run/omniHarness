@@ -40,6 +40,7 @@ from app.gateway.routers import (
     policy,
     preferences,
     previews,
+    questions,
     run_history,
     runs,
     sessions,
@@ -446,6 +447,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.gateway.resume import resume_expired_forever
 
         expiry_task = asyncio.create_task(resume_expired_forever(app))
+        # Question cards expire beside it (009 question-card.md QC-04).
+        from app.gateway.questions import sweep_forever as question_sweep_forever
+
+        question_task = asyncio.create_task(question_sweep_forever(app))
 
         yield
 
@@ -454,9 +459,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.gateway.apps.refresher import stop as stop_apps_refresher
 
         await stop_apps_refresher(apps_refresher, timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS)
-        expiry_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await expiry_task
+        for task in (expiry_task, question_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         # Trace writes in flight end before anything they use is closed.
         from app.gateway.services import drain_trace_tasks
 
@@ -537,6 +543,10 @@ def create_app() -> FastAPI:
     log_redaction.install()
 
     config = get_gateway_config()
+    # Question cards: the lead asker and the harness hook that records them.
+    from app.gateway import questions as question_cards
+
+    question_cards.install()
     docs_kwargs = {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"} if config.enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
     app = FastAPI(
@@ -710,6 +720,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(threads.router)
     # Surface 1: pending Tier 3 confirmations (Feature 004).
     app.include_router(confirmations.router)
+    # Question cards (009 question-card.md): list and answer.
+    app.include_router(questions.router)
 
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)

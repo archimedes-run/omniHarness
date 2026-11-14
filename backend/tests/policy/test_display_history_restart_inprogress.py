@@ -202,7 +202,18 @@ def start_held_turn(gw, monkeypatch) -> tuple[str, str]:
 def test_a_reload_during_a_run_shows_the_persons_message_of_that_run_once(gateway, monkeypatch):
     thread_id, run_id = start_held_turn(gateway, monkeypatch)
     try:
-        state = research._messages(gateway, thread_id)
+        # The precondition: the summary replaced the person's message in the
+        # thread state. The run writes its checkpoints asynchronously (LangGraph's
+        # default durability: a step's checkpoint is saved while the next step
+        # runs), so the checkpoint that carries the summary can still be in
+        # flight when the run reaches the held tool. Wait for it, bounded well
+        # inside the held tool's own wait (issue #180).
+        deadline = time.time() + 15
+        while True:
+            state = research._messages(gateway, thread_id)
+            if SECOND not in json.dumps(state) or time.time() > deadline:
+                break
+            time.sleep(0.05)
         assert SECOND not in json.dumps(state), "the person's message is still in the thread state; this test proves nothing"
         runs = gateway.client.get(f"/api/threads/{thread_id}/runs").json()
         assert [r["status"] for r in runs] == ["success", "running"]
