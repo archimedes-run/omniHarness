@@ -29,10 +29,19 @@ export function clipWords(text: string, max = 160): string {
  * versions cut mid-word), so its last partial word is dropped. */
 const DESCRIPTION_CAP = 300;
 
-/** The assistant's description of a change, clipped at a word. */
+/** Where descriptions were cut before they were clipped at a word: the
+ * job's title (80) and the version note (300). */
+const STORAGE_LIMITS = [80, DESCRIPTION_CAP];
+
+/** The assistant's description of a change, clipped at a word. Text that
+ * ends without terminal punctuation at a storage limit was cut there, maybe
+ * mid-word: its last partial word is dropped. */
 export function clipDescription(text: string, max = 280): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  if (flat.length >= DESCRIPTION_CAP - 1 && !flat.endsWith("…")) {
+  const cutAtLimit = STORAGE_LIMITS.some(
+    (limit) => flat.length >= limit - 1 && flat.length <= limit,
+  );
+  if (cutAtLimit && !/[.!?…)"'’”]$/.test(flat)) {
     const space = flat.lastIndexOf(" ");
     return clipWords(
       `${flat.slice(0, space > 0 ? space : flat.length).replace(/[\s,;:.\-–—]+$/, "")}…`,
@@ -53,7 +62,7 @@ export function anchorCards(
   for (const card of cards) {
     const byId = `card ${card.id}`;
     const byVersion = new RegExp(
-      `App registered by the system: id ${escape(card.app_id)}, version ${card.version}[;( ]`,
+      `App registered by the system: id ${escape(card.app_id)}, version ${card.version}(?!\\d)`,
     );
     for (let i = 0; i < texts.length; i++) {
       const text = texts[i] ?? "";
@@ -201,4 +210,156 @@ export function orderCards<
     newer,
     newestPending: pending.length ? pending[pending.length - 1]!.id : null,
   };
+}
+
+/** What placement needs to know of one thread message. */
+export interface MessageFacts {
+  text: string;
+  /** A tool result: the id of the call it answers. */
+  toolCallId?: string;
+  /** The result of a coding job (where versions are registered). */
+  isJobResult: boolean;
+  /** The person's own words, when this is a genuine (server-marked) user
+   * turn; null otherwise. */
+  userText: string | null;
+}
+
+/** A coding job's registration, as its job record says (by tool call). */
+export interface JobRegistration {
+  app_id: string;
+  version: number;
+}
+
+/**
+ * card id → index of the message it follows. In order: the turn whose report
+ * names the card or its version; the job (by tool call) whose record says it
+ * registered that version; else by time against the cards that were placed:
+ * the job result before the next placed card, or that card's turn, or the
+ * last placed earlier card's turn. Only a card with nothing placed around it
+ * is left out (the end of the thread).
+ */
+export function placeCards(
+  messages: MessageFacts[],
+  cards: Pick<ApprovalCard, "id" | "app_id" | "version" | "created_at">[],
+  registrations: Map<string, JobRegistration[]>,
+): Map<string, number> {
+  const anchors = anchorCards(
+    messages.map((m) => m.text),
+    cards,
+  );
+  for (const card of cards) {
+    if (anchors.has(card.id)) continue;
+    const index = messages.findIndex(
+      (m) =>
+        m.toolCallId !== undefined &&
+        (registrations.get(m.toolCallId) ?? []).some(
+          (r) => r.app_id === card.app_id && r.version === card.version,
+        ),
+    );
+    if (index !== -1) anchors.set(card.id, index);
+  }
+  const time = (c: { created_at: string }) => Date.parse(c.created_at) || 0;
+  const placed = cards.filter((c) => anchors.has(c.id));
+  for (const card of cards) {
+    if (anchors.has(card.id)) continue;
+    const later = placed
+      .filter((c) => time(c) > time(card))
+      .sort((a, b) => time(a) - time(b))[0];
+    if (later) {
+      const at = anchors.get(later.id)!;
+      let before = -1;
+      for (let i = at - 1; i >= 0; i--) {
+        if (messages[i]?.isJobResult) {
+          before = i;
+          break;
+        }
+      }
+      anchors.set(card.id, before !== -1 ? before : at);
+      continue;
+    }
+    const earlier = placed
+      .filter((c) => time(c) <= time(card))
+      .sort((a, b) => time(b) - time(a))[0];
+    if (earlier) anchors.set(card.id, anchors.get(earlier.id)!);
+  }
+  return anchors;
+}
+
+/** The person's own words that started the turn ending at `index`. */
+export function requestBefore(
+  messages: MessageFacts[],
+  index: number,
+): string | null {
+  for (let i = index; i >= 0; i--) {
+    const words = messages[i]?.userText;
+    if (words) return words;
+  }
+  return null;
+}
+
+export type RegistrationState =
+  | { kind: "in_use" }
+  | { kind: "offered" }
+  | { kind: "replaced"; by: number }
+  | { kind: "kept"; version: number }
+  | { kind: "needs_approval" }
+  | { kind: "unknown" };
+
+/**
+ * The live state of a version a job registered, from the app's served
+ * version and this chat's cards (data the chat already reads).
+ */
+export function registrationState(
+  appId: string,
+  version: number,
+  served: number | undefined,
+  cards: Pick<
+    ApprovalCard,
+    "app_id" | "version" | "status" | "keeps_version" | "kind"
+  >[],
+  needsApproval: boolean,
+): RegistrationState {
+  const own = cards.find((c) => c.app_id === appId && c.version === version);
+  if (served === version) return { kind: "in_use" };
+  if (own?.status === "pending") {
+    return own.kind === "version"
+      ? { kind: "offered" }
+      : { kind: "needs_approval" };
+  }
+  if (own?.status === "kept") {
+    return {
+      kind: "kept",
+      version: own.keeps_version ?? served ?? version - 1,
+    };
+  }
+  const newer = cards
+    .filter((c) => c.app_id === appId && c.version > version)
+    .sort((a, b) => a.version - b.version)[0];
+  if (served !== undefined && served > version) {
+    return { kind: "replaced", by: served };
+  }
+  if (own?.status === "superseded" && newer) {
+    return { kind: "replaced", by: newer.version };
+  }
+  if (served === undefined && !own) {
+    return needsApproval ? { kind: "needs_approval" } : { kind: "unknown" };
+  }
+  return { kind: "unknown" };
+}
+
+export function registrationWords(state: RegistrationState): string {
+  switch (state.kind) {
+    case "in_use":
+      return "in use";
+    case "offered":
+      return "offered — waiting for your choice";
+    case "replaced":
+      return `replaced by version ${state.by}`;
+    case "kept":
+      return `kept version ${state.version}`;
+    case "needs_approval":
+      return "needs your approval";
+    case "unknown":
+      return "";
+  }
 }
