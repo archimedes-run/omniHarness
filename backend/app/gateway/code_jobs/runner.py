@@ -42,6 +42,7 @@ import json
 import logging
 import re
 import shlex
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -56,7 +57,7 @@ from . import layout as layout_mod
 from .events import Tally, permission_prompt, to_step
 from .relay import Relay
 from .sandbox_ops import SandboxOps
-from .store import CodeJobStore
+from .store import CodeJobStore, mark_done, mark_live
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,11 @@ class CodeJobManager:
             report = f"Coding job not started: this month's coding-job cap (${settings.monthly_cap_usd:.2f}) is reached (${month:.2f} spent). The owner can raise it in config (code_jobs.monthly_cap_usd)."
             return CodeJobOutcome(job_id="", status="blocked", report=report)
 
+        if implied := app_mode.implied_pass(self.store, thread_id, brief):
+            import dataclasses
+
+            logger.info("code job: a follow-up on %s is the design pass its last app job asked for (%s)", brief.project_dir, implied)
+            brief = dataclasses.replace(brief, fix_of=implied)
         if brief.fix_of and (why := self._fix_refusal(thread_id, brief)):
             return CodeJobOutcome(job_id="", status="blocked", report=f"Coding job not started: {why}. Do not run another automatic fix or design pass; report the results you have.")
         app, why = app_mode.context_for(self.store, thread_id, brief, turn, owner_id=user_id)
@@ -244,7 +250,13 @@ class CodeJobManager:
 
         job_id = uuid.uuid4().hex[:16]
         budget = (settings.app_budget_usd or settings.budget_usd) if app is not None else settings.budget_usd
+        # The job is alive from its row until its terminal status: a heartbeat
+        # thread beats for its whole life, whatever the runner is waiting on
+        # (a slow sandbox call, a stuck event loop), and marks it live in this
+        # process so no reaper here ever calls it stopped.
+        heartbeat = Heartbeat(self.store, job_id)
         self.store.create(job_id=job_id, thread_id=thread_id, user_id=user_id, tool_call_id=tool_call_id, title=brief.title or brief.goal[:80], project_dir=brief.project_dir, budget_usd=budget, model=settings.model_label)
+        mark_live(job_id)
         if brief.fix_of or app is not None:
             # Recorded before anything runs, so the caps hold whatever happens next.
             early: dict = {"fix_of": brief.fix_of} if brief.fix_of else {}
@@ -256,6 +268,7 @@ class CodeJobManager:
         started = time.monotonic()
         running: Running | None = None
         status, why, result = "blocked", "the job did not start", {}
+        heartbeat.start()
         try:
             try:
                 # Starting a sandbox can take a while: keep beating so the
@@ -285,6 +298,7 @@ class CodeJobManager:
             why = f"the job could not be run ({type(exc).__name__})"
             return self._end(job_id, "blocked", why, {"status": "blocked", "reason": why}, relay)
         finally:
+            heartbeat.stop()
             self._running.pop(job_id, None)
             if running is not None:
                 close = getattr(running.ops, "close", None)
@@ -895,6 +909,50 @@ PUBLISH_NAME_TRIES = 20
 
 SNAPSHOT_CMD = "/usr/bin/ps -u gem -o pid=,lstart="
 _SAFE_KEY = re.compile(r"^[0-9]+\|[A-Za-z0-9: ]+$")
+
+
+#: How often a job's heartbeat thread beats, and how often it logs that it does.
+HEARTBEAT_SECONDS = 5.0
+HEARTBEAT_LOG_EVERY = 6
+
+
+class Heartbeat:
+    """Beats a job's row every HEARTBEAT_SECONDS from its creation until its
+    terminal status, on its own thread (independent of the event loop and of
+    whatever sandbox call the runner is waiting on)."""
+
+    def __init__(self, store: CodeJobStore, job_id: str) -> None:
+        self.store = store
+        self.job_id = job_id
+        self.beats = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"code-job-heartbeat-{job_id}", daemon=True)
+
+    def start(self) -> None:
+        logger.info("code job %s: heartbeat started (every %.0f s, owner %s)", self.job_id, HEARTBEAT_SECONDS, store_owner())
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(HEARTBEAT_SECONDS):
+            try:
+                self.store.beat(self.job_id)
+                self.beats += 1
+                if self.beats % HEARTBEAT_LOG_EVERY == 0:
+                    job = self.store.get(self.job_id)
+                    logger.info("code job %s: heartbeat %d (phase %s, %.0f s)", self.job_id, self.beats, job.phase if job else "?", self.beats * HEARTBEAT_SECONDS)
+            except Exception:  # noqa: BLE001 - one failed write never ends the heartbeat
+                logger.warning("code job %s: heartbeat write failed", self.job_id, exc_info=True)
+
+    def stop(self) -> None:
+        self._stop.set()
+        mark_done(self.job_id)
+        logger.info("code job %s: heartbeat stopped after %d beats", self.job_id, self.beats)
+
+
+def store_owner() -> str:
+    from .store import OWNER
+
+    return OWNER
 
 
 def snapshot_keys(ps_output: str) -> frozenset[str]:
