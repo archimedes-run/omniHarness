@@ -103,7 +103,12 @@ def test_github_presets_are_fixed_queries() -> None:
     args = catalog.CATALOG["github.pr_search"].arguments
     assert args({"preset": "review_requested", "limit": 20}, NOW)["q"] == "is:pr is:open review-requested:@me"
     assert args({"preset": "failing", "limit": 20}, NOW)["q"] == "is:pr is:open author:@me status:failure"
-    assert args({"preset": "merged_7d", "limit": 20}, NOW)["q"] == "is:pr is:merged author:@me merged:>=2026-11-06"
+    # NOW is Friday 2026-11-13 15:00 UTC (10:00 in New York).
+    assert args({"preset": "merged_7d", "limit": 20}, NOW)["q"] == "is:pr is:merged author:@me merged:>=2026-11-07T00:00:00+00:00"
+    assert args({"preset": "merged_7d", "limit": 20, "tz": "America/New_York"}, NOW)["q"] == "is:pr is:merged author:@me merged:>=2026-11-07T00:00:00-05:00"
+    assert args({"preset": "merged_week", "limit": 20, "tz": "America/New_York"}, NOW)["q"] == "is:pr is:merged author:@me merged:>=2026-11-09T00:00:00-05:00", "Monday 00:00 local"
+    late = datetime(2026, 11, 16, 3, 30, tzinfo=UTC)  # Sunday 22:30 in New York, Monday in UTC
+    assert args({"preset": "merged_week", "limit": 20, "tz": "America/New_York"}, late)["q"].endswith("merged:>=2026-11-09T00:00:00-05:00"), "still last week locally"
 
 
 def test_calendar_is_the_owners_day_in_the_zone() -> None:

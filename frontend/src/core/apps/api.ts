@@ -45,8 +45,18 @@ export interface ApprovalCard {
   app_name: string;
   version: number;
   manifest_hash: string;
-  status: "pending" | "approved" | "superseded";
+  status: "pending" | "approved" | "superseded" | "kept";
   sources: { name: string; words: string; refresh_words: string }[];
+  /** "access": the app's data access; "version": a new version of an app
+   * whose access is already granted (one click switches to it). */
+  kind?: "access" | "version";
+  /** Version cards: the version that keeps running until the button. */
+  keeps_version?: number | null;
+  /** Version cards: the assistant's own description of the change (model
+   * text, shown quoted and labelled as such). */
+  description?: string | null;
+  /** Version cards: the version passed the system's checks. */
+  checks_passed?: boolean | null;
   sentence: string;
   suggestion: boolean;
   suggestion_source: string | null;
@@ -249,6 +259,16 @@ export async function approveApp(
       manifest_hash: manifestHash,
       card_id: cardId,
     }),
+  );
+}
+
+/** A version card's "Keep version M": the offered version is not served. */
+export async function keepAppVersion(
+  id: string,
+  cardId: string,
+): Promise<{ status: string; version: number }> {
+  return read(
+    await send(`${base()}/${enc(id)}/keep`, "POST", { card_id: cardId }),
   );
 }
 

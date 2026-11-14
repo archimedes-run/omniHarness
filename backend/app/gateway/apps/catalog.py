@@ -111,6 +111,12 @@ class Entry:
     arguments: Callable[[dict, datetime], dict] | None = None
     read: Callable[[SourceContext, dict, datetime], Awaitable[Any]] | None = None
     default_refresh_s: int = REFRESH_DEFAULT_S
+    #: Item keys that travel with a selected field (approving `next_run`
+    #: brings its `trigger` kind, so a tile can say "runs on events").
+    companions: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    #: Top-level facts about the answer, always sent (never the owner's
+    #: data): whether the upstream had more than the cap, items dropped.
+    meta_fields: tuple[str, ...] = ()
 
     @property
     def fields(self) -> tuple[str, ...]:
@@ -163,6 +169,12 @@ def _iso(value: object) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     text = str(value).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        # A date stays a date (an all-day event), never midnight UTC.
+        try:
+            return date.fromisoformat(text).isoformat()
+        except ValueError:
+            return None
     if re.fullmatch(r"\d{10,13}", text):
         seconds = int(text) / (1000 if len(text) == 13 else 1)
         return datetime.fromtimestamp(seconds, UTC).isoformat()
@@ -213,21 +225,75 @@ def _calendar_project(raw: Any, params: dict, now: datetime) -> dict:
 
 # -- GitHub --------------------------------------------------------------------
 
-GITHUB_PRESETS = ("review_requested", "failing", "merged_7d")
+GITHUB_PRESETS = ("review_requested", "failing", "merged_7d", "merged_week")
 
 
-def _github_query(preset: str, now: datetime) -> str:
+def _local_midnight(tz_name: str, now: datetime, days_back: int = 0) -> datetime:
+    start, _ = _day_bounds(tz_name, now)
+    return datetime.combine(start.date() - timedelta(days=days_back), time.min, tzinfo=zoneinfo.ZoneInfo(tz_name))
+
+
+def github_since(preset: str, now: datetime, tz_name: str | None) -> datetime | None:
+    """Where a merged preset's window starts, in the manifest's zone (UTC when
+    the manifest names none): merged_7d, the local midnight six days before
+    today (seven local days, today included); merged_week, Monday 00:00 of
+    this local week (ISO weeks start on Monday)."""
+    tz_name = tz_name or "UTC"
+    if preset == "merged_7d":
+        return _local_midnight(tz_name, now, 6)
+    if preset == "merged_week":
+        return _local_midnight(tz_name, now, now.astimezone(zoneinfo.ZoneInfo(tz_name)).weekday())
+    return None
+
+
+def _github_query(preset: str, now: datetime, tz_name: str | None = None) -> str:
     if preset == "review_requested":
         return "is:pr is:open review-requested:@me"
     if preset == "failing":
         return "is:pr is:open author:@me status:failure"
-    if preset == "merged_7d":
-        return f"is:pr is:merged author:@me merged:>={(now - timedelta(days=7)).date().isoformat()}"
+    since = github_since(preset, now, tz_name)
+    if since is not None:
+        return f"is:pr is:merged author:@me merged:>={since.isoformat()}"
     raise ValueError(f"unknown preset {preset}")
 
 
 def _github_args(params: dict, now: datetime) -> dict:
-    return {"q": _github_query(params["preset"], now), "per_page": params["limit"], "sort": "updated", "order": "desc"}
+    return {"q": _github_query(params["preset"], now, params.get("tz")), "per_page": params["limit"], "sort": "updated", "order": "desc"}
+
+
+_API_REPO = re.compile(r"^https://api\.github\.com/repos/([A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})$")
+_HTML_PR = re.compile(r"^https://github\.com/([A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})/(?:pull|issues)/(\d{1,10})$")
+
+
+def github_repo(item: dict) -> str | None:
+    """OWNER/NAME of a search result, from the fields search answers carry:
+    `repository_url` (the API's), `repository.full_name`, or the item's own
+    GitHub page (`html_url`, `pull_request.html_url`) when its number matches.
+    Only the name is taken; the link is always built here."""
+    m = _API_REPO.match(str(item.get("repository_url") or ""))
+    if m:
+        return m.group(1)
+    repo = item.get("repository")
+    if isinstance(repo, dict) and _GITHUB_REPO_NAME.match(str(repo.get("full_name") or "")):
+        return str(repo["full_name"])
+    pull = item.get("pull_request") if isinstance(item.get("pull_request"), dict) else {}
+    for url in (item.get("html_url"), pull.get("html_url")):
+        m = _HTML_PR.match(str(url or ""))
+        if m and int(m.group(2)) == item.get("number"):
+            return m.group(1)
+    return None
+
+
+_GITHUB_REPO_NAME = re.compile(r"^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$")
+
+
+def merged_at(item: dict, params: dict) -> object:
+    """The merge time: the search answer's `pull_request.merged_at`, or, for a
+    merged preset (every result is merged), its `closed_at`."""
+    pull = item.get("pull_request") if isinstance(item.get("pull_request"), dict) else {}
+    if pull.get("merged_at"):
+        return pull["merged_at"]
+    return item.get("closed_at") if str(params.get("preset", "")).startswith("merged") else None
 
 
 def _github_project(raw: Any, params: dict, now: datetime) -> dict:
@@ -235,20 +301,27 @@ def _github_project(raw: Any, params: dict, now: datetime) -> dict:
     if found is None:
         raise Unrecognised("GitHub answered in a shape the app platform does not recognise")
     items = []
+    dropped = 0
     for it in found:
         number = it.get("number")
-        if not isinstance(number, int) or isinstance(number, bool):
+        repo = github_repo(it) if isinstance(number, int) and not isinstance(number, bool) else None
+        link = github_pr_link(repo, number) if repo else None
+        if repo is None or link is None:
+            dropped += 1  # never shown with a blank repository or link
             continue
-        repo = str(it.get("repository_url", "")).rsplit("/repos/", 1)[-1]
-        pull = it.get("pull_request") if isinstance(it.get("pull_request"), dict) else {}
-        items.append({"repo": _clip(repo), "number": number, "title": _clip(it.get("title", "")), "updated_at": _iso(it.get("updated_at")), "merged_at": _iso(pull.get("merged_at")), "link": github_pr_link(repo, number)})
-    return {"items": items}
+        items.append({"repo": _clip(repo), "number": number, "title": _clip(it.get("title", "")), "updated_at": _iso(it.get("updated_at")), "merged_at": _iso(merged_at(it, params)), "link": link})
+    total = raw.get("total_count") if isinstance(raw, dict) else None
+    if total is None and isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+        total = raw["data"].get("total_count")
+    more = (isinstance(total, int) and not isinstance(total, bool) and total > len(found)) or len(found) >= params.get("limit", ITEMS_MAX)
+    return {"items": items, "more": bool(more), "dropped": dropped}
 
 
 _GITHUB_PHRASES = {
     "review_requested": "Search GitHub for open pull requests waiting on your review",
     "failing": "Search GitHub for your open pull requests with failing checks",
     "merged_7d": "Search GitHub for your pull requests merged in the last 7 days",
+    "merged_week": "Search GitHub for your pull requests merged this week (since Monday)",
 }
 
 # -- Gmail ---------------------------------------------------------------------
@@ -399,7 +472,8 @@ async def _automations_read(ctx: SourceContext, params: dict, now: datetime) -> 
                 continue
             nxt = next_run(rule, now=now, engine_enabled=True, quiet_hours=quiet)
             f = last.get(rule.id)
-            rows.append({"rule_id": rule.id, "last_run": f.at if f else None, "outcome": f.outcome if f else None, "next_run": nxt.get("next_run_at")})
+            trigger = "schedule" if str(rule.type) == "cron" else "event"
+            rows.append({"rule_id": rule.id, "last_run": f.at if f else None, "outcome": f.outcome if f else None, "next_run": nxt.get("next_run_at") if trigger == "schedule" else None, "trigger": trigger})
         return {"rows": rows}
 
     return await asyncio.to_thread(read)
@@ -409,7 +483,7 @@ def _automations_project(raw: Any, params: dict, now: datetime) -> dict:
     from app.gateway.home_view import rule_title
 
     rows = sorted(raw["rows"], key=lambda r: r["last_run"] or "", reverse=True)[: params["limit"]]
-    return {"items": [{"rule": _clip(rule_title(r["rule_id"])), "last_run": _iso(r["last_run"]), "outcome": _clip(r["outcome"]) if r["outcome"] else None, "next_run": _iso(r["next_run"])} for r in rows]}
+    return {"items": [{"rule": _clip(rule_title(r["rule_id"])), "last_run": _iso(r["last_run"]), "outcome": _clip(r["outcome"]) if r["outcome"] else None, "next_run": _iso(r["next_run"]), "trigger": r["trigger"]} for r in rows]}
 
 
 # -- the catalog -----------------------------------------------------------------
@@ -444,8 +518,9 @@ CATALOG: dict[str, Entry] = {
             tool="GITHUB_SEARCH_ISSUES_AND_PULL_REQUESTS",
             item_fields=("repo", "number", "title", "updated_at", "merged_at", "link"),
             field_words={"repo": "repository", "number": "number", "title": "title", "updated_at": "last updated", "merged_at": "merged time", "link": "link"},
-            params={"preset": Param(type="enum", values=GITHUB_PRESETS, required=True), "limit": _limit(20)},
+            params={"preset": Param(type="enum", values=GITHUB_PRESETS, required=True), "limit": _limit(20), "tz": Param(type="timezone", default=None)},
             link_hosts=("github.com",),
+            meta_fields=("more", "dropped"),
             phrase=lambda p: f"{_GITHUB_PHRASES[p['preset']]}, up to {p['limit']}",
             arguments=_github_args,
             project=_github_project,
@@ -489,8 +564,9 @@ CATALOG: dict[str, Entry] = {
         Entry(
             id="omni.automations.recent",
             kind="service",
-            item_fields=("rule", "last_run", "outcome", "next_run"),
-            field_words={"rule": "automation name", "last_run": "last run", "outcome": "outcome", "next_run": "next run"},
+            item_fields=("rule", "last_run", "outcome", "next_run", "trigger"),
+            field_words={"rule": "automation name", "last_run": "last run", "outcome": "outcome", "next_run": "next run", "trigger": "scheduled or on events"},
+            companions=(("next_run", ("trigger",)),),
             params={"limit": _limit(10)},
             link_hosts=(),
             phrase=lambda p: f"Read your automations' last runs, outcomes and next runs, up to {p['limit']}",
@@ -511,8 +587,12 @@ def is_empty(projected: dict) -> bool:
 
 def select(projected: dict, entry: Entry, fields: list[str]) -> dict:
     """Keep only the declared fields; clip, cap and bound (FR-011)."""
-    wanted_items = [f for f in entry.item_fields if f in fields]
-    out: dict[str, Any] = {}
+    chosen = set(fields)
+    for field, extra in entry.companions:
+        if field in chosen:
+            chosen.update(extra)
+    wanted_items = [f for f in entry.item_fields if f in chosen]
+    out: dict[str, Any] = {key: projected[key] for key in entry.meta_fields if key in projected}
     for top in entry.top_fields:
         if top in fields:
             out[top] = projected.get(top)

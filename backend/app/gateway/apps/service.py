@@ -161,6 +161,12 @@ def card_view(card: dict, app: AppRecord | None) -> dict:
             drawn = app
         name = drawn.manifest["name"]
         sources = [{"name": n, "words": source_words(s)["words"], "refresh_words": refresh_words(s["refresh_s"])} for n, s in drawn.sources.items()]
+        note = drawn.snapshot.get("note") or {}
+    else:
+        note = {}
+    # A version card: a new version of an app whose data access is already
+    # granted (same sources). Its button switches the served version.
+    kind = "version" if note.get("kind") == "version" else "access"
     return {
         "id": card["id"],
         "app_id": card["app_id"],
@@ -176,6 +182,10 @@ def card_view(card: dict, app: AppRecord | None) -> dict:
         "thread_id": card.get("thread_id"),
         "created_at": iso(card["created_at"]),
         "resolved_at": iso(card.get("resolved_at")),
+        "kind": kind,
+        "keeps_version": note.get("keeps") if kind == "version" else None,
+        "description": note.get("description") if kind == "version" else None,
+        "checks_passed": note.get("checks") == "passed" if kind == "version" else None,
     }
 
 

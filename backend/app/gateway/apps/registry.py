@@ -20,7 +20,7 @@ from app.gateway.apps import bundle as bundle_mod
 from app.gateway.apps.catalog import get_entry
 from app.gateway.apps.checks import read_only_refusal, rules_in_force
 from app.gateway.apps.manifest import ManifestError, manifest_hash, validate_manifest
-from app.gateway.apps.service import clean_source, load_app, raise_card_if_needed
+from app.gateway.apps.service import clean_source, load_app, raise_card_if_needed, served
 from omniharness.config import config_versions as cv
 
 #: Who a registered version is recorded as.
@@ -40,6 +40,24 @@ class RegistrationResult:
     manifest_hash: str
     needs_approval: bool
     card_id: str | None
+
+
+NOTE_TEXT_MAX = 300
+
+
+def clean_note(note: dict) -> dict:
+    """The version card's note: fixed keys, plain short text only."""
+    out: dict = {}
+    text = note.get("description")
+    if isinstance(text, str):
+        out["description"] = "".join(c if c.isprintable() else " " for c in text)[:NOTE_TEXT_MAX].strip()
+    if note.get("checks") == "passed":
+        out["checks"] = "passed"
+    if isinstance(note.get("keeps"), int):
+        out["keeps"] = note["keeps"]
+    if note.get("kind") == "version":
+        out["kind"] = "version"
+    return out
 
 
 def _new_app_id(name: str, owner_id: str) -> str:
@@ -62,7 +80,13 @@ async def register_app(
     app_id: str | None = None,
     thread_id: str | None = None,
     origin: tuple[Literal["user", "content"], str | None] = ("user", None),
+    hold: bool = False,
+    note: dict | None = None,
 ) -> RegistrationResult:
+    """`hold`: a new version of an existing app waits on the owner's button
+    whatever led to it (an update, or a design pass on a registered app);
+    `note`: what the version card shows (the system's check result, the
+    assistant's description, labelled as such), stored with the version."""
     repo = getattr(app_state, "app_repo", None)
     if repo is None:
         raise AppRegistrationError("apps_unavailable", "apps need the gateway's SQL store")
@@ -92,9 +116,21 @@ async def register_app(
     from_content = kind != "user"
     # Led by content, a new version of an existing app (even a code-only one)
     # waits on the owner's button; the last served version keeps serving.
-    held = from_content and bool(cv.app_history(owner_id, app_id))
+    existing = bool(cv.app_history(owner_id, app_id))
+    held = (from_content or hold) and existing
     digest = cv.write_app_bundle(owner_id, html)
     snapshot = {"manifest": normalised, "manifest_hash": manifest_hash(normalised), "bundle_hash": digest, "script_hashes": script_hashes}
+    if held and await repo.active_grant(owner_id=owner_id, app_id=app_id, manifest_hash=snapshot["manifest_hash"]):
+        # Same sources, already granted: the card offers the version itself.
+        note = {**(note or {}), "kind": "version", "keeps": (await served(repo, owner_id, app_id)).version}
+    if note:
+        snapshot["note"] = clean_note(note)
+    if thread_id and not existing:
+        snapshot["thread_id"] = thread_id  # the chat that built the app (updates must come from it)
+    elif thread_id and existing:
+        first = cv.app_history(owner_id, app_id)[0].snapshot or {}
+        if first.get("thread_id"):
+            snapshot["thread_id"] = first["thread_id"]
     version = cv.write_app(owner_id, app_id, snapshot, who=REGISTRAR, source="code_job", held=held)
     app = load_app(owner_id, app_id, version.version)
     label = clean_source(source_label) or "content read earlier"

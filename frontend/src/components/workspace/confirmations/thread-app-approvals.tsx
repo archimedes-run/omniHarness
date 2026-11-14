@@ -19,7 +19,7 @@ export function ThreadAppApprovals({ threadId }: { threadId: string }) {
       data-testid="thread-app-approvals"
     >
       {data.map((card) => (
-        <AppApprovalCard key={card.id} card={card} />
+        <AppApprovalCard key={card.id} card={card} reveal />
       ))}
     </div>
   );

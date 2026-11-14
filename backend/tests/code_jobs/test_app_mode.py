@@ -71,7 +71,7 @@ def test_the_mock_shim_has_the_real_shims_tile_words():
 def test_short_names_become_the_today_manifest_with_every_field():
     m = today_manifest(timezone="Europe/London")
     assert list(m["sources"]) == TODAY
-    assert m["sources"]["gh_failing"]["params"] == {"preset": "failing", "limit": 20}
+    assert m["sources"]["gh_failing"]["params"] == {"preset": "failing", "limit": 20, "tz": "Europe/London"}, "GitHub weeks follow the app's zone"
     assert m["sources"]["calendar"]["params"]["tz"] == "Europe/London" and m["sources"]["ledger"]["params"]["tz"] == "Europe/London"
     assert m["sources"]["inbox"]["fields"] == ["count", "subject", "received_at", "link"]
 
@@ -131,7 +131,7 @@ def test_sample_data_has_four_states_and_only_the_selected_fields():
     data = app_kit.fixtures(m)
     assert data["sources"]["prs"]["fresh"]["items"][0] == {"number": 479, "title": "Upgrade the build to Node 22"}
     assert data["sources"]["inbox"]["fresh"] == {"items": data["sources"]["inbox"]["fresh"]["items"]} and set(data["sources"]["inbox"]["fresh"]["items"][0]) == {"subject"}
-    assert data["sources"]["prs"]["empty"] == {"items": []}
+    assert data["sources"]["prs"]["empty"] == {"items": [], "more": False, "dropped": 0}, "the bridge always sends more and dropped"
     file = app_kit.mock_data_file(m)
     assert set(file["sources"]["prs"]) == {"use", "fresh", "empty", "not_connected", "failed"}
     assert file["sources"]["prs"]["failed"]["reason"] == app_kit.MOCK_REASON

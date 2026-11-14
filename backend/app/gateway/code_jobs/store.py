@@ -12,6 +12,7 @@ the known-secrets redaction first, and are capped.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
 import threading
@@ -233,9 +234,17 @@ class CodeJobStore:
         for job_id in stale:
             job = self.get(job_id)
             # An automatic fix stays one: its fix_of survives the rewrite (the cap reads it).
-            fix_of = (job.result or {}).get("fix_of") if job else None
-            self.finish(job_id, status="blocked", reason=reason, result={"status": "blocked", "reason": reason, **({"fix_of": fix_of} if fix_of else {})})
+            kept = {k: (job.result or {}).get(k) for k in ("fix_of", "app")} if job else {}
+            self.finish(job_id, status="blocked", reason=reason, result={"status": "blocked", "reason": reason, **{k: v for k, v in kept.items() if v}})
         return stale
+
+    @staticmethod
+    def as_seen(job: Job, max_age: float = 90.0) -> Job:
+        """A job whose runner stopped beating, shown as what it is (read
+        surfaces do not write; reap_stale records it at the next job)."""
+        if job.status == RUNNING and time.time() - job.updated_at > max_age:
+            return dataclasses.replace(job, status="blocked", reason="the job's runner stopped (the gateway restarted or the run ended) before it finished")
+        return job
 
     def beat(self, job_id: str) -> None:
         with self._tx() as db:

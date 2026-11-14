@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   type CodeJobPayload,
@@ -22,6 +22,12 @@ export function useCodeJob({
   const queryClient = useQueryClient();
   const key = ["code-job", threadId, toolCallId];
   const [mountedAt] = useState(() => Date.now());
+  // The tool returned: read the job's final state at once (polling may have
+  // been paused while the tab was hidden).
+  useEffect(() => {
+    if (!waiting) void queryClient.invalidateQueries({ queryKey: key });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting]);
   return useQuery<CodeJobPayload, Error>({
     queryKey: key,
     queryFn: async () => {

@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -8,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.gateway import shutdown
 from app.gateway.auth_middleware import AuthMiddleware
 from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CSRFMiddleware
@@ -80,7 +80,9 @@ logger = logging.getLogger(__name__)
 # Upper bound (seconds) each lifespan shutdown hook is allowed to run.
 # Bounds worker exit time so uvicorn's reload supervisor does not keep
 # firing signals into a worker that is stuck waiting for shutdown cleanup.
-_SHUTDOWN_HOOK_TIMEOUT_SECONDS = 5.0
+#: Each stoppable service's own shutdown bound (app.gateway.shutdown also
+#: keeps it out of the data closes' reserve); OMNI_HARNESS_SHUTDOWN_STEP_SECONDS.
+_SHUTDOWN_HOOK_TIMEOUT_SECONDS = shutdown.step_seconds()
 
 
 async def _ensure_admin_user(app: FastAPI) -> None:
@@ -262,11 +264,7 @@ async def _stop_trigger_engine(app: FastAPI) -> None:
     from app.trigger_engine import lifespan as engine_lifespan
 
     try:
-        await asyncio.wait_for(engine_lifespan.stop(handle), timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS)
-    except TimeoutError:
-        logger.warning("Trigger engine shutdown exceeded %.1fs; proceeding with worker exit.", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
-    except Exception:
-        logger.exception("Trigger engine shutdown raised")
+        await shutdown.service_step(engine_lifespan.stop(handle), "the trigger engine's shutdown", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
     finally:
         _release_engine_lock(getattr(handle, "lock", None))
 
@@ -455,19 +453,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         yield
 
+        # ONE deadline for the whole shutdown, the data closes' share reserved
+        # (app.gateway.shutdown, issue #192): every step below is bounded.
+        shutdown.begin()
+
         # Apps refresher and bridge refreshes end (cancelled and awaited,
         # bounded) before anything they use, the database above all, closes.
         from app.gateway.apps.refresher import stop as stop_apps_refresher
 
-        await stop_apps_refresher(apps_refresher, timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS)
-        for task in (expiry_task, question_task):
+        await stop_apps_refresher(apps_refresher, timeout=shutdown.service_bound(_SHUTDOWN_HOOK_TIMEOUT_SECONDS))
+        # Cancelled AND awaited, within the bound: a sweep whose cleanup
+        # never ends on its own does not hold the shutdown.
+        for task, what in ((expiry_task, "the expiry sweep"), (question_task, "the question sweep")):
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-        # Trace writes in flight end before anything they use is closed.
+            await shutdown.service_step(task, what, _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
+        # Trace writes in flight end before anything they use is closed
+        # (two waits: the writes, then their cancel).
         from app.gateway.services import drain_trace_tasks
 
-        await drain_trace_tasks()
+        await drain_trace_tasks(timeout=shutdown.service_bound(_SHUTDOWN_HOOK_TIMEOUT_SECONDS) / 2)
 
         # Stop the trigger engine before the channel service, so a firing in
         # flight still has a destination to deliver to.
@@ -476,35 +480,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             purge_task.cancel()
 
         # Stop channel service on shutdown (bounded to prevent worker hang)
-        try:
-            from app.channels.service import stop_channel_service
+        from app.channels.service import stop_channel_service
 
-            await asyncio.wait_for(
-                stop_channel_service(),
-                timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            logger.warning(
-                "Channel service shutdown exceeded %.1fs; proceeding with worker exit.",
-                _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-            )
-        except Exception:
-            logger.exception("Failed to stop channel service")
+        await shutdown.service_step(stop_channel_service(), "the channel service's shutdown", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
 
         mcp_server_manager = getattr(app.state, "mcp_server_manager", None)
         if mcp_server_manager is not None:
-            try:
-                await asyncio.wait_for(
-                    mcp_server_manager.close(),
-                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                logger.warning(
-                    "MCP server manager shutdown exceeded %.1fs; proceeding with worker exit.",
-                    _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-                )
-            except Exception:
-                logger.exception("Failed to stop MCP server manager")
+            await shutdown.service_step(mcp_server_manager.close(), "the MCP server manager's shutdown", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
 
         try:
             from app.gateway import code_jobs as code_jobs_runtime
@@ -515,19 +497,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         preview_session_manager = getattr(app.state, "preview_session_manager", None)
         if preview_session_manager is not None:
-            try:
-                await asyncio.wait_for(
-                    preview_session_manager.close(),
-                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                logger.warning(
-                    "Preview session manager shutdown exceeded %.1fs; proceeding with worker exit.",
-                    _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-                )
-            except Exception:
-                logger.exception("Failed to stop preview session manager")
+            await shutdown.service_step(preview_session_manager.close(), "the preview session manager's shutdown", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
 
+    # The last step, after every data close has had its bound: steps abandoned
+    # past their bound are cancelled again and, if still running, detached so
+    # the process's exit cannot wait on them (app.gateway.shutdown).
+    await shutdown.finish()
     logger.info("Shutting down API Gateway")
 
 
