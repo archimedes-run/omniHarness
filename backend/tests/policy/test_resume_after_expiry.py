@@ -6,6 +6,7 @@ expired (and did not run). Nothing runs twice; never two resumes.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +21,8 @@ import test_web_research as wr  # noqa: E402
 from test_web_research import LEAD_SAW, LEAD_SCRIPT, SENT, _private_turn_with_fetches, _thread, gateway  # noqa: E402, F401
 
 URLS = ["https://food1.example/philly", "https://food2.example/philly"]
+#: The loop's own sleep, before any fixture runs.
+_REAL_SLEEP = asyncio.sleep
 
 
 def _store():
@@ -55,6 +58,17 @@ def _settle(gateway, thread_id: str) -> None:  # noqa: F811
 
 def _run_count(gateway, thread_id: str) -> int:  # noqa: F811
     return len(gateway.client.get(f"/api/threads/{thread_id}/runs").json())
+
+
+def test_the_gateway_keeps_its_own_sweep_out_of_the_tests_way(gateway):  # noqa: F811
+    """These tests make the sweeps themselves. The gateway's own sweep pauses
+    a minute between passes; with the loop's sleep sped up for the whole app
+    (the fixture once did, for the task tool's poll) it swept every 50 ms and
+    took the resume a test was waiting for (issue #180)."""
+    from app.gateway.resume import SWEEP_INTERVAL_SECONDS
+
+    assert asyncio.sleep is _REAL_SLEEP, "the fixture sped up every sleep in the gateway, the expiry sweep's pause among them"
+    assert SWEEP_INTERVAL_SECONDS >= 30
 
 
 def test_answered_then_the_rest_expire_resumes_once_and_reports_the_expired_as_not_run(gateway):  # noqa: F811
@@ -167,6 +181,45 @@ def test_a_failed_resume_is_not_retried(gateway, monkeypatch):  # noqa: F811
     assert _sweep(gateway) == []
     assert _sweep(gateway) == []
     assert len(attempts) == 1, "a failed resume was tried again"
+
+
+def test_two_sweeps_at_once_attempt_a_failed_resume_once(gateway, monkeypatch):  # noqa: F811
+    """Every worker sweeps. Two sweeps that both find the turn unattempted
+    (both past the marker check before either records its attempt) still
+    make ONE attempt: a failed resume is not tried again by the other."""
+    import app.gateway.resume as resume
+    import app.gateway.services as services
+
+    thread_id = _thread(gateway)
+    cards = _private_turn_with_fetches(gateway, thread_id, URLS[:1])
+    _expire(cards[0]["id"])
+    attempts = []
+
+    async def broken(*args, **kwargs):
+        attempts.append(1)
+        raise RuntimeError("the run could not start")
+
+    monkeypatch.setattr(services, "start_run", broken)
+    # Hold each sweep after its marker check until both have passed it.
+    real_why_not = resume._why_not
+    arrived: list[int] = []
+    both = asyncio.Event()
+
+    async def held(*args, **kwargs):
+        arrived.append(1)
+        if len(arrived) == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), timeout=10)
+        return await real_why_not(*args, **kwargs)
+
+    monkeypatch.setattr(resume, "_why_not", held)
+
+    async def two_sweeps():
+        return await asyncio.gather(resume.resume_expired(gateway.client.app), resume.resume_expired(gateway.client.app))
+
+    assert gateway.client.portal.call(two_sweeps) == [[], []]
+    assert len(arrived) == 2, "the sweeps did not both pass the marker check; this test proves nothing"
+    assert len(attempts) == 1, f"a failed resume was attempted {len(attempts)} times by two sweeps"
 
 
 def test_a_task_the_person_stopped_is_not_restarted(gateway, monkeypatch):  # noqa: F811
