@@ -89,7 +89,10 @@ def validate_manifest(raw: Any) -> dict:
                 normalised[pname] = _param(entry.id, pname, pspec, params[pname])
             elif pspec.required:
                 raise ManifestError(f"{where}: param {pname} is required")
-            else:
+            elif pspec.default is not None:
+                # An optional param with no default (added later, e.g. the
+                # GitHub source's tz) is left out, so manifests approved
+                # before it existed keep their hash.
                 normalised[pname] = pspec.default
         fields = spec.get("fields")
         if not isinstance(fields, list) or not fields or not all(isinstance(f, str) for f in fields):

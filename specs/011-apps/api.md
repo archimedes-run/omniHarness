@@ -295,11 +295,11 @@ Only the fields the manifest selected appear in each item.
 
 | Catalog entry | `data` |
 |---|---|
-| `googlecalendar.events_today` | `{"items": [{"title", "start", "end", "all_day"}]}` (≤ 50; cancelled events dropped) |
-| `github.pr_search` | `{"items": [{"repo", "number", "title", "updated_at", "merged_at", "link"}]}` |
+| `googlecalendar.events_today` | `{"items": [{"title", "start", "end", "all_day"}]}` (≤ 50; cancelled events dropped). The day is the local day in `tz` (midnight to midnight, DST-aware). A timed event's `start`/`end` carry their offset; an all-day event has `all_day: true` and DATES (`"2026-11-13"`, end exclusive), never a UTC midnight. |
+| `github.pr_search` | `{"items": [{"repo", "number", "title", "updated_at", "merged_at", "link"}], "more": bool, "dropped": int}`. `repo` (`OWNER/NAME`) comes from the answer's `repository_url`, `repository.full_name` or the item's own github.com page; `link` is always built as `https://github.com/OWNER/NAME/pull/N`. A result whose repository cannot be placed is left out and counted in `dropped`, never shown blank. `more`: the search had more results than the cap (show "20+"); `more` and `dropped` are always sent. Presets: `review_requested`, `failing`, `merged_7d` (merged since local midnight six days ago: seven local days, today included), `merged_week` (merged since Monday 00:00 of this local week; weeks start on Monday). Optional param `tz` (IANA) sets the zone of those windows; without it they are UTC. |
 | `omni.ledger.today` | `{"items": [{"bucket": "moved"\|"stuck"\|"overdue", "task", "project", "status", "due_date", "link"}]}` |
 | `omni.sessions.active` (install-wide: the session watcher is not per user) | `{"items": [{"tool", "title", "display_state": "working"\|"waiting-on-user", "known": "observed"\|"inferred", "since"}]}` |
-| `omni.automations.recent` (install-wide: the trigger engine is not per user) | `{"items": [{"rule", "last_run", "outcome", "next_run"}]}` |
+| `omni.automations.recent` (install-wide: the trigger engine is not per user) | `{"items": [{"rule", "last_run", "outcome", "next_run", "trigger"}]}`. `trigger`: `schedule` (a cron rule: `next_run` is its next run, computed by the trigger engine's own schedule function, in the rule's zone, as the Automations page shows it) or `event` (`next_run` is null: say "runs on events"). Selecting `next_run` brings `trigger` with it. `outcome` of the last run: `delivered`, `suppressed` (held back, for example by quiet hours), `queued` (waiting to be delivered), `expired` (queued too long, never delivered), `failed`; null before the first run. |
 | `gmail.unread_subjects` | `{"count": 12, "count_capped": false, "items": [{"subject", "received_at", "link"}]}` (never body, snippet or sender) |
 
 Strings are clipped (200 chars), arrays capped at 50, the payload ≤ 64 KB.
