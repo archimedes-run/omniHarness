@@ -498,7 +498,15 @@ async def resume_expired(app: Any, *, now: Any = None, middleware: Any = None) -
             continue  # the chat is replying: look again next pass, nothing recorded
         reason = await _why_not(request, thread, {a.id for a in group or seeds})
         # Recorded BEFORE the attempt: an attempt that fails is never retried.
-        marker.write_text(reason or "attempted")
+        # Claimed, not just written: two sweeps (every worker sweeps) can both
+        # find no marker above and both get here; only the one that creates
+        # the marker goes on. Written over, a failed attempt was tried again
+        # by the other sweep once the first gave its cards back (issue #180).
+        try:
+            with marker.open("x") as claim:
+                claim.write(reason or "attempted")
+        except FileExistsError:
+            continue  # another sweep holds this turn's one attempt
         if reason:
             logger.info("resume: not resuming thread %s after expiry (%s)", thread, reason)
             continue
