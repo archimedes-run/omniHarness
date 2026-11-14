@@ -197,6 +197,12 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         if not messages:
             return None
         turn = turn_messages(list(messages))
+        from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX
+
+        if any(isinstance(m, ToolMessage) and m.name == "builder_draft" and str(m.content).startswith(ASK_FIRST_PREFIX) for m in turn):
+            # The builder refused to draft something new with no purpose and
+            # asked for this question (spec 010): it is the sanctioned ask.
+            return None
         started = [s for s in tool_steps(turn) if s["name"] not in NON_EVIDENCE_TOOLS and s["id"] != call_id and s["ok"] is not None]
         ambiguous = str((args or {}).get("clarification_type") or "") == "ambiguous_requirement"
         if not started and not ambiguous:

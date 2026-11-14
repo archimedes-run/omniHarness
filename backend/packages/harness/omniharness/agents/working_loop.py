@@ -362,6 +362,30 @@ _CARD_PLAN_START = "Before I do this"
 CARD_PROMPT_RE = re.compile(r"(?i)\b(button|on (?:its|the) card|reply (?:with )?(?:yes|save|apply))\b")
 
 
+def declined_build(messages: list[Any]) -> bool:
+    """This turn is the lead resumed after a builder card was declined or
+    expired, and no builder card it raised ran (spec 010)."""
+    from omniharness.runtime.builder.surface import BUILDER_CARD_TOOLS
+
+    outcomes = [_kwargs(m).get(RESUME_OUTCOME_MARKER) for m in turn_messages(list(messages)) if _type(m) == "tool" and (_name(m) or "") in BUILDER_CARD_TOOLS]
+    return bool(outcomes) and any(o in ("declined", "expired") for o in outcomes) and "executed" not in outcomes
+
+
+#: The longest reply a resumed lead may give after a declined build before it
+#: is cut to the acknowledgement.
+DECLINED_REPLY_MAX = 300
+
+
+def declined_build_reply(reply: str) -> tuple[str, bool]:
+    """After a declined build: the reply, or the fixed acknowledgement when it
+    restates the draft (too long, or a code / JSON block)."""
+    from omniharness.runtime.builder.surface import DECLINED_ACK
+
+    if len(reply or "") > DECLINED_REPLY_MAX or "```" in (reply or ""):
+        return DECLINED_ACK, True
+    return reply, False
+
+
 def called_builder(messages: list[Any]) -> bool:
     """This turn called any chat-builder tool (spec 010)."""
     return any(str(call.get("name") or "").startswith("builder_") for message in turn_messages(list(messages)) if _type(message) == "ai" for call in _tool_calls(message))

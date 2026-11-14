@@ -54,7 +54,7 @@ from typing import Any
 from app.gateway.builder import drafts
 from app.gateway.builder.render import render_draft, render_live
 from omniharness.config import config_versions
-from omniharness.runtime.builder.surface import LEAD_AGENT, bootstrap_target, builder_refusal, forbidden_targets
+from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX, LEAD_AGENT, bootstrap_target, builder_refusal, forbidden_targets
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,15 @@ ACCESS_KEYS = (config_versions.TOOLS_KEY, "tool_groups", "skills", "model", conf
 #: selected); it has none of the tool groups or apps it asked for until the
 #: permission card the save raises is confirmed with its button.
 NEW_AGENT_ACCESS = {"tool_groups": [], "skills": []}
+#: Words a bare build request is made of: a purpose is what is left after them.
+GENERIC_REQUEST_WORDS = frozenset(
+    "a an the me my i i'd i'm we us our you your please can could would will just new another one some quick simple basic "
+    "create make build set up setup add start get give want need like to for with do new agent agents skill skills "
+    "automation automations workflow bot assistant helper something thing it that this".split()
+)
+#: How much purpose a NEW item's request must state, in letters.
+MIN_PURPOSE_CHARS = 12
+
 #: Fixed wording for refusals that reach the model: never free text taken
 #: from stored config or written by a model (a scan's reason).
 INVALID = {
@@ -489,7 +498,7 @@ class GatewayBuilderController:
 
     # -- the tools ---------------------------------------------------------------
 
-    def draft(self, context: dict, *, kind: str, name: str, fields: dict[str, Any], guessed: list[str], replace_current: bool) -> str:
+    def draft(self, context: dict, *, kind: str, name: str, fields: dict[str, Any], guessed: list[str], replace_current: bool, owner_request: str = "") -> str:
         try:
             user_id, thread_id = self._guard(context)
             if kind == "mcp_server":
@@ -512,6 +521,16 @@ class GatewayBuilderController:
                     "Ask the user whether to drop that draft and start this one; if they agree, call builder_draft again with replace_current=true."
                 )
             live, version = self._live(user_id, kind, name)
+            if live is None and bootstrap_target(context) is None:
+                # Something NEW only when the owner said what it is for, in
+                # their own words in this chat: never from memory or from
+                # content the model read.
+                problem = self._request_problem(context, owner_request)
+                if problem:
+                    return (
+                        f"{ASK_FIRST_PREFIX} the {kind} is for ({problem}). Ask the user one question with ask_clarification (what should it do?);"
+                        " you may offer up to 3 suggestions, labelled as suggestions. Then stop. Once they answer, draft it with their words as owner_request."
+                    )
             snapshot, dropped, notes = self._compose(user_id, kind, name, dict(fields or {}), live)
             access_request = None
             if kind == "agent":
@@ -559,6 +578,33 @@ class GatewayBuilderController:
         if not isinstance(messages, list):
             return "unknown", ""
         return initiation_origin(messages, synthetic=is_synthetic_turn(context))
+
+    @staticmethod
+    def _request_problem(context: dict, quote: str) -> str | None:
+        """Why `quote` does not show the owner asked for this, or None: it must
+        appear verbatim (case, spacing and punctuation aside) in one of the
+        owner's own tagged messages in this chat, and say more than a generic
+        "create me an agent"."""
+        from app.policy.lineage import is_user_turn
+
+        def norm(text: str) -> str:
+            return " ".join(re.sub(r"[^a-z0-9']+", " ", (text or "").lower()).split())
+
+        wanted = norm(quote)
+        if not wanted:
+            return "no owner_request was given"
+        meaningful = [w for w in wanted.split() if w not in GENERIC_REQUEST_WORDS]
+        if sum(len(w) for w in meaningful) < MIN_PURPOSE_CHARS:
+            return "the request only asks for one, without a purpose"
+        messages = context.get(MESSAGES_KEY)
+        owner = []
+        for message in messages if isinstance(messages, list) else []:
+            if is_user_turn(message):
+                content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+                owner.append(content if isinstance(content, str) else " ".join(str(p.get("text", "")) if isinstance(p, dict) else str(p) for p in content or []))
+        if not any(wanted in norm(text) for text in owner):
+            return "owner_request is not the user's own words from this chat"
+        return None
 
     @staticmethod
     def _access_words(request: dict) -> str:

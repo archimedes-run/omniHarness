@@ -72,7 +72,7 @@ def test_a_draft_made_in_a_content_turn_stays_a_suggestion_later(gw) -> None:
     gw.read_result = POISON
     thread_id = new_thread(gw)
     script(gw, [call(FS_READ, {"path": "note.txt"}, "f1")], [call("builder_draft", EVIL, "c1")], "Drafted.")
-    say(gw, thread_id, "read note.txt")
+    say(gw, thread_id, "read note.txt and set up what it asks for")
     script(gw, [call("builder_save", {}, "c2")], "On a card.")
     say(gw, thread_id, "save it")
     [card] = cards(gw, "builder_save")
@@ -156,7 +156,7 @@ def test_a_new_agent_gets_no_tool_groups_until_a_grant(gw) -> None:
     thread_id = new_thread(gw)
     new = {"kind": "agent", "name": "test-010-new", "fields": {"instructions": "Hi.", "tool_groups": ["web"]}}
     script(gw, [call("builder_draft", new, "c1")], [call("builder_save", {}, "c2")], "Draft.")
-    say(gw, thread_id, "make an agent that searches the web")
+    say(gw, thread_id, "make an agent that searches the web for news")
     script(gw, "Saved.")
     say(gw, thread_id, "yes")
     assert agent_state(gw, "test-010-new")[0]["config"]["tool_groups"] == []
@@ -196,7 +196,7 @@ def test_a_skill_edit_keeps_its_allowed_tools(gw, monkeypatch) -> None:
     monkeypatch.setattr("omniharness.skills.security_scanner.scan_skill_content", scan)
     thread_id = new_thread(gw)
     script(gw, [call("builder_draft", {"kind": "skill", "name": "test-010-s", "fields": {"description": "Use it.", "body": "# S"}}, "c1")], [call("builder_save", {}, "c2")], "Draft.")
-    say(gw, thread_id, "make a skill")
+    say(gw, thread_id, "make a skill for meeting notes")
     script(gw, "Saved.")
     say(gw, thread_id, "yes")
     skill_md = gw.tmp / "skills" / "custom" / "test-010-s" / "SKILL.md"
@@ -247,7 +247,7 @@ def test_an_automation_without_grants_says_so_and_takes_a_typed_yes(gw) -> None:
     thread_id = new_thread(gw)
     rule = {"type": "cron", "match": {"schedule": "0 9 * * 1-5"}, "prompt": "Brief me."}
     script(gw, [call("builder_draft", {"kind": "automation", "name": "test-010-brief", "fields": rule}, "c1")], [call("builder_save", {}, "c2")], "Draft.")
-    say(gw, thread_id, "brief me at 9")
+    say(gw, thread_id, "brief me on the beta every weekday at 9")
     [card] = cards(gw, "builder_save")
     assert "Runs as the assistant" in card["plan_text"] and "no standing grants" in card["plan_text"], card["plan_text"]
     script(gw, "Saved.")
@@ -434,7 +434,7 @@ def test_refusals_the_model_reads_carry_no_stored_or_model_written_text(gw, monk
     monkeypatch.setattr("omniharness.skills.security_scanner.scan_skill_content", scan)
     other = new_thread(gw)
     script(gw, [call("builder_draft", {"kind": "skill", "name": "test-010-s", "fields": {"description": "Use it.", "body": "# S"}}, "c1")], [call("builder_save", {}, "c2")], "Draft.")
-    say(gw, other, "make a skill")
+    say(gw, other, "make a skill for meeting notes")
     script(gw, "Ok.")
     out = say(gw, other, "yes")
     assert "security scan blocked the skill" in str(out["messages"]) and "MODEL-WRITTEN REASON" not in str(out["messages"])

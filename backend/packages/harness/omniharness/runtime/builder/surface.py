@@ -82,3 +82,18 @@ def forbidden_targets(context: dict | None) -> set[str]:
     if allowed is not None:
         out.discard(allowed)
     return out
+
+
+#: The start of builder_draft's refusal when a NEW agent, skill or automation
+#: was asked for without saying what it is for ("create me an agent"): the
+#: lead asks one question instead (clarification_middleware lets that question
+#: through; it is not a mid-task question).
+ASK_FIRST_PREFIX = "Nothing was drafted: the request does not say what"
+
+#: Builder cards whose decline or expiry ends the build for that turn: the
+#: resumed lead acknowledges briefly and stops (working_loop).
+BUILDER_CARD_TOOLS = frozenset({"builder_save", "builder_grant", "builder_undo"})
+
+#: The resumed lead's whole reply after a builder card was declined or expired
+#: (and nothing it asked for ran).
+DECLINED_ACK = "Okay, not saved. The draft is kept in this chat: tell me what to change, or ask me to save it again."
