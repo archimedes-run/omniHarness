@@ -696,10 +696,19 @@ for (const [scheme, width] of [
       keeps_version: 1,
       description: "Make the calendar tile span two columns",
       checks_passed: true,
+      shots: ["dark", "light"],
     };
     const presses: unknown[] = [];
     await page.route("**/api/apps/approvals**", (route) =>
       route.fulfill(json({ cards: [card] })),
+    );
+    // A tall picture: the thumbnail must still stay small.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAKCAQAAAAm7kQWAAAAEUlEQVR42mP8/58BCTCOcgAAqw0K/dU2v20AAAAASUVORK5CYII=",
+      "base64",
+    );
+    await page.route("**/api/apps/today/versions/2/shots/*.png", (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: png }),
     );
     await page.route("**/api/apps/today/approve", (route) => {
       presses.push(route.request().postDataJSON());
@@ -742,6 +751,37 @@ for (const [scheme, width] of [
     await expect(el.getByTestId("app-card-keep-version")).toHaveText(
       "Keep version 1",
     );
+    // The system's own check screenshots: small, framed and captioned as a
+    // picture of the app; full size only in a dialog with the same caption.
+    const caption =
+      "Preview of the app on sample data — drawn by the app, not by OmniHarness";
+    await expect(el.getByTestId("app-card-shots-caption")).toHaveText(caption);
+    const shots = el.getByTestId("app-card-shot");
+    await expect(shots).toHaveCount(2);
+    for (const box of [
+      await shots.nth(0).boundingBox(),
+      await shots.nth(1).boundingBox(),
+    ]) {
+      expect(box?.height).toBeLessThanOrEqual(161);
+    }
+    // Capped however tall the picture is: object-fit cover, from the top.
+    expect(
+      await shots
+        .nth(0)
+        .evaluate((img) => [
+          getComputedStyle(img).maxHeight,
+          getComputedStyle(img).objectFit,
+          getComputedStyle(img).objectPosition,
+        ]),
+    ).toEqual(["160px", "cover", "50% 0%"]);
+    await expect(el.getByText("Preview", { exact: true })).toHaveCount(2);
+    await el
+      .getByRole("button", { name: "Open the light preview full size" })
+      .click();
+    const dialog = page.getByTestId("app-card-shot-dialog");
+    await expect(dialog).toContainText(caption);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
     // Nothing overflows sideways at phone width.
     expect(
       await page.evaluate(

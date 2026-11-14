@@ -136,11 +136,11 @@ def test_sample_data_has_four_states_and_only_the_selected_fields():
     assert set(file["sources"]["prs"]) == {"use", "fresh", "empty", "not_connected", "failed"}
     assert file["sources"]["prs"]["failed"]["reason"] == app_kit.MOCK_REASON
     s = app_kit.sentinels(data)
-    assert "Upgrade the build to Node 22" in s["prs"] and "#479" in s["prs"]
+    assert s["prs"] == ["Upgrade the build to Node 22", "Rotate the staging certificates"]
 
 
 def test_the_mock_script_cannot_be_closed_by_its_data():
-    data = {"reference": app_kit.REFERENCE, "reason": "</script><script>alert(1)</script>", "sources": {}}
+    data = {"now": "2026-01-14T10:20:00+00:00", "reason": "</script><script>alert(1)</script>", "sources": {}}
     script = app_kit.mock_script(data)
     assert "</script" not in script.split("\n", 1)[0] and "<" not in script.split("\n", 1)[0]
 
@@ -152,7 +152,7 @@ def test_the_mock_build_replaces_the_platform_shim_with_the_mock():
     files = {"index.html": b'<!doctype html><html><head><title>x</title></head><body><script src="./a.js"></script></body></html>', "a.js": b"document.title = 'ok';"}
     app, _ = bundle_mod.inline(files)
     assert app.decode().index("OmniHarness platform shim") < app.decode().index("document.title")
-    mock, hashes = bundle_mod.inline({"index.html": app}, platform_shim=app_kit.mock_script({"reference": app_kit.REFERENCE, "reason": "r", "sources": {}}))
+    mock, hashes = bundle_mod.inline({"index.html": app}, platform_shim=app_kit.mock_script({"now": "2026-01-14T10:20:00+00:00", "reason": "r", "sources": {}}))
     text = mock.decode()
     assert "OmniHarness platform shim" not in text and text.index("__OMNI_MOCK__") < text.index("document.title") and len(hashes) == 2
 
@@ -202,6 +202,7 @@ def page(width: int, **app) -> dict:
     words = {"updated": 3, "ago": 3, "nothing": 0, "not_connected": 0, "cant_tell": 0, "connect": 0, "junk": 0, "reason": False, **app.pop("words", {})}
     base = {"contrast_measured": 20, "contrast_low": 0, "contrast": [], "small_text": 0, "small_text_where": [], "small_targets": 0, "small_targets_where": [], "frames": 0, "doc_height": 900, "words": words}
     base["sentinels"] = {"calendar": True, "inbox": True, "gh_review": True}
+    base["times"] = {"local_found": 99, "first_missing": "", "shifted_found": ""}
     top = {k: app.pop(k) for k in ("overflow_px", "offenders", "svgs", "rendered") if k in app}
     return {"width": width, "overflow_px": 0, "client_width": width, "offenders": [], "rendered": True, "svgs": [], **top, "app": {**base, **app}}
 

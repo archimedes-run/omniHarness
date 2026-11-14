@@ -250,3 +250,18 @@ def test_a_replayed_call_whose_job_stopped_is_refused_cleanly(gateway):  # noqa:
     manager = gateway.client.app.state.code_job_manager
     outcome = gateway.client.portal.call(functools.partial(manager.run, thread_id=thread_id, user_id=owner, tool_call_id="again", brief=CodeJobBrief(goal="x", project_dir="today")))
     assert outcome.job_id == "e" * 16 and "not started again for the same call" in outcome.report
+
+
+def test_the_version_card_shows_the_systems_own_check_screenshots(gateway):  # noqa: F811
+    thread_id = approved_today(gateway)
+    SANDBOX["queue"] = [AppFake(build())]
+    ask_in(gateway, thread_id, UPDATE, "cj2")
+    (card,) = pending(gateway, thread_id)
+    assert card["shots"] == ["dark", "light"]
+    resp = gateway.client.get("/api/apps/today/versions/2/shots/light.png")
+    assert resp.status_code == 200 and resp.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert resp.headers["content-type"] == "image/png" and resp.headers["x-content-type-options"] == "nosniff"
+    assert "default-src 'none'" in resp.headers["content-security-policy"]
+    assert gateway.client.get("/api/apps/today/versions/2/shots/other.png").status_code == 404
+    assert gateway.client.get("/api/apps/today/versions/1/shots/light.png").status_code == 200  # v1 stored its own
+    assert gateway.client.get("/api/apps/nope/versions/1/shots/light.png").status_code == 404

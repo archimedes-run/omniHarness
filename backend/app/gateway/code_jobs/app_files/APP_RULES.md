@@ -16,7 +16,8 @@ measure and refuses to register an app that breaks them.
 | `graphite.css` | The Graphite design tokens for light and dark as CSS variables, plus dashboard primitives (`omni-grid`, `omni-tile`, `omni-kpi`, `omni-list`, `omni-badge`, `omni-state`, `omni-chart`, ...). Import it first. |
 | `mock-data.json` | Sample data for every source in the four states. The system builds your app against it; read it to see real shapes. |
 | `omni-app.schema.json` | The JSON Schema of `omni-app.json`. |
-| `omni-react.tsx` | `useSource(name)` and `<Tile source title empty View>`: the four states with the exact words, "updated N min ago", the Connect button, the skeleton. Use it for every tile. |
+| `omni-react.tsx` | `useSource(name)` and `<Tile source title empty View>` (the four states with the exact words, "updated N min ago", the Connect button, the skeleton); `<Row title meta badge href>`, `<Stat value label>`, `<Timeline events tz now>`, `<Sparkline days label>`; and `zoned(tz)` for every time. Use them. |
+| `app-config.ts` | `TIME_ZONE`: the app's time zone, from omni-app.json. |
 | `starter/` | `App.tsx` (one `Tile` per source, generated from your sources), `main.tsx` and `vite.config.ts`. Copy them into `src/` and the project root and build from there. |
 | `check-render.mjs` | The render check: `node omni-kit/check-render.mjs` renders `src/App.tsx` in every mock state WITHOUT a browser and prints React's own error and the component that threw. |
 | `omni-mock.js` | The MOCK shim with the sample data, for trying the page by hand. Never reference it from `index.html`: the system adds it to its own mock build, and registration adds the real platform shim as the first script (you never get, copy or write the real one). |
@@ -38,10 +39,20 @@ entries in the schema. The system validates it.
 2. Write each tile's fresh view as its OWN component and pass it to `Tile`
    (`<Tile source="calendar" title="Calendar" empty="No meetings today" View={CalendarView} />`).
    Do not hand-roll the four states.
-3. Hooks: call every hook at the top of a component, before any early
+3. Use the kit's `Row` for list rows (the title truncates with a tooltip, the
+   meta stays), `Stat` for numbers, `Timeline` for a day of meetings and
+   `Sparkline` for small daily counts, instead of hand-rolling them.
+4. Time: read "now" only from `omni.now()` (never `new Date()` or
+   `Date.now()`), and format and position every time with
+   `zoned(TIME_ZONE)` (`formatTime`, `formatDay`, `minutesIntoDay`, `dateOf`,
+   `isToday`), never with `getHours()` or the browser's zone. The sample data
+   is written for a fixed "now" (a Wednesday, 10:20 in the app's time zone),
+   which `omni.now()` returns in the system's checks: a timeline drawn right
+   puts the first meeting at 9:30.
+5. Hooks: call every hook at the top of a component, before any early
    `return` or condition. A hook after `if (!data) return …` crashes React the
    moment data arrives ("Rendered more hooks than during the previous render").
-4. Before you finish, run `npm run build && node omni-kit/check-render.mjs` and
+6. Before you finish, run `npm run build && node omni-kit/check-render.mjs` and
    fix the first error it prints. The system runs the same command as the
    verify step, so a failing render check fails the job.
 
@@ -139,5 +150,8 @@ source scan is an early warning on top of them, not the guard.
    and 1280 px, in light and dark, with every source in each of the four
    states, under the app's real CSP: no sideways overflow, no clipped chart,
    no uncaught error, no blocked request, no frame, contrast AA, and the tile
-   words above in each state. Screenshots go to the assistant, who may ask
+   words above in each state; the calendar's sample times shown in the app's
+   time zone; no title cut to almost nothing; no chart label running out of
+   its block; and at least half of each tile's sample items (or an "N more"
+   line). Screenshots go to the assistant, who may ask
    for up to three design passes against the checklist.

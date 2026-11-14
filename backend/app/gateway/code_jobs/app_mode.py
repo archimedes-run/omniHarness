@@ -296,6 +296,8 @@ class AppRun:
     html: bytes | None = None
     manifest: dict | None = None
     published: dict | None = None
+    #: The system's own 1280 px check screenshots (theme -> PNG), stored with the version.
+    shot_bytes: dict = field(default_factory=dict)
 
 
 def _text_file(name: str) -> bool:
@@ -384,6 +386,8 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
     await asyncio.to_thread(ops.sh, f"{B}/rm -f {_q(scan_out)}", timeout=15)
 
     data = app_kit.fixtures(manifest)
+    times = app_kit.expected_times(data)
+    item_counts = {name: len(f["fresh"].get("items") or []) for name, f in data["sources"].items()}
     mock_html, mock_hashes = await asyncio.to_thread(lambda: bundle_mod.inline({bundle_mod.ENTRY: html}, platform_shim=app_kit.mock_script(data)))
     mock_text = mock_html.decode("utf-8")
     # Every step that runs the worker's code (the build, the render check, the
@@ -414,7 +418,7 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
                 await asyncio.to_thread(ops.sh, f"{B}/mkdir -p -m 755 {_q(site)}", timeout=15)
                 await asyncio.to_thread(ops.write, f"{site}/index.html", mock_text)
                 site_csp = prod_csp
-            check = {"csp": prod_csp, "csp_site": site_csp, "dev_build": dev, "nonce": nonce, "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}
+            check = {"csp": prod_csp, "csp_site": site_csp, "dev_build": dev, "nonce": nonce, "sentinels": app_kit.sentinels(data), "times": times, "counts": item_counts, "reason": app_kit.MOCK_REASON}
             await asyncio.to_thread(ops.write, f"{directory}/check.json", json.dumps(check))
             cmd = app_checks.probe_command(directory, www, job_id, nonce)
             code, _ = await beat(job_id, lambda: ops.sh(cmd, timeout=app_checks.TIMEOUT_SECONDS + 20))
@@ -431,10 +435,21 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
             data_sources=list(manifest["sources"]),
             nonce=nonce,
             prod_sha256=hashlib.sha256(mock_text.encode("utf-8")).hexdigest(),
+            item_counts=item_counts,
+            times_expected=len(times["local"]),
         )
     except Exception:  # noqa: BLE001 - the sandbox API failed: the checks could not run (blocks: fail closed)
         logger.exception("code job %s: app checks failed to run", job_id)
         result = app_checks.parse(None, exit_code=None)
+    shot_bytes: dict = {}
+    if result.get("outcome") == "pass":
+        for theme in ("light", "dark"):
+            try:
+                png = await beat(job_id, read_png, ops, f"{directory}/shot-{theme}-1280.png")
+            except Exception:  # noqa: BLE001 - a screenshot is shown, never evidence
+                png = None
+            if png:
+                shot_bytes[theme] = png
     try:
         # The preview is shown, never evidence: its failure cannot change the result.
         if result.get("publishable") and result.get("outcome") != "error":
@@ -459,7 +474,7 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
     if published:
         shots = published.pop("shots", [])
     result["shots"] = shots
-    return AppRun(result, html=html, manifest=manifest, published=published)
+    return AppRun(result, html=html, manifest=manifest, published=published, shot_bytes=shot_bytes)
 
 
 #: The development build the checks load (unminified, with source maps), made
@@ -519,6 +534,29 @@ async def install_dev(ops, project: str, site: str, data: dict, beat=None) -> st
     return policy
 
 
+def read_png(ops, path: str) -> bytes | None:
+    """A PNG the probe wrote, read only if small and really a PNG."""
+    import base64 as b64
+
+    _, size = ops.sh(f"[ -f {_q(path)} ] && [ ! -L {_q(path)} ] && {B}/stat -c %s {_q(path)} 2>/dev/null || echo none", timeout=15)
+    size = size.strip().splitlines()[-1] if size.strip() else ""
+    if not size.isdigit() or int(size) > app_checks.SHOT_MAX_BYTES:
+        return None
+    tmp = f"/tmp/omni-png-{uuid.uuid4().hex[:12]}"
+    # A regular file only, and never more than the limit, whatever it became.
+    ops.sh(
+        f"[ -f {_q(path)} ] && [ ! -L {_q(path)} ] && {B}/head -c {app_checks.SHOT_MAX_BYTES + 1} {_q(path)} | {B}/base64 -w0 > {_q(tmp)} 2>/dev/null; true",
+        timeout=30,
+    )
+    encoded = ops.read_text(tmp) or ""
+    ops.sh(f"{B}/rm -f {_q(tmp)}", timeout=15)
+    try:
+        data = b64.b64decode(encoded.strip(), validate=True)
+    except ValueError:
+        return None
+    return data if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) <= app_checks.SHOT_MAX_BYTES else None
+
+
 def publish_preview(ops, brief, mock_html: str, directory: str, shots: list[dict]) -> dict | None:
     """The mock build (sample data only) as a static site in outputs, so the
     person can see it in the artifact panel, with the check's screenshots in
@@ -572,6 +610,7 @@ async def register(register_app, *, owner_id: str, thread_id: str, ctx: AppConte
         origin=ctx.origin,
         hold=offered,
         note={"description": description, "checks": "passed"},
+        shots=run.shot_bytes or None,
     )
     return {
         "app_id": result.app_id,

@@ -707,6 +707,44 @@ def read_app_bundle(user_id: str, digest: str) -> bytes:
     return data
 
 
+APP_SHOT_MAX_BYTES = 1_500_000
+_PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def write_app_shot(user_id: str, png: bytes) -> str:
+    """Store one of a version's check screenshots (PNG, capped)
+    content-addressed beside the bundles; returns its SHA-256."""
+    if not png.startswith(_PNG) or len(png) > APP_SHOT_MAX_BYTES or len(png) < 33 or png[12:16] != b"IHDR":
+        raise ValueError("not a PNG of at most 1.5 MB")
+    width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    depth, colour = png[24], png[25]
+    # The probe's own screenshots: 1280 px wide, at most 2400 px tall.
+    if width != 1280 or not 1 <= height <= 2400 or depth not in (8, 16) or colour not in (0, 2, 3, 4, 6):
+        raise ValueError("not one of the check's screenshots")
+    digest = hashlib.sha256(png).hexdigest()
+    path = _app_root(user_id) / APP_BUNDLES_DIR / f"{digest}.png"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(path.parent)) as handle:
+            handle.write(png)
+            tmp = Path(handle.name)
+        tmp.replace(path)
+    return digest
+
+
+def read_app_shot(user_id: str, digest: str) -> bytes:
+    """A stored check screenshot, checked against its hash and type."""
+    if not _BUNDLE_HASH.match(str(digest or "")):
+        raise VersionNotFoundError("invalid screenshot hash")
+    path = _app_root(user_id) / APP_BUNDLES_DIR / f"{digest}.png"
+    if not path.exists():
+        raise VersionNotFoundError(f"screenshot {digest} is not stored")
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != digest or not data.startswith(_PNG) or len(data) > APP_SHOT_MAX_BYTES:
+        raise VersionNotFoundError(f"screenshot {digest} does not match")
+    return data
+
+
 def app_history(user_id: str, app_id: str) -> list[Version]:
     return _versions(_app_history_file(user_id, app_id))
 

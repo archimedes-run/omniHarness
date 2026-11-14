@@ -29,6 +29,7 @@ omni.open(link);                         // https on a declared host, or /worksp
 omni.connect("calendar");                // the host shows its own Connect sheet
 omni.onTheme((t) => ...);                // "light" | "dark"; <html> gets .dark
 omni.onUpdate((name, result) => ...);    // the host refreshed a source
+omni.now();                              // the app's "now" (the sample now in the checks)
 ```
 
 Plain `<a href>` clicks are routed through `omni.open` for you. Links the host does
