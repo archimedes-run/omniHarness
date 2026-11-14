@@ -262,9 +262,9 @@ def check_svg(text: str) -> None:
         raise InvalidContent('the root element must be <svg xmlns="http://www.w3.org/2000/svg">.')
     for element in root.iter():
         tag = element.tag if isinstance(element.tag, str) else ""
+        name = tag.rsplit("}", 1)[-1]
         if not tag.startswith(f"{{{SVG_NS}}}"):
             raise InvalidContent("an element outside the SVG namespace is not allowed.")
-        name = tag[len(SVG_NS) + 2 :]
         if name not in SVG_ELEMENTS:
             raise InvalidContent(f"the element <{_safe_name(name)}> is not allowed.")
         for key, value in element.attrib.items():

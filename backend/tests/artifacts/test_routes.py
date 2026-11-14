@@ -230,4 +230,7 @@ def test_importer_indexes_chat_outputs_once(gateway, monkeypatch):
     gateway.store.delete(gateway.user_id, aid, confirm_id=aid, version_count=1)
     monkeypatch.setattr(service, "_LAST_FULL_IMPORT", {})
     service.run_import(gateway.store, gateway.user_id)
+    (out / "copy.md").write_text("# changed after the owner deleted it")
+    monkeypatch.setattr(service, "_LAST_FULL_IMPORT", {})
+    service.run_import(gateway.store, gateway.user_id)
     assert "copy.md" not in {a["title"] for a in c.get("/api/artifacts").json()["artifacts"]}

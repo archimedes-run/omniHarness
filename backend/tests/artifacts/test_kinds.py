@@ -41,6 +41,7 @@ HOSTILE_SVG = {
     "external entity": '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>',
     "xml-stylesheet": '<?xml-stylesheet href="https://evil.example/a.css"?><svg xmlns="http://www.w3.org/2000/svg"/>',
     "no svg namespace": "<svg><rect/></svg>",
+    "allowed name in a foreign namespace": '<svg xmlns="http://www.w3.org/2000/svg"><h:style xmlns:h="http://www.w3.org/1999/xhtml">p{}</h:style></svg>',
     "html root": '<html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>',
     "unknown attribute": '<svg xmlns="http://www.w3.org/2000/svg"><rect formaction="x"/></svg>',
     "not well formed": '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
