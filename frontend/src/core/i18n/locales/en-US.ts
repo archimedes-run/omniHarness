@@ -117,6 +117,7 @@ export const enUS: Translations = {
     projects: "Projects",
     settings: "Settings",
     mcpSuite: "MCP Suite",
+    apps: "Apps",
     home: "Home",
     more: "More",
     moreLabel: "More: settings, memory, safety",

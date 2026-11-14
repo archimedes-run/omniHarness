@@ -217,6 +217,16 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
         except Exception:
             logger.warning("Could not delete the coding jobs of thread %s", sanitize_log_param(thread_id), exc_info=True)
 
+    # Question cards (009 question-card.md): the thread's open questions end
+    # (`asker_ended`, each asker told once), then its questions are forgotten.
+    try:
+        from app.gateway.questions import end_for_thread, get_store
+
+        await end_for_thread(thread_id, app=request.app)
+        get_store().delete_thread(thread_id)
+    except Exception:
+        logger.warning("Could not close the questions of thread %s", sanitize_log_param(thread_id), exc_info=True)
+
     # Clean local filesystem
     response = _delete_thread_data(thread_id, user_id=get_effective_user_id())
 

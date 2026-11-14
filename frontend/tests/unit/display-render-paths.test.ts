@@ -31,6 +31,10 @@ const RENDER_PATHS: Record<string, string> = {
     "chat: the Building chip's title, which the model chose (Spec 010)",
   "core/tools/search-results.ts":
     "chat: a search step's results (title, site, snippet; search-result-list.tsx renders them)",
+  "core/questions/api.ts":
+    "every question card (chat, Home, later the coding job and the builder) reads question, context, options and answer from these loaders",
+  "components/workspace/questions/thread-question.tsx":
+    "chat: a question's own text, shown until its card is read",
 };
 
 const NOTED: Record<string, string> = {

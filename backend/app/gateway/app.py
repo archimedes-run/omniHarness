@@ -17,6 +17,7 @@ from app.gateway.logging_filters import install_preview_token_log_filter
 from app.gateway.preview_sessions import PreviewSessionManager
 from app.gateway.routers import (
     agents,
+    apps,
     artifacts,
     assistants_compat,
     auth,
@@ -40,6 +41,7 @@ from app.gateway.routers import (
     policy,
     preferences,
     previews,
+    questions,
     run_history,
     runs,
     sessions,
@@ -434,18 +436,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # assistant, not a precondition for it.
         app.state.trigger_engine = await _start_trigger_engine(app)
 
+        # Apps (Spec 011): keep recently opened apps' sources warm. Every
+        # worker runs the loop; a lease in the shared store lets one work.
+        from app.gateway.apps.refresher import run_forever as run_apps_refresher
+
+        apps_refresher = asyncio.create_task(run_apps_refresher(app.state))
+
         # A lead turn whose last cards expired resumes, at most once (spec
         # 009, owner decision M2; app.gateway.resume). Every worker sweeps; a
         # turn is resumed only by the caller holding all of its cards' locks.
         from app.gateway.resume import resume_expired_forever
 
         expiry_task = asyncio.create_task(resume_expired_forever(app))
+        # Question cards expire beside it (009 question-card.md QC-04).
+        from app.gateway.questions import sweep_forever as question_sweep_forever
+
+        question_task = asyncio.create_task(question_sweep_forever(app))
 
         yield
 
-        expiry_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await expiry_task
+        # Apps refresher and bridge refreshes end (cancelled and awaited,
+        # bounded) before anything they use, the database above all, closes.
+        from app.gateway.apps.refresher import stop as stop_apps_refresher
+
+        await stop_apps_refresher(apps_refresher, timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS)
+        for task in (expiry_task, question_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         # Trace writes in flight end before anything they use is closed.
         from app.gateway.services import drain_trace_tasks
 
@@ -526,6 +544,10 @@ def create_app() -> FastAPI:
     log_redaction.install()
 
     config = get_gateway_config()
+    # Question cards: the lead asker and the harness hook that records them.
+    from app.gateway import questions as question_cards
+
+    question_cards.install()
     docs_kwargs = {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"} if config.enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
     app = FastAPI(
@@ -699,6 +721,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(threads.router)
     # Surface 1: pending Tier 3 confirmations (Feature 004).
     app.include_router(confirmations.router)
+    # Question cards (009 question-card.md): list and answer.
+    app.include_router(questions.router)
 
     # Trigger engine status: why it is or is not running (Phase 1 wiring pass).
     app.include_router(triggers.router)
@@ -764,6 +788,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Workflows API is mounted at /api/workflows (feature-flagged, returns 404 when disabled)
     app.include_router(workflows.router)
+
+    # Apps (Spec 011): library, approval card, bridge, app documents.
+    app.include_router(apps.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:
