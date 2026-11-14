@@ -125,6 +125,24 @@ def _names_subject(text: str) -> bool:
     return states_purpose(text)[0]
 
 
+def _messages(context: dict) -> list[Any] | None:
+    """The run's messages the tool passed (the turn key and origin read them)."""
+    messages = context.get(MESSAGES_KEY)
+    return list(messages) if isinstance(messages, list) else None
+
+
+def _model_step(context: dict) -> str:
+    """The model step a tool call belongs to: the id of the latest AI message
+    (its tool calls run together), "" when there is none."""
+    for message in reversed(_messages(context) or []):
+        kind = message.get("type") if isinstance(message, dict) else getattr(message, "type", None)
+        if kind == "ai":
+            ident = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
+            calls = (message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)) or []
+            return str(ident or "|".join(str(c.get("id") or "") for c in calls))
+    return ""
+
+
 def _given_name(context: dict) -> str | None:
     """A name the owner gave it ("an agent called Bob"), to keep."""
     from omniharness.runtime.builder.purpose import states_purpose
@@ -634,16 +652,28 @@ class GatewayBuilderController:
                 self._validate(user_id, draft)
             except BuilderRefused as exc:
                 problem = str(exc)
-            drafts.put_draft(user_id, thread_id, draft)
-            if draft["mode"] == "create":
-                self._close_open_cards(context)  # a newer draft, valid or not, replaces them
-            if problem is None and draft["mode"] == "create" and self._raised_this_turn(context) >= self.MAX_RAISED_PER_TURN:
-                return f"{self._model_ack(draft, live)}\n\nThis turn has already shown {self.MAX_RAISED_PER_TURN} save cards: stop now and let the person answer the card."
-            if problem is None and draft["mode"] == "create" and self._raise_save_card(context, draft):
-                # Something new: the builder raises its save card itself (the
-                # model is not relied on to propose it).
-                nxt = f"{SAVE_CARD_SHOWN} for `{draft['name']}`. Say one short line (that it is drafted and the card is below) and stop: the card has the details."
-                return f"{self._model_ack(draft, live)}\n\n{nxt}"
+            if draft["mode"] != "create":
+                drafts.put_draft(user_id, thread_id, draft)
+            else:
+                # One step at a time per chat (the lock a proposed card is
+                # stated under, held across the checks and the raise): two
+                # drafts in one model step cannot show two cards.
+                from app.policy.server_cards import card_lock
+
+                draft["step"] = _model_step(context)
+                with card_lock(context):
+                    shown = self._shown_this_step(context, draft["step"])
+                    if shown is not None:
+                        return f"Nothing was drafted: this step already showed the save card for `{shown}`. One save card per step: stop now and let the person answer it."
+                    drafts.put_draft(user_id, thread_id, draft)
+                    self._close_open_cards(context)  # a newer draft, valid or not, replaces them
+                    if problem is None and self._raised_this_turn(context) >= self.MAX_RAISED_PER_TURN:
+                        return f"{self._model_ack(draft, live)}\n\nThis turn has already shown {self.MAX_RAISED_PER_TURN} save cards: stop now and let the person answer the card."
+                    if problem is None and self._raise_save_card(context, draft):
+                        # Something new: the builder raises its save card
+                        # itself (the model is not relied on to propose it).
+                        nxt = f"{SAVE_CARD_SHOWN} for `{draft['name']}`. Say one short line (that it is drafted and the card is below) and stop: the card has the details."
+                        return f"{self._model_ack(draft, live)}\n\n{nxt}"
             nxt = f"Not ready to save: {problem} Revise it with builder_draft." if problem else f"To propose saving it, call builder_save with draft_id {draft['id']!r}."
             return f"{self._model_ack(draft, live)}\n\n{nxt}"
         except BuilderRefused as exc:
@@ -1105,11 +1135,33 @@ class GatewayBuilderController:
         from app.policy.server_cards import turn_key_of
 
         policy = getattr(self._config(), "policy", None)
-        key = turn_key_of(context)
-        if policy is None or not key or not context.get("thread_id"):
+        if policy is None or not context.get("thread_id"):
+            return 0
+        key = turn_key_of(_messages(context), policy)
+        if not key:
             return 0
         store = PendingStore(directory=Path(policy.state_dir) / "pending")
-        return sum(1 for a in store.in_thread(str(context["thread_id"])) if a.tool_name == "builder_save" and a.group_key == key and a.requester == "lead_agent" and (a.arguments or {}).get("draft_id"))
+        return sum(1 for a in store.in_thread(str(context["thread_id"])) if a.tool_name == "builder_save" and a.group_key == key and (a.arguments or {}).get("draft_id"))
+
+    def _shown_this_step(self, context: dict, step: str) -> str | None:
+        """The name on an open save card raised in this same model step, or
+        None."""
+        from datetime import UTC, datetime
+
+        from app.policy.pending import PendingStore
+
+        policy = getattr(self._config(), "policy", None)
+        if not step or policy is None or not context.get("thread_id"):
+            return None
+        user_id, thread_id = self._who(context)
+        store = PendingStore(directory=Path(policy.state_dir) / "pending")
+        for card in store.open_in_thread(thread_id, datetime.now(UTC)):
+            if card.tool_name != "builder_save":
+                continue
+            shown = drafts.get_draft(user_id, thread_id, str((card.arguments or {}).get("draft_id") or ""))
+            if shown and shown.get("step") == step:
+                return str(shown.get("name") or "")
+        return None
 
     def _close_open_cards(self, context: dict) -> None:
         """Close this chat's open builder save and undo cards (a newer draft,
@@ -1150,6 +1202,7 @@ class GatewayBuilderController:
             arguments={"draft_id": draft["id"]},
             note=detail,
             context=context,
+            messages=_messages(context),
             origin=str(draft.get("origin") or "unknown"),
             origin_source=str(draft.get("origin_source") or ""),
             button_only_reason=button_only,

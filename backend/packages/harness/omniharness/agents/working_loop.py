@@ -463,48 +463,75 @@ def _raised_draft(messages: list[Any]) -> tuple[str, dict] | None:
     return found
 
 
-#: Phrases of a builder "spec / requirements" dump in a reply.
-_DUMP_MARKERS = re.compile(
-    r"(?i)what i need from you|proposed spec|spec defaults|\bdefaults\b|to proceed|pick one|confirm or change|data access|requirements|"
-    r"i'?ll capture|purpose is locked|draft the agent spec"
-)
 #: A sentence that already points to the card.
 _POINTS_TO_CARD = re.compile(r"(?i)review the card|press save|on (?:its|the) card|the card below")
+#: Consecutive words a block must share with the draft's own text to count
+#: as restating it.
+RESTATE_RUN = 8
+#: The draft fields whose text a reply may restate.
+_DRAFT_TEXT_FIELDS = ("instructions", "description", "body", "prompt", "soul")
 
 
-def _draft_terms(name: str, fields: dict) -> tuple[list[str], list[str]]:
-    """(names to look for, long text chunks of the draft to look for)."""
-    names = [n for n in {name, str(fields.get("display_name") or "")} if n and len(n) >= 3]
-    chunks = []
-    for key in ("instructions", "description", "body", "prompt"):
-        text = " ".join(str(fields.get(key) or "").split())
-        chunks += [text[i : i + 30].lower() for i in range(0, max(len(text) - 30, 0) + 1, 30) if len(text) >= 30]
-    return names, chunks
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", (text or "").lower())
+
+
+def _draft_texts(fields: dict) -> list[str]:
+    return [" ".join(str(fields.get(key)).split()) for key in _DRAFT_TEXT_FIELDS if isinstance(fields.get(key), str) and fields.get(key).strip()]
+
+
+def _restates_draft(block: str, fields: dict) -> bool:
+    """Whether a block restates the draft itself: it contains one of the
+    draft's texts whole, or RESTATE_RUN consecutive words of one."""
+    flat = " ".join(block.split()).lower()
+    words = _words(block)
+    runs = {tuple(words[i : i + RESTATE_RUN]) for i in range(len(words) - RESTATE_RUN + 1)}
+    for text in _draft_texts(fields):
+        if text.lower() in flat:
+            return True
+        tokens = _words(text)
+        if any(tuple(tokens[i : i + RESTATE_RUN]) in runs for i in range(len(tokens) - RESTATE_RUN + 1)):
+            return True
+    return False
+
+
+def _fence_is_draft(block: str, fields: dict) -> bool:
+    """Whether a fenced block's content parses to the draft's fields: a
+    mapping that shares at least one field with the draft, each shared field
+    with the draft's value."""
+    body = re.sub(r"^```[^\n]*\n?|```$", "", block.strip())
+    parsed: Any = None
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        try:
+            import yaml
+
+            parsed = yaml.safe_load(body)
+        except Exception:  # noqa: BLE001 — not YAML either: not the draft
+            parsed = None
+    if not isinstance(parsed, dict):
+        return False
+
+    def same(a: Any, b: Any) -> bool:
+        if isinstance(a, str) and isinstance(b, str):
+            return " ".join(a.split()) == " ".join(b.split())
+        return a == b
+
+    shared = [k for k in parsed if k in fields]
+    return bool(shared) and all(same(parsed[k], fields[k]) for k in shared)
 
 
 def save_card_reply(reply: str, name: str, messages: list[Any] | None = None) -> tuple[str, bool]:
-    """After the builder raised a save card: the reply keeps everything that is
-    not the builder's own dump. Removed: paragraphs and lists that restate the
-    draft (its name, its instructions), "what I need from you" and spec or
-    requirement lists, and code blocks that duplicate the draft. Then the
-    fixed line is added when no sentence points to the card already. Only a
-    reply that is nothing but the dump, in a turn that only built, becomes the
-    line alone."""
+    """After the builder raised a save card: the reply stays as written except
+    for the blocks (paragraphs, lists, code blocks) that restate the draft
+    itself: its own text (whole, or RESTATE_RUN consecutive words of it), or
+    a code block whose content parses to the draft's fields. Nothing else is
+    removed. Then the fixed line is added when no sentence points to the
+    card already."""
     line = f"I drafted {name}. Review the card below and press Save, or tell me what to change."
     found = _raised_draft(messages or []) if messages else None
     fields = found[1] if found else {}
-    names, chunks = _draft_terms(name, fields)
-
-    def restates(block: str) -> bool:
-        low = " ".join(block.lower().split())
-        if _DUMP_MARKERS.search(block):
-            return True
-        if any(re.search(rf"(?i)(?<![\w-]){re.escape(n)}(?![\w-])", block) for n in names):
-            return True
-        return any(chunk in low for chunk in chunks)
-
-    def fence_dupes(block: str) -> bool:
-        return restates(block) or bool(re.search(r'"(instructions|tool_groups|skills|soul|display_name)"\s*:', block))
 
     # Blocks: code fences whole, prose split on blank lines; each with the
     # separator that followed it, so what stays is byte for byte.
@@ -520,106 +547,27 @@ def save_card_reply(reply: str, name: str, messages: list[Any] | None = None) ->
             text, sep = pieces[i], pieces[i + 1] if i + 1 < len(pieces) else ""
             if text or sep:
                 blocks.append((text, sep, False))
+    # Whitespace between two code blocks is the separator of the first.
+    merged: list[tuple[str, str, bool]] = []
+    for text, sep, fence in blocks:
+        if merged and not text.strip():
+            last = merged[-1]
+            merged[-1] = (last[0], last[1] + text + sep, last[2])
+            continue
+        merged.append((text, sep, fence))
     kept: list[tuple[str, str]] = []
     removed_any = False
-    previous_removed_heading = False
-    for text, sep, fence in blocks:
-        is_list = bool(re.match(r"^\s*(?:[-*]|\d+[.)])\s+", text))
-        drop = (fence_dupes(text) if fence else restates(text)) or (previous_removed_heading and is_list and not fence)
-        if drop and text.strip():
+    for text, sep, fence in merged:
+        if text.strip() and (_restates_draft(text, fields) or (fence and _fence_is_draft(text, fields))):
             removed_any = True
-            previous_removed_heading = text.rstrip().endswith(":") or (previous_removed_heading and is_list)
             continue
-        previous_removed_heading = False
         kept.append((text, sep))
-    remainder = "".join(t + s for t, s in kept).rstrip()
-    only_built = all(n.startswith("builder_") or n == "ask_clarification" for n in _turn_tool_names(messages or []))
-    if not remainder.strip() and (only_built or removed_any):
+    remainder = "".join(t + s for t, s in kept).rstrip() if removed_any else (reply or "")
+    if not remainder.strip():
         return line, line != reply
     if _POINTS_TO_CARD.search(remainder):
-        return (remainder, True) if removed_any else (reply, False)
-    return f"{remainder}\n\n{line}" if remainder.strip() else line, True
-
-
-def _turn_tool_names(messages: list[Any]) -> list[str]:
-    return [str(call.get("name") or "") for m in turn_messages(list(messages)) if _type(m) == "ai" for call in _tool_calls(m)]
-
-
-#: The owner's rule: the assistant never asks the person to give it a secret
-#: in the chat. Matched per clause: a request addressed to the person (an
-#: imperative, or please / can you / you'll need to) with a giving verb, a
-#: secret as its object within a few words, and the chat as the destination
-#: (here, below, me, this chat), or no other destination named. Or an offer
-#: to receive one ("I'll mask it and not echo"). Never a bare "key".
-_SECRET_OBJECT = r"(?:personal\s+access\s+tokens?|access\s+tokens?|tokens?|api[\s-]?keys?|access\s+keys?|private\s+keys?|secrets?|passwords?|credentials?)"
-_GIVE = r"(?:paste|send|share|give|provide|drop|enter|type)"
-_ADDRESS = r"(?:(?:please|pls|just|then|and|also|now|kindly|so)\s+)*(?:(?:can|could|would)\s+you\s+|you(?:'ll| will)\s+need\s+to\s+|you\s+need\s+to\s+|i\s+need\s+you\s+to\s+)?"
-_ASK_RE = re.compile(rf"(?i)^\s*(?:[-*]|\d+[.)])?\s*{_ADDRESS}{_GIVE}\b(?P<rest>.*)$")
-_OBJECT_NEAR_RE = re.compile(rf"(?i)^\W*(?P<between>(?:[\w+/'-]+\W*){{0,6}}?)\b{_SECRET_OBJECT}\b")
-_HERE_RE = re.compile(r"(?i)\b(here|below|me|in\s+(?:this|the)\s+(?:chat|conversation|thread)|in\s+this\s+conversation|to\s+me|with\s+me)\b")
-_ELSEWHERE_RE = re.compile(r"(?i)\b(?:on|in|into|at|to|with)\s+(?:the|your|their|a)\s+[\w\s-]{0,30}?\b(page|header|file|env|environment|settings|dashboard|terminal|app|portal|console|website|site|team|vault|manager|form|field)\b")
-_OFFER_RE = re.compile(rf"(?i)\b{_SECRET_OBJECT}\b.{{0,80}}\b(i'?ll\s+mask|i\s+will\s+mask|not\s+echo|won'?t\s+echo|i'?ll\s+keep\s+it|i\s+will\s+keep\s+it)\b")
-_NEGATED_CLAUSE = re.compile(r"(?i)\b(never|don't|do not|no need to|without|not)\b")
-#: What replaces such a sentence.
-NO_SECRETS_LINE = "Connect it from Integrations; never paste keys into the chat."
-
-
-def _asks_for_secret(sentence: str) -> bool:
-    """Whether one sentence asks the person to give a secret in this chat."""
-    if _OFFER_RE.search(sentence):
-        return True
-    for clause in re.split(r"[,;:]|\s+-\s+|\bif\b|\bwhen\b|\bthen\b(?=\s+\w)", sentence, flags=re.I):
-        match = _ASK_RE.match(clause)
-        if not match or _NEGATED_CLAUSE.search(clause[: match.start("rest")]):
-            continue
-        rest = match.group("rest")
-        near = _OBJECT_NEAR_RE.match(rest)
-        if not near or re.search(r"(?i)\b(of|about|summary|for)\b", near.group("between")):
-            continue
-        after = rest[near.end() :]
-        if _HERE_RE.search(rest) or not _ELSEWHERE_RE.search(after):
-            return True
-    return False
-
-
-def strip_secret_requests(reply: str) -> tuple[str, bool]:
-    """Replace the sentences that ask the person to give a secret in this chat
-    with the fixed line: the first one is replaced, any more are removed and
-    counted on it. Code blocks and quoted lines ("> ...", content the
-    assistant is quoting) are left exactly as they are."""
-    if not reply:
-        return reply, False
-    parts = re.split(r"(```[\s\S]*?```)", reply)
-    hits = 0
-    out: list[str] = []
-    for part in parts:
-        if part.startswith("```"):
-            out.append(part)
-            continue
-        lines = part.split("\n")
-        for li, line in enumerate(lines):
-            if line.lstrip().startswith(">"):
-                continue
-            pieces = re.split(r"(?<=[.!?])\s+", line)
-            kept = []
-            for piece in pieces:
-                if _asks_for_secret(piece):
-                    hits += 1
-                    if hits == 1:
-                        prefix = re.match(r"^\s*(?:[-*]|\d+[.)])?\s*", piece).group(0)
-                        kept.append(prefix + NO_SECRETS_LINE)
-                    continue
-                kept.append(piece)
-            if kept and all(re.fullmatch(r"\s*(?:\d+[.)]|[-*])\s*", k) for k in kept):
-                kept = []  # only a list number was left
-            lines[li] = " ".join(kept) if kept or not line.strip() else None  # type: ignore[call-overload]
-        out.append("\n".join(line for line in lines if line is not None))
-    if not hits:
-        return reply, False
-    text = "".join(out)
-    if hits > 1:
-        text = text.replace(NO_SECRETS_LINE, f"{NO_SECRETS_LINE} ({hits - 1} similar request{'s' if hits > 2 else ''} removed)", 1)
-    return re.sub(r"\n{3,}", "\n\n", text), True
+        return remainder, removed_any
+    return f"{remainder.rstrip()}\n\n{line}", True
 
 
 def called_builder(messages: list[Any]) -> bool:

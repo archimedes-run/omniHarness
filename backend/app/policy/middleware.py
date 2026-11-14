@@ -57,16 +57,18 @@ _WOULD_RUN: Any = object()
 #: One lock per (owner, thread), held while a Tier 3 call is checked against
 #: that thread's open proposals and saved (PolicyMiddleware.
 #: _require_confirmation). Per thread: other chats never wait on it.
-_PROPOSING: dict[tuple[str, str], threading.Lock] = {}
+#: Re-entrant: the builder holds it across its own checks and the card it
+#: raises (server_cards.card_lock).
+_PROPOSING: dict[tuple[str, str], threading.RLock] = {}
 _PROPOSING_GUARD = threading.Lock()
 
 
-def _proposing(owner_id: Any, thread_id: Any) -> threading.Lock:
+def _proposing(owner_id: Any, thread_id: Any) -> threading.RLock:
     key = (str(owner_id or ""), str(thread_id or ""))
     with _PROPOSING_GUARD:
         lock = _PROPOSING.get(key)
         if lock is None:
-            lock = _PROPOSING[key] = threading.Lock()
+            lock = _PROPOSING[key] = threading.RLock()
         return lock
 
 

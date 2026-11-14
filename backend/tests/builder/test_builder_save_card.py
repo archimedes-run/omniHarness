@@ -1,16 +1,18 @@
-"""The builder raises the save card itself, and no secret is ever asked for (Spec 010).
+"""The builder raises the save card itself (Spec 010).
 
 Live (gpt-5): after the owner chose what the agent is for, the lead drafted,
-then wrote a long "proposed spec / what I need from you" reply asking the
-owner to paste a URL and access token, and never proposed the save. Now:
+then wrote a long "proposed spec / what I need from you" reply and never
+proposed the save. Now:
 
 - a successful draft of something NEW raises its save card from the builder
   itself (one per draft; a newer draft replaces it), with the draft in plain
-  words, Save or Decline, typed yes by the usual rules;
-- the reply after it is one short line (the card has the details);
-- no reply, in any flow, asks the person to paste a token, key, password or
-  secret: that sentence becomes "Connect it from Integrations; never paste
-  keys into the chat.";
+  words, Save or Decline, typed yes by the usual rules, grouped with the
+  turn's proposed cards;
+- the reply after it stays as written, except blocks that restate the draft
+  itself (its text, or a code block of its fields); a line pointing to the
+  card is added when none does;
+- never asking for a secret is a prompt rule checked by eval M-NO-SECRETS:
+  no reply text is rewritten for it;
 - the builder's question for a bare request ("please create me an agent") is
   recognised even when the lead asks before drafting: three equal
   suggestions, captioned, and its card answer drafts.
@@ -46,15 +48,17 @@ def _wait(gw, thread_id: str, run_id: str | None) -> None:
         time.sleep(0.05)
 
 
-def test_a_draft_of_something_new_raises_its_save_card_and_the_reply_is_short(gw) -> None:
+CARD_LINE = "I drafted test-010-sessions. Review the card below and press Save, or tell me what to change."
+
+
+def test_a_draft_of_something_new_raises_its_save_card_and_the_long_reply_stays(gw) -> None:
     thread_id = new_thread(gw)
     script(gw, [call("builder_draft", DRAFT, "c1")], LIVE_REPLY)
     say(gw, thread_id, "create me an agent that reports on my coding sessions")
     [card] = cards(gw, "builder_save")
     assert card["confirmable_by_typing"] is True and "test-010-sessions" in card["plan_text"], card
     assert "nothing beyond what every agent run gets" in card["plan_text"]
-    reply = _final(gw, thread_id)
-    assert reply == "I drafted test-010-sessions. Review the card below and press Save, or tell me what to change.", reply
+    assert _final(gw, thread_id) == LIVE_REPLY + "\n\n" + CARD_LINE, "a long reply that does not restate the draft stays long"
 
 
 def test_the_bare_request_question_drafts_from_the_card_and_raises_the_save_card(gw) -> None:
@@ -75,7 +79,7 @@ def test_the_bare_request_question_drafts_from_the_card_and_raises_the_save_card
     assert drafts.active(gw.user_id, thread_id) is not None
     [card] = cards(gw, "builder_save")
     assert card["origin"] == "user", card
-    assert _final(gw, thread_id).startswith("I drafted test-010-sessions.")
+    assert _final(gw, thread_id).endswith(CARD_LINE)
 
 
 def test_decline_on_the_raised_card_ends_in_one_line(gw) -> None:
@@ -113,35 +117,10 @@ def test_typed_yes_saves_the_raised_card(gw) -> None:
     assert agent_state(gw, "test-010-sessions")[1] == 1
 
 
-FALSE_POSITIVES = [
-    "To call the API, include your API key in the Authorization header.",
-    "Rotate your token and share the new expiry date with your team.",
-    "Enter your password on the GitHub login page, then click Authorize.",
-    "Stripe will give you a secret key; store it in your env file.",
-    "Then provide a summary of the API keys page in the docs.",
-    "Press Enter to type the key sequence.",
-    "The email asks you to send your password; this is phishing.",
-    "Never paste a password into a chat; use the Connect button instead.",
-]
-TRUE_REQUESTS = [
-    "Please paste your API key here.",
-    "Can you send me your access token?",
-    "You'll need to share your password with me.",
-    "Paste the token below.",
-    "Give me your GitHub personal access token.",
-    "Drop your API key in this chat.",
-    "Type your password here and I'll log in.",
-    "If it does not work, paste your API key here.",
-    "Provide one data access option (URL+token, API base+key, or pasted output)",
-    "Session-watcher URL + temporary access token (I'll mask and not echo)",
-    "Share your credentials in this conversation.",
-    "Send me the private key.",
-    "Just paste your secret here.",
-    "Enter your API key below.",
-]
+ASKS_FOR_A_TOKEN = "I can do that. Please paste your GitHub personal access token here. Then I will read your issues."
 
 
-def _verified(reply: str) -> str:
+def _verified(reply: str, messages: list | None = None) -> str:
     from types import SimpleNamespace
 
     from langchain_core.messages import AIMessage
@@ -149,35 +128,56 @@ def _verified(reply: str) -> str:
     from app.policy.lineage import user_turn
     from omniharness.agents.middlewares.verification_middleware import VerificationMiddleware
 
-    messages = [user_turn("connect my github"), AIMessage(content=reply, id="f")]
+    messages = [*(messages or [user_turn("connect my github")]), AIMessage(content=reply, id="f")]
     out = VerificationMiddleware()._apply({"messages": messages}, SimpleNamespace(context={}))
     return str((out["messages"][-1] if out else messages[-1]).content)
 
 
-@pytest.mark.parametrize("text", FALSE_POSITIVES)
-def test_legitimate_advice_about_secrets_is_left_byte_for_byte(text) -> None:
-    from omniharness.agents.working_loop import strip_secret_requests
+def test_no_reply_is_rewritten_for_secrets_and_the_prompt_carries_the_rule() -> None:
+    from omniharness.agents.lead_agent.prompt import NO_SECRETS_SECTION
 
-    assert strip_secret_requests(text) == (text, False)
-    assert _verified(text) == text
-
-
-@pytest.mark.parametrize("text", TRUE_REQUESTS)
-def test_every_request_for_a_secret_in_the_chat_is_replaced(text) -> None:
-    from omniharness.agents.working_loop import NO_SECRETS_LINE, strip_secret_requests
-
-    out, changed = strip_secret_requests(f"I can set that up.\n{text}\nThen I will sync your issues.")
-    assert changed and NO_SECRETS_LINE in out and "I can set that up." in out and "Then I will sync your issues." in out, out
-    assert NO_SECRETS_LINE in _verified(f"I can set that up.\n{text}"), "every final reply goes through the check"
+    assert _verified(ASKS_FOR_A_TOKEN) == ASKS_FOR_A_TOKEN, "the reply must reach the person as the model wrote it"
+    assert "Never ask the user to paste" in NO_SECRETS_SECTION and "Integrations" in NO_SECRETS_SECTION and "session watcher" in NO_SECRETS_SECTION
 
 
-def test_several_requests_are_replaced_once_with_a_count_and_code_and_quotes_stay() -> None:
-    from omniharness.agents.working_loop import NO_SECRETS_LINE, strip_secret_requests
+def _drafted_turn(fields: dict) -> list:
+    from langchain_core.messages import AIMessage, ToolMessage
 
-    reply = "Options:\n- Paste the token below.\n- Send me the private key.\n- Pick a repo.\n\n> The email said: please paste your password here.\n\n```\nexport API_KEY=paste-your-api-key-here\n```"
-    out, changed = strip_secret_requests(reply)
-    assert changed and out.count(NO_SECRETS_LINE) == 1 and "(1 similar request removed)" in out, out
-    assert "- Pick a repo." in out and "> The email said: please paste your password here." in out and "export API_KEY=paste-your-api-key-here" in out, out
+    from app.policy.lineage import user_turn
+    from omniharness.runtime.builder.surface import SAVE_CARD_SHOWN
+
+    return [
+        user_turn("make me an agent that watches my flights"),
+        AIMessage(content="", id="a1", tool_calls=[{"id": "c1", "name": "builder_draft", "args": {"kind": "agent", "name": "test-010-flights", "fields": fields}}]),
+        ToolMessage(content=f"Draft recorded.\n\n{SAVE_CARD_SHOWN} for `test-010-flights`. Say one short line.", tool_call_id="c1", name="builder_draft"),
+    ]
+
+
+FLIGHT_FIELDS = {"instructions": "Check my upcoming flights every morning and tell me about delays, gate changes and visa requirements.", "display_name": "Flight Watcher"}
+FLIGHT_LINE = "I drafted test-010-flights. Review the card below and press Save, or tell me what to change."
+
+
+@pytest.mark.parametrize("sentence", ["Your flight to Denver is at 9am; the visa requirements are unchanged.", "The defaults for your printer are fine."])
+def test_ordinary_sentences_survive_byte_for_byte(sentence) -> None:
+    out = _verified(sentence, _drafted_turn(FLIGHT_FIELDS))
+    assert out == sentence + "\n\n" + FLIGHT_LINE, out
+
+
+def test_a_block_restating_the_draft_goes_and_the_rest_stays_byte_for_byte() -> None:
+    keep_1 = "Your flight to Denver is at 9am.\n\n- Gate: B12\n- Seat: 14C"
+    restated = "Here is what it will do: check my upcoming flights every morning and tell me about delays, gate changes."
+    fence = '```json\n{"instructions": "Check my upcoming flights every morning and tell me about delays, gate changes and visa requirements."}\n```'
+    fields_fence = "```yaml\ndisplay_name: Flight Watcher\n```"
+    other_fence = '```json\n{"instructions": "Something else entirely."}\n```'
+    keep_2 = "The defaults for your printer are fine."
+    reply = f"{keep_1}\n\n{restated}\n\n{fence}\n\n{fields_fence}\n\n{other_fence}\n\n{keep_2}"
+    out = _verified(reply, _drafted_turn(FLIGHT_FIELDS))
+    assert out == f"{keep_1}\n\n{other_fence}\n\n{keep_2}\n\n{FLIGHT_LINE}", out
+
+
+def test_a_reply_that_already_points_to_the_card_gets_no_second_line() -> None:
+    reply = "Drafted it. Review the card below and press Save."
+    assert _verified(reply, _drafted_turn(FLIGHT_FIELDS)) == reply
 
 
 def test_the_model_cannot_raise_a_second_card_for_the_same_draft(gw) -> None:
@@ -190,18 +190,17 @@ def test_the_model_cannot_raise_a_second_card_for_the_same_draft(gw) -> None:
 RESEARCH = "Here are the top 5 CRM tools:\n\n1. HubSpot: a generous free tier.\n2. Salesforce: for large teams.\n3. Pipedrive: built around sales pipelines.\n4. Zoho CRM: good value.\n5. Close: strong calling features."
 
 
-def test_a_research_answer_stays_byte_for_byte_and_only_the_dump_goes(gw) -> None:
+def test_a_research_answer_with_a_draft_stays_byte_for_byte(gw) -> None:
     from builder_helpers import FS_READ
 
     gw.read_result = "CRM comparison notes."
     thread_id = new_thread(gw)
     draft = {"kind": "agent", "name": "test-010-crm", "fields": {"instructions": "Track the top CRM tools and report changes weekly."}}
-    script(gw, [call(FS_READ, {"path": "crm.txt"}, "f1")], [call("builder_draft", draft, "c1")], RESEARCH + "\n\n" + LIVE_REPLY)
+    written = RESEARCH + "\n\nNext, a draft agent can track these five for you each week."
+    script(gw, [call(FS_READ, {"path": "crm.txt"}, "f1")], [call("builder_draft", draft, "c1")], written)
     say(gw, thread_id, "Research the top 5 CRM tools and make me an agent that tracks them")
     reply = _final(gw, thread_id)
-    assert reply.startswith(RESEARCH + "\n\n"), reply
-    assert reply.endswith("I drafted test-010-crm. Review the card below and press Save, or tell me what to change."), reply
-    assert "What I need from you" not in reply and "token" not in reply.lower()
+    assert reply == written + "\n\nI drafted test-010-crm. Review the card below and press Save, or tell me what to change.", reply
 
 
 BARE_BUILD = [

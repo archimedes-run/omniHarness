@@ -605,8 +605,8 @@ any sandbox tool: those files are not where your definition lives, and nothing w
 """
 
 
-#: In every lead prompt: secrets are never pasted into the chat (a server
-#: check on the reply backs it: working_loop.strip_secret_requests).
+#: In every lead prompt: secrets are never pasted into the chat. A rule for
+#: the model only (eval M-NO-SECRETS checks it); no reply text is rewritten.
 NO_SECRETS_SECTION = """<secrets>
 Never ask the user to paste a token, API key, password or any other secret into the chat. Apps and services are
 connected with the Connect button on the Integrations page; local integrations (such as the session watcher) are
