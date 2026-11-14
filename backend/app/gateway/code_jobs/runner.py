@@ -42,6 +42,7 @@ import json
 import logging
 import re
 import shlex
+import sys
 import threading
 import time
 import uuid
@@ -60,6 +61,37 @@ from .sandbox_ops import SandboxOps
 from .store import CodeJobStore, mark_done, mark_live
 
 logger = logging.getLogger(__name__)
+
+
+class _Console(logging.StreamHandler):
+    """A StreamHandler on whatever sys.stderr is when a line is written."""
+
+    _omni_console = True
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value) -> None:
+        pass
+
+
+def _liveness_logger() -> logging.Logger:
+    """Heartbeat lines: always at INFO, on the process console (the gateway's
+    console capture, logs/gateway.console.log) as well as the daily log file,
+    which is where the rest of this module's INFO lines go."""
+    lg = logging.getLogger("app.gateway.code_jobs.liveness")
+    lg.setLevel(logging.INFO)
+    if not any(getattr(h, "_omni_console", False) for h in lg.handlers):
+        handler = _Console()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        lg.addHandler(handler)
+    return lg
+
+
+liveness_log = _liveness_logger()
 
 WORKSPACE = "/mnt/user-data/workspace"
 OUTPUTS = "/mnt/user-data/outputs"
@@ -929,7 +961,7 @@ class Heartbeat:
         self._thread = threading.Thread(target=self._run, name=f"code-job-heartbeat-{job_id}", daemon=True)
 
     def start(self) -> None:
-        logger.info("code job %s: heartbeat started (every %.0f s, owner %s)", self.job_id, HEARTBEAT_SECONDS, store_owner())
+        liveness_log.info("code job %s: heartbeat started (every %.0f s, owner %s)", self.job_id, HEARTBEAT_SECONDS, store_owner())
         self._thread.start()
 
     def _run(self) -> None:
@@ -939,14 +971,14 @@ class Heartbeat:
                 self.beats += 1
                 if self.beats % HEARTBEAT_LOG_EVERY == 0:
                     job = self.store.get(self.job_id)
-                    logger.info("code job %s: heartbeat %d (phase %s, %.0f s)", self.job_id, self.beats, job.phase if job else "?", self.beats * HEARTBEAT_SECONDS)
+                    liveness_log.info("code job %s: heartbeat %d (phase %s, %.0f s)", self.job_id, self.beats, job.phase if job else "?", self.beats * HEARTBEAT_SECONDS)
             except Exception:  # noqa: BLE001 - one failed write never ends the heartbeat
                 logger.warning("code job %s: heartbeat write failed", self.job_id, exc_info=True)
 
     def stop(self) -> None:
         self._stop.set()
         mark_done(self.job_id)
-        logger.info("code job %s: heartbeat stopped after %d beats", self.job_id, self.beats)
+        liveness_log.info("code job %s: heartbeat stopped after %d beats", self.job_id, self.beats)
 
 
 def store_owner() -> str:

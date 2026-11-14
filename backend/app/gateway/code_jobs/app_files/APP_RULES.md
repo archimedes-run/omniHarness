@@ -16,7 +16,7 @@ measure and refuses to register an app that breaks them.
 | `graphite.css` | The Graphite design tokens for light and dark as CSS variables, plus dashboard primitives (`omni-grid`, `omni-tile`, `omni-kpi`, `omni-list`, `omni-badge`, `omni-state`, `omni-chart`, ...). Import it first. |
 | `mock-data.json` | Sample data for every source in the four states. The system builds your app against it; read it to see real shapes. |
 | `omni-app.schema.json` | The JSON Schema of `omni-app.json`. |
-| `omni-react.tsx` | `useSource(name)` and `<Tile source title empty View>` (the four states with the exact words, "updated N min ago", the Connect button, the skeleton); `<Row title meta badge href>`, `<Stat value label>`, `<Timeline events tz now>`, `<Sparkline days label>`; and `zoned(tz)` for every time. Use them. |
+| `omni-react.tsx` | `useSource(name)` and `<Tile source title empty View>` (the four states with the exact words, "updated N min ago", the Connect button, the skeleton); `<Row title meta badge href time>` (`time`: the ISO time an event row shows; the checks read it), `<Stat value label>`, `<Timeline events tz now>`, `<Sparkline days label>`; and `zoned(tz)` for every time. Use them. |
 | `app-config.ts` | `TIME_ZONE`: the app's time zone, from omni-app.json. |
 | `starter/` | `App.tsx` (one `Tile` per source, generated from your sources), `main.tsx` and `vite.config.ts`. Copy them into `src/` and the project root and build from there. |
 | `check-render.mjs` | The render check: `node omni-kit/check-render.mjs` renders `src/App.tsx` in every mock state WITHOUT a browser and prints React's own error and the component that threw. |

@@ -479,7 +479,7 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
             nonce=nonce,
             prod_sha256=hashlib.sha256(mock_text.encode("utf-8")).hexdigest(),
             item_counts=item_counts,
-            times_expected=len(times["local"]),
+            time_events=times,
         )
     except Exception:  # noqa: BLE001 - the sandbox API failed: the checks could not run (blocks: fail closed)
         logger.exception("code job %s: app checks failed to run", job_id)
