@@ -22,6 +22,7 @@ from app.gateway.routers import (
     assistants_compat,
     auth,
     automations,
+    builder,
     channels,
     code_jobs,
     composio,
@@ -730,6 +731,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Automations: the one write path for trigger rules (Phase 2.5).
     app.include_router(automations.router)
+
+    # The chat builder's "Building: <name>" state for a chat (Spec 010).
+    app.include_router(builder.router)
 
     # Inbox: alerts the engine held, failed or delivered (Phase 2.5).
     app.include_router(inbox.router)

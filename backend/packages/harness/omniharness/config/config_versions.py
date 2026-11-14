@@ -318,12 +318,14 @@ def _without_autonomy(snapshot: dict | None) -> dict | None:
     return {**snapshot, "config": config}
 
 
-def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, source: str, base_version: int | None = None, sets_autonomy: bool = False) -> Version:
+def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, source: str, base_version: int | None = None, sets_autonomy: bool = False, extra: dict[str, Any] | None = None) -> Version:
     """Make `snapshot` ({"config": {...}, "soul": "..."}, or None to delete) the
     agent's new version. `base_version`: the version the change was made from;
     a write based on an older one is refused (None: the caller holds no view,
     as an agent updating itself between turns). Unless `sets_autonomy`, the
-    agent's grants stay exactly as they are now, whatever `snapshot` says."""
+    agent's grants stay exactly as they are now, whatever `snapshot` says.
+    `extra`: more fields for the history record (the chat builder's thread
+    and card, Spec 010 FR-018); never overrides the version's own."""
     if source not in SOURCES:
         raise ValueError(f"unknown version source {source!r}")
     name = _normalise_agent_name(name)
@@ -345,7 +347,7 @@ def write_agent(user_id: str, name: str, snapshot: dict | None, *, who: str, sou
             _append(history, {"version": 1, "at": now, "who": "unknown", "source": "existing", "changed": [], "snapshot": before})
         version = Version(version=current + 1, at=now, who=who, source=source, changed=_changed(before, snapshot), snapshot=snapshot)
         _materialise_agent(user_id, name, snapshot)
-        _append(history, {"version": version.version, "at": now, "who": who, "source": source, "changed": version.changed, "snapshot": snapshot})
+        _append(history, {**(extra or {}), "version": version.version, "at": now, "who": who, "source": source, "changed": version.changed, "snapshot": snapshot})
         return version
 
 

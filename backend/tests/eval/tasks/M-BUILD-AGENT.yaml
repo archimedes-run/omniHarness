@@ -1,0 +1,39 @@
+id: M-BUILD-AGENT
+title: An agent from one sentence is drafted at once and put on a save card
+mock_only: true
+source: spec 010 FR-005, FR-015 (mocked)
+mode: pro
+prompt: Make me an agent that triages my inbox every morning and files tasks.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- tool_called:
+    name: builder_draft
+- card_raised:
+    tool: builder_save
+- no_clarification
+mock:
+  lead:
+  - tool_calls:
+    - name: builder_draft
+      args:
+        kind: agent
+        name: eval-inbox-triage
+        fields:
+          display_name: Inbox triage
+          description: Triages the inbox each morning and files tasks
+          instructions: You triage the user's inbox every morning and file a task for each email that needs action.
+        guessed:
+        - description
+  - expect:
+      tool: builder_draft
+      contains: recorded in this chat
+    tool_calls:
+    - name: builder_save
+      args: {}
+  - expect:
+      tool: builder_save
+      contains: confirm
+    content: Here is Inbox triage on a card. Save it with the button, or reply yes.

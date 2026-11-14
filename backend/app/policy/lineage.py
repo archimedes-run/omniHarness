@@ -113,6 +113,12 @@ ORIGIN_UNKNOWN = "unknown"  # nothing structural said; treated like content
 ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter's origin applies
 
 
+def _builder_trusted() -> frozenset[str]:
+    from .builder_rules import TRUSTED_RESULT_TOOLS
+
+    return TRUSTED_RESULT_TOOLS
+
+
 #: Tool results the harness itself produced, which therefore cannot carry
 #: anyone else's words: write acknowledgements and receipts (user decision
 #: 2026-10-20). Anything not listed (mail, web, files, list cells, stored
@@ -135,7 +141,7 @@ ORIGIN_INVITATION = "invitation"  # an invited agent's instruction: the inviter'
 #: earlier in the turn is still found by the walk. Marked by identity
 #: (middleware._mark_trusted_ack: the registered write_todos function), never
 #: by name.
-TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply", "write_todos"})
+TRUSTED_TOOL_RESULTS = frozenset({"ledger_apply", "write_todos"}) | _builder_trusted()
 
 #: Set on a tool result by the policy middleware at dispatch, and only when
 #: the tool that ran IS the registered built-in object (middleware.

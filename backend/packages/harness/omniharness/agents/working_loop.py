@@ -351,6 +351,55 @@ def _paragraphs(text: str) -> list[str]:
     return [p for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
 
 
+#: Tools whose call raises a confirmation card the reply asks the person to
+#: answer (spec 010's builder): a reply that asks for it is not a menu.
+CARD_PROMPT_TOOLS = frozenset({"builder_save", "builder_grant", "builder_undo"})
+
+
+#: The policy layer's plan text, as a card's tool result begins.
+_CARD_PLAN_START = "Before I do this"
+#: The paragraph of a reply that asks for a card's answer.
+CARD_PROMPT_RE = re.compile(r"(?i)\b(button|on (?:its|the) card|reply (?:with )?(?:yes|save|apply))\b")
+
+
+def called_builder(messages: list[Any]) -> bool:
+    """This turn called any chat-builder tool (spec 010)."""
+    return any(str(call.get("name") or "").startswith("builder_") for message in turn_messages(list(messages)) if _type(message) == "ai" for call in _tool_calls(message))
+
+
+def raised_card_prompt(messages: list[Any]) -> bool:
+    """A builder card raised in THIS turn is still open: a builder proposal's
+    result is the policy layer's plan (not a refusal before any card), and the
+    turn is not a resume after its answer."""
+    turn = turn_messages(list(messages))
+    if any(_kwargs(m).get(RESUME_OUTCOME_MARKER) for m in turn):
+        return False
+    names: dict[str, str] = {}
+    for message in turn:
+        if _type(message) == "ai":
+            for call in _tool_calls(message):
+                names[str(call.get("id") or "")] = str(call.get("name") or "")
+    for message in turn:
+        if _type(message) != "tool":
+            continue
+        call_id = str((message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", "")) or "")
+        if (_name(message) or names.get(call_id)) in CARD_PROMPT_TOOLS and text_of(message).lstrip().startswith(_CARD_PLAN_START):
+            return True
+    return False
+
+
+def strip_menu_keeping_card_prompt(reply: str) -> tuple[str, bool]:
+    """Trailing menus go as usual; only the last paragraph, when it asks for
+    the open card's answer, stays."""
+    paragraphs = _paragraphs(reply or "")
+    if not paragraphs or not CARD_PROMPT_RE.search(paragraphs[-1]):
+        return strip_trailing_menu(reply)
+    body, changed = strip_trailing_menu("\n\n".join(paragraphs[:-1]))
+    if not changed:
+        return reply, False
+    return f"{body.rstrip()}\n\n{paragraphs[-1]}", True
+
+
 def has_menu(reply: str) -> bool:
     """The reply ends with an offer or a menu of options (FR-056)."""
     paragraphs = _paragraphs(reply or "")
@@ -575,11 +624,23 @@ CLAIM_RES = (
     re.compile(rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_EXTERNAL})\b(?P<rest>[^.\n]*)"),
     re.compile(rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_MAKING})\b(?P<rest>[^.\n]{{0,80}}?\b(?:{_OBJECTS})\b[^.\n]*)"),
 )
+#: Agents and skills are claim objects only where they are the builder's
+#: (spec 010): always when the claim names one by its backticked slug ("I saved
+#: the agent `inbox-triage`"), and in a turn that called a builder tool. "I made
+#: a table of the skills each role needs" is about the reply, not a change.
+_BUILDER_OBJECTS = r"agents?|skills?"
+BUILDER_NAMED_CLAIM_RE = re.compile(
+    rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_MAKING}|{_EXTERNAL})\b(?P<rest>[^.\n]{{0,80}}?(?:\b(?:{_BUILDER_OBJECTS})\b\s*`[^`\n]+`|`[^`\n]+`\s*(?:{_BUILDER_OBJECTS})\b)[^.\n]*)"
+)
+BUILDER_TURN_CLAIM_RE = re.compile(rf"(?i)\bI(?:'ve| have)?\s+(?:just\s+|now\s+|also\s+|successfully\s+)?({_MAKING})\b(?P<rest>[^.\n]{{0,80}}?\b(?:{_BUILDER_OBJECTS})\b[^.\n]*)")
 _NEGATED_REST = re.compile(r"(?i)^\s*(nothing|no\b|none|anything)")
 _PAST_TURN = re.compile(r"(?i)\b(earlier|yesterday|previously|before|last (?:week|time|turn|month)|in a previous)\b")
 #: Which tools can back a claim, by the claim's words (a web_fetch receipt
 #: cannot back "I saved both places to the list").
 _FAMILIES = (
+    # Agents, skills and automations change only through the chat builder's
+    # confirmed save, grant or undo (spec 010): that confirmation is the receipt.
+    (re.compile(r"(?i)\b(agent|skill|automation|rule)"), re.compile(r"(?i)^builder_(save|grant|undo)$")),
     (re.compile(r"(?i)\b(sent|emailed|texted|messaged|email|message|draft|invit)"), re.compile(r"(?i)mail|message|send|slack|telegram|discord|draft|chat|post")),
     (re.compile(r"(?i)\b(scheduled|booked|reserved|event|meeting|calendar|appointment|reminder|booking|reservation)"), re.compile(r"(?i)calendar|event|schedul|book|reserv|remind|automation|trigger")),
     (re.compile(r"(?i)\b(project|task|goal|note|ledger|entr)"), re.compile(r"(?i)ledger")),
@@ -643,12 +704,13 @@ def _model_prose(reply: str) -> str:
     return re.sub(r"\u201c[^\u201d]*\u201d|\"[^\"\n]*\"", " ", text)
 
 
-def claims_in(reply: str) -> list[str]:
+def claims_in(reply: str, *, builder_turn: bool = False) -> list[str]:
     """Claims of an external change made in THIS turn (not negated, not about
-    an earlier turn, not quoted)."""
+    an earlier turn, not quoted). `builder_turn`: the turn called a builder
+    tool, so a plain "I created the agent" is a claim too."""
     prose = _model_prose(reply)
     found: list[str] = []
-    for pattern in CLAIM_RES:
+    for pattern in (*CLAIM_RES, BUILDER_NAMED_CLAIM_RE, *((BUILDER_TURN_CLAIM_RE,) if builder_turn else ())):
         for match in pattern.finditer(prose):
             if _NEGATED_REST.match(match.group("rest") or ""):
                 continue
@@ -673,4 +735,4 @@ def unbacked_claims(reply: str, messages: list[Any]) -> list[str]:
     """Claims of an external change in the reply that no receipt of this turn
     (of the matching kind of tool) backs."""
     have = receipts(messages)
-    return [c for c in claims_in(reply) if not _backed(c, have)][:3]
+    return [c for c in claims_in(reply, builder_turn=called_builder(messages)) if not _backed(c, have)][:3]

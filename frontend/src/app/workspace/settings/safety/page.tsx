@@ -10,6 +10,7 @@ import {
 } from "@/components/workspace/page-kit";
 import { TierCheckForm } from "@/components/workspace/policy/tier-check";
 import { SafetyToolSources } from "@/components/workspace/settings/safety-tool-sources";
+import { useBuilderStatus } from "@/core/builder/hooks";
 import { usePolicyRules } from "@/core/policy/hooks";
 
 /**
@@ -19,6 +20,7 @@ import { usePolicyRules } from "@/core/policy/hooks";
  */
 export default function SafetyPage() {
   const { rules, error } = usePolicyRules();
+  const builder = useBuilderStatus();
 
   return (
     <PageColumn width="narrow">
@@ -47,6 +49,15 @@ export default function SafetyPage() {
           title="No readable rules: every tool is Tier 3"
         >
           {rules.error}
+        </Problem>
+      )}
+
+      {builder && !builder.available && (
+        <Problem
+          testId="builder-off"
+          title="Building agents, skills and automations in chat is off"
+        >
+          {builder.reason}
         </Problem>
       )}
 

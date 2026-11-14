@@ -45,8 +45,6 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "view_image",
         "task",
         "tool_search",
-        "update_agent",
-        "setup_agent",
         "call_agent",
         "write_todos",
     }

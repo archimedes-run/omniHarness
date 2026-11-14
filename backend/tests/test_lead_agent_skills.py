@@ -216,7 +216,9 @@ def test_make_lead_agent_all_legacy_skills_preserve_all_tools(monkeypatch):
 
     agent_kwargs = lead_agent_module.make_lead_agent({"configurable": {"agent_name": "test"}})
 
-    assert [tool.name for tool in agent_kwargs["tools"]] == ["bash", "read_file", "update_agent"]
+    # A custom agent never holds a tool that changes agents (Spec 010 FR-024,
+    # FR-031): update_agent is on no model's tool list.
+    assert [tool.name for tool in agent_kwargs["tools"]] == ["bash", "read_file"]
 
 
 def test_make_lead_agent_enforces_allowed_tools_when_skill_cache_is_cold(monkeypatch):

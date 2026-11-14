@@ -27,6 +27,8 @@ const RENDER_PATHS: Record<string, string> = {
     "a confirmed card's result line (the tool's result, whose links stay real for the model); its other fields come from loadPending, made safe",
   "components/workspace/code-jobs/code-job-card.tsx":
     "chat: a coding job's title, commands, file paths, outputs and the worker's words",
+  "core/builder/api.ts":
+    "chat: the Building chip's title, which the model chose (Spec 010)",
   "core/tools/search-results.ts":
     "chat: a search step's results (title, site, snippet; search-result-list.tsx renders them)",
   "core/questions/api.ts":

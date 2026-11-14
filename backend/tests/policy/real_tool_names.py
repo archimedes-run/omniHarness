@@ -160,6 +160,12 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "skill_manage",
     "setup_agent",
     "update_agent",
+    "builder_draft",
+    "builder_read",
+    "builder_diff",
+    "builder_save",
+    "builder_grant",
+    "builder_undo",
     "write_todos",
 )
 
