@@ -207,6 +207,38 @@ def subagent_checkpoint_key(thread_id: str, task_id: str) -> str:
     return f"{thread_id}/subagent/{task_id}/{uuid.uuid4().hex[:12]}"
 
 
+#: How long a subagent's connection keeps trying while the store is locked.
+_WAL_SWITCH_SECONDS = 30.0
+
+
+async def _while_locked(step: Any) -> Any:
+    """Run `step()` (an async database step), trying again while SQLite
+    answers "database is locked", with a short backoff, for up to
+    _WAL_SWITCH_SECONDS.
+
+    SQLite answers "locked" AT ONCE, without its busy handler, when a step
+    needs a lock another connection holds in a way that waiting cannot
+    resolve for it (the switch to WAL, or a write after a concurrent change):
+    the gateway's reader or a sibling subagent opening the same store. A
+    subagent that failed there failed its whole confirmed delegation. Any
+    other error is raised at once.
+    """
+    import asyncio
+    import sqlite3
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _WAL_SWITCH_SECONDS
+    delay = 0.02
+    while True:
+        try:
+            return await step()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or loop.time() + delay > deadline:
+                raise
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 0.5)
+
+
 @asynccontextmanager
 async def _sqlite_run_checkpointer(path: str) -> AsyncIterator[Any]:
     """One subagent run's connection to the app's SQLite checkpoint store.
@@ -224,10 +256,10 @@ async def _sqlite_run_checkpointer(path: str) -> AsyncIterator[Any]:
     ensure_sqlite_parent_dir(path)
     conn = await aiosqlite.connect(path, timeout=30)
     try:
-        await conn.execute("PRAGMA journal_mode=WAL;")
+        await _while_locked(lambda: conn.execute("PRAGMA journal_mode=WAL;"))
         await conn.execute("PRAGMA busy_timeout=30000;")
         saver = AsyncSqliteSaver(conn)
-        await saver.setup()
+        await _while_locked(saver.setup)
         yield saver
     finally:
         await conn.close()
