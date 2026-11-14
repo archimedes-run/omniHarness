@@ -226,6 +226,9 @@ test.describe("the side panel, per kind", () => {
     await expect(md.locator("h1")).toHaveText("Project brief");
     await expect(md.locator("li")).toHaveCount(2);
     await expect(md.locator("img, iframe, script")).toHaveCount(0);
+    // Raw HTML is OFF: a tag markdown has no syntax for stays text.
+    await expect(md.locator("kbd")).toHaveCount(0);
+    await expect(md).toContainText("<kbd>RAW</kbd>");
     await expect(panel.getByTestId("artifact-note")).toHaveText(
       "Shortened the title",
     );
@@ -375,6 +378,9 @@ test.describe("versions", () => {
     await page.goto(`/workspace/artifacts/${IDS.md}`, {
       waitUntil: "networkidle",
     });
+    await expect(page.getByTestId("artifact-markdown")).toBeVisible();
+    await aa(page);
+    await shot(page, "page-markdown-light");
     await page.getByTestId("artifact-edit").click();
     const draft = page.getByTestId("artifact-draft");
     await expect(draft).toHaveValue(/Project brief/);

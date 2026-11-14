@@ -40,6 +40,7 @@ export const HOSTILE_MARKDOWN = [
   "- two",
   "",
   `<img src="x" onerror="${CANARY}">`,
+  "<kbd>RAW</kbd>",
   `<script>${CANARY}</script>`,
   `<iframe src="javascript:${CANARY}"></iframe>`,
   `[a link](javascript:${CANARY})`,
