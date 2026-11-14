@@ -78,7 +78,7 @@ async def register_app(
         if reason is not None:
             raise AppRegistrationError("source_refused", f"source {name}: {reason}")
     try:
-        html, script_hashes = bundle_mod.inline(files)
+        html, script_hashes = bundle_mod.inline(files, prelude=bundle_mod.platform_shim())
     except bundle_mod.BundleError as exc:
         raise AppRegistrationError(exc.code, str(exc)) from exc
     if app_id is not None:

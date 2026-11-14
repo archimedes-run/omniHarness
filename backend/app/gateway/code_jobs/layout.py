@@ -62,16 +62,22 @@ LOAD_ERRORS = {
 }
 
 
-def command(directory: str, root: str, job_id: str) -> str:
+#: The hard stop in app mode (Spec 011 FR-026: themes x states x widths).
+APP_TIMEOUT_SECONDS = 115
+
+
+def command(directory: str, root: str, job_id: str, *, app: bool = False) -> str:
     """The shell command that runs the probe from `directory` (fresh, the
     system's own) against the site in `root`. Every tool by absolute path,
-    a fixed PATH, no proxy variables: the page gets no way out of the sandbox."""
+    a fixed PATH, no proxy variables: the page gets no way out of the sandbox.
+    `app`: the app mode (an app's mock build; check.json beside the result)."""
     q = shlex.quote
     script, out = f"{directory}/layout_probe.py", f"{directory}/result.json"
+    limit, extra = (APP_TIMEOUT_SECONDS, " app") if app else (TIMEOUT_SECONDS, "")
     return (
         f'f={q(script)}; [ "$(/usr/bin/sha256sum "$f" | /usr/bin/cut -c1-64)" = {DIGEST} ] || exit 97; '
         f"cd {q(directory)} && /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 HOME={q(directory)} TMPDIR={q(directory)} OMNI_JOB_ID={q(job_id)} "
-        f'/usr/bin/timeout -k 5 {TIMEOUT_SECONDS} {PYTHON} -I -S "$f" {q(root)} {q(out)} < /dev/null > /dev/null 2>&1'
+        f'/usr/bin/timeout -k 5 {limit} {PYTHON} -I -S "$f" {q(root)} {q(out)}{extra} < /dev/null > /dev/null 2>&1'
     )
 
 

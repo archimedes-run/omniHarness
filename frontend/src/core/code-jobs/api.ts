@@ -37,6 +37,37 @@ export interface CodeJobLayout {
   seconds?: number;
 }
 
+/** A screenshot of an app's mock build (Spec 011 FR-026), in the thread's outputs. */
+export interface CodeJobAppShot {
+  theme: "light" | "dark";
+  width: number;
+  path: string;
+}
+
+/** The system's checks of an app-mode job's mock build (Spec 011 FR-026). */
+export interface CodeJobAppChecks {
+  outcome: "pass" | "fail" | "error";
+  /** The failures in the system's own words. */
+  summary?: string[];
+  /** Each failure as shown, element and file names from the page included. */
+  failures?: string[];
+  /** What the system measured but does not block on (small text, targets). */
+  design?: string[];
+  error?: string | null;
+  bundle?: { bytes: number; limit: number } | null;
+  shots?: CodeJobAppShot[];
+}
+
+/** An app the gateway registered from a verified app-mode job (FR-028). */
+export interface CodeJobAppRegistration {
+  app_id: string;
+  version: number;
+  name: string;
+  needs_approval: boolean;
+  suggestion?: boolean;
+  url: string;
+}
+
 export interface CodeJobResult {
   status: CodeJobStatus;
   reason: string | null;
@@ -71,9 +102,16 @@ export interface CodeJobResult {
   over_reservation_calls?: number;
   model?: string;
   published?: { artifact_id: string; path: string } | null;
-  /** This job is the one automatic fix of that job's layout failures. */
+  /** This job is the one automatic fix of that job's layout failures, or
+   * one of an app's design passes. */
   fix_of?: string | null;
   duration_s?: number;
+  /** App mode (Spec 011). */
+  app?: { root: string; design_pass?: boolean } | null;
+  app_checks?: CodeJobAppChecks | null;
+  app_registration?: CodeJobAppRegistration | null;
+  app_registration_error?: { code: string; message: string } | null;
+  design_passes_used?: number;
 }
 
 export interface CodeJob {
@@ -146,6 +184,22 @@ export type CodeJobStep =
       bytes: number;
     }
   | ({ seq: number; at: string; kind: "layout" } & CodeJobLayout)
+  | {
+      seq: number;
+      at: string;
+      kind: "app_checks";
+      outcome: "pass" | "fail" | "error";
+      summary: string[];
+      design_count: number;
+      error: string | null;
+      bundle: { bytes: number; limit: number } | null;
+      shots: CodeJobAppShot[];
+    }
+  | ({
+      seq: number;
+      at: string;
+      kind: "app_registered";
+    } & CodeJobAppRegistration)
   | {
       seq: number;
       at: string;

@@ -14,6 +14,7 @@ import hashlib
 import mimetypes
 import posixpath
 import re
+from pathlib import Path
 
 BUNDLE_MAX_BYTES = 2 * 1024 * 1024
 ENTRY = "index.html"
@@ -100,8 +101,34 @@ def _inline_css(css: str, files: dict[str, bytes], base: str) -> str:
     return _CSS_URL.sub(url, css)
 
 
-def inline(files: dict[str, bytes], entry: str = ENTRY) -> tuple[bytes, list[str]]:
-    """(the self-contained document, its script hashes) or BundleError."""
+#: The platform shim (Spec 011 FR-018, FR-023): a byte copy of
+#: frontend/src/core/apps/shim/omni-shim.js (a test keeps the two identical),
+#: inlined by registration as the FIRST script of every app. The worker never
+#: writes or edits it.
+PLATFORM_SHIM_PATH = Path(__file__).with_name("kit") / "omni-shim.js"
+_HEAD = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+_HTML = re.compile(r"<html\b[^>]*>", re.IGNORECASE)
+
+
+def platform_shim() -> str:
+    return PLATFORM_SHIM_PATH.read_text(encoding="utf-8")
+
+
+def with_prelude(html: str, prelude: str) -> str:
+    """`prelude` as the document's first script: before anything in <head>."""
+    tag = "<script>" + prelude.replace("</script", "<\\/script") + "</script>"
+    for pattern in (_HEAD, _HTML):
+        m = pattern.search(html)
+        if m:
+            return html[: m.end()] + tag + html[m.end() :]
+    return tag + html
+
+
+def inline(files: dict[str, bytes], entry: str = ENTRY, *, prelude: str | None = None) -> tuple[bytes, list[str]]:
+    """(the self-contained document, its script hashes) or BundleError.
+
+    `prelude` (the platform shim) is added as the first script AFTER the scan:
+    it is the platform's own code, which names the APIs it removes."""
     if entry not in files:
         raise BundleError("missing_file", f"the bundle has no {entry}")
     try:
@@ -157,6 +184,8 @@ def inline(files: dict[str, bytes], entry: str = ENTRY) -> tuple[bytes, list[str
     for name, pattern in FORBIDDEN:
         if pattern.search(html):
             raise BundleError("forbidden_api", f"the bundle names {name}, which apps may not use")
+    if prelude is not None:
+        html = with_prelude(html, prelude)
     hashes = []
     for m in _INLINE_SCRIPT.finditer(html):
         if re.search(r"\bsrc\s*=", m.group(1), re.IGNORECASE):

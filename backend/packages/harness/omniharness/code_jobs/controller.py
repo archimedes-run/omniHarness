@@ -34,6 +34,12 @@ class CodeJobBrief:
     #: The one automatic layout fix: the id of the job whose layout check
     #: failed. The gateway allows one per job, never a fix of a fix.
     fix_of: str | None = None
+    #: App mode (Spec 011 FR-025): `{"name", "description"?, "timezone"?,
+    #: "sources"}`. The gateway validates it against the source catalog,
+    #: writes the app kit, checks the mock build and registers a passing app
+    #: for the person's approval. None: an ordinary job. With `fix_of` on an
+    #: app job, the follow-up is one of the app's design passes (at most 3).
+    app: dict | None = None
 
 
 @dataclass
@@ -54,8 +60,12 @@ class CodeJobController(Protocol):
         """None when coding jobs can run here, else why not (shown to the lead)."""
         ...
 
-    async def run(self, *, thread_id: str, user_id: str, tool_call_id: str, brief: CodeJobBrief) -> CodeJobOutcome:
-        """Run one job to its end (verified or not, stopped, blocked)."""
+    async def run(self, *, thread_id: str, user_id: str, tool_call_id: str, brief: CodeJobBrief, turn: dict | None = None) -> CodeJobOutcome:
+        """Run one job to its end (verified or not, stopped, blocked).
+
+        `turn`: the calling turn's `messages` and run `context`, from which
+        the gateway works out who led to the call (the person, or content
+        read earlier: an app it registers is then a suggestion)."""
         ...
 
 

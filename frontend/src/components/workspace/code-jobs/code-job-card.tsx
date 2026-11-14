@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  LayoutDashboardIcon,
   AppWindowIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -15,11 +16,15 @@ import {
   WrenchIcon,
   XIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { resolveArtifactURL } from "@/core/artifacts/utils";
 import {
   type CodeJob,
+  type CodeJobAppChecks,
+  type CodeJobAppRegistration,
   type CodeJobLayout,
   CodeJobNotFound,
   type CodeJobStatus,
@@ -440,6 +445,12 @@ function Evidence({ job }: { job: CodeJob }) {
           </li>
         ))}
         {r?.layout ? <LayoutEvidence layout={r.layout} /> : null}
+        {r?.app_checks ? (
+          <AppChecksEvidence checks={r.app_checks} threadId={job.thread_id} />
+        ) : null}
+        {r?.app_registration ? (
+          <AppRegisteredEvidence registration={r.app_registration} />
+        ) : null}
         <li className="flex items-start gap-2">
           <Mark ok={null} />
           <span className="[overflow-wrap:anywhere]">
@@ -614,6 +625,116 @@ function Mark({ ok }: { ok: boolean | null }) {
   );
 }
 
+function appChecksSummary(outcome: string, count: number) {
+  if (outcome === "pass")
+    return "App checks passed: every theme, state and width";
+  if (outcome === "fail")
+    return `App checks failed: ${count} problem${count === 1 ? "" : "s"}`;
+  return "App checks gave no answer";
+}
+
+/** The system's app checks (Spec 011 FR-026) and the screenshots of the mock
+ * build (sample data only). Failure lines name elements and files the
+ * worker's page chose: shown as text. */
+function AppChecksEvidence({
+  checks,
+  threadId,
+}: {
+  checks: CodeJobAppChecks;
+  threadId: string;
+}) {
+  const failures = checks.failures ?? [];
+  const design = checks.design ?? [];
+  const shots = checks.shots ?? [];
+  return (
+    <li
+      className="flex items-start gap-2"
+      data-testid="code-job-app-checks"
+      data-outcome={checks.outcome}
+    >
+      <Mark
+        ok={
+          checks.outcome === "pass"
+            ? true
+            : checks.outcome === "fail"
+              ? false
+              : null
+        }
+      />
+      <div className="min-w-0 flex-1">
+        <span>{appChecksSummary(checks.outcome, failures.length)}</span>
+        {checks.bundle ? (
+          <span className="text-muted-foreground">
+            {` · one file, ${Math.round(checks.bundle.bytes / 1024)} KB`}
+          </span>
+        ) : null}
+        {failures.length ? (
+          <ul className="text-foreground-2 mt-1 list-disc pl-4 text-xs">
+            {failures.slice(0, 8).map((f, i) => (
+              <li key={i} className="[overflow-wrap:anywhere]">
+                {safeField(f)}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {design.length ? (
+          <p className="text-muted-foreground mt-1 text-xs">
+            Design findings (not blocking): {design.map(safeField).join("; ")}
+          </p>
+        ) : null}
+        {shots.length ? (
+          <div
+            className="mt-2 flex flex-wrap gap-2"
+            data-testid="code-job-app-shots"
+          >
+            {shots.map((shot) => (
+              <a
+                key={shot.path}
+                href={resolveArtifactURL(shot.path, threadId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-foreground-2 hover:bg-surface-raised flex min-h-6 items-center rounded-md border px-2 text-xs"
+              >
+                {`${shot.theme} ${shot.width} px`}
+              </a>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+/** "App registered: <name> v<n>" with the link to its page. Approval is the
+ * person's button on the App access card, never this card. */
+function AppRegisteredEvidence({
+  registration,
+}: {
+  registration: CodeJobAppRegistration;
+}) {
+  return (
+    <li
+      className="flex items-start gap-2"
+      data-testid="code-job-app-registered"
+    >
+      <LayoutDashboardIcon
+        className="text-muted-foreground mt-0.5 size-4 shrink-0"
+        aria-hidden
+      />
+      <span className="[overflow-wrap:anywhere]">
+        {`App registered: ${safeField(registration.name) || registration.app_id} v${registration.version}`}
+        {registration.needs_approval ? " — needs your approval" : ""}{" "}
+        <Link
+          href={`/workspace/apps/${encodeURIComponent(registration.app_id)}`}
+          className="text-primary underline-offset-2 hover:underline"
+        >
+          Open
+        </Link>
+      </span>
+    </li>
+  );
+}
+
 function StepRow({ step }: { step: CodeJobStep }) {
   const [expanded, setExpanded] = useState(false);
   if (step.kind === "command" || step.kind === "verify") {
@@ -739,6 +860,36 @@ function StepRow({ step }: { step: CodeJobStep }) {
           }
         />
         <span>{layoutSummary(step)}</span>
+      </li>
+    );
+  }
+  if (step.kind === "app_checks") {
+    return (
+      <li className="flex items-start gap-2 px-1 text-xs">
+        <Mark
+          ok={
+            step.outcome === "pass"
+              ? true
+              : step.outcome === "fail"
+                ? false
+                : null
+          }
+        />
+        <span>{appChecksSummary(step.outcome, step.summary.length)}</span>
+      </li>
+    );
+  }
+  if (step.kind === "app_registered") {
+    return (
+      <li className="flex items-start gap-2 px-1 text-xs">
+        <LayoutDashboardIcon
+          className="text-muted-foreground mt-0.5 size-3.5 shrink-0"
+          aria-hidden
+        />
+        <span>
+          {`App registered: v${step.version}`}
+          {step.needs_approval ? " — needs your approval" : ""}
+        </span>
       </li>
     );
   }

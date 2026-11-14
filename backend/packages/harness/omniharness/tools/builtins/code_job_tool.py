@@ -8,6 +8,7 @@ worker's own summary is passed on only as unverified data.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Annotated
 
@@ -36,7 +37,14 @@ Arguments:
 - publish_dir: for a web app to show: the build folder relative to project_dir (usually "dist"). Once the build passes it is copied to /mnt/user-data/outputs and opened in the artifact panel
   (an app whose layout check failed is still shown, marked; one that renders nothing is not).
 - inputs / constraints: anything else the worker needs (references, versions, limits). Never secrets.
-- fix_of: ONLY for the one automatic layout fix a result asks for: the id of the job whose layout check failed. Leave empty otherwise.
+- fix_of: ONLY for a follow-up a result asks for: the one automatic layout fix of a web job, or one of an app's design passes (at most 3 per app). The id of the job it follows. Leave empty otherwise.
+- app: ONLY to build an OmniHarness app (a dashboard of the person's own data, opened from the Apps library): {"name": "Today", "sources": ["calendar", "gh_review", ...], "timezone": "Europe/London"}.
+  Sources: calendar (today's events), gh_review (PRs waiting on their review), gh_failing (their PRs with failing CI), gh_merged (their PRs merged in 7 days),
+  ledger (Project Ledger tasks moved, stuck or overdue), sessions (coding sessions running or waiting on them), automations (last runs and next runs),
+  inbox (count and subjects of unread mail, never bodies).
+  The system writes an app kit into project_dir (types, Graphite styles, sample data, rules), builds against sample data, checks every tile state
+  in both themes at three widths, returns screenshots, and registers a passing app; the person approves its data access with a button.
+  verify_command, expect_files and publish_dir default to npm run build, dist/index.html and dist.
 
 The person sees live progress and can stop the job. The result's STATUS is decided by the system from evidence:
 verified (the verify command exited 0 and every expected file exists), unverified (no evidence), failed (the check failed), stopped, or blocked (budget, network or time limit).
@@ -82,6 +90,32 @@ def normalize_relative(value: str, field: str) -> str:
     return "/".join(parts)
 
 
+#: The size of the `app` argument, as JSON.
+APP_MAX_CHARS = 8000
+
+
+def normalize_app(value) -> dict | None:
+    """The `app` argument's shape (the gateway checks it against the catalog)."""
+    if value is None or value == {}:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError('app must be an object like {"name": "Today", "sources": ["calendar", "inbox"]}')
+    try:
+        text = json.dumps(value)
+    except (TypeError, ValueError):
+        raise ValueError("app must be plain JSON") from None
+    if len(text) > APP_MAX_CHARS:
+        raise ValueError(f"app is larger than {APP_MAX_CHARS} characters")
+    unknown = sorted(set(value) - {"name", "description", "timezone", "sources"})
+    if unknown:
+        raise ValueError(f"app has unknown key(s) {', '.join(unknown)}; use name, description, timezone and sources")
+    if not isinstance(value.get("name"), str) or not value["name"].strip():
+        raise ValueError("app.name is required")
+    if not isinstance(value.get("sources"), (list, dict)) or not value["sources"]:
+        raise ValueError("app.sources must name at least one source")
+    return json.loads(text)
+
+
 @tool("code_job", description=DESCRIPTION)
 async def code_job_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
@@ -95,6 +129,7 @@ async def code_job_tool(
     inputs: str | None = None,
     constraints: str | None = None,
     fix_of: str | None = None,
+    app: dict | None = None,
 ) -> Command:
     def reply(text: str, artifacts: list[str] | None = None) -> Command:
         update: dict = {"messages": [ToolMessage(text, tool_call_id=tool_call_id)]}
@@ -114,6 +149,11 @@ async def code_job_tool(
     try:
         if not (goal or "").strip():
             raise ValueError("goal is required")
+        app_spec = normalize_app(app)
+        if app_spec is not None:
+            verify_command = verify_command or "npm run build"
+            expect_files = expect_files or ["dist/index.html"]
+            publish_dir = publish_dir or "dist"
         brief = CodeJobBrief(
             goal=goal.strip()[:4000],
             project_dir=normalize_project_dir(project_dir),
@@ -125,13 +165,18 @@ async def code_job_tool(
             publish_dir=normalize_relative(publish_dir, "publish_dir") if (publish_dir or "").strip() else None,
             title=goal.strip().splitlines()[0][:80],
             fix_of=(fix_of or "").strip() or None,
+            app=app_spec,
         )
         if brief.fix_of and not re.fullmatch(r"[0-9a-f]{16}", brief.fix_of):
-            raise ValueError("fix_of must be the id of the job whose layout check failed")
+            raise ValueError("fix_of must be the id of the job this one follows")
         if brief.verify_command and ("\n" in brief.verify_command or "\x00" in brief.verify_command):
             raise ValueError("verify_command must be one line")
     except ValueError as exc:
         return reply(f"Error: {exc}. Fix the argument and call code_job again.")
 
-    outcome = await controller.run(thread_id=thread_id, user_id=_user_id(runtime), tool_call_id=tool_call_id, brief=brief)
+    # Who led to this call (the person, or content read earlier in the turn)
+    # is worked out by the gateway from the turn itself, never from arguments.
+    state = getattr(runtime, "state", None)
+    turn = {"messages": list(state.get("messages") or []) if isinstance(state, dict) else [], "context": dict(runtime.context or {}) if isinstance(runtime.context, dict) else {}}
+    outcome = await controller.run(thread_id=thread_id, user_id=_user_id(runtime), tool_call_id=tool_call_id, brief=brief, turn=turn)
     return reply(outcome.report, outcome.artifacts)

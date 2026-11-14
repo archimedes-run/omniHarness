@@ -94,8 +94,4 @@ omniharness.skills.tool_policy:NamedTool  # used as a PEP 695 type-parameter bou
 session_watcher.registry:SessionRegistry.is_empty  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
 session_watcher.registry:SessionRegistry.is_observable  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
 session_watcher.reply:observe_only_notice  # UNWIRED, wire in Feature 005: FR-015 wording when the user tries to answer a watched (Claude or Codex) session (specs/005-project-ledger/plan-inputs.md)
-app.gateway.apps.registry:register_app  # UNWIRED until Spec 011 PR 3a: the coding job's app mode calls it in process after a verified job (specs/011-apps/plan.md); there is deliberately no HTTP route (FR-007)
-app.gateway.apps.registry:AppRegistrationError  # UNWIRED until Spec 011 PR 3a: raised by register_app, caught by the coding job's app mode
-app.gateway.apps.registry:RegistrationResult  # UNWIRED until Spec 011 PR 3a: what register_app returns to the coding job's app mode
-app.gateway.apps.registry:REGISTRAR  # UNWIRED until Spec 011 PR 3a: who register_app records a version as
-omniharness.config.config_versions:write_app_bundle  # UNWIRED until Spec 011 PR 3a: called only by register_app, which the coding job's app mode calls
+app.gateway.code_jobs.app_kit:tokens_from_globals  # generator of the tracked app_files/graphite-tokens.css from frontend globals.css (the gateway image has no frontend tree); run by tests/code_jobs/test_app_mode.py, which fails when the two drift

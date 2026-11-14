@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "Today",
+  "description": "My day at a glance",
+  "sources": {
+    "calendar": { "use": "googlecalendar.events_today", "fields": ["title", "start", "end", "all_day"] },
+    "gh_review": { "use": "github.pr_search", "params": { "preset": "review_requested" }, "fields": ["repo", "number", "title", "link"] },
+    "inbox": { "use": "gmail.unread_subjects", "fields": ["count", "subject", "received_at", "link"] }
+  }
+}
