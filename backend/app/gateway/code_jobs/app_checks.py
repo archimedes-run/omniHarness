@@ -483,12 +483,19 @@ def _parse(
     events = {e["title"]: e for e in ((time_events or {}).get("events") or []) if isinstance(e, dict) and e.get("title")}
     zone = (time_events or {}).get("time_zone") or "UTC"
     for theme, shown in times_seen[:1] if events else []:
-        # A kit-marked event time must read as the local time; elsewhere only
-        # the same instant in UTC, next to the event's title, counts as wrong.
-        wrong = [e for e in shown if _text(e.get("title"), 60) in events and e.get("ok") is not True and (e.get("wrong") is True or (e.get("kind") == "marked" and _text(e.get("shown"), 12)))]
+        # Wrong only when an event's start shows in another zone and its local
+        # start does not (an end time, a range or a duration beside it is
+        # fine). A kit-marked event showing no start at all: a design finding.
+        wrong = [e for e in shown if _text(e.get("title"), 60) in events and e.get("ok") is not True and e.get("wrong") is True]
+        for e in shown:
+            title = _text(e.get("title"), 60)
+            if title in events and e.get("kind") == "marked" and e.get("ok") is not True and e.get("wrong") is not True:
+                seen = _text(e.get("shown"), 12)
+                design.append(f"the event '{title}' shows no start time{f' (shows {seen})' if seen else ''}; expected {events[title]['local_label']} somewhere in its row")
+                break
         if wrong:
             ev = events[_text(wrong[0].get("title"), 60)]
-            seen = (ev.get("shifted_label") if wrong[0].get("wrong") is True else None) or _text(wrong[0].get("shown"), 12)
+            seen = ev.get("shifted_label") or "another time"
             knock_on(
                 f"the event '{ev['title']}' shows {seen}; expected {ev['local_label']} ({zone}; {theme})",
                 "times are not in the app's time zone",

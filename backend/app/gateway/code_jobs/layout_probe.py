@@ -477,7 +477,9 @@ APP_MEASURE = r"""
   }
   // The calendar's sample times, read where each EVENT's time is shown,
   // never from clock-like text elsewhere (an hour axis, a header clock).
-  // 1. Elements the kit marks with data-omni-time="<iso>": their own text.
+  // 1. Elements the kit marks with data-omni-time="<iso>" (a Row, a
+  //    Timeline block's title): right when the event's local START shows
+  //    anywhere in their text; an end time or a range beside it is ignored.
   // 2. Otherwise: the smallest container (a few levels up) holding the
   //    event's title and a time, outside any chart.
   const tcfg = cfg.times || {};
@@ -490,10 +492,13 @@ APP_MEASURE = r"""
     const el = markedEls[i];
     const when = at(el.getAttribute('data-omni-time') || '');
     const ev = events.find((e) => at(e.iso) === when);
-    const shown = (el.textContent || '').trim().slice(0, 80);
+    const parts = [];
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(), k = 0; n && k < 40; n = tw.nextNode(), k++) parts.push(n.nodeValue || '');
+    const shown = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 240);
     if (!ev || !shown) continue;
     markedTitles.add(ev.title);
-    const clock = (shown.match(/\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?/) || [''])[0];
+    const clock = (shown.split(ev.title).join(' ').match(/\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?/) || [''])[0];
     marked.push({ kind: 'marked', title: ev.title, shown: clock, ok: new RegExp(ev.local_re).test(shown), wrong: !!ev.shifted_re && new RegExp(ev.shifted_re).test(shown) });
   }
   const inChart = (n) => !!(n && n.closest && n.closest('svg,[data-omni-axis],.omni-timeline'));

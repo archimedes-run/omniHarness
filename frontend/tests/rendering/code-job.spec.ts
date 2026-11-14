@@ -597,7 +597,7 @@ for (const scheme of ["light", "dark"] as const) {
         card.getByTestId("code-job-app-shots").getByRole("link"),
       ).toHaveText(["light 360 px", "dark 1280 px"]);
       await expect(card.getByTestId("code-job-fix-of")).toHaveText(
-        "Design pass 2 of 3 for an earlier app job.",
+        "Design pass 2 of 3.",
       );
       await expect(card.getByTestId("code-job-evidence")).toContainText(
         "the build's entry file, 471 bytes; inlined into one app file below",
