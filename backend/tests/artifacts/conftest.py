@@ -30,6 +30,7 @@ def gateway(tmp_path, monkeypatch):
     config["database"] = {"backend": "sqlite", "sqlite_dir": str(tmp_path / "data")}
     config["policy"] = {"enabled": True, "state_dir": str(tmp_path / "policy")}
     config["trigger_engine"] = {"enabled": False}
+    config["agents_api"] = {"enabled": True}
     config.setdefault("memory", {})["enabled"] = False
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))

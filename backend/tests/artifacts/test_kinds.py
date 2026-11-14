@@ -169,3 +169,16 @@ def test_event_attributes_are_refused_even_if_the_allowlist_named_one(monkeypatc
 def test_any_doctype_is_refused():
     with pytest.raises(InvalidContent):
         kinds.canonical("svg", '<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg"/>')
+
+
+@pytest.mark.parametrize("name", ["__proto__", "constructor", "prototype", "Constructor"])
+def test_chart_field_names_refuse_object_internals(name):
+    for spec in ({**CHART, "x": {"field": name, "type": "category"}, "data": [{name: "a", "rate": 1}]}, {**CHART, "data": [{"day": "2026-11-10", "rate": 1, name: 1}]}):
+        with pytest.raises(InvalidContent):
+            kinds.canonical("chart", spec)
+
+
+def test_mermaid_config_cannot_inject_css_or_fonts():
+    for src in ('%%{init: {"themeCSS": ".node{background:url(x)}"}}%%\ngraph TD; A-->B', '%%{init: {"fontFamily": "x"}}%%\ngraph TD; A-->B'):
+        with pytest.raises(InvalidContent):
+            kinds.canonical("mermaid", src)

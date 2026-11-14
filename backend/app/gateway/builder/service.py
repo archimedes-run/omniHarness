@@ -394,7 +394,8 @@ class GatewayBuilderController:
 
                 groups = {c.name: c.group for c in cfg.tools if getattr(c, "group", None)}
                 out = []
-                for tool in get_available_tools(include_mcp=False, app_config=cfg, subagent_enabled=True):
+                # Every built-in an agent could be granted (artifacts included).
+                for tool in get_available_tools(include_mcp=False, app_config=cfg, subagent_enabled=True, artifact_tools=True):
                     try:
                         if integration_of(tool, config_groups=groups) == integration:
                             out.append(tool.name)

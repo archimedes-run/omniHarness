@@ -11,7 +11,7 @@ latest version number and the latest text kept for search).
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from omniharness.persistence.base import Base
@@ -86,6 +86,10 @@ class ArtifactImportRow(Base):
     path: Mapped[str] = mapped_column(String(500), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     artifact_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: The file's size and mtime when it was recorded: an unchanged file is
+    #: skipped on the next pass without being read.
+    size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mtime_ns: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (UniqueConstraint("owner_id", "thread_id", "path", "content_hash", name="uq_artifact_imports_key"), Index("ix_artifact_imports_owner_thread_path", "owner_id", "thread_id", "path"))

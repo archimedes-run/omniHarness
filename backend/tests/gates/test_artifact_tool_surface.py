@@ -21,6 +21,7 @@ import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool as make_tool
 
 from app.policy.classify import classify
 from app.policy.config import ConfigLoader
@@ -42,7 +43,7 @@ def shipped():
 
 @pytest.mark.parametrize(
     "tool,tier,reversible,reads_private",
-    [("artifact_create", Tier.TIER_2, True, False), ("artifact_update", Tier.TIER_2, True, False), ("artifact_read", Tier.TIER_1, True, None), ("artifact_list", Tier.TIER_1, True, None)],
+    [("artifact_create", Tier.TIER_2, True, False), ("artifact_update", Tier.TIER_2, True, None), ("artifact_read", Tier.TIER_1, True, None), ("artifact_list", Tier.TIER_1, True, None)],
 )
 def test_the_four_tools_are_ruled_as_the_spec_says(shipped, tool, tier, reversible, reads_private):
     decision = classify(tool, {}, shipped)
@@ -120,7 +121,7 @@ def system(tmp_path, monkeypatch, store):
     set_artifact_controller(GatewayArtifactController(lambda: store))
     middleware = PolicyMiddleware(
         loader=ConfigLoader(path=RULES_FILE),
-        pending=SimpleNamespace(save=lambda a: a, open_actions=lambda now: [], get=lambda i: None, expire_due=lambda now: [], declined_in_thread=lambda *a, **k: []),
+        pending=SimpleNamespace(save=lambda a: a, open_actions=lambda now: [], get=lambda i: None, expire_due=lambda now: [], declined_in_thread=lambda *a, **k: [], open_in_thread=lambda *a, **k: [], resolve=lambda *a, **k: None),
         ledger=DisclosureLedger(),
         actor="default",
         now=lambda: datetime(2026, 11, 14, 12, 0, tzinfo=UTC),
@@ -129,11 +130,21 @@ def system(tmp_path, monkeypatch, store):
     set_artifact_controller(None)
 
 
+FETCHED: list[str] = []
+
+
+@make_tool("web_fetch")
+def fake_web_fetch(url: str) -> str:
+    """Fetch a page."""
+    FETCHED.append(url)
+    return "a page"
+
+
 def _run(system, calls: list[dict], said: str = "Done.") -> list:
     from omniharness.tools.builtins.artifact_tools import ARTIFACT_TOOLS
 
     steps = [AIMessage(content="", tool_calls=[call]) for call in calls] + [AIMessage(content=said)]
-    agent = create_agent(model=ToolCapableFake(messages=iter(steps)), tools=ARTIFACT_TOOLS, middleware=[system.middleware])
+    agent = create_agent(model=ToolCapableFake(messages=iter(steps)), tools=[*ARTIFACT_TOOLS, fake_web_fetch], middleware=[system.middleware])
     return agent.invoke({"messages": [user_turn("make me a brief")]})["messages"]
 
 
@@ -168,3 +179,20 @@ def test_a_create_after_a_read_in_the_same_turn_is_content_led(system):
     assert "artifact_read" not in str(final.content).split("Ran without asking:")[-1], "a Tier 1 read was disclosed as a write"
     made = system.store.get(get_effective_user_id(), created.artifact["artifact_id"])
     assert made["lineage"] == "content" and made["lineage_source"] == "artifact_read"
+
+
+def test_an_outbound_lookup_after_an_update_with_edits_needs_a_card(system):
+    """artifact_update's answer depends on stored text (do the edits apply?),
+    so it counts as a private read: a web_fetch after it in the same turn is a
+    card, never a silent call that could carry the guess out."""
+    first = _run(system, [_create_call(1)])
+    aid = next(m for m in first if isinstance(m, ToolMessage)).artifact["artifact_id"]
+    FETCHED.clear()
+    edit = {"name": "artifact_update", "args": {"id": aid, "base_version": 1, "edits": [{"old": "Brief", "new": "Plan"}]}, "id": "u1"}
+    fetch = {"name": "web_fetch", "args": {"url": "https://example.com/?q=Brief"}, "id": "f1"}
+    _run(system, [edit, fetch])
+    assert system.store.get(get_effective_user_id(), aid)["latest_version"] == 2, "the update did not run"
+    assert FETCHED == [], "the outbound call ran without a card after a private read"
+    # Control: without the update, the lookup runs.
+    _run(system, [fetch])
+    assert FETCHED == ["https://example.com/?q=Brief"]

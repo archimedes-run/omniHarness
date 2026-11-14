@@ -176,7 +176,7 @@ def canonical_image(data: bytes) -> Canonical:
 
 _DIRECTIVE = re.compile(r"%%\{(.*?)\}%%", re.S)
 _FRONTMATTER = re.compile(r"^\s*---\s*\n(.*?)\n\s*---", re.S)
-_MERMAID_FORBIDDEN = ("securitylevel", "htmllabels", "secure", "dompurify")
+_MERMAID_FORBIDDEN = ("securitylevel", "htmllabels", "secure", "dompurify", "themecss", "fontfamily")
 
 
 def check_mermaid(text: str) -> None:
@@ -187,7 +187,7 @@ def check_mermaid(text: str) -> None:
     for block in blocks:
         lowered = block.lower()
         if any(word in lowered for word in _MERMAID_FORBIDDEN):
-            raise InvalidContent("a mermaid config block may not set securityLevel, htmlLabels, secure or dompurifyConfig.")
+            raise InvalidContent("a mermaid config block may not set securityLevel, htmlLabels, secure, dompurifyConfig, themeCSS or fontFamily.")
 
 
 # -- svg (FR-014: allowlist, parsed with defusedxml) ------------------------------------
@@ -300,7 +300,18 @@ X_TYPES = ("category", "time", "number")
 MAX_SERIES = 8
 MAX_ROWS = 5000
 MAX_ROW_KEYS = 32
-_FIELD = re.compile(r"^[A-Za-z0-9_ .-]{1,64}$")
+_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9_ .-]{1,64}$")
+#: Names a renderer's object lookups could treat as something else.
+_RESERVED_FIELDS = frozenset({"__proto__", "constructor", "prototype"})
+
+
+class _Field:
+    @staticmethod
+    def match(value: str) -> bool:
+        return bool(_FIELD_PATTERN.match(value)) and value.strip().lower() not in _RESERVED_FIELDS
+
+
+_FIELD = _Field()
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f  ‪-‮⁦-⁩]")
 
 

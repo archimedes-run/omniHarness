@@ -39,6 +39,7 @@ def test_svg_and_images_are_served_only_as_inert_images(gateway):
         assert resp.headers["x-content-type-options"] == "nosniff"
         assert resp.headers["content-security-policy"] == "default-src 'none'; sandbox"
         assert resp.headers["cross-origin-resource-policy"] == "same-origin"
+        assert resp.headers["cache-control"] == "private, no-store", "deleted content must not linger in a cache"
         assert c.get(f"/api/artifacts/{aid}/versions/1").json()["content"] is None
 
 

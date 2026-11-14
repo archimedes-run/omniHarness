@@ -62,9 +62,11 @@ def subagent_surface(
     called_agent: bool = False,
     selected_sources: list[str] | None = None,
     tool_access: dict | None = None,
+    artifact_tools: bool = False,
 ) -> dict:
     """A delegated (or @-called) agent's surface."""
     return {
+        "artifact_tools": bool(artifact_tools),
         "tool_access": dict(tool_access) if tool_access is not None else None,
         "kind": SUBAGENT,
         "subagent_type": subagent_type,
@@ -133,6 +135,7 @@ def tools_for_surface(surface: dict, *, app_config: Any = None) -> list:
             selected_sources=surface.get("selected_sources"),
             user_id=surface.get("user_id"),
             tool_access=surface.get("tool_access") if isinstance(surface.get("tool_access"), dict) else None,
+            artifact_tools=surface.get("artifact_tools") is True,
         )
         executor = SubagentExecutor(config=config, tools=base, app_config=app_config, parent_model=surface.get("model_name"))
         return executor.effective_tools()

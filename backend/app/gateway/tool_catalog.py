@@ -132,7 +132,8 @@ def _builtins(config: Any, ruleset: Any) -> list[CatalogIntegration]:
     from omniharness.tools.agent_access import integration_of
     from omniharness.tools.tools import get_available_tools
 
-    tools = get_available_tools(include_mcp=False, app_config=config)
+    # Every grantable built-in, artifacts included (Spec 012).
+    tools = get_available_tools(include_mcp=False, app_config=config, artifact_tools=True)
     groups = {cfg.name: cfg.group for cfg in config.tools if getattr(cfg, "group", None)}
     by_integration: dict[str, list[Any]] = {}
     for tool in tools:

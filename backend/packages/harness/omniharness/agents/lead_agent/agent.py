@@ -482,7 +482,7 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
     extra_tools = builder_tools_for(cfg)
 
     if inputs.is_bootstrap:
-        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config) + extra_tools
+        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config, artifact_tools=True) + extra_tools
         return filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include | {t.name for t in extra_tools})
 
     # Per-conversation tool selection (namespaced source ids) + owning user, both
@@ -511,6 +511,8 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
         max_tools=max_tools,
         tool_access=tool_access,
         research_enabled=True,
+        # Spec 012: the built-in assistant only; a custom agent needs the grant.
+        artifact_tools=inputs.agent_config is None,
     )
     # A skill's allowed-tools narrows the run's working tools, never the
     # builder: it is the owner's own means of changing agents and skills, and
@@ -560,6 +562,9 @@ def _lead_metadata(inputs: _LeadInputs) -> dict:
         "tool_groups": inputs.agent_config.tool_groups if inputs.agent_config else None,
         # 006-G: a delegate of this agent inherits its allowlist (task_tool).
         "tool_access": access_dict(inputs.agent_config.tools) if inputs.agent_config else None,
+        # Spec 012: a delegate of the built-in assistant keeps the artifact
+        # tools; one of a custom agent has them only through its allowlist.
+        "artifact_tools": inputs.agent_config is None,
         "available_skills": sorted(inputs.available_skills) if inputs.available_skills is not None else None,
     }
 

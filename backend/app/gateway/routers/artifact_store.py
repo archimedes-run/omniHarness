@@ -38,7 +38,8 @@ CONTENT_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; sandbox",
     "Cross-Origin-Resource-Policy": "same-origin",
-    "Cache-Control": "private, max-age=31536000, immutable",
+    # Not cached: a deleted artifact's content must not linger in a cache.
+    "Cache-Control": "private, no-store",
 }
 
 

@@ -605,7 +605,7 @@ async def test_skill(skill_name: str, request: SkillTestRequest, config: AppConf
     container = config.skills.container_path
     paths = {s.get_container_file_path(container): s.name for s in skills}
     system = apply_prompt_template(agent_name=agent_cfg.name if agent_cfg else None, available_skills=available, app_config=config, user_id=user_id)
-    tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config, tool_access=agent_cfg.tools if agent_cfg else None)
+    tools = get_available_tools(groups=agent_cfg.tool_groups if agent_cfg else None, include_mcp=False, model_name=model_name, app_config=config, tool_access=agent_cfg.tools if agent_cfg else None, artifact_tools=agent_cfg is None)
     try:
         model = ToolNameBoundaryModel(create_chat_model(name=model_name, thinking_enabled=False, app_config=config)).bind_tools(tools)
     except Exception as exc:  # noqa: BLE001 — said, not hidden

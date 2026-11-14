@@ -267,7 +267,8 @@ class ArtifactStore:
     # -- writes --------------------------------------------------------------------------
 
     def _store_blob(self, s: Session, owner_id: str, data: bytes) -> tuple[str, bool]:
-        """Quota check, then the blob. Returns (hash, newly written)."""
+        """Quota check, then the blob (written before the row commits; made
+        sure of again after it commits, see _settle). Returns (hash, newly written)."""
         content_hash = blobs.sha256(data)
         known = s.execute(select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.content_hash == content_hash, ArtifactVersionRow.stored == "blob")).scalar_one()
         if not known:
@@ -294,17 +295,18 @@ class ArtifactStore:
         turn_id: str | None,
         tool_call_id: str | None,
         chat_ref: tuple[str, int, str] | None = None,
-    ) -> tuple[ArtifactVersionRow, str | None]:
+        post: dict | None = None,
+    ) -> ArtifactVersionRow:
         if lineage not in LINEAGES or origin not in ORIGINS:
             raise InvalidRequest("Bad lineage or origin.")
-        written: str | None = None
         if chat_ref is not None:
             content_hash, size, chat_path = chat_ref
             media_type, language, stored = "application/octet-stream", None, "chat"
         else:
             assert canon is not None
-            content_hash, fresh = self._store_blob(s, row.owner_id, canon.data)
-            written = content_hash if fresh else None
+            content_hash, _ = self._store_blob(s, row.owner_id, canon.data)
+            if post is not None:
+                post["ensure"][content_hash] = canon.data
             size, media_type, language, stored, chat_path = len(canon.data), canon.media_type, canon.language, "blob", None
         version = ArtifactVersionRow(
             artifact_id=row.id,
@@ -332,9 +334,9 @@ class ArtifactStore:
         if canon is not None and row.kind in SEARCH_KINDS and canon.search_text is not None:
             row.search_text = canon.search_text[: caps.SEARCH_TEXT_CHARS]
         s.flush()
-        return version, written
+        return version
 
-    def _prune(self, s: Session, row: ArtifactRow) -> None:
+    def _prune(self, s: Session, row: ArtifactRow, post: dict) -> None:
         """Beyond the per-artifact cap: drop the oldest version that is neither
         v1 nor the latest (FR-004). Nothing in S1 references older versions."""
         count = s.execute(select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.artifact_id == row.id)).scalar_one()
@@ -342,39 +344,54 @@ class ArtifactStore:
             oldest = s.execute(select(ArtifactVersionRow).where(ArtifactVersionRow.artifact_id == row.id, ArtifactVersionRow.n != 1, ArtifactVersionRow.n != row.latest_version).order_by(ArtifactVersionRow.n).limit(1)).scalar_one_or_none()
             if oldest is None:
                 return
-            content_hash = oldest.content_hash
+            post["gc"].add(oldest.content_hash)
             s.delete(oldest)
             s.flush()
-            self._drop_blob_if_unreferenced(s, row.owner_id, content_hash)
             count -= 1
 
-    @staticmethod
-    def _drop_blob_if_unreferenced(s: Session, owner_id: str, content_hash: str) -> None:
-        still = s.execute(select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.content_hash == content_hash, ArtifactVersionRow.stored == "blob")).scalar_one()
-        if not still:
-            blobs.delete(owner_id, content_hash)
+    def _settle(self, owner_id: str, *, ensure: dict[str, bytes], gc: set[str]) -> None:
+        """After a transaction ended, under the owner's cross-worker blob lock:
+        every blob a committed version needs exists (another worker's delete
+        may have unlinked it between our write and our commit), and a blob is
+        unlinked only when a FRESH read finds no version referencing it. Both
+        under one lock, so a delete never unlinks what a racing write just
+        committed, in either order."""
+        if not ensure and not gc:
+            return
+        with blobs.owner_lock(owner_id):
+            for content_hash, data in ensure.items():
+                if not blobs.path_for(owner_id, content_hash).exists():
+                    blobs.write(owner_id, data)
+            if gc:
+                with self._read() as s:
+                    for content_hash in gc:
+                        still = s.execute(
+                            select(func.count()).select_from(ArtifactVersionRow).where(ArtifactVersionRow.owner_id == owner_id, ArtifactVersionRow.content_hash == content_hash, ArtifactVersionRow.stored == "blob")
+                        ).scalar_one()
+                        if not still:
+                            blobs.delete(owner_id, content_hash)
 
     def _commit_or_cleanup(self, owner_id: str, work) -> Any:
-        """Run a write; if it fails after writing a fresh blob, remove that blob
-        when nothing references it."""
-        fresh: list[str] = []
+        """Run a write, then settle its blobs. If it fails, a blob it wrote is
+        removed when nothing references it."""
+        post: dict = {"ensure": {}, "gc": set()}
         try:
             with self._write() as s:
-                return work(s, fresh)
+                result = work(s, post)
         except IntegrityError:
-            self._cleanup(owner_id, fresh)
+            self._cleanup(owner_id, post)
             raise Stale("This artifact changed while saving; read it again.") from None
         except BaseException:
-            self._cleanup(owner_id, fresh)
+            self._cleanup(owner_id, post)
             raise
+        self._settle(owner_id, ensure=post["ensure"], gc=post["gc"])
+        return result
 
-    def _cleanup(self, owner_id: str, fresh: list[str]) -> None:
-        for content_hash in fresh:
-            try:
-                with self._write() as s:
-                    self._drop_blob_if_unreferenced(s, owner_id, content_hash)
-            except Exception:  # noqa: BLE001 — an orphan blob is harmless; logged
-                logger.warning("artifact store: could not remove an orphan blob")
+    def _cleanup(self, owner_id: str, post: dict) -> None:
+        try:
+            self._settle(owner_id, ensure={}, gc=set(post["ensure"]))
+        except Exception:  # noqa: BLE001 — an orphan blob is harmless; logged
+            logger.warning("artifact store: could not remove an orphan blob")
 
     def create(
         self,
@@ -395,16 +412,14 @@ class ArtifactStore:
     ) -> tuple[dict, dict]:
         clean = clean_title(title)
 
-        def work(s: Session, fresh: list[str]) -> tuple[dict, dict]:
+        def work(s: Session, post: dict) -> tuple[dict, dict]:
             now = time.time()
             row = ArtifactRow(id=new_id(), owner_id=owner_id, kind=kind, title=clean, origin_thread_id=thread_id, origin_turn_id=turn_id, imported_from=imported_from, latest_version=1, pinned=False, created_at=now, updated_at=now)
             s.add(row)
             s.flush()
-            version, written = self._insert_version(
-                s, row, canon, n=1, base_version=None, lineage=lineage, lineage_source=lineage_source, origin=origin, note=note, thread_id=thread_id, turn_id=turn_id, tool_call_id=tool_call_id, chat_ref=chat_ref
+            version = self._insert_version(
+                s, row, canon, n=1, base_version=None, lineage=lineage, lineage_source=lineage_source, origin=origin, note=note, thread_id=thread_id, turn_id=turn_id, tool_call_id=tool_call_id, chat_ref=chat_ref, post=post
             )
-            if written:
-                fresh.append(written)
             return self._summary(s, row), _version_dict(version)
 
         return self._commit_or_cleanup(owner_id, work)
@@ -432,7 +447,7 @@ class ArtifactStore:
         version inside the same transaction (edits, restore, owner edits), always
         validated as the artifact's own kind, so a kind never changes."""
 
-        def work(s: Session, fresh: list[str]) -> tuple[dict, dict]:
+        def work(s: Session, post: dict) -> tuple[dict, dict]:
             row = self._artifact(s, owner_id, artifact_id)
             if row.archived_at is not None:
                 raise Archived("This artifact is archived; restore it from the archive first.")
@@ -441,7 +456,7 @@ class ArtifactStore:
             content = canon
             if build is not None:
                 content = build(s, row)
-            version, written = self._insert_version(
+            version = self._insert_version(
                 s,
                 row,
                 content,
@@ -455,10 +470,9 @@ class ArtifactStore:
                 turn_id=turn_id,
                 tool_call_id=tool_call_id,
                 chat_ref=chat_ref,
+                post=post,
             )
-            if written:
-                fresh.append(written)
-            self._prune(s, row)
+            self._prune(s, row, post)
             return self._summary(s, row), _version_dict(version)
 
         return self._commit_or_cleanup(owner_id, work)
@@ -470,6 +484,13 @@ class ArtifactStore:
         return blobs.read(row.owner_id, v.content_hash)
 
     def restore(self, owner_id: str, artifact_id: str, *, version: int, base_version: int) -> tuple[dict, dict]:
+        # The restored text is the old version's, so it keeps that version's
+        # lineage (a version never changes, so reading it first is safe).
+        with self._read() as s:
+            self._artifact(s, owner_id, artifact_id)
+            source = self._version(s, owner_id, artifact_id, version)
+            lineage, lineage_source = source.lineage, source.lineage_source
+
         def build(s: Session, row: ArtifactRow) -> Canonical:
             old = self._version(s, owner_id, artifact_id, version)
             if old.stored != "blob":
@@ -482,7 +503,7 @@ class ArtifactStore:
                 search = text_of(row.kind, data)
             return Canonical(data, old.media_type, old.language, search)
 
-        return self.add_version(owner_id, artifact_id, base_version=base_version, build=build, lineage="user", lineage_source=None, origin="restore", note=f"Restored version {version}")
+        return self.add_version(owner_id, artifact_id, base_version=base_version, build=build, lineage=lineage, lineage_source=lineage_source, origin="restore", note=f"Restored version {version}")
 
     def patch(self, owner_id: str, artifact_id: str, *, title: str | None = None, pinned: bool | None = None) -> dict:
         with self._write() as s:
@@ -531,6 +552,8 @@ class ArtifactStore:
         return summary
 
     def delete(self, owner_id: str, artifact_id: str, *, confirm_id: str, version_count: int) -> None:
+        # Blobs are unlinked only AFTER the delete commits, each re-checked
+        # under the owner's blob lock (_settle).
         with self._write() as s:
             row = self._artifact(s, owner_id, artifact_id)
             if row.archived_at is None:
@@ -544,19 +567,24 @@ class ArtifactStore:
                 imp.artifact_id = None
             s.delete(row)
             s.flush()
-            for content_hash in hashes:
-                self._drop_blob_if_unreferenced(s, owner_id, content_hash)
+        self._settle(owner_id, ensure={}, gc=hashes)
 
     # -- importer bookkeeping (FR-037) ------------------------------------------------
 
     def import_known(self, owner_id: str, thread_id: str, path: str, content_hash: str) -> bool:
         with self._read() as s:
-            return (
-                s.execute(
-                    select(func.count()).select_from(ArtifactImportRow).where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path, ArtifactImportRow.content_hash == content_hash)
-                ).scalar_one()
-                > 0
+            q = select(func.count()).select_from(ArtifactImportRow).where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path, ArtifactImportRow.content_hash == content_hash)
+            return s.execute(q).scalar_one() > 0
+
+    def import_unchanged(self, owner_id: str, thread_id: str, path: str, size: int, mtime_ns: int) -> bool:
+        """An import of this path was recorded with this size and mtime."""
+        with self._read() as s:
+            q = (
+                select(func.count())
+                .select_from(ArtifactImportRow)
+                .where(ArtifactImportRow.owner_id == owner_id, ArtifactImportRow.thread_id == thread_id, ArtifactImportRow.path == path, ArtifactImportRow.size == size, ArtifactImportRow.mtime_ns == mtime_ns)
             )
+            return s.execute(q).scalar_one() > 0
 
     def import_target(self, owner_id: str, thread_id: str, path: str) -> str | None:
         """The live artifact an earlier import of this path made, if any."""
@@ -566,9 +594,9 @@ class ArtifactStore:
                 return "deleted"
             return rows[0].artifact_id if rows else None
 
-    def record_import(self, owner_id: str, thread_id: str, path: str, content_hash: str, artifact_id: str | None) -> None:
+    def record_import(self, owner_id: str, thread_id: str, path: str, content_hash: str, artifact_id: str | None, *, size: int | None = None, mtime_ns: int | None = None) -> None:
         try:
             with self._write() as s:
-                s.add(ArtifactImportRow(owner_id=owner_id, thread_id=thread_id, path=path, content_hash=content_hash, artifact_id=artifact_id, created_at=time.time()))
+                s.add(ArtifactImportRow(owner_id=owner_id, thread_id=thread_id, path=path, content_hash=content_hash, artifact_id=artifact_id, size=size, mtime_ns=mtime_ns, created_at=time.time()))
         except IntegrityError:
             pass  # another worker recorded it first: idempotent

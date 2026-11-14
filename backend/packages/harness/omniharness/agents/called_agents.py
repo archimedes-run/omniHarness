@@ -280,6 +280,7 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
             selected_sources=selected,
             user_id=surface.get("user_id"),
             tool_access=surface.get("tool_access") if isinstance(surface.get("tool_access"), dict) else None,
+            artifact_tools=surface.get("artifact_tools") is True,
         )
         chain = tuple(resume.get("delegation_chain") or ())
         origin = str(resume.get("origin") or "unknown")

@@ -736,7 +736,7 @@ def test_the_model_reads_search_results_compact(gateway):
 #: `research` (spec 009 FR-061): the read-only web researcher, whose only
 #: tools are the three web lookups; its result is public web content. In a turn
 #: that read private data it is a card (and the turn is private already).
-PUBLIC = {"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos", "artifact_create", "artifact_update"}
+PUBLIC = {"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos", "artifact_create"}
 
 
 def _shipped():

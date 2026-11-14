@@ -216,7 +216,7 @@ async def get_thread_tools_count(thread_id: str, request: Request) -> CountRespo
     # cannot be deferred exceed it — the UI shows "N / cap" and blocks
     # enabling more.
     try:
-        tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap)
+        tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap, artifact_tools=True)
         count = offered_tool_count(tools)
     except ToolCapExceededError as exc:
         count = exc.count

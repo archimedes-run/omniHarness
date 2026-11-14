@@ -319,6 +319,10 @@ policy:
     # Tier 2, disclosed on the final reply; in a scheduled run only under a
     # standing grant. Reading or listing returns the owner's own (possibly
     # private) data: Tier 1 with no `reads_private`, so a private read.
+    # artifact_update is a private read too: whether its exact {old, new}
+    # edits apply depends on the stored text, so its answer says something
+    # about that text (an outbound lookup after it needs a card).
+    # artifact_create's answer depends only on its own arguments.
     # There is deliberately NO rule for archiving, deleting, sharing,
     # exporting or promoting an artifact: those are the owner's buttons, and
     # a tool by such a name matches nothing here and is refused (rule 1).
@@ -330,7 +334,6 @@ policy:
     - pattern: "artifact_update"
       tier: 2
       reversible: true
-      reads_private: false
     - pattern: "artifact_read"
       tier: 1
       reversible: true

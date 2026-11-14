@@ -26,12 +26,14 @@ import json
 import logging
 import os
 import re
+import secrets
+import stat
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from app.gateway.artifacts_store import caps, kinds
+from app.gateway.artifacts_store import blobs, caps, kinds, safe_open
 from app.gateway.artifacts_store.kinds import Canonical, InvalidContent, TooLarge
 from app.gateway.artifacts_store.store import Archived, ArtifactStore, InvalidRequest, QuotaExceeded, StoreError
 from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
@@ -47,9 +49,15 @@ OUTPUTS_PREFIX = f"{VIRTUAL_PATH_PREFIX}/outputs/"
 _CLOSE = re.compile(r"</(artifact)", re.I)
 
 
+#: Control, bidi and zero-width characters, kept out of what the model reads
+#: (line breaks and tabs stay: the text's own structure).
+_INVISIBLE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+
+
 def fence_text(text: str) -> str:
-    """Nothing inside can close the <artifact> element around it."""
-    return _CLOSE.sub(r"<\\/\1", text)
+    """Nothing inside can close the element around it (whose tag also carries
+    a per-call nonce), and no invisible character reaches the model."""
+    return _CLOSE.sub(r"<\\/\1", _INVISIBLE.sub("", text))
 
 
 def _attr(value: Any) -> str:
@@ -94,7 +102,8 @@ def apply_edits(text: str, edits: list[Any]) -> str:
             raise InvalidRequest(f"edit {index} must be {{old, new}} with non-empty old text.")
         count = text.count(edit["old"])
         if count != 1:
-            raise InvalidRequest(f"edit {index}: the old text occurs {count} times; it must occur exactly once.")
+            # No count: how often a guess occurs is itself a fact about the text.
+            raise InvalidRequest(f"edit {index}: the old text was not found exactly once; read the artifact and try again.")
         text = text.replace(edit["old"], edit["new"], 1)
     return text
 
@@ -119,18 +128,14 @@ class GatewayArtifactController:
             raise InvalidRequest("an image needs a chat to read its file from.")
         if not isinstance(source_path, str) or not source_path.startswith(OUTPUTS_PREFIX):
             raise InvalidRequest(f"source_path must be a file under {OUTPUTS_PREFIX}")
-        paths = get_paths()
+        outputs = get_paths().sandbox_outputs_dir(thread_id, user_id=owner_id)
         try:
-            path = paths.resolve_virtual_path(thread_id, source_path, user_id=owner_id)
-        except ValueError:
-            raise InvalidRequest(f"source_path must be a file under {OUTPUTS_PREFIX}") from None
-        outputs = paths.sandbox_outputs_dir(thread_id, user_id=owner_id).resolve()
-        if outputs not in path.parents or path.is_symlink() or not path.is_file():
-            raise InvalidRequest(f"source_path must be a file under {OUTPUTS_PREFIX}")
-        size = path.stat().st_size
-        if size > caps.BINARY_VERSION_BYTES:
-            raise TooLarge(size, caps.BINARY_VERSION_BYTES)
-        return kinds.canonical_image(path.read_bytes())
+            # Opened without following any link, read from that fd only, at
+            # most the cap (safe_open): no check-then-open by path.
+            data = safe_open.read_under(outputs, source_path[len(OUTPUTS_PREFIX) :], caps.BINARY_VERSION_BYTES)
+        except safe_open.Refused:
+            raise InvalidRequest(f"source_path must be a plain file under {OUTPUTS_PREFIX}, at most {caps.BINARY_VERSION_BYTES} bytes.") from None
+        return kinds.canonical_image(data)
 
     def create(self, context: dict, *, kind: str, title: str, content: Any, language: str | None, source_path: str | None, note: str | None) -> tuple[str, dict | None]:
         store = self._store()
@@ -209,7 +214,8 @@ class GatewayArtifactController:
                 body = data.decode("utf-8")
         else:
             body = f"({kind} content, {meta['size']} bytes, {meta['media_type']}: not shown as text)"
-        return f"{FENCE_LABEL}\n<artifact {attrs}>\n{fence_text(body)}\n</artifact>"
+        tag = f"artifact-{secrets.token_hex(4)}"
+        return f"{FENCE_LABEL}\n<{tag} {attrs}>\n{fence_text(body)}\n</{tag}>"
 
     def list(self, context: dict, *, query: str | None, kind: str | None, limit: int | None) -> str:
         store = self._store()
@@ -220,8 +226,9 @@ class GatewayArtifactController:
             return f"Not listed: kind must be one of {', '.join(kinds.STORED_KINDS)}."
         size = max(1, min(int(limit or 20), 50))
         rows, total = store.list(owner_id, kind=kind, q=(query or None), limit=size)
+        tag = f"artifacts-{secrets.token_hex(4)}"
         lines = [json.dumps({"id": r["id"], "kind": r["kind"], "title": r["title"], "latest_version": r["latest_version"], "lineage": r["lineage"], "updated_at": r["updated_at"]}, ensure_ascii=False).replace("<", "\\u003c") for r in rows]
-        return f'{FENCE_LABEL}\n<artifacts total="{total}" shown="{len(rows)}">\n' + "\n".join(lines) + "\n</artifacts>"
+        return f'{FENCE_LABEL}\n<{tag} total="{total}" shown="{len(rows)}">\n' + "\n".join(lines) + f"\n</{tag}>"
 
 
 # -- the lazy importer (FR-037) ----------------------------------------------------------
@@ -234,21 +241,14 @@ CODE_LANGUAGES = {
     ".toml": "toml", ".xml": "xml", ".txt": "text", ".r": "r", ".lua": "lua",
 }  # fmt: skip
 MAX_FILES_PER_THREAD = 500
+#: One pass, across every chat of the owner.
+MAX_FILES_PER_PASS = 2000
+MAX_BYTES_PER_PASS = 256 * 1024 * 1024
 _THREAD_DIR = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _IMPORT_LOCKS: dict[str, threading.Lock] = {}
 _IMPORT_LOCKS_GUARD = threading.Lock()
 _LAST_FULL_IMPORT: dict[str, float] = {}
 FULL_IMPORT_INTERVAL = 30.0
-
-
-def _hash_file(path: Path) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def detect(name: str, data: bytes) -> tuple[str, Canonical]:
@@ -301,9 +301,10 @@ def run_import(store: ArtifactStore, owner_id: str, *, thread_id: str | None = N
         else:
             names = sorted(p.name for p in threads_root.iterdir() if p.is_dir() and _THREAD_DIR.match(p.name)) if threads_root.is_dir() else []
         made = 0
+        budget = _Budget()
         for name in names:
             try:
-                made += _import_thread(store, owner_id, name)
+                made += _import_thread(store, owner_id, name, budget)
             except Exception:  # noqa: BLE001 — one chat failing never stops the rest
                 logger.warning("artifact importer: a chat could not be indexed", exc_info=True)
         return made
@@ -311,59 +312,99 @@ def run_import(store: ArtifactStore, owner_id: str, *, thread_id: str | None = N
         lock.release()
 
 
-def _import_thread(store: ArtifactStore, owner_id: str, thread_id: str) -> int:
+class _Budget:
+    """One pass's limits across every chat: files looked at and bytes read."""
+
+    def __init__(self) -> None:
+        self.files = MAX_FILES_PER_PASS
+        self.bytes = MAX_BYTES_PER_PASS
+
+    def take(self, size: int) -> bool:
+        if self.files <= 0 or self.bytes < size:
+            return False
+        self.files -= 1
+        self.bytes -= size
+        return True
+
+
+def _import_thread(store: ArtifactStore, owner_id: str, thread_id: str, budget: _Budget) -> int:
     outputs = get_paths().sandbox_outputs_dir(thread_id, user_id=owner_id)
-    if not outputs.is_dir() or outputs.is_symlink():
+    if outputs.is_symlink() or not outputs.is_dir():
         return 0
-    root = outputs.resolve()
     made = 0
     seen = 0
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not os.path.islink(os.path.join(dirpath, d)))
+    # The listing only proposes names: every file is opened by safe_open,
+    # relative to directory fds and without following links.
+    for dirpath, dirnames, filenames in os.walk(outputs, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
         for filename in sorted(filenames):
             if filename.startswith("."):
                 continue
             path = Path(dirpath) / filename
-            if path.is_symlink() or not path.is_file() or root not in path.resolve().parents:
+            rel = path.relative_to(outputs).as_posix()
+            if len(rel) > 400:
                 continue
+            try:
+                info = os.lstat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                continue  # links, FIFOs, devices: never imported
             seen += 1
             if seen > MAX_FILES_PER_THREAD:
                 return made
-            rel = path.relative_to(root).as_posix()
-            if len(rel) > 400:
-                continue
-            made += _import_file(store, owner_id, thread_id, path, rel)
+            made += _import_file(store, owner_id, thread_id, outputs, rel, info, budget)
     return made
 
 
-def _import_file(store: ArtifactStore, owner_id: str, thread_id: str, path: Path, rel: str) -> int:
-    content_hash = _hash_file(path)
+def _import_file(store: ArtifactStore, owner_id: str, thread_id: str, outputs: Path, rel: str, info: os.stat_result, budget: _Budget) -> int:
+    size, mtime_ns = info.st_size, info.st_mtime_ns
+    if store.import_unchanged(owner_id, thread_id, rel, size, mtime_ns):
+        return 0  # same size and mtime as recorded: not read again
+    canon: Canonical | None = None
+    chat_ref = None
+    if size > caps.BINARY_VERSION_BYTES:
+        # Never read: recorded as living in its chat, keyed by a fingerprint
+        # of (path, size, mtime) instead of a content hash.
+        if not budget.take(0):
+            return 0
+        content_hash = blobs.sha256(f"chat:{rel}:{size}:{mtime_ns}".encode())
+        kind = "file"
+        chat_ref = (content_hash, size, rel)
+    else:
+        if not budget.take(size):
+            return 0
+        try:
+            data = safe_open.read_under(outputs, rel, caps.BINARY_VERSION_BYTES, expect=info)
+        except safe_open.Refused:
+            return 0
+        content_hash = blobs.sha256(data)
+        kind, canon = detect(rel.rsplit("/", 1)[-1], data)
     if store.import_known(owner_id, thread_id, rel, content_hash):
         return 0
     target = store.import_target(owner_id, thread_id, rel)
     if target == "deleted":
         return 0  # the owner deleted what this path made: not made again
-    size = path.stat().st_size
-    canon: Canonical | None = None
-    chat_ref = None
-    if size > caps.BINARY_VERSION_BYTES:
-        with path.open("rb") as handle:
-            head = handle.read(16)
-        kind = "image" if kinds.sniff_image(head) else "file"
-        chat_ref = (content_hash, size, rel)
-    else:
-        kind, canon = detect(path.name, path.read_bytes())
+    if target:
+        try:
+            summary = store.get(owner_id, target)
+            latest = store.versions(owner_id, target)[0]
+        except StoreError:
+            target = None
+        else:
+            # A changed file never lands on top of the owner's own work: an
+            # artifact the owner pinned, edited or restored, or of another
+            # kind, is left as it is and the file becomes a NEW artifact.
+            if summary["pinned"] or latest["origin"] != "import" or summary["kind"] != kind:
+                target = None
     kwargs = {"lineage": "content", "lineage_source": IMPORT_SOURCE, "origin": "import", "thread_id": thread_id}
     artifact_id = None
     for attempt in ("blob", "chat"):
         try:
             if target:
-                summary = store.get(owner_id, target)
-                if summary["kind"] == kind:
-                    s, _ = store.add_version(owner_id, target, base_version=summary["latest_version"], canon=canon, chat_ref=chat_ref, **kwargs)
-                    artifact_id = s["id"]
-                    break
-            s, _ = store.create(owner_id, kind=kind, title=path.name, canon=canon, chat_ref=chat_ref, imported_from=f"{thread_id}:{OUTPUTS_PREFIX}{rel}", **kwargs)
+                s, _ = store.add_version(owner_id, target, base_version=summary["latest_version"], canon=canon, chat_ref=chat_ref, **kwargs)
+            else:
+                s, _ = store.create(owner_id, kind=kind, title=rel.rsplit("/", 1)[-1], canon=canon, chat_ref=chat_ref, imported_from=f"{thread_id}:{OUTPUTS_PREFIX}{rel}", **kwargs)
             artifact_id = s["id"]
             break
         except QuotaExceeded:
@@ -375,5 +416,5 @@ def _import_file(store: ArtifactStore, owner_id: str, thread_id: str, path: Path
             break
         except StoreError:
             return 0
-    store.record_import(owner_id, thread_id, rel, content_hash, artifact_id)
+    store.record_import(owner_id, thread_id, rel, content_hash, artifact_id, size=size, mtime_ns=mtime_ns)
     return 1

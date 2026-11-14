@@ -10,10 +10,13 @@ decides that).
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import re
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from omniharness.config.paths import get_paths
@@ -68,3 +71,19 @@ def read(owner_id: str, content_hash: str) -> bytes:
 
 def delete(owner_id: str, content_hash: str) -> None:
     path_for(owner_id, content_hash).unlink(missing_ok=True)
+
+
+@contextmanager
+def owner_lock(owner_id: str) -> Iterator[None]:
+    """One owner's blob lock, across threads and worker processes (flock on a
+    file beside the blobs): a blob is unlinked and a committed version's blob
+    is made sure of under it, never in between."""
+    base = root(owner_id).parent
+    base.mkdir(parents=True, exist_ok=True)
+    fd = os.open(base / ".lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)

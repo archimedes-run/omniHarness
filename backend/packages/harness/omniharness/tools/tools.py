@@ -122,9 +122,9 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
 #: false` in default_rules.yaml). They are reserved whether or not this install
 #: offers the built-in, so an outside tool can never pass its output off as a
 #: public one (web-research review, finding 1).
-#: artifact_create and artifact_update (Spec 012) answer with ids and version
-#: numbers only, never the owner's data.
-PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos", "artifact_create", "artifact_update"})
+#: artifact_create (Spec 012) answers from its own arguments only. Not
+#: artifact_update: whether its edits apply depends on the stored text.
+PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos", "artifact_create"})
 
 
 def refuse_builtin_collisions(tools: list[BaseTool], source: str, config: AppConfig | None = None) -> list[BaseTool]:
@@ -168,6 +168,7 @@ def get_available_tools(
     tool_access: object | None = None,
     defer_overflow: bool = True,
     research_enabled: bool = False,
+    artifact_tools: bool = False,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -188,6 +189,12 @@ def get_available_tools(
         max_tools: The model's tool-array cap, or None for no cap. Connector
             tools that would take the request past it are DEFERRED (or, with
             `defer_overflow=False`, left out): see fit_connectors_to_cap.
+        artifact_tools: True only for the built-in assistant (the lead with no
+            custom agent config) and the delegates it starts. A custom agent
+            gets the artifact tools only when its allowlist names
+            `builtin:artifacts` (Spec 012); one with no allowlist never gets
+            them, so a grant is never silent. Default False: a caller that
+            forgets fails closed.
             ToolCapExceededError only when the tools that cannot be moved
             exceed it on their own.
         defer_overflow: True for an agent that installs the
@@ -267,10 +274,13 @@ def get_available_tools(
         builtin_tools.extend([ledger_read_tool, ledger_apply_tool])
 
     # The artifact tools only when an ArtifactController is registered
-    # (gateway mode, Spec 012).
+    # (gateway mode, Spec 012), and only for the built-in assistant or an
+    # agent granted builtin:artifacts (see `artifact_tools`).
     from omniharness.runtime.artifacts.controller import get_artifact_controller
 
-    if get_artifact_controller() is not None:
+    if get_artifact_controller() is not None and (artifact_tools or access is not None):
+        # With an allowlist they are candidates only: apply_tool_access keeps
+        # them when it names builtin:artifacts and those tools.
         from omniharness.tools.builtins.artifact_tools import ARTIFACT_TOOLS
 
         builtin_tools.extend(ARTIFACT_TOOLS)
