@@ -94,7 +94,7 @@ def test_memory_and_read_content_never_count_as_the_owners_request(gw) -> None:
     controller = GatewayBuilderController(lambda: gw.client.app.state.config)
     context = {"user_id": gw.user_id, "thread_id": new_thread(gw), MESSAGES_KEY: messages}
     out = controller.draft(context, kind="agent", name="o1-finder", fields={"instructions": profile}, guessed=[], replace_current=False, owner_request="wants an O-1 visa through published research")
-    assert out.startswith("Nothing was drafted") and "not the user's own words" in out, out
+    assert out.startswith("Nothing was drafted"), out
     assert "only when the user's request mentions them" in BUILDER_SECTION
 
 

@@ -72,16 +72,6 @@ ACCESS_KEYS = (config_versions.TOOLS_KEY, "tool_groups", "skills", "model", conf
 #: selected); it has none of the tool groups or apps it asked for until the
 #: permission card the save raises is confirmed with its button.
 NEW_AGENT_ACCESS = {"tool_groups": [], "skills": []}
-#: English words a bare build request is made of (verbs, the things the
-#: builder makes, pronouns, articles, fillers). A request names a subject when
-#: it has at least one word outside this list, in any script.
-GENERIC_REQUEST_WORDS = frozenset(
-    "a an the me my i i'd i'm we us our you your please pls can could would will shall just new another one ones some "
-    "quick simple basic create make build set setup up add start get give want need like to for with do something thing "
-    "agent agents skill skills automation automations workflow workflows bot bots assistant assistants helper helpers "
-    "it that this there here now help hi hey ok okay".split()
-)
-
 #: Fixed wording for refusals that reach the model: never free text taken
 #: from stored config or written by a model (a scan's reason).
 INVALID = {
@@ -128,20 +118,23 @@ def _not_done(lead: str, exc: Exception, confirmed: bool) -> str:
     return f"{lead}: {exc}"
 
 
-def _tokens(text: str) -> list[str]:
-    """Words of any script: NFKC, casefolded, split on anything that is not a
-    letter or a digit (an apostrophe stays inside a word)."""
-    import unicodedata
+def _names_subject(text: str) -> bool:
+    """The text says what the new thing is for (app.gateway.builder.purpose)."""
+    from app.gateway.builder.purpose import states_purpose
 
-    folded = unicodedata.normalize("NFKC", text or "").casefold()
-    cleaned = "".join(ch if ch.isalnum() or ch == "'" else " " for ch in folded)
-    return [w.strip("'") for w in cleaned.split() if w.strip("'")]
+    return states_purpose(text)[0]
 
 
-def _contains(words: list[str], wanted: list[str]) -> bool:
-    """`wanted` appears in `words` as whole words, in order, side by side."""
-    size = len(wanted)
-    return any(words[i : i + size] == wanted for i in range(len(words) - size + 1))
+def _given_name(context: dict) -> str | None:
+    """A name the owner gave it ("an agent called Bob"), to keep."""
+    from app.gateway.builder.purpose import states_purpose
+
+    for text in _owner_words(context):
+        name = states_purpose(text)[1]
+        if name:
+            found = re.search(r"\s+".join(re.escape(w) for w in name.split()), text, re.I)
+            return found.group(0) if found else name
+    return None
 
 
 def _message_text(message: Any) -> str:
@@ -184,6 +177,7 @@ def _owner_words(context: dict) -> list[str]:
             or q.owner_id != str(context.get("user_id"))
             or answer.get("via") != VIA_BUTTON
             or str((q.asker.get("ref") or {}).get("tool_call_id") or "") not in asked
+            or q.asker_data.get("purpose") != "builder"
         ):
             continue
         if answer.get("option") is not None:
@@ -205,7 +199,9 @@ def _asked_after_refusal(turn: list[Any]) -> set[str]:
                 calls = later.get("tool_calls") if isinstance(later, dict) else getattr(later, "tool_calls", None)
                 later_type = later.get("type") if isinstance(later, dict) else getattr(later, "type", None)
                 if later_type == "ai" and calls:
-                    out |= {str(c.get("id")) for c in calls if c.get("name") == "ask_clarification"}
+                    # The first call after the refusal, made on its own.
+                    if len(calls) == 1 and calls[0].get("name") == "ask_clarification":
+                        out.add(str(calls[0].get("id")))
                     break
     return out
 
@@ -609,11 +605,13 @@ class GatewayBuilderController:
                 # Something NEW only when the owner said what it is for, in
                 # their own words in this chat: never from memory or from
                 # content the model read.
-                problem = self._request_problem(context, owner_request)
-                if problem:
+                if self._request_problem(context) is not None:
+                    named = _given_name(context)
+                    keep = f" They named it {named!r}: keep that name." if named else ""
                     return (
-                        f"{ASK_FIRST_PREFIX} the {kind} is for ({problem}). Ask the user one question with ask_clarification (what should it do?);"
-                        " you may offer up to 3 suggestions, labelled as suggestions. Then stop. Once they answer, draft it with their words as owner_request."
+                        f"{ASK_FIRST_PREFIX} the {kind} is for.{keep} Ask the user one short question with ask_clarification (what should it do?),"
+                        " with at most 3 suggestions, then stop. When they answer, draft it from their answer with sensible defaults and propose saving it."
+                        " Never mention tool or parameter names to the user."
                     )
             snapshot, dropped, notes = self._compose(user_id, kind, name, dict(fields or {}), live)
             access_request = None
@@ -664,20 +662,17 @@ class GatewayBuilderController:
         return initiation_origin(messages, synthetic=is_synthetic_turn(context))
 
     @staticmethod
-    def _request_problem(context: dict, quote: str) -> str | None:
-        """Why `quote` does not show the owner asked for this, or None. It must
-        name a subject (a word beyond the generic "create me an agent"), and
-        appear word for word in the owner's own words of THIS request: their
+    def _request_problem(context: dict, quote: str = "") -> str | None:
+        """Why the owner has not said what a NEW item is for, or None. The
+        SERVER reads the owner's own words of this request itself (their
         tagged message that started the current turn, or their answer on the
-        Question card the builder's own "ask first" refusal raised."""
-        wanted = _tokens(quote)
-        if not wanted:
-            return "no owner_request was given"
-        if all(w in GENERIC_REQUEST_WORDS for w in wanted):
-            return "the request only asks for one, without saying what it is for"
-        if not any(_contains(_tokens(text), wanted) for text in _owner_words(context)):
-            return "owner_request is not the user's own words from this request"
-        return None
+        Question card the builder's "ask first" refusal raised); one of them
+        must name a subject (a word beyond the generic "create me an agent").
+        The model's `quote` is not needed and not trusted: a paraphrase of the
+        answer works, and no quote can stand in for the owner's words."""
+        if any(_names_subject(text) for text in _owner_words(context)):
+            return None
+        return "the owner's request does not say what it is for"
 
     @staticmethod
     def _access_words(request: dict) -> str:

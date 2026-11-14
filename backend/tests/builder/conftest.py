@@ -112,6 +112,14 @@ def gw(tmp_path, monkeypatch):
 
     monkeypatch.setattr("omniharness.tools.connector_tools.load_connector_tools", load_connector_tools)
 
+    # Memory is off in this gateway's config (it is not under test); the
+    # builder's question offers suggestions only when memory informs the chat,
+    # so tests treat it as on unless they say otherwise.
+    from omniharness.agents.middlewares import clarification_middleware
+
+    state.memory_on = clarification_middleware._memory_on
+    monkeypatch.setattr(clarification_middleware, "_memory_on", lambda ctx: not (ctx or {}).get("memory_off"))
+
     # Predictable draft ids.
     ids = count(1)
     monkeypatch.setattr("app.gateway.builder.drafts.new_draft_id", lambda: f"d-test-{next(ids)}")

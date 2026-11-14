@@ -283,6 +283,9 @@ export function MessageList({
     return <MessageListSkeleton />;
   }
 
+  // One card per question: a question's id is shown at the first group that
+  // carries it, never again lower in the same thread (reset every render).
+  const shownQuestions = new Set<string>();
   const renderGroup = (
     group: (typeof groupedMessages)[number],
     groupIndex: number,
@@ -347,6 +350,8 @@ export function MessageList({
       // A question that became a card (009 question-card.md): the shared
       // card, answered only by the owner's click or own tagged reply.
       const questionId = message ? questionIdOf(message) : null;
+      if (questionId && shownQuestions.has(questionId)) return null;
+      if (questionId) shownQuestions.add(questionId);
       if (message && questionId) {
         return (
           <div key={groupKey} className="w-full">

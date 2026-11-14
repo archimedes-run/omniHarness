@@ -197,6 +197,8 @@ def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) ->
             continue
         if is_tool_result(message):
             name = _tool_name_of(items, message)
+            if _owners_own_answer(message, name):
+                continue
             if not tool_result_is_trusted(message, name) and name not in untrusted:
                 untrusted.insert(0, name)
             continue
@@ -206,6 +208,20 @@ def initiation_origin(messages: list[Any] | None, *, synthetic: bool = False) ->
             return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_USER, "")
         return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
     return (ORIGIN_CONTENT, ", ".join(untrusted)) if untrusted else (ORIGIN_UNKNOWN, "")
+
+
+def _owners_own_answer(message: Any, name: str) -> bool:
+    """A question result the harness wrote that carries no one else's words
+    (spec 010): the builder's own question, the owner's card answer to it,
+    and a question that was not asked. Set by the server only (the
+    clarification middleware, app.gateway.resume)."""
+    from omniharness.agents.middlewares.clarification_middleware import NOT_ASKED_MARKER
+    from omniharness.runtime.builder.surface import BUILDER_QUESTION_MARKER, OWNER_ANSWER_MARKER
+
+    if name != "ask_clarification":
+        return False
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    return isinstance(kwargs, dict) and any(kwargs.get(k) is True for k in (NOT_ASKED_MARKER, BUILDER_QUESTION_MARKER, OWNER_ANSWER_MARKER))
 
 
 def _tool_name_of(items: list[Any], result: Any) -> str:

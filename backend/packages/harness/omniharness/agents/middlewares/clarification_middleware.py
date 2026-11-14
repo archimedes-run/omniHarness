@@ -45,15 +45,112 @@ def _recommended_index(raw: object, count: int) -> int | None:
     return number - 1 if 1 <= number <= count else None
 
 
+#: On every ask_clarification result that did NOT ask the person anything
+#: ("Not asked: ..."): an instruction to the model, never shown in the chat as
+#: a question (frontend core/messages/utils.ts hides it).
+NOT_ASKED_MARKER = "omniharness_not_asked"
+
+
 def problem_message(problem: str, call_id: str, *, marker: str | None = None) -> ToolMessage:
     """A question that cannot be asked as it is: the model is told why and
     runs again (it is not a pause)."""
+    kwargs = {NOT_ASKED_MARKER: True, **({marker: True} if marker else {})}
     return ToolMessage(
         content=f"Not asked: {problem}. Ask again with that fixed, or pick a sensible default, state it, and continue.",
         tool_call_id=call_id,
         name="ask_clarification",
-        additional_kwargs={marker: True} if marker else {},
+        additional_kwargs=kwargs,
     )
+
+
+#: The builder's "what should it do?" question: at most this many suggestions.
+BUILDER_ASK_MAX_OPTIONS = 3
+#: The caption a builder question's suggestions carry when memory informs them.
+MEMORY_CAPTION = "Suggestions based on what I know about you"
+
+
+def _builder_refusal_index(turn: list) -> int | None:
+    """Index of the latest builder "ask first" refusal in the turn, or None."""
+    from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX
+
+    found = None
+    for index, message in enumerate(turn):
+        if isinstance(message, ToolMessage) and message.name == "builder_draft" and str(message.content).startswith(ASK_FIRST_PREFIX):
+            found = index
+    return found
+
+
+def builder_ask(turn: list, call_id: str) -> bool:
+    """This call is THE one question asked directly after the builder's latest
+    "ask first" refusal (spec 010)."""
+    index = _builder_refusal_index(turn)
+    if index is None:
+        return False
+    following = next((m for m in turn[index + 1 :] if getattr(m, "tool_calls", None)), None)
+    # The FIRST call after the refusal, made on its own: an off-topic question
+    # bundled with other calls is not the builder's question.
+    calls = list(getattr(following, "tool_calls", None) or [])
+    return len(calls) == 1 and calls[0].get("name") == "ask_clarification" and calls[0].get("id") == call_id
+
+
+def builder_answered(turn: list, context: dict | None) -> bool:
+    """A run resumed on the owner's answer to the builder's question, with no
+    new "ask first" refusal since: the owner has said what it is for, so it is
+    drafted now, not asked about again (spec 010)."""
+    from omniharness.runtime.builder.surface import BUILDER_QUESTION_MARKER, QUESTION_ANSWER_KEY, question_resume
+
+    if not question_resume(context):
+        return False
+    index = _builder_refusal_index(turn)
+    if index is None:
+        return False
+    # The builder's own question (marked when it was asked), by its card id.
+    builder_qids = {str(((m.additional_kwargs or {}).get(QUESTION_MARKER) or {}).get("id") or "") for m in turn[index + 1 :] if isinstance(m, ToolMessage) and (m.additional_kwargs or {}).get(BUILDER_QUESTION_MARKER)}
+    answered = [i for i, m in enumerate(turn) if isinstance(m, ToolMessage) and str((m.additional_kwargs or {}).get(QUESTION_ANSWER_KEY) or "") in builder_qids - {""}]
+    if not answered or index > answered[-1]:
+        return False
+    # Only until the draft is made: a later, unrelated question follows the
+    # usual rules.
+    drafted = any(getattr(m, "tool_calls", None) and any(c.get("name") == "builder_draft" for c in m.tool_calls) for m in turn[answered[-1] + 1 :])
+    return not drafted
+
+
+def answered_refusal(call_id: str) -> ToolMessage:
+    """A question after the owner answered the builder's question: not asked."""
+    return ToolMessage(
+        content="Not asked: the person already answered what it should do. Draft it now from their answer, with sensible defaults for anything else, and propose saving it.",
+        tool_call_id=call_id,
+        name="ask_clarification",
+        additional_kwargs={NOT_ASKED_MARKER: True},
+    )
+
+
+def _memory_on(context: dict | None) -> bool:
+    """Memory informs this chat: on in the install, and not switched off for
+    the chat (the run context's server-owned `memory_off`, spec 007 #207)."""
+    from omniharness.agents.memory_switch import MEMORY_OFF_KEY
+
+    if (context or {}).get(MEMORY_OFF_KEY):
+        return False
+    try:
+        from omniharness.config import get_app_config
+
+        return bool(get_app_config().memory.enabled)
+    except Exception:  # noqa: BLE001 - unknown: no suggestions from memory
+        return False
+
+
+def shape_builder_question(args: dict, context: dict | None) -> dict:
+    """The builder's one question: at most 3 suggestions, each at most 60
+    characters, none pre-picked (they come from what the model knows, so all
+    look equal), captioned as suggestions from memory when memory is on in
+    this chat, and none at all when it is off."""
+    options = _options_list(args.get("options")) if _memory_on(context) else []
+    trimmed = [(o if len(o) <= 60 else o[:59].rstrip() + "…") for o in options][:BUILDER_ASK_MAX_OPTIONS]
+    trimmed = list(dict.fromkeys(trimmed))
+    if len(trimmed) == 1:
+        trimmed = []
+    return {**args, "options": trimmed, "recommended": None, "context": MEMORY_CAPTION if trimmed else ""}
 
 
 def card_questions_enabled() -> bool:
@@ -197,16 +294,10 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         if not messages:
             return None
         turn = turn_messages(list(messages))
-        from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX
-
-        for index, message in enumerate(turn):
-            if isinstance(message, ToolMessage) and message.name == "builder_draft" and str(message.content).startswith(ASK_FIRST_PREFIX):
-                # The builder refused to draft something new with no purpose
-                # and asked for ONE question (spec 010): the call made right
-                # after that refusal is the sanctioned ask, and only it.
-                following = next((m for m in turn[index + 1 :] if getattr(m, "tool_calls", None)), None)
-                if following is not None and any(c.get("id") == call_id for c in following.tool_calls):
-                    return None
+        if builder_ask(turn, call_id):
+            # The builder refused to draft something new with no purpose and
+            # asked for ONE question (spec 010): that question, and only it.
+            return None
         started = [s for s in tool_steps(turn) if s["name"] not in NON_EVIDENCE_TOOLS and s["id"] != call_id and s["ok"] is not None]
         ambiguous = str((args or {}).get("clarification_type") or "") == "ambiguous_requirement"
         if not started and not ambiguous:
@@ -227,7 +318,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             ),
             tool_call_id=call_id,
             name="ask_clarification",
-            additional_kwargs={self.DEFERRED_MARKER: True},
+            additional_kwargs={self.DEFERRED_MARKER: True, NOT_ASKED_MARKER: True},
         )
 
     # -- the question card ---------------------------------------------------
@@ -272,11 +363,18 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         return None, fixed
 
     @staticmethod
+    def _turn_of(state: object) -> list:
+        from omniharness.agents.working_loop import turn_messages
+
+        messages = state.get("messages") if isinstance(state, dict) else None
+        return turn_messages(list(messages or []))
+
+    @staticmethod
     def _context_of(runtime: object) -> dict:
         context = getattr(runtime, "context", None) or {}
         return dict(context) if isinstance(context, dict) else {}
 
-    def _open_card(self, request: ToolCallRequest, args: dict, tool_call_id: str) -> dict | None:
+    def _open_card(self, request: ToolCallRequest, args: dict, tool_call_id: str, purpose: str = "") -> dict | None:
         runtime = getattr(request, "runtime", None)
         context = getattr(runtime, "context", None) or {}
         state = getattr(request, "state", None) or {}
@@ -287,6 +385,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             recommended=_recommended_index(args.get("recommended"), len(options)),
             context_text=str(args.get("context") or ""),
             tool_call_id=tool_call_id,
+            purpose=purpose,
             messages=list(state.get("messages") or []) if isinstance(state, dict) else [],
             runtime_context=dict(context) if isinstance(context, dict) else {},
         )
@@ -308,12 +407,20 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         Returns:
             Command that interrupts execution with the formatted clarification message
         """
+        state = getattr(request, "state", None) or {}
+        turn = self._turn_of(state)
+        call_id = request.tool_call.get("id", "")
+        context = self._context_of(getattr(request, "runtime", None))
+        if builder_answered(turn, context):
+            return answered_refusal(call_id)
         deferred = self._mid_task_deferral(request)
         if deferred is not None:
             return deferred
 
         # Extract clarification arguments
         args = request.tool_call.get("args", {})
+        if builder_ask(turn, call_id):
+            args = shape_builder_question(dict(args), context)
         question = args.get("question", "")
 
         # Get the tool call ID
@@ -332,11 +439,16 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         # The question card (009 question-card.md): recorded by the gateway,
         # answered only by the owner's click or the owner's own tagged reply.
         card = None
+        builder_question = builder_ask(self._turn_of(state), tool_call_id)
         try:
-            card = self._open_card(request, args, tool_call_id)
+            card = self._open_card(request, args, tool_call_id, purpose="builder" if builder_question else "")
         except QuestionRefused as exc:
             return problem_message(str(exc), tool_call_id)
         kwargs = {}
+        if builder_question:
+            from omniharness.runtime.builder.surface import BUILDER_QUESTION_MARKER
+
+            kwargs[BUILDER_QUESTION_MARKER] = True
         if card is not None:
             kwargs[QUESTION_MARKER] = {"id": card["id"]}
             # Read as text where there is no card (a channel, the model's own
@@ -383,9 +495,16 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         call = last.tool_calls[0]
         if call.get("name") != "ask_clarification":
             return None
-        deferred = self._deferral(messages, call.get("id", ""), call.get("args") or {})
+        context = self._context_of(runtime)
+        turn = self._turn_of(state)
+        if builder_answered(turn, context):
+            return {"jump_to": "model", "messages": [answered_refusal(call.get("id", ""))]}
+        args = call.get("args") or {}
+        if builder_ask(turn, call.get("id", "")):
+            args = shape_builder_question(dict(args), context)
+        deferred = self._deferral(messages, call.get("id", ""), args)
         if deferred is None:
-            problem, _ = self._shape(call.get("args") or {}, self._context_of(runtime), messages)
+            problem, _ = self._shape(args, context, messages)
             if problem is None:
                 return None
             deferred = problem_message(problem, call.get("id", ""), marker=self.SHAPE_MARKER)

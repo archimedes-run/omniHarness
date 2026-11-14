@@ -214,9 +214,15 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(page.getByTestId("question-outcome")).toHaveText(
         "You chose New York, on the card.",
       );
-      await expect(page.getByTestId("question-live")).toHaveText(
-        "You chose New York, on the card.",
+      // The outcome is its own live region, so the change is announced once
+      // (no hidden copy repeating it).
+      await expect(page.getByTestId("question-outcome")).toHaveAttribute(
+        "aria-live",
+        "polite",
       );
+      await expect(
+        page.getByText("You chose New York, on the card."),
+      ).toHaveCount(1);
       await expect(page.getByTestId("question-option")).toHaveCount(0);
       await expectAA(page);
       await shot(page, `answered-${scheme}`);

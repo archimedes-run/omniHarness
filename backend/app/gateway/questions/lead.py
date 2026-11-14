@@ -89,6 +89,7 @@ def open_lead_question(
     tool_call_id: str,
     messages: list[Any] | None,
     runtime_context: dict | None,
+    purpose: str = "",
 ) -> dict[str, Any] | None:
     """Record the lead's question as a card. None when this run does not ask
     with a card (the question is then shown as text, as before); raises
@@ -113,7 +114,9 @@ def open_lead_question(
         recommended=recommended,
         timeout_seconds=LEAD_TIMEOUT_SECONDS,
         context=context_text,
-        asker_data={"turn_key": turn_key, "private_read": private, "surface": lead_surface(ctx)},
+        # `purpose` "builder": the builder's own "what should it do?" (spec
+        # 010), whose card answer is the owner's words for the draft.
+        asker_data={"turn_key": turn_key, "private_read": private, "surface": lead_surface(ctx), **({"purpose": purpose} if purpose else {})},
     )
     get_store().save(record)
     logger.info("question %s opened by the lead", record.id)

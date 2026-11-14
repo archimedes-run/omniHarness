@@ -113,3 +113,13 @@ BUILDER_CARD_TOOLS = frozenset({"builder_save", "builder_grant", "builder_undo"}
 #: The resumed lead's whole reply after a builder card was declined or expired
 #: (and nothing it asked for ran).
 DECLINED_ACK = "Okay, not saved. The draft is kept in this chat: tell me what to change, or ask me to save it again."
+
+#: On a resumed run's tool result carrying the owner's answer to a question
+#: card (app.gateway.resume.QUESTION_ANSWER_MARKER, the same key).
+QUESTION_ANSWER_KEY = "omniharness_question_answer"
+
+#: On the builder's own "what should it do?" question (its tool result) and
+#: on the owner's card answer to it: harness-written, the owner's words, so
+#: they do not make the turn "content" (app.policy.lineage).
+BUILDER_QUESTION_MARKER = "omniharness_builder_question"
+OWNER_ANSWER_MARKER = "omniharness_owner_answer"
