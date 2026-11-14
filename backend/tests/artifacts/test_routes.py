@@ -172,7 +172,8 @@ def test_search_and_filters(gateway):
     assert [x["id"] for x in c.get("/api/artifacts?q=roadmap").json()["artifacts"]] == [a]
     assert [x["id"] for x in c.get("/api/artifacts?kind=chart").json()["artifacts"]] == [b]
     assert c.get("/api/artifacts?q=100%25").json()["total"] == 0
-    assert c.get("/api/artifacts?kind=html").status_code == 422
+    assert c.get("/api/artifacts?kind=html").status_code == 200  # Slice 2 kind
+    assert c.get("/api/artifacts?kind=whiteboard").status_code == 422
 
 
 def test_thread_endpoint_lists_bindings(gateway):

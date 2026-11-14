@@ -5,7 +5,15 @@ runs it only if its checksum matches, with the image's own root-owned Python
 (`python3.10 -I -S`: the standard library only, no site packages, no
 environment) and the browser already in the image. Usage:
 
-    python3.10 -I -S layout_probe.py <site root> <result file> [app]
+    python3.10 -I -S layout_probe.py <site root> <result file> [app|artifact] [nonce]
+
+With `artifact` (Spec 012 FR-018) the site holds ONE document, prod/index.html:
+the exact bytes the artifact frame serves, under the artifact CSP the
+gateway wrote to check.json. It is loaded once per theme (the frame shim
+reads the theme from the URL fragment) and measured at each width; the
+check records every blocked request (CSP violations from an isolated world,
+the browser's own reports, and any request to anything but the local
+server) and saves a PNG per theme at the widest width.
 
 With `app` (Spec 011 FR-026) the site is an app's MOCK build: its index.html
 reads `?state=` and `?theme=` and answers every source in that state. It is
@@ -49,6 +57,7 @@ MAX_RESULT = 16384
 APP_THEMES = ("light", "dark")
 APP_STATES = ("fresh", "empty", "not_connected", "failed")
 APP_OVERALL_S = 150.0
+ARTIFACT_OVERALL_S = 60.0
 APP_MAX_RESULT = 98304
 RESIZE_S = 0.35
 SHOT_MAX_BYTES = 1_500_000
@@ -803,9 +812,13 @@ def make_handler(root, csp=None, reports=None):
 
 
 class Check:
-    def __init__(self, root, out, app=False):
+    def __init__(self, root, out, app=False, artifact=False):
         self.root = root
         self.out = out
+        # The artifact mode shares the app mode's fresh-folder, config, CSP
+        # and report plumbing (self.app), and runs its own page loop.
+        self.artifact = artifact
+        app = app or artifact
         self.app = app
         self.config = {}
         self.reports = []
@@ -813,7 +826,9 @@ class Check:
         self.nonce = ""
         self.errors = {}
         self.console = []
-        if app:
+        if artifact:
+            self.result = {"v": 1, "mode": "artifact", "widths": list(WIDTHS), "themes": list(APP_THEMES), "runs": [], "shots": []}
+        elif app:
             self.result = {"v": 1, "mode": "app", "widths": list(WIDTHS), "themes": list(APP_THEMES), "states": list(APP_STATES), "runs": [], "shots": []}
         else:
             self.result = {"v": 1, "widths": list(WIDTHS), "pages": []}
@@ -895,6 +910,7 @@ class Check:
             if ok:
                 self.cdp.send("Fetch.continueRequest", {"requestId": p.get("requestId")}, session)
             else:
+                page["blocked"] = page.get("blocked", 0) + 1
                 self.cdp.send("Fetch.failRequest", {"requestId": p.get("requestId"), "errorReason": "BlockedByClient"}, session)
         elif method == "Page.loadEventFired":
             page["_loaded"].set()
@@ -1078,6 +1094,93 @@ class Check:
             except CdpError:
                 pass
 
+    def check_artifact_run(self, theme):
+        """One theme of an artifact's frame document (Spec 012): every width,
+        the blocked-request watch, a screenshot at the widest width."""
+        run = {"theme": theme, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False, "blocked": 0}
+        cdp = self.cdp
+        target = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+        session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
+        run["_loaded"] = threading.Event()
+        self.pages[session] = run
+        try:
+            cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, session)
+            cdp.call("Page.enable", None, session)
+            cdp.call("Runtime.enable", None, session)
+            cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": APP_WATCH, "worldName": WORLD}, session)
+            cdp.call("Emulation.setDeviceMetricsOverride", {"width": WIDTHS[0], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
+            nav = cdp.call("Page.navigate", {"url": f"{self.origin}/prod/?t={theme}#t={theme}"}, session)
+            if nav.get("errorText"):
+                run["load_error"] = "nav"
+                return run
+            arrived = run["_loaded"].wait(LOAD_S)
+            if run["crashed"]:
+                run["load_error"] = "crashed"
+                return run
+            if not arrived:
+                run["load_error"] = "slow"
+                return run
+            time.sleep(SETTLE_S)
+            frame = cdp.call("Page.getFrameTree", None, session)["frameTree"]["frame"]["id"]
+            world = (run.get("_worlds") or {}).get(frame)
+            if world is not None:
+                run["watched"] = True
+            else:
+                world = cdp.call("Page.createIsolatedWorld", {"frameId": frame, "worldName": WORLD + "-late"}, session)["executionContextId"]
+            for i, width in enumerate(WIDTHS):
+                if i:
+                    cdp.call("Emulation.setDeviceMetricsOverride", {"width": width, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
+                    time.sleep(RESIZE_S)
+                value = self._evaluate(MEASURE, world, session)
+                if not isinstance(value, dict):
+                    run["load_error"] = "unmeasurable"
+                    return run
+                value["width"] = width
+                run["pages"].append(value)
+                if width == WIDTHS[-1]:
+                    height = self._evaluate("Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)", world, session)
+                    self.result["shots"].append(self._shot(session, theme, width, height if isinstance(height, int) else HEIGHT))
+            if run["watched"]:
+                found = self._evaluate("(window.__omniViolations || []).slice(0, 20)", world, session)
+                run["violations"] = [clip(v, 40) for v in found] if isinstance(found, list) else []
+            run["loaded"] = True
+            return run
+        except (CdpError, KeyError, TypeError):
+            run["load_error"] = "crashed" if run["crashed"] else "no_response"
+            return run
+        finally:
+            self.pages.pop(session, None)
+            run.pop("_loaded", None)
+            run.pop("_worlds", None)
+            try:
+                cdp.call("Target.closeTarget", {"targetId": target}, timeout=3)
+            except CdpError:
+                pass
+
+    def run_artifact(self):
+        for theme in APP_THEMES:
+            if self.cdp.dead:
+                return self.finish(browser_exit=True)
+            try:
+                self.result["runs"].append(self.check_artifact_run(theme))
+            except CdpError:
+                return self.finish(browser_exit=True)
+        time.sleep(1.0)  # reports are sent after the fact
+        for run in self.result["runs"]:
+            key = f"/prod/?t={run['theme']}"
+            for uri, directive in list(self.reports):
+                if key in uri and directive and directive not in run["violations"] and len(run["violations"]) < 20:
+                    run["violations"].append(directive)
+        self.result["nonce"] = self.nonce
+        try:
+            import hashlib
+
+            with open(os.path.join(os.path.realpath(self.root), "prod", "index.html"), "rb") as f:
+                self.result["prod_sha256"] = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            self.result["prod_sha256"] = ""
+        return self.finish()
+
     def run(self):
         if self.app:
             here = os.path.dirname(os.path.abspath(self.out))
@@ -1091,7 +1194,7 @@ class Check:
                 self.config = raw if isinstance(raw, dict) else {}
             except (OSError, ValueError):
                 self.config = {}
-        threading.Timer(APP_OVERALL_S if self.app else OVERALL_S, lambda: self.finish(timed_out=True)).start()
+        threading.Timer(ARTIFACT_OVERALL_S if self.artifact else APP_OVERALL_S if self.app else OVERALL_S, lambda: self.finish(timed_out=True)).start()
         try:
             root = os.path.realpath(self.root)
             if not os.path.isdir(root):
@@ -1106,7 +1209,7 @@ class Check:
                 return self.finish(setup_error="unreadable")
             if self.app:
                 site = self.config.get("csp_site") if isinstance(self.config.get("csp_site"), str) else csp
-                csp = {"site": site, "prod": csp}
+                csp = {"site": site if not self.artifact else csp, "prod": csp}
             holder = [csp]
             self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, holder, self.reports if self.app else None))
         except OSError:
@@ -1155,6 +1258,8 @@ class Check:
             self.cdp.call("Browser.getVersion", timeout=15)
         except CdpError as exc:
             return self.finish(setup_error="browser", detail=self.why_not_started(exc))
+        if self.artifact:
+            return self.run_artifact()
         if self.app:
             for theme in APP_THEMES:
                 for state in APP_STATES:
@@ -1218,7 +1323,8 @@ class Check:
 
 if __name__ == "__main__":
     try:
-        check = Check(sys.argv[1], sys.argv[2], app=len(sys.argv) > 3 and sys.argv[3] == "app")
+        mode = sys.argv[3] if len(sys.argv) > 3 else ""
+        check = Check(sys.argv[1], sys.argv[2], app=mode == "app", artifact=mode == "artifact")
         check.nonce = sys.argv[4] if len(sys.argv) > 4 else ""
         check.run()
     except Exception:  # noqa: BLE001 - the gateway reads "no result"

@@ -67,14 +67,18 @@ LOAD_ERRORS = {
 APP_TIMEOUT_SECONDS = 170
 
 
-def command(directory: str, root: str, job_id: str, *, app: bool = False, nonce: str = "") -> str:
+#: The hard stop in artifact mode (Spec 012 FR-018: two themes x three widths).
+ARTIFACT_TIMEOUT_SECONDS = 75
+
+
+def command(directory: str, root: str, job_id: str, *, app: bool = False, nonce: str = "", artifact: bool = False) -> str:
     """The shell command that runs the probe from `directory` (fresh, the
     system's own) against the site in `root`. Every tool by absolute path,
     a fixed PATH, no proxy variables: the page gets no way out of the sandbox.
     `app`: the app mode (an app's mock build; check.json beside the result)."""
     q = shlex.quote
     script, out = f"{directory}/layout_probe.py", f"{directory}/result.json"
-    limit, extra = (APP_TIMEOUT_SECONDS, f" app {q(nonce)}") if app else (TIMEOUT_SECONDS, "")
+    limit, extra = (ARTIFACT_TIMEOUT_SECONDS, f" artifact {q(nonce)}") if artifact else (APP_TIMEOUT_SECONDS, f" app {q(nonce)}") if app else (TIMEOUT_SECONDS, "")
     return (
         f'f={q(script)}; [ "$(/usr/bin/sha256sum "$f" | /usr/bin/cut -c1-64)" = {DIGEST} ] || exit 97; '
         f"cd {q(directory)} && /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 HOME={q(directory)} TMPDIR={q(directory)} OMNI_JOB_ID={q(job_id)} "

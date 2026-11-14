@@ -1,10 +1,12 @@
-# Artifacts, Slice 1: gateway API contract
+# Artifacts, Slices 1 and 2: gateway API contract
 
-The contract between the gateway (S1 backend) and the frontend (store page,
-inline artifact card, side panel). Requirements are in
+The contract between the gateway and the frontend (store page, inline
+artifact card, side panel, the locked frame). Requirements are in
 [`spec.md`](spec.md); this file names routes, JSON shapes, tool schemas and
 error codes only. Kinds in Slice 1: `markdown`, `code`, `svg`, `mermaid`,
 `chart`, `image`, plus `file` (only made by the importer; download only).
+Slice 2 adds the code kinds `html` and `react`, which run only in the
+locked frame: see [Code kinds (Slice 2)](#code-kinds-slice-2).
 
 ## Conventions
 
@@ -47,6 +49,10 @@ error codes only. Kinds in Slice 1: `markdown`, `code`, `svg`, `mermaid`,
 | 422 | `not_editable` | owner edit of a kind that has no editor in S1 (`svg`, `chart`, `image`, `file`) |
 | 422 | `invalid_request` | other body errors (title empty or too long, bad filter). Pydantic failures use FastAPI's default 422 shape (`detail` is a list) |
 | 503 | `artifacts_unavailable` | the gateway has no SQL store |
+| 409 | `build_failed` | (S2) frame or check of a react version that did not build |
+| 409 | `build_running` | (S2) Rebuild while another build of the artifact is alive |
+| 409 | `already_checked` | (S2) Check again on a version whose checks have an answer |
+| 409 | `fix_refused` | (S2, tools only) `fix_of` breaks the one-fix rule |
 
 ### Caps (tracked defaults, `app/gateway/artifacts_store/caps.py`)
 
@@ -58,6 +64,10 @@ error codes only. Kinds in Slice 1: `markdown`, `code`, `svg`, `mermaid`,
 | Per-owner store | 1 GB of distinct blobs |
 | Title | 120 characters after display sanitising |
 | Note | 300 characters |
+| `html` version (S2) | 2 MB of document |
+| `react` sources (S2) | 2 MB of canonical `{entry, files}` JSON, at most 50 files |
+| `react` bundle (S2) | 2 MB after inlining |
+| `react` build (S2) | 120 s wall time in the chat's sandbox |
 
 A write over any cap is refused before anything is stored.
 
@@ -153,6 +163,8 @@ A write over any cap is refused before anything is stored.
 | `chart` | `omni-chart/1` object (or its JSON string) | JSON (sorted keys, compact) | `application/json` |
 | `image` | from a file in the chat's outputs (`source_path`) | the bytes | from magic bytes: `image/png`, `image/jpeg`, `image/webp`, `image/gif` |
 | `file` | importer only | the bytes | `application/octet-stream` |
+| `html` (S2) | one HTML document (string) | the document as given, after the scan | `text/html` |
+| `react` (S2) | `{"entry": "App.tsx", "files": {"App.tsx": "…"}}` | the built, inlined document (no shim); the canonical source JSON is a second blob | `text/html` |
 
 Text must be valid UTF-8 without NUL. `language` is `[a-z0-9+#._-]{1,32}`
 (default `text`).
@@ -281,6 +293,7 @@ the content hash.
 | `svg` | `image/svg+xml` (render ONLY as `<img src>`) | inline |
 | `image` | its media type | inline |
 | `file` | `application/octet-stream` | attachment (title as filename) |
+| `html`, `react` (S2) | `text/plain; charset=utf-8` (the stored document as text, never a page) | inline |
 
 ### `PATCH /api/artifacts/{id}` (CSRF)
 
@@ -338,7 +351,7 @@ exports or promotes: such names have no rule and the policy layer refuses them.
 | `artifact_list(query?, kind?, limit?)` | 1 | true | (private read) |
 
 - `artifact_create`: `kind` ∈ `markdown`, `code`, `svg`, `mermaid`, `chart`,
-  `image`. `content` is required except for `image`, which takes
+  `image`, `html`, `react` (S2). `content` is required except for `image`, which takes
   `source_path`: a file under `/mnt/user-data/outputs/` of this chat.
 - `artifact_update`: always a new version. `content` replaces it; `edits` is
   a list of `{"old","new"}` exact replacements (text kinds: markdown, code,
@@ -384,3 +397,191 @@ Render an artifact card bound to that version at that turn; fetch the
 summary for the title and "Latest: vN". A refused call has no `artifact`
 field (`null`). `GET /api/artifacts/threads/{thread_id}` lists the same
 bindings (`versions_in_thread[].tool_call_id`) for chats reloaded from history.
+
+
+## Code kinds (Slice 2)
+
+`html` and `react` artifacts are programs. They are never rendered by the
+host page and never served as a page of this origin: only in the **locked
+frame** below.
+
+### Objects: what code kinds add
+
+`ArtifactSummary` of a code kind has `"code"`:
+
+```json
+{"build_state": "ok", "check_state": "passed", "shown_version": 3,
+ "build": {"state": "running", "base_version": 3, "reason": null, "result_version": null, "started_at": "…"}}
+```
+
+- `build_state` / `check_state`: of the **latest** version (`check_state` is
+  `null` for a failed build).
+- `shown_version`: the newest version that built. A failed build is stored
+  (source and log) but the card keeps showing this one.
+- `build`: the owner's last Rebuild (`running`, `done`, `failed`, or
+  `interrupted` when its worker stopped beating for 90 s), or `null`.
+
+`Version` of a code kind has `"code"`:
+
+```json
+{"build_state": "ok", "has_source": true, "fix_of": null,
+ "findings": ["<img src> loads from the network (blocked in the frame: use data: URLs)"],
+ "recipe": {"tool": "esbuild", "versions": {"esbuild": "0.24.2", "react": "18.3.1", "react-dom": "18.3.1"}, "entry": "App.tsx", "…": "…"},
+ "check": {"state": "failed", "summary": ["overflows sideways at 360 px (light, dark)"],
+           "failures": ["overflows sideways at 360 px (light) by 40 px (sticking out: div#wide)"],
+           "warnings": [], "widths": [360, 560, 1280], "themes": ["light", "dark"],
+           "shots": {"light": true, "dark": true}, "checked_at": "…"}}
+```
+
+- `build_state` ∈ `ok`, `build_failed`. `check` is `null` for `build_failed`.
+- `check.state` ∈ `pending`, `passed`, `failed`, `not_checked`. Only
+  `passed` is shown as "checked". `not_checked` means the checks gave no
+  answer (no sandbox, an unreadable or tampered result, a check whose worker
+  stopped): fail closed. A `pending` check older than 90 s without a
+  heartbeat reads `not_checked`.
+- `summary` is in the system's words. `failures` and `findings` may carry
+  the page's own element names and error text: display them as text
+  (`safeField`), never as markup.
+- `fix_of`: the version this one is the automatic fix of.
+- `origin` of a Rebuild version is `owner_edit`; restore and duplicate copy
+  the code record (and the checks, when the bytes are the same).
+
+`GET /api/artifacts/{id}/versions/{n}` of a code kind also has
+`"content"` (html: the document; react: `null`), `"source"` (react: the
+`{entry, files}` object) and `"build_log"` (a failed build's tail, else `null`).
+
+### The system checks
+
+Run by the gateway in the chat's sandbox on the exact frame document (its
+SHA-256 is recorded), after a tool write, an owner edit, a restore of a
+version whose checks are not copied, and Check again: the coding jobs'
+layout probe at 360, 560 and 1280 px in the light and the dark theme
+(overflow, a clipped chart), the render check (loaded, rendered something,
+no uncaught error) and the no-network watch (any CSP violation or any
+request to anything but the probe's own server fails it). A fresh,
+unguessable folder per run, the probe's checksum, a per-run nonce and the
+document's hash echoed back; anything else is `not_checked`. A version that
+fails is stored and viewable, labelled.
+
+### `GET /api/artifacts/{id}/versions/{n}/frame-token`
+
+`{"token": "…", "expires_in": 300, "url": "/api/artifacts/{id}/versions/{n}/frame.html?t=…"}`.
+A short-lived token for one view of one version (owner, artifact, version
+bound). `409 build_failed` for a version with no document.
+
+### `GET /api/artifacts/{id}/versions/{n}/frame.html?t=…`
+
+The locked frame's document: the stored document with the gateway's shim
+(`artifacts_store/frame/artifact-shim.js`) injected as its first script.
+Served ONLY when the request carries the owner's session, a valid token for
+this owner and version, `Sec-Fetch-Dest: iframe` and `Sec-Fetch-Site:
+same-origin`. Anything else (a top-level open, a fetch, another site, no or
+a bad token) gets `403` with an inert page ("Open this artifact in
+OmniHarness.") under `default-src 'none'; style-src 'unsafe-inline';
+sandbox; frame-ancestors 'none'`.
+
+The document's headers, exactly (`artifacts_store/frame/profile.json`, the
+one source both sides read):
+
+```
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+Cache-Control: private, no-store
+Referrer-Policy: no-referrer
+X-Content-Type-Options: nosniff
+Cross-Origin-Resource-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+X-DNS-Prefetch-Control: off
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-read=(), clipboard-write=()
+Content-Disposition: inline; filename="artifact.html"
+```
+
+This is the **artifact profile** (FR-031): the app profile of Spec 011 with
+`script-src 'unsafe-inline'` instead of hashes and without the Trusted Types
+directives (a test fails on any other difference).
+
+The host embeds it as
+`<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" src="{url}#n={nonce}&t={light|dark}">`,
+with `sandbox` exactly `allow-scripts`.
+
+### The frame protocol (FR-019)
+
+- Frame → host, by `window.parent.postMessage` (the only window message
+  accepted, from the frame's own `contentWindow`): `{v:1, type:"hello", nonce}`
+  with the per-view nonce from the fragment. The host answers once, after
+  exactly one hello and one `load`, with `{v:1, type:"init", theme, vars}` and
+  a `MessageChannel` port (`"*"`: the frame's origin is opaque). A second
+  load or hello, a wrong nonce, or no hello tears the frame down.
+- Frame → host, on the port only: `{v:1, type:"ready"}`,
+  `{v:1, type:"size", height}` (clamped 120 to 1200), `{v:1, type:"open", url}`
+  (`https:` only; opened after the owner confirms the host's "Open link?"
+  dialog naming the host). Anything else is dropped and reported.
+- Host → frame, on the port: `{v:1, type:"theme", theme, vars}`; `vars` maps
+  CSS custom properties (`--[a-z0-9-]{1,48}`) to plain values.
+- Nothing a frame sends reaches the model, starts a tool call or answers a
+  card. The frame holds no token, no data and no bridge.
+
+### `GET /api/artifacts/{id}/versions/{n}/shots/{theme}.png`
+
+The checks' own screenshot (1280 px, `light` or `dark`) for previews. `404`
+when there is none. Same content headers as the content route.
+
+### `POST /api/artifacts/{id}/versions/{n}/check` (CSRF): Check again
+
+Only for a version whose checks are `not_checked`: `202 {"state": "pending"}`;
+otherwise `409 already_checked`. The checks run after the response.
+
+### `POST /api/artifacts/{id}/versions` (CSRF): owner edit of `html`
+
+As for the text kinds: `{"base_version", "content"}`; the new version's
+checks run after the response (`check.state` is `pending` until then). A
+document the scan refuses (frames, WebRTC, XSLT) is `422 invalid_content`.
+`react` is not edited here (`422 not_editable`): use Rebuild.
+
+### `POST /api/artifacts/{id}/rebuild` (CSRF): Rebuild a react artifact
+
+Body: `{"base_version": 3, "content": {"entry": "App.tsx", "files": {…}}}`.
+Validated, then `202 {"build": {...}}`; the build runs in the artifact's chat
+sandbox after the response and makes version `base_version + 1` (origin
+`owner_edit`, lineage `user`), `ok` or `build_failed`; its checks follow.
+`409 build_running` while another build is alive; `409 stale_base_version`.
+Poll `GET /api/artifacts/{id}` (`code.build`).
+
+### `POST /api/artifacts/{id}/refused` (CSRF)
+
+`{"reason": "[a-z][a-z0-9_]{0,47}", "type"?: "[a-z][a-z0-9_]{0,31}"}` → `204`.
+Logged as `artifact_message_refused`. Codes only: no free text from a frame.
+
+### Chat tools (S2 changes)
+
+- `artifact_create(kind="html", content="<!doctype html>…")`: one
+  self-contained document. Refused (`invalid_content`): frame markup
+  (`iframe`, `frame`, `object`, `embed`, `portal`, `fencedframe`, `srcdoc`),
+  `RTCPeerConnection`, `RTCDataChannel`, `XSLTProcessor`. Remote references,
+  `@import`, `<meta http-equiv>`, `<base>`, WebSocket, EventSource, eval,
+  fetch, sendBeacon, serviceWorker are **findings** (stored, reported).
+- `artifact_create(kind="react", content={"entry", "files"})`: TSX, TS, JSX,
+  JS, CSS, JSON files, short relative paths, no `..`, no name starting
+  `__omni`. The entry's default export is mounted into `#root`. Built in the
+  chat's sandbox (react and react-dom only); refused when there is no sandbox.
+- `artifact_update(…, fix_of?: int)`: html takes `content` or `edits`;
+  react takes the whole `content`. `fix_of` names the version whose checks (or
+  build) failed; refused for a version that passed, a version that is itself
+  a fix, or one already fixed.
+- The result names ids, numbers, states and the system's own words (checks
+  passed / FAILED with the summary / gave no answer, the number of findings,
+  and, after a failure, the instruction for the ONE automatic fix). The
+  page's and the compiler's own words (check failures, findings, build log)
+  are read with `artifact_read`, fenced.
+- `artifact_read` of a code kind returns, inside the fence: html the
+  document; react `entry:` and each file under `----- file: PATH -----`;
+  then a failed build's log, the findings and the checks' failures. The tag
+  carries `build_state`, `checks` and `fix_of`.
+- Tiers are unchanged (`artifact_create`, `artifact_update`: Tier 2,
+  disclosed once; the build runs inside the call, so there is no second
+  disclosure). No promote, export or share tool.
+
+### Stored for promotion (after spec 008), no button
+
+Each code version keeps its kind, the source (react: the `{entry, files}`
+blob; html: the document) and the build recipe (`code.recipe`). Nothing
+promotes in this slice.

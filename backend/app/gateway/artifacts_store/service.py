@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from app.gateway.artifacts_store import blobs, caps, kinds, safe_open
+from app.gateway.artifacts_store import store as store_mod
 from app.gateway.artifacts_store.kinds import Canonical, InvalidContent, TooLarge
 from app.gateway.artifacts_store.store import Archived, ArtifactStore, InvalidRequest, QuotaExceeded, StoreError
 from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
@@ -152,6 +153,8 @@ class GatewayArtifactController:
             return _UNAVAILABLE, None
         owner_id, thread_id = self._who(context)
         lineage, source = turn_lineage(context)
+        if kind in kinds.CODE_KINDS:
+            return self._code_write(store, context, owner_id, thread_id, kind=kind, title=title, content=content, lineage=lineage, source=source, note=note)
         try:
             if kind not in kinds.TOOL_KINDS:
                 raise InvalidRequest(f"kind must be one of {', '.join(kinds.TOOL_KINDS)}.")
@@ -168,12 +171,20 @@ class GatewayArtifactController:
             return _refusal("Not created", exc), None
         return f"Created {kind} artifact {summary['id']} version {version['n']}. It is shown to the user as a card in this chat.", binding(summary, version)
 
-    def update(self, context: dict, *, artifact_id: str, base_version: int, content: Any, edits: list[dict] | None, language: str | None, note: str | None) -> tuple[str, dict | None]:
+    def update(self, context: dict, *, artifact_id: str, base_version: int, content: Any, edits: list[dict] | None, language: str | None, note: str | None, fix_of: int | None = None) -> tuple[str, dict | None]:
         store = self._store()
         if store is None:
             return _UNAVAILABLE, None
         owner_id, thread_id = self._who(context)
         lineage, source = turn_lineage(context, exempt_read=lambda args, result: self._own_user_read(store, owner_id, artifact_id, args, result))
+        try:
+            current = store.get(owner_id, artifact_id)
+        except StoreError as exc:
+            return _refusal("Not changed", exc), None
+        if current["kind"] in kinds.CODE_KINDS:
+            return self._code_write(store, context, owner_id, thread_id, kind=current["kind"], content=content, edits=edits, lineage=lineage, source=source, note=note, artifact_id=artifact_id, base_version=base_version, fix_of=fix_of)
+        if fix_of is not None:
+            return "Not changed: fix_of is only for html and react artifacts whose checks failed.", None
 
         def build(s, row) -> Canonical:
             if (content is None) == (edits is None):
@@ -197,6 +208,105 @@ class GatewayArtifactController:
         except (InvalidContent, TooLarge, StoreError) as exc:
             return _refusal("Not changed", exc), None
         return f"Updated artifact {summary['id']}: version {version['n']} (based on {base_version}).", binding(summary, version)
+
+    def _code_write(
+        self,
+        store: ArtifactStore,
+        context: dict,
+        owner_id: str,
+        thread_id: str | None,
+        *,
+        kind: str,
+        content: Any,
+        lineage: str,
+        source: str | None,
+        note: str | None,
+        title: str | None = None,
+        edits: list[dict] | None = None,
+        artifact_id: str | None = None,
+        base_version: int | None = None,
+        fix_of: int | None = None,
+    ) -> tuple[str, dict | None]:
+        """Create or update an html or react artifact (Slice 2): validate and
+        scan, build react in the chat's sandbox, store the version, then run
+        the system checks on the stored bytes. The result names ids, numbers,
+        states and the system's own words only (a trusted acknowledgement);
+        the page's own text (check details, build log) is read through
+        artifact_read, fenced."""
+        from app.gateway.artifacts_store import checks as checks_mod
+        from app.gateway.artifacts_store import code_service, frame
+
+        lead = "Not created" if artifact_id is None else "Not changed"
+        write = dict(lineage=lineage, lineage_source=source, origin="tool", note=note, thread_id=thread_id, turn_id=context.get("run_id"), tool_call_id=context.get(TOOL_CALL_KEY))
+        try:
+            if artifact_id is not None:
+                if (content is None) == (edits is None):
+                    raise InvalidRequest("pass either content or edits.")
+                if kind == "react" and edits is not None:
+                    raise InvalidRequest("a react artifact takes content: the whole {entry, files} object.")
+                latest = store.get(owner_id, artifact_id)
+                if latest["latest_version"] != base_version:
+                    raise store_mod.Stale(f"This artifact changed: the latest version is {latest['latest_version']}.", current_version=latest["latest_version"])
+            if kind == "html":
+                fix = {"fix_of": fix_of} if fix_of is not None else {}
+
+                def make(s=None, row=None):
+                    text = content
+                    if edits is not None:
+                        text = apply_edits(kinds.text_of("html", store.latest_bytes(s, row)), edits)
+                    canon, findings = frame.canonical_html(text)
+                    canon = Canonical(canon.data, canon.media_type, None, text)
+                    return canon, {"build_state": "ok", "findings": findings, "recipe": {"tool": "none", "kind": "html"}, **fix}
+
+                if artifact_id is None:
+                    canon, code = make()
+                    summary, version = store.create(owner_id, kind=kind, title=title or "", canon=canon, code=code, **write)
+                else:
+                    summary, version = store.add_version(owner_id, artifact_id, base_version=int(base_version), build=make, **write)
+            else:
+                data, parsed = frame.canonical_react_source(content)
+                if fix_of is not None and artifact_id is not None:
+                    # Refuse a fix the rule forbids BEFORE spending a build on it.
+                    store.check_fix(owner_id, artifact_id, int(fix_of))
+                built = code_service.build_react(owner_id, thread_id, parsed)
+                if built is None:
+                    raise InvalidRequest("react artifacts are built in this chat's sandbox, which is not available here.")
+                code = {"source": data, "recipe": built.recipe, "build_log": built.log, "findings": built.findings, **({"fix_of": fix_of} if fix_of is not None else {})}
+                if built.ok:
+                    canon, code["build_state"] = built.canon, "ok"
+                else:
+                    canon, code["build_state"] = Canonical(data, "application/json", None, None), "build_failed"
+                    code["build_log"] = (built.reason + "\n" + built.log).strip()
+                if artifact_id is None:
+                    summary, version = store.create(owner_id, kind=kind, title=title or "", canon=canon, code=code, **write)
+                else:
+                    summary, version = store.add_version(owner_id, artifact_id, base_version=int(base_version), canon=canon, code=code, **write)
+        except (InvalidContent, TooLarge, StoreError) as exc:
+            return _refusal(lead, exc), None
+        n = version["n"]
+        code_info = version.get("code") or {}
+        verb = f"Created {kind} artifact {summary['id']} version {n}." if artifact_id is None else f"Updated artifact {summary['id']}: version {n} (based on {base_version})."
+        lines = [verb + " It is shown to the user as a card in this chat."]
+        state = "build_failed"
+        if code_info.get("build_state") == "build_failed":
+            shown = (summary.get("code") or {}).get("shown_version")
+            lines.append("The react build FAILED; the version is stored with its log" + (f" and version {shown} stays the one shown." if shown else "."))
+        else:
+            state, result = code_service.check_version(store, owner_id, summary["id"], n, thread_id)
+            lines += checks_mod.model_lines(result, state)
+        findings = code_info.get("findings") or []
+        if findings:
+            lines.append(f"The scan found {len(findings)} thing(s) the frame blocks (no network, no outside files).")
+        if state in ("failed", "build_failed"):
+            if fix_of is not None:
+                lines.append(f"This version was the automatic fix of version {fix_of}: do not run another automatic fix. Tell the person what still fails; they can ask for another try.")
+            else:
+                lines.append(
+                    f"Run ONE automatic fix now, without asking: read the details with artifact_read(id={summary['id']}, version={n}), then call artifact_update with fix_of={n} and base_version={n}. Only one automatic fix is allowed."
+                )
+        elif findings:
+            lines.append(f"Read the list with artifact_read(id={summary['id']}, version={n}).")
+        return "\n".join(lines), binding(summary, version)
 
     @staticmethod
     def _own_user_read(store: ArtifactStore, owner_id: str, artifact_id: str, args: dict, result) -> bool:
@@ -234,7 +344,10 @@ class GatewayArtifactController:
             return _refusal("Not read", exc), None
         kind = summary["kind"]
         attrs = f'id="{_attr(summary["id"])}" version="{n}" latest="{summary["latest_version"]}" kind="{_attr(kind)}" lineage="{_attr(meta["lineage"])}" title="{_attr(summary["title"])}"'
-        if kind in kinds.TEXT_KINDS and meta["stored"] == "blob":
+        if kind in kinds.CODE_KINDS and meta["stored"] == "blob":
+            body, extra = self._code_body(store, owner_id, summary["id"], n, kind, row)
+            attrs += extra
+        elif kind in kinds.TEXT_KINDS and meta["stored"] == "blob":
             data = store.content(owner_id, row)
             if kind == "code":
                 code = json.loads(data)
@@ -247,6 +360,34 @@ class GatewayArtifactController:
         tag = f"artifact-{secrets.token_hex(4)}"
         read = {"type": "omni_artifact_read", "artifact_id": summary["id"], "version": n}
         return f"{FENCE_LABEL}\n<{tag} {attrs}>\n{fence_text(body)}\n</{tag}>", read
+
+    @staticmethod
+    def _code_body(store: ArtifactStore, owner_id: str, artifact_id: str, n: int, kind: str, row) -> tuple[str, str]:
+        """The SOURCE of a code version (html: the document; react: each file),
+        then the build log, the scan's findings and the checks' details, all
+        inside the fence (the page's and the compiler's words are data)."""
+        _summary, _v, code, check = store.code_version(owner_id, artifact_id, n)
+        from app.gateway.artifacts_store.store import check_dict
+
+        parts: list[str] = []
+        if kind == "html":
+            parts.append(store.content(owner_id, row).decode("utf-8"))
+        else:
+            src = json.loads(store.source(owner_id, code) or b"{}")
+            parts.append(f"entry: {src.get('entry')}")
+            for path, text in (src.get("files") or {}).items():
+                parts.append(f"----- file: {path} -----\n{text}")
+        info = check_dict(check) if code.build_state == "ok" else None
+        tail = []
+        if code.build_state == "build_failed" and code.build_log:
+            tail.append("----- build log (tail) -----\n" + code.build_log)
+        findings = json.loads(code.findings or "[]")
+        if findings:
+            tail.append("----- scan findings (the frame blocks these) -----\n" + "\n".join(f"- {f}" for f in findings))
+        if info and (info["failures"] or info["summary"]):
+            tail.append(f"----- system checks: {info['state']} -----\n" + "\n".join(f"- {f}" for f in (info["failures"] or info["summary"])))
+        attrs = f' build_state="{_attr(code.build_state)}" checks="{_attr(info["state"] if info else "none")}"' + (f' fix_of="{code.fix_of}"' if code.fix_of else "")
+        return "\n".join(parts + tail), attrs
 
     def list(self, context: dict, *, query: str | None, kind: str | None, limit: int | None) -> str:
         store = self._store()
@@ -301,6 +442,11 @@ def detect(name: str, data: bytes) -> tuple[str, Canonical]:
                 return "mermaid", kinds.canonical("mermaid", text)
             if ext == ".svg":
                 return "svg", kinds.canonical("svg", text)
+            if ext in (".html", ".htm"):
+                # Slice 2 (FR-012): a single-file page becomes an html artifact
+                # (shown only in the locked frame). One that the scan refuses
+                # (frames, WebRTC) stays a downloadable file.
+                return "html", kinds.canonical("html", text)
             if ext in CODE_LANGUAGES:
                 return "code", kinds.canonical("code", text, language=CODE_LANGUAGES[ext])
         except (InvalidContent, TooLarge):
