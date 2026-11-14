@@ -101,6 +101,12 @@ def _check_expect(expect: dict, messages: list[BaseMessage]) -> str | None:
         return f"the last tool result contains {expect['not_contains']!r}"
     if "any_contains" in expect and not any(str(expect["any_contains"]).lower() in _text(m).lower() for m in messages):
         return f"no message contains {expect['any_contains']!r}"
+    # `none_contains`: no message the model was given (the system prompt
+    # included) contains this text: the assembled input, not the reply.
+    if "none_contains" in expect:
+        hits = [type(m).__name__ for m in messages if str(expect["none_contains"]).lower() in _text(m).lower()]
+        if hits:
+            return f"the model's input contains {expect['none_contains']!r} (in {', '.join(hits)})"
     return None
 
 

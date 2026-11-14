@@ -199,7 +199,7 @@ def _build_available_subagents_description(available_names: list[str], bash_avai
     return "\n".join(lines)
 
 
-def _build_subagent_section(max_concurrent: int, *, app_config: AppConfig | None = None) -> str:
+def _build_subagent_section(max_concurrent: int, *, app_config: AppConfig | None = None, builtin_only: bool = False) -> str:
     """Build the subagent system prompt section with dynamic concurrency limit.
 
     Args:
@@ -210,6 +210,12 @@ def _build_subagent_section(max_concurrent: int, *, app_config: AppConfig | None
     """
     n = max_concurrent
     available_names = get_available_subagent_names(app_config=app_config) if app_config is not None else get_available_subagent_names()
+    if builtin_only:
+        # Memory off in this chat: the owner's own agents (their names and
+        # descriptions are personal context) are not listed.
+        from omniharness.subagents.builtins import BUILTIN_SUBAGENTS
+
+        available_names = [name for name in available_names if name in BUILTIN_SUBAGENTS]
     bash_available = "bash" in available_names
 
     # Subagent type descriptions, generated from the registry (every registered
@@ -494,7 +500,11 @@ def _get_memory_context(agent_name: str | None = None, *, app_config: AppConfig 
         if not memory_content.strip():
             return ""
 
+        from omniharness.agents.memory_switch import MEMORY_RULE
+
         return f"""<memory>
+{MEMORY_RULE}
+
 {memory_content}
 </memory>
 """
@@ -754,16 +764,25 @@ def apply_prompt_template(
     memory_user_id: str | None = None,
     connectors_off: list[str] | None = None,
     builder: bool = False,
+    memory_off: bool = False,
 ) -> str:
     # Get memory context. `user_id`: whose agent and memory; None reads the
     # effective user from context (a run); a request handler passes its own.
     # `memory_user_id`: whose memory only, when the run says so (the server-
     # owned MEMORY_USER_KEY: a lead automation keeps the system user's memory).
-    memory_context = _get_memory_context(agent_name, app_config=app_config, user_id=memory_user_id or user_id)
+    # Memory off in this chat (the server-owned run key, omniharness.agents.
+    # memory_switch): the memory block is NOT put in the prompt at all, and the
+    # model is told to build its reply without the person's history.
+    if memory_off:
+        from omniharness.agents.memory_switch import MEMORY_OFF_SECTION
+
+        memory_context = MEMORY_OFF_SECTION
+    else:
+        memory_context = _get_memory_context(agent_name, app_config=app_config, user_id=memory_user_id or user_id)
 
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents
-    subagent_section = _build_subagent_section(n, app_config=app_config) if subagent_enabled else ""
+    subagent_section = _build_subagent_section(n, app_config=app_config, builtin_only=memory_off) if subagent_enabled else ""
 
     # Add subagent reminder to critical_reminders if enabled
     subagent_reminder = f"- **Subagents**: delegate independent side research with a five-part brief and keep the synthesis yourself. **HARD LIMIT: max {n} `task` calls per response.**\n" if subagent_enabled else ""

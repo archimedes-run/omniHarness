@@ -46,9 +46,10 @@ def _env_seconds(name: str, default: float) -> float:
         return default
 
 
-#: The data closes (the database engine, the store, the checkpointer, the
-#: stream bridge): each gets a fair share of what is left for them.
-DATA_STEPS = 4
+#: The data steps (marking in-flight runs interrupted, the database engine,
+#: the store, the checkpointer, the stream bridge): each gets a fair share of
+#: what is left for them.
+DATA_STEPS = 5
 #: A data close always gets at least this long, even if the deadline passed.
 MIN_DATA_STEP_SECONDS = 0.25
 #: The last step (the abandoned steps' second cancel) gets at least this long.

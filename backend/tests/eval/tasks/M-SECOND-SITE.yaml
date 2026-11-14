@@ -1,0 +1,63 @@
+id: M-SECOND-SITE
+title: When every page fetched is from one site, the last fetch is kept for a second site
+mock_only: true
+source: 'real-model eval 2026-11-14 on the per-turn budget (T02: six react.dev pages, the answer cited
+  one site)'
+mode: pro
+prompt: Main new features of the latest stable React release; cite 3 sources.
+tools: []
+confirm: none
+budget:
+  seconds: 90
+checks:
+- min_links:
+    n: 3
+    distinct_hosts: 2
+- max_lookups:
+    searches: 6
+    fetches: 7
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: react 19 release features
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://react.dev/versions
+    - name: web_fetch
+      args:
+        url: https://react.dev/blog/2024/12/05/react-19
+    - name: web_fetch
+      args:
+        url: https://react.dev/blog/2024/04/25/react-19-upgrade-guide
+    - name: web_fetch
+      args:
+        url: https://react.dev/reference/react/use
+    - name: web_fetch
+      args:
+        url: https://react.dev/reference/react/useActionState
+    - name: web_fetch
+      args:
+        url: https://react.dev/reference/react-dom/components/form
+  - expect:
+      tool: web_fetch
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://react.dev/learn
+  - expect:
+      tool: web_fetch
+      contains: kept for a second site
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://www.telerik.com/blogs/whats-new-react-19
+  - expect:
+      tool: web_fetch
+      not_contains: Not run
+    content: 'React 19 adds Actions, use() and ref as a prop. Sources: [React v19](https://react.dev/blog/2024/12/05/react-19),
+      [Versions](https://react.dev/versions) and [Telerik](https://www.telerik.com/blogs/whats-new-react-19).'

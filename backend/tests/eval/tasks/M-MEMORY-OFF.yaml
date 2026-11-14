@@ -1,0 +1,50 @@
+id: M-MEMORY-OFF
+title: Asked not to use past chats, the reply is built without memory
+source: live chat 2026-11-14 ("do not reference my past chats and history with you" answered from memory)
+mode: thinking
+prompt: What can you do for me, do not reference my past chats and history with you
+tools: []
+confirm: none
+fixtures:
+  memory:
+    version: '1.0'
+    user:
+      workContext:
+        summary: Works on ZEBRA-7731 Opportunity scouting (judging, press, speaking) for a visa petition.
+      personalContext:
+        summary: ''
+      topOfMind:
+        summary: ZEBRA-7731 drafting an O-1 evidence plan.
+    history:
+      recentMonths:
+        summary: ''
+      earlierContext:
+        summary: ''
+      longTermBackground:
+        summary: ''
+    facts:
+    - id: f1
+      content: 'ZEBRA-7731: the owner wants Opportunity scouting (judging, press, speaking).'
+      category: goal
+      confidence: 0.95
+      createdAt: '2026-11-01T00:00:00Z'
+      source: t0
+budget:
+  seconds: 60
+  est_usd: 0.01
+checks:
+- reply_contains_none:
+    values:
+    - ZEBRA-7731
+    - Opportunity scouting
+    - judging, press
+    - O-1
+- no_cards
+- no_clarification
+mock:
+  lead:
+  - expect:
+      none_contains: ZEBRA-7731
+      any_contains: Memory is OFF in this chat
+    content: I can research questions with sources, write and edit documents, work with files and code,
+      plan tasks and checklists, and use your connected apps once they are switched on in this chat.

@@ -96,7 +96,15 @@ def _stamp_step(result: Any, step: dict) -> Any:
     messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])
     for message in messages:
         if getattr(message, "type", None) == "tool" and isinstance(getattr(message, "additional_kwargs", None), dict):
-            message.additional_kwargs[STEP_KEY] = {"tier": step.get("tier"), "outcome": step.get("outcome") or "ran", **({"card_id": step["card_id"]} if step.get("card_id") else {})}
+            message.additional_kwargs[STEP_KEY] = {
+                "tier": step.get("tier"),
+                "outcome": step.get("outcome") or "ran",
+                **({"card_id": step["card_id"]} if step.get("card_id") else {}),
+                # The resolved targets of a Tier 2 call that ran: the restart
+                # notice discloses a cut-off turn's actions from these stamps
+                # (app.gateway.run_recovery), the ledger being in memory.
+                **({"targets": list(step["targets"])} if step.get("targets") else {}),
+            }
     return result
 
 
@@ -301,6 +309,8 @@ class PolicyMiddleware(AgentMiddleware):
             resolved = tuple(self.resolve_targets(decision.tool_name, arguments)) if (self.resolve_targets and source_argument(arguments)) else ()
             if _ran(result):
                 self.ledger.record(tool_name=decision.tool_name, arguments=arguments, result=result, targets=resolved)
+                if resolved:
+                    _step()["targets"] = [str(t) for t in resolved]
             return result
 
         # Tier 3 always asks: a standing grant never skips a confirmation.

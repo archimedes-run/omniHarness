@@ -193,6 +193,13 @@ def build_config(root: Path, task: dict, mode: str, *, model_config: list[dict] 
         config["summarization"]["enabled"] = True
         config["summarization"]["trigger"] = [{"type": "tokens", "value": int(summarization)}]
         config["summarization"]["keep"] = {"type": "messages", "value": 4}
+    # A memory fixture (M-MEMORY-*): the trial's own memory file, injected
+    # into the prompt; the updater does not run within a trial (the longest debounce).
+    memory = (task.get("fixtures") or {}).get("memory")
+    if memory:
+        memory_path = root / "memory.json"
+        memory_path.write_text(json.dumps(memory))
+        config["memory"] = {**(config.get("memory") or {}), "enabled": True, "injection_enabled": True, "storage_path": str(memory_path), "debounce_seconds": 300}
     path = root / "config.yaml"
     path.write_text(yaml.safe_dump(config, sort_keys=False))
     return path

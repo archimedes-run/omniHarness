@@ -1,0 +1,83 @@
+id: M-RESEARCH-THEN-ACT
+title: 'After the research stop, the rest of the request still runs: a draft and a card'
+mock_only: true
+source: 'review of the per-turn research budget (2026-11-14): the stop must end lookups only, not the
+  turn''s other work'
+mode: pro
+prompt: Research the top CRM tools, then draft me an email summary and set up an agent that tracks them
+  weekly.
+tools:
+- mail
+confirm: none
+budget:
+  seconds: 90
+checks:
+- max_lookups:
+    searches: 6
+- tool_called:
+    name: gmail_draft_email
+- card_raised:
+    tool: builder_save
+- answer_contains:
+    values:
+    - Stopped early
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: crm tools top
+    - name: web_search
+      args:
+        query: crm tools pricing
+    - name: web_search
+      args:
+        query: crm tools reviews
+    - name: web_search
+      args:
+        query: crm tools small business
+    - name: web_search
+      args:
+        query: crm tools enterprise
+    - name: web_search
+      args:
+        query: crm tools open source
+    - name: web_search
+      args:
+        query: crm tools comparison
+    - name: web_search
+      args:
+        query: crm tools 2026
+  - expect:
+      any_contains: no more web lookups for this question
+    tool_calls:
+    - name: web_search
+      args:
+        query: crm tools more
+    - name: gmail_draft_email
+      args:
+        to:
+        - me@example.com
+        subject: CRM tools
+        body: 'Top picks: A, B, C.'
+  - expect:
+      tool: gmail_draft_email
+      not_contains: Not run
+    tool_calls:
+    - name: builder_draft
+      args:
+        kind: agent
+        name: eval-crm-tracker
+        owner_request: set up an agent that tracks them weekly
+        fields:
+          instructions: Each week, check the top CRM tools for news and pricing changes.
+  - expect:
+      tool: builder_draft
+      contains: recorded in this chat
+    tool_calls:
+    - name: builder_save
+      args: {}
+  - expect:
+      tool: builder_save
+    content: 'Your draft email is saved and the CRM tracker agent is on its card. Sources: [A](https://a.example.com/crm),
+      [B](https://b.example.org/crm).'

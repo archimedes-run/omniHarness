@@ -41,7 +41,7 @@ router = APIRouter(prefix="/api/threads", tags=["threads"])
 # the auth contextvar; this list closes the metadata-blob echo gap.
 #: ``turn_provenance`` marks a scheduled run; only the trigger engine's run
 #: request may carry it (services.start_run), never a thread's metadata.
-_SERVER_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"owner_id", "user_id", "turn_provenance", "called_agent", "selected_sources"})
+_SERVER_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"owner_id", "user_id", "turn_provenance", "called_agent", "selected_sources", "memory_off", "memory_off_source"})
 
 
 def _strip_reserved_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:

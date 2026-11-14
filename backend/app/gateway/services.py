@@ -192,12 +192,20 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 #:   whose long-term memory a run reads and writes when not its user's; set
 #:   only for a lead automation (the system user's, as before #133);
 #: - ``connectors_off`` (CONNECTORS_OFF_KEY): the user's connected apps this
-#:   chat has switched off, named in the agent's prompt.
+#:   chat has switched off, named in the agent's prompt;
+#: - ``memory_off`` (omniharness.agents.memory_switch.MEMORY_OFF_KEY): memory
+#:   is off in this chat (the chat's stored switch, or the owner's own message
+#:   asking not to use past chats): no memory block in the prompt, no memory
+#:   writes. A request may only switch memory OFF (the new chat's composer
+#:   toggle, sent with its first message); nothing in a request turns it
+#:   back on (only the owner's PUT /api/threads/{id}/memory).
 CONNECTORS_OFF_KEY = "connectors_off"
+MEMORY_OFF_KEY = "memory_off"
 
 SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
     {
         CONNECTORS_OFF_KEY,
+        MEMORY_OFF_KEY,
         "user_id",
         "selected_sources",
         "agent_name",
@@ -217,7 +225,7 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
 _CLIENT_CONTEXT_KEYS: frozenset[str] = _CONTEXT_CONFIGURABLE_KEYS - SERVER_OWNED_RUN_KEYS
 
 #: Metadata keys a client may never set on a run or a thread.
-_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id", "invited_agent", "delegation_chain", "sandbox_id", "run_id"}
+_SERVER_OWNED_METADATA_KEYS: frozenset[str] = SERVER_OWNED_RUN_KEYS | {"owner_id", "invited_agent", "delegation_chain", "sandbox_id", "run_id", "worker_id"}
 
 #: ALLOWLISTS (security baseline, review round): what a client may put in each
 #: run-config container. Everything else is dropped before the server writes
@@ -955,6 +963,13 @@ async def start_run(
     switched_off = connectors_switched_off(connected, selected_sources) if selected_sources is not None else []
     if switched_off:
         config["context"][CONNECTORS_OFF_KEY] = switched_off
+    # Memory off in this chat (live chat 2026-11-14): the chat's stored switch,
+    # or the owner's own message asking not to use their past chats / memory,
+    # or the new chat's composer toggle sent with its first message. Only the
+    # person's own turn can turn it on; nothing in a request turns it off.
+    memory_off_now, memory_off_source = await _memory_off_for_run(request, thread_id, body, graph_input, own_turn=not relayed and synthetic_rule_id is None)
+    if memory_off_now:
+        config["context"][MEMORY_OFF_KEY] = True
     # The thread is the one this request was authorised for, never a value from
     # the body. A request carrying only config.context used to leave no
     # configurable at all, and the run died with KeyError 'thread_id'.
@@ -1038,12 +1053,46 @@ async def start_run(
         if as_owner is not None:
             reset_current_user(as_owner)
 
+    # The chat's record exists now (the launch upserts it): a switch turned
+    # on by this turn is stored, so it holds from this turn on.
+    if memory_off_source is not None:
+        try:
+            from app.gateway.routers.thread_memory import set_chat_memory_off
+
+            await set_chat_memory_off(getattr(request.app.state, "thread_store", None), thread_id, True, memory_off_source)
+        except Exception:
+            logger.warning("Could not store memory off for thread %s", sanitize_log_param(thread_id), exc_info=True)
+
     # Title sync is handled by worker.py's finally block which reads the
     # title from the checkpoint and calls thread_store.update_display_name
     # after the run completes.
 
     _trace_when_done(request.app, record, owner_id=user_id, resume=server_resume[1] if server_resume is not None else None, assistant_id=body.assistant_id)
     return record
+
+
+async def _memory_off_for_run(request: Request, thread_id: str, body: Any, graph_input: dict, *, own_turn: bool) -> tuple[bool, str | None]:
+    """(memory is off for this run, the source to store when THIS turn turned
+    it on, else None)."""
+    from app.gateway.routers.thread_memory import chat_memory_off
+    from omniharness.agents.memory_switch import asks_memory_off
+
+    stored, _ = await chat_memory_off(getattr(request.app.state, "thread_store", None), thread_id)
+    if stored:
+        return True, None
+    if not own_turn:
+        return False, None
+    body_context = getattr(body, "context", None)
+    if isinstance(body_context, Mapping) and body_context.get(MEMORY_OFF_KEY) is True:
+        return True, "toggle"
+    messages = graph_input.get("messages") if isinstance(graph_input, dict) else None
+    last = messages[-1] if messages else None
+    if isinstance(last, HumanMessage):
+        content = last.content
+        text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+        if asks_memory_off(text):
+            return True, "message"
+    return False, None
 
 
 def _trace_when_done(app: Any, record: Any, *, owner_id: str | None, resume: dict | None, assistant_id: str | None) -> None:

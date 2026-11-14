@@ -95,3 +95,4 @@ session_watcher.registry:SessionRegistry.is_empty  # UNWIRED, wire in Feature 00
 session_watcher.registry:SessionRegistry.is_observable  # UNWIRED, wire in Feature 005: empty vs can't-tell on the Today view (specs/005-project-ledger/plan-inputs.md)
 session_watcher.reply:observe_only_notice  # UNWIRED, wire in Feature 005: FR-015 wording when the user tries to answer a watched (Claude or Codex) session (specs/005-project-ledger/plan-inputs.md)
 app.gateway.code_jobs.app_kit:tokens_from_globals  # generator of the tracked app_files/graphite-tokens.css from frontend globals.css (the gateway image has no frontend tree); run by tests/code_jobs/test_app_mode.py, which fails when the two drift
+omniharness.agents.research_ledger:reset_for_tests  # test seam: replaces the process-wide research ledgers (and their clock) between tests; no production caller by design

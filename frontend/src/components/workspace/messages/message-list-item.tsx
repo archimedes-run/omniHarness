@@ -46,12 +46,14 @@ import {
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import { humanMessagePlugins } from "@/core/streamdown";
+import { runNotice } from "@/core/threads/run-notice";
 import { cn } from "@/lib/utils";
 
 import { CopyButton } from "../copy-button";
 
 import { DisclosureNote } from "./disclosure-note";
 import { MarkdownContent } from "./markdown-content";
+import { RunNotice } from "./run-notice";
 import {
   TruncationBadge,
   extractTruncationInfo,
@@ -142,6 +144,24 @@ export function MessageListItem({
   showCopyButton?: boolean;
 }) {
   const isHuman = message.type === "human";
+  // A reply cut off by a restart: a notice from the system, not a reply.
+  const notice = runNotice(message);
+  if (notice) {
+    const { body, items } = splitDisclosure(
+      extractContentFromMessage(message) ?? "",
+      message.additional_kwargs,
+    );
+    return (
+      <RunNotice
+        className={className}
+        // The server's words, minus the disclosure block (the note shows it).
+        text={body.trim() || undefined}
+        items={items}
+        retryText={notice.retryText}
+        hadAttachments={notice.hadAttachments}
+      />
+    );
+  }
   return (
     <AIElementMessage
       className={cn("group/conversation-message relative w-full", className)}

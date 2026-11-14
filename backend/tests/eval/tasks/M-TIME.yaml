@@ -45,3 +45,4 @@ mock:
 config:
   research_budget:
     max_seconds: 20
+    seconds_per_extra_search: 0

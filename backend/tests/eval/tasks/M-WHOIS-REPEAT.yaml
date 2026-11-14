@@ -1,0 +1,30 @@
+id: M-WHOIS-REPEAT
+title: A search with the same terms as an earlier one is refused as a repeat
+mock_only: true
+source: live chat 2026-11-14 (near-duplicate searches for one person)
+mode: thinking
+prompt: who is Jane Roe
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- max_lookups:
+    searches: 1
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: Who is Jane Roe?
+  - expect:
+      tool: web_search
+      not_contains: Not run
+    tool_calls:
+    - name: web_search
+      args:
+        query: jane roe
+  - expect:
+      tool: web_search
+      contains: repeats one already made
+    content: Jane Roe is an example person. [Profile](https://example.org/jane-roe) and [News](https://news.example.com/jane-roe).

@@ -38,10 +38,17 @@ class RunRecord:
     abort_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     abort_action: str = "interrupt"
     error: str | None = None
+    #: Why the run was interrupted by the server, not the person ("restart":
+    #: the gateway is stopping; app.gateway.run_recovery). Recorded as the
+    #: run's error so the restart notice can be told from a person's Stop.
+    interrupt_reason: str | None = None
 
 
 #: `RunManager.list_history(user_id=ALL_USERS)`: every user's runs (server-side).
 ALL_USERS = object()
+
+#: Run metadata key: the worker process that runs it (server-owned).
+WORKER_ID_KEY = "worker_id"
 
 #: An active run row in the store not updated for this long belongs to a
 #: worker that died; it no longer holds its thread (write_when_idle).
@@ -56,8 +63,12 @@ class RunManager:
     that run history survives process restarts.
     """
 
-    def __init__(self, store: RunStore | None = None) -> None:
+    def __init__(self, store: RunStore | None = None, *, worker_id: str | None = None) -> None:
         self._runs: dict[str, RunRecord] = {}
+        #: This process's id (app.gateway.run_recovery.WorkerLease), stamped
+        #: on every run it records so a restart sweep in another worker can
+        #: tell a live worker's run from a dead one's.
+        self.worker_id = worker_id
         self._lock = asyncio.Lock()
         self._store = store
         #: Thread writes waiting for that thread's run to end (write_when_idle).
@@ -184,12 +195,20 @@ class RunManager:
                 assistant_id=record.assistant_id,
                 status=record.status.value,
                 multitask_strategy=record.multitask_strategy,
-                metadata=record.metadata or {},
+                metadata={**(record.metadata or {}), WORKER_ID_KEY: self.worker_id} if self.worker_id else (record.metadata or {}),
                 kwargs=record.kwargs or {},
                 created_at=record.created_at,
             )
         except Exception:
             logger.warning("Failed to persist run %s to store", record.run_id, exc_info=True)
+
+    def live_records(self) -> list[RunRecord]:
+        """This process's runs still in flight (pending, running, or a task
+        not yet finished)."""
+        return [r for r in self._runs.values() if r.status in (RunStatus.pending, RunStatus.running) or (r.task is not None and not r.task.done())]
+
+    def owns(self, run_id: str) -> bool:
+        return run_id in self._runs
 
     async def update_run_completion(self, run_id: str, **kwargs) -> None:
         """Persist token usage and completion data to the backing store."""

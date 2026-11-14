@@ -1,0 +1,36 @@
+id: M-WHOIS
+title: A who-is question is answered with 2+ sources inside the small research budget
+source: live chat 2026-11-14 (19 web searches over 7+ minutes for "who is <person>", no answer)
+mode: thinking
+prompt: Who is Tim Berners-Lee? Look it up and give me two sources with links from different sites.
+tools: []
+confirm: none
+budget:
+  seconds: 90
+  est_usd: 0.02
+checks:
+- min_links:
+    n: 2
+    distinct_hosts: 2
+- tool_called:
+    name: web_search
+- max_lookups:
+    searches: 6
+    fetches: 6
+- no_cards
+- no_clarification
+- no_menu
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: Tim Berners-Lee biography
+    - name: web_search
+      args:
+        query: Tim Berners-Lee World Wide Web inventor
+  - expect:
+      tool: web_search
+    content: 'Sir Tim Berners-Lee is the British computer scientist who invented the World Wide Web in
+      1989 at CERN and directs the W3C. Sources: [W3C profile](https://www.w3.org/People/Berners-Lee/)
+      and [Britannica](https://www.britannica.com/biography/Tim-Berners-Lee).'
