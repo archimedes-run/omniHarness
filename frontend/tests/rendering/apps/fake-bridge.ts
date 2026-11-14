@@ -263,6 +263,8 @@ export interface FakeApp {
   states?: SourceStates;
   /** A newer version waiting on the owner's button (api.md pending_version). */
   pendingVersion?: number;
+  /** The pending version's manifest hash (differs from the served one's). */
+  pendingHash?: string;
   /** The card's suggestion line (api.md suggestion_words). */
   suggestion?: { source: string; words: string };
   /** GET /api/apps/{id} answers 500 bridge_failed. */
@@ -348,7 +350,7 @@ export function approvalCard(app: FakeApp, status = "pending") {
     app_id: app.id,
     app_name: app.name,
     version: app.pendingVersion ?? app.version,
-    manifest_hash: app.hash,
+    manifest_hash: app.pendingHash ?? app.hash,
     status,
     sources: app.sources.map((s) => ({
       name: s,
@@ -590,7 +592,7 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
         return json(route, { detail: [{ msg: "extra or missing keys" }] }, 422);
       }
       log.approvals.push(body);
-      if (body.manifest_hash !== app.hash) {
+      if (body.manifest_hash !== (app.pendingHash ?? app.hash)) {
         return json(
           route,
           { detail: { code: "hash_mismatch", message: "The app changed." } },
@@ -600,7 +602,9 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
       app.status = "approved";
       if (app.pendingVersion !== undefined) {
         app.version = app.pendingVersion;
+        app.hash = app.pendingHash ?? app.hash;
         delete app.pendingVersion;
+        delete app.pendingHash;
       }
       return json(route, {
         status: "approved",

@@ -534,6 +534,7 @@ test.describe("matches the bridge (api.md)", () => {
       apps: [
         demoApp({
           pendingVersion: 4,
+          pendingHash: HASH_PENDING,
           suggestion: {
             source: "an email you read earlier",
             words:
@@ -558,7 +559,7 @@ test.describe("matches the bridge (api.md)", () => {
       .poll(() => bridge.log.approvals)
       .toEqual([
         {
-          manifest_hash: bridge.apps.get("today")!.hash,
+          manifest_hash: HASH_PENDING,
           card_id: expect.any(String) as unknown,
         },
       ]);
