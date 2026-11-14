@@ -572,3 +572,29 @@ version stays in History and can be restored from the Apps page.
 
 `ApprovalCard` gains `kind` (`access` | `version`), and for version cards
 `keeps_version`, `description` and `checks_passed`; `status` may be `kept`.
+
+### Round 3: sample data in the app's time zone, data shown right, version screenshots
+
+- The sample data is generated per app for a fixed sample now: a Wednesday,
+  10:20 in the app's time zone (the first `tz` param of its sources, else
+  UTC), with real UTC offsets; calendar events at 09:30, 11:00, 12:30, 14:00
+  and 16:00 local plus one all-day event; the other sources' times relative to
+  it (today, earlier this week, one overdue). The platform shim gains
+  `omni.now()` (the real time; the mock build's sample now), and `ago()`
+  measures from it. The kit adds `omni-kit/app-config.ts` (`TIME_ZONE`) and,
+  in `omni-react.tsx`, `zoned(tz)` (`formatTime`, `formatDay`,
+  `minutesIntoDay`, `dateOf`, `isToday`), `Row`, `Stat`, `Timeline` and
+  `Sparkline`; the starter uses them.
+- New checks on the development build, all blocking unless noted: the
+  calendar's sample start times show in the app's time zone ("times are not
+  in the app's time zone (expected 9:30 AM, found 2:30 PM)"); no text cut to
+  fewer than 4 characters or a quarter of itself at 1280 px; no chart label
+  running past the block it sits in or over another label; each tile shows at
+  least half of its sample items or an "N more" line; a card mostly empty next
+  to a fuller card in its row is a design finding (not blocking).
+- `GET /api/apps/{id}/versions/{n}/shots/{light|dark}.png`: the system's own
+  1280 px check screenshots (sample data) of a version, stored content-
+  addressed with the version at registration (PNG only, at most 1.5 MB, hash
+  checked on read). Owner only, `image/png`, `nosniff`, `default-src 'none';
+  sandbox`. A version card lists them in `shots` and shows them as
+  thumbnails that open full size.

@@ -464,9 +464,88 @@ APP_MEASURE = r"""
   for (let i = 0; i < buttons.length && i < 1000; i++) {
     if (visible(buttons[i]) && /^\s*connect\b/i.test(buttons[i].innerText || buttons[i].getAttribute('aria-label') || '')) connect++;
   }
+  // How many of each source's sample items show (one needle per item).
   const found = {};
   for (const [source, needles] of Object.entries(cfg.sentinels || {})) {
-    found[source] = needles.some((n) => n && text.indexOf(n) !== -1);
+    found[source] = needles.filter((n) => n && text.indexOf(n) !== -1).length;
+  }
+  const more = /\b\d+\+?\s+more\b/i.test(text);
+  // The calendar's sample times, in the app's time zone (and the same
+  // instants in UTC: shown instead, the page is in the wrong zone).
+  const times = { local_found: 0, first_missing: '', shifted_found: '' };
+  for (const t of ((cfg.times || {}).local || []).slice(0, 12)) {
+    if (new RegExp(t.re).test(text)) times.local_found++;
+    else if (!times.first_missing) times.first_missing = t.label;
+  }
+  for (const t of ((cfg.times || {}).shifted || []).slice(0, 12)) {
+    if (new RegExp(t.re).test(text)) { times.shifted_found = t.label; break; }
+  }
+  // Text cut to almost nothing by its own box (ellipsis or hidden overflow).
+  const cut = [];
+  if (body) {
+    const els = body.getElementsByTagName('*');
+    for (let i = 0; i < els.length && i < 4000 && cut.length < 4; i++) {
+      const el = els[i];
+      if (el.children.length > 2 || el instanceof SVGElement) continue;
+      const t = (el.textContent || '').trim();
+      if (t.length < 8 || !visible(el)) continue;
+      const cs = getComputedStyle(el);
+      const clips = cs.textOverflow === 'ellipsis' || cs.overflowX === 'hidden' || cs.overflowX === 'clip';
+      if (!clips || el.scrollWidth <= el.clientWidth + 1 || el.clientWidth === 0) continue;
+      const frac = el.clientWidth / el.scrollWidth;
+      if (Math.floor(t.length * frac) < 4 || frac < 0.25) {
+        const label = where(el);
+        if (!cut.includes(label)) cut.push(label);
+      }
+    }
+  }
+  // Chart labels: a <text> running past the block it sits in, or over another label.
+  const spill = [];
+  const svgList = document.querySelectorAll('svg');
+  for (let i = 0; i < svgList.length && i < 50 && spill.length < 4; i++) {
+    const svg = svgList[i];
+    if (svg.ownerSVGElement) continue;
+    const sr = svg.getBoundingClientRect();
+    if (sr.width < 24 || sr.height < 24) continue;
+    const rects = Array.from(svg.querySelectorAll('rect')).map((r) => r.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0 && r.width * r.height < 0.9 * sr.width * sr.height);
+    const texts = Array.from(svg.querySelectorAll('text')).slice(0, 60).map((t) => t.getBoundingClientRect()).filter((r) => r.width > 0);
+    let bad = false;
+    for (const tb of texts) {
+      const cx = tb.left + 1, cy = tb.top + tb.height / 2;
+      const host = rects.find((r) => cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom);
+      if (host && tb.right > host.right + 2) { bad = true; break; }
+    }
+    for (let a = 0; !bad && a < texts.length; a++) {
+      for (let b = a + 1; b < texts.length; b++) {
+        const p = texts[a], q = texts[b];
+        const w = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+        const h = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+        if (w > 0 && h > 0 && w * h > 0.3 * Math.min(p.width * p.height, q.width * q.height)) { bad = true; break; }
+      }
+    }
+    if (bad) spill.push(where(svg));
+  }
+  // Cards that are mostly empty next to a fuller card in the same row.
+  const emptyCards = [];
+  if (body) {
+    const els = body.getElementsByTagName('*');
+    for (let i = 0; i < els.length && i < 3000 && emptyCards.length < 4; i++) {
+      if (getComputedStyle(els[i]).display !== 'grid') continue;
+      const cards = Array.from(els[i].children).filter((c) => visible(c));
+      const content = (c) => {
+        const top = c.getBoundingClientRect().top;
+        let bottom = top;
+        for (const k of c.children) bottom = Math.max(bottom, k.getBoundingClientRect().bottom);
+        return bottom - top;
+      };
+      for (const c of cards) {
+        const r = c.getBoundingClientRect();
+        const mine = content(c);
+        if (r.height < 120 || mine / r.height >= 0.35) continue;
+        const fuller = cards.some((o) => o !== c && Math.abs(o.getBoundingClientRect().top - r.top) < 4 && content(o) > mine * 1.5);
+        if (fuller) emptyCards.push(where(c));
+      }
+    }
   }
   return {
     contrast_measured: measured,
@@ -489,6 +568,11 @@ APP_MEASURE = r"""
       reason: !!cfg.reason && text.indexOf(cfg.reason) !== -1,
     },
     sentinels: found,
+    more,
+    times,
+    cut,
+    spill,
+    empty_cards: emptyCards,
   };
 })
 """
@@ -893,7 +977,7 @@ class Check:
         session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
         run["_loaded"] = threading.Event()
         self.pages[session] = run
-        cfg = json.dumps({"theme": theme, "sentinels": self.config.get("sentinels") or {}, "reason": self.config.get("reason") or ""})
+        cfg = json.dumps({"theme": theme, "sentinels": self.config.get("sentinels") or {}, "reason": self.config.get("reason") or "", "times": self.config.get("times") or {}})
         expression = "(function () { const base = " + MEASURE.strip() + "; base.app = " + APP_MEASURE.strip() + "(" + cfg + "); return base; })()"
         try:
             cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, session)

@@ -92,6 +92,13 @@ class AppFake(FakeSandbox):
         if command.startswith("/usr/bin/stat -c %s ") and "result.json" not in command:
             content = self.read_text(shlex.split(command)[3])
             return 0, str(len(content.encode())) if content is not None else "none"
+        if "/usr/bin/base64 -w0 " in command:
+            import base64 as b64
+
+            src, dst = re.search(r"base64 -w0 (\S+) > (\S+) 2>", command).groups()
+            content = self.read_text(src.strip("'"))
+            self._put(dst.strip("'"), b64.b64encode(content.encode("latin-1")).decode() if content is not None else "")
+            return 0, ""
         if "grep -rnoIEZ" in command:
             out = re.search(r"> (\S+); true$", command).group(1).strip("'")
             self._put(out, self.scan_output)
@@ -124,7 +131,7 @@ class AppFake(FakeSandbox):
                     pass
                 self._put(f"{directory}/result.json", body)
                 for shot in json.loads(self.layout).get("shots", []):
-                    self._put(f"{directory}/{shot['file']}", "x" * shot["bytes"])
+                    self._put(f"{directory}/{shot['file']}", "\x89PNG\r\n\x1a\n" + "x" * (shot["bytes"] - 8))
             return self.layout_exit, ""
         if "od -An" in command and "/usr/bin/cp" in command:
             src, dst = re.search(r"/usr/bin/cp (\S+) (\S+) && echo __ok__", command).groups()

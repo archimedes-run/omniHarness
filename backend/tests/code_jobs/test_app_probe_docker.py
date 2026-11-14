@@ -30,6 +30,18 @@ IMAGE = os.environ.get("SANDBOX_IMAGE", "omni-harness-sandbox:1.11.0-oh5")
 
 #: name -> (change to app.js, change to app.css, a failure that must be listed)
 BROKEN: dict[str, tuple] = {
+    "wrong_time_zone": (None, None, "times are not in the app's time zone (expected 9:30 AM, found 2:30 PM"),
+    "cut_title": (None, ".omni-list-main { max-width: 12px; }", "a row's title is cut to almost nothing"),
+    "chart_label_spill": (
+        ('class: "omni-series" }));', 'class: "omni-series" }));\n    const lbl = svg("text", { x: Math.max(0, x0) + 1, y: 26 }); lbl.textContent = item.title || ""; chart.appendChild(lbl);'),
+        None,
+        "chart label overflows its block",
+    ),
+    "few_items": (
+        ('for (const item of data.items || []) {\n    const li = el("li");\n    const a = el(', 'for (const item of (data.items || []).slice(0, 1)) {\n    const li = el("li");\n    const a = el('),
+        None,
+        "a tile shows fewer than half of its sample items (source gh_review)",
+    ),
     "overflow": (None, ".omni-page { min-width: 900px; }", "overflows sideways at 360 px"),
     "clipped_chart": (("x: Math.max(0, x0),", "x: Math.max(0, x0) + 200,"), ".load-chart { overflow: hidden; }", "chart clipped: svg.omni-chart.load-chart"),
     "missing_state": (('result.state === "empty" ? tile.empty : words.label', "tile.empty"), None, 'failed state: says "Nothing today"'),
@@ -38,6 +50,10 @@ BROKEN: dict[str, tuple] = {
     "uses_innerhtml": (("// A small app", 'document.getElementById("clock").innerHTML = "<b>now</b>";\n// A small app'), None, "HTML or script from a string (Trusted Types)"),
     "has_iframe": (("// A small app", 'document.body.appendChild(document.createElement("iframe"));\n// A small app'), None, "the page has a nested frame or embedded object"),
 }
+
+
+TIMES: dict[str, int] = {}
+COUNTS: dict[str, dict] = {}
 
 
 def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> list[str]:
@@ -49,7 +65,10 @@ def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> 
         files["app.js"] = files["app.js"].replace(old.encode(), new.encode())
     if css_change:
         files["app.css"] += b"\n" + css_change.encode()
-    manifest = app_kit.read_manifest((FIXTURE / "omni-app.json").read_text())
+    raw = json.loads((FIXTURE / "omni-app.json").read_text())
+    if name == "wrong_time_zone":
+        raw["sources"]["calendar"]["params"] = {"tz": "America/New_York"}
+    manifest = app_kit.read_manifest(json.dumps(raw))
     html, _ = bundle_mod.inline(files)
     data = app_kit.fixtures(manifest)
     mock, hashes = bundle_mod.inline({"index.html": html}, platform_shim=app_kit.mock_script(data))
@@ -64,7 +83,9 @@ def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> 
         bad, bad_hashes = bundle_mod.inline({"index.html": bundle_mod.inline(files)[0]}, platform_shim=app_kit.mock_script(data))
         (d / "www" / "prod" / "index.html").write_bytes(bad)
         hashes = bad_hashes
-    (d / "check.json").write_text(json.dumps({"csp": app_checks.probe_csp(hashes), "csp_site": app_checks.probe_csp(site_hashes), "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}))
+    (d / "check.json").write_text(json.dumps({"csp": app_checks.probe_csp(hashes), "csp_site": app_checks.probe_csp(site_hashes), "sentinels": app_kit.sentinels(data), "times": app_kit.expected_times(data), "reason": app_kit.MOCK_REASON}))
+    TIMES[name] = len(app_kit.expected_times(data)["local"])
+    COUNTS[name] = {n: len(f["fresh"].get("items") or []) for n, f in data["sources"].items()}
     shutil.copy(Path(layout.__file__).with_name("layout_probe.py"), d / "layout_probe.py")
     return list(manifest["sources"])
 
@@ -100,7 +121,7 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     results = {}
     for d in root.iterdir():
         raw = (d / "result.json").read_text() if (d / "result.json").exists() else None
-        results[d.name] = app_checks.parse(raw, exit_code=int(codes.get(d.name, "0")), data_sources=sources)
+        results[d.name] = app_checks.parse(raw, exit_code=int(codes.get(d.name, "0")), data_sources=sources, item_counts=COUNTS.get(d.name), times_expected=TIMES.get(d.name, 0))
     assert results["pre_written"]["error_code"] == "tampered"
     bad = results["prod_only_violation"]
     assert bad["outcome"] == "fail" and any("production/" in f and "connect-src" in f for f in bad["failures"]), bad["failures"]

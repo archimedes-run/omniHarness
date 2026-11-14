@@ -696,10 +696,18 @@ for (const [scheme, width] of [
       keeps_version: 1,
       description: "Make the calendar tile span two columns",
       checks_passed: true,
+      shots: ["dark", "light"],
     };
     const presses: unknown[] = [];
     await page.route("**/api/apps/approvals**", (route) =>
       route.fulfill(json({ cards: [card] })),
+    );
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await page.route("**/api/apps/today/versions/2/shots/*.png", (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: png }),
     );
     await page.route("**/api/apps/today/approve", (route) => {
       presses.push(route.request().postDataJSON());
@@ -742,6 +750,16 @@ for (const [scheme, width] of [
     await expect(el.getByTestId("app-card-keep-version")).toHaveText(
       "Keep version 1",
     );
+    // The system's own check screenshots, each opening full size.
+    const shots = el.getByTestId("app-card-shots").getByRole("link");
+    await expect(shots).toHaveCount(2);
+    await expect(shots.first()).toHaveAttribute(
+      "href",
+      /\/api\/apps\/today\/versions\/2\/shots\/dark\.png$/,
+    );
+    await expect(
+      el.getByRole("img", { name: /Version 2, light theme/ }),
+    ).toBeVisible();
     // Nothing overflows sideways at phone width.
     expect(
       await page.evaluate(

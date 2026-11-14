@@ -5,7 +5,11 @@ import { CheckIcon, LayoutGridIcon, Loader2Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { AppsApiError, type ApprovalCard } from "@/core/apps/api";
+import {
+  AppsApiError,
+  type ApprovalCard,
+  versionShotUrl,
+} from "@/core/apps/api";
 import { useApproveApp, useKeepAppVersion } from "@/core/apps/hooks";
 import { hashGroups, writeError } from "@/core/apps/wording";
 import { cn } from "@/lib/utils";
@@ -134,6 +138,33 @@ export function AppApprovalCard({
             ? "It passed the system's checks. It reads the same data as the version you use now."
             : "It reads the same data as the version you use now."}
         </p>
+        {card.shots && card.shots.length > 0 ? (
+          <div
+            className="mt-3 grid grid-cols-2 gap-2"
+            data-testid="app-card-shots"
+          >
+            {card.shots.map((theme) => {
+              const src = versionShotUrl(card.app_id, card.version, theme);
+              return (
+                <a
+                  key={theme}
+                  href={src}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="focus-visible:ring-ring/50 block rounded-md outline-none focus-visible:ring-[3px]"
+                  title={`Open the ${theme} screenshot`}
+                >
+                  <img
+                    src={src}
+                    alt={`Version ${card.version}, ${theme} theme, with sample data (the system's check)`}
+                    loading="lazy"
+                    className="border-border w-full rounded-md border"
+                  />
+                </a>
+              );
+            })}
+          </div>
+        ) : null}
         <p className="text-muted-foreground mt-1 text-xs">
           {`Version ${keeps} keeps running until you choose.`}
         </p>

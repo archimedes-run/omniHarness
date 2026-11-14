@@ -348,3 +348,72 @@ a.omni-link:hover,
   white-space: nowrap;
   border: 0;
 }
+
+/* Kit components (omni-react.tsx): Row, Timeline, Sparkline. */
+.omni-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.omni-row:first-child {
+  border-top: 0;
+}
+.omni-row-badge {
+  flex: 0 0 auto;
+}
+.omni-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 24px;
+  color: inherit;
+  text-decoration: none;
+}
+a.omni-row-title:hover {
+  text-decoration: underline;
+}
+.omni-row-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.omni-timeline {
+  overflow-x: auto;
+}
+.omni-timeline svg {
+  min-width: 720px;
+}
+.omni-timeline-label {
+  fill: var(--primary-foreground) !important;
+  font-size: 12px;
+}
+.omni-timeline-hour {
+  fill: var(--muted-foreground);
+  font-size: 12px;
+}
+.omni-free-line {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.omni-free {
+  opacity: 0.6;
+}
+.omni-now {
+  stroke: var(--destructive);
+  stroke-width: 2;
+}
+.omni-sparkline {
+  max-width: 160px;
+}
