@@ -188,6 +188,15 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             app.state.home_dismissal_repo = None
 
+        # Apps (Spec 011): grants, approval cards, the projected-data cache,
+        # leases and limits, in the shared store so every worker agrees.
+        if sf is not None:
+            from omniharness.persistence.apps import AppRepository
+
+            app.state.app_repo = AppRepository(sf)
+        else:
+            app.state.app_repo = None
+
         # ComposioClient (only when COMPOSIO_API_KEY is set)
         import os
 

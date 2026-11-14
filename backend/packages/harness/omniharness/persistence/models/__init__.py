@@ -14,6 +14,7 @@ its storage implementation lives in ``omniharness.runtime.events.store.db`` and
 there is no matching entity directory.
 """
 
+from omniharness.persistence.apps.model import AppApprovalCardRow, AppAuditRow, AppGrantRow, AppLeaseRow, AppOpenRow, AppPinsRow, AppRateRow, AppSourceCacheRow
 from omniharness.persistence.composio_connections.model import ComposioConnectionRow
 from omniharness.persistence.feedback.model import FeedbackRow
 from omniharness.persistence.home_dismissals.model import HomeDismissalRow
@@ -35,6 +36,14 @@ from omniharness.persistence.workflow_versions.model import WorkflowVersionRow
 from omniharness.persistence.workflows.model import WorkflowRow
 
 __all__ = [
+    "AppApprovalCardRow",
+    "AppAuditRow",
+    "AppGrantRow",
+    "AppLeaseRow",
+    "AppOpenRow",
+    "AppPinsRow",
+    "AppRateRow",
+    "AppSourceCacheRow",
     "ComposioConnectionRow",
     "FeedbackRow",
     "FirstAccountClaimRow",
