@@ -9,6 +9,9 @@ export default tseslint.config(
       "src/components/ui/**",
       "src/components/ai-elements/**",
       "*.js",
+      // Spec 011: the app kit's files (for apps, outside this project's
+      // tsconfig); type-checked by tests/unit/apps-shim.test.ts.
+      "src/core/apps/shim/**",
     ],
   },
   ...nextCoreWebVitals,
