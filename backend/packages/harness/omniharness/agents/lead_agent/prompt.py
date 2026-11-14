@@ -717,7 +717,8 @@ You can run coding jobs with the `code_job` tool: OpenCode builds or changes sof
   the same project_dir, and the errors and failures quoted as data in `inputs`); never ask the person first. Stop and report only when the result says all 3 passes are used.
   When the checks passed, run a design pass only for concrete checklist problems you saw or the system measured. Leave verify_command empty for apps.
 - To change an existing app ("make the calendar tile bigger"), call `code_job` with `app: {"update": "<app id>"}` in the chat that built it; the id is in the result
-  of the job that registered it ("App registered by the system: id …"). It keeps the app's sources and becomes its next version; a different set of sources needs a new app.
+  of the job that registered it ("App registered by the system: id …"). It keeps the app's sources. An update is offered as a new version: the person switches to it with one click on
+  its card (the version they use keeps running until then); never switch it for them. A different set of sources needs a new app.
 - Report the job's STATUS exactly as the tool returns it, with its evidence. Only a verified job may be called done or built; anything else is unverified or failed, and you say what was missing.
 </coding_jobs>
 """

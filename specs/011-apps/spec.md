@@ -123,6 +123,7 @@ The owner opens **Today** from the sidebar. Within 2 s every tile shows cached d
 - **FR-025**: `code_job` MUST accept app mode. The runner MUST write the **app kit** into the project: the manifest schema; `omni.d.ts`, a typed client generated from the catalog (`await omni.data("calendar")` returns that source's typed result; naming aligned with code mode's generated API, 009 FR-019); the shim; `graphite.css` (the tokens of `globals.css`, both themes, `.dark` toggled by the `theme` message); mock fixtures for every catalog entry in all four states; and the app rules (single-file build, no dynamic imports, no remote URLs, no eval, every tile handles all four states, responsive from 360 px, charts as inline SVG).
 - **FR-026**: The system's checks after verification MUST include, on the mock build: the layout check at 360, 560 and 1280 px (PR #182), in both themes and with every tile in each of the four states; AA contrast measured from the probe's isolated world; and screenshots returned to the lead. The probe stays a gateway-written script using the image's existing browser.
 - **FR-027**: The lead MAY run up to 3 design follow-up jobs per app against a fixed design checklist (grid alignment, hierarchy, state wording, chart legibility, touch targets ≥ 24 px, no text under 12 px) using the screenshots. Failing layout or contrast blocks registration.
+- **FR-028a**: An update of an existing app (`app.update`, from the chat that created it, same sources) and any design pass on an app that is already registered register a HELD version: an update is offered as a new version; the owner switches to it with one click ("Use version N" / "Keep version M"), and the served version keeps running until then.
 - **FR-028**: On a passing job the gateway (not the worker) MUST register the app: validate the manifest against the catalog, inline the bundle, compute script hashes, scan it (FR-018), store a version, and raise the approval card when its hash has no active grant. Cap: 2 MB per bundle.
 
 ### Library and navigation
@@ -184,7 +185,7 @@ Writes of any kind from apps; apps calling arbitrary MCP tools outside the catal
 
 - More artifact kinds and exports (PDF, image, a static snapshot).
 - MCP-UI inline: app views rendered inside chat messages.
-- "Update my app" via OpenCode from the library (an edit job on the existing app, diff and new version).
+- "Update my app" from the library (chat updates exist: `app.update`; an update is offered as a new version and the owner switches to it with one click).
 - Lists as the apps' data layer (owner-writable records an app can read and, with a grant, write).
 - Link an app to a Ledger project.
 - Generic read sources: any Tier 1 read tool with a declared projection.

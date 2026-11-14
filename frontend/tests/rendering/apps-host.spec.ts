@@ -660,3 +660,98 @@ test.describe("matches the bridge (api.md)", () => {
     ).toBe(expected);
   });
 });
+
+for (const [scheme, width] of [
+  ["light", 1280],
+  ["dark", 1280],
+  ["light", 390],
+] as const) {
+  test(`a new version of an approved app is offered with one click (${scheme}, ${width} px)`, async ({
+    page,
+  }) => {
+    await setTheme(page, scheme);
+    await page.setViewportSize({ width, height: 800 });
+    await installFakeBridge(page);
+    const json = (body: unknown) => ({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+    const card = {
+      id: "c".repeat(32),
+      app_id: "today",
+      app_name: "Today",
+      version: 2,
+      manifest_hash: "a".repeat(64),
+      status: "pending",
+      sources: [],
+      sentence: "Data is shown in the app only; the assistant never sees it.",
+      suggestion: false,
+      suggestion_source: null,
+      suggestion_words: null,
+      thread_id: "t1",
+      created_at: new Date().toISOString(),
+      resolved_at: null,
+      kind: "version",
+      keeps_version: 1,
+      description: "Make the calendar tile span two columns",
+      checks_passed: true,
+    };
+    const presses: unknown[] = [];
+    await page.route("**/api/apps/approvals**", (route) =>
+      route.fulfill(json({ cards: [card] })),
+    );
+    await page.route("**/api/apps/today/approve", (route) => {
+      presses.push(route.request().postDataJSON());
+      return route.fulfill(
+        json({
+          status: "approved",
+          manifest_hash: card.manifest_hash,
+          approved_at: new Date().toISOString(),
+        }),
+      );
+    });
+    await page.route("**/api/langgraph/**", (route) => {
+      const url = route.request().url();
+      if (
+        url.includes("/history") ||
+        url.includes("/runs") ||
+        url.includes("/search")
+      )
+        return route.fulfill(json([]));
+      return route.fulfill(
+        json({ thread_id: "t1", values: { messages: [] }, metadata: {} }),
+      );
+    });
+    await page.route("**/api/confirmations", (route) =>
+      route.fulfill(json({ actions: [], readable: true, error: "" })),
+    );
+    await page.goto("/workspace/chats/t1");
+    const el = page.locator(
+      '[data-testid="app-approval-card"][data-kind="version"]',
+    );
+    await expect(el).toBeVisible({ timeout: 15_000 });
+    await expect(el).toContainText("Today: use version 2?");
+    await expect(el.getByTestId("app-card-description")).toContainText(
+      "The assistant's description of the change:",
+    );
+    await expect(el.getByTestId("app-card-checks")).toContainText(
+      "It passed the system's checks.",
+    );
+    await expect(el).toContainText("Version 1 keeps running until you choose.");
+    await expect(el.getByTestId("app-card-keep-version")).toHaveText(
+      "Keep version 1",
+    );
+    // Nothing overflows sideways at phone width.
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+      ),
+    ).toBe(true);
+    await contrast(page);
+    await el.getByTestId("app-card-use-version").click();
+    await expect
+      .poll(() => presses)
+      .toEqual([{ manifest_hash: card.manifest_hash, card_id: card.id }]);
+  });
+}

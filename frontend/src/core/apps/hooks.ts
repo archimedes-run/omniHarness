@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AppsApiError,
   approveApp,
+  keepAppVersion,
   getApp,
   getAppPermissions,
   getAppPins,
@@ -117,6 +118,11 @@ function useAppsWrite<T, R>(fn: (input: T) => Promise<R>) {
 export const useApproveApp = () =>
   useAppsWrite((input: { id: string; manifestHash: string; cardId: string }) =>
     approveApp(input.id, input.manifestHash, input.cardId),
+  );
+
+export const useKeepAppVersion = () =>
+  useAppsWrite((input: { id: string; cardId: string }) =>
+    keepAppVersion(input.id, input.cardId),
   );
 
 export const useRestoreApp = () =>

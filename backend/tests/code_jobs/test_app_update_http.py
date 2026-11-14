@@ -42,19 +42,45 @@ def cards(gateway, thread_id):  # noqa: F811
     return gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"]
 
 
-def test_the_owners_update_becomes_the_next_served_version_without_a_card(gateway):  # noqa: F811
-    thread_id = approved_today(gateway)
-    fake = AppFake(build())
-    SANDBOX["queue"] = [fake]
+def pending(gateway, thread_id):  # noqa: F811
+    return [c for c in cards(gateway, thread_id) if c["status"] == "pending"]
+
+
+def press(gateway, card, button="approve"):  # noqa: F811
+    body = {"manifest_hash": card["manifest_hash"], "card_id": card["id"]} if button == "approve" else {"card_id": card["id"]}
+    return gateway.client.post(f"/api/apps/{card['app_id']}/{button}", json=body)
+
+
+def test_an_owners_update_is_offered_as_a_new_version_and_one_click_switches_to_it(gateway):  # noqa: F811
+    thread_id = approved_today(gateway)  # the turn before held untrusted code_job results; this one is the owner's "ok"
+    SANDBOX["queue"] = [AppFake(build())]
     report = ask_in(gateway, thread_id, {**UPDATE, "project_dir": "elsewhere"}, "cj2")
-    assert "STATUS VERIFIED" in report and "App registered by the system: id today, version 2" in report and "already approved, so it is live" in report
+    assert "STATUS VERIFIED" in report and "App registered by the system: id today, version 2" in report and "offered to the person as a new version" in report
+    assert 'Only the person\'s own press of "Use version 2"' in report
     newest = max(gateway.client.app.state.code_job_store.for_thread(thread_id), key=lambda j: j.created_at)
-    assert newest.project_dir == "today" and fake.read_text(f"{P}/omni-kit/APP_RULES.md")  # the project that built it
+    assert newest.project_dir == "today"  # the project that built it, whatever project_dir said
     (app,) = apps(gateway)
-    assert app["id"] == "today" and app["current_version"] == 2 and app["status"] == "approved"
-    assert [c["status"] for c in cards(gateway, thread_id)] == ["approved"]
-    versions = gateway.client.get("/api/apps/today/versions").json()["versions"]
-    assert [v["version"] for v in versions] == [2, 1]  # each version stays restorable
+    assert app["current_version"] == 1 and app["pending_version"] == 2  # v1 keeps serving
+    (card,) = pending(gateway, thread_id)
+    assert card["kind"] == "version" and card["version"] == 2 and card["keeps_version"] == 1 and card["suggestion"] is False
+    assert card["checks_passed"] is True and card["description"].startswith("Make the calendar tile span two columns")
+    assert press(gateway, card).status_code == 200
+    assert apps(gateway)[0]["current_version"] == 2 and pending(gateway, thread_id) == []
+    assert [v["version"] for v in gateway.client.get("/api/apps/today/versions").json()["versions"]] == [2, 1]
+
+
+def test_keep_leaves_the_served_version_and_an_older_card_never_switches_later(gateway):  # noqa: F811
+    thread_id = approved_today(gateway)
+    SANDBOX["queue"] = [AppFake(build()), AppFake(build())]
+    ask_in(gateway, thread_id, UPDATE, "cj2")
+    (v2,) = pending(gateway, thread_id)
+    assert press(gateway, v2, "keep").status_code == 200
+    assert apps(gateway)[0]["current_version"] == 1 and pending(gateway, thread_id) == []
+    ask_in(gateway, thread_id, UPDATE, "cj3")
+    (v3,) = pending(gateway, thread_id)
+    assert press(gateway, v3).status_code == 200 and apps(gateway)[0]["current_version"] == 3
+    # A stale press of an older card (here v2's, already answered) changes nothing.
+    assert press(gateway, v2).status_code == 404 and apps(gateway)[0]["current_version"] == 3
 
 
 def test_a_content_led_update_is_held_behind_a_suggestion_card(gateway):  # noqa: F811
@@ -81,8 +107,24 @@ def test_a_content_led_update_is_held_behind_a_suggestion_card(gateway):  # noqa
     assert outcome.status == "verified", outcome.report
     (app,) = apps(gateway)
     assert app["current_version"] == 1  # the approved version keeps serving
-    pending = [c for c in cards(gateway, thread_id) if c["status"] == "pending"]
-    assert len(pending) == 1 and pending[0]["suggestion"] is True and pending[0]["version"] == 2
+    (held,) = pending(gateway, thread_id)
+    assert held["suggestion"] is True and held["version"] == 2 and held["kind"] == "version"
+    # The owner's next ordinary request on the same folder (it now holds v2's
+    # code): offered too, never served without the button.
+    SANDBOX["queue"] = [AppFake(build())]
+    ask_in(gateway, thread_id, UPDATE, "cj3")
+    (app,) = apps(gateway)
+    assert app["current_version"] == 1 and app["pending_version"] == 3
+    (newest,) = pending(gateway, thread_id)
+    assert newest["version"] == 3 and [c["status"] for c in cards(gateway, thread_id) if c["version"] == 2] == ["superseded"]
+
+
+def test_a_failed_update_changes_nothing(gateway):  # noqa: F811
+    thread_id = approved_today(gateway)
+    SANDBOX["queue"] = [AppFake(build(), probe=app_result({("light", "fresh"): {360: {"overflow_px": 400}}}))]
+    assert "STATUS UNVERIFIED" in ask_in(gateway, thread_id, UPDATE, "cj2")
+    (app,) = apps(gateway)
+    assert app["current_version"] == 1 and app.get("pending_version") is None and pending(gateway, thread_id) == []
 
 
 def test_an_update_keeps_the_stored_sources(gateway):  # noqa: F811
@@ -96,7 +138,7 @@ def test_an_update_keeps_the_stored_sources(gateway):  # noqa: F811
     assert app["current_version"] == 1
 
 
-@pytest.mark.parametrize(("app_id", "where", "why"), [("nope", "same", "there is no app 'nope' to update (your apps: today (Today: calendar, gh_review, inbox))"), ("today", "other", "was not built in this chat")])
+@pytest.mark.parametrize(("app_id", "where", "why"), [("nope", "same", "<<<BEGIN APP LIST"), ("today", "other", "was not built in this chat")])
 def test_an_update_needs_an_app_of_yours_built_in_this_chat(gateway, app_id, where, why):  # noqa: F811
     thread_id = approved_today(gateway)
     if where == "other":
@@ -135,7 +177,7 @@ def _following_lead():
     return Lead()
 
 
-def test_the_automatic_pass_of_a_failed_update_keeps_its_origin_and_app(gateway, monkeypatch):  # noqa: F811
+def test_the_automatic_pass_of_a_failed_update_is_offered_with_its_origin(gateway, monkeypatch):  # noqa: F811
     thread_id = approved_today(gateway)
     overflow = app_result({("light", "fresh"): {360: {"overflow_px": 400}}})
     SANDBOX["queue"] = [AppFake(build(), probe=overflow), AppFake(build())]
@@ -147,8 +189,9 @@ def test_the_automatic_pass_of_a_failed_update_keeps_its_origin_and_app(gateway,
     assert update.status == "unverified" and passed.status == "verified" and passed.result["fix_of"] == update.id
     assert passed.result["design_passes_used"] == 1  # a fresh budget of 3 for this request
     (app,) = apps(gateway)
-    assert app["id"] == "today" and app["current_version"] == 2 and app["status"] == "approved"
-    assert not [c for c in cards(gateway, thread_id) if c["status"] == "pending"]
+    assert app["id"] == "today" and app["current_version"] == 1 and app["pending_version"] == 2
+    (card,) = pending(gateway, thread_id)
+    assert card["kind"] == "version" and card["suggestion"] is False  # the update's origin
 
 
 def test_a_job_whose_runner_stopped_never_reads_as_running(gateway):  # noqa: F811
@@ -174,7 +217,36 @@ def test_the_tool_and_the_lead_prompt_name_the_update():
     from omniharness.agents.lead_agent.prompt import CODING_JOBS_SECTION
     from omniharness.tools.builtins.code_job_tool import DESCRIPTION, normalize_app
 
-    assert normalize_app({"update": "today", "name": "ignored"}) == {"update": "today"}
-    with pytest.raises(ValueError):
-        normalize_app({"update": "Not An Id"})
+    assert normalize_app({"update": "today"}) == {"update": "today"}
+    for bad in ({"update": "Not An Id"}, {"update": "today", "sources": ["inbox"]}):
+        with pytest.raises(ValueError):
+            normalize_app(bad)
     assert 'app: {"update": "<app id>"}' in DESCRIPTION and '`app: {"update": "<app id>"}`' in CODING_JOBS_SECTION
+
+
+def test_an_update_must_come_from_the_chat_that_created_the_app(gateway):  # noqa: F811
+    approved_today(gateway)
+    other = _thread(gateway)
+    owner = gateway.client.get("/api/v1/auth/me").json()["id"]
+    store = gateway.client.app.state.code_job_store
+    # A job in another chat that once registered an app under the same id.
+    store.create(job_id="d" * 16, thread_id=other, user_id=owner, tool_call_id="old", title="x", project_dir="today", budget_usd=1, model="m")
+    store.finish("d" * 16, status="verified", reason=None, result={"app_registration": {"app_id": "today", "manifest_hash": "0" * 64}})
+    report = ask_in(gateway, other, UPDATE, "cj9")
+    assert "Coding job not started" in report and "was not built in this chat" in report
+
+
+def test_a_replayed_call_whose_job_stopped_is_refused_cleanly(gateway):  # noqa: F811
+    import time
+
+    from omniharness.code_jobs import CodeJobBrief
+
+    thread_id = _thread(gateway)
+    owner = gateway.client.get("/api/v1/auth/me").json()["id"]
+    store = gateway.client.app.state.code_job_store
+    store.create(job_id="e" * 16, thread_id=thread_id, user_id=owner, tool_call_id="again", title="x", project_dir="today", budget_usd=1, model="m")
+    store._conn().execute("UPDATE jobs SET updated_at = ? WHERE id = ?", (time.time() - 600, "e" * 16))
+    store._conn().commit()
+    manager = gateway.client.app.state.code_job_manager
+    outcome = gateway.client.portal.call(functools.partial(manager.run, thread_id=thread_id, user_id=owner, tool_call_id="again", brief=CodeJobBrief(goal="x", project_dir="today")))
+    assert outcome.job_id == "e" * 16 and "not started again for the same call" in outcome.report
