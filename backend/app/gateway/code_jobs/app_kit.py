@@ -247,6 +247,9 @@ def manifest_schema() -> dict:
     }
 
 
+MOCK_BANNER = "/* The kit's MOCK shim with sample data, for trying the page by hand (?state=, ?theme=). Never reference it from index.html:\n * the system adds it to its own mock build, and registration adds the real platform shim. */\n"
+
+
 def kit_files(manifest: dict) -> dict[str, str]:
     """omni-kit/* for this manifest (paths relative to the project)."""
     return {
@@ -255,7 +258,7 @@ def kit_files(manifest: dict) -> dict[str, str]:
         f"{KIT_DIR}/graphite.css": graphite_css(),
         f"{KIT_DIR}/mock-data.json": json.dumps(mock_data_file(manifest), indent=2, ensure_ascii=False) + "\n",
         f"{KIT_DIR}/omni-app.schema.json": json.dumps(manifest_schema(), indent=2) + "\n",
-        f"{KIT_DIR}/omni-mock.js": "/* The kit's MOCK shim with sample data, for trying the page by hand (?state=, ?theme=). Never reference it from index.html:\n * the system adds it to its own mock build, and registration adds the real platform shim. */\n" + mock_script(fixtures(manifest)),
+        f"{KIT_DIR}/omni-mock.js": MOCK_BANNER + mock_script(fixtures(manifest)),
     }
 
 

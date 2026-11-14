@@ -266,3 +266,11 @@ def test_an_invalid_app_argument_starts_no_job(gateway):  # noqa: F811
     report = _tool_result(messages)
     assert "Coding job not started: the app is not valid: unknown source" in report
     assert gateway.client.app.state.code_job_store.for_thread(thread_id) == []
+
+
+def test_a_build_that_carries_the_mock_shim_fails(gateway):  # noqa: F811
+    index = (FIXTURE / "index.html").read_text().replace("<title>", '<script src="./omni-mock.js"></script><title>')
+    fake = SANDBOX["current"] = AppFake(build(extra={f"{P}/dist/index.html": index, f"{P}/dist/omni-mock.js": "window.__OMNI_MOCK__ = {};"}))
+    _, messages = ask(gateway)
+    report = _tool_result(messages)
+    assert "the build includes the kit's mock shim" in report and not fake.app_probes and apps(gateway) == []
