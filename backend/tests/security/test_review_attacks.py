@@ -24,6 +24,10 @@ def _minted(sec, user_id: str) -> TestClient:
     from app.gateway.auth import create_access_token
 
     client = TestClient(sec.app)
+    # On the app's own event loop (issue #192): a client without a portal serves
+    # each request on a short-lived loop of its own, and a run it starts is left
+    # with that loop closed under it (a database connection's thread dies).
+    client.portal = sec.owner.portal
     client.cookies.set("access_token", create_access_token(user_id, token_version=0))
     client.cookies.set("csrf_token", "csrf-pair")
     client.headers["X-CSRF-Token"] = "csrf-pair"
@@ -171,6 +175,10 @@ def test_atk_trigger_credential_is_derivable_by_any_internal_token_holder(sec, c
     token = internal_auth._INTERNAL_AUTH_TOKEN  # what every channel already holds
     derived = hmac.new(token.encode(), b"omniharness/trigger-engine/v1", hashlib.sha256).hexdigest()
     client = TestClient(sec.app)
+    # On the app's own event loop (issue #192): a client without a portal serves
+    # each request on a short-lived loop of its own, and a run it starts is left
+    # with that loop closed under it (a database connection's thread dies).
+    client.portal = sec.owner.portal
     client.cookies.set("csrf_token", "c")
     client.headers.update({"X-OmniHarness-Internal-Token": token, "X-OmniHarness-Trigger-Engine": derived, "X-CSRF-Token": "c"})
     tid = client.post("/api/threads", json={}).json()["thread_id"]

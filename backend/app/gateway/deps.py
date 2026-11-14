@@ -8,9 +8,10 @@ Initialization is handled directly in ``app.py`` via :class:`AsyncExitStack`.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from fastapi import FastAPI, HTTPException, Request
 from langgraph.types import Checkpointer
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+logger = logging.getLogger(__name__)
+
 
 def get_config(request: Request) -> AppConfig:
     """Return the app-scoped ``AppConfig`` stored on ``app.state``."""
@@ -36,6 +39,35 @@ def get_config(request: Request) -> AppConfig:
     if config is None:
         raise HTTPException(status_code=503, detail="Configuration not available")
     return config
+
+
+@asynccontextmanager
+async def _bounded_context(cm: Any, what: str) -> AsyncGenerator[Any, None]:
+    """Enter ``cm`` as usual; its exit is a bounded data close
+    (app.gateway.shutdown: a close can wait on a database connection whose
+    worker thread has died, which never answers; issue #192)."""
+    from app.gateway import shutdown
+
+    value = await cm.__aenter__()
+    try:
+        yield value
+    except BaseException as exc:
+        await shutdown.data_step(cm.__aexit__(type(exc), exc, exc.__traceback__), f"closing the {what}")
+        raise
+    else:
+        await shutdown.data_step(cm.__aexit__(None, None, None), f"closing the {what}")
+
+
+async def _close_engine_bounded(close_engine: Any) -> None:
+    from app.gateway import shutdown
+
+    await shutdown.data_step(close_engine(), "closing the database engine")
+    from omniharness.persistence import engine as engine_module
+
+    # A dispose cut off by the bound leaves the module pointing at an engine
+    # that is going away; the next startup initialises its own.
+    engine_module._engine = None
+    engine_module._session_factory = None
 
 
 @asynccontextmanager
@@ -57,14 +89,14 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         if config is None:
             raise RuntimeError("langgraph_runtime() requires app.state.config to be initialized")
 
-        app.state.stream_bridge = await stack.enter_async_context(make_stream_bridge(config))
+        app.state.stream_bridge = await stack.enter_async_context(_bounded_context(make_stream_bridge(config), "stream bridge"))
 
         # Initialize persistence engine BEFORE checkpointer so that
         # auto-create-database logic runs first (postgres backend).
         await init_engine_from_config(config.database)
 
-        app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
-        app.state.store = await stack.enter_async_context(make_store(config))
+        app.state.checkpointer = await stack.enter_async_context(_bounded_context(make_checkpointer(config), "checkpointer"))
+        app.state.store = await stack.enter_async_context(_bounded_context(make_store(config), "store"))
 
         # Initialize repositories — one get_session_factory() call for all.
         sf = get_session_factory()
@@ -231,7 +263,7 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             yield
         finally:
-            await close_engine()
+            await _close_engine_bounded(close_engine)
 
 
 # ---------------------------------------------------------------------------

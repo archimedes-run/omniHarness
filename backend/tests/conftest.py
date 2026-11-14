@@ -246,6 +246,30 @@ class HardTestTimeout(BaseException):
     """Raised in a test that ran past OMNI_TEST_HARD_TIMEOUT."""
 
 
+#: The test whose hard timeout fired in this process. What it was waiting on
+#: is still running (an app whose shutdown never finished keeps its event
+#: loop, its database and the process-wide state it set), so no later test
+#: may run beside it: each would fail on that state instead of on its own
+#: (issue #192 saw `system_already_initialized` and FR-008a errors at setup).
+_TAINTED_BY: list[str] = []
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    if not _TAINTED_BY:
+        return
+    reason = f"not running {item.nodeid}: {_TAINTED_BY[0]} hit the hard timeout and what it waited on still holds this process's state"
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        # xdist starts a fresh worker for the rest of the file and reports
+        # this test as crashed; the timed-out test has already failed by name.
+        sys.stderr.write(reason + "\n")
+        sys.stderr.flush()
+        os._exit(1)
+    # A serial run has no fresh process to move to: each later test fails
+    # here, naming the cause, rather than on the state left behind.
+    pytest.fail(reason, pytrace=False)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
     import faulthandler
@@ -258,7 +282,8 @@ def pytest_runtest_protocol(item, nextitem):
 
         def _expired(signum, frame):
             faulthandler.dump_traceback(all_threads=True)
-            raise HardTestTimeout(f"{item.nodeid} ran past {_HARD_TIMEOUT:.0f} s (OMNI_TEST_HARD_TIMEOUT)")
+            _TAINTED_BY.append(item.nodeid)
+            raise HardTestTimeout(f"{item.nodeid} ran past {_HARD_TIMEOUT:.0f} s (OMNI_TEST_HARD_TIMEOUT); later tests in this process do not run beside it (under xdist the worker restarts and its next test is reported as crashed)")
 
         previous = signal.signal(signal.SIGALRM, _expired)
         signal.setitimer(signal.ITIMER_REAL, _HARD_TIMEOUT)
