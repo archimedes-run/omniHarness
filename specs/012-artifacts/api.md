@@ -94,6 +94,9 @@ A write over any cap is refused before anything is stored.
   artifact the importer made, else `null`.
 - `origin_turn_id` is the run id of the turn that made it (null for imports
   and owner-made copies).
+- `title` (and `note`) are stored with control, bidi and line-break characters
+  removed, but URLs are NOT defanged (a file name like `brief.md` would read
+  `brief[.]md`): display them through the frontend's `safeField`, as text.
 
 ### Version
 
@@ -318,6 +321,10 @@ exports or promotes: such names have no rule and the policy layer refuses them.
   mermaid, svg), each `old` occurring exactly once. Refused: stale
   `base_version` (the result names the latest), another owner's or a missing
   id, an archived artifact, a different kind.
+- An `image` or `file` artifact is not changed by `artifact_update` in S1.
+- For an agent with a per-tool allowlist (Studio), the four tools are the
+  integration `builtin:artifacts` ("Artifacts"); an agent without an
+  allowlist has them whenever the gateway runs.
 - `artifact_read` returns the content fenced as data:
 
   ```

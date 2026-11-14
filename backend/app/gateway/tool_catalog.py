@@ -43,6 +43,7 @@ BUILTIN_NAMES: dict[str, tuple[str, str]] = {
     "builtin:bash": ("Shell", "Run commands in the sandbox"),
     "builtin:ledger": ("Tasks and notes", "Your projects, tasks and decisions"),
     "builtin:workspace": ("Workspace", "Previews, coding jobs, MCP building and skill editing"),
+    "builtin:artifacts": ("Artifacts", "Make, change and read your artifacts"),
 }
 
 #: The tools people reach for first in each app, most common first (the
@@ -283,4 +284,5 @@ async def integration_choices(request: Any, config: Any, user_id: str | None) ->
     groups = [g.name for g in config.tool_groups]
     out += [(f"builtin:{g}", BUILTIN_NAMES.get(f"builtin:{g}", (_label(g), ""))[0]) for g in groups]
     out.append(("builtin:ledger", BUILTIN_NAMES["builtin:ledger"][0]))
+    out.append(("builtin:artifacts", BUILTIN_NAMES["builtin:artifacts"][0]))
     return out

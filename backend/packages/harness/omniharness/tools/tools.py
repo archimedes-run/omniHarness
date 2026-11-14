@@ -96,6 +96,7 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
     (tools.names.canonical_tool_name): the in-process tools, whether or not
     this agent gets them, and the tools config.yaml loads. The registry
     decides built-in identity; a tool's NAME never does (review round 3)."""
+    from omniharness.tools.builtins.artifact_tools import ARTIFACT_TOOLS
     from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
     from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
     from omniharness.tools.builtins.tool_search import tool_search
@@ -104,7 +105,7 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
 
     # skill_manage is no longer offered to any model (Spec 010 FR-024), but its
     # name stays reserved: an outside tool may never pass itself off as it.
-    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, research_tool, skill_manage_tool, *BUILDER_TOOLS, preview_tool, code_job_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
+    objects: list[object] = [*BUILTIN_TOOLS, *SUBAGENT_TOOLS, research_tool, skill_manage_tool, *BUILDER_TOOLS, *ARTIFACT_TOOLS, preview_tool, code_job_tool, mcp_build_tool, view_image_tool, ledger_read_tool, ledger_apply_tool, tool_search]
     registry: dict[str, object] = {canonical_tool_name(getattr(t, "name", "")): t for t in objects}
     cfg = config
     if cfg is None:
@@ -121,7 +122,9 @@ def builtin_tool_registry(config: AppConfig | None = None) -> dict[str, object]:
 #: false` in default_rules.yaml). They are reserved whether or not this install
 #: offers the built-in, so an outside tool can never pass its output off as a
 #: public one (web-research review, finding 1).
-PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos"})
+#: artifact_create and artifact_update (Spec 012) answer with ids and version
+#: numbers only, never the owner's data.
+PUBLIC_RESULT_TOOL_NAMES = frozenset({"web_search", "web_fetch", "image_search", "research", "ask_clarification", "present_files", "tool_search", "write_todos", "artifact_create", "artifact_update"})
 
 
 def refuse_builtin_collisions(tools: list[BaseTool], source: str, config: AppConfig | None = None) -> list[BaseTool]:
@@ -262,6 +265,15 @@ def get_available_tools(
         from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
 
         builtin_tools.extend([ledger_read_tool, ledger_apply_tool])
+
+    # The artifact tools only when an ArtifactController is registered
+    # (gateway mode, Spec 012).
+    from omniharness.runtime.artifacts.controller import get_artifact_controller
+
+    if get_artifact_controller() is not None:
+        from omniharness.tools.builtins.artifact_tools import ARTIFACT_TOOLS
+
+        builtin_tools.extend(ARTIFACT_TOOLS)
 
     # The read-only web researcher (spec 009 FR-061): for the lead, in every
     # mode, when a web search tool is configured. Never for a subagent
@@ -607,6 +619,7 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
     """
     from omniharness.agents.middlewares.todo_middleware import TodoMiddleware
     from omniharness.mcp.cache import loaded_mcp_tools
+    from omniharness.tools.builtins.artifact_tools import ARTIFACT_TOOLS
     from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
     from omniharness.tools.builtins.ledger_tool import ledger_apply_tool, ledger_read_tool
     from omniharness.tools.builtins.tool_search import tool_search
@@ -617,7 +630,7 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
             names.append(resolve_variable(cfg.use, BaseTool).name)
         except Exception:  # noqa: BLE001 — a config tool that cannot load is never offered
             logger.warning("tool %r (%s) could not be loaded, so it is not offered", cfg.name, cfg.use)
-    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, code_job_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, *BUILDER_TOOLS)]
+    names += [t.name for t in (*BUILTIN_TOOLS, preview_tool, code_job_tool, mcp_build_tool, ledger_read_tool, ledger_apply_tool, *SUBAGENT_TOOLS, view_image_tool, tool_search, *BUILDER_TOOLS, *ARTIFACT_TOOLS)]
     names += [t.name for t in TodoMiddleware().tools]
     names += [t.name for t in (loaded_mcp_tools() or [])]
     return list(dict.fromkeys(names))
