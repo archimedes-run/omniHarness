@@ -600,6 +600,14 @@ function ToolCall({
       </ChainOfThoughtStep>
     );
   } else if (name === "ask_clarification") {
+    // A question that was not asked (its result tells the model why) is not
+    // shown: only questions the person was actually asked appear.
+    if (
+      typeof result === "string" &&
+      result.trimStart().startsWith("Not asked:")
+    ) {
+      return null;
+    }
     return (
       <ChainOfThoughtStep
         label={resolveLabel(t.toolCalls.needYourHelp)}

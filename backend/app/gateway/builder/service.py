@@ -138,10 +138,9 @@ def _tokens(text: str) -> list[str]:
     return [w.strip("'") for w in cleaned.split() if w.strip("'")]
 
 
-def _contains(words: list[str], wanted: list[str]) -> bool:
-    """`wanted` appears in `words` as whole words, in order, side by side."""
-    size = len(wanted)
-    return any(words[i : i + size] == wanted for i in range(len(words) - size + 1))
+def _names_subject(text: str) -> bool:
+    """The text has a word beyond the generic ones (any script)."""
+    return any(w not in GENERIC_REQUEST_WORDS for w in _tokens(text))
 
 
 def _message_text(message: Any) -> str:
@@ -609,11 +608,11 @@ class GatewayBuilderController:
                 # Something NEW only when the owner said what it is for, in
                 # their own words in this chat: never from memory or from
                 # content the model read.
-                problem = self._request_problem(context, owner_request)
-                if problem:
+                if self._request_problem(context) is not None:
                     return (
-                        f"{ASK_FIRST_PREFIX} the {kind} is for ({problem}). Ask the user one question with ask_clarification (what should it do?);"
-                        " you may offer up to 3 suggestions, labelled as suggestions. Then stop. Once they answer, draft it with their words as owner_request."
+                        f"{ASK_FIRST_PREFIX} the {kind} is for. Ask the user one short question with ask_clarification (what should it do?),"
+                        " with at most 3 suggestions, then stop. When they answer, draft it from their answer with sensible defaults and propose saving it."
+                        " Never mention tool or parameter names to the user."
                     )
             snapshot, dropped, notes = self._compose(user_id, kind, name, dict(fields or {}), live)
             access_request = None
@@ -664,20 +663,17 @@ class GatewayBuilderController:
         return initiation_origin(messages, synthetic=is_synthetic_turn(context))
 
     @staticmethod
-    def _request_problem(context: dict, quote: str) -> str | None:
-        """Why `quote` does not show the owner asked for this, or None. It must
-        name a subject (a word beyond the generic "create me an agent"), and
-        appear word for word in the owner's own words of THIS request: their
+    def _request_problem(context: dict, quote: str = "") -> str | None:
+        """Why the owner has not said what a NEW item is for, or None. The
+        SERVER reads the owner's own words of this request itself (their
         tagged message that started the current turn, or their answer on the
-        Question card the builder's own "ask first" refusal raised."""
-        wanted = _tokens(quote)
-        if not wanted:
-            return "no owner_request was given"
-        if all(w in GENERIC_REQUEST_WORDS for w in wanted):
-            return "the request only asks for one, without saying what it is for"
-        if not any(_contains(_tokens(text), wanted) for text in _owner_words(context)):
-            return "owner_request is not the user's own words from this request"
-        return None
+        Question card the builder's "ask first" refusal raised); one of them
+        must name a subject (a word beyond the generic "create me an agent").
+        The model's `quote` is not needed and not trusted: a paraphrase of the
+        answer works, and no quote can stand in for the owner's words."""
+        if any(_names_subject(text) for text in _owner_words(context)):
+            return None
+        return "the owner's request does not say what it is for"
 
     @staticmethod
     def _access_words(request: dict) -> str:

@@ -97,12 +97,11 @@ def test_a_request_in_any_script_is_accepted(phrase) -> None:
     assert _problem(phrase, phrase) is None, phrase
 
 
-def test_whole_words_only_and_only_the_current_request() -> None:
+def test_only_the_current_request_counts() -> None:
     from langchain_core.messages import AIMessage
 
     from app.policy.lineage import user_turn
 
-    assert _problem("create an agent that reads my email", "mail"), "a quote inside a longer word matched"
     earlier = [user_turn("an agent that files my receipts"), AIMessage(content="Noted.")]
     assert _problem("create me an agent", "files my receipts", earlier=earlier), "an older message counted"
 
@@ -110,15 +109,22 @@ def test_whole_words_only_and_only_the_current_request() -> None:
 # -- through the app: the model's own quote (the helper does not fill it in) --------
 
 
-def test_a_wrong_or_bare_quote_from_the_model_is_refused(gw) -> None:
+def test_the_models_quote_never_stands_in_for_the_owners_words(gw) -> None:
+    """The server reads the owner's words itself: a quote with a subject does
+    not make "create me an agent" a request, and a paraphrase of a request
+    that has one is fine (the live failure)."""
     from app.gateway.builder import drafts
 
-    for quote in ("an agent that finds O-1 visa opportunities", "create me an agent", "inbox every"):
-        thread_id = new_thread(gw)
-        draft = {"kind": "agent", "name": "test-010-x", "owner_request": quote, "fields": {"instructions": "x"}}
-        script(gw, [call("builder_draft", draft, "c1")], "Asked.")
-        say(gw, thread_id, "create me an agent that sorts my inbox")
-        assert drafts.active(gw.user_id, thread_id) is None, quote
+    thread_id = new_thread(gw)
+    draft = {"kind": "agent", "name": "test-010-x", "owner_request": "an agent that finds O-1 visa opportunities", "fields": {"instructions": "x"}}
+    script(gw, [call("builder_draft", draft, "c1")], "Asked.")
+    say(gw, thread_id, "create me an agent")
+    assert drafts.active(gw.user_id, thread_id) is None
+    thread_id = new_thread(gw)
+    draft = {"kind": "agent", "name": "test-010-x", "owner_request": "Summarize running Claude Code sessions (read-only)", "fields": {"instructions": "x"}}
+    script(gw, [call("builder_draft", draft, "c1")], [call("builder_save", {}, "c2")], "On its card.")
+    say(gw, thread_id, "create me an agent that reports on my coding sessions")
+    assert drafts.active(gw.user_id, thread_id) is not None and len(cards(gw, "builder_save")) == 1
 
 
 # -- through the app: answering the builder's question --------------------------------
@@ -166,12 +172,14 @@ def test_free_text_on_the_card_becomes_the_draft(gw) -> None:
     assert len(cards(gw, "builder_save")) == 1
 
 
-def test_a_quote_not_from_the_card_answer_is_refused_in_the_resume(gw) -> None:
+def test_a_paraphrased_card_answer_still_drafts(gw) -> None:
+    """Live: the owner clicked "Session-Watcher Reporter (read-only)" and the
+    model paraphrased it; the draft is made all the same."""
     from app.gateway.builder import drafts
 
     thread_id, qid = _asked(gw)
-    _answer(gw, thread_id, qid, {"option": 0}, "files my receipts")
-    assert drafts.active(gw.user_id, thread_id) is None and cards(gw, "builder_save") == []
+    _answer(gw, thread_id, qid, {"option": 1}, "Summarize running Claude Code sessions (read-only)")
+    assert drafts.active(gw.user_id, thread_id) is not None and len(cards(gw, "builder_save")) == 1
 
 
 def test_a_typed_answer_in_chat_becomes_the_draft(gw) -> None:

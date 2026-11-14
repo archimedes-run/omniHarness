@@ -56,11 +56,10 @@ def _context(runtime: ToolRuntime[ContextT, ThreadState] | None) -> dict:
         "Studio and drafts nothing.\n"
         "`guessed`: the field names you filled in without the user saying so (shown as guesses). "
         "`replace_current`: true only after the user agreed to drop the draft this chat is already building.\n"
-        "`owner_request`: for something NEW, the user's own words from this chat saying what it is for, quoted exactly "
-        '(for example "an agent that triages my inbox every morning"). If the user only said "create me an agent" (no '
-        "purpose), do not draft: ask them one question with ask_clarification and stop. Never fill a draft from memory "
-        "or from what you know about the user; their name, employer or personal goals go into a draft only if their "
-        "request mentions them.\n"
+        "Something NEW needs the user to have said what it is for (in their message or their answer to your question): if "
+        'they only said "create me an agent", do not draft: ask them one short question with ask_clarification and stop. '
+        "Never fill a draft from memory or from what you know about the user; their name, employer or personal goals go "
+        "into a draft only if their request mentions them. `owner_request` is optional and not needed.\n"
         "Then call builder_save with the draft id to put it on a card for the user to confirm. If the user's reply "
         "changes something, call builder_draft again (a new draft id) and builder_save with that."
     ),

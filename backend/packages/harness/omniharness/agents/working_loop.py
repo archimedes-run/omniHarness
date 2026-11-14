@@ -388,6 +388,24 @@ def declined_build_reply(reply: str) -> tuple[str, bool]:
     return reply, False
 
 
+#: The builder's internal names, never for the person to read (spec 010).
+INTERNAL_NAMES_RE = re.compile(r"\b(owner_request|draft_id|replace_current|builder_(?:draft|save|grant|undo|read|diff))\b")
+
+
+def strip_internal_names(reply: str) -> tuple[str, bool]:
+    """The reply without the sentences that name a builder tool or parameter."""
+    if not INTERNAL_NAMES_RE.search(reply or ""):
+        return reply, False
+    lines = []
+    for line in (reply or "").split("\n"):
+        parts = re.split(r"(?<=[.!?])\s+", line)
+        kept = [p for p in parts if not INTERNAL_NAMES_RE.search(p)]
+        if kept or not line.strip():
+            lines.append(" ".join(kept))
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text, True
+
+
 def called_builder(messages: list[Any]) -> bool:
     """This turn called any chat-builder tool (spec 010)."""
     return any(str(call.get("name") or "").startswith("builder_") for message in turn_messages(list(messages)) if _type(message) == "ai" for call in _tool_calls(message))

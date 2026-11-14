@@ -113,3 +113,7 @@ BUILDER_CARD_TOOLS = frozenset({"builder_save", "builder_grant", "builder_undo"}
 #: The resumed lead's whole reply after a builder card was declined or expired
 #: (and nothing it asked for ran).
 DECLINED_ACK = "Okay, not saved. The draft is kept in this chat: tell me what to change, or ask me to save it again."
+
+#: On a resumed run's tool result carrying the owner's answer to a question
+#: card (app.gateway.resume.QUESTION_ANSWER_MARKER, the same key).
+QUESTION_ANSWER_KEY = "omniharness_question_answer"

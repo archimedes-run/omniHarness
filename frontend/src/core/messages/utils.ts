@@ -71,7 +71,12 @@ export function getMessageGroups(messages: Message[]): MessageGroup[] {
     }
 
     if (message.type === "tool") {
-      if (isClarificationToolMessage(message)) {
+      if (isClarificationToolMessage(message) && isNotAskedMessage(message)) {
+        // "Not asked: ...": an instruction to the model, never a question for
+        // the person. It stays with its call (so the step can hide too) and
+        // gets no block of its own.
+        lastOpenGroup()?.messages.push(message);
+      } else if (isClarificationToolMessage(message)) {
         // Add to the preceding processing group to preserve tool-call association,
         // then also open a standalone clarification group for prominent display.
         lastOpenGroup()?.messages.push(message);
@@ -357,6 +362,16 @@ export function hasPresentFiles(message: Message) {
 
 export function isClarificationToolMessage(message: Message) {
   return message.type === "tool" && message.name === "ask_clarification";
+}
+
+/** An ask_clarification result that asked nothing ("Not asked: ..."): the
+ *  server marks it (omniharness_not_asked); older ones are known by their
+ *  wording. */
+export function isNotAskedMessage(message: Message) {
+  if (message.type !== "tool") return false;
+  if (message.additional_kwargs?.omniharness_not_asked === true) return true;
+  const text = typeof message.content === "string" ? message.content : "";
+  return text.trimStart().startsWith("Not asked:");
 }
 
 export function extractPresentFilesFromMessage(message: Message) {

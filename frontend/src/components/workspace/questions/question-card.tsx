@@ -239,6 +239,8 @@ export function QuestionCard({
         <div
           className="border-border bg-muted rounded-md border px-3 py-2 text-sm"
           data-testid="question-outcome"
+          role="status"
+          aria-live="polite"
         >
           <p>{answeredText(shown)}</p>
           {shown.answer?.text && (
@@ -262,9 +264,13 @@ export function QuestionCard({
           {error}
         </p>
       )}
-      <p className="sr-only" aria-live="polite" data-testid="question-live">
-        {announcement}
-      </p>
+      {/* The answered outcome above is its own live region: announced once,
+          shown once (not repeated in a hidden copy). */}
+      {state !== "answered" && (
+        <p className="sr-only" aria-live="polite" data-testid="question-live">
+          {announcement}
+        </p>
+      )}
     </section>
   );
 }
