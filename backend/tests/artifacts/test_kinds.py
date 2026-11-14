@@ -119,7 +119,7 @@ def test_chart_fuzz_never_crashes_and_never_accepts_unknown_keys():
             out = json.loads(kinds.canonical("chart", spec).data)
         except InvalidContent:
             continue
-        assert set(out) <= {"schema", "type", "title", "x", "series", "data", "units"}
+        assert set(out) <= {"schema", "type", "title", "x", "series", "data", "units", "stacked"}
         assert set(out["x"]) <= {"field", "type", "label"}
         assert all(set(s) == {"field", "label"} for s in out["series"])
 
@@ -189,3 +189,12 @@ def test_mermaid_output_attributes_are_accepted():
     kinds.canonical("svg", '<svg xmlns="http://www.w3.org/2000/svg"><g name="node" transform-origin="10 10"><rect width="1" height="1"/></g></svg>')
     with pytest.raises(InvalidContent):
         kinds.canonical("svg", '<svg xmlns="http://www.w3.org/2000/svg"><g transform-origin="url(https://evil.example/a)"/></svg>')
+
+
+def test_stacked_is_a_boolean_for_bar_and_area_only():
+    assert json.loads(kinds.canonical("chart", {**CHART, "stacked": True}).data)["stacked"] is True
+    assert json.loads(kinds.canonical("chart", {**CHART, "type": "area", "stacked": False}).data)["stacked"] is False
+    assert "stacked" not in json.loads(kinds.canonical("chart", CHART).data)
+    for bad in ({**CHART, "stacked": "yes"}, {**CHART, "stacked": 1}, {**CHART, "type": "line", "stacked": True}, {**CHART, "type": "pie", "stacked": True}):
+        with pytest.raises(InvalidContent):
+            kinds.canonical("chart", bad)

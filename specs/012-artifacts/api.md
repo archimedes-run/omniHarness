@@ -122,10 +122,17 @@ A write over any cap is refused before anything is stored.
 
 - `origin` ∈ `tool`, `owner_edit`, `restore`, `import`, `duplicate`.
   (`duplicate` is the first version of an artifact made with Duplicate.)
-- `lineage` ∈ `user`, `content`. It is computed by the server from the turn
-  (never from tool arguments): `content` when the turn read anything untrusted
-  before the call (and for automations, invited agents, unknown causes and
-  imports); `lineage_source` names what (tool names, or `"a file from the chat"`).
+- `lineage` ∈ `user`, `content`, `import`. It is computed by the server from
+  the turn (never from tool arguments): `content` when the turn read anything
+  untrusted before the call (and for automations, invited agents and unknown
+  causes); `lineage_source` names what (tool names). One exception, for
+  `artifact_update` only: an `artifact_read` of the SAME artifact whose read
+  version is `user` does not by itself make the update `content` (reading is
+  how an artifact is edited); any other untrusted result in the turn still
+  does, and the policy layer's own checks are unchanged. Files indexed from a
+  chat's outputs are `import`, source `"a file from this chat"`; the UI says
+  "Imported from its chat". Older imports were recorded as `content` with
+  source `"a file from the chat"`, which the UI shows the same way.
 - `note` is the assistant's words (display-sanitised); show it labelled as such.
 - `stored` is `blob` (in the store) or `chat` (an imported file over 10 MB that
   lives in its chat; content route answers `409 lives_in_chat`). A `chat`
@@ -192,6 +199,7 @@ SVG through the same allowlist before showing it as `<img>`.
 | `data` | 1 to 5,000 rows; each row an object of ≤ 32 keys (`[A-Za-z0-9_ .-]{1,64}`), values string (≤ 200), finite number, boolean or null; every row has `x.field`; series values are numbers or null |
 | x values | `category`: string or number; `time`: ISO 8601 date or date-time string; `number`: finite number |
 | `units` | optional, ≤ 40 |
+| `stacked` | optional boolean, `bar` and `area` only: stack the series |
 
 No other keys at any level (no expressions, callbacks, colours or HTML).
 Strings may not contain control characters. Text is rendered as text, never

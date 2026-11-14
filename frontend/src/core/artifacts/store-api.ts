@@ -34,7 +34,7 @@ export const TEXT_KINDS: readonly ArtifactKind[] = [
   "chart",
 ];
 
-export type Lineage = "user" | "content";
+export type Lineage = "user" | "content" | "import";
 export type VersionOrigin =
   | "tool"
   | "owner_edit"

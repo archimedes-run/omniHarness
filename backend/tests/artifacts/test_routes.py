@@ -207,7 +207,7 @@ def test_importer_indexes_chat_outputs_once(gateway, monkeypatch):
     assert set(rows) == {"brief.md", "copy.md", "pic.png", "big.bin", "bad.svg", "main.py"}, "a symlink was followed or a file was missed"
     assert rows["brief.md"]["kind"] == "markdown" and rows["pic.png"]["kind"] == "image" and rows["main.py"]["language"] == "python"
     assert rows["bad.svg"]["kind"] == "file", "an SVG failing the allowlist is kept as a download-only file"
-    assert rows["brief.md"]["imported_from"] == "thread-old:/mnt/user-data/outputs/brief.md" and rows["brief.md"]["lineage"] == "content"
+    assert rows["brief.md"]["imported_from"] == "thread-old:/mnt/user-data/outputs/brief.md" and rows["brief.md"]["lineage"] == "import" and rows["brief.md"]["lineage_source"] == "a file from this chat"
     big = gateway.store.versions(gateway.user_id, rows["big.bin"]["id"])[0]
     assert big["stored"] == "chat"
     lives = c.get(f"/api/artifacts/{rows['big.bin']['id']}/versions/1/content")

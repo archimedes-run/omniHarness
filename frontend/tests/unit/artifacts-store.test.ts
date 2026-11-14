@@ -25,6 +25,7 @@ import {
   lineageWords,
   panelKey,
   parsePanelKey,
+  previewMarkdown,
   refusalWords,
   titleText,
 } from "@/core/artifacts/store-logic";
@@ -206,9 +207,22 @@ describe("the chart renderer (omni-chart/1)", () => {
     });
   }
 
-  it("a time axis and a legend; `stacked` is not read from content (not in the gateway schema yet)", () => {
-    const parsed = parseChartSpec(chartSpec({ stacked: true }));
-    expect(parsed.ok && parsed.spec.stacked).toBeFalsy();
+  it("`stacked` is read for bar and area, refused elsewhere or when not a boolean", () => {
+    const bar = parseChartSpec(chartSpec({ type: "bar", stacked: true }));
+    expect(bar.ok && bar.spec.stacked).toBe(true);
+    const area = parseChartSpec(chartSpec({ type: "area", stacked: true }));
+    expect(area.ok && area.spec.stacked).toBe(true);
+    expect(parseChartSpec(chartSpec({ type: "line", stacked: true })).ok).toBe(
+      false,
+    );
+    expect(parseChartSpec(chartSpec({ type: "bar", stacked: "yes" })).ok).toBe(
+      false,
+    );
+    const off = parseChartSpec(chartSpec({ type: "bar" }));
+    expect(off.ok && off.spec.stacked).toBeFalsy();
+  });
+
+  it("a time axis and a legend", () => {
     const html = renderChart(
       chartSpec({
         x: { field: "day", type: "time" },
@@ -474,5 +488,36 @@ describe("FR-013 source gate", () => {
       .filter((f) => !ALLOWLIST.some((a) => f.endsWith(a)))
       .filter((f) => SINK.test(readFileSync(f, "utf8")));
     expect(hits).toEqual([]);
+  });
+});
+
+describe("imported files and markdown previews (S1 follow-ups)", () => {
+  it("a chat's output file says so, not the content badge", () => {
+    expect(lineageWords("import", "a file from this chat")).toBe(
+      "Imported from its chat",
+    );
+    // Older imports were recorded as content with the importer's source.
+    expect(lineageWords("content", "a file from the chat")).toBe(
+      "Imported from its chat",
+    );
+    expect(lineageWords("content", "web_fetch")).toContain(
+      "content the assistant read",
+    );
+  });
+
+  it("a card preview clips only at a block boundary", () => {
+    const doc =
+      "# Brief\n\nSome **bold\nstill bold** here.\n" +
+      "x".repeat(380) +
+      "\n\nplain text after";
+    const out = previewMarkdown(doc, 6, 400);
+    expect(out).toBe("# Brief");
+    const short = "# Brief\n\nplain text after";
+    expect(previewMarkdown(short)).toBe(short);
+    const setext =
+      "Title\n\nline one\nline two\nline three\nline four\nline five\n---";
+    expect(previewMarkdown(setext, 6, 400).endsWith("---")).toBe(false);
+    const fence = "```\n" + "code\n".repeat(10);
+    expect(previewMarkdown(fence, 6, 400).trimEnd().endsWith("```")).toBe(true);
   });
 });
