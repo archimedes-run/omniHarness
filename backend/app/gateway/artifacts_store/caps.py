@@ -30,3 +30,5 @@ REACT_BUNDLE_BYTES = 2 * MB
 REACT_BUILD_SECONDS = 120
 #: Build log tail kept with a failed build.
 BUILD_LOG_CHARS = 4000
+#: A webapp's stored file set, decoded (FR-029: the html file sets).
+WEBAPP_FILES_BYTES = 2 * MB

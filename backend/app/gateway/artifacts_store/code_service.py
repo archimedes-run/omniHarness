@@ -61,12 +61,14 @@ def _close(ops) -> None:
 def check_version(store: ArtifactStore, owner_id: str, artifact_id: str, n: int, thread_id: str | None) -> tuple[str, dict]:
     """Run the checks on version n and record them. Returns (state, result)."""
     try:
-        _summary, version, code, _check = store.code_version(owner_id, artifact_id, n)
+        summary, version, code, _check = store.code_version(owner_id, artifact_id, n)
     except StoreError:
         return "not_checked", checks.error("unreadable")
     if code.build_state != "ok":
         return "not_checked", checks.error("site_missing")
-    stored = store.content(owner_id, version)
+    from app.gateway.artifacts_store.frame import frame_sha256, stored_document
+
+    stored = stored_document(summary["kind"], store.content(owner_id, version))
     sha = code.frame_sha256 or ""
     ops = sandbox_for(thread_id, owner_id)
     if ops is None:
@@ -78,8 +80,6 @@ def check_version(store: ArtifactStore, owner_id: str, artifact_id: str, n: int,
     finally:
         _close(ops)
     state = checks.state_of(result)
-    from app.gateway.artifacts_store.frame import frame_sha256
-
     # Recorded against the bytes the checks loaded: the version's own.
     store.set_check(owner_id, artifact_id, n, state=state, result=result, frame_sha256=frame_sha256(stored), shots=shots)
     return state, result

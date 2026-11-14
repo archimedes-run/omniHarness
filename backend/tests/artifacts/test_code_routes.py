@@ -159,3 +159,90 @@ def test_failing_check_label_and_refusal_log(gateway, sandbox, caplog):
     assert gateway.client.post(f"/api/artifacts/{aid}/refused", json={"reason": "unknown_type", "type": "fetch"}).status_code == 204
     assert "artifact_message_refused" in caplog.text
     assert gateway.client.post(f"/api/artifacts/{aid}/refused", json={"reason": "Free text here"}).status_code == 422
+
+
+# -- webapp (a stored file set) and downloads (owner update) -----------------------------
+
+SITE = {
+    "index.html": b'<!doctype html><html><head><link rel="stylesheet" href="css/site.css"></head><body><h1 id=home-marker>Home</h1><img src="img/dot.png"><a href="about.html">About</a><script src="js/app.js"></script></body></html>',
+    "about.html": b"<!doctype html><html><head></head><body><h1 id=about-marker>About</h1></body></html>",
+    "css/site.css": b"h1{color:var(--primary)}",
+    "js/app.js": b"document.title='site'",
+    "img/dot.png": b"\x89PNG\r\n\x1a\nxx",
+}
+
+
+def make_webapp(gateway, files=SITE):
+    canon, findings = frame.canonical_webapp(files, "index.html")
+    code = {"findings": findings, "recipe": {"tool": "none", "kind": "webapp"}}
+    summary, _ = gateway.store.create(gateway.user_id, kind="webapp", title="My site", canon=canon, lineage="user", lineage_source=None, origin="tool", thread_id="thread-a", code=code)
+    return summary["id"]
+
+
+def test_webapp_pages_are_served_inlined_by_relative_path(gateway, sandbox):
+    aid = make_webapp(gateway)
+    c = gateway.client
+    url = token(gateway, aid)["url"]
+    home = c.get(url, headers=IFRAME)
+    assert home.status_code == 200 and "home-marker" in home.text
+    assert home.headers["content-security-policy"] == frame.CSP
+    assert "h1{color:var(--primary)}" in home.text and "data:image/png;base64," in home.text and "document.title='site'" in home.text
+    assert 'href="css/site.css"' not in home.text and 'src="js/app.js"' not in home.text
+    about = c.get(url + "&path=about.html", headers=IFRAME)
+    assert about.status_code == 200 and "about-marker" in about.text and about.headers["content-security-policy"] == frame.CSP
+    for bad in ("../index.html", "/index.html", "css/site.css", "js/app.js", "missing.html", "a/../index.html", "about.html%00", ".hidden.html", "about.html/"):
+        resp = c.get(url + "&path=" + bad, headers=IFRAME)
+        assert resp.status_code in (403, 404) and "marker" not in resp.text, bad
+    # Without the iframe headers a page is inert too.
+    assert "about-marker" not in c.get(url + "&path=about.html").text
+    v = c.get(f"/api/artifacts/{aid}/versions/1").json()
+    assert v["webapp"]["entry"] == "index.html" and {f["path"] for f in v["webapp"]["files"]} == set(SITE)
+    assert v["code"]["check"]["state"] in ("pending", "passed", "not_checked")
+
+
+@pytest.mark.parametrize(
+    "files, entry",
+    [
+        ({"../x.html": b"x"}, "../x.html"),
+        ({"/abs.html": b"x"}, "/abs.html"),
+        ({"a\\b.html": b"x"}, "a\\b.html"),
+        ({"index.html": b"<iframe src=x></iframe>"}, "index.html"),
+        ({"index.html": b"<img src='https://x/y.png'><script src='https://cdn/x.js'></script>"}, "index.html"),
+        ({"style.css": b"x"}, "style.css"),
+        ({"index.html": b"x"}, "other.html"),
+    ],
+)
+def test_webapp_sets_are_refused_when_unsafe(files, entry):
+    from app.gateway.artifacts_store.kinds import InvalidContent
+
+    with pytest.raises(InvalidContent):
+        frame.canonical_webapp(files, entry)
+
+
+def test_webapp_size_cap():
+    from app.gateway.artifacts_store import caps
+    from app.gateway.artifacts_store.kinds import TooLarge
+
+    with pytest.raises(TooLarge):
+        frame.canonical_webapp({"index.html": b"<p>x</p>", "big.bin": b"x" * caps.WEBAPP_FILES_BYTES}, "index.html")
+
+
+def test_download_page_and_source(gateway, sandbox):
+    import io
+    import zipfile
+
+    aid = make(gateway, "react", REACT)
+    page = gateway.client.get(f"/api/artifacts/{aid}/versions/1/download?form=page")
+    assert page.status_code == 200 and page.headers["content-type"] == "application/octet-stream"
+    assert page.headers["content-disposition"].startswith("attachment;") and page.headers["content-security-policy"] == "default-src 'none'; sandbox"
+    assert page.text.index("Content-Security-Policy") < page.text.index("<script")
+    src = gateway.client.get(f"/api/artifacts/{aid}/versions/1/download?form=source")
+    zf = zipfile.ZipFile(io.BytesIO(src.content))
+    assert zf.namelist() == ["App.tsx"] and zf.read("App.tsx").decode() == REACT["files"]["App.tsx"]
+    site = make_webapp(gateway)
+    names = zipfile.ZipFile(io.BytesIO(gateway.client.get(f"/api/artifacts/{site}/versions/1/download?form=source").content)).namelist()
+    assert sorted(names) == sorted(SITE) and all(not n.startswith("/") and ".." not in n for n in names)
+    sandbox["ops"].build = lambda files: (1, {}, "error")
+    failed = make(gateway, "react", REACT)
+    assert gateway.client.get(f"/api/artifacts/{failed}/versions/1/download?form=page").status_code == 409
+    assert gateway.client.get(f"/api/artifacts/{failed}/versions/1/download?form=source").status_code == 200

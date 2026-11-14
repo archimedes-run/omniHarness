@@ -461,7 +461,7 @@ class ArtifactStore:
         and its checks row (`pending`; the checks fill it). `code`:
         build_state, source (bytes), recipe, build_log, findings, fix_of, or
         copy_of (n: a restore or a copy keeps that version's code and checks)."""
-        from app.gateway.artifacts_store.frame import frame_sha256
+        from app.gateway.artifacts_store.frame import frame_sha256, stored_document
 
         copy_of = code.get("copy_of")
         if copy_of is not None:
@@ -488,7 +488,7 @@ class ArtifactStore:
             source_size = len(code["source"])
             if post is not None:
                 post["ensure"][source_hash] = code["source"]
-        sha = frame_sha256(canon.data) if (canon is not None and build_state == "ok") else None
+        sha = frame_sha256(stored_document(row.kind, canon.data)) if (canon is not None and build_state == "ok") else None
         s.add(
             ArtifactCodeRow(
                 artifact_id=row.id,

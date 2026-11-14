@@ -372,6 +372,14 @@ class GatewayArtifactController:
         parts: list[str] = []
         if kind == "html":
             parts.append(store.content(owner_id, row).decode("utf-8"))
+        elif kind == "webapp":
+            from app.gateway.artifacts_store import frame as frame_mod
+
+            entry, files = frame_mod.webapp_set(store.content(owner_id, row))
+            parts.append(f"entry: {entry}\nfiles: " + ", ".join(sorted(files)))
+            for path, data in sorted(files.items()):
+                if path.lower().endswith((".html", ".htm", ".css", ".js", ".mjs", ".json", ".txt", ".svg")):
+                    parts.append(f"----- file: {path} -----\n{data.decode('utf-8', 'replace')}")
         else:
             src = json.loads(store.source(owner_id, code) or b"{}")
             parts.append(f"entry: {src.get('entry')}")

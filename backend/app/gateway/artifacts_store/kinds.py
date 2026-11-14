@@ -20,9 +20,10 @@ from app.gateway.artifacts_store import caps
 #: Kinds the chat tools make in Slice 1.
 TOOL_KINDS = ("markdown", "code", "svg", "mermaid", "chart", "image", "html", "react")
 #: Kinds a stored artifact may have (`file`: the importer only).
-STORED_KINDS = (*TOOL_KINDS, "file")
+STORED_KINDS = (*TOOL_KINDS, "webapp", "file")
 #: Code kinds (Slice 2): programs, run only in the locked frame (FR-016).
-CODE_KINDS = frozenset({"html", "react"})
+#: `webapp`: a static file set saved from a coding job (not made by a tool).
+CODE_KINDS = frozenset({"html", "react", "webapp"})
 TEXT_KINDS = frozenset({"markdown", "code", "svg", "mermaid", "chart", "html", "react"})
 #: Kinds the owner edits in place (FR-010; html in Slice 2; react is rebuilt
 #: from edited source through its own route; document and spreadsheet arrive in S4).
@@ -32,7 +33,17 @@ EDIT_KINDS = frozenset({"markdown", "code", "mermaid", "svg", "html"})
 #: Kinds whose latest text is kept for search.
 SEARCH_KINDS = frozenset({"markdown", "code", "mermaid", "html"})
 
-MEDIA_TYPES = {"markdown": "text/markdown", "mermaid": "text/vnd.mermaid", "code": "text/plain", "svg": "image/svg+xml", "chart": "application/json", "file": "application/octet-stream", "html": "text/html", "react": "text/html"}
+MEDIA_TYPES = {
+    "markdown": "text/markdown",
+    "mermaid": "text/vnd.mermaid",
+    "code": "text/plain",
+    "svg": "image/svg+xml",
+    "chart": "application/json",
+    "file": "application/octet-stream",
+    "html": "text/html",
+    "react": "text/html",
+    "webapp": "application/json",
+}
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 _LANGUAGE = re.compile(r"^[a-z0-9+#._-]{1,32}$")
 

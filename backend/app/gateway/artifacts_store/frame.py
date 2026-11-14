@@ -203,8 +203,10 @@ def frame_document(stored: bytes) -> bytes:
     return bundle.inject_first(stored.decode("utf-8"), SHIM).encode("utf-8")
 
 
-def frame_sha256(stored: bytes) -> str:
-    return hashlib.sha256(frame_document(stored)).hexdigest()
+def frame_sha256(document: bytes) -> str:
+    """SHA-256 of the frame document served for `document` (a version's
+    stored_document)."""
+    return hashlib.sha256(frame_document(document)).hexdigest()
 
 
 REACT_INDEX = (
@@ -229,3 +231,111 @@ def react_files_to_html(js: bytes, css: bytes | None) -> tuple[Canonical, list[s
     text = html.decode("utf-8")
     findings = scan(text)
     return Canonical(html, REACT_MEDIA_TYPE, None, None), findings
+
+
+# -- webapp: a stored static file set (Slice 2, owner update) -------------------------
+#
+# A `webapp` version is ONE canonical blob: JSON {"entry": "index.html",
+# "files": {"<path>": "<base64>"}} (sorted keys), at most WEBAPP_MAX_FILES
+# files and caps.WEBAPP_FILES_BYTES decoded. Immutable like any version.
+# A page of it is served by the frame route by relative path: the gateway
+# inlines THAT html page with its local assets (the Apps inliner: local files
+# only, caps, a linear tokenizer) into one self-contained document under the
+# same artifact profile. Nothing else of the set is ever served to the frame
+# (the CSP has no 'self'): no network, as for html and react.
+
+WEBAPP_MAX_FILES = 300
+WEBAPP_PAGE = (".html", ".htm")
+_WEBAPP_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@+-]{0,99}(/[A-Za-z0-9_][A-Za-z0-9_.@+-]{0,99}){0,9}$")
+
+
+def check_path(path: Any) -> str:
+    """A relative path inside a stored set, or InvalidContent: plain
+    segments only (no '..', no leading '/', no backslash, no empty or dot
+    segment, no control characters), at most 10 deep."""
+    if not isinstance(path, str) or not _WEBAPP_PATH.fullmatch(path) or any(seg in ("", ".", "..") or seg.endswith(".") for seg in path.split("/")):
+        raise InvalidContent("file paths are plain relative paths (letters, digits, _ . @ + -), no .. and no leading /.")
+    return path
+
+
+def canonical_webapp(files: dict[str, bytes], entry: str = "index.html") -> tuple[Canonical, list[str]]:
+    """(stored bytes, findings) for a `webapp` version from a file set
+    (path -> bytes, e.g. a coding job's published folder). The entry page
+    must inline into one document; the scan refuses frames and WebRTC."""
+    import base64
+
+    if not isinstance(files, dict) or not files or len(files) > WEBAPP_MAX_FILES:
+        raise InvalidContent(f"a web app has 1 to {WEBAPP_MAX_FILES} files.")
+    total = 0
+    clean: dict[str, str] = {}
+    for path, data in files.items():
+        check_path(path)
+        if not isinstance(data, bytes | bytearray):
+            raise InvalidContent("file contents are bytes.")
+        total += len(data)
+        if total > caps.WEBAPP_FILES_BYTES:
+            raise TooLarge(total, caps.WEBAPP_FILES_BYTES)
+        clean[path] = base64.b64encode(bytes(data)).decode("ascii")
+    check_path(entry)
+    if entry not in clean or not entry.lower().endswith(WEBAPP_PAGE):
+        raise InvalidContent("entry must name an .html file of the set.")
+    data = dumps({"entry": entry, "files": clean})
+    page = webapp_page(data, entry)
+    return Canonical(data, "application/json", None, None), scan(page.decode("utf-8"))
+
+
+def webapp_set(stored: bytes) -> tuple[str, dict[str, bytes]]:
+    import base64
+
+    value = json.loads(stored)
+    return value["entry"], {p: base64.b64decode(b) for p, b in value["files"].items()}
+
+
+def webapp_page(stored: bytes, path: str | None = None) -> bytes:
+    """One html page of a stored set, inlined (no shim), or InvalidContent."""
+    entry, files = webapp_set(stored)
+    path = check_path(path) if path is not None else entry
+    if path not in files or not path.lower().endswith(WEBAPP_PAGE):
+        raise InvalidContent("no such page in this web app.")
+    try:
+        html, _ = bundle.inline(files, entry=path, platform_shim="", forbid=False)
+    except bundle.BundleError as exc:
+        raise InvalidContent(f"the page does not inline into one document ({exc.code})") from None
+    html = html.replace(b"<script></script>", b"", 1)
+    scan(html.decode("utf-8"))  # refusals hold for every page served
+    return html
+
+
+def stored_document(kind: str, stored: bytes, path: str | None = None) -> bytes:
+    """The document a code version shows (before the shim): html and react
+    their stored document (no path), webapp the inlined page at `path`
+    (default: its entry)."""
+    if kind == "webapp":
+        return webapp_page(stored, path)
+    if path is not None:
+        raise InvalidContent("only a web app has pages.")
+    return stored
+
+
+def download_page(kind: str, stored: bytes) -> bytes:
+    """The built page to download: the document with a network-blocking CSP
+    meta tag first in <head> (a saved copy has no network either)."""
+    meta = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:\">"
+    html = stored_document(kind, stored).decode("utf-8")
+    m = re.search(r"<head[^>]*>", html[:4096], re.I)
+    out = html[: m.end()] + meta + html[m.end() :] if m else meta + html
+    return out.encode("utf-8")
+
+
+def source_files(kind: str, stored: bytes, source: bytes | None) -> dict[str, bytes]:
+    """The source files for the .zip: html its document, react its files,
+    webapp its set. Every name passed the path rules when it was stored and
+    is checked again here."""
+    if kind == "html":
+        return {"index.html": stored}
+    if kind == "react":
+        value = json.loads(source or b"{}")
+        out = {check_path(p): t.encode("utf-8") for p, t in (value.get("files") or {}).items()}
+        return out
+    _, files = webapp_set(stored)
+    return {check_path(p): b for p, b in files.items()}

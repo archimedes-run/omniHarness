@@ -104,7 +104,7 @@ def _schedule_import(background: BackgroundTasks, store: ArtifactStore, owner: s
 async def list_artifacts(
     request: Request,
     background: BackgroundTasks,
-    kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "file", "html", "react"] | None = None,
+    kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "file", "html", "react", "webapp"] | None = None,
     pinned: bool | None = None,
     archived: Literal["false", "true", "all"] = "false",
     thread: str | None = Query(None, max_length=128),
@@ -168,6 +168,9 @@ async def get_version(artifact_id: str, n: int, request: Request) -> dict:
         if summary["kind"] == "react":
             src = await _call(store.source, owner, code)
             out["source"] = json.loads(src) if src else None
+        if summary["kind"] == "webapp":
+            entry, files = await _call(frame.webapp_set, await _call(store.content, owner, row))
+            out["webapp"] = {"entry": entry, "files": [{"path": p, "size": len(b)} for p, b in sorted(files.items())]}
         out["build_log"] = code.build_log
     return out
 
@@ -353,6 +356,10 @@ def _token_ok(token: str | None, owner: str, artifact_id: str, n: int) -> bool:
     return payload.get("typ") == FRAME_TOKEN_TYPE and payload.get("sub") == owner and payload.get("aid") == artifact_id and payload.get("n") == n
 
 
+def summary_kind(store: ArtifactStore, owner: str, artifact_id: str) -> str:
+    return store.get(owner, artifact_id)["kind"]
+
+
 def _inert(status: int = 403) -> Response:
     return Response(INERT_PAGE, status_code=status, media_type="text/html; charset=utf-8", headers=INERT_HEADERS)
 
@@ -374,7 +381,7 @@ async def frame_token(artifact_id: str, n: int, request: Request) -> dict:
 
 @router.get("/{artifact_id}/versions/{n}/frame.html")
 @require_permission("threads", "read")
-async def frame_html(artifact_id: str, n: int, request: Request, t: str | None = Query(None, max_length=1024)) -> Response:
+async def frame_html(artifact_id: str, n: int, request: Request, t: str | None = Query(None, max_length=1024), path: str | None = Query(None, max_length=1100)) -> Response:
     """The locked frame's document (FR-016, FR-031). Served ONLY to this
     app's own iframe request (Sec-Fetch-Dest: iframe, Sec-Fetch-Site:
     same-origin) carrying a valid view token for this owner and version;
@@ -393,7 +400,13 @@ async def frame_html(artifact_id: str, n: int, request: Request, t: str | None =
     if code.build_state != "ok" or version.stored != "blob":
         return _inert(409)
     data = await run_in_threadpool(store.content, owner, version)
-    document = frame.frame_document(data)
+    try:
+        # A webapp page by relative path (strict path rules), inlined; html
+        # and react take no path. Anything else: inert.
+        page = await run_in_threadpool(frame.stored_document, summary_kind(store, owner, artifact_id), data, path)
+    except InvalidContent:
+        return _inert(404)
+    document = frame.frame_document(page)
     return Response(document, media_type="text/html; charset=utf-8", headers={**frame.HEADERS, "Content-Security-Policy": frame.CSP})
 
 
@@ -493,3 +506,43 @@ async def message_refused(artifact_id: str, body: RefusedIn, request: Request) -
     _check_id(artifact_id)
     logger.info("artifact_message_refused artifact=%s reason=%s type=%s", artifact_id, body.reason, body.type or "-")
     return Response(status_code=204)
+
+
+def _safe_filename(title: str, ext: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", title).strip("._")[:80] or "artifact"
+    return f"{stem}{ext}"
+
+
+@router.get("/{artifact_id}/versions/{n}/download")
+@require_permission("threads", "read")
+async def download(artifact_id: str, n: int, request: Request, form: Literal["page", "source"] = Query("page")) -> Response:
+    """A code version to keep: `page` the built page (.html, with a
+    network-blocking CSP meta tag), `source` its sources (.zip, built here
+    from the stored blob; names checked again). Always an attachment, never
+    rendered on this origin."""
+    import io
+    import zipfile
+
+    owner = owner_of(request)
+    store = store_of(request)
+    artifact_id = _check_id(artifact_id)
+    summary, version, code, _ = await _call(store.code_version, owner, artifact_id, n)
+    kind = summary["kind"]
+    data = await _call(store.content, owner, version)
+    headers = {**CONTENT_HEADERS}
+    if form == "page":
+        if code.build_state != "ok":
+            raise _error(409, "build_failed", "This version did not build; download its source instead.")
+        body = await _call(frame.download_page, kind, data)
+        headers["Content-Disposition"] = f'attachment; filename="{_safe_filename(summary["title"], ".html")}"'
+        return Response(body, media_type="application/octet-stream", headers=headers)
+    source = await _call(store.source, owner, code)
+    files = await _call(frame.source_files, kind, data, source)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in sorted(files.items()):
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.external_attr = 0o644 << 16  # a plain file: no links, no exec bits
+            zf.writestr(info, content)
+    headers["Content-Disposition"] = f'attachment; filename="{_safe_filename(summary["title"], "-source.zip")}"'
+    return Response(buf.getvalue(), media_type="application/zip", headers=headers)

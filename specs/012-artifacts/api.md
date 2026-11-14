@@ -5,8 +5,9 @@ artifact card, side panel, the locked frame). Requirements are in
 [`spec.md`](spec.md); this file names routes, JSON shapes, tool schemas and
 error codes only. Kinds in Slice 1: `markdown`, `code`, `svg`, `mermaid`,
 `chart`, `image`, plus `file` (only made by the importer; download only).
-Slice 2 adds the code kinds `html` and `react`, which run only in the
-locked frame: see [Code kinds (Slice 2)](#code-kinds-slice-2).
+Slice 2 adds the code kinds `html`, `react` and `webapp` (a stored static
+file set), which run only in the locked frame: see
+[Code kinds (Slice 2)](#code-kinds-slice-2).
 
 ## Conventions
 
@@ -469,9 +470,19 @@ fails is stored and viewable, labelled.
 A short-lived token for one view of one version (owner, artifact, version
 bound). `409 build_failed` for a version with no document.
 
-### `GET /api/artifacts/{id}/versions/{n}/frame.html?t=…`
+### `GET /api/artifacts/{id}/versions/{n}/frame.html?t=…[&path=…]`
 
-The locked frame's document: the stored document with the gateway's shim
+`path` (webapp only): the relative path of one `.html`/`.htm` page of the
+version's file set (default: its entry). Plain segments only (letters,
+digits, `_ . @ + -`), no `..`, no leading `/`, no backslash, at most 10
+deep; anything else, a non-page file, or `path` on html/react is `404` with
+the inert page. The page is served INLINED: the gateway inlines that page's
+local stylesheets, scripts and images (data: URLs) into one document; no
+other file of the set is ever served to the frame (the CSP has no `'self'`),
+so a webapp has no network either. The same token covers every page of the
+version.
+
+The locked frame's document: the stored document (webapp: the inlined page) with the gateway's shim
 (`artifacts_store/frame/artifact-shim.js`) injected as its first script.
 Served ONLY when the request carries the owner's session, a valid token for
 this owner and version, `Sec-Fetch-Dest: iframe` and `Sec-Fetch-Site:
@@ -579,6 +590,48 @@ Logged as `artifact_message_refused`. Codes only: no free text from a frame.
 - Tiers are unchanged (`artifact_create`, `artifact_update`: Tier 2,
   disclosed once; the build runs inside the call, so there is no second
   disclosure). No promote, export or share tool.
+
+### `webapp`: a stored static file set (for the Save flow)
+
+One version is ONE canonical blob: JSON `{"entry": "index.html", "files":
+{"<path>": "<base64>"}}` (sorted keys), 1 to 300 files, at most 2 MB
+decoded, paths under the rules above. Made in the gateway (no chat tool
+makes one) with:
+
+```python
+from app.gateway.artifacts_store.frame import canonical_webapp
+canon, findings = canonical_webapp({"index.html": b"...", "css/a.css": b"..."}, "index.html")
+store.create(owner_id, kind="webapp", title=..., canon=canon, lineage=..., lineage_source=..., origin=...,
+             thread_id=..., code={"findings": findings, "recipe": {"tool": "none", "kind": "webapp", "from": "<where>"}})
+```
+
+`canonical_webapp` refuses (`InvalidContent`) a bad path, a missing or
+non-html entry, an entry that does not inline (a remote script or
+stylesheet, a missing local file) and the scan's refusals; `TooLarge` over
+the cap. The version's checks run on the inlined entry like any code kind.
+`GET /versions/{n}` adds `"webapp": {"entry", "files": [{"path", "size"}]}`.
+`artifact_read` lists the files and returns its text files, fenced.
+
+### `GET /api/artifacts/{id}/versions/{n}/download?form=page|source`
+
+Always an attachment (`Content-Disposition: attachment; filename="<title>.html"`
+or `"<title>-source.zip"`, title reduced to `[A-Za-z0-9._-]`), with the
+content route's headers. `page` (`application/octet-stream`): the built
+document (webapp: the inlined entry) with a network-blocking CSP `<meta>`
+first in `<head>`, no shim; `409 build_failed` for a failed build. `source`
+(`application/zip`): html `index.html`; react its files; webapp its set;
+every name re-checked under the path rules, plain files (mode 0644), fixed
+timestamps.
+
+### The frame component (frontend)
+
+`LockedFrame` in
+`frontend/src/components/workspace/artifacts/store/artifact-frame.tsx`,
+standalone: `{artifactId, version, entry?, title, variant: "inline" | "panel", className?}`.
+It fetches its own view token, owns the handshake (`core/artifacts/frame-host.ts`)
+and the "Open link?" dialog. `CodeKindView` (`artifact-code-kind.tsx`) is the
+full viewer (checks, Preview, Code, downloads, Rebuild, Ask) used by the
+panel and `/workspace/artifacts/[id]`.
 
 ### Stored for promotion (after spec 008), no button
 
