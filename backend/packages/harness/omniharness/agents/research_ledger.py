@@ -81,6 +81,8 @@ class TurnLedger:
     started: float | None = None
     searches: int = 0
     fetches: set[str] = field(default_factory=set)
+    #: Sites (hosts) of the pages fetched in this turn.
+    fetched_hosts: set[str] = field(default_factory=set)
     research: int = 0
     #: (tool, normalised terms) -> the query as first asked
     queries: dict[str, str] = field(default_factory=dict)
@@ -104,6 +106,8 @@ OVER_RESEARCH = "research"
 OUT_OF_TIME = "time"
 REPEAT = "repeat"
 STOPPED = "stopped"
+#: The last fetch is kept for a second site: every page so far is from one.
+SECOND_SITE = "second_site"
 
 
 class ResearchLedgers:
@@ -191,6 +195,12 @@ class ResearchLedgers:
             url = _url_key(args)
             if url not in ledger.fetches and len(ledger.fetches) >= ledger.caps.fetches:
                 return OVER_FETCHES, str(ledger.caps.fetches)
+            # Web claims need two independent sources: when every page so far
+            # is from one site, the last fetch is kept for another site
+            # (real eval T02: six react.dev pages and no second site).
+            host = url_host(url)
+            if url not in ledger.fetches and ledger.caps.fetches >= 2 and len(ledger.fetches) >= ledger.caps.fetches - 1 and ledger.fetched_hosts == {host}:
+                return SECOND_SITE, host
         if name in RESEARCH_TOOLS and ledger.research >= ledger.caps.research:
             return OVER_RESEARCH, str(ledger.caps.research)
         return OK, ""
@@ -204,6 +214,8 @@ class ResearchLedgers:
                 ledger.queries.setdefault(key, str((args or {}).get("query") or ""))
         elif name in FETCH_TOOLS:
             ledger.fetches.add(_url_key(args))
+            if url_host(_url_key(args)):
+                ledger.fetched_hosts.add(url_host(_url_key(args)))
         elif name in RESEARCH_TOOLS:
             ledger.research += 1
 
@@ -213,7 +225,7 @@ class ResearchLedgers:
         # counts toward the stop.
         for one in ledgers:
             one.refusals += 1
-            if outcome not in (REPEAT, STOPPED):
+            if outcome not in (REPEAT, STOPPED, SECOND_SITE):
                 one.budget_refusals += 1
 
     def release(self, ledger: TurnLedger, name: str, args: dict) -> None:
@@ -233,6 +245,22 @@ class ResearchLedgers:
     def stop(self, ledger: TurnLedger, why: str) -> None:
         with self._lock:
             ledger.stopped = ledger.stopped or why
+
+
+def url_host(url: str) -> str:
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    return host.removeprefix("www.")
+
+
+def sites_note(ledger: TurnLedger | None) -> str:
+    """A note when the turn's pages all come from one site: the answer's web
+    claims need a second, independent source."""
+    if ledger is None or len(ledger.fetched_hosts) != 1:
+        return ""
+    (host,) = tuple(ledger.fetched_hosts)
+    return f" Your fetched pages all come from one site ({host}): cite a second, independent site too (a link from another site in your search results counts)."
 
 
 def _repeat_key(name: str, args: Any) -> str:

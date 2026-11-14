@@ -53,11 +53,16 @@ OUT_OF_TIME = 'Not run: this task has used its research time ({n} s). Budget spe
 SHORTENED = "\n\n[Page shortened for reading: the first {n} of {total} characters.]"
 REPEATED = 'Not run: this search repeats one already made in this task ("{q}"): same terms. Use those results. If the budget is spent, answer now from what you have, and say what is unverified.'
 #: Every refusal starts with this (never counted as a lookup).
-REFUSED_PREFIXES = ("Not run: this task has used", "Not run: this search repeats")
+REFUSED_PREFIXES = ("Not run: this task has used", "Not run: this search repeats", "Not run: the last fetch")
 #: The hard ceiling: the last model call of a turn whose lookups ended.
 ANSWER_NOW = (
     "[System: no more web lookups for this question ({why} spent): web_search, web_fetch and research will not run. "
     'Continue the rest of the request with what you have; if nothing else is left to do, write the answer now, cite the sources you used, and list what is unverified under "Not verified".]'
+)
+#: The last fetch, kept for a second site.
+SECOND_SITE_NOTE = (
+    "Not run: the last fetch of this task is kept for a second site. Every page fetched so far is from {host}, and web claims "
+    "need a second, independent source: fetch a page from another site, or cite a link from another site in your search results, then answer."
 )
 #: A lookup asked for after the stop.
 LOOKUPS_STOPPED = "Not run: this task has used its research budget; no more lookups. Budget spent: answer now from what you have and continue the rest of the request, and say what is unverified."
@@ -262,11 +267,13 @@ class TurnBudgetMiddleware(AgentMiddleware):
         if outcome == rl.REPEAT:
             text = REPEATED.format(q=detail)
         elif outcome == rl.STOPPED:
-            text = LOOKUPS_STOPPED
+            text = LOOKUPS_STOPPED + rl.sites_note(ledger or own)
+        elif outcome == rl.SECOND_SITE:
+            text = SECOND_SITE_NOTE.format(host=detail)
         elif outcome == rl.OUT_OF_TIME:
             text = OUT_OF_TIME.format(n=detail)
         else:
-            text = OVER_BUDGET.format(what=outcome, n=detail)
+            text = OVER_BUDGET.format(what=outcome, n=detail) + rl.sites_note(ledger or own)
         budget = self.budget
         hard = getattr(budget, "hard_stop_after_refusals", 2)
         for one in (ledger, own):
@@ -299,6 +306,7 @@ class TurnBudgetMiddleware(AgentMiddleware):
         budget = self.budget
         self._last_elapsed = 0.0
         self._last_caps = None
+        self._last_ledger = None
         if not getattr(budget, "enabled", True):
             return None
         from omniharness.agents.research_ledger import LOOKUP_TOOLS
@@ -315,6 +323,7 @@ class TurnBudgetMiddleware(AgentMiddleware):
             outcome, detail = ledgers().reserve(turn, name, args, extra=extra)
             self._last_elapsed = max(one.elapsed(self._clock()) for one in (ledger, own) if one is not None)
             self._last_caps = turn.caps
+            self._last_ledger = turn
             if outcome != OK:
                 return self._refusal(outcome, detail, call_id, name, ledger, own)
             self._reserved = (turn, extra, name, args)
@@ -418,10 +427,13 @@ class TurnBudgetMiddleware(AgentMiddleware):
         elapsed = getattr(self, "_last_elapsed", 0.0)
         caps = getattr(self, "_last_caps", None)
         seconds = caps.seconds if caps is not None else budget.max_seconds
+        from omniharness.agents.research_ledger import sites_note
+
+        sites = sites_note(getattr(self, "_last_ledger", None))
         if elapsed >= 0.6 * seconds:
-            content += TIME_NOTE.format(s=int(elapsed))
+            content += TIME_NOTE.format(s=int(elapsed)).rstrip("]") + sites + "]"
         elif count >= budget.answer_after_calls:
-            content += ANSWER_NOTE.format(n=count)
+            content += ANSWER_NOTE.format(n=count).rstrip("]") + sites + "]"
         return result if content == result.content else result.model_copy(update={"content": content})
 
     def _turn_token(self, request: Any) -> Any:
