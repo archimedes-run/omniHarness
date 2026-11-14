@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import { BuildingChip } from "@/components/workspace/chat-bar/building-chip";
+import { MemoryOffChipView } from "@/components/workspace/chat-bar/memory-chip";
 import {
   ChatBox,
   useComposerInset,
@@ -28,6 +29,7 @@ import { useModels } from "@/core/models/hooks";
 import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings, useThreadSettings } from "@/core/settings";
 import { useThreadStream } from "@/core/threads/hooks";
+import { useChatMemory } from "@/core/threads/memory";
 import { textOfMessage } from "@/core/threads/utils";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
@@ -122,11 +124,21 @@ export default function ChatPage() {
     },
   });
 
+  // "Memory off in this chat" (per chat; re-read when a run finishes).
+  const memory = useChatMemory(threadId, isNewThread, thread.isLoading);
+  // "Try again" on a reply cut off by a restart: the person's message, sent
+  // again as a new message (the composer's path). Only on a click.
+  const retry = useCallback(
+    (text: string) => void sendMessage(threadId, { text, files: [] }),
+    [sendMessage, threadId],
+  );
+
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
-      void sendMessage(threadId, message);
+      // A new chat's memory toggle goes with its first message only.
+      void sendMessage(threadId, message, memory.sendContext);
     },
-    [sendMessage, threadId],
+    [sendMessage, threadId, memory.sendContext],
   );
   const handleStop = useCallback(async () => {
     await thread.stop();
@@ -161,7 +173,7 @@ export default function ChatPage() {
     : "off";
 
   return (
-    <ThreadContext.Provider value={{ thread, isMock }}>
+    <ThreadContext.Provider value={{ thread, isMock, retry }}>
       <ChatBox threadId={threadId}>
         <div className="relative flex size-full min-h-0 justify-between">
           <header
@@ -250,6 +262,14 @@ export default function ChatPage() {
                   running={thread.isLoading}
                   rowClassName="flex -translate-y-4 justify-start pb-2"
                 />
+                {memory.memoryOff && (
+                  <div className="flex -translate-y-4 justify-start pb-2">
+                    <MemoryOffChipView
+                      changing={memory.changing}
+                      onTurnOn={() => memory.setMemoryOff(false)}
+                    />
+                  </div>
+                )}
                 {mountedRef.current ? (
                   <InputBox
                     className="bg-background/5 w-full -translate-y-4"
@@ -274,6 +294,8 @@ export default function ChatPage() {
                       setSettings("context", context)
                     }
                     followupsContainer={followupsSlot}
+                    memoryOff={memory.memoryOff}
+                    onMemoryToggle={memory.setMemoryOff}
                     onSubmit={handleSubmit}
                     onStop={handleStop}
                   />
