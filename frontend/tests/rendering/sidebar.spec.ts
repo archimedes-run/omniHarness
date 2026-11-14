@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * The sidebar (Feature 006): New chat · Chats · Apps (Spec 011) · MCP Suite, a divider, Recent
+ * The sidebar (Feature 006): New chat · Chats · Artifacts (Spec 012) · Apps (Spec 011) · MCP Suite, a divider, Recent
  * chats; the user and More (Settings, Memory, Safety, Activity log,
  * Appearance, About) in the footer. Agents, Automations, Projects and Inbox
  * left it: the first three are capsule panels, Inbox is Home.
@@ -91,7 +91,7 @@ async function serve(
   await page.goto("/workspace/chats");
 }
 
-test("the sidebar reads New chat, Chats, Apps, MCP Suite, then Recent", async ({
+test("the sidebar reads New chat, Chats, Artifacts, Apps, MCP Suite, then Recent", async ({
   page,
 }) => {
   await serve(page);
@@ -104,7 +104,13 @@ test("the sidebar reads New chat, Chats, Apps, MCP Suite, then Recent", async ({
       .locator('[data-sidebar="menu-button"]')
       .allInnerTexts()
   ).map((l) => l.trim());
-  expect(labels).toEqual(["New chat", "Chats", "Apps", "MCP Suite"]);
+  expect(labels).toEqual([
+    "New chat",
+    "Chats",
+    "Artifacts",
+    "Apps",
+    "MCP Suite",
+  ]);
   // The nav comes before the divider, Recent after it.
   const order = await sidebar.evaluate((el) => {
     const nav = el.querySelector('a[href="/workspace/connections"]')!;

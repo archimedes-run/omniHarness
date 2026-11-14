@@ -71,7 +71,10 @@ const NOT_A_THEME_TOKEN: Record<string, string> = {
 };
 
 /** Shared values that are deliberate, each with the reason. */
-const INTENTIONALLY_SHARED: Record<string, string> = {};
+const INTENTIONALLY_SHARED: Record<string, string> = {
+  "--artifact-series-6":
+    "the dataviz palette's green slot is the same step in both themes (validated on both surfaces)",
+};
 
 describe("the dark theme", () => {
   const light = tokens(":root");

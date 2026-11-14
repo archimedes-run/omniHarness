@@ -260,6 +260,7 @@ const MONO: Record<string, [string, string]> = {
   "builtin:file:write": ["Wf", "4"],
   "builtin:bash": [">_", "lead"],
   "builtin:workspace": ["Ws", "1"],
+  "builtin:artifacts": ["Ar", "5"],
   "local:filesystem": ["fs", "6"],
   "local:postgres": ["pg", "0"],
   "local:session-watcher": ["sw", "7"],
@@ -283,6 +284,7 @@ const KNOWN_NAMES: Record<string, string> = {
   "builtin:file:write": "Write files",
   "builtin:bash": "Shell",
   "builtin:workspace": "Workspace",
+  "builtin:artifacts": "Artifacts",
 };
 
 /** An integration's name from its id (local servers are named by their id). */

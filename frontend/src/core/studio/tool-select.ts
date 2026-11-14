@@ -22,6 +22,9 @@ export type Selection = Record<string, string[]>;
 /** The MCP servers every chat gets (persistence/thread_tool_selection). */
 export const PINNED_LOCAL = ["filesystem", "postgres", "session-watcher"];
 
+/** Integrations never ticked unless the owner ticks them (Spec 012). */
+export const OPT_IN_ONLY = ["builtin:artifacts"];
+
 export function usable(i: CatalogIntegration): boolean {
   return i.status === "connected" && i.tools.length > 0;
 }
@@ -51,6 +54,10 @@ export function legacySelection(
   const out: Selection = {};
   for (const i of catalog.integrations) {
     if (!usable(i)) continue;
+    // Grants are never silent: Artifacts (Spec 012) is ticked only when the
+    // owner ticks it, so a legacy agent shows it unticked, as the gateway
+    // withholds those tools from an agent without an allowlist.
+    if (OPT_IN_ONLY.includes(i.id)) continue;
     const inGroups =
       i.kind === "builtin" &&
       (i.id === "builtin:ledger" ||
