@@ -39,7 +39,9 @@ from omniharness.persistence.artifacts.model import ArtifactImportRow, ArtifactR
 logger = logging.getLogger(__name__)
 
 ORIGINS = ("tool", "owner_edit", "restore", "import", "duplicate")
-LINEAGES = ("user", "content")
+#: user: the owner's own turn or click; content: made after outside content
+#: was read; import: a file a chat produced, indexed from its outputs.
+LINEAGES = ("user", "content", "import")
 
 
 class StoreError(Exception):

@@ -265,3 +265,108 @@ def test_edits_must_match_exactly_once(tools, store):
         answers.append(text)
     assert answers[0] == answers[1], "twice and never must read the same: no count of a guess in stored text"
     assert store.get(OWNER, card["artifact_id"])["latest_version"] == 1
+
+
+def _read_then(tools, aid_read, then_call, *, read_version=None, extra=()):
+    """A turn that really read the artifact: the result is the controller's own
+    (its structured part names the version read)."""
+    args = {"id": aid_read} if read_version is None else {"id": aid_read, "version": read_version}
+    text, read = tools.read_bound(ctx(), artifact_id=aid_read, version=read_version)
+    assert read is not None, text
+    return [
+        user_turn("update my brief"),
+        AIMessage(content="", tool_calls=[{"name": "artifact_read", "args": args, "id": "r1"}]),
+        ToolMessage(content=text, tool_call_id="r1", name="artifact_read", artifact=read),
+        *extra,
+        AIMessage(content="", tool_calls=[{"name": then_call, "args": {}, "id": "u1"}]),
+    ]
+
+
+def _update(tools, aid, base, messages):
+    text, card = tools.update(ctx(messages), artifact_id=aid, base_version=base, content=f"# v{base + 1}", edits=None, language=None, note=None)
+    assert card is not None, text
+    return card
+
+
+def test_reading_an_owner_artifact_to_edit_it_keeps_the_update_user_led(tools, store):
+    _, card = _create(tools)
+    aid = card["artifact_id"]
+    _update(tools, aid, 1, _read_then(tools, aid, "artifact_update"))
+    latest = store.versions(OWNER, aid)[0]
+    assert latest["lineage"] == "user" and latest["lineage_source"] is None
+
+
+def test_reading_a_content_artifact_still_taints_its_update(tools, store):
+    _, card = _create(tools, messages=_content_turn())
+    aid = card["artifact_id"]
+    _update(tools, aid, 1, _read_then(tools, aid, "artifact_update"))
+    assert store.versions(OWNER, aid)[0]["lineage"] == "content"
+
+
+def test_reading_an_older_content_version_still_taints(tools, store):
+    _, card = _create(tools, messages=_content_turn())
+    aid = card["artifact_id"]
+    _update(tools, aid, 1, _read_then(tools, aid, "artifact_update"))  # v2 is content (read of a content v1)
+    store.add_version(OWNER, aid, base_version=2, canon=canonical("markdown", "typed"), lineage="user", lineage_source=None, origin="owner_edit")
+    _update(tools, aid, 3, _read_then(tools, aid, "artifact_update", read_version=1))
+    assert store.versions(OWNER, aid)[0]["lineage"] == "content"
+
+
+def test_any_other_untrusted_read_in_the_turn_still_taints(tools, store):
+    _, card = _create(tools)
+    aid = card["artifact_id"]
+    page = (AIMessage(content="", tool_calls=[{"name": "web_fetch", "args": {"url": "https://example.com"}, "id": "w1"}]), ToolMessage(content="page", tool_call_id="w1", name="web_fetch"))
+    _update(tools, aid, 1, _read_then(tools, aid, "artifact_update", extra=page))
+    latest = store.versions(OWNER, aid)[0]
+    assert latest["lineage"] == "content" and latest["lineage_source"] == "web_fetch"
+
+
+def test_reading_another_artifact_taints_the_update(tools, store):
+    _, a = _create(tools)
+    _, b = _create(tools, title="Other")
+    _update(tools, a["artifact_id"], 1, _read_then(tools, b["artifact_id"], "artifact_update"))
+    latest = store.versions(OWNER, a["artifact_id"])[0]
+    assert latest["lineage"] == "content" and latest["lineage_source"] == "artifact_read"
+
+
+def test_the_exemption_is_for_updates_only(tools, store):
+    _, a = _create(tools)
+    _, made = _create(tools, messages=_read_then(tools, a["artifact_id"], "artifact_create"))
+    assert store.get(OWNER, made["artifact_id"])["lineage"] == "content"
+
+
+def test_only_an_artifact_read_is_exempt_even_with_the_same_id_argument(tools, store):
+    """Another tool called with the artifact's id (an outside tool's result)
+    still taints: the exemption is for artifact_read results only."""
+    _, card = _create(tools)
+    aid = card["artifact_id"]
+    turn = [
+        user_turn("update my brief"),
+        AIMessage(content="", tool_calls=[{"name": "notes_fetch", "args": {"id": aid}, "id": "n1"}]),
+        ToolMessage(content="outside text", tool_call_id="n1", name="notes_fetch"),
+        AIMessage(content="", tool_calls=[{"name": "artifact_update", "args": {}, "id": "u1"}]),
+    ]
+    _update(tools, aid, 1, turn)
+    latest = store.versions(OWNER, aid)[0]
+    assert latest["lineage"] == "content" and latest["lineage_source"] == "notes_fetch"
+
+
+def test_the_exemption_judges_the_version_actually_read(tools, store):
+    """The read returned a content version; a `user` version appearing later in
+    the turn does not make the update user-led."""
+    _, card = _create(tools)
+    aid = card["artifact_id"]
+    store.add_version(OWNER, aid, base_version=1, canon=canonical("markdown", "from a page"), lineage="content", lineage_source="web_fetch", origin="tool")
+    turn = _read_then(tools, aid, "artifact_update")  # reads v2 (content), no version named
+    store.add_version(OWNER, aid, base_version=2, canon=canonical("markdown", "typed"), lineage="user", lineage_source=None, origin="owner_edit")
+    _update(tools, aid, 3, turn)
+    assert store.versions(OWNER, aid)[0]["lineage"] == "content"
+
+
+def test_a_read_result_without_its_structured_part_is_not_exempt(tools, store):
+    _, card = _create(tools)
+    aid = card["artifact_id"]
+    turn = _read_then(tools, aid, "artifact_update")
+    turn[2] = ToolMessage(content=turn[2].content, tool_call_id="r1", name="artifact_read")
+    _update(tools, aid, 1, turn)
+    assert store.versions(OWNER, aid)[0]["lineage"] == "content"

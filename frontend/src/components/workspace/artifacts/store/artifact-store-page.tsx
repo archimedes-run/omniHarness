@@ -25,6 +25,7 @@ import {
 } from "@/core/artifacts/store-hooks";
 import {
   formatBytes,
+  isImported,
   KIND_WORDS,
   livesInChat,
   titleText,
@@ -390,7 +391,11 @@ function StoreCard({ artifact }: { artifact: ArtifactSummary }) {
           <span>{KIND_WORDS[artifact.kind]}</span>
           <span>v{artifact.latest_version}</span>
           <span>{ago(artifact.updated_at)}</span>
-          {artifact.lineage === "content" && <span>From content read</span>}
+          {isImported(artifact.lineage, artifact.lineage_source) ? (
+            <span>Imported from its chat</span>
+          ) : (
+            artifact.lineage === "content" && <span>From content read</span>
+          )}
         </p>
         {artifact.origin_thread_id && (
           <Link

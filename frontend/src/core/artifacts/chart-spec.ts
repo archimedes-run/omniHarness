@@ -18,8 +18,7 @@ export interface ChartSpec {
   series: { field: string; label: string }[];
   rows: Row[];
   units?: string;
-  /** Stacks bar and area series. NOT read from content: the gateway's
-   * omni-chart/1 schema has no such key yet (a follow-up there). */
+  /** Stacks bar and area series (omni-chart/1 `stacked`, optional). */
   stacked?: boolean;
 }
 
@@ -147,6 +146,14 @@ export function parseChartSpec(raw: unknown): Result {
       ? undefined
       : text(unitsRaw, 40);
   if (units === null) return fail("bad units");
+  const stackedRaw = own(value, "stacked");
+  if (
+    stackedRaw !== undefined &&
+    stackedRaw !== null &&
+    (typeof stackedRaw !== "boolean" || (type !== "bar" && type !== "area"))
+  )
+    return fail("bad stacked");
+  const stacked = stackedRaw === true ? true : undefined;
   return {
     ok: true,
     spec: {
@@ -160,6 +167,7 @@ export function parseChartSpec(raw: unknown): Result {
       series,
       rows,
       units,
+      stacked,
     },
   };
 }

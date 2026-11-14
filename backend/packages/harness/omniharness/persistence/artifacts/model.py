@@ -50,7 +50,7 @@ class ArtifactVersionRow(Base):
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     media_type: Mapped[str] = mapped_column(String(64), nullable=False)
     language: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    # user | content
+    # user | content | import
     lineage: Mapped[str] = mapped_column(String(16), nullable=False)
     lineage_source: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # tool | owner_edit | restore | import | duplicate

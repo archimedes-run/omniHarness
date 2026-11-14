@@ -354,7 +354,7 @@ def _is_time(value: Any) -> bool:
 
 
 def check_chart(spec: Any) -> dict:
-    spec = _keys(spec, {"schema", "type", "title", "x", "series", "data", "units"}, {"type", "title", "x", "series", "data"}, "spec")
+    spec = _keys(spec, {"schema", "type", "title", "x", "series", "data", "units", "stacked"}, {"type", "title", "x", "series", "data"}, "spec")
     if spec.get("schema", CHART_SCHEMA) != CHART_SCHEMA:
         raise InvalidContent(f"chart schema must be {CHART_SCHEMA}.")
     if spec["type"] not in CHART_TYPES:
@@ -405,9 +405,14 @@ def check_chart(spec: Any) -> dict:
             if field in row and row[field] is not None and not _number(row[field]):
                 raise InvalidContent("chart series values must be numbers or null.")
     units = _chart_text(spec.get("units"), "units", 40, required=False)
+    stacked = spec.get("stacked")
+    if stacked is not None and (not isinstance(stacked, bool) or spec["type"] not in ("bar", "area")):
+        raise InvalidContent("chart stacked is true or false, and only for bar and area charts.")
     out: dict[str, Any] = {"schema": CHART_SCHEMA, "type": spec["type"], "title": title, "x": {"field": x["field"], "type": x["type"]}, "series": clean_series, "data": data}
     if x_label is not None:
         out["x"]["label"] = x_label
     if units is not None:
         out["units"] = units
+    if stacked is not None:
+        out["stacked"] = stacked
     return out

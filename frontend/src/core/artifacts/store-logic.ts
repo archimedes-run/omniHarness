@@ -105,12 +105,30 @@ export function originWords(origin: string): string {
   return ORIGIN_WORDS[origin as VersionOrigin] ?? "Changed";
 }
 
-/** The content badge, with the source named (as text) when known. */
+/** Recorded by the importer before imports had a lineage of their own. */
+const LEGACY_IMPORT_SOURCE = "a file from the chat";
+
+/** True for a file indexed from a chat's outputs (lineage `import`, or an
+ * older import recorded as content with the importer's source). */
+export function isImported(
+  lineage: string,
+  source: string | null | undefined,
+): boolean {
+  return (
+    lineage === "import" ||
+    (lineage === "content" && source === LEGACY_IMPORT_SOURCE)
+  );
+}
+
+/** The lineage badge: none for the owner's own work, "Imported from its
+ * chat" for a chat's output file, else the content badge with the source
+ * named (as text) when known. */
 export function lineageWords(
   lineage: string,
   source: string | null | undefined,
 ): string | null {
   if (lineage === "user") return null;
+  if (isImported(lineage, source)) return "Imported from its chat";
   const named = safeField(source);
   return named
     ? `Made from content the assistant read (${named})`
@@ -189,6 +207,33 @@ export function retryUnless4xx(count: number, error: Error): boolean {
     return false;
   }
   return count < 1;
+}
+
+/** The start of a markdown artifact for a card preview, clipped only at a
+ * BLOCK boundary (a blank line outside a code fence), never mid-token: a
+ * clipped `**bold` or a lone setext underline would otherwise render as
+ * stray characters. If even the first block is over the budget, it is cut
+ * at a line boundary and an open code fence is closed. */
+export function previewMarkdown(text: string, lines = 6, chars = 400): string {
+  const all = text.replace(/\r\n?/g, "\n").split("\n");
+  const kept: string[] = [];
+  let inFence = false;
+  let lastBoundary = 0;
+  let used = 0;
+  for (const raw of all) {
+    const line = raw.replace(/[\p{Cc}\p{Cf}]/gu, "");
+    if (kept.length >= lines || used + line.length > chars) break;
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    kept.push(line);
+    used += line.length + 1;
+    if (!inFence && line.trim() === "") lastBoundary = kept.length;
+  }
+  const done = kept.length === all.length;
+  if (done) return kept.join("\n");
+  if (lastBoundary > 0) return kept.slice(0, lastBoundary).join("\n").trimEnd();
+  // One long first block: cut at a line boundary, close an open fence.
+  const fences = kept.filter((l) => /^\s*(```|~~~)/.test(l)).length;
+  return kept.join("\n") + (fences % 2 === 1 ? "\n```" : "");
 }
 
 /** The first lines of a text artifact, as a plain-text preview. */

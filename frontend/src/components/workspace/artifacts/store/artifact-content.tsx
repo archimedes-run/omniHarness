@@ -28,7 +28,11 @@ import type {
 } from "@/core/artifacts/store-api";
 import { contentUrl } from "@/core/artifacts/store-api";
 import { useArtifactVersion } from "@/core/artifacts/store-hooks";
-import { previewLines, titleText } from "@/core/artifacts/store-logic";
+import {
+  previewLines,
+  previewMarkdown,
+  titleText,
+} from "@/core/artifacts/store-logic";
 import { checkSvgText, svgDataUrl } from "@/core/artifacts/svg-allowlist";
 import { streamdownPlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
@@ -73,9 +77,12 @@ const NO_RAW_HTML = [
 export function MarkdownView({ text }: { text: string }) {
   return (
     <div data-testid="artifact-markdown" className="min-w-0 text-sm">
+      {/* A stored document is complete: no "repair" of markers that look
+          unclosed (it appended stray `**`/`__*` at the end). */}
       <Markdown
         remarkPlugins={streamdownPlugins.remarkPlugins}
         rehypePlugins={NO_RAW_HTML}
+        parseIncompleteMarkdown={false}
       >
         {text}
       </Markdown>
@@ -410,7 +417,7 @@ function TextKind({
       className="pointer-events-none max-h-32 overflow-hidden text-xs [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm"
       data-testid="artifact-markdown-preview"
     >
-      <MarkdownView text={previewLines(text, 6, 400)} />
+      <MarkdownView text={previewMarkdown(text, 6, 400)} />
     </div>
   ) : (
     <MarkdownView text={text} />
