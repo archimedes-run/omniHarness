@@ -33,6 +33,8 @@ class ArtifactRow(Base):
     #: In the owner's store (the Saved tab). False: it belongs to its chat.
     saved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     saved_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: The chat that made it was deleted (the artifact itself is kept).
+    origin_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     archived_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     #: The latest version's text for text kinds (search, FR-034); never served.
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -117,3 +119,13 @@ class ArtifactBundleFileRow(Base):
         UniqueConstraint("artifact_id", "n", "path", name="uq_artifact_bundle_files_path"),
         Index("ix_artifact_bundle_files_owner_hash", "owner_id", "content_hash"),
     )
+
+
+class ArtifactMetaRow(Base):
+    """One-time store migrations, recorded as done (separately from any column
+    they add, so a crash between the two is finished on the next start)."""
+
+    __tablename__ = "artifact_meta"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    done_at: Mapped[float] = mapped_column(Float, nullable=False)

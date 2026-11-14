@@ -268,6 +268,7 @@ CODE_LANGUAGES = {
     ".toml": "toml", ".xml": "xml", ".txt": "text", ".r": "r", ".lua": "lua",
 }  # fmt: skip
 TEXT_FILE_MEDIA = "text/plain"
+MAX_PATH_CHARS = 400
 WEBAPP_ENTRY = "index.html"
 
 
@@ -307,6 +308,8 @@ def _relative(path: str) -> str:
     elif path.rstrip("/") == OUTPUTS_PREFIX.rstrip("/"):
         path = ""
     path = path.strip("/")
+    if len(path) > MAX_PATH_CHARS:
+        raise InvalidRequest(f"path is longer than {MAX_PATH_CHARS} characters.")
     safe_open.components(path or "x")  # refuses "..", ".", empty parts, NUL
     return path
 
@@ -323,6 +326,8 @@ def import_from_chat(store: ArtifactStore, owner_id: str, thread_id: str, path: 
         raise InvalidRequest("path must be a plain path under the chat's outputs.") from None
     common = {"lineage": "import", "lineage_source": IMPORT_SOURCE, "origin": "import", "thread_id": thread_id, "imported_from": f"{thread_id}:{OUTPUTS_PREFIX}{rel}", "saved": True}
     if rel and not safe_open.is_dir_under(outputs, rel):
+        if rel.rsplit("/", 1)[-1].startswith("."):
+            raise InvalidRequest("hidden files (such as .env) are not saved as artifacts.")
         try:
             data = safe_open.read_under(outputs, rel, caps.BINARY_VERSION_BYTES)
         except safe_open.Refused as exc:
@@ -341,7 +346,7 @@ def import_from_chat(store: ArtifactStore, owner_id: str, thread_id: str, path: 
     try:
         files, skipped = safe_open.read_tree(outputs, rel, max_files=caps.WEBAPP_FILES, max_bytes=caps.WEBAPP_BYTES)
     except safe_open.Refused as exc:
-        if str(exc) in ("too many files", "over the size cap"):
+        if str(exc) in ("too many files", "over the size cap", "too deep", "too many directories"):
             raise TooLarge(caps.WEBAPP_BYTES + 1, caps.WEBAPP_BYTES) from None
         raise InvalidRequest("path must be a plain directory under the chat's outputs.") from None
     if WEBAPP_ENTRY not in files:

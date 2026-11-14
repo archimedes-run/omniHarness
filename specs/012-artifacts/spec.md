@@ -140,13 +140,13 @@ Pre-compile in the sandbox. Compiling in the frame needs `eval`/`new Function` o
 
 ### C2. Saved artifacts, download, render anywhere (amendment, owner decision 2026-11-14)
 
-- **FR-060**: An artifact MUST carry `saved` (default false) and `saved_at`. An artifact the assistant makes is unsaved and belongs to its chat (inline card, the chat's artifact list). The store's default view lists saved artifacts only. Pinning saves; Unsave unpins.
+- **FR-060**: An artifact MUST carry `saved` (default false) and `saved_at`. An artifact the assistant makes is unsaved and belongs to its chat (inline card, the chat's artifact list). The store's Saved tab lists saved artifacts only. Owner intent saves: pin, rename, owner edit, restore. Unsave unpins; archiving does not unsave.
 - **FR-061**: Save and Unsave MUST be owner buttons only: owner browser session plus CSRF. No model tool can save, and no rule names one, so the policy layer refuses any such name.
-- **FR-062**: Nothing MUST be deleted on the owner's behalf. Unsaved artifacts are removed only when the owner deletes their chat (the existing delete flow and confirmation) or the artifact itself. A sweep pruning unsaved artifacts not changed for N days MAY be turned on in config (`artifacts.prune_unsaved_after_days`, default null: off); it never touches saved, pinned or archived artifacts. Unsaved artifacts count toward the per-owner cap.
+- **FR-062**: Nothing MUST be deleted on the owner's behalf. Deleting a chat never deletes artifacts: they stay stored, marked `origin_deleted`. An artifact is removed only by the owner's own archive-then-typed delete. A sweep pruning unsaved artifacts not changed for N days MAY be turned on in config (`artifacts.prune_unsaved_after_days`, default null: off); it never touches saved, pinned or archived artifacts. Unsaved artifacts count toward the per-owner cap.
 - **FR-063**: "Save to artifacts" on a chat's output MUST read through the link-safe path (no link followed, regular files only, read from the opened file within its cap) and create a SAVED artifact; a directory with an `index.html` becomes one `webapp` artifact.
 - **FR-064**: Download MUST give every version as an attachment with a sanitised file name and the kind's extension, with the content route's headers (nosniff, no-store, sandbox CSP).
 - **FR-065**: Every kind MUST have a render target in the store (api.md, "Rendering in the store"): static kinds by the host renderers, UTF-8 `file`s as text, other `file`s as a download card, `html`, `react` and `webapp` only in the locked frame (Slice 2), never as a page on the app's origin.
-- **FR-066**: On deploy, existing artifacts MUST become saved only where the owner showed intent (pinned, edited or restored by the owner, or metadata changed after the latest version, as a rename does); the rest stay unsaved and in their chats. Nothing is deleted.
+- **FR-066**: On deploy, existing artifacts MUST become saved where the owner showed intent (pinned, edited or restored by the owner, metadata changed after the latest version as a rename does, or archived); the rest stay unsaved and in their chats. The rule runs once, recorded separately from the columns. Nothing is deleted.
 
 ### D. Exports
 

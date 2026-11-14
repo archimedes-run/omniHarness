@@ -183,6 +183,7 @@ class ArtifactStore:
             "pinned": bool(row.pinned),
             "saved": bool(row.saved),
             "saved_at": iso(row.saved_at),
+            "origin_deleted": bool(row.origin_deleted),
             "archived": row.archived_at is not None,
             "archived_at": iso(row.archived_at),
             "origin_thread_id": row.origin_thread_id,
@@ -514,6 +515,8 @@ class ArtifactStore:
                 chat_ref=chat_ref,
                 post=post,
             )
+            if origin in ("owner_edit", "restore"):
+                self._owner_intent(row)
             self._prune(s, row, post)
             return self._summary(s, row), _version_dict(version, row.kind)
 
@@ -554,12 +557,13 @@ class ArtifactStore:
             row = self._artifact(s, owner_id, artifact_id)
             if title is not None:
                 row.title = clean_title(title)
+                self._owner_intent(row)
             if pinned is not None:
                 if row.archived_at is not None and pinned:
                     raise Archived("An archived artifact cannot be pinned.")
                 row.pinned = bool(pinned)
-                if pinned and not row.saved:  # a pinned item is one the owner keeps
-                    row.saved, row.saved_at = True, time.time()
+                if pinned:  # a pinned item is one the owner keeps
+                    self._owner_intent(row)
             row.updated_at = time.time()
             s.flush()
             return self._summary(s, row)
@@ -610,8 +614,6 @@ class ArtifactStore:
         with self._write() as s:
             row = self._artifact(s, owner_id, artifact_id)
             if saved and not row.saved:
-                if row.archived_at is not None:
-                    raise Archived("An archived artifact cannot be saved; restore it from the archive first.")
                 row.saved, row.saved_at = True, time.time()
             elif not saved and row.saved:
                 row.saved, row.saved_at, row.pinned = False, None, False
@@ -632,16 +634,21 @@ class ArtifactStore:
         s.flush()
         return hashes
 
-    def delete_unsaved_for_thread(self, owner_id: str, thread_id: str) -> int:
-        """The owner deleted this chat (its own confirmation): its UNSAVED
-        artifacts go with it. Saved ones stay in the store."""
-        hashes: set[str] = set()
+    def mark_origin_deleted(self, owner_id: str, thread_id: str) -> int:
+        """The owner deleted this chat. Its artifacts are KEPT (saved or not);
+        they are only marked, so the UI can say "from a chat you deleted"."""
         with self._write() as s:
-            rows = s.execute(select(ArtifactRow).where(ArtifactRow.owner_id == owner_id, ArtifactRow.origin_thread_id == thread_id, ArtifactRow.saved.is_(False))).scalars().all()
+            rows = s.execute(select(ArtifactRow).where(ArtifactRow.owner_id == owner_id, ArtifactRow.origin_thread_id == thread_id)).scalars().all()
             for row in rows:
-                hashes |= self._purge(s, row)
-        self._settle(owner_id, ensure={}, gc=hashes)
-        return len(rows)
+                row.origin_deleted = True
+            return len(rows)
+
+    @staticmethod
+    def _owner_intent(row: ArtifactRow) -> None:
+        """An owner edit, restore, rename or pin keeps the artifact: saved
+        (the same rule the one-time migration applied to older artifacts)."""
+        if not row.saved:
+            row.saved, row.saved_at = True, time.time()
 
     def prune_unsaved(self, owner_id: str, *, older_than_days: float, now: float | None = None) -> int:
         """The optional sweep (OFF unless configured): unsaved, unpinned,
@@ -649,7 +656,21 @@ class ArtifactStore:
         cutoff = (now if now is not None else time.time()) - older_than_days * 86400
         hashes: set[str] = set()
         with self._write() as s:
-            rows = s.execute(select(ArtifactRow).where(ArtifactRow.owner_id == owner_id, ArtifactRow.saved.is_(False), ArtifactRow.pinned.is_(False), ArtifactRow.archived_at.is_(None), ArtifactRow.updated_at < cutoff)).scalars().all()
+            rows = (
+                s.execute(
+                    select(ArtifactRow).where(
+                        ArtifactRow.owner_id == owner_id,
+                        ArtifactRow.saved.is_(False),
+                        ArtifactRow.pinned.is_(False),
+                        ArtifactRow.archived_at.is_(None),
+                        ArtifactRow.updated_at < cutoff,
+                        # Anything the owner touched is spared even if unsaved.
+                        ArtifactRow.id.not_in(select(ArtifactVersionRow.artifact_id).where(ArtifactVersionRow.origin.in_(("owner_edit", "restore", "duplicate")))),
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for row in rows:
                 hashes |= self._purge(s, row)
         self._settle(owner_id, ensure={}, gc=hashes)

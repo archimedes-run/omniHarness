@@ -15,7 +15,7 @@ there is no matching entity directory.
 """
 
 from omniharness.persistence.apps.model import AppApprovalCardRow, AppAuditRow, AppGrantRow, AppLeaseRow, AppOpenRow, AppPinsRow, AppRateRow, AppSourceCacheRow
-from omniharness.persistence.artifacts.model import ArtifactBundleFileRow, ArtifactImportRow, ArtifactRow, ArtifactVersionRow
+from omniharness.persistence.artifacts.model import ArtifactBundleFileRow, ArtifactImportRow, ArtifactMetaRow, ArtifactRow, ArtifactVersionRow
 from omniharness.persistence.composio_connections.model import ComposioConnectionRow
 from omniharness.persistence.feedback.model import FeedbackRow
 from omniharness.persistence.home_dismissals.model import HomeDismissalRow
@@ -47,6 +47,7 @@ __all__ = [
     "AppSourceCacheRow",
     "ArtifactBundleFileRow",
     "ArtifactImportRow",
+    "ArtifactMetaRow",
     "ArtifactRow",
     "ArtifactVersionRow",
     "ComposioConnectionRow",

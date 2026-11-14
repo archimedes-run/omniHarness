@@ -52,7 +52,7 @@ Every slice: backend and frontend in one PR; tests through `create_app()`; sabot
 
 ### S1b: Saved artifacts (owner decision 2026-11-14, spec FR-060 to FR-066)
 
-- **Backend**: `saved` / `saved_at` on artifacts (added once, with the intent rule for existing rows, in `persistence/engine.py`); save and unsave routes; `saved` filter (default true); download route (`artifacts_store/downloads.py`); owner-only "Save to artifacts" (`POST /api/artifacts/import`) through `safe_open`, with the `webapp` file set (`artifact_bundle_files`); the automatic importer removed; deleting a chat removes its unsaved artifacts; the optional sweep, off by default.
+- **Backend**: `saved` / `saved_at` on artifacts (added once, with the intent rule for existing rows, in `persistence/engine.py`); save and unsave routes; `saved` filter (default true); download route (`artifacts_store/downloads.py`); owner-only "Save to artifacts" (`POST /api/artifacts/import`) through `safe_open`, with the `webapp` file set (`artifact_bundle_files`); the automatic importer removed; deleting a chat never deletes artifacts (they are marked `origin_deleted`); the optional sweep, off by default.
 - **Frontend**: Save and Download on every card and in the panel; Saved and Unsaved tabs; "Save to artifacts" on chat output files; the render matrix (`render` on each version).
 - **Tests**: authz, CSRF and owner scoping of save; the default listing; download headers and hostile titles; link-safe import; the sweep never touches saved; the migration rule; no model path to save. Each guard sabotaged.
 

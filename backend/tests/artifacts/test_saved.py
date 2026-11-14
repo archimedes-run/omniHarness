@@ -37,8 +37,9 @@ def test_made_artifacts_are_unsaved_and_out_of_the_default_listing(gateway):
     aid = make(gateway)
     c = gateway.client
     assert gateway.store.get(gateway.user_id, aid)["saved"] is False
-    assert ids(c.get("/api/artifacts")) == [], "the store's default view lists saved artifacts only"
+    assert ids(c.get("/api/artifacts?saved=true")) == [], "the Saved tab lists saved artifacts only"
     assert ids(c.get("/api/artifacts?saved=false")) == [aid]
+    assert ids(c.get("/api/artifacts")) == [aid], "the default stays `all` for the deployed store page"
     assert ids(c.get("/api/artifacts?saved=all")) == [aid]
     assert [a["id"] for a in c.get("/api/artifacts/threads/thread-a").json()["artifacts"]] == [aid], "the chat still has it"
 
@@ -50,12 +51,12 @@ def test_save_and_unsave(gateway):
     assert resp.status_code == 200
     state = gateway.store.get(gateway.user_id, aid)
     assert state["saved"] is True and state["saved_at"]
-    assert ids(c.get("/api/artifacts")) == [aid]
+    assert ids(c.get("/api/artifacts?saved=true")) == [aid]
     c.patch(f"/api/artifacts/{aid}", json={"pinned": True})
     c.post(f"/api/artifacts/{aid}/unsave")
     state = gateway.store.get(gateway.user_id, aid)
     assert state["saved"] is False and state["saved_at"] is None and state["pinned"] is False, "unsave also unpins"
-    assert ids(c.get("/api/artifacts")) == []
+    assert ids(c.get("/api/artifacts?saved=true")) == []
 
 
 def test_pinning_saves(gateway):
@@ -64,12 +65,32 @@ def test_pinning_saves(gateway):
     assert gateway.store.get(gateway.user_id, aid)["saved"] is True
 
 
-def test_an_archived_artifact_is_not_saved(gateway):
+def test_archived_artifacts_may_be_saved_and_archiving_does_not_unsave(gateway):
     aid = make(gateway)
-    gateway.client.post(f"/api/artifacts/{aid}/archive")
-    resp = gateway.client.post(f"/api/artifacts/{aid}/save")
-    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "artifact_archived"
-    assert gateway.store.get(gateway.user_id, aid)["saved"] is False
+    c = gateway.client
+    c.post(f"/api/artifacts/{aid}/archive")
+    assert c.post(f"/api/artifacts/{aid}/save").status_code == 200
+    assert gateway.store.get(gateway.user_id, aid)["saved"] is True
+    other = make(gateway, content="# other")
+    c.post(f"/api/artifacts/{other}/save")
+    c.post(f"/api/artifacts/{other}/archive")
+    state = gateway.store.get(gateway.user_id, other)
+    assert state["saved"] is True and state["archived"] is True
+    assert other in ids(c.get("/api/artifacts?archived=true")), "the Archived tab lists every saved state"
+
+
+def test_owner_edit_restore_and_rename_save(gateway):
+    c = gateway.client
+    edited, restored, renamed = (make(gateway, content=f"# {n}") for n in ("e", "r", "n"))
+    c.post(f"/api/artifacts/{edited}/versions", json={"base_version": 1, "content": "# typed"})
+    gateway.store.add_version(gateway.user_id, restored, base_version=1, canon=canonical("markdown", "# v2"), lineage="user", lineage_source=None, origin="tool")
+    c.post(f"/api/artifacts/{restored}/restore", json={"version": 1, "base_version": 2})
+    c.patch(f"/api/artifacts/{renamed}", json={"title": "Better name"})
+    for aid in (edited, restored, renamed):
+        assert gateway.store.get(gateway.user_id, aid)["saved"] is True, aid
+    untouched = make(gateway, content="# u")
+    gateway.store.add_version(gateway.user_id, untouched, base_version=1, canon=canonical("markdown", "# u2"), lineage="user", lineage_source=None, origin="tool")
+    assert gateway.store.get(gateway.user_id, untouched)["saved"] is False, "an assistant update is not the owner's intent"
 
 
 def test_save_needs_the_owners_session_and_csrf(gateway):
@@ -89,20 +110,27 @@ def test_save_needs_the_owners_session_and_csrf(gateway):
     assert gateway.store.get("someone-else", theirs)["saved"] is False
 
 
-def test_deleting_a_chat_removes_its_unsaved_artifacts_only(gateway):
-    c = gateway.client
-    thread_id = c.post("/api/threads", json={}).json()["thread_id"]
-    kept = make(gateway, thread=thread_id, content="# keep")
-    gone = make(gateway, thread=thread_id, content="# gone")
-    other = make(gateway, thread="another-chat", content="# other")
-    c.post(f"/api/artifacts/{kept}/save")
-    gone_hash = gateway.store.versions(gateway.user_id, gone)[0]["content_hash"]
-    assert c.delete(f"/api/threads/{thread_id}").status_code == 200
-    rows = {a["id"] for a in gateway.store.list(gateway.user_id, saved="all")[0]}
-    assert rows == {kept, other}
+def test_deleting_a_chat_never_deletes_artifacts(gateway):
+    """Saved, unsaved, archived, owner-edited and cross-chat-updated artifacts
+    and every blob survive the chat's delete; they are only marked."""
     from app.gateway.artifacts_store import blobs
 
-    assert not blobs.path_for(gateway.user_id, gone_hash).exists()
+    c = gateway.client
+    thread_id = c.post("/api/threads", json={}).json()["thread_id"]
+    made = {n: make(gateway, thread=thread_id, content=f"# {n}") for n in ("saved", "unsaved", "archived", "edited", "cross")}
+    c.post(f"/api/artifacts/{made['saved']}/save")
+    c.post(f"/api/artifacts/{made['archived']}/archive")
+    c.post(f"/api/artifacts/{made['edited']}/versions", json={"base_version": 1, "content": "# typed"})
+    gateway.store.add_version(gateway.user_id, made["cross"], base_version=1, canon=canonical("markdown", "# from another chat"), lineage="user", lineage_source=None, origin="tool", thread_id="another-chat")
+    before = {aid: gateway.store.versions(gateway.user_id, aid) for aid in made.values()}
+    assert c.delete(f"/api/threads/{thread_id}").status_code == 200
+    for name, aid in made.items():
+        state = gateway.store.get(gateway.user_id, aid)
+        assert state["origin_deleted"] is True and state["origin_thread_id"] == thread_id, name
+        assert gateway.store.versions(gateway.user_id, aid) == before[aid], name
+        for v in before[aid]:
+            assert blobs.path_for(gateway.user_id, v["content_hash"]).exists(), name
+    assert made["unsaved"] in ids(c.get("/api/artifacts?saved=false"))
 
 
 def test_the_sweep_is_off_by_default_and_never_touches_saved_pinned_or_archived(gateway):
@@ -309,4 +337,74 @@ def test_existing_artifacts_are_saved_only_where_the_owner_showed_intent(tmp_pat
     with engine.begin() as conn:
         saved = {r[0] for r in conn.execute(text("SELECT id FROM artifacts WHERE saved"))}
         assert migrate_artifacts_saved(conn, "sqlite") is False, "runs once"
-    assert saved == {"pinned", "edited", "restored", "renamed"}
+    assert saved == {"pinned", "edited", "restored", "renamed", "archived"}
+
+
+def test_the_rule_runs_when_a_start_stopped_between_the_column_and_the_rule(tmp_path):
+    from sqlalchemy import create_engine, text
+
+    from omniharness.persistence.engine import migrate_artifacts_saved
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'half.db'}")
+    with engine.begin() as conn:
+        # The column exists (an earlier start added it) but the rule never ran.
+        conn.execute(text("CREATE TABLE artifacts (id VARCHAR PRIMARY KEY, owner_id VARCHAR, pinned BOOLEAN, archived_at FLOAT, updated_at FLOAT, saved BOOLEAN NOT NULL DEFAULT 0, saved_at FLOAT)"))
+        conn.execute(text("CREATE TABLE artifact_versions (artifact_id VARCHAR, origin VARCHAR, created_at FLOAT)"))
+        conn.execute(text("INSERT INTO artifacts (id, owner_id, pinned, archived_at, updated_at) VALUES ('p', 'o', 1, NULL, 10), ('u', 'o', 0, NULL, 10)"))
+        conn.execute(text("INSERT INTO artifact_versions VALUES ('p', 'tool', 10), ('u', 'tool', 10)"))
+    with engine.begin() as conn:
+        assert migrate_artifacts_saved(conn, "sqlite") is True
+        assert {r[0] for r in conn.execute(text("SELECT id FROM artifacts WHERE saved"))} == {"p"}
+        assert migrate_artifacts_saved(conn, "sqlite") is False
+
+
+# -- bounds on what "Save to artifacts" reads ----------------------------------------------
+
+
+def test_hidden_files_hard_links_and_long_paths_are_refused(gateway, chat):
+    thread_id, out = chat
+    (out / ".env").write_text("SECRET=1")
+    (out / "real.md").write_text("# real")
+    os.link(out / "real.md", out / "linked.md")
+    for path, why in ((".env", "hidden"), ("linked.md", ""), ("a/" * 201 + "x.md", "longer")):
+        resp = _import(gateway, thread_id, path)
+        assert resp.status_code == 422 and resp.json()["detail"]["code"] == "invalid_request", (path, resp.text)
+        assert why in resp.json()["detail"]["message"]
+    assert gateway.store.list(gateway.user_id, saved="all")[1] == 0
+
+
+def test_web_app_walk_bounds(gateway, chat, monkeypatch):
+    from app.gateway.artifacts_store import safe_open
+
+    thread_id, out = chat
+    site = out / "site"
+    site.mkdir()
+    (site / "index.html").write_text("<p>x</p>")
+    (site / "a\\b.js").write_text("x")
+    (site / "c:d.js").write_text("x")
+    (site / "e\u202ef.js").write_text("x")
+    (site / "real.js").write_text("y")
+    os.link(site / "real.js", site / "hard.js")
+    body = _import(gateway, thread_id, "site").json()
+    assert sorted(body["skipped"]) == sorted(["a\\b.js", "c:d.js", "e\u202ef.js", "hard.js", "real.js"])
+    deep = out / "deep"
+    path = deep
+    for i in range(14):
+        path = path / f"d{i}"
+    path.mkdir(parents=True)
+    (deep / "index.html").write_text("<p>x</p>")
+    assert _import(gateway, thread_id, "deep").status_code == 413
+    wide = out / "wide"
+    wide.mkdir()
+    (wide / "index.html").write_text("<p>x</p>")
+    for i in range(5):
+        (wide / f"d{i}").mkdir()
+    monkeypatch.setattr(safe_open, "MAX_DIRS", 3)
+    assert _import(gateway, thread_id, "wide").status_code == 413
+    monkeypatch.setattr(safe_open, "MAX_SKIPPED_LISTED", 2)
+    many = out / "many"
+    many.mkdir()
+    (many / "index.html").write_text("<p>x</p>")
+    for i in range(5):
+        (many / f".h{i}").write_text("x")
+    assert len(_import(gateway, thread_id, "many").json()["skipped"]) == 2

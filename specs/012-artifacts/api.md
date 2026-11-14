@@ -10,31 +10,40 @@ artifacts" on a chat's output, below).
 ## Saved and unsaved (owner decision, 2026-11-14)
 
 - An artifact the assistant makes is **unsaved**: it belongs to its chat
-  (inline card, the chat's artifact list) and is NOT in the store's default
-  view. The owner's **Save** button makes it **saved**: the store's Saved tab
-  lists saved artifacts only (`GET /api/artifacts`, default `saved=true`).
+  (inline card, the chat's artifact list) and is NOT on the store's Saved tab.
+  The owner's **Save** button makes it **saved**: the Saved tab lists saved
+  artifacts only. The new store page sends `saved` EXPLICITLY
+  (`GET /api/artifacts?saved=true` for Saved, `saved=false` for Unsaved);
+  the API's default stays `saved=all`, today's behaviour, so the deployed page
+  keeps working until the new one ships. `archived=true` (the Archived tab)
+  lists archived artifacts in every saved state.
 - Save, Unsave, Download and "Save to artifacts" (a chat's output file) are the
   OWNER's buttons. No model tool can save: there is no `artifact_save` tool and
   no rule for one, so the policy layer refuses the name.
-- Nothing is deleted on the owner's behalf. An unsaved artifact stays with its
-  chat until the owner deletes that chat (the existing delete flow and its
-  confirmation removes the chat's unsaved artifacts with it) or deletes the
-  artifact. Saved artifacts outlive their chat. An optional sweep that prunes
-  unsaved artifacts not changed for N days exists but ships OFF
-  (`artifacts.prune_unsaved_after_days: null` in config.yaml); when an owner
-  turns it on it never touches saved, pinned or archived artifacts.
+- Nothing is deleted on the owner's behalf. **Deleting a chat never deletes
+  artifacts** (neither the chat's delete nor a run-history thread delete):
+  they stay stored with `origin_thread_id` kept and `origin_deleted: true`,
+  so the UI can say "from a chat you deleted"; unsaved ones stay on the
+  Unsaved view until the owner saves them or deletes them (archive, then the
+  typed delete). An optional sweep that prunes unsaved artifacts not changed
+  for N days exists but ships OFF (`artifacts.prune_unsaved_after_days: null`
+  in config.yaml); when an owner turns it on it never touches saved, pinned or
+  archived artifacts, or any the owner edited, restored or copied.
 - Unsaved artifacts count toward the 1 GB per-owner cap like saved ones.
-- Pinning an artifact also saves it (a pinned item is one the owner keeps).
-  Unsave also unpins.
+- Owner intent saves: pinning, renaming, an owner edit or a restore sets
+  `saved: true` (the same rule the one-time migration applied to older
+  artifacts). An assistant update does not. Unsave also unpins. An archived
+  artifact may be saved, and archiving does not unsave.
 - Chat outputs are no longer imported automatically.
 
 ### What the owner sees after this change is deployed
 
-Existing artifacts are migrated once, when the `saved` column is added:
-saved = true for those the owner showed intent on (pinned; edited or restored
-by the owner; or metadata changed after their latest version, which is how a
-rename shows), false for everything else, including the files the old importer
-pulled in. Nothing is deleted. The Saved tab is therefore nearly empty at
+Existing artifacts are migrated once (recorded as done in `artifact_meta`,
+separately from the columns, so a start that stopped half way finishes on the
+next one): saved = true for those the owner showed intent on (pinned; edited
+or restored by the owner; metadata changed after their latest version, which
+is how a rename shows; or archived), false for everything else, including the
+files the old importer pulled in. Nothing is deleted. The Saved tab is therefore nearly empty at
 first; every other artifact is still reachable from its chat (inline cards and
 the chat's artifact list) and from the store's "Unsaved" view
 (`saved=false`), where Save puts it back in the store.
@@ -108,6 +117,7 @@ A write over any cap is refused before anything is stored.
   "pinned": false,
   "saved": false,
   "saved_at": null,
+  "origin_deleted": false,
   "archived": false,
   "archived_at": null,
   "origin_thread_id": "6c0e…",
@@ -339,8 +349,8 @@ chat).
 
 ### `POST /api/artifacts/{id}/save` (CSRF) and `POST /api/artifacts/{id}/unsave` (CSRF)
 
-Owner session only. Idempotent. Save sets `saved: true` and `saved_at`;
-saving an archived artifact is `409 artifact_archived`. Unsave sets
+Owner session only. Idempotent. Save sets `saved: true` and `saved_at`
+(archived ones too). Unsave sets
 `saved: false`, `saved_at: null` and unpins. Returns `ArtifactSummary`.
 
 ### `POST /api/artifacts/import` (CSRF): "Save to artifacts" on a chat's output
@@ -350,8 +360,9 @@ Owner session only. Body: `{"thread_id": "…", "path": "/mnt/user-data/outputs/
 The chat must be the owner's (else `404 artifact_not_found`, no oracle).
 Every file is opened without following links, relative to the opened outputs
 directory (`O_NOFOLLOW`, regular files only, no FIFOs) and read from that open
-file only, at most its cap; a link, a special file or a path with `..` is
-`422 invalid_request`.
+file only, at most its cap; a link, a hard link, a special file, a hidden file
+(a name starting with `.`, such as `.env`), a path with `..` or a path over
+400 characters is `422 invalid_request`.
 
 - A **file** becomes a SAVED artifact, origin `import`, lineage `import`
   (source "a file from this chat"), `imported_from` set: kind by content
@@ -360,9 +371,11 @@ file only, at most its cap; a link, a special file or a path with `..` is
   that is UTF-8 text gets `render: "text"`). Cap 10 MB.
 - A **directory** with an `index.html` (a coding job's static web app) becomes
   ONE saved artifact of kind `webapp`: an immutable file set, entry
-  `index.html`. Caps: at most 500 files and 20 MB in all, regular files only;
-  links and special files are skipped and listed in `skipped`; hidden entries
-  (`.name`) are skipped. Over a cap is `413 too_large`, nothing stored.
+  `index.html`. Caps: at most 500 files and 20 MB in all, 12 directory levels
+  and 200 directories, regular files only. Links, hard links, special files,
+  hidden entries (`.name`) and names holding `\`, `:` or control or format
+  characters are skipped and listed in `skipped` (at most 200 listed). Over a
+  cap is `413 too_large`, nothing stored.
 - Saving the same path again with the same content returns the existing
   artifact (`200`, `"created": false`); changed content is a new artifact.
 

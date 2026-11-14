@@ -17,6 +17,7 @@ between a check and an open. Nothing here checks a path and then reopens it:
 from __future__ import annotations
 
 import os
+import re
 import stat
 from collections.abc import Callable
 from pathlib import Path
@@ -58,6 +59,8 @@ def read_under(root: Path, rel: str, cap: int, *, expect: os.stat_result | None 
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise Refused("not a regular file")
+        if info.st_nlink > 1:
+            raise Refused("a hard link")
         if expect is not None and (info.st_dev, info.st_ino) != (expect.st_dev, expect.st_ino):
             raise Refused("changed since it was listed")
         if info.st_size > cap:
@@ -95,6 +98,15 @@ def is_dir_under(root: Path, rel: str) -> bool:
             os.close(opened)
 
 
+#: Bounds of one tree walk, besides the file and byte caps.
+MAX_DEPTH = 12
+MAX_DIRS = 200
+MAX_SKIPPED_LISTED = 200
+#: A bundle name may not hold these (they mean something else on other systems
+#: or could forge what a path looks like).
+_BAD_NAME = re.compile(r"[\\:\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+
+
 def read_tree(root: Path, rel: str, *, max_files: int, max_bytes: int) -> tuple[dict[str, bytes], list[str]]:
     """Every regular file under `root/rel`, walked through directory fds (each
     opened with O_NOFOLLOW relative to its parent) and read from its own fd.
@@ -104,7 +116,13 @@ def read_tree(root: Path, rel: str, *, max_files: int, max_bytes: int) -> tuple[
     files: dict[str, bytes] = {}
     skipped: list[str] = []
     total = 0
+    dirs = 0
     fds: list[int] = []
+
+    def skip(path: str) -> None:
+        if len(skipped) < MAX_SKIPPED_LISTED:
+            skipped.append(path)
+
     try:
         try:
             fds.append(os.open(root, _DIR_FLAGS))
@@ -113,44 +131,49 @@ def read_tree(root: Path, rel: str, *, max_files: int, max_bytes: int) -> tuple[
         except OSError as exc:
             raise Refused("not a plain directory") from exc
 
-        def walk(dir_fd: int, prefix: str) -> None:
-            nonlocal total
+        def walk(dir_fd: int, prefix: str, depth: int) -> None:
+            nonlocal total, dirs
+            if depth > MAX_DEPTH:
+                raise Refused("too deep")
             for entry in sorted(os.scandir(dir_fd), key=lambda e: e.name):
                 name = entry.name
                 path = f"{prefix}{name}"
-                if name.startswith("."):
-                    skipped.append(path)
+                if name.startswith(".") or _BAD_NAME.search(name):
+                    skip(path)
                     continue
                 try:
                     info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
                 except OSError:
-                    skipped.append(path)
+                    skip(path)
                     continue
                 if stat.S_ISDIR(info.st_mode):
+                    dirs += 1
+                    if dirs > MAX_DIRS:
+                        raise Refused("too many directories")
                     try:
                         sub = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
                     except OSError:
-                        skipped.append(path)
+                        skip(path)
                         continue
                     try:
-                        walk(sub, f"{path}/")
+                        walk(sub, f"{path}/", depth + 1)
                     finally:
                         os.close(sub)
                     continue
-                if not stat.S_ISREG(info.st_mode):
-                    skipped.append(path)  # links, FIFOs, devices
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                    skip(path)  # links, FIFOs, devices, hard links
                     continue
                 if len(files) >= max_files:
                     raise Refused("too many files")
                 try:
                     fd = os.open(name, _FILE_FLAGS, dir_fd=dir_fd)
                 except OSError:
-                    skipped.append(path)
+                    skip(path)
                     continue
                 try:
                     opened = os.fstat(fd)
                     if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-                        skipped.append(path)
+                        skip(path)
                         continue
                     left = max_bytes - total
                     chunks: list[bytes] = []
@@ -169,7 +192,7 @@ def read_tree(root: Path, rel: str, *, max_files: int, max_bytes: int) -> tuple[
                 total += len(data)
                 files[path] = data
 
-        walk(fds[-1], "")
+        walk(fds[-1], "", 0)
         return files, skipped
     finally:
         for opened in reversed(fds):

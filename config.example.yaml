@@ -568,9 +568,9 @@ agents_api:
 # Artifact store (Spec 012)
 # ============================================================================
 # Unsaved artifacts (the ones the assistant made that the owner did not Save)
-# live with their chat and are removed only when the owner deletes that chat
-# or the artifact. Set a number of days to also prune unsaved artifacts not
-# changed for that long; saved, pinned and archived ones are never pruned.
+# are kept until the owner deletes them; deleting a chat never deletes them.
+# Set a number of days to prune unsaved artifacts not changed for that long;
+# saved, pinned, archived and owner-edited ones are never pruned.
 artifacts:
   prune_unsaved_after_days: null # off: nothing is deleted on the owner's behalf
 

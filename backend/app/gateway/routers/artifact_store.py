@@ -91,7 +91,9 @@ async def _call(fn, *args, **kwargs):
 @require_permission("threads", "read")
 async def list_artifacts(
     request: Request,
-    saved: Literal["true", "false", "all"] = "true",
+    # Default `all` (what the deployed store page expects); the new store page
+    # asks for `saved=true` explicitly.
+    saved: Literal["true", "false", "all"] = "all",
     kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "file", "webapp"] | None = None,
     pinned: bool | None = None,
     archived: Literal["false", "true", "all"] = "false",
@@ -252,7 +254,7 @@ async def patch_artifact(artifact_id: str, body: PatchBody, request: Request) ->
 class ImportBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     thread_id: str = Field(..., min_length=1, max_length=128)
-    path: str = Field(..., min_length=1, max_length=600)
+    path: str = Field(..., min_length=1, max_length=4096)
 
 
 @router.post("/import", status_code=201)
