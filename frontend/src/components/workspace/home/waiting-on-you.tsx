@@ -14,7 +14,11 @@ import type { PendingAction, ResolveResult } from "@/core/confirmations/types";
 import { useDismissAlerts } from "@/core/home/hooks";
 import { ago, alertKey, knownBy } from "@/core/home/logic";
 import { countsTowardBadge, useInboxAlerts } from "@/core/inbox/hooks";
+import { useOpenQuestions } from "@/core/questions/hooks";
+import type { QuestionView } from "@/core/questions/types";
 import type { SessionRow } from "@/core/sessions/types";
+
+import { QuestionCard } from "../questions/question-card";
 
 import { AlertWaitingRow } from "./alert-waiting-row";
 import { ApprovalRow } from "./approval-row";
@@ -52,7 +56,21 @@ export function WaitingOnYou({
   const inbox = useInboxAlerts();
   const dismiss = useDismissAlerts();
   const away = inbox.alerts?.alerts.filter(countsTowardBadge);
-  const rows = shown.length + (waiting?.length ?? 0) + (away?.length ?? 0);
+  // Open question cards (009 question-card.md QC-11), beside the approvals.
+  // One answered here stays, with its answer, until the list is read again.
+  const openQuestions = useOpenQuestions();
+  const [answered, setAnswered] = useState<Record<string, QuestionView>>({});
+  const questions = [
+    ...(openQuestions.questions ?? []).map((q) => answered[q.id] ?? q),
+    ...Object.values(answered).filter(
+      (q) => !(openQuestions.questions ?? []).some((o) => o.id === q.id),
+    ),
+  ];
+  const rows =
+    shown.length +
+    questions.length +
+    (waiting?.length ?? 0) +
+    (away?.length ?? 0);
 
   return (
     <section
@@ -104,6 +122,34 @@ export function WaitingOnYou({
         />
       ))}
 
+      {questions.length > 0 && (
+        <div
+          className="flex flex-col gap-2 px-5 py-2"
+          data-testid="questions-waiting"
+        >
+          {questions.map((q) => (
+            <div key={q.id} className="flex flex-col gap-1">
+              <QuestionCard
+                question={q}
+                compact
+                onAnswered={(result) =>
+                  setAnswered((previous) => ({
+                    ...previous,
+                    [q.id]: result.question,
+                  }))
+                }
+              />
+              <Link
+                href={`/workspace/chats/${encodeURIComponent(q.thread_id)}`}
+                className="text-muted-foreground hover:text-foreground self-end text-xs underline-offset-2 hover:underline"
+              >
+                Open the chat
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
+
       {away && away.length > 0 && (
         <div className="contents" data-testid="alerts-waiting">
           {away.map((a) => (
@@ -120,6 +166,14 @@ export function WaitingOnYou({
 
       <div className="space-y-1 px-5 pb-3 empty:hidden">
         {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
+        {openQuestions.error != null && (
+          <p
+            className="text-warning text-sm"
+            data-testid="questions-unreadable"
+          >
+            {`I can't tell which questions are waiting for you: ${String(openQuestions.error)}`}
+          </p>
+        )}
         {approvalsUnreadable && (
           <p className="text-warning text-sm" data-testid="unreadable">
             {`I can't tell which approvals are pending: the pending set could not be read, so this may be missing some. ${pending?.error ?? (error ? String(error) : "")}`}
