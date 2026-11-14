@@ -148,8 +148,12 @@ export function zoned(tz: string) {
 
 // -- building blocks ---------------------------------------------------------------------
 
-/** A list row: the title truncates (with the full text as a tooltip), the meta stays. */
-export function Row({ title, meta, badge, href }: { title: string; meta?: string; badge?: ReactNode; href?: string | null }) {
+/**
+ * A list row: the title truncates (with the full text as a tooltip), the meta
+ * stays. Pass `time` (the ISO time the meta shows) for an event: the meta is
+ * marked data-omni-time, which the system's checks read.
+ */
+export function Row({ title, meta, badge, href, time }: { title: string; meta?: string; badge?: ReactNode; href?: string | null; time?: string | null }) {
   const label = href ? (
     <a className="omni-row-title" href={href} title={title}>
       {title}
@@ -163,7 +167,11 @@ export function Row({ title, meta, badge, href }: { title: string; meta?: string
     <li className="omni-row">
       {badge ? <span className="omni-row-badge">{badge}</span> : null}
       {label}
-      {meta ? <span className="omni-row-meta">{meta}</span> : null}
+      {meta ? (
+        <span className="omni-row-meta" data-omni-time={time ?? undefined}>
+          {meta}
+        </span>
+      ) : null}
     </li>
   );
 }
@@ -218,7 +226,8 @@ export function Timeline({ events, tz, from = 8, to = 19, now }: { events: Timel
           // About 7 px per character at 12 px: only a label that fits is drawn inside.
           const fits = label.length * 7 + 12 <= w;
           return (
-            <g key={i}>
+            <g key={i} data-omni-event={label}>
+              <title data-omni-time={e.start!}>{`${label}, ${z.formatTime(e.start!)}`}</title>
               <rect x={a} y={top} width={w} height={bar} rx={4} className="omni-series" />
               {fits ? (
                 <text x={a + 6} y={top + bar / 2 + 4} className="omni-timeline-label">
@@ -230,7 +239,7 @@ export function Timeline({ events, tz, from = 8, to = 19, now }: { events: Timel
         })}
         <line x1={nowX} x2={nowX} y1={top - 4} y2={top + bar + 4} className="omni-now" />
         {hours.map((h) => (
-          <text key={h} x={Math.min(Math.max(x(h * 60), 10), W - 10)} y={H + 14} textAnchor="middle" className="omni-timeline-hour">
+          <text key={h} x={Math.min(Math.max(x(h * 60), 10), W - 10)} y={H + 14} textAnchor="middle" className="omni-timeline-hour" data-omni-axis="">
             {h % 12 || 12}
             {h < 12 ? "a" : "p"}
           </text>

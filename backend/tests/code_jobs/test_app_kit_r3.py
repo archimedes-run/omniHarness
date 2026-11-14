@@ -35,13 +35,16 @@ def test_sample_data_is_written_for_a_fixed_now_in_the_apps_time_zone():
 
 def test_expected_times_accept_both_clock_styles_and_know_the_utc_ones():
     times = app_kit.expected_times(app_kit.fixtures(manifest()))
-    assert [t["label"] for t in times["local"]] == ["9:30 AM", "11:00 AM", "12:30 PM", "2:00 PM", "4:00 PM"]
-    first = re.compile(times["local"][0]["re"])
+    events = times["events"]
+    assert times["time_zone"] == "America/New_York"
+    assert [e["local_label"] for e in events] == ["9:30 AM", "11:00 AM", "12:30 PM", "2:00 PM", "4:00 PM"]
+    assert events[3]["title"] == "Roadmap planning" and events[3]["iso"] == "2026-01-14T14:00:00-05:00"
+    first = re.compile(events[0]["local_re"])
     assert first.search("Team standup 9:30 AM") and first.search("09:30") and not first.search("19:30")
-    two = re.compile(times["local"][3]["re"])
+    two = re.compile(events[3]["local_re"])
     assert two.search("14:00") and two.search("2:00 PM")
-    assert times["shifted"][0]["label"] == "2:30 PM"
-    assert app_kit.expected_times(app_kit.fixtures(manifest("UTC")))["shifted"] == []
+    assert events[0]["shifted_label"] == "2:30 PM" and events[3]["shifted_label"] == "7:00 PM"
+    assert all(e["shifted_re"] is None for e in app_kit.expected_times(app_kit.fixtures(manifest("UTC")))["events"])
 
 
 def test_the_kit_carries_the_time_zone_and_the_components():
@@ -65,12 +68,17 @@ def parse(raw, **kw):
     return app_checks.parse(raw, exit_code=0, data_sources=["calendar", "inbox", "gh_review"], item_counts=COUNTS, **kw)
 
 
-def test_times_in_another_zone_fail_and_the_right_ones_pass():
-    wrong = _fresh({"times": {"local_found": 0, "first_missing": "9:30 AM", "shifted_found": "2:30 PM"}})
-    r = parse(wrong, times_expected=5)
-    assert r["outcome"] == "fail" and "times are not in the app's time zone (expected 9:30 AM, found 2:30 PM; light)" in r["failures"]
-    right = _fresh({"times": {"local_found": 5, "first_missing": "", "shifted_found": ""}})
-    assert parse(right, times_expected=5)["outcome"] == "pass"
+def _times(marked=(), near=()) -> dict:
+    return {"times": {"marked": list(marked), "near": list(near)}}
+
+
+def test_times_in_another_zone_fail_naming_the_event_and_the_right_ones_pass():
+    expected = app_kit.expected_times(app_kit.fixtures(manifest()))
+    wrong = _fresh(_times(near=[{"kind": "near", "title": "Roadmap planning", "found": True, "ok": False, "wrong": True}]))
+    r = parse(wrong, time_events=expected)
+    assert r["outcome"] == "fail" and "the event 'Roadmap planning' shows 7:00 PM; expected 2:00 PM (America/New_York; light)" in r["failures"]
+    right = _fresh(_times(marked=[{"kind": "marked", "title": "Roadmap planning", "shown": "2:00 PM", "ok": True, "wrong": False}]))
+    assert parse(right, time_events=expected)["outcome"] == "pass"
 
 
 def test_text_cut_to_nothing_and_spilling_chart_labels_fail():
@@ -93,20 +101,26 @@ def test_a_mostly_empty_card_is_a_design_finding_only():
 
 def test_the_check_config_carries_the_times(tmp_path):
     data = app_kit.fixtures(manifest())
-    assert json.loads(json.dumps(app_kit.expected_times(data)))["local"][0]["label"] == "9:30 AM"
+    assert json.loads(json.dumps(app_kit.expected_times(data)))["events"][0]["local_label"] == "9:30 AM"
 
 
 def test_times_pass_when_the_shown_ones_are_local_and_fail_on_a_shifted_or_none():
-    some = _fresh({"times": {"local_found": 2, "first_missing": "12:30 PM", "shifted_found": ""}})
-    assert parse(some, times_expected=5)["outcome"] == "pass"  # a "next 2 meetings" design
-    none = _fresh({"times": {"local_found": 0, "first_missing": "9:30 AM", "shifted_found": ""}})
-    assert parse(none, times_expected=5)["outcome"] == "fail"
-    mixed = _fresh({"times": {"local_found": 4, "first_missing": "", "shifted_found": "2:30 PM"}})
-    assert parse(mixed, times_expected=5)["outcome"] == "fail"
+    expected = app_kit.expected_times(app_kit.fixtures(manifest()))
+    ok = {"kind": "near", "title": "Team standup", "found": True, "ok": True, "wrong": False}
+    some = _fresh(_times(near=[ok, {"kind": "near", "title": "Lunch with Sam", "found": False, "ok": False, "wrong": False}]))
+    assert parse(some, time_events=expected)["outcome"] == "pass"  # a "next 2 meetings" design
+    none = _fresh(_times(near=[{**ok, "ok": False}]))
+    r = parse(none, time_events=expected)
+    assert r["outcome"] == "fail" and any(f.startswith("the calendar's sample times are not shown in the app's time zone (expected 9:30 AM for 'Team standup'") for f in r["failures"])
+    mixed = _fresh(_times(near=[ok, {"kind": "near", "title": "Lunch with Sam", "found": True, "ok": False, "wrong": True}]))
+    assert "the event 'Lunch with Sam' shows 5:30 PM; expected 12:30 PM (America/New_York; light)" in parse(mixed, time_events=expected)["failures"]
+    # A kit-marked time is compared with that event's local time, whatever it shows.
+    off = _fresh(_times(marked=[{"kind": "marked", "title": "Team standup", "shown": "10:30 AM", "ok": False, "wrong": False}]))
+    assert "the event 'Team standup' shows 10:30 AM; expected 9:30 AM (America/New_York; light)" in parse(off, time_events=expected)["failures"]
 
 
 def test_a_utc_time_equal_to_a_local_one_is_never_counted_as_shifted():
-    shifted = [t["label"] for t in app_kit.expected_times(app_kit.fixtures(manifest()))["shifted"]]
+    shifted = [e["shifted_label"] for e in app_kit.expected_times(app_kit.fixtures(manifest()))["events"]]
     assert "4:00 PM" not in shifted and "2:30 PM" in shifted
 
 

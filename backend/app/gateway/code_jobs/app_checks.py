@@ -241,7 +241,7 @@ def _parse(
     nonce: str | None = None,
     prod_sha256: str | None = None,
     item_counts: dict[str, int] | None = None,
-    times_expected: int = 0,
+    time_events: dict | None = None,
 ) -> dict:
     """`nonce`: the one the gateway gave this run of the probe; `prod_sha256`:
     the production page it wrote. A result without them, or with others, was
@@ -390,7 +390,8 @@ def _parse(
                         empty_cards.update(_where(w) for w in _list(app.get("empty_cards"))[:4])
                         if state == "fresh":
                             t = app.get("times") if isinstance(app.get("times"), dict) else {}
-                            times_seen.append((theme, _int(t.get("local_found")) or 0, _text(t.get("first_missing"), 20), _text(t.get("shifted_found"), 20)))
+                            shown = [e for e in [*_list(t.get("marked")), *_list(t.get("near"))] if isinstance(e, dict)]
+                            times_seen.append((theme, shown))
                             more = app.get("more") is True
                             totals = app.get("totals") if isinstance(app.get("totals"), dict) else {}
                             for name in sources:
@@ -479,12 +480,22 @@ def _parse(
         add(f"the page has a nested frame or embedded object ({_join(frames[:3])})")
     if junk:
         knock_on(f'the page shows "undefined", "NaN", "Invalid Date" or "[object Object]" ({_join(junk[:4])})')
-    for theme, local_found, first_missing, shifted_found in times_seen:
-        # Wrong only when a sample event's time shows in another zone, or none shows at all.
-        if times_expected and (shifted_found or local_found == 0):
-            found = f", found {shifted_found}" if shifted_found else ""
-            knock_on(f"times are not in the app's time zone (expected {first_missing or 'the sample times'}{found}; {theme})", "times are not in the app's time zone")
-            break
+    events = {e["title"]: e for e in ((time_events or {}).get("events") or []) if isinstance(e, dict) and e.get("title")}
+    zone = (time_events or {}).get("time_zone") or "UTC"
+    for theme, shown in times_seen[:1] if events else []:
+        # A kit-marked event time must read as the local time; elsewhere only
+        # the same instant in UTC, next to the event's title, counts as wrong.
+        wrong = [e for e in shown if _text(e.get("title"), 60) in events and e.get("ok") is not True and (e.get("wrong") is True or (e.get("kind") == "marked" and _text(e.get("shown"), 12)))]
+        if wrong:
+            ev = events[_text(wrong[0].get("title"), 60)]
+            seen = (ev.get("shifted_label") if wrong[0].get("wrong") is True else None) or _text(wrong[0].get("shown"), 12)
+            knock_on(
+                f"the event '{ev['title']}' shows {seen}; expected {ev['local_label']} ({zone}; {theme})",
+                "times are not in the app's time zone",
+            )
+        elif not any(e.get("ok") is True for e in shown):
+            first = next(iter(events.values()))
+            knock_on(f"the calendar's sample times are not shown in the app's time zone (expected {first['local_label']} for '{first['title']}', {zone}; {theme})", "times are not in the app's time zone")
     for where in sorted(cut)[:3]:
         add(f"a row's title is cut to almost nothing: {where}", "a row's title is cut to almost nothing")
     for where, at in list(spill.items())[:3]:

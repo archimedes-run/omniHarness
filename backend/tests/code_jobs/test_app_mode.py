@@ -202,7 +202,7 @@ def page(width: int, **app) -> dict:
     words = {"updated": 3, "ago": 3, "nothing": 0, "not_connected": 0, "cant_tell": 0, "connect": 0, "junk": 0, "reason": False, **app.pop("words", {})}
     base = {"contrast_measured": 20, "contrast_low": 0, "contrast": [], "small_text": 0, "small_text_where": [], "small_targets": 0, "small_targets_where": [], "frames": 0, "doc_height": 900, "words": words}
     base["sentinels"] = {"calendar": True, "inbox": True, "gh_review": True}
-    base["times"] = {"local_found": 99, "first_missing": "", "shifted_found": ""}
+    base["times"] = {"marked": [{"title": "Team standup", "ok": True, "wrong": False}], "near": []}
     top = {k: app.pop(k) for k in ("overflow_px", "offenders", "svgs", "rendered") if k in app}
     return {"width": width, "overflow_px": 0, "client_width": width, "offenders": [], "rendered": True, "svgs": [], **top, "app": {**base, **app}}
 

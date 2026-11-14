@@ -475,16 +475,53 @@ APP_MEASURE = r"""
   for (const [source, n] of Object.entries(cfg.counts || {})) {
     totals[source] = Number.isInteger(n) && n > 0 && new RegExp('(?<![0-9])' + n + '(?![0-9])').test(text);
   }
-  // The calendar's sample times, in the app's time zone (and the same
-  // instants in UTC: shown instead, the page is in the wrong zone).
-  const times = { local_found: 0, first_missing: '', shifted_found: '' };
-  for (const t of ((cfg.times || {}).local || []).slice(0, 12)) {
-    if (new RegExp(t.re).test(text)) times.local_found++;
-    else if (!times.first_missing) times.first_missing = t.label;
+  // The calendar's sample times, read where each EVENT's time is shown,
+  // never from clock-like text elsewhere (an hour axis, a header clock).
+  // 1. Elements the kit marks with data-omni-time="<iso>": their own text.
+  // 2. Otherwise: the smallest container (a few levels up) holding the
+  //    event's title and a time, outside any chart.
+  const tcfg = cfg.times || {};
+  const events = (tcfg.events || []).slice(0, 12);
+  const at = (iso) => { const t = Date.parse(iso); return isNaN(t) ? null : t; };
+  const marked = [];
+  const markedTitles = new Set();
+  const markedEls = document.querySelectorAll('[data-omni-time]');
+  for (let i = 0; i < markedEls.length && i < 60; i++) {
+    const el = markedEls[i];
+    const when = at(el.getAttribute('data-omni-time') || '');
+    const ev = events.find((e) => at(e.iso) === when);
+    const shown = (el.textContent || '').trim().slice(0, 80);
+    if (!ev || !shown) continue;
+    markedTitles.add(ev.title);
+    const clock = (shown.match(/\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?/) || [''])[0];
+    marked.push({ kind: 'marked', title: ev.title, shown: clock, ok: new RegExp(ev.local_re).test(shown), wrong: !!ev.shifted_re && new RegExp(ev.shifted_re).test(shown) });
   }
-  for (const t of ((cfg.times || {}).shifted || []).slice(0, 12)) {
-    if (new RegExp(t.re).test(text)) { times.shifted_found = t.label; break; }
+  const inChart = (n) => !!(n && n.closest && n.closest('svg,[data-omni-axis],.omni-timeline'));
+  const near = [];
+  for (const ev of events) {
+    if (markedTitles.has(ev.title) || !ev.title || !body) continue;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    let entry = { kind: 'near', title: ev.title, found: false, ok: false, wrong: false };
+    for (let node = walker.nextNode(), k = 0; node && k < 5000; node = walker.nextNode(), k++) {
+      if (!node.nodeValue || node.nodeValue.indexOf(ev.title) === -1) continue;
+      let el = node.parentElement;
+      if (!el || inChart(el)) continue;
+      entry.found = true;
+      for (let up = 0; el && up < 4; up++, el = el.parentElement) {
+        const all = (el.innerText || el.textContent || '');
+        if (all.length > 400) break;
+        const rest = all.split(ev.title).join(' ');
+        if (/\d{1,2}:\d{2}/.test(rest)) {
+          entry.ok = entry.ok || new RegExp(ev.local_re).test(rest);
+          entry.wrong = entry.wrong || (!!ev.shifted_re && new RegExp(ev.shifted_re).test(rest));
+          break;
+        }
+      }
+      if (entry.ok || entry.wrong) break;
+    }
+    near.push(entry);
   }
+  const times = { marked: marked.slice(0, 20), near };
   // Text cut to almost nothing by its own box (ellipsis or hidden overflow).
   const cut = [];
   if (body) {

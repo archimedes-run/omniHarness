@@ -321,10 +321,11 @@ def starter_app(manifest: dict) -> str:
         if main:
             meta_expr = (f"item.{meta} ? z.formatTime(item.{meta}) : undefined" if is_time else f"item.{meta} ?? undefined") if meta else "undefined"
             link = "item.link ?? null" if "link" in item_fields else "null"
+            time_attr = f" time={{item.{meta} ?? null}}" if is_time and meta == "start" else ""
             body += [
                 '      <ul className="omni-list">',
                 "        {data.items.slice(0, 5).map((item, i) => (",
-                f'          <Row key={{i}} title={{String(item.{main} ?? "")}} meta={{{meta_expr}}} href={{{link}}} />',
+                f'          <Row key={{i}} title={{String(item.{main} ?? "")}} meta={{{meta_expr}}} href={{{link}}}{time_attr} />',
                 "        ))}",
                 "      </ul>",
                 '      {data.items.length > 5 ? <p className="omni-muted omni-text-xs">{data.items.length - 5} more</p> : null}',
@@ -553,12 +554,14 @@ def sentinels(data: dict) -> dict[str, list[str]]:
 
 
 def expected_times(data: dict) -> dict:
-    """The calendar's timed sample events: each start in the app's time zone
-    (accepted as H:MM or HH:MM, 12 or 24 hour) and, for a zone other than UTC,
-    the same instants in UTC (a page showing those is in the wrong zone)."""
+    """The calendar's timed sample events, each with its start in the app's
+    time zone (accepted as H:MM or HH:MM, 12 or 24 hour) and, for a zone other
+    than UTC, the same instant in UTC: shown next to that event instead, the
+    page is in the wrong zone. A UTC time that equals one of the local times
+    proves nothing and is left out."""
     tz = data.get("time_zone") or "UTC"
     zone = zoneinfo.ZoneInfo(tz)
-    local, shifted = [], []
+    events = []
     for f in data["sources"].values():
         if f["use"] != "googlecalendar.events_today":
             continue
@@ -568,16 +571,25 @@ def expected_times(data: dict) -> dict:
                 continue
             at = datetime.fromisoformat(start)
             here, utc = at.astimezone(zone), at.astimezone(zoneinfo.ZoneInfo("UTC"))
-            local.append(_time_words(here))
-            if tz != "UTC" and utc.utcoffset() != here.utcoffset():
-                shifted.append(_time_words(utc))
+            local = _time_words(here)
+            shifted = _time_words(utc) if tz != "UTC" and utc.utcoffset() != here.utcoffset() else None
+            events.append({"title": str(item.get("title") or "")[:60], "iso": start, "local": local, "shifted": shifted})
         break
-    # A UTC time that is also one of the local times proves nothing: left out.
-    local_words = {w for t in local for w in t["words"]}
-    shifted = [t for t in shifted if not (set(t["words"]) & local_words)]
-    for t in [*local, *shifted]:
-        t.pop("words")
-    return {"local": local, "shifted": shifted}
+    local_words = {w for e in events for w in e["local"]["words"]}
+    out = []
+    for e in events:
+        shifted = e["shifted"] if e["shifted"] and not (set(e["shifted"]["words"]) & local_words) else None
+        out.append(
+            {
+                "title": e["title"],
+                "iso": e["iso"],
+                "local_re": e["local"]["re"],
+                "local_label": e["local"]["label"],
+                "shifted_re": shifted["re"] if shifted else None,
+                "shifted_label": shifted["label"] if shifted else None,
+            }
+        )
+    return {"time_zone": tz, "events": out}
 
 
 def _time_words(at: datetime) -> dict:
