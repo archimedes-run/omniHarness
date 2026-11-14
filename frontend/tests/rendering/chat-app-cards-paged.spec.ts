@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { EIGHT_PLUS, json, stub, THREAD } from "./chat-bar-stubs";
 
@@ -129,6 +129,23 @@ const CARDS = [
   },
 ];
 
+/**
+ * Whether `a` comes before `b` in the thread, by document order: what
+ * "in place" means, independent of layout. (Two bounding boxes read one after
+ * the other can disagree while the thread scrolls to keep its place as older
+ * runs are prepended, which is what the first version of this test measured.)
+ */
+async function comesBefore(a: Locator, b: Locator): Promise<boolean> {
+  const handle = await b.elementHandle();
+  return a.evaluate(
+    (el, other) =>
+      !!other &&
+      (el.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING) !==
+        0,
+    handle,
+  );
+}
+
 async function open(page: Page) {
   await stub(page, EIGHT_PLUS);
   const now = new Date().toISOString();
@@ -157,18 +174,23 @@ async function open(page: Page) {
     if (url.pathname.endsWith("/runs")) return json(route, runs);
     return json(route, state);
   });
-  await page.route(/\/api\/threads\/[^/]+\/runs\/[^/]+\/messages/, (route) => {
-    const runId = new URL(route.request().url()).pathname.split("/").at(-2)!;
-    const data = (RUN_MESSAGES[runId] ?? []).map((content, i) => ({
-      thread_id: THREAD,
-      run_id: runId,
-      content,
-      metadata: { caller: "lead_agent" },
-      seq: i + 1,
-      created_at: now,
-    }));
-    return json(route, { data, has_more: false });
-  });
+  await page.route(
+    /\/api\/threads\/[^/]+\/runs\/[^/]+\/messages/,
+    async (route) => {
+      const runId = new URL(route.request().url()).pathname.split("/").at(-2)!;
+      // Older pages arrive a little later, as on a real server.
+      await new Promise((r) => setTimeout(r, 250));
+      const data = (RUN_MESSAGES[runId] ?? []).map((content, i) => ({
+        thread_id: THREAD,
+        run_id: runId,
+        content,
+        metadata: { caller: "lead_agent" },
+        seq: i + 1,
+        created_at: now,
+      }));
+      return json(route, { data, has_more: false });
+    },
+  );
   await page.route("**/api/confirmations", (route) =>
     json(route, { actions: [], readable: true, error: "" }),
   );
@@ -217,8 +239,9 @@ test("decided cards wait for their turn; the undecided one shows at the end, lab
   await expect(page.getByTestId("app-card-earlier")).toHaveText(
     "From earlier in this chat",
   );
-  const replyBox = (await page.getByText("and the colours?").boundingBox())!;
-  expect((await pending.boundingBox())!.y).toBeGreaterThan(replyBox.y);
+  expect(await comesBefore(page.getByText("and the colours?"), pending)).toBe(
+    true,
+  );
 });
 
 test("after Load more, every card appears in place and the label goes", async ({
@@ -226,15 +249,20 @@ test("after Load more, every card appears in place and the label goes", async ({
 }) => {
   await open(page);
   const more = page.getByRole("button", { name: "Load more" });
-  // Load older runs until none is left (each press loads one run).
-  for (let i = 0; i < 25 && (await more.count()) > 0; i++) {
-    if (await more.isEnabled()) await more.click().catch(() => undefined);
-    await page.waitForTimeout(700);
-  }
-  await expect(more).toHaveCount(0, { timeout: 10_000 });
-  await expect(page.getByText("build me a Today page")).toBeVisible();
-  const y = async (text: string) =>
-    (await page.getByText(text, { exact: true }).first().boundingBox())!.y;
+  // Load older runs until the first turn is in and nothing is left to load.
+  // (While a page loads the button reads "Loading…", so its absence alone
+  // does not mean the history is complete.)
+  const first = page.getByText("build me a Today page");
+  await expect(async () => {
+    if ((await more.count()) > 0 && (await more.isEnabled())) {
+      await more.click();
+    }
+    await expect(first).toBeVisible({ timeout: 1_500 });
+  }).toPass({ timeout: 30_000 });
+  await expect(
+    page.getByRole("button", { name: /Load more|Loading/ }),
+  ).toHaveCount(0, { timeout: 10_000 });
+  const text = (t: string) => page.getByText(t, { exact: true }).first();
   const c1 = page.locator('[data-testid="app-card-line"][data-card-id="c1"]');
   const c2 = page.locator('[data-testid="app-card-line"][data-card-id="c2"]');
   const c3 = page.locator(
@@ -243,12 +271,16 @@ test("after Load more, every card appears in place and the label goes", async ({
   await expect(c1).toHaveCount(1);
   await expect(c2).toHaveCount(1);
   await expect(c3).toHaveCount(1);
-  expect((await c1.boundingBox())!.y).toBeLessThan(
-    await y("add my pull requests"),
-  );
-  expect((await c2.boundingBox())!.y).toBeLessThan(await y("make it denser"));
-  expect((await c3.boundingBox())!.y).toBeLessThan(
-    await y("thanks, tell me about the layout"),
-  );
+  // Each card right after its own turn: after that turn's request, before
+  // the next one.
+  const order = [
+    [text("build me a Today page"), c1],
+    [c1, text("add my pull requests")],
+    [text("add my pull requests"), c2],
+    [c2, text("make it denser")],
+    [text("make it denser"), c3],
+    [c3, text("thanks, tell me about the layout")],
+  ] as const;
+  for (const [a, b] of order) expect(await comesBefore(a, b)).toBe(true);
   await expect(page.getByTestId("app-card-earlier")).toHaveCount(0);
 });
