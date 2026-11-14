@@ -1,7 +1,6 @@
 import { FilesIcon, XIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { GroupImperativeHandle } from "react-resizable-panels";
 
 import { ConversationEmptyState } from "@/components/ai-elements/conversation";
@@ -31,6 +30,7 @@ import {
   ArtifactFileList,
   useArtifacts,
 } from "../artifacts";
+import { ArtifactOverlay } from "../artifacts/store/artifact-overlay";
 import { ArtifactPanel } from "../artifacts/store/artifact-panel";
 import { useThread } from "../messages/context";
 
@@ -165,20 +165,11 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     <>
       {/* At phone width a store artifact opens over the chat, full screen
           (the split panel would be a sliver). */}
-      {isMobile &&
-        artifactPanelOpen &&
-        storePanel &&
-        createPortal(
-          <div
-            className="bg-background fixed inset-0 z-50 flex flex-col overflow-hidden p-4"
-            role="dialog"
-            aria-modal="true"
-            data-testid="artifact-panel-mobile"
-          >
-            {storePanel}
-          </div>,
-          document.body,
-        )}
+      {isMobile && artifactPanelOpen && storePanel && (
+        <ArtifactOverlay onClose={() => setArtifactsOpen(false)}>
+          {storePanel}
+        </ArtifactOverlay>
+      )}
       <ResizablePanelGroup
         id={`${resizableIdBase}-panels`}
         orientation="horizontal"

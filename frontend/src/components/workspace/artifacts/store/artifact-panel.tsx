@@ -42,6 +42,7 @@ import {
   useStoreArtifact,
 } from "@/core/artifacts/store-hooks";
 import {
+  confirmText,
   KIND_WORDS,
   lineageWords,
   originWords,
@@ -225,7 +226,7 @@ function PanelHeader({
         <div className="min-w-0 flex-1">
           {renaming ? (
             <RenameForm
-              initial={title}
+              initial={confirmText(artifact.title)}
               pending={actions.patch.isPending}
               onCancel={() => setRenaming(false)}
               onSave={(t) =>
@@ -710,7 +711,8 @@ function DeleteDialog({
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  const matches = typed.trim() === title;
+  const expected = confirmText(artifact.title);
+  const matches = confirmText(typed) === expected && expected !== "";
   const confirm = async () => {
     setError(null);
     try {
@@ -745,8 +747,15 @@ function DeleteDialog({
           </p>
         ) : (
           <>
-            <label className="text-sm" htmlFor="artifact-delete-confirm">
-              Type the title to confirm
+            <p className="text-sm">Type the title to confirm:</p>
+            <code
+              className="bg-muted block rounded-md px-2 py-1 font-mono text-sm break-all select-all"
+              data-testid="artifact-delete-title"
+            >
+              {expected}
+            </code>
+            <label className="sr-only" htmlFor="artifact-delete-confirm">
+              Title
             </label>
             <Input
               id="artifact-delete-confirm"

@@ -13,12 +13,13 @@ import {
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultRehypePlugins } from "streamdown";
 
 import { Markdown } from "@/components/ai-elements/markdown";
 import { parseChartSpec } from "@/core/artifacts/chart-spec";
-import { drawMermaid, offscreenContainer } from "@/core/artifacts/mermaid";
+import { drawMermaid, UNSUPPORTED_REASON } from "@/core/artifacts/mermaid";
+import { renderInFrame } from "@/core/artifacts/mermaid-frame-host";
 import type {
   ArtifactKind,
   ArtifactSummary,
@@ -138,6 +139,32 @@ export function ImageView({
   );
 }
 
+/** True once the element has been on screen (cards draw only then). */
+function useSeen(enabled: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(!enabled);
+  useEffect(() => {
+    if (!enabled || seen) return;
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setSeen(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [enabled, seen]);
+  return [ref, seen] as const;
+}
+
 export function MermaidView({
   source,
   title,
@@ -149,38 +176,50 @@ export function MermaidView({
 }) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
+  // A card in the chat draws only once it is on screen.
+  const [ref, seen] = useSeen(!!compact);
   const [state, setState] = useState<
-    { s: "drawing" } | { s: "ok"; url: string } | { s: "failed" }
+    | { s: "drawing" }
+    | { s: "ok"; url: string; linksRemoved: boolean }
+    | { s: "failed"; unsupported: boolean }
   >({ s: "drawing" });
   useEffect(() => {
+    if (!seen) return;
     let live = true;
     setState({ s: "drawing" });
     void drawMermaid(source, dark, {
-      load: async () => (await import("mermaid")).default,
+      render: renderInFrame,
       check: checkSvgText,
       toUrl: svgDataUrl,
-      container: offscreenContainer,
     }).then((r) => {
       if (!live) return;
-      setState(r.ok ? { s: "ok", url: r.url } : { s: "failed" });
+      setState(
+        r.ok
+          ? { s: "ok", url: r.url, linksRemoved: r.linksRemoved }
+          : { s: "failed", unsupported: r.reason === UNSUPPORTED_REASON },
+      );
     });
     return () => {
       live = false;
     };
-  }, [source, dark]);
+  }, [source, dark, seen]);
 
   if (state.s === "drawing") {
     return (
-      <p className="text-muted-foreground text-sm" role="status">
-        Drawing the diagram…
-      </p>
+      <div ref={ref}>
+        <p className="text-muted-foreground text-sm" role="status">
+          {seen ? "Drawing the diagram…" : "Diagram"}
+        </p>
+      </div>
     );
   }
   if (state.s === "failed") {
     return (
       <div className="flex min-w-0 flex-col gap-2" data-testid="mermaid-failed">
         <p className="text-muted-foreground text-sm" role="status">
-          Couldn&rsquo;t draw this diagram. Here is its source.
+          {state.unsupported
+            ? "Journey diagrams aren’t supported yet. Here is its source."
+            : "Couldn’t draw this diagram. Here is its source."}
         </p>
         {compact ? (
           <PlainPreview text={source} />
@@ -191,15 +230,25 @@ export function MermaidView({
     );
   }
   return (
-    <img
-      src={state.url}
-      alt={title}
-      data-testid="artifact-mermaid"
-      className={cn(
-        "mx-auto block h-auto max-w-full",
-        compact ? "max-h-40" : "max-h-[70vh]",
+    <div className="flex min-w-0 flex-col gap-1">
+      <img
+        src={state.url}
+        alt={title}
+        data-testid="artifact-mermaid"
+        className={cn(
+          "mx-auto block h-auto max-w-full",
+          compact ? "max-h-40" : "max-h-[70vh]",
+        )}
+      />
+      {state.linksRemoved && !compact && (
+        <p
+          className="text-muted-foreground text-xs"
+          data-testid="mermaid-links-removed"
+        >
+          Links in diagrams are not supported; they were left out.
+        </p>
       )}
-    />
+    </div>
   );
 }
 
@@ -356,5 +405,14 @@ function TextKind({
   if (kind === "mermaid") {
     return <MermaidView source={text} title={title} compact={compact} />;
   }
-  return compact ? <PlainPreview text={text} /> : <MarkdownView text={text} />;
+  return compact ? (
+    <div
+      className="pointer-events-none max-h-32 overflow-hidden text-xs [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm"
+      data-testid="artifact-markdown-preview"
+    >
+      <MarkdownView text={previewLines(text, 6, 400)} />
+    </div>
+  ) : (
+    <MarkdownView text={text} />
+  );
 }

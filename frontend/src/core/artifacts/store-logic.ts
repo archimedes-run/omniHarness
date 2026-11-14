@@ -117,6 +117,18 @@ export function lineageWords(
     : "Made from content the assistant read";
 }
 
+/** The RAW title as the owner types it back (rename starts from it; the
+ * typed delete compares against it): NFKC, invisible and control
+ * characters removed, whitespace collapsed. Shown only as text. */
+export function confirmText(title: string | null | undefined): string {
+  return (title ?? "")
+    .normalize("NFKC")
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** An artifact title, safe to show as text (never empty). */
 export function titleText(title: string | null | undefined): string {
   return safeField(title) || "Untitled";

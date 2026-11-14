@@ -154,6 +154,12 @@ test.describe("the thread", () => {
       // The first turn's card keeps v1 and says a newer one exists; the
       // update's card shows "Version 2" of the same artifact.
       await expect(card(page, IDS.md, 1)).toContainText("v1");
+      // A document card previews its first lines RENDERED (safe renderer).
+      await expect(
+        card(page, IDS.md, 2).locator(
+          "[data-testid=artifact-markdown-preview] h1",
+        ),
+      ).toHaveText("Project brief");
       await expect(
         card(page, IDS.md, 1).getByTestId("artifact-card-latest"),
       ).toContainText("Latest: v2");
@@ -209,6 +215,13 @@ test.describe("the thread", () => {
     await noHorizontalScroll(page);
     await shot(page, "panel-chart-390");
     await assertInert(page, outside);
+    // A modal: Tab stays inside, Escape closes.
+    for (let i = 0; i < 15; i++) await page.keyboard.press("Tab");
+    expect(
+      await overlay.evaluate((el) => el.contains(document.activeElement)),
+    ).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(overlay).toHaveCount(0);
   });
 });
 
@@ -425,9 +438,14 @@ test.describe("versions", () => {
     await expect(confirm).toBeDisabled();
     await dialog.getByTestId("artifact-delete-input").fill("Old notes");
     await expect(confirm).toBeDisabled();
+    await expect(dialog.getByTestId("artifact-delete-title")).toHaveText(
+      `Old notes ${"with a very long title ".repeat(4)}`.trim(),
+    );
+    // Compared against the raw title, normalised: a zero-width space or a
+    // full-width letter typed or pasted along still matches.
     await dialog
       .getByTestId("artifact-delete-input")
-      .fill(`Old notes ${"with a very long title ".repeat(4)}`.trim());
+      .fill(`Ｏld\u200b notes ${"with a very long title ".repeat(4)}`.trim());
     await confirm.click();
     await expect.poll(() => log.writes.length).toBe(1);
     expect(log.writes[0]).toEqual({

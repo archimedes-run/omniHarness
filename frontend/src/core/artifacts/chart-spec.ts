@@ -18,7 +18,8 @@ export interface ChartSpec {
   series: { field: string; label: string }[];
   rows: Row[];
   units?: string;
-  /** Not in api.md yet: stacks bar and area series when true. */
+  /** Stacks bar and area series. NOT read from content: the gateway's
+   * omni-chart/1 schema has no such key yet (a follow-up there). */
   stacked?: boolean;
 }
 
@@ -146,7 +147,6 @@ export function parseChartSpec(raw: unknown): Result {
       ? undefined
       : text(unitsRaw, 40);
   if (units === null) return fail("bad units");
-  const stacked = own(value, "stacked") === true;
   return {
     ok: true,
     spec: {
@@ -160,15 +160,33 @@ export function parseChartSpec(raw: unknown): Result {
       series,
       rows,
       units,
-      stacked,
     },
   };
 }
 
 /** A series value of a row, or null when missing. */
+/** Values are clamped to ±1e15 so a range never overflows to Infinity. */
+export const VALUE_LIMIT = 1e15;
+export function clampValue(v: number): number {
+  return Math.max(-VALUE_LIMIT, Math.min(VALUE_LIMIT, v));
+}
+
 export function valueOf(row: Row, field: string): number | null {
   const v = row.get(field);
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
+  return typeof v === "number" && Number.isFinite(v) ? clampValue(v) : null;
+}
+
+/** Points drawn per series: cards and the store grid, and the full view. */
+export const PREVIEW_POINTS = 200;
+export const FULL_POINTS = 1000;
+
+/** Every k-th row (first and last kept) so at most `max` are drawn. */
+export function downsample(rows: Row[], max: number): Row[] {
+  if (rows.length <= max) return rows;
+  const step = (rows.length - 1) / (max - 1);
+  const out: Row[] = [];
+  for (let i = 0; i < max; i++) out.push(rows[Math.round(i * step)]!);
+  return out;
 }
 
 /** "Nice" tick values covering [lo, hi]. */

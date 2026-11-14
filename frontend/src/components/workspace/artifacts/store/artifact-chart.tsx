@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  clampValue,
+  downsample,
+  FULL_POINTS,
   formatNumber,
   niceTicks,
+  PREVIEW_POINTS,
   valueOf,
   type ChartSpec,
   type Row,
@@ -56,7 +60,7 @@ function xText(spec: ChartSpec, row: Row): string {
 }
 
 export function ArtifactChart({
-  spec,
+  spec: full,
   compact = false,
   className,
 }: {
@@ -64,6 +68,14 @@ export function ArtifactChart({
   compact?: boolean;
   className?: string;
 }) {
+  // At most PREVIEW_POINTS (cards, grid) or FULL_POINTS (panel, page) rows
+  // are drawn per series; the full view says when it thinned the data.
+  const cap = compact ? PREVIEW_POINTS : FULL_POINTS;
+  const spec = useMemo(
+    () => ({ ...full, rows: downsample(full.rows, cap) }),
+    [full, cap],
+  );
+  const thinned = full.rows.length > spec.rows.length;
   const [ref, measured] = useWidth(compact ? 320 : 640);
   const width = Math.max(200, measured);
   const height = compact
@@ -110,6 +122,15 @@ export function ArtifactChart({
           />
         )}
       </svg>
+      {thinned && !compact && (
+        <p
+          className="text-muted-foreground text-xs"
+          data-testid="artifact-chart-thinned"
+        >
+          Showing {spec.rows.length.toLocaleString("en-US")} of{" "}
+          {full.rows.length.toLocaleString("en-US")} points, evenly spaced.
+        </p>
+      )}
       {showLegend && (
         <ul
           className="text-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs"
@@ -197,7 +218,8 @@ function XYMarks({
   } else {
     const raw = rows.map((r) => {
       const v = r.get(spec.x.field);
-      return spec.x.type === "time" ? Date.parse(String(v)) : Number(v);
+      const raw = spec.x.type === "time" ? Date.parse(String(v)) : Number(v);
+      return Number.isFinite(raw) ? clampValue(raw) : 0;
     });
     const min = Math.min(...raw);
     const max = Math.max(...raw);

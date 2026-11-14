@@ -8,12 +8,18 @@ import { describe, expect, it, vi } from "vitest";
 import { ArtifactChart } from "@/components/workspace/artifacts/store/artifact-chart";
 import { parseChartSpec } from "@/core/artifacts/chart-spec";
 import {
+  downsample,
+  FULL_POINTS,
+  PREVIEW_POINTS,
+} from "@/core/artifacts/chart-spec";
+import {
   drawMermaid,
   mermaidConfig,
-  type MermaidLike,
+  prefilter,
 } from "@/core/artifacts/mermaid";
 import { ArtifactsApiError, readResponse } from "@/core/artifacts/store-api";
 import {
+  confirmText,
   artifactBindingOf,
   artifactBindingsOf,
   lineageWords,
@@ -200,10 +206,11 @@ describe("the chart renderer (omni-chart/1)", () => {
     });
   }
 
-  it("stacked bars, a time axis and a legend", () => {
+  it("a time axis and a legend; `stacked` is not read from content (not in the gateway schema yet)", () => {
+    const parsed = parseChartSpec(chartSpec({ stacked: true }));
+    expect(parsed.ok && parsed.spec.stacked).toBeFalsy();
     const html = renderChart(
       chartSpec({
-        stacked: true,
         x: { field: "day", type: "time" },
         data: [
           { day: "2026-11-10", pass: 3, fail: 1 },
@@ -250,19 +257,17 @@ describe("the chart renderer (omni-chart/1)", () => {
   });
 });
 
-describe("mermaid: drawn in an isolated step, shown as an image, or the source", () => {
+describe("mermaid: drawn in the isolated frame, shown as an image, or the source", () => {
   const svg =
     '<svg xmlns="http://www.w3.org/2000/svg"><g><text>A</text></g></svg>';
-  const fake = (impl: MermaidLike["render"]) => {
-    const m: MermaidLike & { configs: Record<string, unknown>[] } = {
-      configs: [],
-      initialize(c) {
-        m.configs.push(c);
-      },
-      render: impl,
-    };
-    return m;
-  };
+  const deps = (render: (s: string, d: boolean) => Promise<string>) => ({
+    render,
+    check: (s: string) =>
+      s.includes("foreignObject")
+        ? ({ ok: false, reason: "the element <foreignObject>" } as const)
+        : ({ ok: true } as const),
+    toUrl: (s: string) => `data:image/svg+xml;base64,${btoa(s)}`,
+  });
 
   it("strict, HTML labels off, page-styling directives locked", () => {
     const c = mermaidConfig(false);
@@ -281,56 +286,121 @@ describe("mermaid: drawn in an isolated step, shown as an image, or the source",
     }
   });
 
-  it("a drawing that passes the allowlist becomes an image URL; the container is removed", async () => {
-    const m = fake(() => Promise.resolve({ svg }));
-    const dispose = vi.fn();
-    const r = await drawMermaid("graph TD; A-->B", true, {
-      load: () => Promise.resolve(m),
-      check: () => ({ ok: true }),
-      toUrl: (s) => `data:image/svg+xml;base64,${btoa(s)}`,
-      container: () => ({ element: {} as Element, dispose }),
-    });
+  it("a drawing that passes the allowlist becomes an image URL", async () => {
+    const render = vi.fn(() => Promise.resolve(svg));
+    const r = await drawMermaid("graph TD; A-->B", true, deps(render));
     expect(r).toEqual({
       ok: true,
       url: `data:image/svg+xml;base64,${btoa(svg)}`,
+      linksRemoved: false,
     });
-    expect(m.configs[0]!.securityLevel).toBe("strict");
-    expect(dispose).toHaveBeenCalledOnce();
+    expect(render).toHaveBeenCalledWith("graph TD; A-->B", true);
   });
 
-  it("mermaid throwing, an allowlist failure or a security directive falls back (and the container still goes)", async () => {
-    const dispose = vi.fn();
-    const deps = {
-      check: (s: string) =>
-        s.includes("foreignObject")
-          ? ({ ok: false, reason: "the element <foreignObject>" } as const)
-          : ({ ok: true } as const),
-      toUrl: () => "data:",
-      container: () => ({ element: {} as Element, dispose }),
-    };
-    const throws = await drawMermaid("graph TD; A-->", false, {
-      ...deps,
-      load: () =>
-        Promise.resolve(fake(() => Promise.reject(new Error("parse")))),
-    });
-    expect(throws.ok).toBe(false);
-    const html = await drawMermaid("graph TD; A-->B", false, {
-      ...deps,
-      load: () =>
-        Promise.resolve(
-          fake(() => Promise.resolve({ svg: "<svg><foreignObject/></svg>" })),
-        ),
-    });
-    expect(html).toEqual({ ok: false, reason: "the element <foreignObject>" });
-    expect(dispose).toHaveBeenCalledTimes(2);
-    const load = vi.fn();
-    const directive = await drawMermaid(
-      '%%{init: {"securityLevel": "loose"}}%%\ngraph TD; A-->B',
-      false,
-      { ...deps, load },
+  it("the frame failing or an allowlist failure falls back", async () => {
+    expect(
+      (
+        await drawMermaid(
+          "graph TD; A-->",
+          false,
+          deps(() => Promise.reject(new Error("parse"))),
+        )
+      ).ok,
+    ).toBe(false);
+    expect(
+      await drawMermaid(
+        "graph TD; A-->B",
+        false,
+        deps(() => Promise.resolve("<svg><foreignObject/></svg>")),
+      ),
+    ).toEqual({ ok: false, reason: "the element <foreignObject>" });
+  });
+
+  // The reviewer's payloads: diagram CSS that would fetch from the app.
+  it.each([
+    [
+      "stateDiagram-v2\nA-->B\nclassDef x fill:red,background:url(/api/b63)\nclass A x",
+    ],
+    [
+      "classDiagram\nclass A\nstyle A fill:#f00,background:url(/api/logout?x=1)",
+    ],
+    ["block-beta\na\nstyle a fill:#f00,background:url(/api/b65)"],
+    [
+      "graph TD\nA-->B\nclassDef x fill:red;}@font-face{font-family:q;src:url(/api/b73)}text{font-family:q\nclass A x",
+    ],
+    ['graph TD\nA-->B\nstyle A fill:image-set("x.png" 1x)'],
+    ["graph TD\nA-->B\nclassDef x fill:red\\;color:blue"],
+    ["graph TD\nA-->B\nlinkStyle 0 stroke:red}"],
+    ['%%{init: {"securityLevel": "loose"}}%%\ngraph TD; A-->B'],
+  ])("is refused before the frame sees it: %s", async (source) => {
+    const render = vi.fn(() => Promise.resolve(svg));
+    expect((await drawMermaid(source, false, deps(render))).ok).toBe(false);
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it("click, link, callback and href statements are removed, and said so", async () => {
+    const pre = prefilter(
+      'graph TD\nA-->B\nclick A "https://evil.example"\n  link A "x"\ncallback A fn\nlinkStyle 0 stroke:red',
     );
-    expect(directive.ok).toBe(false);
-    expect(load).not.toHaveBeenCalled();
+    expect(pre).toEqual({
+      source: "graph TD\nA-->B\nlinkStyle 0 stroke:red",
+      linksRemoved: true,
+    });
+    const render = vi.fn(() => Promise.resolve(svg));
+    const r = await drawMermaid(
+      'graph TD\nA-->B\nclick A "x"',
+      false,
+      deps(render),
+    );
+    expect(r.ok && r.linksRemoved).toBe(true);
+    expect(render).toHaveBeenCalledWith("graph TD\nA-->B", false);
+  });
+});
+
+describe("raw titles for rename and typed delete", () => {
+  it("NFKC, invisible and control characters removed, not defanged", () => {
+    expect(confirmText("brief.md \u200bplan\u202e")).toBe("brief.md plan");
+    expect(confirmText("ｆｕｌｌ\u00a0width")).toBe("full width");
+    expect(confirmText("evil.com")).toBe("evil.com");
+  });
+});
+
+describe("chart caps", () => {
+  it("previews draw at most 200 points per series; values are clamped", () => {
+    const rows = Array.from({ length: 5000 }, (_, i) => ({ n: i, v: i }));
+    const parsed = parseChartSpec({
+      type: "line",
+      title: "Big",
+      x: { field: "n", type: "number" },
+      series: [{ field: "v", label: "V" }],
+      data: rows,
+    });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(downsample(parsed.spec.rows, PREVIEW_POINTS)).toHaveLength(200);
+    expect(downsample(parsed.spec.rows, FULL_POINTS)).toHaveLength(1000);
+    const html = renderToStaticMarkup(
+      createElement(ArtifactChart, { spec: parsed.spec, compact: true }),
+    );
+    expect(html.match(/<path /g)?.length ?? 0).toBeLessThanOrEqual(2);
+    const full = renderToStaticMarkup(
+      createElement(ArtifactChart, { spec: parsed.spec }),
+    );
+    expect(full).toContain("Showing 1,000 of 5,000 points");
+    const huge = parseChartSpec({
+      type: "bar",
+      title: "Huge",
+      x: { field: "c", type: "category" },
+      series: [{ field: "v", label: "V" }],
+      data: [
+        { c: "a", v: 1e308 },
+        { c: "b", v: -1e308 },
+      ],
+    });
+    if (!huge.ok) throw new Error(huge.reason);
+    const hugeHtml = renderToStaticMarkup(
+      createElement(ArtifactChart, { spec: huge.spec }),
+    );
+    expect(hugeHtml).not.toMatch(/NaN|Infinity/);
   });
 });
 

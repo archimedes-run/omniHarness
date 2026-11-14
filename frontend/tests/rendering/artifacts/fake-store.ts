@@ -285,6 +285,8 @@ export interface StoreOptions {
   /** The next owner edit answers 409 stale_base_version (another tab won). */
   staleOnce?: boolean;
   empty?: boolean;
+  /** Extra mermaid artifacts: id (22 chars) -> source. */
+  mermaid?: Record<string, string>;
 }
 
 const json = (body: unknown, status = 200) => ({
@@ -300,6 +302,30 @@ export async function installFakeStore(
   opts: StoreOptions = {},
 ): Promise<{ log: StoreLog; recs: Rec[] }> {
   const recs = opts.empty ? [] : fixtures();
+  for (const [id, source] of Object.entries(opts.mermaid ?? {})) {
+    recs.push({
+      id,
+      kind: "mermaid",
+      title: id,
+      pinned: false,
+      archived: false,
+      origin_thread_id: null,
+      imported_from: null,
+      language: null,
+      size: source.length,
+      versions: [
+        {
+          n: 1,
+          content: source,
+          lineage: "user",
+          lineage_source: null,
+          origin: "tool",
+          note: null,
+        },
+      ],
+      updated: -5,
+    });
+  }
   const log: StoreLog = { gets: [], writes: [] };
   let stale = !!opts.staleOnce;
   const find = (id: string) => recs.find((r) => r.id === id);

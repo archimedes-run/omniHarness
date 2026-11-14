@@ -1,7 +1,9 @@
 /**
  * Spec 012 FR-014/FR-015: the gateway's SVG allowlist
  * (backend/app/gateway/artifacts_store/kinds.py `check_svg`), ported to the
- * frontend for the SVG that mermaid draws in the browser. A drawing that
+ * frontend for the SVG that mermaid draws in its isolated frame. Two inert
+ * attributes mermaid writes are added: `name` (sequence diagrams) and
+ * `transform-origin` (gantt). A drawing that
  * fails is not shown (the source is, as code). One that passes is still only
  * ever shown as an `<img>` (scripts never run in an image).
  *
@@ -38,7 +40,8 @@ const ATTRIBUTES = new Set(
   edgeMode preserveAlpha surfaceScale diffuseConstant specularConstant specularExponent azimuth elevation z
   pointsAtX pointsAtY pointsAtZ limitingConeAngle kernelUnitLength href lang role media vector-effect
   shape-rendering text-rendering image-rendering color-interpolation color-interpolation-filters paint-order
-  mix-blend-mode isolation pathLength`.split(/\s+/),
+  mix-blend-mode isolation pathLength
+  name transform-origin`.split(/\s+/),
 );
 
 const URL_FN = /url\s*\(\s*(['"]?)(.*?)\1\s*\)/gis;
@@ -140,18 +143,26 @@ export function checkSvgDocument(doc: Document): SvgCheck {
   return { ok: true };
 }
 
-/** Parse (as XML, never as HTML in the page) and check. Browser only. */
-export function checkSvgText(text: string): SvgCheck {
+/** Parse (as XML, never as HTML in the page) and check. `parse` is the
+ * browser's DOMParser unless a test passes its own. */
+export function checkSvgText(
+  text: string,
+  parse?: (text: string) => Document,
+): SvgCheck {
   if (/<\?xml-stylesheet/i.test(text)) {
     return { ok: false, reason: "an xml-stylesheet instruction" };
   }
   if (/<!DOCTYPE|<!ENTITY/i.test(text)) {
     return { ok: false, reason: "a DOCTYPE or entity" };
   }
-  if (typeof DOMParser === "undefined") {
+  let doc: Document;
+  if (parse) {
+    doc = parse(text);
+  } else if (typeof DOMParser === "undefined") {
     return { ok: false, reason: "no parser" };
+  } else {
+    doc = new DOMParser().parseFromString(text, "image/svg+xml");
   }
-  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   return checkSvgDocument(doc);
 }
 
