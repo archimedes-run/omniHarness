@@ -482,7 +482,7 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
     extra_tools = builder_tools_for(cfg)
 
     if inputs.is_bootstrap:
-        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config) + extra_tools
+        tools = get_available_tools(model_name=inputs.model_name, subagent_enabled=inputs.subagent_enabled, app_config=app_config, artifact_tools=True) + extra_tools
         return filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include=always_include | {t.name for t in extra_tools})
 
     # Per-conversation tool selection (namespaced source ids) + owning user, both
@@ -511,6 +511,8 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
         max_tools=max_tools,
         tool_access=tool_access,
         research_enabled=True,
+        # Spec 012: the built-in assistant only; a custom agent needs the grant.
+        artifact_tools=inputs.agent_config is None,
     )
     # A skill's allowed-tools narrows the run's working tools, never the
     # builder: it is the owner's own means of changing agents and skills, and
@@ -519,21 +521,38 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
 
 
 def builder_tools_for(cfg: dict) -> list[BaseTool]:
-    """The builder tools this lead run gets: all of them, or none."""
+    """The builder tools this lead run gets: all of them; draft and save only
+    in a run resumed on Question-card answers; or none. Not offered at all
+    (no <builder> prompt section either) when the install cannot use it: see
+    GET /api/builder/status for why."""
     from omniharness.runtime.builder.controller import get_builder_controller
     from omniharness.runtime.builder.surface import builder_refusal
 
     controller = get_builder_controller()
-    if controller is None or builder_refusal(cfg) is not None:
+    if controller is None:
         return []
-    unavailable = getattr(controller, "unavailable_reason", None)
-    if callable(unavailable) and unavailable() is not None:
-        # Not offered at all (no <builder> prompt section either): see
-        # GET /api/builder/status for why.
+    if builder_refusal(cfg) is not None:
+        return _builder_question_resume_tools(cfg) if _builder_ready(controller) else []
+    if not _builder_ready(controller):
         return []
     from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
 
     return list(BUILDER_TOOLS)
+
+
+def _builder_ready(controller) -> bool:
+    unavailable = getattr(controller, "unavailable_reason", None)
+    return not (callable(unavailable) and unavailable() is not None)
+
+
+def _builder_question_resume_tools(cfg: dict) -> list[BaseTool]:
+    """In a run resumed on Question-card answers: draft and save (a card) only."""
+    from omniharness.runtime.builder.surface import QUESTION_RESUME_TOOLS, builder_refusal, question_resume
+    from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
+
+    if not question_resume(cfg) or builder_refusal(cfg, "builder_draft") is not None:
+        return []
+    return [t for t in BUILDER_TOOLS if t.name in QUESTION_RESUME_TOOLS]
 
 
 def lead_agent_tools(cfg: dict, *, app_config: AppConfig | None = None) -> list[BaseTool]:
@@ -560,6 +579,9 @@ def _lead_metadata(inputs: _LeadInputs) -> dict:
         "tool_groups": inputs.agent_config.tool_groups if inputs.agent_config else None,
         # 006-G: a delegate of this agent inherits its allowlist (task_tool).
         "tool_access": access_dict(inputs.agent_config.tools) if inputs.agent_config else None,
+        # Spec 012: a delegate of the built-in assistant keeps the artifact
+        # tools; one of a custom agent has them only through its allowlist.
+        "artifact_tools": inputs.agent_config is None,
         "available_skills": sorted(inputs.available_skills) if inputs.available_skills is not None else None,
     }
 

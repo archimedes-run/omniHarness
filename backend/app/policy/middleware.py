@@ -1248,14 +1248,15 @@ class PolicyMiddleware(AgentMiddleware):
         only when, the tool dispatched IS a registered built-in whose results
         are trusted (lineage.TRUSTED_TOOL_RESULTS), by object identity: an
         outside tool with the same name is never marked."""
+        from omniharness.tools.builtins.artifact_tools import ARTIFACT_TOOLS
         from omniharness.tools.builtins.builder_tools import BUILDER_TOOLS
         from omniharness.tools.builtins.ledger_tool import ledger_apply_tool
 
         from .builder_rules import TRUSTED_RESULT_TOOLS
-        from .lineage import TRUSTED_ACK_MARKER
+        from .lineage import ARTIFACT_ACK_TOOLS, TRUSTED_ACK_MARKER
 
         tool = getattr(request, "tool", None)
-        trusted_tools = (ledger_apply_tool, *(t for t in BUILDER_TOOLS if t.name in TRUSTED_RESULT_TOOLS))
+        trusted_tools = (ledger_apply_tool, *(t for t in BUILDER_TOOLS if t.name in TRUSTED_RESULT_TOOLS), *(t for t in ARTIFACT_TOOLS if t.name in ARTIFACT_ACK_TOOLS))
         if not any(tool is trusted for trusted in trusted_tools) and not _is_registered_write_todos(tool):
             return result
         messages = [result] if hasattr(result, "additional_kwargs") else list(((getattr(result, "update", None) or {}).get("messages") or []) if isinstance(getattr(result, "update", None), dict) else [])

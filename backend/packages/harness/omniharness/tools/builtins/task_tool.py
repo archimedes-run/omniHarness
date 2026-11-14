@@ -56,6 +56,7 @@ def subagent_base_tools(
     selected_sources: list[str] | None = None,
     user_id: str | None = None,
     tool_access: dict | None = None,
+    artifact_tools: bool = False,
 ) -> list:
     """The tools a delegated subagent starts from, before its own filters.
 
@@ -71,7 +72,7 @@ def subagent_base_tools(
     from omniharness.tools import get_available_tools
 
     # Subagents should not have subagent tools enabled (prevent recursive nesting)
-    kwargs: dict[str, Any] = {"model_name": model_name, "groups": tool_groups, "subagent_enabled": False}
+    kwargs: dict[str, Any] = {"model_name": model_name, "groups": tool_groups, "subagent_enabled": False, "artifact_tools": bool(artifact_tools)}
     if selected_sources is not None:
         # A delegate gets no tool the chat does not have: the chat's selection
         # applies to it as to the lead (Feature 006, plan.md Phase 2).
@@ -215,7 +216,11 @@ async def task_tool(
     user_id = runtime.context.get("user_id") if (runtime is not None and runtime.context) else None
     raw_selection = runtime.context.get("selected_sources") if (runtime is not None and runtime.context) else None
     selected_sources = sorted(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
-    tools = subagent_base_tools(model_name=effective_model, tool_groups=parent_tool_groups, app_config=resolved_app_config, selected_sources=selected_sources, user_id=user_id, tool_access=parent_tool_access)
+    # Spec 012: inherited from the agent that delegates (server-written metadata).
+    parent_artifact_tools = metadata.get("artifact_tools") is True
+    tools = subagent_base_tools(
+        model_name=effective_model, tool_groups=parent_tool_groups, app_config=resolved_app_config, selected_sources=selected_sources, user_id=user_id, tool_access=parent_tool_access, artifact_tools=parent_artifact_tools
+    )
 
     from omniharness.agents.tool_surface import subagent_surface
 
@@ -239,6 +244,7 @@ async def task_tool(
             user_id=user_id,
             selected_sources=selected_sources,
             tool_access=parent_tool_access,
+            artifact_tools=parent_artifact_tools,
         ),
         "user_id": user_id,
     }

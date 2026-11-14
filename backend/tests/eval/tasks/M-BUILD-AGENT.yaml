@@ -19,6 +19,7 @@ mock:
   - tool_calls:
     - name: builder_draft
       args:
+        owner_request: an agent that triages my inbox every morning and files tasks
         kind: agent
         name: eval-inbox-triage
         fields:

@@ -96,6 +96,22 @@ def asked_for_pass(target) -> bool:
     return target.status in ("failed", "unverified")
 
 
+def implied_pass(store, thread_id: str, brief) -> str | None:
+    """A follow-up the lead started without `fix_of` (or `app`) on the project
+    of an app job whose result asked for a design pass: that job's id, so the
+    follow-up IS that pass (app mode, the app budget, the pass cap, a held
+    version). None for anything else."""
+    if brief.fix_of or brief.app is not None:
+        return None
+    for job in store.for_thread(thread_id, limit=50):  # newest first
+        if job.project_dir != brief.project_dir:
+            continue
+        if (job.result or {}).get("app") and job.status != "running" and asked_for_pass(job):
+            return job.id
+        return None
+    return None
+
+
 def follow_origin(turn: dict | None, root: tuple[str, str], target) -> tuple[str, str]:
     """A design pass is the person's request only when it is the
     system-prompted automatic pass of an app the person asked for (its sources

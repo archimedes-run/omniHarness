@@ -17,9 +17,12 @@ import gc
 import http.server
 import importlib
 import os
+import socket
 import socketserver
+import stat
 import sys
 import threading
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -62,8 +65,33 @@ def no_proxy(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def _fds() -> int:
-    return len(os.listdir("/dev/fd"))
+def _client_sockets_to(url: str) -> int:
+    """This process's open sockets connected TO the test server: the client's
+    side of its connections, and nothing else.
+
+    Not a count of every descriptor in the process (issue #198): the server's
+    own side of each connection closes on its handler thread, a moment after
+    the client's, and other tests in the same xdist worker open and close
+    descriptors of their own; either moved a process-wide count by a few."""
+    port = urlsplit(url).port
+    count = 0
+    for name in os.listdir("/dev/fd"):
+        try:
+            fd = int(name)
+            if not stat.S_ISSOCK(os.fstat(fd).st_mode):
+                continue
+            dup = socket.socket(fileno=os.dup(fd))
+        except (OSError, ValueError):
+            continue  # gone meanwhile, or not a socket this process can read
+        try:
+            peer = dup.getpeername()
+        except OSError:
+            peer = None  # a listener, or not connected
+        finally:
+            dup.close()  # the duplicate only
+        if isinstance(peer, tuple) and peer[1] == port:
+            count += 1
+    return count
 
 
 def _transport(client: httpx.AsyncClient) -> LoopLocalAsyncTransport:
@@ -81,8 +109,7 @@ def _live(transport: LoopLocalAsyncTransport) -> set:
 def test_many_short_lived_loops_leave_no_pool_and_no_socket(server) -> None:
     client = loop_local_async_client()
     others = _live(_transport(client))
-    gc.collect()
-    before = _fds()
+    assert _client_sockets_to(server) == 0
     used: list = []
 
     async def call() -> int:
@@ -91,10 +118,20 @@ def test_many_short_lived_loops_leave_no_pool_and_no_socket(server) -> None:
 
     for _ in range(40):
         assert asyncio.run(call()) == 200
+    # Forty distinct loops (each held in `used`), each with its own request.
+    assert len(set(map(id, used))) == 40
     gc.collect()
     assert _live(_transport(client)) - others == set(), "a closed loop's pool was kept"
     assert not set(used) & set(_transport(client)._by_loop)
-    assert _fds() - before <= 1, f"sockets left open: {_fds() - before}"
+    assert _client_sockets_to(server) == 0, f"sockets left open to the server: {_client_sockets_to(server)}"
+
+
+def test_the_socket_measurement_sees_an_open_connection(server) -> None:
+    """The measurement above is not blind: a connection held open counts."""
+    port = urlsplit(server).port
+    with socket.create_connection(("127.0.0.1", port)) as held:
+        assert held and _client_sockets_to(server) == 1
+    assert _client_sockets_to(server) == 0
 
 
 def test_a_released_loop_closes_its_own_pool_before_it_ends(server) -> None:

@@ -34,6 +34,9 @@ class Recorder(GenericFakeChatModel):
     """Answers from its script; records the tool names it was bound with."""
 
     sink: list = []
+    # Resumed runs are streamed; the fake cannot stream a tool call, so it
+    # answers whole, as a non-streaming model does (as tests/policy do).
+    disable_streaming: bool = True
 
     def bind_tools(self, tools, **kwargs):
         self.sink.append(sorted(getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else str(t)) for t in tools))

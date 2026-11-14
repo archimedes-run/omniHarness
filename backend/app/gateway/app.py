@@ -18,6 +18,7 @@ from app.gateway.preview_sessions import PreviewSessionManager
 from app.gateway.routers import (
     agents,
     apps,
+    artifact_store,
     artifacts,
     assistants_compat,
     auth,
@@ -797,6 +798,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Apps (Spec 011): library, approval card, bridge, app documents.
     app.include_router(apps.router)
+
+    # The Artifact store (Spec 012): /api/artifacts, records and versions.
+    app.include_router(artifact_store.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:
