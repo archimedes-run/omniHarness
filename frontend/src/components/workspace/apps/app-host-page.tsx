@@ -75,9 +75,13 @@ export function AppHostPage({ appId }: { appId: string }) {
         <p className="font-medium">
           {error instanceof AppsApiError && error.status === 404
             ? "There is no app with this link."
-            : "Could not open this app."}
+            : "Couldn't load this app."}
         </p>
-        {error && <p className="text-muted-foreground">{error.message}</p>}
+        {!(error instanceof AppsApiError && error.status === 404) && (
+          <p className="text-muted-foreground" data-testid="app-load-failed">
+            Try again in a moment.
+          </p>
+        )}
         <Link href="/workspace/apps" className="text-primary underline">
           Back to Apps
         </Link>
@@ -155,6 +159,7 @@ function ApprovedApp({
   const onConnect = useCallback((name: string) => setConnectFor(name), []);
   return (
     <>
+      {app.approval?.status === "pending" && <PendingVersion app={app} />}
       <AppFrame
         app={app}
         onConnect={onConnect}
@@ -217,6 +222,45 @@ function AccessGate({ app }: { app: AppDetail }) {
           )
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A newer version waits on the owner's button while the approved one keeps
+ * running: its card, folded under one line above the frame (changing the
+ * layout around the frame never reloads it).
+ */
+function PendingVersion({ app }: { app: AppDetail }) {
+  const [open, setOpen] = useState(false);
+  const card = app.approval!;
+  return (
+    <div
+      className="border-border bg-card border-b px-3 py-2 text-sm md:px-4"
+      data-testid="app-pending-version"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          Version {card.version} is waiting for your approval. Version{" "}
+          {app.current_version} keeps running until then.
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+          data-testid="app-pending-review"
+          className="max-md:min-h-11"
+        >
+          {open ? "Hide" : "Review"}
+        </Button>
+      </div>
+      {open && (
+        <div className="max-h-[60vh] overflow-y-auto pt-3">
+          <AppApprovalCard card={card} />
+        </div>
+      )}
     </div>
   );
 }

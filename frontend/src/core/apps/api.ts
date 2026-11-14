@@ -20,6 +20,9 @@ export interface AppSummary {
   pinned: boolean;
   updated_at: string;
   last_opened_at: string | null;
+  /** A newer version waiting on the owner's button; the served one
+   * (`current_version`) keeps running until it is approved. */
+  pending_version?: number | null;
 }
 
 export interface SourceView {
@@ -47,6 +50,8 @@ export interface ApprovalCard {
   sentence: string;
   suggestion: boolean;
   suggestion_source: string | null;
+  /** The line to show for a suggestion, built by the gateway (as text). */
+  suggestion_words?: string | null;
   thread_id: string | null;
   created_at: string;
   resolved_at: string | null;

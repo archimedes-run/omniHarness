@@ -90,8 +90,9 @@ export function AppApprovalCard({
           className="border-warning/40 bg-warning/10 text-foreground mt-3 rounded-md border px-3 py-2 text-xs"
           data-testid="app-card-suggestion"
         >
-          <strong className="font-semibold">Suggestion</strong>
-          {card.suggestion_source ? `, from ${card.suggestion_source}. ` : ". "}
+          <strong className="font-semibold">Suggestion.</strong>{" "}
+          {/* The gateway's own line, rendered as text; never the raw source. */}
+          {card.suggestion_words ? `${card.suggestion_words} ` : ""}
           It was not your own request. Allow it only if you want this app.
         </p>
       )}

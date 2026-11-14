@@ -456,7 +456,9 @@ describe("omni.d.ts", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, // It runs the TypeScript compiler over omni.d.ts and lib.dom: seconds on
+  // a CI runner, so not the default 5 s.
+  30_000);
 });
 
 describe("the shim's second layer against other realms (H1)", () => {

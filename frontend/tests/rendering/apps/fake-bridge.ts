@@ -261,6 +261,12 @@ export interface FakeApp {
   status: "approved" | "needs_approval" | "revoked";
   sources: string[];
   states?: SourceStates;
+  /** A newer version waiting on the owner's button (api.md pending_version). */
+  pendingVersion?: number;
+  /** The card's suggestion line (api.md suggestion_words). */
+  suggestion?: { source: string; words: string };
+  /** GET /api/apps/{id} answers 500 bridge_failed. */
+  failDetail?: boolean;
   /** The app's own script (after the shim). Default: the demo app. */
   script?: string;
   style?: string;
@@ -341,7 +347,7 @@ export function approvalCard(app: FakeApp, status = "pending") {
     id: `card${app.id.replace(/-/g, "")}`.padEnd(32, "0").slice(0, 32),
     app_id: app.id,
     app_name: app.name,
-    version: app.version,
+    version: app.pendingVersion ?? app.version,
     manifest_hash: app.hash,
     status,
     sources: app.sources.map((s) => ({
@@ -350,8 +356,9 @@ export function approvalCard(app: FakeApp, status = "pending") {
       refresh_words: "Refreshes every 5 minutes while you use it",
     })),
     sentence: "Data is shown in the app only; the assistant never sees it.",
-    suggestion: false,
-    suggestion_source: null,
+    suggestion: app.suggestion !== undefined,
+    suggestion_source: app.suggestion?.source ?? null,
+    suggestion_words: app.suggestion?.words ?? null,
     thread_id: "t1",
     created_at: minutesAgo(2),
     resolved_at: null,
@@ -388,12 +395,16 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
     pinned: pins.includes(a.id),
     updated_at: minutesAgo(60 * 26),
     last_opened_at: a.id === "today" ? minutesAgo(12) : null,
+    pending_version: a.pendingVersion ?? null,
   });
   const detail = (a: FakeApp) => ({
     ...summary(a),
     html_url: `/api/apps/${a.id}/versions/${a.version}/app.html`,
     sources: a.sources.map(sourceView),
-    approval: a.status === "approved" ? null : approvalCard(a),
+    approval:
+      a.status === "approved" && a.pendingVersion === undefined
+        ? null
+        : approvalCard(a),
   });
   const result = (a: FakeApp, s: string) => ({
     ...sourceResult(s, a.states?.[s] ?? "fresh"),
@@ -479,7 +490,18 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
         body: doc.html,
       });
     }
-    if (rest === "" && method === "GET") return json(route, detail(app));
+    if (rest === "" && method === "GET") {
+      if (app.failDetail) {
+        return json(
+          route,
+          {
+            detail: { code: "bridge_failed", message: "KeyError at app.py:42" },
+          },
+          500,
+        );
+      }
+      return json(route, detail(app));
+    }
     if (rest === "/data" || rest.startsWith("/data/")) {
       if (app.status !== "approved") {
         return json(
@@ -545,7 +567,7 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
       return route.fulfill({ status: 204, body: "" });
     }
     if (rest === "/approval") {
-      return app.status === "approved"
+      return app.status === "approved" && app.pendingVersion === undefined
         ? json(
             route,
             {
@@ -563,6 +585,10 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
         manifest_hash: string;
         card_id: string;
       };
+      // The bridge's ApproveIn: exactly these two keys (extra="forbid").
+      if (Object.keys(body).sort().join() !== "card_id,manifest_hash") {
+        return json(route, { detail: [{ msg: "extra or missing keys" }] }, 422);
+      }
       log.approvals.push(body);
       if (body.manifest_hash !== app.hash) {
         return json(
@@ -572,6 +598,10 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
         );
       }
       app.status = "approved";
+      if (app.pendingVersion !== undefined) {
+        app.version = app.pendingVersion;
+        delete app.pendingVersion;
+      }
       return json(route, {
         status: "approved",
         manifest_hash: app.hash,

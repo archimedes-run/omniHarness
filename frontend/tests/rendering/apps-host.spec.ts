@@ -525,3 +525,76 @@ test("a gateway without the Apps routes (404) costs one quiet request each", asy
   expect(hits.filter((p) => p === "/api/apps")).toHaveLength(1);
   expect(hits.filter((p) => p === "/api/preferences/app-pins")).toHaveLength(1);
 });
+
+test.describe("matches the bridge (api.md)", () => {
+  test("a pending version shows its card while the approved one keeps running", async ({
+    page,
+  }) => {
+    const bridge = await installFakeBridge(page, {
+      apps: [
+        demoApp({
+          pendingVersion: 4,
+          suggestion: {
+            source: "an email you read earlier",
+            words:
+              "Suggested after reading: \u201can email you read earlier\u201d",
+          },
+        }),
+      ],
+    });
+    await page.goto("/workspace/apps/today");
+    await appFrame(page);
+    const strip = page.getByTestId("app-pending-version");
+    await expect(strip).toContainText("Version 4 is waiting for your approval");
+    await page.getByTestId("app-pending-review").click();
+    const card = page.getByTestId("app-approval-card");
+    await expect(card).toContainText("version 4");
+    // The gateway's line, as text; the raw source never on its own.
+    await expect(page.getByTestId("app-card-suggestion")).toHaveText(
+      /^Suggestion\. Suggested after reading: \u201can email you read earlier\u201d It was not your own request/,
+    );
+    await page.getByTestId("app-card-allow").click();
+    await expect
+      .poll(() => bridge.log.approvals)
+      .toEqual([
+        {
+          manifest_hash: bridge.apps.get("today")!.hash,
+          card_id: expect.any(String) as unknown,
+        },
+      ]);
+    await page.goto("/workspace/apps");
+    await expect(page.getByTestId("app-row").first()).toContainText("v4");
+    await expect(page.getByTestId("app-row-pending")).toHaveCount(0);
+  });
+
+  test("500 bridge_failed shows the fixed couldn't-load state, never the error text", async ({
+    page,
+  }) => {
+    await installFakeBridge(page, { apps: [demoApp({ failDetail: true })] });
+    await page.goto("/workspace/apps/today");
+    await expect(page.getByText("Couldn't load this app.")).toBeVisible();
+    await expect(page.getByTestId("app-load-failed")).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("KeyError");
+  });
+
+  test("the app document's CSP is api.md's, Trusted Types included", async ({
+    page,
+  }) => {
+    await installFakeBridge(page);
+    let csp = "";
+    page.on("response", (r) => {
+      if (r.url().includes("/app.html"))
+        csp = r.headers()["content-security-policy"] ?? "";
+    });
+    await page.goto("/workspace/apps/today");
+    await appFrame(page);
+    const expected =
+      "sandbox allow-scripts; default-src 'none'; script-src HASHES; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'";
+    expect(
+      csp.replace(
+        /script-src ('sha256-[A-Za-z0-9+/=]+' ?)+/,
+        "script-src HASHES",
+      ),
+    ).toBe(expected);
+  });
+});

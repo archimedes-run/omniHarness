@@ -66,7 +66,7 @@ export function AppsLibrary() {
         <Skeleton className="h-32 rounded-xl" />
       ) : error ? (
         <p className="text-destructive" role="alert">
-          Could not read your apps: {error.message}
+          Couldn&rsquo;t load your apps. Try again in a moment.
         </p>
       ) : !apps || apps.length === 0 ? (
         <div
@@ -130,6 +130,14 @@ function AppRow({
             <span className="text-muted-foreground text-xs">
               v{app.current_version}
             </span>
+            {app.pending_version != null && (
+              <span
+                className="text-warning text-xs"
+                data-testid="app-row-pending"
+              >
+                v{app.pending_version} waiting for approval
+              </span>
+            )}
             <StatusWord
               tone={STATUS_TONE[app.status]}
               data-testid="app-row-status"
@@ -174,7 +182,7 @@ function AppRow({
             {pinned ? <PinOffIcon /> : <PinIcon />}
             {pinned ? "Unpin" : "Pin to sidebar"}
           </Button>
-          {app.status !== "approved" && (
+          {(app.status !== "approved" || app.pending_version != null) && (
             <PanelButton
               open={panel === "approval"}
               controls={panelId}
