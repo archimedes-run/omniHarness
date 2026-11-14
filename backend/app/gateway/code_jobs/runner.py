@@ -214,6 +214,8 @@ class CodeJobManager:
         if reason:
             return CodeJobOutcome(job_id="", status="blocked", report=f"Coding job not started: {reason}. Tell the person; do not pretend a job ran.")
         existing = self.store.by_call(thread_id, tool_call_id)
+        if existing is not None and existing.status == "running" and self.store.as_seen(existing).status == "running":
+            return CodeJobOutcome(job_id=existing.id, status="blocked", report="Coding job not started: this call already started a job that is still running; it was not started twice.")
         if existing is not None and existing.status != "running":
             # A replayed tool call (resume): the job already ran once. Never twice.
             return CodeJobOutcome(job_id=existing.id, status=existing.status, report=self.report(existing.id), artifacts=_artifacts_of(existing.result))
@@ -227,11 +229,15 @@ class CodeJobManager:
 
         if brief.fix_of and (why := self._fix_refusal(thread_id, brief)):
             return CodeJobOutcome(job_id="", status="blocked", report=f"Coding job not started: {why}. Do not run another automatic fix or design pass; report the results you have.")
-        app, why = app_mode.context_for(self.store, thread_id, brief, turn)
+        app, why = app_mode.context_for(self.store, thread_id, brief, turn, owner_id=user_id)
         if why:
             return CodeJobOutcome(job_id="", status="blocked", report=f"Coding job not started: {why}. Fix the app argument and call code_job again.")
         if app is not None:
             brief = app_mode.with_app_defaults(brief)
+            if app.project_dir and brief.project_dir != app.project_dir:
+                import dataclasses
+
+                brief = dataclasses.replace(brief, project_dir=app.project_dir)
 
         job_id = uuid.uuid4().hex[:16]
         budget = (settings.app_budget_usd or settings.budget_usd) if app is not None else settings.budget_usd

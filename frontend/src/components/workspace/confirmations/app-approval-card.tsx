@@ -2,13 +2,15 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckIcon, LayoutGridIcon, Loader2Icon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { AppsApiError, type ApprovalCard } from "@/core/apps/api";
 import { useApproveApp } from "@/core/apps/hooks";
 import { hashGroups, writeError } from "@/core/apps/wording";
 import { cn } from "@/lib/utils";
+
+import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 
 /**
  * Spec 011 FR-006, FR-007: the App access card. Each source in the gateway's
@@ -26,15 +28,26 @@ export function AppApprovalCard({
   card,
   heading = "App access",
   className,
+  reveal = false,
 }: {
   card: ApprovalCard;
   heading?: string;
   className?: string;
+  /** In a chat: scroll a pending card fully into view, above the composer. */
+  reveal?: boolean;
 }) {
+  const ref = useRef<HTMLElement>(null);
   const approve = useApproveApp();
   const client = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const resolved = card.status !== "pending";
+  useEffect(() => {
+    if (reveal && !resolved) {
+      ref.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
+    // Once per card, when it is raised.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.id, reveal]);
 
   const onAllow = () => {
     setError(null);
@@ -56,7 +69,12 @@ export function AppApprovalCard({
   const titleId = `app-card-${card.id}`;
   return (
     <section
+      ref={ref}
       aria-labelledby={titleId}
+      // The composer floats over the bottom of the thread: stop above it.
+      style={{
+        scrollMarginBottom: `calc(var(${COMPOSER_INSET_VAR}, 200px) + 24px)`,
+      }}
       data-testid="app-approval-card"
       data-card-id={card.id}
       data-status={card.status}

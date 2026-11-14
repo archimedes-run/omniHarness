@@ -542,3 +542,18 @@ Job steps added: `app_checks` (`outcome`, `summary`, `design_count`, `error`,
 - `code_jobs.app_budget_usd` (default 2.00) is the budget of an app-mode job
   or design pass, still under the monthly cap. It applies when set, or when
   `budget_usd` is at its default; an owner who lowered `budget_usd` keeps it.
+
+### Updating an existing app
+
+`code_job` takes `app: {"update": "<app id>"}` to change one of the owner's
+apps. The gateway works on the project that built the app, in the chat that
+built it (anywhere else it refuses and says so), keeps the stored app's
+sources exactly (a change of sources is refused with `sources_changed`: that
+needs a new app and its own approval), gives the request a fresh budget of 3
+design passes, and registers the next version of the same app id. Origin
+rules are the registry's: an update the owner's own message led to, with an
+unchanged manifest, becomes the served version without a card; a
+content-led one is held behind a suggestion card; the automatic design pass
+after a failed check keeps the update's origin. An unknown id is refused with
+the owner's apps listed by id, name and source names (never their data).
+Every version stays in History and can be restored from the Apps page.

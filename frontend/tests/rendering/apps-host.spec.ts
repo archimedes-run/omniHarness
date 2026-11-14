@@ -436,6 +436,67 @@ test.describe("the library", () => {
       "CI board",
     );
   });
+
+  test("a card raised under a long thread is scrolled fully into view, above the composer, when it is raised", async ({
+    page,
+  }) => {
+    await installFakeBridge(page);
+    const json = (body: unknown) => ({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+    const messages = Array.from({ length: 24 }, (_, i) =>
+      i % 2
+        ? { type: "ai", id: `a${i}`, content: `Reply ${i}. `.repeat(30) }
+        : { type: "human", id: `h${i}`, content: `Question ${i}` },
+    );
+    const state = {
+      values: { title: "Long chat", messages },
+      next: [],
+      tasks: [],
+      metadata: {},
+      created_at: new Date().toISOString(),
+      checkpoint: { thread_id: "t1", checkpoint_id: "c1", checkpoint_ns: "" },
+      parent_checkpoint: null,
+    };
+    await page.route("**/api/langgraph/**", (route) => {
+      const url = route.request().url();
+      if (url.includes("/history")) return route.fulfill(json([state]));
+      if (url.includes("/runs") || url.includes("/search"))
+        return route.fulfill(json([]));
+      return route.fulfill(json(state));
+    });
+    await page.route("**/api/confirmations", (route) =>
+      route.fulfill(json({ actions: [], readable: true, error: "" })),
+    );
+    // The card is raised after the thread has loaded and scrolled.
+    await page.route("**/api/apps/approvals**", async (route) => {
+      await new Promise((r) => setTimeout(r, 2500));
+      await route.fallback();
+    });
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.goto("/workspace/chats/t1");
+    // The person is reading a little higher up when the card is raised.
+    await expect(page.getByText("Question 22")).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.mouse.move(640, 300);
+    await page.mouse.wheel(0, -500);
+    const card = page
+      .locator('[data-testid="app-approval-card"][data-status="pending"]')
+      .first();
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => {
+        const c = await card.boundingBox();
+        const composer = await page.getByTestId("composer").boundingBox();
+        return (
+          !!c && !!composer && c.y >= 0 && c.y + c.height <= composer.y + 1
+        );
+      })
+      .toBe(true);
+  });
 });
 
 for (const scheme of ["light", "dark"] as const) {

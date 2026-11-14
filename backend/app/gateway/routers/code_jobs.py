@@ -35,7 +35,8 @@ def _payload(request: Request, job, after: int) -> dict:
 @router.get("/threads/{thread_id}/code-jobs")
 @require_permission("threads", "read", owner_check=True)
 async def list_code_jobs(thread_id: str, request: Request) -> dict:
-    return {"jobs": [job.public() for job in _store(request).for_thread(thread_id)]}
+    store = _store(request)
+    return {"jobs": [store.as_seen(job).public() for job in store.for_thread(thread_id)]}
 
 
 @router.get("/threads/{thread_id}/code-jobs/by-call/{tool_call_id}")
@@ -44,7 +45,7 @@ async def code_job_by_call(thread_id: str, tool_call_id: str, request: Request, 
     job = _store(request).by_call(thread_id, tool_call_id)
     if job is None:
         raise HTTPException(status_code=404, detail="No coding job for this tool call yet")
-    return _payload(request, job, after)
+    return _payload(request, _store(request).as_seen(job), after)
 
 
 @router.get("/threads/{thread_id}/code-jobs/{job_id}")
@@ -53,7 +54,7 @@ async def get_code_job(thread_id: str, job_id: str, request: Request, after: int
     job = _store(request).get(job_id)
     if job is None or job.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Coding job not found")
-    return _payload(request, job, after)
+    return _payload(request, _store(request).as_seen(job), after)
 
 
 @router.post("/threads/{thread_id}/code-jobs/{job_id}/stop")
