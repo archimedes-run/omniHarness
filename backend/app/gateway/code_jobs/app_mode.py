@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import shlex
 import time
@@ -85,6 +86,26 @@ def request_of(turn: dict | None) -> str:
     return ""
 
 
+def turn_key(turn: dict | None) -> str:
+    """Which owner message this turn answers: the last genuine user turn's id
+    (or a digest of its text). "" when no owner message led to it."""
+    from app.policy.lineage import is_user_turn
+
+    for message in reversed((turn or {}).get("messages") or []):
+        if not is_user_turn(message):
+            continue
+        mid = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
+        if mid:
+            return f"id:{mid}"[:120]
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+        return "sha:" + hashlib.sha256(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()[:24]
+    return ""
+
+
+#: An owner message asking to change an existing app (implies app.update).
+_UPDATE_WORDS = re.compile(r"\b(update|change|redesign|improve|rework|fix)\b", re.IGNORECASE)
+
+
 def asked_for_pass(target) -> bool:
     """The job's own result told the lead to run a design pass at once: its
     app checks did not pass, its registration was refused, or its build failed
@@ -96,20 +117,44 @@ def asked_for_pass(target) -> bool:
     return target.status in ("failed", "unverified")
 
 
-def implied_pass(store, thread_id: str, brief) -> str | None:
+def _last_on_project(store, thread_id: str, project_dir: str):
+    for job in store.for_thread(thread_id, limit=50):  # newest first
+        if job.project_dir == project_dir:
+            return job
+    return None
+
+
+def implied_pass(store, thread_id: str, brief, turn: dict | None = None) -> str | None:
     """A follow-up the lead started without `fix_of` (or `app`) on the project
-    of an app job whose result asked for a design pass: that job's id, so the
-    follow-up IS that pass (app mode, the app budget, the pass cap, a held
-    version). None for anything else."""
+    of an app job whose result asked for a design pass, IN THE SAME TURN (no
+    new owner message since that job): that job's id, so the follow-up IS that
+    pass (app mode, the app budget, the pass cap, a held version). A job in a
+    turn opened by a new owner message is a new request. None otherwise."""
     if brief.fix_of or brief.app is not None:
         return None
-    for job in store.for_thread(thread_id, limit=50):  # newest first
-        if job.project_dir != brief.project_dir:
-            continue
-        if (job.result or {}).get("app") and job.status != "running" and asked_for_pass(job):
-            return job.id
+    job = _last_on_project(store, thread_id, brief.project_dir)
+    if job is None or job.status == "running":
         return None
+    stored = (job.result or {}).get("app") or {}
+    key = turn_key(turn)
+    if stored and asked_for_pass(job) and key and stored.get("turn") == key:
+        return job.id
     return None
+
+
+def implied_update(store, thread_id: str, brief, turn: dict | None = None) -> str | None:
+    """A job the lead started without `app` on the project of a registered
+    app, in a turn whose owner message asks to change it: that app's id (the
+    job is an update of it). None otherwise."""
+    if brief.fix_of or brief.app is not None or turn_origin(turn)[0] != "user":
+        return None
+    if not _UPDATE_WORDS.search(request_of(turn)):
+        return None
+    job = _last_on_project(store, thread_id, brief.project_dir)
+    stored = ((job.result or {}).get("app") or {}) if job is not None else {}
+    if not stored:
+        return None
+    return stored.get("app_id") or latest_app_id(store, thread_id, stored.get("root") or job.id)
 
 
 def follow_origin(turn: dict | None, root: tuple[str, str], target) -> tuple[str, str]:
@@ -145,9 +190,12 @@ class AppContext:
     extra: dict = field(default_factory=dict)
     #: The person's own words that started this job chain (request_of).
     request: str = ""
+    #: The owner message this job's turn answers (turn_key): a design pass is
+    #: implied only within it.
+    turn: str = ""
 
     def stored(self, job_id: str) -> dict:
-        return {"root": self.root or job_id, "spec": self.spec, "origin": list(self.origin), "app_id": self.app_id, "design_pass": self.design_pass, "update": self.update, "request": self.request}
+        return {"root": self.root or job_id, "spec": self.spec, "origin": list(self.origin), "app_id": self.app_id, "design_pass": self.design_pass, "update": self.update, "request": self.request, "turn": self.turn}
 
 
 #: The kit's render check, run after every app build (no browser needed).
@@ -233,6 +281,13 @@ def update_context(store, thread_id: str, owner_id: str, app_id: str, turn: dict
 def context_for(store, thread_id: str, brief, turn: dict | None, owner_id: str = "") -> tuple[AppContext | None, str | None]:
     """(the app context, None), (None, None) for an ordinary job, or (None,
     why it cannot start)."""
+    ctx, why = _context_for(store, thread_id, brief, turn, owner_id)
+    if ctx is not None:
+        ctx.turn = turn_key(turn)
+    return ctx, why
+
+
+def _context_for(store, thread_id: str, brief, turn: dict | None, owner_id: str = "") -> tuple[AppContext | None, str | None]:
     if brief.fix_of:
         target = store.get(brief.fix_of)
         stored = ((target.result or {}).get("app") if target is not None else None) or None

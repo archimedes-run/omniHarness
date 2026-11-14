@@ -410,7 +410,7 @@ function Evidence({ job }: { job: CodeJob }) {
           data-testid="code-job-fix-of"
         >
           {r.app
-            ? `Design pass ${r.design_passes_used ?? 1} of 3 for an earlier app job.`
+            ? designPassWords(r.design_passes_used ?? 1)
             : "The automatic fix of an earlier job's layout failures (run once, by the system's rule)."}
         </p>
       ) : null}
@@ -970,4 +970,11 @@ function RegisteredStep({
       </span>
     </li>
   );
+}
+
+/** "Design pass 2 of 3." / the last one says plainly that none are left. */
+export function designPassWords(used: number): string {
+  return used >= 3
+    ? "Design pass 3 of 3: 3 of 3 design passes used. No more automatic passes."
+    : `Design pass ${used} of 3.`;
 }
