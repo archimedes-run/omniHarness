@@ -13,8 +13,9 @@ matching the LangGraph Platform wire format expected by the
 from __future__ import annotations
 
 import logging
+import re
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from langgraph.checkpoint.base import empty_checkpoint
@@ -50,6 +51,29 @@ def _strip_reserved_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return {k: v for k, v in metadata.items() if k not in _SERVER_RESERVED_METADATA_KEYS}
 
 
+#: A chat's folder label (archive and folders, e.g. "Tests"): letters,
+#: digits, space, "_" and "-", at most 40 characters, not starting with a
+#: space or punctuation.
+_FOLDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,39}$")
+
+
+def _validate_organising_keys(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Check the chat-organising keys when present: ``archived`` must be a
+    boolean, ``folder`` a safe label or null (null clears it). Other keys
+    pass through exactly as before."""
+    if "archived" in metadata and not isinstance(metadata["archived"], bool):
+        raise ValueError("archived must be true or false")
+    if "folder" in metadata:
+        folder = metadata["folder"]
+        if folder is not None and (not isinstance(folder, str) or not _FOLDER_RE.match(folder)):
+            raise ValueError("folder must be 1-40 letters, digits, spaces, '_' or '-', or null")
+    return metadata
+
+
+def _clean_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    return _validate_organising_keys(_strip_reserved_metadata(metadata))
+
+
 # ---------------------------------------------------------------------------
 # Response / request models
 # ---------------------------------------------------------------------------
@@ -81,7 +105,7 @@ class ThreadCreateRequest(BaseModel):
     assistant_id: str | None = Field(default=None, description="Associate thread with an assistant")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Initial metadata")
 
-    _strip_reserved = field_validator("metadata")(classmethod(lambda cls, v: _strip_reserved_metadata(v)))
+    _strip_reserved = field_validator("metadata")(classmethod(lambda cls, v: _clean_metadata(v)))
 
 
 class ThreadSearchRequest(BaseModel):
@@ -91,6 +115,8 @@ class ThreadSearchRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000, description="Maximum results")
     offset: int = Field(default=0, ge=0, description="Pagination offset")
     status: str | None = Field(default=None, description="Filter by thread status")
+    archived: bool | Literal["all"] = Field(default=False, description="false (default): not archived; true: archived only; 'all': both")
+    folder: str | None = Field(default=None, pattern=_FOLDER_RE.pattern, description="Only chats in this folder")
 
 
 class ThreadStateResponse(BaseModel):
@@ -111,7 +137,7 @@ class ThreadPatchRequest(BaseModel):
 
     metadata: dict[str, Any] = Field(default_factory=dict, description="Metadata to merge")
 
-    _strip_reserved = field_validator("metadata")(classmethod(lambda cls, v: _strip_reserved_metadata(v)))
+    _strip_reserved = field_validator("metadata")(classmethod(lambda cls, v: _clean_metadata(v)))
 
 
 class ThreadStateUpdateRequest(BaseModel):
@@ -364,12 +390,30 @@ async def search_threads(body: ThreadSearchRequest, request: Request) -> list[Th
     from app.gateway.deps import get_thread_store
 
     repo = get_thread_store(request)
-    rows = await repo.search(
-        metadata=body.metadata or None,
-        status=body.status,
-        limit=body.limit,
-        offset=body.offset,
-    )
+
+    def shown(row: dict) -> bool:
+        meta = row.get("metadata") or {}
+        archived = meta.get("archived") is True
+        if body.archived is not True and body.archived != "all" and archived:
+            return False
+        if body.archived is True and not archived:
+            return False
+        return body.folder is None or meta.get("folder") == body.folder
+
+    # Archived chats are hidden by default. The filter runs here, over pages
+    # read in order, so limit and offset count shown chats only (and every
+    # thread store behaves the same).
+    wanted = body.offset + body.limit
+    chunk = max(body.limit, 100)
+    picked: list[dict] = []
+    start = 0
+    for _ in range(20):
+        page = await repo.search(metadata=body.metadata or None, status=body.status, limit=chunk, offset=start)
+        picked.extend(r for r in page if shown(r))
+        start += chunk
+        if len(page) < chunk or len(picked) >= wanted:
+            break
+    rows = picked[body.offset : wanted]
 
     # Exclude workflow-owned threads when the workflows feature is enabled.
     config = getattr(request.app.state, "config", None)

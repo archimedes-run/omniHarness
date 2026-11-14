@@ -236,6 +236,15 @@ export const zhCN: Translations = {
   // Chats
   chats: {
     searchChats: "搜索对话",
+    archive: "归档",
+    unarchive: "取消归档",
+    moveToTests: "移到 Tests",
+    active: "进行中",
+    archived: "已归档",
+    allFolders: "全部已归档",
+    noFolder: "无文件夹",
+    archivedBanner: "已归档",
+    noArchived: "没有已归档的对话。",
   },
 
   // Page titles (document title)

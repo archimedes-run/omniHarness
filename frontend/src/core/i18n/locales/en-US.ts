@@ -249,6 +249,15 @@ export const enUS: Translations = {
   // Chats
   chats: {
     searchChats: "Search chats",
+    archive: "Archive",
+    unarchive: "Unarchive",
+    moveToTests: "Move to Tests",
+    active: "Active",
+    archived: "Archived",
+    allFolders: "All archived",
+    noFolder: "No folder",
+    archivedBanner: "Archived",
+    noArchived: "No archived chats.",
   },
 
   // Page titles (document title)
