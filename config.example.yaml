@@ -365,6 +365,7 @@ sandbox:
 #   enabled: true
 #   model: null                 # a name under `models:`; default: the lead's model
 #   budget_usd: 1.0             # per job
+#   app_budget_usd: 2.0         # per app-mode job or design pass (Spec 011); used when set, or when budget_usd is left at its default
 #   monthly_cap_usd: 20.0       # all jobs in a calendar month (UTC)
 #   wall_seconds: 1800          # a job is stopped after this long
 #   verify_timeout_seconds: 600 # the gateway's own build check

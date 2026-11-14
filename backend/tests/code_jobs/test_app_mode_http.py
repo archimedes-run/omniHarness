@@ -11,6 +11,7 @@ itself runs in the real sandbox image in test_app_probe_docker.py).
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import re
 import shlex
@@ -20,7 +21,7 @@ from langchain_core.messages import AIMessage
 
 from app.gateway.code_jobs import app_kit
 
-from .fake_sandbox import FakeSandbox, bash, write
+from .fake_sandbox import FakeSandbox, bash, text, write
 from .test_app_mode import app_result
 from .test_code_job_http import FIX_RE, LEAD_SCRIPT, SANDBOX, _job, _thread, _tool_result, gateway  # noqa: F401 - the fixture
 
@@ -48,12 +49,46 @@ class AppFake(FakeSandbox):
     listing, the source scan, the app probe (canned result and screenshots)
     and the screenshot copies."""
 
-    def __init__(self, scenario: list[dict], *, probe: str | None = None, scan: str = "", **kw) -> None:
+    def __init__(self, scenario: list[dict], *, probe: str | None = None, scan: str = "", echo: bool = True, **kw) -> None:
         super().__init__(scenario, layout=probe if probe is not None else app_result(), **kw)
+        self.echo = echo
         self.scan_output = scan
         self.app_probes: list[dict] = []
 
+    has_vite = False
+    tamper_prod = False
+
     def sh(self, command: str, *, timeout: int = 30):
+        if "node_modules/.bin/vite" in command and "__vite__" in command:
+            return 0, "__vite__" if self.has_vite else "__none__"
+        if "vite build --mode development" in command:
+            # The worker's own Vite (arbitrary code): it builds, and plants
+            # what it can wherever it can write. The probe's folder does not
+            # exist yet.
+            self.order.append("dev_build")
+            project = re.search(r"cd (\S+) 2>/dev/null", command).group(1).strip("'")
+            dev = f"{project}/.omni-check/dev"
+            self._put(f"{dev}/index.html", (FIXTURE / "index.html").read_text().replace("./app.js", "./assets/app.js"))
+            self._put(f"{dev}/assets/app.js", (FIXTURE / "app.js").read_text())
+            forged = app_result()
+            for planted in (f"{dev}/result.json", f"{dev}/shot-light-360.png", f"{project}/result.json", "/tmp/result.json"):
+                self._put(planted, forged)
+            with self.lock:
+                for path in [p for p in self.fs if p.startswith("/tmp/omni-app-")]:
+                    self.fs[path] = forged  # nothing there yet; would be caught if there were
+            log = re.search(r"> (\S+verify\.log)", command).group(1).strip("'")
+            self._put(log, "built (development)")
+            return 0, ""
+        if "__copied__" in command:
+            src = re.search(r"cd (\S+) 2>/dev/null", command).group(1).strip("'")
+            site = re.search(r"/usr/bin/mkdir -p -m 755 (\S+) &&", command).group(1).strip("'")
+            with self.lock:
+                items = [(p, c) for p, c in self.fs.items() if p.startswith(src + "/")]
+            for path, content in items:
+                self._put(site + path[len(src) :], content)
+            return 0, "__copied__"
+        if "mkdir -m 700 /tmp/omni-app-" in command:
+            self.order.append("probe_dir")
         if command.startswith("/usr/bin/stat -c %s ") and "result.json" not in command:
             content = self.read_text(shlex.split(command)[3])
             return 0, str(len(content.encode())) if content is not None else "none"
@@ -68,12 +103,26 @@ class AppFake(FakeSandbox):
                 rows = [f"{p[len(root) + 1 :]}\t{len(c.encode())}" for p, c in self.fs.items() if p.startswith(root + "/")]
             self._put(out, "\n".join(rows) + ("\n" if rows else ""))
             return 0, ""
-        if "layout_probe.py" in command and "sha256sum" in command and command.rstrip().endswith("2>&1") and " app <" in command:
+        if "layout_probe.py" in command and "sha256sum" in command and command.rstrip().endswith("2>&1") and " app " in command:
             directory = re.search(r"f=(\S+)/layout_probe\.py;", command).group(1).strip("'")
             self.order.append("app_probe")
-            self.app_probes.append({"site": self.read_text(f"{directory}/site/index.html"), "check": json.loads(self.read_text(f"{directory}/check.json") or "{}"), "command": command})
+            self.app_probes.append({"site": self.read_text(f"{directory}/www/site/index.html"), "check": json.loads(self.read_text(f"{directory}/check.json") or "{}"), "command": command})
             if self.layout:
-                self._put(f"{directory}/result.json", self.layout)
+                body = self.layout
+                try:
+                    # As the real probe does: this run's nonce and the hash of the production page it served.
+                    parsed = json.loads(body)
+                    if isinstance(parsed, dict) and parsed.get("mode") == "app" and self.echo:
+                        if self.tamper_prod:
+                            self._put(f"{directory}/www/prod/index.html", "<html><body>other bytes</body></html>")
+                        prod_page = self.read_text(f"{directory}/www/prod/index.html") or ""
+                        if self.echo != "no_nonce":
+                            parsed.setdefault("nonce", json.loads(self.read_text(f"{directory}/check.json") or "{}").get("nonce"))
+                        parsed.setdefault("prod_sha256", hashlib.sha256(prod_page.encode()).hexdigest())
+                        body = json.dumps(parsed)
+                except ValueError:
+                    pass
+                self._put(f"{directory}/result.json", body)
                 for shot in json.loads(self.layout).get("shots", []):
                     self._put(f"{directory}/{shot['file']}", "x" * shot["bytes"])
             return self.layout_exit, ""
@@ -150,7 +199,7 @@ def test_failing_checks_block_registration_and_ask_for_a_design_pass(gateway):  
     thread_id, messages = ask(gateway)
     report = _tool_result(messages)
     assert "STATUS UNVERIFIED" in report and "the app checks failed: overflows sideways at 360 px by 400 px" in report
-    assert apps(gateway) == [] and "Run a design pass now (3 left)" in report and FIX_RE.search(report)
+    assert apps(gateway) == [] and "Run design pass 1 of 3 now" in report and FIX_RE.search(report)
 
 
 def test_an_app_that_uses_the_network_or_is_too_large_never_reaches_the_probe(gateway):  # noqa: F811
@@ -292,7 +341,7 @@ def test_the_automatic_pass_after_a_failure_is_the_persons_request(gateway, monk
 
 class ThrowingFake(AppFake):
     def sh(self, command: str, *, timeout: int = 30):
-        if " app <" in command and "layout_probe.py" in command:
+        if " app " in command and "layout_probe.py" in command:
             raise RuntimeError("the sandbox API failed")
         return super().sh(command, timeout=timeout)
 
@@ -350,3 +399,55 @@ def test_sources_other_than_the_requested_ones_are_never_registered(gateway):  #
     report = _tool_result(messages)
     assert "its sources differ from the ones requested" in report and "(sources_changed)" in report
     assert apps(gateway) == [] and gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"] == []
+
+
+def test_an_app_job_runs_with_the_app_budget_and_the_render_check(gateway):  # noqa: F811
+    fake = SANDBOX["current"] = AppFake(build())
+    thread_id, _ = ask(gateway)
+    (job,) = gateway.client.app.state.code_job_store.for_thread(thread_id)
+    assert job.budget_usd == 2.0
+    assert "node omni-kit/check-render.mjs" in fake.verify_env
+
+
+def test_worker_code_runs_before_the_probe_folder_exists_and_cannot_forge_its_result(gateway):  # noqa: F811
+    fake = AppFake(build())
+    fake.has_vite = True
+    SANDBOX["current"] = fake
+    thread_id, messages = ask(gateway)
+    report = _tool_result(messages)
+    assert "STATUS VERIFIED" in report, report
+    order = [o for o in fake.order if o in ("dev_build", "cleanup", "probe_dir", "app_probe")]
+    assert order.index("dev_build") < order.index("probe_dir") < order.index("app_probe")
+    assert "cleanup" in order[order.index("dev_build") : order.index("probe_dir")]
+    (probe,) = fake.app_probes
+    assert probe["check"]["dev_build"] is True and "require-trusted-types-for" in probe["check"]["csp_site"]
+    assert re.search(r"/tmp/omni-app-[0-9a-f]{32}/", probe["command"]) and probe["check"]["nonce"] in probe["command"]
+
+
+@pytest.mark.parametrize("layer", ["probe found its files taken", "no nonce in the result", "production page swapped"])
+def test_a_result_the_probe_did_not_make_on_these_bytes_registers_nothing(gateway, layer):  # noqa: F811
+    if layer == "probe found its files taken":
+        fake = AppFake(build(), layout_exit=98)
+    elif layer == "no nonce in the result":
+        fake = AppFake(build(), echo="no_nonce")
+    else:
+        fake = AppFake(build())
+        fake.tamper_prod = True
+    SANDBOX["current"] = fake
+    thread_id, messages = ask(gateway)
+    report = _tool_result(messages)
+    assert "STATUS UNVERIFIED" in report and "not its own" in report
+    assert apps(gateway) == [] and gateway.client.get(f"/api/apps/approvals?thread_id={thread_id}").json()["cards"] == []
+
+
+def test_the_lead_report_carries_at_most_8000_characters_of_page_and_worker_text(gateway):  # noqa: F811
+    from app.gateway.code_jobs.runner import REPORT_TEXT_MAX
+
+    detail = [{"message": f"Error {i}: " + "y" * 590, "frames": [], "where": []} for i in range(5)]
+    console = [{"level": "error", "text": f"{i} " + "z" * 590} for i in range(10)]
+    crash = {(t, s): {"run": {"errors": 1, "first_error": "Error: boom"}} for t in ("light", "dark") for s in ("fresh", "empty", "not_connected", "failed")}
+    SANDBOX["current"] = AppFake([*build(), text("w" * 2900)], probe=app_result(crash, errors_detail=detail, console=console))
+    _, messages = ask(gateway)
+    report = _tool_result(messages)
+    fenced_text = "".join(re.findall(r"<<<BEGIN [A-Z ]+ \w+>>>\n(.*?)\n<<<END", report, re.S))
+    assert len(fenced_text) <= REPORT_TEXT_MAX + 400 and "clipped: a report carries at most 8000" in report

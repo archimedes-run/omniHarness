@@ -27,6 +27,7 @@ class CodeJobsConfig(BaseModel):
     enabled: bool = Field(default=True, description="Offer code_job when the hardened container sandbox is configured")
     model: str | None = Field(default=None, description="Model (a name under `models:`) the worker uses; default: the lead's model (D2)")
     budget_usd: float = Field(default=1.0, gt=0, le=50, description="Per-job model spend ceiling (D2: $1)")
+    app_budget_usd: float = Field(default=2.0, gt=0, le=50, description="Per-job model spend ceiling for app-mode jobs and their design passes (Spec 011): an app with many sources costs more per build")
     monthly_cap_usd: float = Field(default=20.0, gt=0, le=10_000, description="All jobs in a calendar month (UTC); reached = new jobs refused")
     wall_seconds: int = Field(default=1800, ge=60, le=4 * 3600, description="A job is stopped after this long")
     verify_timeout_seconds: int = Field(default=600, ge=30, le=600, description="Hard cap on the gateway's verification command (D4)")

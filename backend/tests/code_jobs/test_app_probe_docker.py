@@ -23,6 +23,8 @@ import pytest
 from app.gateway.apps import bundle as bundle_mod
 from app.gateway.code_jobs import app_checks, app_kit, layout
 
+from .test_app_mode import app_result as app_result_json
+
 FIXTURE = Path(__file__).with_name("app_fixtures") / "pass"
 IMAGE = os.environ.get("SANDBOX_IMAGE", "omni-harness-sandbox:1.11.0-oh5")
 
@@ -38,7 +40,7 @@ BROKEN: dict[str, tuple] = {
 }
 
 
-def _site(root: Path, name: str, js_change, css_change) -> list[str]:
+def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> list[str]:
     files = {n: (FIXTURE / n).read_bytes() for n in ("index.html", "app.js", "app.css")}
     files["graphite.css"] = app_kit.graphite_css().encode()
     if js_change:
@@ -52,9 +54,17 @@ def _site(root: Path, name: str, js_change, css_change) -> list[str]:
     data = app_kit.fixtures(manifest)
     mock, hashes = bundle_mod.inline({"index.html": html}, platform_shim=app_kit.mock_script(data))
     d = root / name
-    (d / "site").mkdir(parents=True)
-    (d / "site" / "index.html").write_bytes(mock)
-    (d / "check.json").write_text(json.dumps({"csp": app_checks.probe_csp(hashes), "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}))
+    for part in ("site", "prod"):
+        (d / "www" / part).mkdir(parents=True)
+        (d / "www" / part / "index.html").write_bytes(mock)
+    site_hashes = hashes
+    if prod_js_change:
+        # Only the production bytes differ (a development-only guard in the app).
+        files["app.js"] = files["app.js"].replace(prod_js_change[0].encode(), prod_js_change[1].encode())
+        bad, bad_hashes = bundle_mod.inline({"index.html": bundle_mod.inline(files)[0]}, platform_shim=app_kit.mock_script(data))
+        (d / "www" / "prod" / "index.html").write_bytes(bad)
+        hashes = bad_hashes
+    (d / "check.json").write_text(json.dumps({"csp": app_checks.probe_csp(hashes), "csp_site": app_checks.probe_csp(site_hashes), "sentinels": app_kit.sentinels(data), "reason": app_kit.MOCK_REASON}))
     shutil.copy(Path(layout.__file__).with_name("layout_probe.py"), d / "layout_probe.py")
     return list(manifest["sources"])
 
@@ -66,10 +76,15 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     sources = _site(root, "pass", None, None)
     for name, (js, css, _why) in BROKEN.items():
         _site(root, name, js, css)
+    # Network and a frame only in the production build: caught there.
+    _site(root, "prod_only_violation", None, None, ("// A small app", 'fetch("https://example.com/x").catch(() => {});\ndocument.body.appendChild(document.createElement("iframe"));\n// A small app'))
+    # A result already in the probe's folder: the probe refuses to run.
+    _site(root, "pre_written", None, None)
+    (root / "pre_written" / "result.json").write_text(app_result_json())
     os.chmod(root, 0o777)
-    for d in root.iterdir():
+    for d in root.rglob("*"):
         os.chmod(d, 0o777)
-    loop = "for d in /w/*/; do cd $d && /usr/bin/timeout -k 5 115 /usr/bin/python3.10 -I -S layout_probe.py $d/site $d/result.json app < /dev/null > /dev/null 2>&1; echo $d $?; done"
+    loop = "for d in /w/*/; do cd $d && /usr/bin/timeout -k 5 170 /usr/bin/python3.10 -I -S layout_probe.py $d/www $d/result.json app < /dev/null > /dev/null 2>&1; rc=$?; echo $(basename $d) $rc; done"
     name = f"oh-app-probe-e2e-{uuid.uuid4().hex[:8]}"
     try:
         run = subprocess.run(
@@ -81,16 +96,24 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
     assert run.returncode == 0, run.stderr[-2000:]
+    codes = dict(line.split() for line in run.stdout.split("\n") if line.strip())
     results = {}
     for d in root.iterdir():
         raw = (d / "result.json").read_text() if (d / "result.json").exists() else None
-        results[d.name] = app_checks.parse(raw, exit_code=0, data_sources=sources)
+        results[d.name] = app_checks.parse(raw, exit_code=int(codes.get(d.name, "0")), data_sources=sources)
+    assert results["pre_written"]["error_code"] == "tampered"
+    bad = results["prod_only_violation"]
+    assert bad["outcome"] == "fail" and any("production/" in f and "connect-src" in f for f in bad["failures"]), bad["failures"]
+    assert any("nested frame" in f and "production/" in f for f in bad["failures"])
 
     good = results["pass"]
     assert good["outcome"] == "pass", good["failures"]
     assert len(good["shots"]) == 6
     for shot in good["shots"]:
         assert (root / "pass" / shot["file"]).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert not good["errors_detail"]
+    crash = results["uses_innerhtml"]["errors_detail"]
+    assert crash and "TrustedHTML" in crash[0]["message"] and crash[0]["frames"]
     for name, (_js, _css, why) in BROKEN.items():
         r = results[name]
         assert r["outcome"] == "fail" and any(why in f for f in r["failures"]), (name, r["failures"], r.get("error"))

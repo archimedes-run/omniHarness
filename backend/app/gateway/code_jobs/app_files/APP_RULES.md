@@ -16,6 +16,9 @@ measure and refuses to register an app that breaks them.
 | `graphite.css` | The Graphite design tokens for light and dark as CSS variables, plus dashboard primitives (`omni-grid`, `omni-tile`, `omni-kpi`, `omni-list`, `omni-badge`, `omni-state`, `omni-chart`, ...). Import it first. |
 | `mock-data.json` | Sample data for every source in the four states. The system builds your app against it; read it to see real shapes. |
 | `omni-app.schema.json` | The JSON Schema of `omni-app.json`. |
+| `omni-react.tsx` | `useSource(name)` and `<Tile source title empty View>`: the four states with the exact words, "updated N min ago", the Connect button, the skeleton. Use it for every tile. |
+| `starter/` | `App.tsx` (one `Tile` per source, generated from your sources), `main.tsx` and `vite.config.ts`. Copy them into `src/` and the project root and build from there. |
+| `check-render.mjs` | The render check: `node omni-kit/check-render.mjs` renders `src/App.tsx` in every mock state WITHOUT a browser and prints React's own error and the component that threw. |
 | `omni-mock.js` | The MOCK shim with the sample data, for trying the page by hand. Never reference it from `index.html`: the system adds it to its own mock build, and registration adds the real platform shim as the first script (you never get, copy or write the real one). |
 
 `omni-app.json` (in the project folder) is the app's manifest: its name and
@@ -23,12 +26,29 @@ the data sources it reads. The system wrote a starter. You may change `name`
 and `description`; change `sources` only if the job asks for it, and only to
 entries in the schema. The system validates it.
 
+## Start from the starter
+
+1. Scaffold Vite + React + TypeScript, then copy `omni-kit/starter/App.tsx` and
+   `omni-kit/starter/main.tsx` into `src/` and `omni-kit/starter/vite.config.ts`
+   into the project root. `src/App.tsx` must default-export the app's root
+   component with no props (the render check imports it).
+2. Write each tile's fresh view as its OWN component and pass it to `Tile`
+   (`<Tile source="calendar" title="Calendar" empty="No meetings today" View={CalendarView} />`).
+   Do not hand-roll the four states.
+3. Hooks: call every hook at the top of a component, before any early
+   `return` or condition. A hook after `if (!data) return …` crashes React the
+   moment data arrives ("Rendered more hooks than during the previous render").
+4. Before you finish, run `npm run build && node omni-kit/check-render.mjs` and
+   fix the first error it prints. The system runs the same command as the
+   verify step, so a failing render check fails the job.
+
 ## Build output
 
 - The build must produce **`dist/index.html`**; the system inlines every
   local script, stylesheet, image and font it references into ONE HTML file of
   at most **2 MB**. So: no code splitting, no dynamic `import()`, no lazy
   routes, no web workers, images and fonts small (or inline SVG).
+- No dynamic `import()` anywhere in your code (and no lazy routes).
 - Vite: set `base: './'`, `build.modulePreload: false`, `build.cssCodeSplit: false`,
   `build.assetsInlineLimit: 100000000`, and
   `build.rollupOptions.output.inlineDynamicImports: true`.

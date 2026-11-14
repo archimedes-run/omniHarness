@@ -44,6 +44,7 @@ _WHERE = re.compile(r"[^A-Za-z0-9_#.\- ]")
 #: checksum is, because something in the sandbox interfered.
 ERRORS: dict[str, tuple[str, bool]] = {
     "checksum": ("the check script did not match its checksum", True),
+    "tampered": ("the check's own files were not its own (written by something else, or its result was not this run's)", True),
     "unreadable": ("the check left no readable result", True),
     "too_large": ("the check's result was too large", True),
     "no_answer": ("the sandbox did not answer", False),
@@ -63,17 +64,17 @@ LOAD_ERRORS = {
 
 
 #: The hard stop in app mode (Spec 011 FR-026: themes x states x widths).
-APP_TIMEOUT_SECONDS = 115
+APP_TIMEOUT_SECONDS = 170
 
 
-def command(directory: str, root: str, job_id: str, *, app: bool = False) -> str:
+def command(directory: str, root: str, job_id: str, *, app: bool = False, nonce: str = "") -> str:
     """The shell command that runs the probe from `directory` (fresh, the
     system's own) against the site in `root`. Every tool by absolute path,
     a fixed PATH, no proxy variables: the page gets no way out of the sandbox.
     `app`: the app mode (an app's mock build; check.json beside the result)."""
     q = shlex.quote
     script, out = f"{directory}/layout_probe.py", f"{directory}/result.json"
-    limit, extra = (APP_TIMEOUT_SECONDS, " app") if app else (TIMEOUT_SECONDS, "")
+    limit, extra = (APP_TIMEOUT_SECONDS, f" app {q(nonce)}") if app else (TIMEOUT_SECONDS, "")
     return (
         f'f={q(script)}; [ "$(/usr/bin/sha256sum "$f" | /usr/bin/cut -c1-64)" = {DIGEST} ] || exit 97; '
         f"cd {q(directory)} && /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 HOME={q(directory)} TMPDIR={q(directory)} OMNI_JOB_ID={q(job_id)} "

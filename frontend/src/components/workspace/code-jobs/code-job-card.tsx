@@ -404,8 +404,9 @@ function Evidence({ job }: { job: CodeJob }) {
           className="text-muted-foreground mb-1 text-xs"
           data-testid="code-job-fix-of"
         >
-          The automatic fix of an earlier job&apos;s layout failures (run once,
-          by the system&apos;s rule).
+          {r.app
+            ? `Design pass ${r.design_passes_used ?? 1} of 3 for an earlier app job.`
+            : "The automatic fix of an earlier job's layout failures (run once, by the system's rule)."}
         </p>
       ) : null}
       {job.reason ? (
@@ -440,7 +441,11 @@ function Evidence({ job }: { job: CodeJob }) {
             <Mark ok={f.exists} />
             <span className="[overflow-wrap:anywhere]">
               <code className="text-xs">{safeField(f.path)}</code>{" "}
-              {f.exists ? `exists (${f.bytes} bytes)` : "is missing"}
+              {f.exists
+                ? r?.app
+                  ? `exists (the build's entry file, ${f.bytes} bytes; inlined into one app file below)`
+                  : `exists (${f.bytes} bytes)`
+                : "is missing"}
             </span>
           </li>
         ))}
@@ -665,7 +670,7 @@ function AppChecksEvidence({
         <span>{appChecksSummary(checks.outcome, failures.length)}</span>
         {checks.bundle ? (
           <span className="text-muted-foreground">
-            {` · one file, ${Math.round(checks.bundle.bytes / 1024)} KB`}
+            {` · inlined into one app file of ${Math.round(checks.bundle.bytes / 1024)} KB`}
           </span>
         ) : null}
         {failures.length ? (

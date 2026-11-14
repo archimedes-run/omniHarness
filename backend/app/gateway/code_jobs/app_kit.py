@@ -247,6 +247,89 @@ def manifest_schema() -> dict:
     }
 
 
+#: The kit's React helpers, render check and starter (paths under omni-kit/).
+KIT_STATIC = ("omni-react.tsx", "check-render.mjs", "check-render-core.mjs", "render-entry.tsx")
+#: Per catalog entry, the item field a starter list shows first.
+_MAIN_FIELD = {
+    "googlecalendar.events_today": "title",
+    "github.pr_search": "title",
+    "gmail.unread_subjects": "subject",
+    "omni.ledger.today": "task",
+    "omni.sessions.active": "title",
+    "omni.automations.recent": "rule",
+}
+
+STARTER_MAIN = """import { createRoot } from "react-dom/client";
+
+import "../omni-kit/graphite.css";
+import App from "./App";
+
+createRoot(document.getElementById("root")!).render(<App />);
+"""
+
+STARTER_VITE = """import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+// One self-contained file: the system inlines dist/ into the app.
+export default defineConfig({
+  plugins: [react()],
+  base: "./",
+  build: {
+    modulePreload: false,
+    cssCodeSplit: false,
+    assetsInlineLimit: 100000000,
+    rollupOptions: { output: { inlineDynamicImports: true } },
+  },
+});
+"""
+
+
+def _title(name: str) -> str:
+    return name.replace("_", " ").capitalize()
+
+
+def starter_app(manifest: dict) -> str:
+    """src/App.tsx for this manifest: one kit Tile per source, each with a
+    small fresh view. The worker replaces the views and the layout."""
+    views, tiles = [], []
+    for name, spec in manifest["sources"].items():
+        entry = get_entry(spec["use"])
+        item_fields = [f for f in entry.item_fields if f in spec["fields"]] if entry else []
+        main = _MAIN_FIELD.get(spec["use"]) if _MAIN_FIELD.get(spec["use"]) in item_fields else (item_fields[0] if item_fields else None)
+        comp = "".join(p.capitalize() for p in name.split("_")) + "View"
+        lines = [f'function {comp}({{ data }}: {{ data: DataOf<"{name}"> }}) {{']
+        if "count" in spec["fields"]:
+            lines.append('  return <p className="omni-kpi-value">{data.count}</p>;')
+        elif main:
+            lines += [
+                "  return (",
+                '    <ul className="omni-list">',
+                "      {data.items.map((item, i) => (",
+                f'        <li key={{i}}><span className="omni-list-main">{{String(item.{main} ?? "")}}</span></li>',
+                "      ))}",
+                "    </ul>",
+                "  );",
+            ]
+        else:
+            lines.append("  return <p>{data.items.length}</p>;")
+        lines.append("}")
+        views.append("\n".join(lines))
+        tiles.append(f'        <Tile source="{name}" title="{_title(name)}" View={{{comp}}} />')
+    head = """import { Tile } from "../omni-kit/omni-react";
+import type { DataOf } from "../omni-kit/omni";
+
+// A STARTER written by the system: replace the views and the layout. Keep
+// the pattern: every hook at the top of a component, one Tile per source,
+// each tile's fresh view a component of its own.
+"""
+    title = json.dumps(manifest["name"])[1:-1].replace("{", "&#123;").replace("<", "&lt;")
+    app = (
+        '\nexport default function App() {\n  return (\n    <main className="omni-page">\n      <header className="omni-header">\n'
+        f'        <h1>{title}</h1>\n      </header>\n      <div className="omni-grid">\n' + "\n".join(tiles) + "\n      </div>\n    </main>\n  );\n}\n"
+    )
+    return head + "\n" + "\n\n".join(views) + "\n" + app
+
+
 MOCK_BANNER = "/* The kit's MOCK shim with sample data, for trying the page by hand (?state=, ?theme=). Never reference it from index.html:\n * the system adds it to its own mock build, and registration adds the real platform shim. */\n"
 
 
@@ -259,6 +342,10 @@ def kit_files(manifest: dict) -> dict[str, str]:
         f"{KIT_DIR}/mock-data.json": json.dumps(mock_data_file(manifest), indent=2, ensure_ascii=False) + "\n",
         f"{KIT_DIR}/omni-app.schema.json": json.dumps(manifest_schema(), indent=2) + "\n",
         f"{KIT_DIR}/omni-mock.js": MOCK_BANNER + mock_script(fixtures(manifest)),
+        **{f"{KIT_DIR}/{name}": (HERE / name).read_text(encoding="utf-8") for name in KIT_STATIC},
+        f"{KIT_DIR}/starter/App.tsx": starter_app(manifest),
+        f"{KIT_DIR}/starter/main.tsx": STARTER_MAIN,
+        f"{KIT_DIR}/starter/vite.config.ts": STARTER_VITE,
     }
 
 

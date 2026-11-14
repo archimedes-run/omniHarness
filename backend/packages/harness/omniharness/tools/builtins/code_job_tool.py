@@ -44,7 +44,7 @@ Arguments:
   inbox (count and subjects of unread mail, never bodies).
   The system writes an app kit into project_dir (types, Graphite styles, sample data, rules), builds against sample data, checks every tile state
   in both themes at three widths, returns screenshots, and registers a passing app; the person approves its data access with a button.
-  verify_command, expect_files and publish_dir default to npm run build, dist/index.html and dist.
+  verify_command, expect_files and publish_dir default to the build plus the kit's render check, dist/index.html and dist: leave them empty.
 
 The person sees live progress and can stop the job. The result's STATUS is decided by the system from evidence:
 verified (the verify command exited 0 and every expected file exists), unverified (no evidence), failed (the check failed), stopped, or blocked (budget, network or time limit).
@@ -90,6 +90,8 @@ def normalize_relative(value: str, field: str) -> str:
     return "/".join(parts)
 
 
+#: An app's build, then the kit's render check (no browser needed).
+APP_VERIFY = "npm run build && node omni-kit/check-render.mjs"
 #: The size of the `app` argument, as JSON.
 APP_MAX_CHARS = 8000
 
@@ -151,7 +153,9 @@ async def code_job_tool(
             raise ValueError("goal is required")
         app_spec = normalize_app(app)
         if app_spec is not None:
-            verify_command = verify_command or "npm run build"
+            verify_command = (verify_command or "").strip() or APP_VERIFY
+            if "omni-kit/check-render.mjs" not in verify_command:
+                verify_command = f"{verify_command} && node omni-kit/check-render.mjs"
             expect_files = expect_files or ["dist/index.html"]
             publish_dir = publish_dir or "dist"
         brief = CodeJobBrief(
