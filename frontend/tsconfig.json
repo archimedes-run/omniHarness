@@ -54,5 +54,11 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules", "generated"]
+  "exclude": [
+    "node_modules",
+    "generated",
+    // Spec 011: the app kit's files, for apps, not this page (omni.d.ts
+    // declares a global `omni`). Type-checked by tests/unit/apps-shim.test.ts.
+    "src/core/apps/shim"
+  ]
 }

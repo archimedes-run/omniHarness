@@ -12,6 +12,7 @@ import type { PostedResult } from "@/core/confirmations/logic";
 import { anchorActions } from "@/core/messages/agents";
 
 import { PendingConfirmations } from "./pending-confirmations";
+import { ThreadAppApprovals } from "./thread-app-approvals";
 
 /**
  * A chat's confirmation cards, each IN the thread at the point it was raised
@@ -91,14 +92,18 @@ export function useThreadConfirmations(
   );
 
   const footer = enabled ? (
-    <PendingConfirmations
-      threadId={threadId}
-      exclude={anchored}
-      quietWhenEmpty
-      onContinue={onContinue}
-      onResumed={onResumed}
-      onPickUp={onPickUp}
-    />
+    <>
+      <PendingConfirmations
+        threadId={threadId}
+        exclude={anchored}
+        quietWhenEmpty
+        onContinue={onContinue}
+        onResumed={onResumed}
+        onPickUp={onPickUp}
+      />
+      {/* Spec 011: App access cards raised in this chat (button only). */}
+      <ThreadAppApprovals threadId={threadId} />
+    </>
   ) : null;
 
   return { afterGroup, footer };
