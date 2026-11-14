@@ -413,6 +413,8 @@ describe("the shim at run time", () => {
   });
 });
 
+// The compile test runs the TypeScript compiler over omni.d.ts and lib.dom:
+// seconds on a CI runner, so it has 30 s, not the default 5 s.
 describe("omni.d.ts", () => {
   it("compiles, and types omni.data by the manifest's source names", () => {
     const dir = mkdtempSync(join(tmpdir(), "omni-dts-"));
@@ -456,7 +458,7 @@ describe("omni.d.ts", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
 
 describe("the shim's second layer against other realms (H1)", () => {

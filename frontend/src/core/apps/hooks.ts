@@ -19,15 +19,17 @@ import {
 const APPS = ["apps"] as const;
 
 /**
- * Retry a failed read twice, except a 4xx: a gateway without the Apps routes
+ * Retry a failed read twice, except a 4xx or bridge_failed: a gateway without the Apps routes
  * (404) or a refusal will answer the same again. The sidebar reads apps and
  * pins on every page, so a missing route must cost one request, not four.
  */
 function retryUnless4xx(count: number, error: Error): boolean {
+  // A 4xx, or the bridge's own unexpected failure (500 bridge_failed),
+  // answers the same again: shown at once as "Couldn't load".
   if (
     error instanceof AppsApiError &&
-    error.status >= 400 &&
-    error.status < 500
+    ((error.status >= 400 && error.status < 500) ||
+      error.code === "bridge_failed")
   ) {
     return false;
   }
