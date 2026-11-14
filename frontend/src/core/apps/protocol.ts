@@ -86,10 +86,26 @@ export function checkFrameMessage(
   return { ok: true, message };
 }
 
-/** The shim's one window message, accepted only from the app's own frame. */
-export function isReadyMessage(raw: unknown): boolean {
-  return validateProtocolMessage(SCHEMA, "frame_to_host_window", raw).ok;
+/** The shim's one window message, `hello`: its nonce, or null if it is not
+ * a well-formed hello. Accepted only from the app's own frame. */
+export function helloNonce(raw: unknown): string | null {
+  if (!validateProtocolMessage(SCHEMA, "frame_to_host_window", raw).ok) {
+    return null;
+  }
+  return (raw as { nonce: string }).nonce;
 }
+
+/**
+ * Workspace pages an app may link to (L2): where the catalog's own links
+ * point (Ledger projects, coding sessions, automations, Home). Opened in
+ * place, path only: the query and fragment are dropped.
+ */
+export const INTERNAL_LINK_PREFIXES: readonly string[] = [
+  "/workspace/projects/",
+  "/workspace/sessions",
+  "/workspace/automations",
+  "/workspace/home",
+];
 
 const STATES = new Set<string>(SOURCE_STATES);
 
@@ -162,8 +178,8 @@ export type OpenTarget =
 /**
  * FR-019: where an app's link may go. An `https` URL on a host one of the
  * app's sources declares in the catalog (`link_hosts`), opened in a new tab
- * with noopener and noreferrer; or a path of this workspace (`/workspace/...`,
- * the Ledger's links), opened in place. Nothing else: no http, no other
+ * with noopener and noreferrer; or a workspace page on the fixed list
+ * (INTERNAL_LINK_PREFIXES), path only, opened in place. Nothing else: no http, no other
  * scheme, no credentials, no port, no host the catalog did not name.
  */
 export function checkOpenUrl(
@@ -182,12 +198,14 @@ export function checkOpenUrl(
     } catch {
       return { ok: false, reason: "url_not_allowed" };
     }
-    if (url.origin === origin && url.pathname.startsWith("/workspace/")) {
-      return {
-        ok: true,
-        kind: "internal",
-        path: url.pathname + url.search + url.hash,
-      };
+    const path = url.pathname;
+    const allowed = INTERNAL_LINK_PREFIXES.some((prefix) =>
+      prefix.endsWith("/")
+        ? path.startsWith(prefix) && path.length > prefix.length
+        : path === prefix || path.startsWith(prefix + "/"),
+    );
+    if (url.origin === origin && allowed && /^[A-Za-z0-9/_-]+$/.test(path)) {
+      return { ok: true, kind: "internal", path };
     }
     return { ok: false, reason: "url_not_allowed" };
   }

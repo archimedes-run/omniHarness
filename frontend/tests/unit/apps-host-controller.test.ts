@@ -35,7 +35,12 @@ interface Harness {
   connects: string[];
   torn: { count: number };
   next: () => Promise<unknown>;
+  /** The shim's hello (from the frame, with the nonce) and the load. */
+  hello: (nonce?: string) => void;
+  open: () => Promise<void>;
 }
+
+const NONCE = "n0nce-n0nce-n0nce-0123";
 
 const open: MessagePort[] = [];
 afterEach(() => {
@@ -81,6 +86,9 @@ function harness(over: Partial<HostControllerOptions> = {}): Harness {
     onTornDown: () => {
       torn.count += 1;
     },
+    nonce: NONCE,
+    settleMs: 0,
+    helloGraceMs: 30,
     ...over,
   });
   controller.attach({ contentWindow: frameWindow as unknown as Window });
@@ -96,15 +104,32 @@ function harness(over: Partial<HostControllerOptions> = {}): Harness {
     connects,
     torn,
     next: () => new Promise((resolve) => waiters.push(resolve)),
+    hello: (nonce = NONCE) =>
+      controller.handleWindowMessage({
+        source: frameWindow as unknown as Window,
+        data: { v: 1, type: "hello", nonce },
+      }),
+    open: async () => {
+      controller.handleWindowMessage({
+        source: frameWindow as unknown as Window,
+        data: { v: 1, type: "hello", nonce: NONCE },
+      });
+      controller.handleLoad();
+      await new Promise((r) => setTimeout(r, 5));
+    },
   };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
 describe("the handshake", () => {
-  it("posts init with one port to the frame's own window on the first load", () => {
+  it("posts init with one port, only after one hello with the nonce and one load", async () => {
     const h = harness();
     h.controller.handleLoad();
+    await settle();
+    expect(h.frameWindow.postMessage).not.toHaveBeenCalled();
+    h.hello();
+    await settle();
     expect(h.frameWindow.postMessage).toHaveBeenCalledTimes(1);
     const [msg, origin, transfer] = h.frameWindow.postMessage.mock.calls[0]!;
     expect(msg).toEqual({
@@ -121,7 +146,7 @@ describe("the handshake", () => {
 
   it("a second load closes the port and tears the frame down: no second handshake", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     h.controller.handleLoad();
     expect(h.frameWindow.postMessage).toHaveBeenCalledTimes(1);
     expect(h.torn.count).toBe(1);
@@ -143,7 +168,7 @@ describe("messages on the port", () => {
     const h = harness({
       prefetch: Promise.resolve({ calendar: FRESH }),
     });
-    h.controller.handleLoad();
+    await h.open();
     h.port().postMessage({ v: 1, type: "data", id: "r1", source: "calendar" });
     expect(await h.next()).toMatchObject({
       type: "result",
@@ -163,7 +188,7 @@ describe("messages on the port", () => {
 
   it("refuses an unapproved source before any request, answers and reports it", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     h.port().postMessage({
       v: 1,
       type: "data",
@@ -184,7 +209,7 @@ describe("messages on the port", () => {
 
   it("refuses malformed and oversized messages the same way", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     h.port().postMessage({
       v: 1,
       type: "refresh",
@@ -219,7 +244,7 @@ describe("messages on the port", () => {
   it("a flood: 30 a second are served, the rest refused, and reported once", async () => {
     let t = 0;
     const h = harness({ now: () => t });
-    h.controller.handleLoad();
+    await h.open();
     for (let i = 0; i < 100; i++) {
       h.port().postMessage({
         v: 1,
@@ -252,7 +277,7 @@ describe("messages on the port", () => {
 
   it("open: an allowed link is opened by the host; anything else is refused", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     h.port().postMessage({
       v: 1,
       type: "open",
@@ -275,7 +300,7 @@ describe("messages on the port", () => {
 
   it("connect opens the host's own sheet, for an approved source only", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     h.port().postMessage({ v: 1, type: "connect", source: "calendar" });
     h.port().postMessage({ v: 1, type: "connect", source: "github" });
     await settle();
@@ -285,7 +310,7 @@ describe("messages on the port", () => {
 
   it("a port sent along with a message is closed and refused", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     const extra = new MessageChannel();
     open.push(extra.port1, extra.port2);
     h.port().postMessage({ v: 1, type: "data", id: "r1", source: "calendar" }, [
@@ -300,9 +325,9 @@ describe("messages on the port", () => {
 });
 
 describe("window messages", () => {
-  it("are never acted on; protocol-looking ones are refused and reported", async () => {
+  it("are never acted on; the frame's are reported, other windows' dropped quietly", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     const other = {};
     // From the app frame, but not on the port.
     h.controller.handleWindowMessage({
@@ -314,11 +339,6 @@ describe("window messages", () => {
       source: other as Window,
       data: { v: 1, type: "data", id: "r2", source: "calendar" },
     });
-    // The shim's ready, from the frame: accepted silently.
-    h.controller.handleWindowMessage({
-      source: h.frameWindow as unknown as Window,
-      data: { v: 1, type: "ready" },
-    });
     // Someone else's message (not the protocol): ignored, not reported.
     h.controller.handleWindowMessage({
       source: other as Window,
@@ -328,7 +348,6 @@ describe("window messages", () => {
     expect(h.fetches).toEqual([]);
     expect(h.refusals).toEqual([
       { reason: "not_on_port", type: "data", source: "calendar" },
-      { reason: "wrong_window", type: "data", source: "calendar" },
     ]);
   });
 });
@@ -336,7 +355,7 @@ describe("window messages", () => {
 describe("theme and updates", () => {
   it("passes a theme change in, live, and pushes updates for approved sources only", async () => {
     const h = harness();
-    h.controller.handleLoad();
+    await h.open();
     h.controller.setTheme("dark");
     h.controller.setTheme("dark");
     h.controller.pushUpdate("inbox", { ...FRESH, source: "inbox" });
@@ -392,11 +411,150 @@ describe("refusal reports", () => {
       "rate_limited",
       "url_not_allowed",
       "not_on_port",
-      "wrong_window",
+      "second_document",
+      "no_hello",
+      "bad_nonce",
       "transfer_refused",
       "second_load",
     ]) {
       expect(reportOf({ reason: r }).reason).toMatch(/^[a-z][a-z0-9_]{0,47}$/);
     }
+  });
+});
+
+describe("the handshake is bound to one app document (M1)", () => {
+  it("a second hello (a replacement document) before the load: no port, torn down", async () => {
+    const h = harness();
+    h.hello();
+    h.hello();
+    h.controller.handleLoad();
+    await settle();
+    expect(h.frameWindow.postMessage).not.toHaveBeenCalled();
+    expect(h.torn.count).toBe(1);
+    expect(h.refusals).toEqual([{ reason: "second_document" }]);
+  });
+
+  it("a second hello inside the settle after the load cancels the handshake", async () => {
+    const h = harness({ settleMs: 15 });
+    h.hello();
+    h.controller.handleLoad();
+    h.hello();
+    await settle();
+    expect(h.frameWindow.postMessage).not.toHaveBeenCalled();
+    expect(h.refusals).toEqual([{ reason: "second_document" }]);
+  });
+
+  it("a hello after the handshake closes the port", async () => {
+    const h = harness();
+    await h.open();
+    h.hello();
+    expect(h.controller.state).toBe("torn-down");
+    expect(h.refusals).toEqual([{ reason: "second_document" }]);
+  });
+
+  it("a load with no hello (a document without the shim): torn down after the grace", async () => {
+    const h = harness();
+    h.controller.handleLoad();
+    await settle();
+    await settle();
+    expect(h.frameWindow.postMessage).not.toHaveBeenCalled();
+    expect(h.refusals).toEqual([{ reason: "no_hello" }]);
+  });
+
+  it("a hello with the wrong nonce, or from another window, never opens it", async () => {
+    const h = harness();
+    h.controller.handleWindowMessage({
+      source: {} as Window,
+      data: { v: 1, type: "hello", nonce: NONCE },
+    });
+    h.controller.handleLoad();
+    await settle();
+    await settle();
+    expect(h.frameWindow.postMessage).not.toHaveBeenCalled();
+    const g = harness();
+    g.hello("wrong-nonce-wrong-nonce-0");
+    expect(g.controller.state).toBe("torn-down");
+    expect(g.refusals).toEqual([{ reason: "bad_nonce" }]);
+  });
+
+  it("the hello may come after the load, within the grace", async () => {
+    const h = harness({ helloGraceMs: 200 });
+    h.controller.handleLoad();
+    h.hello();
+    await settle();
+    expect(h.controller.state).toBe("connected");
+  });
+});
+
+describe("the low-severity guards", () => {
+  it("connect: one sheet at a time, then a cooldown after it closes (L3)", async () => {
+    let t = 0;
+    const h = harness({ now: () => t, connectCooldownMs: 30_000 });
+    await h.open();
+    h.port().postMessage({ v: 1, type: "connect", source: "calendar" });
+    h.port().postMessage({ v: 1, type: "connect", source: "inbox" });
+    await settle();
+    expect(h.connects).toEqual(["calendar"]);
+    h.controller.connectClosed();
+    t = 10_000;
+    h.port().postMessage({ v: 1, type: "connect", source: "inbox" });
+    await settle();
+    expect(h.connects).toEqual(["calendar"]);
+    t = 31_000;
+    h.port().postMessage({ v: 1, type: "connect", source: "inbox" });
+    await settle();
+    expect(h.connects).toEqual(["calendar", "inbox"]);
+    expect(
+      h.received.filter(
+        (m) => (m as { reason?: string }).reason === "connect_busy",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("a bridge failure reaches the frame as a fixed sentence, not the error (L4)", async () => {
+    const h = harness({
+      fetchSource: () =>
+        Promise.reject(new Error("secret internal detail at 10.0.0.5")),
+    });
+    await h.open();
+    h.port().postMessage({
+      v: 1,
+      type: "refresh",
+      id: "r1",
+      source: "calendar",
+    });
+    const m = (await h.next()) as { state: string; reason: string };
+    expect(m.state).toBe("failed");
+    expect(m.reason).toBe("OmniHarness could not read this source just now.");
+  });
+
+  it("ports sent with rate-limited messages are closed too (L5)", async () => {
+    const t = 0;
+    const h = harness({ now: () => t });
+    await h.open();
+    for (let i = 0; i < 30; i++) {
+      h.port().postMessage({
+        v: 1,
+        type: "data",
+        id: `r${i}`,
+        source: "calendar",
+      });
+    }
+    const extra = new MessageChannel();
+    open.push(extra.port1);
+    let closed = false;
+    // Node: closing one end of a channel emits "close" on the other.
+    (extra.port1 as unknown as { on(e: string, f: () => void): void }).on(
+      "close",
+      () => {
+        closed = true;
+      },
+    );
+    h.port().postMessage({ v: 1, type: "data", id: "x", source: "calendar" }, [
+      extra.port2,
+    ]);
+    await settle();
+    await settle();
+    expect(closed).toBe(true);
   });
 });

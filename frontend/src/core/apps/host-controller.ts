@@ -2,14 +2,25 @@
  * Spec 011 FR-020..FR-024, FR-031: the host side of one app frame, apart from
  * React so the handshake, the checks and the teardown are unit-tested.
  *
- * - Handshake on the frame's FIRST load only: a MessageChannel, `init` posted
- *   with port 2 to the frame's own contentWindow ("*" because its origin is
- *   opaque; safe because it goes only to this frame, once).
- * - A SECOND load (the frame reloaded or navigated itself) closes the port
- *   and tears the frame down. No second handshake, ever.
+ * - The handshake is bound to ONE app document. The frame URL carries a
+ *   per-open nonce (in the fragment, so the immutable cache still hits); the
+ *   shim, the first script of every app document, posts `hello` with it at
+ *   once, before any app code runs. The host sends `init` (a MessageChannel,
+ *   port 2 to the frame's own contentWindow; "*" because its origin is
+ *   opaque) only when it has seen exactly one hello with this nonce AND
+ *   exactly one load, in either order, and nothing else for a short settle.
+ * - Why that binds it: the frame can only ever show documents under
+ *   /api/apps/ (the host page's path-scoped frame-src), and every app
+ *   document there starts with the shim. A document that replaces the app
+ *   document (location.replace during parse, which gives one load event)
+ *   therefore either says hello too (a second hello: torn down), or runs no
+ *   script at all (a JSON route or an error page: the port is harmless).
+ * - A second load, a second hello, a wrong nonce, or no hello closes the
+ *   port and tears the frame down. No second handshake, ever.
  * - Everything after the handshake is accepted on the port only. Window
- *   messages are ignored, except the shim's `ready` from this frame; any
- *   other protocol-looking window message is refused and reported.
+ *   messages from the frame other than its hello are refused and reported;
+ *   messages from other windows are dropped, unreported (they are not the
+ *   app's doing).
  * - Each port message: at most 30 per second, schema-checked, its source in
  *   the APPROVED manifest; a refusal is answered `{type:"error", reason}` and
  *   reported to the gateway (`app_message_refused`).
@@ -20,7 +31,7 @@ import {
   buildResult,
   checkFrameMessage,
   checkOpenUrl,
-  isReadyMessage,
+  helloNonce,
   isValidHostMessage,
   MAX_FRAME_MESSAGES_PER_SECOND,
   RateLimiter,
@@ -63,6 +74,23 @@ export interface HostControllerOptions {
   onTornDown(): void;
   now?: () => number;
   createChannel?: () => MessageChannel;
+  /** Per-open nonce put in the frame URL (tests pass their own). */
+  nonce?: string;
+  /** How long to wait for the hello after the load (or the reverse). */
+  helloGraceMs?: number;
+  /** Quiet time after hello + load before init (a second hello cancels). */
+  settleMs?: number;
+  /** After the Connect sheet closes, `connect` is ignored this long. */
+  connectCooldownMs?: number;
+}
+
+/** 128 random bits, base64url. */
+export function newNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let text = "";
+  for (const b of bytes) text += String.fromCharCode(b);
+  return btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 type Phase = "waiting" | "connected" | "torn-down" | "disposed";
@@ -70,6 +98,12 @@ type Phase = "waiting" | "connected" | "torn-down" | "disposed";
 export class AppHostController {
   private phase: Phase = "waiting";
   private loads = 0;
+  private hellos = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private connectOpen = false;
+  private connectClosedAt = -Infinity;
+  private readonly now: () => number;
+  readonly nonce: string;
   private port: MessagePort | null = null;
   private frame: FrameLike | null = null;
   private theme: Theme;
@@ -86,6 +120,8 @@ export class AppHostController {
     this.approved = new Set(opts.approvedSources);
     this.linkHosts = new Set(opts.linkHosts.map((h) => h.toLowerCase()));
     const now = opts.now ?? (() => Date.now());
+    this.now = now;
+    this.nonce = opts.nonce ?? newNonce();
     this.inbound = new RateLimiter(MAX_FRAME_MESSAGES_PER_SECOND, 1000, now);
     // A flood is reported, not every message of it: the audit is not a
     // second channel for the frame to fill.
@@ -105,11 +141,39 @@ export class AppHostController {
   handleLoad(): void {
     if (this.phase === "disposed" || this.phase === "torn-down") return;
     this.loads += 1;
-    if (this.loads === 1) {
-      this.handshake();
+    if (this.loads > 1) {
+      this.tearDown("second_load");
       return;
     }
-    this.tearDown();
+    this.progress();
+  }
+
+  /** The Connect sheet closed: `connect` is ignored for a while. */
+  connectClosed(): void {
+    this.connectOpen = false;
+    this.connectClosedAt = this.now();
+  }
+
+  /** Hello and load seen once each: init after a settle; else wait, bounded. */
+  private progress(): void {
+    this.clearTimer();
+    if (this.phase !== "waiting") return;
+    if (this.loads === 1 && this.hellos === 1) {
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        if (this.phase === "waiting") this.handshake();
+      }, this.opts.settleMs ?? 50);
+      return;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.phase === "waiting") this.tearDown("no_hello");
+    }, this.opts.helloGraceMs ?? 1500);
+  }
+
+  private clearTimer(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   /** The host window's `message` event. */
@@ -118,15 +182,24 @@ export class AppHostController {
     const fromFrame =
       this.frame?.contentWindow != null &&
       event.source === (this.frame.contentWindow as unknown);
-    if (fromFrame && isReadyMessage(event.data)) return; // liveness only
-    if (!looksLikeProtocol(event.data)) return; // not ours: other code's
-    this.refuse(
-      {
-        reason: fromFrame ? "not_on_port" : "wrong_window",
-        ...labels(event.data),
-      },
-      false,
-    );
+    if (!fromFrame) return; // another window: not the app's doing (L1)
+    const nonce = helloNonce(event.data);
+    if (nonce !== null) {
+      if (nonce !== this.nonce) {
+        this.tearDown("bad_nonce");
+        return;
+      }
+      this.hellos += 1;
+      if (this.hellos > 1 || this.phase !== "waiting") {
+        // A second app document in this frame: never hand it the port.
+        this.tearDown("second_document");
+        return;
+      }
+      this.progress();
+      return;
+    }
+    if (!looksLikeProtocol(event.data)) return;
+    this.refuse({ reason: "not_on_port", ...labels(event.data) }, false);
   }
 
   setTheme(theme: Theme): void {
@@ -142,6 +215,7 @@ export class AppHostController {
   }
 
   dispose(): void {
+    this.clearTimer();
     this.closePort();
     this.phase = "disposed";
   }
@@ -170,11 +244,11 @@ export class AppHostController {
     target.postMessage(init, "*", [channel.port2]);
   }
 
-  private tearDown(): void {
+  private tearDown(reason: string): void {
+    this.clearTimer();
     this.closePort();
     this.phase = "torn-down";
-    if (this.reports.allow())
-      this.opts.reportRefusal({ reason: "second_load" });
+    if (this.reports.allow()) this.opts.reportRefusal({ reason });
     this.opts.onTornDown();
   }
 
@@ -208,7 +282,9 @@ export class AppHostController {
   private handlePortMessage(event: MessageEvent): void {
     if (this.phase !== "connected") return;
     if (!this.inbound.allow()) {
-      // Over the limit: answered once a second, reported once a second.
+      // Over the limit: dropped (any port it carried closed), answered once
+      // a second, reported once a second.
+      for (const p of event.ports ?? []) p.close();
       if (this.answeredRateLimit.allow()) {
         this.refuse({ reason: "rate_limited", ...labels(event.data) }, true);
       }
@@ -238,6 +314,17 @@ export class AppHostController {
         void this.answer(message.id, message.source, true);
         return;
       case "connect":
+        // One sheet at a time, and a pause after it closes: a frame cannot
+        // keep throwing the sheet up (L3).
+        if (
+          this.connectOpen ||
+          this.now() - this.connectClosedAt <
+            (this.opts.connectCooldownMs ?? 30_000)
+        ) {
+          this.post({ v: 1, type: "error", id: null, reason: "connect_busy" });
+          return;
+        }
+        this.connectOpen = true;
         this.opts.onConnect(message.source);
         return;
       case "open": {
@@ -270,15 +357,16 @@ export class AppHostController {
     if (!result) {
       try {
         result = await this.opts.fetchSource(source, refresh);
-      } catch (err) {
+      } catch {
+        // A fixed string: nothing from the error (or the gateway's message)
+        // is handed to the frame (L4).
         result = {
           source,
           state: "failed",
           data: null,
           fetched_at: null,
           stale: false,
-          reason:
-            err instanceof Error ? err.message : "Could not reach OmniHarness.",
+          reason: "OmniHarness could not read this source just now.",
         };
       }
     }

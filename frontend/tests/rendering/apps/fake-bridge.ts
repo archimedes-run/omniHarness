@@ -20,7 +20,8 @@ import { DEMO_BODY, DEMO_SCRIPT, DEMO_SOURCES, DEMO_STYLE } from "./demo-app";
  *
  * APPS_SABOTAGE_FRAME_CSP (sabotage runs only): "open-connect-src" serves the
  * frame with connect-src * (dropping the directive alone changes nothing:
- * it falls back to default-src 'none'); "no-csp" serves it without a CSP.
+ * it falls back to default-src 'none'); "no-trusted-types" drops the Trusted
+ * Types directives; "no-csp" serves it without a CSP.
  */
 
 const SHIM_PATH = new URL(
@@ -42,11 +43,14 @@ export function appDocument({
   body,
   scripts,
   csp = "full",
+  trustedTypes = true,
 }: {
   style: string;
   body: string;
   scripts: string[];
   csp?: FrameCsp;
+  /** The Trusted Types directives (H1: no HTML or script from strings). */
+  trustedTypes?: boolean;
 }): { html: string; headers: Record<string, string> } {
   const html =
     `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
@@ -76,10 +80,15 @@ export function appDocument({
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'self'",
+    "require-trusted-types-for 'script'",
+    "trusted-types 'none'",
   ];
   let policy = directives;
   if (csp === "no-sandbox-directive") policy = directives.slice(1);
   const sabotage = process.env.APPS_SABOTAGE_FRAME_CSP;
+  if (!trustedTypes || sabotage === "no-trusted-types") {
+    policy = policy.filter((d) => !d.includes("trusted-types"));
+  }
   if (sabotage === "open-connect-src") {
     policy = policy.map((d) =>
       d.startsWith("connect-src") ? "connect-src *" : d,
@@ -302,6 +311,10 @@ export interface BridgeOptions {
   apps?: FakeApp[];
   pins?: string[];
   csp?: FrameCsp;
+  /** Default true. False serves the CSP without its Trusted Types directives. */
+  trustedTypes?: boolean;
+  /** Serve the app without the platform shim (to test the CSP on its own). */
+  withoutShim?: boolean;
   /** Extra JSON fields put on every bridge result (a leak the host must drop). */
   resultExtra?: Record<string, unknown>;
   /** Milliseconds each bridge answer waits. */
@@ -448,11 +461,17 @@ export async function installFakeBridge(page: Page, opts: BridgeOptions = {}) {
     const html = /^\/versions\/(\d+)\/app\.html$/.exec(rest);
     if (html) {
       const shim = readFileSync(SHIM_PATH, "utf8");
+      const appScript = app.script ?? DEMO_SCRIPT;
       const doc = appDocument({
         style: app.style ?? DEMO_STYLE,
         body: app.body ?? DEMO_BODY,
-        scripts: [shim, app.script ?? DEMO_SCRIPT],
+        // Without the shim, a placeholder takes its place in <head> so the
+        // app's script still runs in <body>, as it would.
+        scripts: opts.withoutShim
+          ? ["/* no shim */", appScript]
+          : [shim, appScript],
         csp: opts.csp ?? "full",
+        trustedTypes: opts.trustedTypes ?? true,
       });
       return route.fulfill({
         status: 200,

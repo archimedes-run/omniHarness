@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  AppsApiError,
   approveApp,
   getApp,
   getAppPermissions,
@@ -16,18 +17,40 @@ import {
 } from "./api";
 
 const APPS = ["apps"] as const;
+
+/**
+ * Retry a failed read twice, except a 4xx: a gateway without the Apps routes
+ * (404) or a refusal will answer the same again. The sidebar reads apps and
+ * pins on every page, so a missing route must cost one request, not four.
+ */
+function retryUnless4xx(count: number, error: Error): boolean {
+  if (
+    error instanceof AppsApiError &&
+    error.status >= 400 &&
+    error.status < 500
+  ) {
+    return false;
+  }
+  return count < 2;
+}
+const QUIET = { retry: retryUnless4xx, staleTime: 60_000 } as const;
 export const APP_PINS_KEY = ["appPins"] as const;
 
 export function useApps() {
   const { data, error, isLoading } = useQuery({
     queryKey: APPS,
     queryFn: listApps,
+    ...QUIET,
   });
   return { apps: data, error, isLoading };
 }
 
 export function useApp(id: string) {
-  return useQuery({ queryKey: [...APPS, id], queryFn: () => getApp(id) });
+  return useQuery({
+    queryKey: [...APPS, id],
+    queryFn: () => getApp(id),
+    retry: retryUnless4xx,
+  });
 }
 
 export function useAppVersions(id: string, enabled: boolean) {
@@ -35,6 +58,7 @@ export function useAppVersions(id: string, enabled: boolean) {
     queryKey: [...APPS, id, "versions"],
     queryFn: () => getAppVersions(id),
     enabled,
+    retry: retryUnless4xx,
   });
 }
 
@@ -43,6 +67,7 @@ export function useAppPermissions(id: string, enabled: boolean) {
     queryKey: [...APPS, id, "permissions"],
     queryFn: () => getAppPermissions(id),
     enabled,
+    retry: retryUnless4xx,
   });
 }
 
@@ -51,6 +76,7 @@ export function usePendingApproval(id: string, enabled: boolean) {
     queryKey: [...APPS, id, "approval"],
     queryFn: () => getPendingApproval(id),
     enabled,
+    retry: retryUnless4xx,
   });
 }
 
@@ -69,6 +95,7 @@ export function useAppCatalog(enabled = true) {
     queryFn: getCatalog,
     staleTime: 5 * 60_000,
     enabled,
+    retry: retryUnless4xx,
   });
 }
 
@@ -102,7 +129,7 @@ export function useAppPins() {
   const { data, error } = useQuery({
     queryKey: APP_PINS_KEY,
     queryFn: getAppPins,
-    retry: false,
+    ...QUIET,
   });
   return { pins: data, error };
 }

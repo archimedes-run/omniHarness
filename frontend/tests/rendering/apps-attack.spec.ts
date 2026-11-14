@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import { expect, test, type Frame, type Page } from "@playwright/test";
 
+import { DEMO_SCRIPT } from "./apps/demo-app";
 import {
   demoApp,
   installFakeBridge,
@@ -365,7 +366,7 @@ test("a flood: at most 30 messages a second are served, the refusal is reported 
   expect(rate.length).toBeLessThanOrEqual(3);
 });
 
-test("messages outside the port are ignored: from the frame's window, or another window", async ({
+test("messages outside the port are ignored: the frame's reported, another window's dropped unreported", async ({
   page,
 }) => {
   const { bridge, frame } = await openHostile(page);
@@ -389,8 +390,10 @@ test("messages outside the port are ignored: from the frame's window, or another
     doc.body.appendChild(s);
   });
   await expect
-    .poll(() => bridge.log.refused.map((r) => r.reason).sort())
-    .toEqual(["not_on_port", "wrong_window"]);
+    .poll(() => bridge.log.refused.map((r) => r.reason))
+    .toEqual(["not_on_port"]);
+  await page.waitForTimeout(500);
+  expect(bridge.log.refused.map((r) => r.reason)).toEqual(["not_on_port"]);
   expect(bridge.log.dataReads.slice(before)).toEqual([]);
 });
 
@@ -527,4 +530,39 @@ test("the app's own URL opened as a page: opaque, and it says to open it from Om
   );
   expect(await page.evaluate(() => origin)).toBe("null");
   expect(bridge.log.dataReads).toEqual([]);
+});
+
+test("a document that replaces the app before its first load never gets the port", async ({
+  page,
+}) => {
+  // The app's own code replaces its document during parse (one load event)
+  // with another app document, passing the nonce along.
+  const replace =
+    'if (!/again/.test(location.search)) location.replace(location.pathname + "?again=1" + location.hash);' +
+    DEMO_SCRIPT;
+  const bridge = await installFakeBridge(page, {
+    apps: [demoApp({ script: replace })],
+  });
+  await page.goto("/workspace/apps/today");
+  await expect(page.getByTestId("app-reloaded")).toBeVisible();
+  await expect(page.locator('[data-testid="app-frame"]')).toHaveCount(0);
+  await expect
+    .poll(() => bridge.log.refused.map((r) => r.reason))
+    .toContain("second_document");
+});
+
+test("the frame cannot navigate to a page of this origin outside /api/apps/", async ({
+  page,
+}) => {
+  const { frame } = await openHostile(page);
+  // Every navigation request a sub-frame makes, recorded as it leaves.
+  const navigations: string[] = [];
+  page.on("request", (req) => {
+    if (req.isNavigationRequest() && req.frame() !== page.mainFrame()) {
+      navigations.push(new URL(req.url()).pathname);
+    }
+  });
+  await frame.evaluate(() => location.replace("/workspace/home"));
+  await page.waitForTimeout(1500);
+  expect(navigations).not.toContain("/workspace/home");
 });

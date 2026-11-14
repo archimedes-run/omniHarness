@@ -104,7 +104,41 @@ afterEach(() => {
   }
 });
 
+const NONCE = "n0nce-n0nce-n0nce-0123";
+
+/** Stand-ins for the DOM prototypes the shim guards (fresh per load). */
+let FakeDocument: { prototype: Record<string, unknown> };
+let FakeElement: { prototype: Record<string, unknown> };
+function freshDom() {
+  class D {
+    createElement(name: string) {
+      return { localName: String(name).toLowerCase() };
+    }
+    createElementNS(_ns: string, q: string) {
+      return { localName: q };
+    }
+    write(_html: string) {
+      return undefined;
+    }
+  }
+  class E {
+    html = "";
+    get innerHTML() {
+      return this.html;
+    }
+    set innerHTML(v: string) {
+      this.html = v;
+    }
+    insertAdjacentHTML(_where: string, v: string) {
+      this.html += v;
+    }
+  }
+  FakeDocument = D as unknown as typeof FakeDocument;
+  FakeElement = E as unknown as typeof FakeElement;
+}
+
 function load({ topLevel = false } = {}): Env {
+  freshDom();
   const listeners: Record<string, Listener[]> = {};
   const parent = { postMessage: vi.fn() };
   const classes = new Set<string>();
@@ -118,6 +152,10 @@ function load({ topLevel = false } = {}): Env {
     RTCPeerConnection: class RTCPeerConnection {},
     RTCDataChannel: class RTCDataChannel {},
     webkitRTCPeerConnection: class webkitRTCPeerConnection {},
+    XSLTProcessor: class XSLTProcessor {},
+    location: { hash: `#omni-nonce=${NONCE}` },
+    Document: FakeDocument,
+    Element: FakeElement,
   };
   win.parent = topLevel ? win : parent;
   const doc = {
@@ -166,12 +204,13 @@ describe("the shim at run time", () => {
     expect(env.win.RTCPeerConnection).toBeUndefined();
   });
 
-  it("says ready to its parent, and exposes a frozen omni", () => {
+  it("says hello with its nonce to its parent, and exposes a frozen omni", () => {
     const env = load();
     expect(env.parent.postMessage).toHaveBeenCalledWith(
-      { v: 1, type: "ready" },
+      { v: 1, type: "hello", nonce: NONCE },
       "*",
     );
+    expect(env.parent.postMessage).toHaveBeenCalledTimes(1);
     expect(Object.isFrozen(env.win.omni)).toBe(true);
     expect(() => {
       (env.win as Record<string, unknown>).omni = {};
@@ -417,5 +456,106 @@ describe("omni.d.ts", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the shim's second layer against other realms (H1)", () => {
+  it("refuses to create any frame element, by DOM call or HTML string", () => {
+    const env = load();
+    const D = env.win.Document as new () => {
+      createElement(n: string): { localName: string };
+      createElementNS(ns: string, q: string): unknown;
+      write(h: string): void;
+    };
+    const doc = new D();
+    for (const tag of [
+      "iframe",
+      "IFRAME",
+      "frame",
+      "object",
+      "embed",
+      "frameset",
+      "portal",
+      "fencedframe",
+    ]) {
+      expect(() => doc.createElement(tag), tag).toThrow(
+        "Apps cannot create frames.",
+      );
+    }
+    expect(() =>
+      doc.createElementNS("http://www.w3.org/1999/xhtml", "html:iframe"),
+    ).toThrow();
+    expect(doc.createElement("div").localName).toBe("div");
+    expect(() => doc.write('<iframe srcdoc="x">')).toThrow();
+    const E = env.win.Element as new () => {
+      innerHTML: string;
+      insertAdjacentHTML(w: string, h: string): void;
+    };
+    const el = new E();
+    el.innerHTML = "<b>fine</b>";
+    expect(el.innerHTML).toBe("<b>fine</b>");
+    for (const html of [
+      '<iframe srcdoc="x"></iframe>',
+      "<IFRAME>",
+      "< embed>",
+      "<object data=x>",
+      "<div><frame></div>",
+    ]) {
+      expect(() => {
+        el.innerHTML = html;
+      }, html).toThrow();
+      expect(() => el.insertAdjacentHTML("beforeend", html), html).toThrow();
+    }
+    // Words that merely start alike are fine.
+    el.innerHTML = "<p>iframe embed object</p><iframes-list></iframes-list>";
+  });
+
+  it("removes XSLT, and the guards cannot be put back", () => {
+    const env = load();
+    expect(env.win.XSLTProcessor).toBeUndefined();
+    const proto = (env.win.Document as { prototype: Record<string, unknown> })
+      .prototype;
+    const guarded = proto.createElement;
+    expect(() => {
+      proto.createElement = () => ({});
+    }).toThrow();
+    expect(proto.createElement).toBe(guarded);
+  });
+
+  it("says no hello, and takes no init, while WebRTC is still reachable", async () => {
+    // A window where the constructors cannot be removed.
+    freshDom();
+    const listeners: Listener[] = [];
+    const parent = { postMessage: vi.fn() };
+    const win: Record<string, unknown> = {
+      addEventListener: (_t: string, fn: Listener) => listeners.push(fn),
+      removeEventListener: () => undefined,
+      location: { hash: `#omni-nonce=${NONCE}` },
+      Document: FakeDocument,
+      Element: FakeElement,
+      parent,
+    };
+    Object.defineProperty(win, "RTCPeerConnection", {
+      value: class Stuck {},
+      writable: false,
+      configurable: false,
+    });
+    saved.window = (globalThis as Record<string, unknown>).window;
+    saved.document = (globalThis as Record<string, unknown>).document;
+    (globalThis as Record<string, unknown>).window = win;
+    (globalThis as Record<string, unknown>).document = {
+      readyState: "complete",
+      body: { textContent: "" },
+      documentElement: {
+        classList: { add: () => 0, remove: () => 0 },
+        style: {},
+      },
+      addEventListener: () => undefined,
+    };
+    runInThisContext(SHIM);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+    const p = port();
+    for (const fn of listeners) fn({ source: parent, data: INIT, ports: [p] });
+    expect((win.omni as OmniLike).theme).toBeNull();
   });
 });

@@ -198,8 +198,16 @@ describe("frame → host: only data, refresh, open, connect", () => {
     });
   });
 
-  it("the window channel takes only the shim's ready", () => {
-    expect(v("frame_to_host_window", { v: 1, type: "ready" }).ok).toBe(true);
+  it("the window channel takes only the shim's hello with a nonce", () => {
+    const nonce = "abcdefghijklmnop";
+    expect(v("frame_to_host_window", { v: 1, type: "hello", nonce }).ok).toBe(
+      true,
+    );
+    expect(v("frame_to_host_window", { v: 1, type: "hello" }).ok).toBe(false);
+    expect(
+      v("frame_to_host_window", { v: 1, type: "hello", nonce: "short" }).ok,
+    ).toBe(false);
+    expect(v("frame_to_host_window", { v: 1, type: "ready" }).ok).toBe(false);
     expect(
       v("frame_to_host_window", {
         v: 1,
@@ -208,9 +216,9 @@ describe("frame → host: only data, refresh, open, connect", () => {
         source: "calendar",
       }).ok,
     ).toBe(false);
-    expect(v("frame_to_host_window", { v: 1, type: "ready", x: 1 }).ok).toBe(
-      false,
-    );
+    expect(
+      v("frame_to_host_window", { v: 1, type: "hello", nonce, x: 1 }).ok,
+    ).toBe(false);
   });
 });
 
@@ -341,12 +349,34 @@ describe("open: https on a catalog-declared host, or /workspace/...", () => {
     });
     expect(checkOpenUrl("https://GitHub.com/x", hosts, origin).ok).toBe(true);
   });
-  it("allows this workspace's own paths, in place", () => {
+  it("allows the listed workspace pages, path only, in place (L2)", () => {
     expect(checkOpenUrl("/workspace/projects/p1", hosts, origin)).toEqual({
       ok: true,
       kind: "internal",
       path: "/workspace/projects/p1",
     });
+    expect(checkOpenUrl("/workspace/sessions", hosts, origin).ok).toBe(true);
+    expect(checkOpenUrl("/workspace/automations/r1", hosts, origin).ok).toBe(
+      true,
+    );
+    // The query and the fragment are dropped.
+    expect(checkOpenUrl("/workspace/projects/p1?x=1#y", hosts, origin)).toEqual(
+      {
+        ok: true,
+        kind: "internal",
+        path: "/workspace/projects/p1",
+      },
+    );
+    for (const url of [
+      "/workspace/settings/safety",
+      "/workspace/apps/other",
+      "/workspace/chats/t1",
+      "/workspace/projects/",
+      "/workspace/sessionsx",
+      "/workspace/projects/%2e%2e/x",
+    ]) {
+      expect(checkOpenUrl(url, hosts, origin).ok, url).toBe(false);
+    }
   });
   it("refuses everything else", () => {
     for (const url of [

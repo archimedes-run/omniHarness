@@ -6,7 +6,13 @@
  * `node scripts/build-app-shim.mjs`; a unit test fails if the two drift.
  *
  * It runs first in every app, before app code, as an inline script:
- * - removes the WebRTC constructors (CSP does not govern WebRTC);
+ * - says hello to the host with the per-open nonce from its URL, before any
+ *   app code can run (the host binds the handshake to that one document);
+ * - removes the WebRTC constructors (CSP does not govern WebRTC), and makes
+ *   sure no other realm can be had where they still exist: no frame element
+ *   of any kind may be created, by DOM call or by HTML string, and any that
+ *   appears anyway is removed (with the app CSP's Trusted Types, which
+ *   refuse HTML and script from strings, this is the second layer);
  * - accepts `init` once, only from window.parent, only with one port; after
  *   that it listens to that port and nothing else;
  * - validates every host message against the schema; nothing is evaluated,
@@ -60,6 +66,129 @@
         /* nothing more to do */
       }
     }
+  }
+
+  // Read before any app code runs: the host's per-open nonce.
+  var NONCE = (/^#omni-nonce=([A-Za-z0-9_-]{16,64})$/.exec(
+    String(w.location && w.location.hash),
+  ) || [])[1];
+
+  // FR-018, other realms: a frame (iframe, frame, object, embed...) would
+  // be a fresh realm the shim never ran in, with WebRTC in it. Apps may not
+  // make one at all.
+  var FRAME_TAGS = {
+    iframe: 1,
+    frame: 1,
+    frameset: 1,
+    object: 1,
+    embed: 1,
+    portal: 1,
+    fencedframe: 1,
+  };
+  var FRAME_SELECTOR = "iframe,frame,frameset,object,embed,portal,fencedframe";
+  var FRAME_HTML =
+    /<\s*\/?\s*(iframe|frame|frameset|object|embed|portal|fencedframe)(?![a-z0-9-])/i;
+  function refuseFrame() {
+    throw new DOMException("Apps cannot create frames.", "NotSupportedError");
+  }
+  function lock(obj, name, value) {
+    try {
+      Object.defineProperty(obj, name, {
+        value: value,
+        writable: false,
+        configurable: false,
+      });
+    } catch (_e) {
+      /* already locked */
+    }
+  }
+  function checkHtml(args) {
+    for (var i = 0; i < args.length; i++) {
+      if (args[i] != null && FRAME_HTML.test(String(args[i]))) refuseFrame();
+    }
+  }
+  function guardMethod(obj, name) {
+    var f = obj && obj[name];
+    if (typeof f !== "function") return;
+    lock(obj, name, function () {
+      checkHtml(arguments);
+      return f.apply(this, arguments);
+    });
+  }
+  function guardSetter(proto, name) {
+    var d = proto && Object.getOwnPropertyDescriptor(proto, name);
+    if (!d || !d.set) return;
+    try {
+      Object.defineProperty(proto, name, {
+        get: d.get,
+        set: function (v) {
+          checkHtml([v]);
+          d.set.call(this, v);
+        },
+        enumerable: d.enumerable,
+        configurable: false,
+      });
+    } catch (_e) {
+      /* already locked */
+    }
+  }
+  var DocProto = w.Document && w.Document.prototype;
+  if (DocProto) {
+    var createElement = DocProto.createElement;
+    var createElementNS = DocProto.createElementNS;
+    lock(DocProto, "createElement", function (name) {
+      if (FRAME_TAGS[String(name).toLowerCase()]) refuseFrame();
+      return createElement.apply(this, arguments);
+    });
+    lock(DocProto, "createElementNS", function (_ns, qname) {
+      var local = String(qname).split(":").pop().toLowerCase();
+      if (FRAME_TAGS[local]) refuseFrame();
+      return createElementNS.apply(this, arguments);
+    });
+    guardMethod(DocProto, "write");
+    guardMethod(DocProto, "writeln");
+  }
+  var ElProto = w.Element && w.Element.prototype;
+  guardSetter(ElProto, "innerHTML");
+  guardSetter(ElProto, "outerHTML");
+  guardMethod(ElProto, "insertAdjacentHTML");
+  guardMethod(ElProto, "setHTMLUnsafe");
+  guardSetter(w.ShadowRoot && w.ShadowRoot.prototype, "innerHTML");
+  guardMethod(w.ShadowRoot && w.ShadowRoot.prototype, "setHTMLUnsafe");
+  guardMethod(w.Range && w.Range.prototype, "createContextualFragment");
+  guardMethod(w.DOMParser && w.DOMParser.prototype, "parseFromString");
+  guardMethod(w.Document, "parseHTMLUnsafe");
+  // XSLT can build elements without createElement or an HTML string.
+  lock(w, "XSLTProcessor", undefined);
+  // And anything that appears anyway is removed before it can load.
+  try {
+    new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var added = records[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          var node = added[j];
+          if (!node || node.nodeType !== 1) continue;
+          if (FRAME_TAGS[String(node.localName).toLowerCase()]) {
+            node.remove();
+            continue;
+          }
+          var inner = node.querySelectorAll
+            ? node.querySelectorAll(FRAME_SELECTOR)
+            : [];
+          for (var k = 0; k < inner.length; k++) inner[k].remove();
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+  } catch (_e) {
+    /* no observer: the guards above stand */
+  }
+
+  /** True when no WebRTC constructor is reachable here. */
+  function rtcGone() {
+    for (var i = 0; i < RTC.length; i++) {
+      if (typeof w[RTC[i]] !== "undefined") return false;
+    }
+    return true;
   }
 
   var SCHEMA = /*@@PROTOCOL_SCHEMA@@*/ null;
@@ -158,6 +287,7 @@
   function onWindowMessage(event) {
     if (port) return; // the handshake happens once
     if (event.source !== w.parent || w.parent === w) return;
+    if (!rtcGone()) return; // never hand data to a realm with WebRTC
     if (!event.ports || event.ports.length !== 1) return;
     var m = event.data;
     var verdict = validateProtocolMessage(SCHEMA, "host_to_frame", m);
@@ -305,11 +435,11 @@
     } else {
       notice();
     }
-  } else {
+  } else if (NONCE && rtcGone()) {
     try {
-      w.parent.postMessage({ v: 1, type: "ready" }, "*");
+      w.parent.postMessage({ v: 1, type: "hello", nonce: NONCE }, "*");
     } catch (_e) {
-      /* the host does not need it */
+      /* no hello: the host tears the frame down */
     }
   }
 })();

@@ -47,8 +47,11 @@ export function AppFrame({
   app,
   onConnect,
   connected,
+  connectOpen = false,
   takePrefetch,
 }: {
+  /** Whether the host's Connect sheet is open (a close starts the cooldown). */
+  connectOpen?: boolean;
   app: AppDetail;
   /** The batch read the page started with the app's own read (FR-031),
    * handed over once; later opens (Reopen) start their own. */
@@ -136,7 +139,9 @@ export function AppFrame({
     frame.setAttribute("title", app.name);
     frame.setAttribute("data-testid", "app-frame");
     frame.className = "bg-background block size-full border-0";
-    frame.src = appHtmlPath(id, version);
+    // The per-open nonce rides in the fragment: never sent to the server,
+    // so the immutable app document still comes from the cache.
+    frame.src = `${appHtmlPath(id, version)}#omni-nonce=${controller.nonce}`;
     container.appendChild(frame);
 
     // The theme follows the page's, live.
@@ -175,6 +180,12 @@ export function AppFrame({
     // `app.name` only titles the frame; a rename must not reload the app.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, version, sources, linkHosts, nonce, router]);
+
+  const wasOpen = useRef(connectOpen);
+  useEffect(() => {
+    if (wasOpen.current && !connectOpen) controllerRef.current?.connectClosed();
+    wasOpen.current = connectOpen;
+  }, [connectOpen]);
 
   useEffect(() => {
     if (!connected) return;
