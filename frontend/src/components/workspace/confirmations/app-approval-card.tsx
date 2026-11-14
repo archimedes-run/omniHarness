@@ -28,6 +28,85 @@ import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
  * press posts the hash this card showed; if the app changed since, the
  * gateway refuses (409) and the card is reloaded.
  */
+const PREVIEW_CAPTION =
+  "Preview of the app on sample data — drawn by the app, not by OmniHarness";
+
+/**
+ * The system's own screenshots of an offered version. They are pictures of
+ * the APP (untrusted): small, framed, tagged and captioned so nothing in them
+ * can pass for the card's own text or buttons. Click opens one full size in
+ * a dialog that carries the same caption.
+ */
+function AppPreview({
+  appId,
+  version,
+  themes,
+}: {
+  appId: string;
+  version: number;
+  themes: string[];
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <figure className="mt-3" data-testid="app-card-shots">
+      <figcaption
+        className="text-muted-foreground mb-1.5 text-xs"
+        data-testid="app-card-shots-caption"
+      >
+        {PREVIEW_CAPTION}
+      </figcaption>
+      <div className="bg-muted border-border grid grid-cols-2 gap-2 rounded-lg border p-2 shadow-inner">
+        {themes.map((theme) => (
+          <button
+            key={theme}
+            type="button"
+            onClick={() => setOpen(theme)}
+            className="focus-visible:ring-ring/50 relative block overflow-hidden rounded-md outline-none focus-visible:ring-[3px]"
+            aria-label={`Open the ${theme} preview full size`}
+          >
+            <img
+              src={versionShotUrl(appId, version, theme)}
+              alt={`Version ${version}, ${theme} theme, with sample data (the system's check)`}
+              loading="lazy"
+              className="border-border block max-h-40 w-full rounded-md border object-cover object-top opacity-90"
+              data-testid="app-card-shot"
+            />
+            <span className="bg-foreground text-background absolute top-1 left-1 rounded px-1.5 py-0.5 text-[12px] leading-4 font-medium">
+              Preview
+            </span>
+          </button>
+        ))}
+      </div>
+      {open ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={PREVIEW_CAPTION}
+          className="bg-overlay/80 fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 p-4"
+          data-testid="app-card-shot-dialog"
+          onClick={() => setOpen(null)}
+        >
+          <p className="bg-card text-card-foreground rounded-md px-3 py-1.5 text-sm">
+            {PREVIEW_CAPTION}
+          </p>
+          <img
+            src={versionShotUrl(appId, version, open)}
+            alt={`Version ${version}, ${open} theme, with sample data (the system's check)`}
+            className="border-border max-h-[80vh] max-w-full rounded-md border"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setOpen(null)}
+          >
+            Close
+          </Button>
+        </div>
+      ) : null}
+    </figure>
+  );
+}
+
 export function AppApprovalCard({
   card,
   heading = "App access",
@@ -139,33 +218,13 @@ export function AppApprovalCard({
             : "It reads the same data as the version you use now."}
         </p>
         {card.shots && card.shots.length > 0 ? (
-          <div
-            className="mt-3 grid grid-cols-2 gap-2"
-            data-testid="app-card-shots"
-          >
-            {card.shots.map((theme) => {
-              const src = versionShotUrl(card.app_id, card.version, theme);
-              return (
-                <a
-                  key={theme}
-                  href={src}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="focus-visible:ring-ring/50 block rounded-md outline-none focus-visible:ring-[3px]"
-                  title={`Open the ${theme} screenshot`}
-                >
-                  <img
-                    src={src}
-                    alt={`Version ${card.version}, ${theme} theme, with sample data (the system's check)`}
-                    loading="lazy"
-                    className="border-border w-full rounded-md border"
-                  />
-                </a>
-              );
-            })}
-          </div>
+          <AppPreview
+            appId={card.app_id}
+            version={card.version}
+            themes={card.shots}
+          />
         ) : null}
-        <p className="text-muted-foreground mt-1 text-xs">
+        <p className="text-muted-foreground mt-3 text-xs">
           {`Version ${keeps} keeps running until you choose.`}
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">

@@ -216,7 +216,22 @@ def failed_before_probe(why: str, detail: str | None = None, *, publishable: boo
     return out
 
 
-def parse(
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def parse(raw: str | None, **kw) -> dict:
+    """The app probe's result (see _parse); a malformed value anywhere in it
+    is "unreadable" (counted), never an exception."""
+    try:
+        return _parse(raw, **kw)
+    except (TypeError, AttributeError, KeyError, ValueError, IndexError):
+        out = base_result(mode=kw.get("mode", "enforce"))
+        wording, counted = layout_mod.ERRORS["unreadable"]
+        return {**out, "outcome": "error", "error": wording, "error_code": "unreadable", "counted": counted}
+
+
+def _parse(
     raw: str | None,
     *,
     exit_code: int | None,
@@ -368,19 +383,23 @@ def parse(
                 if (_int(words.get("junk")) or 0) > 0:
                     junk.append(label)
                 if not prod:
-                    for w in (app.get("spill") or [])[:4]:
+                    for w in _list(app.get("spill"))[:4]:
                         spill.setdefault(_where(w), []).append(f"{width} px")
                     if width == layout_mod.WIDTHS[-1]:
-                        cut.update(_where(w) for w in (app.get("cut") or [])[:4])
-                        empty_cards.update(_where(w) for w in (app.get("empty_cards") or [])[:4])
+                        cut.update(_where(w) for w in _list(app.get("cut"))[:4])
+                        empty_cards.update(_where(w) for w in _list(app.get("empty_cards"))[:4])
                         if state == "fresh":
                             t = app.get("times") if isinstance(app.get("times"), dict) else {}
                             times_seen.append((theme, _int(t.get("local_found")) or 0, _text(t.get("first_missing"), 20), _text(t.get("shifted_found"), 20)))
                             more = app.get("more") is True
+                            totals = app.get("totals") if isinstance(app.get("totals"), dict) else {}
                             for name in sources:
                                 c, need = app["sentinels"].get(name), (item_counts or {}).get(name, 0)
-                                if isinstance(c, int) and not isinstance(c, bool) and need >= 2 and c * 2 < need and not more:
-                                    few_items.add(name)
+                                if not isinstance(c, int) or isinstance(c, bool) or need < 2 or c * 2 >= need or more:
+                                    continue
+                                if c >= 2 and totals.get(name) is True:
+                                    continue  # at least two rows and the total: a summary tile
+                                few_items.add(name)
                 if j != 0:
                     continue  # the words are read once per theme and state (at 360 px)
                 n = {k: _int(words.get(k)) or 0 for k in ("updated", "ago", "nothing", "not_connected", "cant_tell", "connect")}
@@ -461,7 +480,8 @@ def parse(
     if junk:
         knock_on(f'the page shows "undefined", "NaN", "Invalid Date" or "[object Object]" ({_join(junk[:4])})')
     for theme, local_found, first_missing, shifted_found in times_seen:
-        if times_expected and local_found * 2 < times_expected:
+        # Wrong only when a sample event's time shows in another zone, or none shows at all.
+        if times_expected and (shifted_found or local_found == 0):
             found = f", found {shifted_found}" if shifted_found else ""
             knock_on(f"times are not in the app's time zone (expected {first_missing or 'the sample times'}{found}; {theme})", "times are not in the app's time zone")
             break

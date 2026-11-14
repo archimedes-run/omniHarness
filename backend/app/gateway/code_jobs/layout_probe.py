@@ -470,6 +470,11 @@ APP_MEASURE = r"""
     found[source] = needles.filter((n) => n && text.indexOf(n) !== -1).length;
   }
   const more = /\b\d+\+?\s+more\b/i.test(text);
+  // A source's item count shown as a number (a total next to its rows).
+  const totals = {};
+  for (const [source, n] of Object.entries(cfg.counts || {})) {
+    totals[source] = Number.isInteger(n) && n > 0 && new RegExp('(?<![0-9])' + n + '(?![0-9])').test(text);
+  }
   // The calendar's sample times, in the app's time zone (and the same
   // instants in UTC: shown instead, the page is in the wrong zone).
   const times = { local_found: 0, first_missing: '', shifted_found: '' };
@@ -529,13 +534,16 @@ APP_MEASURE = r"""
   const emptyCards = [];
   if (body) {
     const els = body.getElementsByTagName('*');
-    for (let i = 0; i < els.length && i < 3000 && emptyCards.length < 4; i++) {
+    let grids = 0;
+    for (let i = 0; i < els.length && i < 3000 && emptyCards.length < 4 && grids < 20; i++) {
       if (getComputedStyle(els[i]).display !== 'grid') continue;
-      const cards = Array.from(els[i].children).filter((c) => visible(c));
+      grids++;
+      const cards = Array.from(els[i].children).slice(0, 40).filter((c) => visible(c));
       const content = (c) => {
         const top = c.getBoundingClientRect().top;
         let bottom = top;
-        for (const k of c.children) bottom = Math.max(bottom, k.getBoundingClientRect().bottom);
+        const kids = c.children;
+        for (let k = 0; k < kids.length && k < 60; k++) bottom = Math.max(bottom, kids[k].getBoundingClientRect().bottom);
         return bottom - top;
       };
       for (const c of cards) {
@@ -569,6 +577,7 @@ APP_MEASURE = r"""
     },
     sentinels: found,
     more,
+    totals,
     times,
     cut,
     spill,
@@ -977,7 +986,7 @@ class Check:
         session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
         run["_loaded"] = threading.Event()
         self.pages[session] = run
-        cfg = json.dumps({"theme": theme, "sentinels": self.config.get("sentinels") or {}, "reason": self.config.get("reason") or "", "times": self.config.get("times") or {}})
+        cfg = json.dumps({"theme": theme, "sentinels": self.config.get("sentinels") or {}, "reason": self.config.get("reason") or "", "times": self.config.get("times") or {}, "counts": self.config.get("counts") or {}})
         expression = "(function () { const base = " + MEASURE.strip() + "; base.app = " + APP_MEASURE.strip() + "(" + cfg + "); return base; })()"
         try:
             cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, session)

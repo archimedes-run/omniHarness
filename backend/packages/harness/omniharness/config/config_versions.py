@@ -714,8 +714,13 @@ _PNG = b"\x89PNG\r\n\x1a\n"
 def write_app_shot(user_id: str, png: bytes) -> str:
     """Store one of a version's check screenshots (PNG, capped)
     content-addressed beside the bundles; returns its SHA-256."""
-    if not png.startswith(_PNG) or len(png) > APP_SHOT_MAX_BYTES:
+    if not png.startswith(_PNG) or len(png) > APP_SHOT_MAX_BYTES or len(png) < 33 or png[12:16] != b"IHDR":
         raise ValueError("not a PNG of at most 1.5 MB")
+    width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    depth, colour = png[24], png[25]
+    # The probe's own screenshots: 1280 px wide, at most 2400 px tall.
+    if width != 1280 or not 1 <= height <= 2400 or depth not in (8, 16) or colour not in (0, 2, 3, 4, 6):
+        raise ValueError("not one of the check's screenshots")
     digest = hashlib.sha256(png).hexdigest()
     path = _app_root(user_id) / APP_BUNDLES_DIR / f"{digest}.png"
     if not path.exists():

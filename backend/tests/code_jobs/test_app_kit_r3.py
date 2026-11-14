@@ -94,3 +94,55 @@ def test_a_mostly_empty_card_is_a_design_finding_only():
 def test_the_check_config_carries_the_times(tmp_path):
     data = app_kit.fixtures(manifest())
     assert json.loads(json.dumps(app_kit.expected_times(data)))["local"][0]["label"] == "9:30 AM"
+
+
+def test_times_pass_when_the_shown_ones_are_local_and_fail_on_a_shifted_or_none():
+    some = _fresh({"times": {"local_found": 2, "first_missing": "12:30 PM", "shifted_found": ""}})
+    assert parse(some, times_expected=5)["outcome"] == "pass"  # a "next 2 meetings" design
+    none = _fresh({"times": {"local_found": 0, "first_missing": "9:30 AM", "shifted_found": ""}})
+    assert parse(none, times_expected=5)["outcome"] == "fail"
+    mixed = _fresh({"times": {"local_found": 4, "first_missing": "", "shifted_found": "2:30 PM"}})
+    assert parse(mixed, times_expected=5)["outcome"] == "fail"
+
+
+def test_a_utc_time_equal_to_a_local_one_is_never_counted_as_shifted():
+    shifted = [t["label"] for t in app_kit.expected_times(app_kit.fixtures(manifest()))["shifted"]]
+    assert "4:00 PM" not in shifted and "2:30 PM" in shifted
+
+
+def test_two_rows_and_the_total_are_a_summary_not_missing_items():
+    summary = _fresh({"sentinels": {"calendar": 6, "inbox": 2, "gh_review": 3}, "totals": {"inbox": True}})
+    assert parse(summary)["outcome"] == "pass"
+    one = _fresh({"sentinels": {"calendar": 6, "inbox": 1, "gh_review": 3}, "totals": {"inbox": True}})
+    assert any("(source inbox)" in f for f in parse(one)["failures"])
+
+
+def test_malformed_measurements_are_unreadable_not_an_exception():
+    for bad in ({"spill": 5}, {"cut": {"a": 1}}, {"empty_cards": "x"}, {"times": [1]}, {"sentinels": {"inbox": "3"}}):
+        r = parse(_fresh(bad))
+        assert r["outcome"] in ("pass", "fail", "error")
+    data = json.loads(_fresh({}))
+    data["runs"][0]["violations"] = 5  # not a list
+    assert parse(json.dumps(data))["error_code"] == "unreadable"
+
+
+def _png(width=1280, height=900, depth=8, colour=6) -> bytes:
+    import struct
+    import zlib
+
+    ihdr = struct.pack(">IIBBBBB", width, height, depth, colour, 0, 0, 0)
+    chunk = struct.pack(">I", len(ihdr)) + b"IHDR" + ihdr + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr))
+    return b"\x89PNG\r\n\x1a\n" + chunk
+
+
+def test_only_the_checks_own_screenshots_are_stored(tmp_path, monkeypatch):
+    import pytest
+
+    from omniharness.config import config_versions as cv
+
+    monkeypatch.setattr(cv, "_app_root", lambda user_id: tmp_path)
+    digest = cv.write_app_shot("u", _png())
+    assert cv.read_app_shot("u", digest).startswith(b"\x89PNG")
+    for bad in (_png(width=800), _png(height=5000), _png(depth=3), _png(colour=5), b"\x89PNG\r\n\x1a\n" + b"x" * 40):
+        with pytest.raises(ValueError):
+            cv.write_app_shot("u", bad)

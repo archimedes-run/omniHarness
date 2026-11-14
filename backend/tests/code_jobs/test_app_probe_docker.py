@@ -53,6 +53,12 @@ BROKEN: dict[str, tuple] = {
 
 
 TIMES: dict[str, int] = {}
+
+
+def _counts(data: dict) -> dict:
+    return {n: len(f["fresh"].get("items") or []) for n, f in data["sources"].items()}
+
+
 COUNTS: dict[str, dict] = {}
 
 
@@ -83,7 +89,18 @@ def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> 
         bad, bad_hashes = bundle_mod.inline({"index.html": bundle_mod.inline(files)[0]}, platform_shim=app_kit.mock_script(data))
         (d / "www" / "prod" / "index.html").write_bytes(bad)
         hashes = bad_hashes
-    (d / "check.json").write_text(json.dumps({"csp": app_checks.probe_csp(hashes), "csp_site": app_checks.probe_csp(site_hashes), "sentinels": app_kit.sentinels(data), "times": app_kit.expected_times(data), "reason": app_kit.MOCK_REASON}))
+    (d / "check.json").write_text(
+        json.dumps(
+            {
+                "csp": app_checks.probe_csp(hashes),
+                "csp_site": app_checks.probe_csp(site_hashes),
+                "sentinels": app_kit.sentinels(data),
+                "times": app_kit.expected_times(data),
+                "counts": {n: len(f["fresh"].get("items") or []) for n, f in data["sources"].items()},
+                "reason": app_kit.MOCK_REASON,
+            }
+        )
+    )
     TIMES[name] = len(app_kit.expected_times(data)["local"])
     COUNTS[name] = {n: len(f["fresh"].get("items") or []) for n, f in data["sources"].items()}
     shutil.copy(Path(layout.__file__).with_name("layout_probe.py"), d / "layout_probe.py")
@@ -105,18 +122,27 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     os.chmod(root, 0o777)
     for d in root.rglob("*"):
         os.chmod(d, 0o777)
-    loop = "for d in /w/*/; do cd $d && /usr/bin/timeout -k 5 170 /usr/bin/python3.10 -I -S layout_probe.py $d/www $d/result.json app < /dev/null > /dev/null 2>&1; rc=$?; echo $(basename $d) $rc; done"
-    name = f"oh-app-probe-e2e-{uuid.uuid4().hex[:8]}"
+    # Three containers side by side: the whole set stays well inside the
+    # suite's per-test time limit.
+    names = sorted(d.name for d in root.iterdir())
+    procs, containers = [], []
     try:
-        run = subprocess.run(
-            ["docker", "run", "--rm", "--name", name, "--network", "none", "--user", "1000:1000", "--entrypoint", "/bin/bash", "-v", f"{root}:/w", IMAGE, "-c", loop],
-            capture_output=True,
-            text=True,
-            timeout=1500,
-        )
+        for part in range(3):
+            dirs = " ".join(f"/w/{n}" for n in names[part::3])
+            loop = f"for d in {dirs}; do cd $d && /usr/bin/timeout -k 5 170 /usr/bin/python3.10 -I -S layout_probe.py $d/www $d/result.json app < /dev/null > /dev/null 2>&1; rc=$?; echo $(basename $d) $rc; done"
+            name = f"oh-app-probe-e2e-{uuid.uuid4().hex[:8]}"
+            containers.append(name)
+            cmd = ["docker", "run", "--rm", "--name", name, "--network", "none", "--user", "1000:1000", "--entrypoint", "/bin/bash", "-v", f"{root}:/w", IMAGE, "-c", loop]
+            procs.append(subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+        outs = [p.communicate(timeout=900) for p in procs]
     finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
-    assert run.returncode == 0, run.stderr[-2000:]
+        for name in containers:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    assert all(p.returncode == 0 for p in procs), [o[1][-500:] for o in outs]
+
+    class run:  # noqa: N801 - the joined output, read below
+        stdout = "".join(o[0] for o in outs)
+
     codes = dict(line.split() for line in run.stdout.split("\n") if line.strip())
     results = {}
     for d in root.iterdir():

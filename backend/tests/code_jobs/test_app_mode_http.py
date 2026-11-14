@@ -44,6 +44,16 @@ def build(app_js: str | None = None, extra: dict | None = None) -> list[dict]:
     ]
 
 
+def _png_text(width: int, size: int) -> str:
+    """A PNG header with this width (the fake's file system holds text)."""
+    import struct
+    import zlib
+
+    ihdr = struct.pack(">IIBBBBB", width, 900, 8, 6, 0, 0, 0)
+    head = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr))
+    return (head + b"x" * max(0, size - len(head))).decode("latin-1")
+
+
 class AppFake(FakeSandbox):
     """The stand-in, plus what app mode asks of the sandbox: the build output
     listing, the source scan, the app probe (canned result and screenshots)
@@ -92,6 +102,17 @@ class AppFake(FakeSandbox):
         if command.startswith("/usr/bin/stat -c %s ") and "result.json" not in command:
             content = self.read_text(shlex.split(command)[3])
             return 0, str(len(content.encode())) if content is not None else "none"
+        if command.startswith("[ -f ") and "/usr/bin/stat -c %s" in command and "od -An" not in command:
+            path = shlex.split(command)[2]
+            content = self.read_text(path)
+            return 0, str(len(content.encode("latin-1"))) if content is not None else "none"
+        if "/usr/bin/head -c " in command and "/usr/bin/base64 -w0" in command:
+            import base64 as b64
+
+            src, dst = re.search(r"head -c \d+ (\S+) \| /usr/bin/base64 -w0 > (\S+) 2>", command).groups()
+            content = self.read_text(src.strip("'"))
+            self._put(dst.strip("'"), b64.b64encode(content.encode("latin-1")).decode() if content is not None else "")
+            return 0, ""
         if "/usr/bin/base64 -w0 " in command:
             import base64 as b64
 
@@ -131,7 +152,7 @@ class AppFake(FakeSandbox):
                     pass
                 self._put(f"{directory}/result.json", body)
                 for shot in json.loads(self.layout).get("shots", []):
-                    self._put(f"{directory}/{shot['file']}", "\x89PNG\r\n\x1a\n" + "x" * (shot["bytes"] - 8))
+                    self._put(f"{directory}/{shot['file']}", _png_text(1280 if shot["width"] == 1280 else shot["width"], shot["bytes"]))
             return self.layout_exit, ""
         if "od -An" in command and "/usr/bin/cp" in command:
             src, dst = re.search(r"/usr/bin/cp (\S+) (\S+) && echo __ok__", command).groups()

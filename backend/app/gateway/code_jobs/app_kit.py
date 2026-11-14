@@ -572,6 +572,11 @@ def expected_times(data: dict) -> dict:
             if tz != "UTC" and utc.utcoffset() != here.utcoffset():
                 shifted.append(_time_words(utc))
         break
+    # A UTC time that is also one of the local times proves nothing: left out.
+    local_words = {w for t in local for w in t["words"]}
+    shifted = [t for t in shifted if not (set(t["words"]) & local_words)]
+    for t in [*local, *shifted]:
+        t.pop("words")
     return {"local": local, "shifted": shifted}
 
 
@@ -580,7 +585,7 @@ def _time_words(at: datetime) -> dict:
     h12 = at.hour % 12 or 12
     words = {f"{at.hour}:{at.minute:02d}", f"{h12}:{at.minute:02d}"}
     pattern = "(?<![0-9])(?:" + "|".join(f"0?{w}" for w in sorted(words)) + ")(?![0-9])"
-    return {"re": pattern, "label": f"{h12}:{at.minute:02d} {'AM' if at.hour < 12 else 'PM'}"}
+    return {"re": pattern, "label": f"{h12}:{at.minute:02d} {'AM' if at.hour < 12 else 'PM'}", "words": sorted(words)}
 
 
 def mock_script(data: dict) -> str:
