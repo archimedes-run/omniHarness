@@ -12,8 +12,15 @@ export interface RunNotice {
   kind: "interrupted";
   reason: string;
   runId: string;
-  /** The person's original message, or null when it is not known. */
+  /**
+   * The owner's own message, to send again; null when the cut-off turn was
+   * not theirs (relayed channel text, an automation's prompt) or is unknown.
+   */
   retryText: string | null;
+  /** The message carried files: "Try again" re-sends the text only. */
+  hadAttachments: boolean;
+  /** The run was a scheduled/automation run. */
+  automation: boolean;
 }
 
 export function runNotice(
@@ -22,10 +29,8 @@ export function runNotice(
   if (message?.type !== "ai") return null;
   const marker = message.additional_kwargs?.[RUN_NOTICE_MARKER];
   if (!marker || typeof marker !== "object") return null;
-  const { kind, reason, run_id, retry_text } = marker as Record<
-    string,
-    unknown
-  >;
+  const { kind, reason, run_id, retry_text, had_attachments, automation } =
+    marker as Record<string, unknown>;
   if (kind !== "interrupted") return null;
   return {
     kind,
@@ -33,5 +38,7 @@ export function runNotice(
     runId: typeof run_id === "string" ? run_id : "",
     retryText:
       typeof retry_text === "string" && retry_text.trim() ? retry_text : null,
+    hadAttachments: had_attachments === true,
+    automation: automation === true,
   };
 }

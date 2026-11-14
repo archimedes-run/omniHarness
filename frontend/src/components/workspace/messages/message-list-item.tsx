@@ -53,7 +53,7 @@ import { CopyButton } from "../copy-button";
 
 import { DisclosureNote } from "./disclosure-note";
 import { MarkdownContent } from "./markdown-content";
-import { INTERRUPTED_TEXT, RunNotice } from "./run-notice";
+import { RunNotice } from "./run-notice";
 import {
   TruncationBadge,
   extractTruncationInfo,
@@ -154,9 +154,11 @@ export function MessageListItem({
     return (
       <RunNotice
         className={className}
-        text={body.trim() || INTERRUPTED_TEXT}
+        // The server's words, minus the disclosure block (the note shows it).
+        text={body.trim() || undefined}
         items={items}
         retryText={notice.retryText}
+        hadAttachments={notice.hadAttachments}
       />
     );
   }
