@@ -186,6 +186,9 @@ def card_view(card: dict, app: AppRecord | None) -> dict:
         "kind": kind,
         "keeps_version": note.get("keeps") if kind == "version" else None,
         "description": note.get("description") if kind == "version" else None,
+        # The person's own words that started the job (never model or page
+        # text; empty for a content-led version, which shows its suggestion).
+        "request_words": (str(note.get("request") or "") or None) if not card["suggestion"] else None,
         "checks_passed": note.get("checks") == "passed" if kind == "version" else None,
         # The system's own check screenshots of the offered version (sample data).
         "shots": sorted(shots) if kind == "version" else [],

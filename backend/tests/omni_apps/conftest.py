@@ -88,8 +88,8 @@ def apps(gateway):
 
     repo = gateway.app.state.app_repo
 
-    def register(m: dict | None = None, *, files: dict | None = None, app_id: str | None = None, owner: str | None = None, thread_id: str | None = "thread-1", origin=("user", None)):
-        return gateway.client.portal.call(partial(register_app, gateway.app.state, owner_id=owner or gateway.user_id, manifest=m or manifest(), files=files or FILES, app_id=app_id, thread_id=thread_id, origin=origin))
+    def register(m: dict | None = None, *, files: dict | None = None, app_id: str | None = None, owner: str | None = None, thread_id: str | None = "thread-1", origin=("user", None), **extra):
+        return gateway.client.portal.call(partial(register_app, gateway.app.state, owner_id=owner or gateway.user_id, manifest=m or manifest(), files=files or FILES, app_id=app_id, thread_id=thread_id, origin=origin, **extra))
 
     def approve(app_id: str):
         card = gateway.client.get(f"/api/apps/{app_id}/approval").json()

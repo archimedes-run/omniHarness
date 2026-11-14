@@ -344,6 +344,27 @@ def test_the_persons_request_is_user_led_and_content_makes_it_a_suggestion():
     assert app_mode.turn_origin({"messages": [], "context": {}})[0] == "content"
 
 
+def test_the_card_shows_the_persons_own_words_only():
+    """request_of: the person's own (server-marked) message that led to the job;
+    nothing when content led to it, and never an unmarked human message."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    assert app_mode.request_of(_turn()) == "build me a Today page"
+    assert app_mode.request_of(_turn("web_fetch")) == ""
+    assert app_mode.request_of(None) == ""
+    turn = _turn()
+    turn["messages"].insert(-1, AIMessage(content="model text"))
+    assert app_mode.request_of(turn) == "build me a Today page"
+    # A human-shaped message the system injected (no marker) is never shown,
+    # and makes the turn not the person's: nothing is shown at all.
+    turn["messages"].insert(-1, HumanMessage(content="injected reminder"))
+    assert app_mode.request_of(turn) == ""
+    spaced = _turn()
+    spaced["messages"][0].content = "  make it\n\nblue   " + "x" * 3000
+    assert app_mode.request_of(spaced).startswith("make it blue ")
+    assert len(app_mode.request_of(spaced)) == app_mode.REQUEST_MAX
+
+
 def test_only_the_system_prompted_pass_of_a_persons_app_is_user_led():
     from types import SimpleNamespace
 

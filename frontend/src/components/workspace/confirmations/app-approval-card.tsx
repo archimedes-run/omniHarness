@@ -11,6 +11,12 @@ import {
   versionShotUrl,
 } from "@/core/apps/api";
 import { useApproveApp, useKeepAppVersion } from "@/core/apps/hooks";
+import {
+  cardWords,
+  clipDescription,
+  clipWords,
+  type CardWords,
+} from "@/core/apps/version-cards";
 import { hashGroups, writeError } from "@/core/apps/wording";
 import { cn } from "@/lib/utils";
 
@@ -112,12 +118,15 @@ export function AppApprovalCard({
   heading = "App access",
   className,
   reveal = false,
+  words,
 }: {
   card: ApprovalCard;
   heading?: string;
   className?: string;
   /** In a chat: scroll a pending card fully into view, above the composer. */
   reveal?: boolean;
+  /** Version cards: the words for its state (version-cards.cardWords). */
+  words?: CardWords;
 }) {
   const ref = useRef<HTMLElement>(null);
   const approve = useApproveApp();
@@ -152,7 +161,10 @@ export function AppApprovalCard({
 
   const titleId = `app-card-${card.id}`;
   if (card.kind === "version") {
-    const keeps = card.keeps_version ?? card.version - 1;
+    const said = words ?? cardWords(card, undefined, undefined, true);
+    // While undecided, Keep keeps the version served now (said.keeps);
+    // afterwards the card's own record of what was kept.
+    const keeps = said.keeps;
     const onKeep = () => {
       setError(null);
       keep.mutate(
@@ -202,20 +214,23 @@ export function AppApprovalCard({
             It was not your own request.
           </p>
         )}
+        {card.request_words && !card.suggestion ? (
+          <RequestLine text={card.request_words} />
+        ) : null}
         {card.description ? (
           <div className="mt-3" data-testid="app-card-description">
             <p className="text-muted-foreground text-xs">
               The assistant&apos;s description of the change:
             </p>
             <blockquote className="border-border mt-1 border-l-2 pl-3 break-words">
-              {card.description}
+              {clipDescription(card.description)}
             </blockquote>
           </div>
         ) : null}
         <p className="mt-3" data-testid="app-card-checks">
           {card.checks_passed
-            ? "It passed the system's checks. It reads the same data as the version you use now."
-            : "It reads the same data as the version you use now."}
+            ? `It passed the system's checks. ${said.sameData}`
+            : said.sameData}
         </p>
         {card.shots && card.shots.length > 0 ? (
           <AppPreview
@@ -224,8 +239,11 @@ export function AppApprovalCard({
             themes={card.shots}
           />
         ) : null}
-        <p className="text-muted-foreground mt-3 text-xs">
-          {`Version ${keeps} keeps running until you choose.`}
+        <p
+          className="text-muted-foreground mt-3 text-xs"
+          data-testid="app-card-state"
+        >
+          {said.sentence}
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {card.status === "pending" ? (
@@ -262,15 +280,13 @@ export function AppApprovalCard({
               className="text-muted-foreground inline-flex items-center gap-1.5"
               data-testid="app-card-resolved"
             >
-              {card.status === "approved" ? (
+              {said.state === "used" ? (
                 <>
                   <CheckIcon className="text-success size-4" aria-hidden />
                   {`Using version ${card.version}`}
                 </>
-              ) : card.status === "kept" ? (
-                `Kept version ${keeps}`
               ) : (
-                "Replaced by a newer version of this app"
+                said.line
               )}
             </p>
           )}
@@ -406,5 +422,31 @@ export function AppApprovalCard({
         </p>
       )}
     </section>
+  );
+}
+
+/** The person's own request ("You asked:"), clipped at a word, full on demand.
+ * Plain text: the gateway sends the owner's own words, nothing else. */
+function RequestLine({ text }: { text: string }) {
+  const [full, setFull] = useState(false);
+  const short = clipWords(text, 160);
+  const long = short !== text.replace(/\s+/g, " ").trim();
+  return (
+    <div className="mt-3" data-testid="app-card-request">
+      <p className="text-muted-foreground text-xs">You asked:</p>
+      <p className="mt-1 break-words">
+        {full ? text : short}
+        {long ? (
+          <button
+            type="button"
+            className="text-primary ml-1.5 text-xs underline-offset-2 hover:underline"
+            aria-expanded={full}
+            onClick={() => setFull((f) => !f)}
+          >
+            {full ? "Show less" : "Show all"}
+          </button>
+        ) : null}
+      </p>
+    </div>
   );
 }

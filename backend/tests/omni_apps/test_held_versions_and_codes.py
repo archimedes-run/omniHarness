@@ -83,3 +83,25 @@ def test_a_revoke_mid_fetch_neither_refills_nor_recreates_the_cache(gateway, com
     apps.call(apps.repo.delete_cache, owner_id=gateway.user_id, app_id=reg.app_id)
     assert not apps.call(apps.repo.claim_upstream, **key, min_interval_s=-1)
     assert apps.call(apps.repo.cache_row, **key) is None, "no row is recreated after a revoke"
+
+
+def test_a_version_card_carries_the_persons_request_and_never_a_content_led_one(gateway, apps) -> None:
+    reg = apps.register(manifest(inbox=INBOX))
+    apps.approve(reg.app_id)
+    v2 = apps.register(manifest(inbox=INBOX), files={**FILES, "app.js": b"document.title='v2';"}, app_id=reg.app_id, hold=True, note={"description": "Bluer.", "checks": "passed", "request": "make the inbox tile blue"})
+    assert v2.needs_approval
+    card = gateway.client.get(f"/api/apps/{reg.app_id}/approval").json()
+    assert card["request_words"] == "make the inbox tile blue"
+    v3 = apps.register(manifest(inbox=INBOX), files={**FILES, "app.js": b"document.title='v3';"}, app_id=reg.app_id, origin=("content", "an email"), note={"request": "smuggled words"})
+    assert v3.needs_approval
+    card = gateway.client.get(f"/api/apps/{reg.app_id}/approval").json()
+    assert card["version"] == 3 and card["request_words"] is None and card["suggestion_words"]
+
+
+def test_a_long_description_is_clipped_at_a_word() -> None:
+    from app.gateway.apps.registry import NOTE_TEXT_MAX, clean_note
+
+    out = clean_note({"description": "word " * 70 + "enforcing"})["description"]
+    assert len(out) <= NOTE_TEXT_MAX + 1 and out.endswith("…") and not out.endswith("wor…")
+    assert clean_note({"request": "mine"}) == {}, "a request is kept only for a version the person led"
+    assert clean_note({"request": "  make\nit blue "}, user_led=True) == {"request": "make it blue"}
