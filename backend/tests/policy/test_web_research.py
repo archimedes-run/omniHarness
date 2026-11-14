@@ -223,6 +223,18 @@ def gateway(tmp_path, monkeypatch):
     reset_extensions_config()
 
 
+class _FastPollAsyncio:
+    """asyncio as the task tool sees it: every name as is, `sleep` short."""
+
+    _real_sleep = staticmethod(asyncio.sleep)
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+    def sleep(self, _seconds, *args, **kwargs):
+        return self._real_sleep(0.05, *args, **kwargs)
+
+
 def _wire(monkeypatch):
     # tests/conftest.py replaces the executor module with a MagicMock for the
     # session; delegation needs the real one.
@@ -243,8 +255,12 @@ def _wire(monkeypatch):
         return [*LEAD_TOOLS, *(SUBAGENT_TOOLS if kwargs.get("subagent_enabled") else [])]
 
     monkeypatch.setattr("omniharness.tools.get_available_tools", available)
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(task_tool_module.asyncio, "sleep", lambda _s: real_sleep(0.05))
+    # The task tool polls its subagent every few seconds; poll fast. ONLY the
+    # task tool: `task_tool_module.asyncio` IS the asyncio module, so patching
+    # its `sleep` sped up every sleep in the gateway, the expiry sweep's
+    # once-a-minute pause among them, which then raced the sweeps a test makes
+    # itself (issue #180, test_resume_after_expiry).
+    monkeypatch.setattr(task_tool_module, "asyncio", _FastPollAsyncio())
 
 
 # -- helpers -------------------------------------------------------------------
