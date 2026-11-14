@@ -1,0 +1,84 @@
+id: M-WHOIS-SUMMARY
+title: The research budget holds across summaries; past it tool calls end and a reply exists
+mock_only: true
+source: 'live chat 2026-11-14 (root cause: each summary reset the per-task search count and clock)'
+mode: thinking
+prompt: who is Jane Roe
+tools: []
+confirm: none
+fixtures:
+  summarization_tokens: 300
+budget:
+  seconds: 60
+checks:
+- trace_step:
+    type: summary
+    min: 1
+- max_lookups:
+    searches: 6
+- answer_contains:
+    values:
+    - Stopped early
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe biography
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe career
+    expect:
+      tool: web_search
+      not_contains: Not run
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe awards
+    expect:
+      tool: web_search
+      not_contains: Not run
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe interview
+    expect:
+      tool: web_search
+      not_contains: Not run
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe company
+    expect:
+      tool: web_search
+      not_contains: Not run
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe education
+    expect:
+      tool: web_search
+      not_contains: Not run
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe linkedin
+    expect:
+      tool: web_search
+      not_contains: Not run
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe news
+    expect:
+      tool: web_search
+      contains: search budget
+  - expect:
+      tool: web_search
+      contains: 'Budget spent: answer now'
+      any_contains: no more web lookups for this question
+    tool_calls:
+    - name: web_search
+      args:
+        query: jane roe twitter

@@ -63,6 +63,12 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         config = self._memory_config or get_memory_config()
         if not config.enabled:
             return None
+        # Memory off in this chat (omniharness.agents.memory_switch): nothing
+        # from it is written to memory either.
+        from omniharness.agents.memory_switch import memory_off
+
+        if memory_off(runtime.context):
+            return None
 
         # Get thread ID from runtime context first, then fall back to LangGraph's configurable metadata
         thread_id = runtime.context.get("thread_id") if runtime.context else None

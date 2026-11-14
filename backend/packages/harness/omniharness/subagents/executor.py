@@ -364,6 +364,11 @@ class SubagentExecutor:
         self.sandbox_state = sandbox_state
         self.thread_data = thread_data
         self.thread_id = thread_id
+        # The lead's turn this delegation belongs to (research_ledger): its
+        # lookups join that turn's budget only.
+        from omniharness.agents.research_ledger import CURRENT_TURN_KEY
+
+        self.research_turn_key = CURRENT_TURN_KEY.get()
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
         # Where the delegating turn came from, captured where the delegation
@@ -429,12 +434,21 @@ class SubagentExecutor:
 
         # Reuse shared middleware composition with lead agent.
         middlewares = build_subagent_runtime_middlewares(app_config=app_config, model_name=self.model_name, lazy_init=True)
-        if self.config.name == "research":
-            # The read-only web researcher keeps the same per-task search and
-            # fetch budget and fetch cache as the lead (spec 009 review).
-            from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware, _budget
+        # Every subagent's web lookups count in the turn's ONE research budget
+        # (omniharness.agents.research_ledger), opened by the lead for this
+        # thread: a `task` subagent had no budget at all, and the research
+        # subagent only its own per-call one (live chat 2026-11-14). The
+        # research subagent also keeps its smaller per-call budget.
+        from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware, _budget
 
-            middlewares.append(TurnBudgetMiddleware(_budget(app_config).for_subagent(), scale_to_items=False))
+        # Only the researcher gets research notes; any subagent's lookups
+        # still count. A research call is guaranteed a floor of lookups so
+        # parallel research calls are not squeezed out by each other.
+        budget = _budget(app_config)
+        researcher = self.config.name == "research"
+        per_call = budget.for_subagent() if researcher else budget
+        floor = (getattr(budget, "subagent_floor_searches", 2), getattr(budget, "subagent_floor_fetches", 2)) if researcher else (0, 0)
+        middlewares.append(TurnBudgetMiddleware(per_call, scale_to_items=False, shared="join", notes=researcher, floor=floor))
 
         # A checkpointer, for the same reason the lead agent gets one: without
         # it a middleware that suspends the run (a permission gate asking the
@@ -631,6 +645,10 @@ class SubagentExecutor:
                     self.checkpoint_key = subagent_checkpoint_key(self.thread_id, result.task_id)
                 run_config["configurable"] = {"thread_id": self.checkpoint_key}
                 context["thread_id"] = self.thread_id
+                if self.research_turn_key:
+                    from omniharness.agents.research_ledger import TURN_KEY_CONTEXT
+
+                    context[TURN_KEY_CONTEXT] = self.research_turn_key
                 from omniharness.agents.invitation import DELEGATION_KEY
 
                 context[DELEGATION_KEY] = self.checkpoint_key

@@ -391,8 +391,10 @@ async def run_agent(
             except Exception:
                 logger.warning("Run %s cancellation rollback failed", run_id, exc_info=True)
         else:
-            await _end(RunStatus.interrupted)
-            logger.info("Run %s was cancelled", run_id)
+            # Stopped by the server (a graceful gateway stop), not the person:
+            # the reason is the run's error, so the restart notice is written.
+            await _end(RunStatus.interrupted, error=record.interrupt_reason)
+            logger.info("Run %s was cancelled%s", run_id, f" ({record.interrupt_reason})" if record.interrupt_reason else "")
 
     except Exception as exc:
         error_msg = f"{exc}"

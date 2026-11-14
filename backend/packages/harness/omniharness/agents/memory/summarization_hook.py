@@ -12,6 +12,10 @@ def memory_flush_hook(event: SummarizationEvent) -> None:
     """Flush messages about to be summarized into the memory queue."""
     if not get_memory_config().enabled or not event.thread_id:
         return
+    from omniharness.agents.memory_switch import memory_off
+
+    if memory_off(getattr(event.runtime, "context", None)):
+        return  # memory off in this chat: nothing from it is written to memory
 
     filtered_messages = filter_messages_for_memory(list(event.messages_to_summarize))
     user_messages = [message for message in filtered_messages if getattr(message, "type", None) == "human"]

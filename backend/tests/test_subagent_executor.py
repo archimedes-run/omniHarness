@@ -288,6 +288,13 @@ class TestAgentConstruction:
                 build_subagent_runtime_middlewares=fake_build_subagent_runtime_middlewares,
             ),
         )
+        # Every subagent joins the turn's research budget (research_ledger).
+        budget_mw = object()
+        monkeypatch.setitem(
+            sys.modules,
+            "omniharness.agents.middlewares.turn_budget_middleware",
+            _module("omniharness.agents.middlewares.turn_budget_middleware", TurnBudgetMiddleware=lambda *a, **k: budget_mw, _budget=lambda cfg: SimpleNamespace(for_subagent=lambda: None)),
+        )
 
         executor = SubagentExecutor(
             config=base_config,
@@ -297,6 +304,7 @@ class TestAgentConstruction:
         )
 
         result = executor._create_agent()
+        assert budget_mw in middlewares
 
         assert result is agent
         assert captured["model"] == {

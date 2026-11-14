@@ -67,6 +67,9 @@ class RunResponse(BaseModel):
     multitask_strategy: str = "reject"
     created_at: str = ""
     updated_at: str = ""
+    #: Why a run ended without a reply, when the server knows ("restart":
+    #: interrupted by a gateway restart, app.gateway.run_recovery).
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +96,7 @@ def _record_to_response(record: RunRecord) -> RunResponse:
         multitask_strategy=record.multitask_strategy,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        error=record.error,
     )
 
 

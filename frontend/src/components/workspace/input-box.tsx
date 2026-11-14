@@ -80,6 +80,7 @@ import {
   type ReasoningEffort,
   type Trigger,
 } from "./chat-bar/logic";
+import { MEMORY_TOGGLE_LABEL, MemoryToggleView } from "./chat-bar/memory-chip";
 import { SuggestMenu, type SuggestItem } from "./chat-bar/suggest-menu";
 import {
   useAgentChoices,
@@ -126,6 +127,8 @@ export function InputBox({
   followupsContainer,
   onSubmit,
   onStop,
+  memoryOff,
+  onMemoryToggle,
   ...props
 }: Omit<ComponentProps<typeof PromptInput>, "onSubmit"> & {
   assistantId?: string | null;
@@ -156,6 +159,9 @@ export function InputBox({
   followupsContainer?: HTMLElement | null;
   onSubmit?: (message: PromptInputMessage) => void;
   onStop?: () => void;
+  /** "Don't use memory in this chat": shown when the page wires it. */
+  memoryOff?: boolean;
+  onMemoryToggle?: (off: boolean) => void;
 }) {
   const { t } = useI18n();
   const router = useRouter();
@@ -816,6 +822,15 @@ export function InputBox({
           <PromptInputFooter className="flex flex-wrap gap-2 p-0">
             <PromptInputTools>
               <AttachButton disabled={disabled} />
+              {onMemoryToggle && (
+                <Tooltip content={MEMORY_TOGGLE_LABEL}>
+                  <MemoryToggleView
+                    memoryOff={!!memoryOff}
+                    onToggle={onMemoryToggle}
+                    disabled={disabled}
+                  />
+                </Tooltip>
+              )}
             </PromptInputTools>
             <PromptInputTools className="flex-wrap justify-end gap-2">
               <ModeMenu

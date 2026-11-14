@@ -289,6 +289,23 @@ def max_calls(o: Outcome, n: int) -> tuple[bool, str]:
     return count <= n, f"{count} tool call(s) (max {n})"
 
 
+def max_lookups(o: Outcome, searches: int, fetches: int | None = None) -> tuple[bool, str]:
+    """Web lookups that RAN (not refused by the research budget, not served
+    from the task's cache), from the run traces: every agent's, the lead's,
+    the research tool's and subagents' alike."""
+
+    def ran(step: dict) -> bool:
+        out = str(step.get("output") or "").lstrip()
+        # No output: a call the model asked for that never ran (its tool
+        # calls were dropped when the turn's research stopped).
+        return bool(out) and not out.startswith(("Not run:", "[From earlier in this task"))
+
+    s = sum(1 for st in o.steps if st["name"] in ("web_search", "image_search") and ran(st))
+    f = sum(1 for st in o.steps if st["name"] == "web_fetch" and ran(st))
+    ok = s <= searches and (fetches is None or f <= fetches)
+    return ok, f"{s} search(es), {f} fetch(es) ran (max {searches}/{fetches if fetches is not None else '-'})"
+
+
 def no_repeat_calls(o: Outcome, tools: list[str] | None = None) -> tuple[bool, str]:
     """No identical call (tool + arguments) made twice: the 're-searching the
     same sites after a summary' failure."""
@@ -400,6 +417,7 @@ CHECKS: dict[str, Callable[..., tuple[bool, str]]] = {
         checklist_before_action,
         verified_section,
         max_calls,
+        max_lookups,
         no_repeat_calls,
         trace_recorded,
         verification_status,

@@ -438,7 +438,6 @@ async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any)
     "error" for anything else: transient, retried. IDEMPOTENT by the message's
     id: a post retried (after a restart) is never added twice.
     """
-    from omniharness.utils.time import now_iso
 
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 
@@ -446,19 +445,20 @@ async def _append_to_checkpoint(checkpointer: Any, thread_id: str, message: Any)
         stored = ((getattr(snapshot, "checkpoint", None) or {}).get("channel_values") or {}).get("messages") or []
         return any(getattr(m, "id", None) == message.id for m in stored)
 
+    from app.gateway.thread_writes import write_thread_messages
+
     try:
         current = await checkpointer.aget_tuple(config)
         if current is None:
             return GONE
         if has_it(current):
             return WRITTEN
-        checkpoint: dict[str, Any] = dict(getattr(current, "checkpoint", {}) or {})
-        metadata: dict[str, Any] = dict(getattr(current, "metadata", {}) or {})
-        values: dict[str, Any] = dict(checkpoint.get("channel_values", {}))
-        values["messages"] = [*list(values.get("messages") or []), message]
-        checkpoint["channel_values"] = values
-        metadata.update({"updated_at": now_iso(), "source": "update", "step": metadata.get("step", 0) + 1})
-        await checkpointer.aput({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, checkpoint, metadata, {})
+        # A new checkpoint with the messages channel's next version: the old
+        # in-place write (same id, no new versions) was dropped by savers that
+        # store values per version (app.gateway.thread_writes).
+        written = await write_thread_messages(checkpointer, thread_id, lambda messages: [*messages, message])
+        if written is None:
+            return GONE
         return WRITTEN if has_it(await checkpointer.aget_tuple(config)) else ERROR
     except Exception:  # noqa: BLE001 — classified and reported to the caller
         logger.warning("could not post the confirmed result to thread %s", thread_id, exc_info=True)
