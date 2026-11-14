@@ -20,7 +20,7 @@ from app.gateway.apps import bundle as bundle_mod
 from app.gateway.apps.catalog import get_entry
 from app.gateway.apps.checks import read_only_refusal, rules_in_force
 from app.gateway.apps.manifest import ManifestError, manifest_hash, validate_manifest
-from app.gateway.apps.service import load_app, raise_card_if_needed
+from app.gateway.apps.service import clean_source, load_app, raise_card_if_needed
 from omniharness.config import config_versions as cv
 
 #: Who a registered version is recorded as.
@@ -78,7 +78,7 @@ async def register_app(
         if reason is not None:
             raise AppRegistrationError("source_refused", f"source {name}: {reason}")
     try:
-        html, script_hashes = bundle_mod.inline(files, prelude=bundle_mod.platform_shim())
+        html, script_hashes = bundle_mod.inline(files)
     except bundle_mod.BundleError as exc:
         raise AppRegistrationError(exc.code, str(exc)) from exc
     if app_id is not None:
@@ -88,11 +88,16 @@ async def register_app(
             raise AppRegistrationError("invalid_request", str(exc)) from exc
     else:
         app_id = _new_app_id(normalised["name"], owner_id)
+    kind, source_label = origin
+    from_content = kind != "user"
+    # Led by content, a new version of an existing app (even a code-only one)
+    # waits on the owner's button; the last served version keeps serving.
+    held = from_content and bool(cv.app_history(owner_id, app_id))
     digest = cv.write_app_bundle(owner_id, html)
     snapshot = {"manifest": normalised, "manifest_hash": manifest_hash(normalised), "bundle_hash": digest, "script_hashes": script_hashes}
-    version = cv.write_app(owner_id, app_id, snapshot, who=REGISTRAR, source="code_job")
+    version = cv.write_app(owner_id, app_id, snapshot, who=REGISTRAR, source="code_job", held=held)
     app = load_app(owner_id, app_id, version.version)
-    kind, source_label = origin
-    card = await raise_card_if_needed(repo, app, thread_id=thread_id, suggestion=kind != "user", suggestion_source=(source_label or "content read earlier")[:200] if kind != "user" else None)
-    await repo.audit(owner_id=owner_id, app_id=app_id, event="app_registered", detail={"version": app.version, "manifest_hash": app.manifest_hash, "bundle_hash": digest, "card": card["id"] if card else None})
+    label = clean_source(source_label) or "content read earlier"
+    card = await raise_card_if_needed(repo, app, thread_id=thread_id, suggestion=from_content, suggestion_source=label if from_content else None, held=held)
+    await repo.audit(owner_id=owner_id, app_id=app_id, event="app_registered", detail={"version": app.version, "manifest_hash": app.manifest_hash, "bundle_hash": digest, "card": card["id"] if card else None, "held": held})
     return RegistrationResult(app_id=app_id, version=app.version, manifest_hash=app.manifest_hash, needs_approval=card is not None, card_id=card["id"] if card else None)

@@ -449,7 +449,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         yield
 
-        apps_refresher.cancel()
+        # Apps refresher and bridge refreshes end (cancelled and awaited,
+        # bounded) before anything they use, the database above all, closes.
+        from app.gateway.apps.refresher import stop as stop_apps_refresher
+
+        await stop_apps_refresher(apps_refresher, timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS)
         expiry_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await expiry_task

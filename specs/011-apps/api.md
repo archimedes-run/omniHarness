@@ -38,6 +38,7 @@ approval card (PR 2), and the coding job's app mode (PR 3a). Requirements are in
 | 409 | `stale_version` | restore: `base_version` is no longer the current version |
 | 422 | `invalid_request` | pins that are not distinct apps of yours. Other body validation failures use FastAPI's default 422 shape (`detail` is a list) |
 | 429 | `rate_limited` | 60 bridge requests per app per minute per owner; `Retry-After` header set |
+| 500 | `bridge_failed` | the bridge failed unexpectedly (logged by error type only) |
 | 503 | `apps_unavailable` | the gateway has no SQL store |
 
 ## Library
@@ -56,11 +57,18 @@ approval card (PR 2), and the coding job's app mode (PR 3a). Requirements are in
       "status": "approved",
       "pinned": true,
       "updated_at": "2026-11-13T10:00:00+00:00",
-      "last_opened_at": "2026-11-13T10:05:00+00:00"
+      "last_opened_at": "2026-11-13T10:05:00+00:00",
+      "pending_version": null
     }
   ]
 }
 ```
+
+`current_version` is the version the app SERVES. `pending_version` is a newer
+version waiting on the owner's button (registered after content led the
+request: even a code-only change waits), or `null`. Until it is approved the
+served version keeps serving, and the pending card's `version` names the
+pending one.
 
 `status` is one of:
 
@@ -189,6 +197,7 @@ Idempotent: revoking again answers with zero counts.
   "sentence": "Data is shown in the app only; the assistant never sees it.",
   "suggestion": false,
   "suggestion_source": null,
+  "suggestion_words": null,
   "thread_id": "…" ,
   "created_at": "…",
   "resolved_at": null
@@ -201,7 +210,10 @@ Idempotent: revoking again answers with zero counts.
 - `suggestion: true` when the job that built the app was led by content (an
   email, a page, an automation's turn), with `suggestion_source` naming it
   (for example "an email you read earlier"). The card still grants only by its
-  button.
+  button. `suggestion_source` is cleaned by the gateway (no control or
+  formatting characters, quotes or angle brackets; at most 120 characters);
+  `suggestion_words` is the line to show, with it quoted:
+  `Suggested after reading: “…”`. Render both as text.
 - `status`: `pending`, `approved`, or `superseded` (a newer version replaced it
   before it was approved).
 - Typed chat text never grants. There is no confirmation-by-message path for
@@ -221,8 +233,10 @@ can render "Allowed"): `{"cards": [ApprovalCard, …]}`. `thread_id` is required
 Body: `{"manifest_hash": "<the hash the card showed>", "card_id": "<card id>"}`.
 
 - `200 {"status": "approved", "manifest_hash": "…", "approved_at": "…"}`.
-- `409 hash_mismatch` when `manifest_hash` is not the current version's hash
-  (the app changed after the card was drawn: reload the card).
+- `409 hash_mismatch` when `manifest_hash` is not the hash of the version the
+  card was drawn for (reload the card). A newer registration supersedes a
+  pending card (`404` for the old one).
+- Approving a pending version makes it the served one.
 - `404 no_pending_approval` when `card_id` is not this app's pending card.
 - `403 owner_session_required` for any internal-token caller. Only the
   owner's own button press, from the browser, approves.
@@ -284,8 +298,8 @@ Only the fields the manifest selected appear in each item.
 | `googlecalendar.events_today` | `{"items": [{"title", "start", "end", "all_day"}]}` (≤ 50; cancelled events dropped) |
 | `github.pr_search` | `{"items": [{"repo", "number", "title", "updated_at", "merged_at", "link"}]}` |
 | `omni.ledger.today` | `{"items": [{"bucket": "moved"\|"stuck"\|"overdue", "task", "project", "status", "due_date", "link"}]}` |
-| `omni.sessions.active` | `{"items": [{"tool", "title", "display_state": "working"\|"waiting-on-user", "known": "observed"\|"inferred", "since"}]}` |
-| `omni.automations.recent` | `{"items": [{"rule", "last_run", "outcome", "next_run"}]}` |
+| `omni.sessions.active` (install-wide: the session watcher is not per user) | `{"items": [{"tool", "title", "display_state": "working"\|"waiting-on-user", "known": "observed"\|"inferred", "since"}]}` |
+| `omni.automations.recent` (install-wide: the trigger engine is not per user) | `{"items": [{"rule", "last_run", "outcome", "next_run"}]}` |
 | `gmail.unread_subjects` | `{"count": 12, "count_capped": false, "items": [{"subject", "received_at", "link"}]}` (never body, snippet or sender) |
 
 Strings are clipped (200 chars), arrays capped at 50, the payload ≤ 64 KB.
@@ -301,7 +315,7 @@ The registered, self-contained document. Headers (exact):
 ```
 Content-Type: text/html; charset=utf-8
 Cache-Control: private, max-age=31536000, immutable
-Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'sha256-…' …; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'sha256-…' …; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'
 Referrer-Policy: no-referrer
 X-Content-Type-Options: nosniff
 Cross-Origin-Resource-Policy: same-origin
@@ -310,7 +324,11 @@ Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 ```
 
 `script-src` lists one `'sha256-…'` per inline script, computed at
-registration. With no scripts it is `script-src 'none'`. Embed it only as
+registration; the first is always the platform shim, which the gateway injects
+as the document's first script from its own copy of the generated
+`omni-shim.js` (a shim the bundle carries, by reference or inlined, is
+dropped). Trusted Types with no policy: no `innerHTML` or any other
+HTML-from-string API works in the app. Embed it only as
 `<iframe sandbox="allow-scripts" src="…">`.
 
 ## Refusals reported by the host
@@ -326,7 +344,7 @@ The host page reports a frame message it dropped (FR-022). Body:
 Codes only, no free text (a frame cannot carry data into the log through a
 report): `reason` matches `[a-z][a-z0-9_]{0,47}` (for example
 `source_not_approved`, `unknown_type`, `invalid_message`, `oversized`,
-`rate_limited`, `second_load`); `type` and `source` (both optional) match
+`rate_limited`, `second_load`, `second_document`, `no_hello`, `bad_nonce`); `type` and `source` (both optional) match
 `[a-z][a-z0-9_]{0,31}`; send no `source` when the frame's value is not a
 valid name. Anything else is `422`. Stored in the apps audit log as
 `app_message_refused`. `204`. Rate limited with the bridge's per-app limit.
@@ -399,6 +417,8 @@ result = await register_app(
     thread_id=thread_id,            # where the approval card is shown
     origin=("user", None),          # or ("content", "an email you read earlier")
 )
+# origin "content" on an existing app: the version is held (not served) until
+# the owner approves its card; the last served version keeps serving.
 # result.app_id, result.version, result.manifest_hash, result.needs_approval, result.card_id
 ```
 
@@ -406,18 +426,16 @@ Raises `AppRegistrationError(code, message)` with codes `invalid_manifest`,
 `source_refused` (a connector source failing a read-only check),
 `invalid_request` (a malformed `app_id`), `apps_unavailable` (no SQL store),
 `invalid_bundle` (entry file not UTF-8),
-`bundle_too_large` (> 2 MB after inlining), `forbidden_api` (`RTCPeerConnection`,
+`forbidden_markup` (`<iframe>`, `<frame>`, `<frameset>`, `<object>`,
+`<embed>`, `<portal>`, `<fencedframe>`, `srcdoc`), `bundle_too_large` (> 2 MB after inlining), `forbidden_api` (`RTCPeerConnection`,
 `RTCDataChannel`, `WebSocket`, `eval`, `new Function`), `remote_url` (a script,
 style, image or font that is not inline or `data:`; also any `src`, `href`,
 `action` or `srcset` in markup pointing at a remote or `javascript:` URL,
 `<a href="https://…">` included: links go through the `open` message),
 `missing_file`. Code inside `<script>` is not scanned for URLs (the CSP
-governs it) but is scanned for the forbidden names.
-
-Registration inlines the platform shim (`app/gateway/apps/kit/omni-shim.js`, a
-byte copy of `frontend/src/core/apps/shim/omni-shim.js` that a test keeps
-identical) as the document's FIRST script, after the scan (the shim names the
-APIs it removes) and before the size check: the 2 MB cap includes it.
+governs it) but is scanned for the forbidden names and frame markup. The scan
+is defence in depth: a name built from strings at run time dodges it; the
+CSP's Trusted Types and the injected shim are the guards.
 
 ## Coding-job app mode (PR 3a)
 

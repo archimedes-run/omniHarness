@@ -116,7 +116,7 @@ def test_an_app_request_writes_the_kit_checks_the_mock_build_and_registers_it_fo
     # The kit, written before the worker started.
     manifest = json.loads(fake.read_text(f"{P}/omni-app.json"))
     assert list(manifest["sources"]) == ["calendar", "gh_review", "inbox"] and manifest["sources"]["calendar"]["params"]["tz"] == "Europe/London"
-    for name in ("APP_RULES.md", "omni.d.ts", "graphite.css", "mock-data.json", "omni-app.schema.json", "omni-shim.js"):
+    for name in ("APP_RULES.md", "omni.d.ts", "graphite.css", "mock-data.json", "omni-app.schema.json", "omni-mock.js"):
         assert fake.read_text(f"{P}/omni-kit/{name}"), name
     assert "omni-kit/APP_RULES.md" in fake.read_text("/mnt/user-data/workspace/AGENTS.md")
     # The probe ran once, in app mode, on the MOCK build under the app CSP.
@@ -174,7 +174,7 @@ def test_the_two_megabyte_cap_counts_the_platform_shim(gateway):  # noqa: F811
     files = {n: (FIXTURE / n).read_bytes() for n in ("index.html", "app.css")}
     files["graphite.css"] = app_kit.graphite_css().encode()
     files["app.js"] = (FIXTURE / "app.js").read_bytes()
-    base = len(bundle_mod.inline(files)[0])
+    base = len(bundle_mod.inline(files, platform_shim="")[0])
     # Fits on its own, by 1 KB; the shim (registration adds it first) does not fit.
     padded = (FIXTURE / "app.js").read_text() + "\n// " + "x" * (bundle_mod.BUNDLE_MAX_BYTES - base - 1024)
     fake = SANDBOX["current"] = AppFake(build(app_js=padded))

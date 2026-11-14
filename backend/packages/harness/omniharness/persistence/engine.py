@@ -89,7 +89,7 @@ async def init_engine(
         from sqlalchemy import event
 
         os.makedirs(sqlite_dir or ".", exist_ok=True)
-        _engine = create_async_engine(url, echo=echo, json_serializer=_json_serializer)
+        _engine = create_async_engine(url, echo=echo, json_serializer=_json_serializer, hide_parameters=True)
 
         # Enable WAL on every new connection. SQLite PRAGMA settings are
         # per-connection, so we wire the listener instead of running PRAGMA
@@ -119,9 +119,14 @@ async def init_engine(
             pool_size=pool_size,
             pool_pre_ping=True,
             json_serializer=_json_serializer,
+            hide_parameters=True,
         )
     else:
         raise ValueError(f"Unknown persistence backend: {backend!r}")
+
+    # hide_parameters: a statement's parameters (a projected app payload, a
+    # message, anything a row holds) never appear in an error's text, so a
+    # failed write cannot copy data into a log line or a traceback.
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
@@ -146,7 +151,7 @@ async def init_engine(
             await _auto_create_postgres_db(url)
             # Rebuild engine against the now-existing database
             await _engine.dispose()
-            _engine = create_async_engine(url, echo=echo, pool_size=pool_size, pool_pre_ping=True, json_serializer=_json_serializer)
+            _engine = create_async_engine(url, echo=echo, pool_size=pool_size, pool_pre_ping=True, json_serializer=_json_serializer, hide_parameters=True)
             _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
             async with _engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)

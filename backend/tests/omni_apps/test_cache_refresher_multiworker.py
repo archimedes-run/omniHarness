@@ -50,6 +50,8 @@ def test_one_upstream_claim_across_workers(tmp_path) -> None:
         engines, (a, b) = await _two_repos(tmp_path / "shared.db")
         key = {"owner_id": "o", "app_id": "today", "source": "inbox", "manifest_hash": "h" * 64, "min_interval_s": 60}
         try:
+            assert not await a.claim_upstream(**key), "no grant, no claim (and no row)"
+            await a.create_grant(owner_id="o", app_id="today", manifest_hash="h" * 64, version=1, card_id=None)
             results = await asyncio.gather(*(r.claim_upstream(**key) for r in (a, b, a, b)))
             assert sorted(results) == [False, False, False, True]
         finally:

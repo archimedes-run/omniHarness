@@ -195,7 +195,7 @@ def prompt_lines(ctx: AppContext, brief) -> list[str]:
 @dataclass
 class AppRun:
     result: dict
-    #: The single-file app (without the platform shim), for registration.
+    #: The single-file app, for registration (which re-injects its shim).
     html: bytes | None = None
     manifest: dict | None = None
     published: dict | None = None
@@ -260,11 +260,14 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
     if files is None:
         return AppRun(app_checks.failed_before_probe("the build output could not be bundled", why), manifest=manifest)
     try:
+        # Registration's own inlining: the platform shim first (any shim the
+        # build carried is dropped), the 2 MB cap counted with it.
         html, _ = bundle_mod.inline(files)
-        # The size registration will see: the platform shim included.
-        final, _ = bundle_mod.inline({bundle_mod.ENTRY: html}, prelude=bundle_mod.platform_shim())
     except bundle_mod.BundleError as exc:
         return AppRun(app_checks.failed_before_probe(f"the build does not inline into one app file ({exc.code})", str(exc)[:300]), manifest=manifest)
+    if b"__OMNI_MOCK__" in html:
+        return AppRun(app_checks.failed_before_probe("the build includes the kit's mock shim; the system adds it only to its own mock build"), manifest=manifest)
+    final = html
     bundle_info = {"bytes": len(final), "limit": bundle_mod.BUNDLE_MAX_BYTES}
 
     scan_out = f"/tmp/omni-scan-{uuid.uuid4().hex[:12]}"
@@ -273,7 +276,7 @@ async def run_checks(manager, running, brief, project: str, ctx: AppContext) -> 
     await asyncio.to_thread(ops.sh, f"{B}/rm -f {_q(scan_out)}", timeout=15)
 
     data = app_kit.fixtures(manifest)
-    mock_html, mock_hashes = bundle_mod.inline({bundle_mod.ENTRY: html}, prelude=app_kit.mock_script(data))
+    mock_html, mock_hashes = bundle_mod.inline({bundle_mod.ENTRY: html}, platform_shim=app_kit.mock_script(data))
     mock_text = mock_html.decode("utf-8")
     directory = f"/tmp/omni-app-{uuid.uuid4().hex[:12]}"
     site = f"{directory}/site"

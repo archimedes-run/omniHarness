@@ -21,7 +21,7 @@ import time
 from datetime import UTC, datetime
 
 from app.gateway.apps import bridge, catalog
-from app.gateway.apps.service import AppNotFound, load_app
+from app.gateway.apps.service import AppNotFound, served
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def tick(app_state, repo, *, holder: str = HOLDER) -> int:
     now = time.time()
     for owner_id, app_id in await repo.opened_since(now - OPENED_WITHIN_S):
         try:
-            app = load_app(owner_id, app_id)
+            app = await served(repo, owner_id, app_id)
         except AppNotFound:
             continue
         if not await repo.active_grant(owner_id=owner_id, app_id=app_id, manifest_hash=app.manifest_hash):
@@ -73,5 +73,17 @@ async def run_forever(app_state) -> None:
             await tick(app_state, repo)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - one bad pass must not end the loop
-            logger.warning("apps refresher pass failed", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - one bad pass must not end the loop
+            # The type only: an error's text or traceback can carry a row's data.
+            logger.warning("apps refresher pass failed (%s)", type(exc).__name__)
+
+
+async def stop(task: asyncio.Task | None, *, timeout: float) -> None:
+    """Cancel the refresher loop and every background bridge refresh, and wait
+    for them to finish (bounded): none of them may still be inside a database
+    session when the engine closes. Results and errors are ignored."""
+    tasks = [t for t in (task, *bridge.background_tasks()) if t is not None and not t.done()]
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout)

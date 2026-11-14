@@ -34,7 +34,7 @@ def today_manifest(**extra) -> dict:
 
 
 def test_the_gateway_shim_and_types_are_byte_copies_of_the_frontends():
-    assert bundle_mod.PLATFORM_SHIM_PATH.read_bytes() == (FRONTEND_SHIM / "omni-shim.js").read_bytes()
+    assert bundle_mod.SHIM_FILE.read_bytes() == (FRONTEND_SHIM / "omni-shim.js").read_bytes()
     assert app_kit.DTS_PATH.read_bytes() == (FRONTEND_SHIM / "omni.d.ts").read_bytes()
 
 
@@ -49,7 +49,7 @@ def test_graphite_tokens_are_generated_from_globals_css_both_themes():
 
 
 def test_the_mock_shim_has_the_real_shims_tile_words():
-    real = bundle_mod.platform_shim()
+    real = bundle_mod.shim()
     mock = app_kit.MOCK_SHIM_PATH.read_text()
 
     def body(text: str, name: str) -> str:
@@ -113,14 +113,14 @@ def test_the_projects_manifest_is_read_back_strictly():
 
 def test_the_kit_has_every_file_and_types_generated_from_the_sources():
     files = app_kit.kit_files(today_manifest())
-    assert sorted(files) == sorted(f"omni-kit/{n}" for n in ("APP_RULES.md", "omni.d.ts", "graphite.css", "mock-data.json", "omni-app.schema.json", "omni-shim.js"))
+    assert sorted(files) == sorted(f"omni-kit/{n}" for n in ("APP_RULES.md", "omni.d.ts", "graphite.css", "mock-data.json", "omni-app.schema.json", "omni-mock.js"))
     dts = files["omni-kit/omni.d.ts"]
     assert 'calendar: CatalogData["googlecalendar.events_today"];' in dts and 'inbox: CatalogData["gmail.unread_subjects"];' in dts
     assert "export interface OmniSources {}" not in dts
     schema = json.loads(files["omni-kit/omni-app.schema.json"])
     uses = [e["properties"]["use"]["const"] for e in schema["properties"]["sources"]["additionalProperties"]["oneOf"]]
     assert "gmail.unread_subjects" in uses and len(uses) == 6
-    assert files["omni-kit/omni-shim.js"].startswith("/* A COPY for reading only")
+    assert "__OMNI_MOCK__" in files["omni-kit/omni-mock.js"] and "OmniHarness platform shim" not in files["omni-kit/omni-mock.js"]
     rules = files["omni-kit/APP_RULES.md"]
     for rule in ("No network of any kind", "innerHTML", "dangerouslySetInnerHTML", "<iframe>", "omni.open", "Graphite only", "360 px", "AA", "inline SVG", "omni.d.ts", "2 MB"):
         assert rule in rules, rule
@@ -148,27 +148,13 @@ def test_the_mock_script_cannot_be_closed_by_its_data():
 # -- the bundle with the platform shim --------------------------------------------------
 
 
-def test_registration_inlines_the_platform_shim_first_and_hashes_it():
+def test_the_mock_build_replaces_the_platform_shim_with_the_mock():
     files = {"index.html": b'<!doctype html><html><head><title>x</title></head><body><script src="./a.js"></script></body></html>', "a.js": b"document.title = 'ok';"}
-    html, hashes = bundle_mod.inline(files, prelude=bundle_mod.platform_shim())
-    text = html.decode()
-    assert text.index("OmniHarness platform shim") < text.index("document.title")
-    assert len(hashes) == 2
-    # The shim names the APIs it removes; the scan runs before it is added.
-    assert "RTCPeerConnection" in text
-    with pytest.raises(bundle_mod.BundleError) as exc:
-        bundle_mod.inline({"index.html": b"<html><head></head><body><script>new RTCPeerConnection()</script></body></html>"}, prelude=bundle_mod.platform_shim())
-    assert exc.value.code == "forbidden_api"
-
-
-def test_the_size_cap_counts_the_platform_shim():
-    shim = len(bundle_mod.platform_shim().encode())
-    room = bundle_mod.BUNDLE_MAX_BYTES - 200
-    files = {"index.html": b"<html><head></head><body><p>" + b"x" * room + b"</p></body></html>"}
-    bundle_mod.inline(files)  # fits without the shim
-    with pytest.raises(bundle_mod.BundleError) as exc:
-        bundle_mod.inline(files, prelude=bundle_mod.platform_shim())
-    assert exc.value.code == "bundle_too_large" and shim > 200
+    app, _ = bundle_mod.inline(files)
+    assert app.decode().index("OmniHarness platform shim") < app.decode().index("document.title")
+    mock, hashes = bundle_mod.inline({"index.html": app}, platform_shim=app_kit.mock_script({"reference": app_kit.REFERENCE, "reason": "r", "sources": {}}))
+    text = mock.decode()
+    assert "OmniHarness platform shim" not in text and text.index("__OMNI_MOCK__") < text.index("document.title") and len(hashes) == 2
 
 
 # -- the source scan ----------------------------------------------------------------------

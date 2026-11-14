@@ -50,7 +50,7 @@ def _site(root: Path, name: str, js_change, css_change) -> list[str]:
     manifest = app_kit.read_manifest((FIXTURE / "omni-app.json").read_text())
     html, _ = bundle_mod.inline(files)
     data = app_kit.fixtures(manifest)
-    mock, hashes = bundle_mod.inline({"index.html": html}, prelude=app_kit.mock_script(data))
+    mock, hashes = bundle_mod.inline({"index.html": html}, platform_shim=app_kit.mock_script(data))
     d = root / name
     (d / "site").mkdir(parents=True)
     (d / "site" / "index.html").write_bytes(mock)

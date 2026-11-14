@@ -714,6 +714,11 @@ def app_restored_from(user_id: str, app_id: str) -> dict[int, int]:
     return {int(r["version"]): int(r["restored_from"]) for r in _read_lines(_app_history_file(user_id, app_id)) if isinstance(r.get("version"), int) and isinstance(r.get("restored_from"), int)}
 
 
+def app_held_versions(user_id: str, app_id: str) -> set[int]:
+    """Versions written held (served only once the owner approves them)."""
+    return {int(r["version"]) for r in _read_lines(_app_history_file(user_id, app_id)) if isinstance(r.get("version"), int) and r.get("held") is True}
+
+
 def app_ids(user_id: str) -> list[str]:
     directory = _app_root(user_id) / APP_VERSIONS_DIR
     if not directory.is_dir():
@@ -721,10 +726,13 @@ def app_ids(user_id: str) -> list[str]:
     return sorted(p.stem for p in directory.glob("*.jsonl") if _APP_ID.match(p.stem))
 
 
-def write_app(user_id: str, app_id: str, snapshot: dict, *, who: str, source: str, base_version: int | None = None, restored_from: int | None = None) -> Version:
+def write_app(user_id: str, app_id: str, snapshot: dict, *, who: str, source: str, base_version: int | None = None, restored_from: int | None = None, held: bool = False) -> Version:
     """Record a new version of an app. The snapshot's bundle must already be
     stored (write_app_bundle). Refused (StaleWriteError) when `base_version`
-    is given and is not the current version."""
+    is given and is not the current version.
+
+    `held`: the version is not served until the owner's button approves it
+    (a registration led by content); the last served version keeps serving."""
     if source not in ("code_job", "undo"):
         raise ValueError("an app version is written only by a verified coding job or a Restore")
     if not isinstance(snapshot, dict) or not _BUNDLE_HASH.match(str(snapshot.get("bundle_hash", ""))):
@@ -744,6 +752,8 @@ def write_app(user_id: str, app_id: str, snapshot: dict, *, who: str, source: st
         record = {"app_id": app_id, "version": current + 1, "at": now, "who": who, "source": source, "changed": changed, "snapshot": snapshot}
         if restored_from is not None:
             record["restored_from"] = restored_from
+        if held:
+            record["held"] = True
         _append(history, record)
         return Version(version=current + 1, at=now, who=who, source=source, changed=changed, snapshot=snapshot)
 

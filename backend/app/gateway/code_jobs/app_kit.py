@@ -11,13 +11,14 @@ Before the worker starts, the gateway writes into the project:
                                 both themes, plus dashboard primitives
   omni-kit/mock-data.json       sample data for every source in four states
   omni-kit/omni-app.schema.json the manifest's JSON Schema, from the catalog
-  omni-kit/omni-shim.js         a read-only copy of the platform shim
+  omni-kit/omni-mock.js         the mock shim with the sample data (never in index.html)
 
 The kit is the worker's material, not the system's evidence: the system's
 checks regenerate the sample data and the mock shim from the FINAL manifest
 and its own tracked copies, whatever the worker did to these files. The
 platform shim that ships is inlined by registration from the gateway's own
-copy (app.gateway.apps.bundle.PLATFORM_SHIM_PATH), never from the project.
+copy (app.gateway.apps.bundle.SHIM_FILE), never from the project; the kit
+carries only the MOCK shim (omni-kit/omni-mock.js) for trying the page locally.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ TOKENS_PATH = HERE / "graphite-tokens.css"
 PRIMITIVES_PATH = HERE / "primitives.css"
 MOCK_SHIM_PATH = HERE / "omni-mock.js"
 RULES_PATH = HERE / "APP_RULES.md"
-DTS_PATH = bundle_mod.PLATFORM_SHIM_PATH.with_name("omni.d.ts")
+DTS_PATH = bundle_mod.SHIM_FILE.with_name("omni.d.ts")
 #: The day the sample data is written for; the mock shim moves it to today.
 REFERENCE = "2026-01-15T00:00:00+00:00"
 #: The failure every source reports in the `failed` state (a check reads it back).
@@ -254,7 +255,7 @@ def kit_files(manifest: dict) -> dict[str, str]:
         f"{KIT_DIR}/graphite.css": graphite_css(),
         f"{KIT_DIR}/mock-data.json": json.dumps(mock_data_file(manifest), indent=2, ensure_ascii=False) + "\n",
         f"{KIT_DIR}/omni-app.schema.json": json.dumps(manifest_schema(), indent=2) + "\n",
-        f"{KIT_DIR}/omni-shim.js": "/* A COPY for reading only: the system inlines its own copy when it registers the app. Never include or edit it. */\n" + bundle_mod.platform_shim(),
+        f"{KIT_DIR}/omni-mock.js": "/* The kit's MOCK shim with sample data, for trying the page by hand (?state=, ?theme=). Never reference it from index.html:\n * the system adds it to its own mock build, and registration adds the real platform shim. */\n" + mock_script(fixtures(manifest)),
     }
 
 

@@ -24,9 +24,9 @@ def test_inlines_scripts_styles_and_images_and_hashes_each_script() -> None:
     }
     html, hashes = bundle.inline(files)
     text = html.decode()
-    assert "a.js" not in text and "s.css" not in text and 'src="data:image/png;base64,' in text and 'url("data:image/png;base64,' in text
+    assert 'src="a.js"' not in text and 's.css"' not in text and 'src="data:image/png;base64,' in text and 'url("data:image/png;base64,' in text
     assert "<script>var a='<\\/script>';</script>" in text
-    assert hashes == [_sha("var a='<\\/script>';"), _sha("var b=1;")]
+    assert hashes == [_sha(bundle.shim()), _sha("var a='<\\/script>';"), _sha("var b=1;")]
 
 
 def test_csp_is_exact() -> None:
@@ -34,7 +34,7 @@ def test_csp_is_exact() -> None:
         "sandbox allow-scripts; default-src 'none'; script-src 'sha256-AAA' 'sha256-BBB'; style-src 'unsafe-inline'; "
         "img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; "
         "child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; "
-        "form-action 'none'; frame-ancestors 'self'"
+        "form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'"
     )
     assert "script-src 'none';" in bundle.csp([])
 

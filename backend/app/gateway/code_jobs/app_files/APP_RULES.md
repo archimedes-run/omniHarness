@@ -16,7 +16,7 @@ measure and refuses to register an app that breaks them.
 | `graphite.css` | The Graphite design tokens for light and dark as CSS variables, plus dashboard primitives (`omni-grid`, `omni-tile`, `omni-kpi`, `omni-list`, `omni-badge`, `omni-state`, `omni-chart`, ...). Import it first. |
 | `mock-data.json` | Sample data for every source in the four states. The system builds your app against it; read it to see real shapes. |
 | `omni-app.schema.json` | The JSON Schema of `omni-app.json`. |
-| `omni-shim.js` | A copy of the platform shim, for reading only. The system inlines its own copy as the first script when it registers the app; never include, copy or edit it. |
+| `omni-mock.js` | The MOCK shim with the sample data, for trying the page by hand. Never reference it from `index.html`: the system adds it to its own mock build, and registration adds the real platform shim as the first script (you never get, copy or write the real one). |
 
 `omni-app.json` (in the project folder) is the app's manifest: its name and
 the data sources it reads. The system wrote a starter. You may change `name`
@@ -33,6 +33,10 @@ entries in the schema. The system validates it.
   `build.assetsInlineLimit: 100000000`, and
   `build.rollupOptions.output.inlineDynamicImports: true`.
 - Use `window.omni` as a global. Do not add any script that defines it.
+- **React (Vite `react-ts`) or plain DOM code only** (`createElement`,
+  `textContent`, `setAttribute`). No Svelte, Vue, Lit, Alpine or other
+  frameworks or template libraries: they build HTML from strings, which the
+  app's Trusted Types policy refuses.
 - TypeScript: add `"omni-kit/omni.d.ts"` to `tsconfig` `include` (or
   `/// <reference path="../omni-kit/omni.d.ts" />` in your entry file).
 
@@ -47,11 +51,14 @@ entries in the schema. The system validates it.
   `new Function`, `setTimeout("string")`. The app runs under Trusted Types
   with no policy, so these throw. Build DOM with `createElement` /
   `textContent`, or JSX.
-- **No frames or popups**: no `<iframe>`, `srcdoc`, `<object>`, `<embed>`,
-  `window.open`, `target="_blank"`, forms that submit.
+- **No frames or popups**: no `<iframe>`, `<frame>`, `<frameset>`, `<object>`,
+  `<embed>`, `<portal>`, `<fencedframe>`, `srcdoc` (registration refuses the
+  bundle: `forbidden_markup`), no `window.open`, `target="_blank"`, forms that
+  submit.
 - **No navigation**: every link goes through `omni.open(url)` (plain
   `<a href>` clicks are routed there for you). Only `https` links on the
-  hosts of your sources' catalog entries, or `/workspace/...`, open.
+  hosts of your sources' catalog entries, and the links the data itself
+  carries (`link` fields), open; other workspace paths are refused.
 - No `localStorage`, `sessionStorage`, cookies or IndexedDB (the frame has an
   opaque origin; they throw). Keep state in memory.
 - No chart, UI or icon library that fetches, uses `eval`, or draws on canvas

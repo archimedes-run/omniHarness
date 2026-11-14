@@ -131,15 +131,18 @@ async def fetch_and_record(app_state, repo, app: AppRecord, name: str) -> None:
         state, data, reason = await fetch(app_state, app.owner_id, entry, spec)
     except SourceRefused as exc:
         state, data, reason = "failed", None, _sanitise(f"Refused: {exc}")
-    await repo.record_answer(
-        owner_id=app.owner_id,
-        app_id=app.app_id,
-        source=name,
-        manifest_hash=app.manifest_hash,
-        state=state,
-        data_json=json.dumps(data, separators=(",", ":")) if data is not None else None,
-        reason=reason,
-    )
+    try:
+        await repo.record_answer(
+            owner_id=app.owner_id,
+            app_id=app.app_id,
+            source=name,
+            manifest_hash=app.manifest_hash,
+            state=state,
+            data_json=json.dumps(data, separators=(",", ":")) if data is not None else None,
+            reason=reason,
+        )
+    except Exception as exc:  # noqa: BLE001 - the error's text can carry the data being written
+        logger.warning("app %s source %s: the answer could not be stored (%s)", app.app_id, name, type(exc).__name__)
 
 
 def result(name: str, spec: dict, row: dict | None) -> dict:
@@ -154,8 +157,23 @@ def result(name: str, spec: dict, row: dict | None) -> dict:
     return {"source": name, "state": state, "data": data, "fetched_at": iso(fetched), "stale": stale, "reason": row.get("reason") if state == "failed" else None}
 
 
+def background_tasks() -> list[asyncio.Task]:
+    """Background refreshes still in flight (stopped at shutdown)."""
+    return list(_BACKGROUND)
+
+
+async def _quiet(coro) -> None:
+    """A background refresh: any error is logged by type only, never by text."""
+    try:
+        await coro
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("an app background refresh failed (%s)", type(exc).__name__)
+
+
 def _background(app_state, repo, app: AppRecord, name: str) -> None:
-    task = asyncio.create_task(fetch_and_record(app_state, repo, app, name))
+    task = asyncio.create_task(_quiet(fetch_and_record(app_state, repo, app, name)))
     _BACKGROUND.add(task)
     task.add_done_callback(_BACKGROUND.discard)
 
