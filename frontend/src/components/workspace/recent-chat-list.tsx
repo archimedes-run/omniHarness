@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  Archive,
   Download,
+  FolderInput,
   FileJson,
   FileText,
   MoreHorizontal,
@@ -47,8 +49,10 @@ import {
   exportThreadAsJSON,
   exportThreadAsMarkdown,
 } from "@/core/threads/export";
+import { archivePatch, TESTS_FOLDER } from "@/core/threads/organise";
 import {
   useDeleteThread,
+  useOrganiseThread,
   useRenameThread,
   useThreads,
 } from "@/core/threads/queries";
@@ -70,6 +74,16 @@ export function RecentChatList() {
   const { data: threads = [] } = useThreads();
   const { mutate: deleteThread } = useDeleteThread();
   const { mutate: renameThread } = useRenameThread();
+  const { mutate: organiseThread } = useOrganiseThread();
+  // Archived chats leave Recent (the list hides them); nothing is deleted.
+  const handleArchive = useCallback(
+    (threadId: string, folder?: string) =>
+      organiseThread(
+        { threadId, patch: archivePatch(folder) },
+        { onError: (e) => toast.error(e.message) },
+      ),
+    [organiseThread],
+  );
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
@@ -248,6 +262,22 @@ export function RecentChatList() {
                                 </DropdownMenuSubContent>
                               </DropdownMenuSub>
                               <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid="chat-archive"
+                                onSelect={() => handleArchive(thread.thread_id)}
+                              >
+                                <Archive className="text-current" />
+                                <span>{t.chats.archive}</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                data-testid="chat-move-tests"
+                                onSelect={() =>
+                                  handleArchive(thread.thread_id, TESTS_FOLDER)
+                                }
+                              >
+                                <FolderInput className="text-current" />
+                                <span>{t.chats.moveToTests}</span>
+                              </DropdownMenuItem>
                               <DropdownMenuItem
                                 onSelect={() => handleDelete(thread.thread_id)}
                               >
