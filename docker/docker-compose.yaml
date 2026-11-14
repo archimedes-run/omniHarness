@@ -138,10 +138,16 @@ services:
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
         UV_EXTRAS: ${UV_EXTRAS:-}
     container_name: omni-harness-gateway
+    # The gateway's own shutdown has one deadline, 25 s by default
+    # (OMNI_HARNESS_SHUTDOWN_DEADLINE_SECONDS, app/gateway/shutdown.py), with its
+    # database closes reserved: this grace period leaves it room before SIGKILL.
+    # `exec` so uvicorn (through uv) gets the SIGTERM itself: as a child of
+    # `sh -c` it never saw it, and every stop ended in SIGKILL after the grace.
+    stop_grace_period: 30s
     # Shared across workers: each worker mints its own token otherwise, and
     # internal loopback calls (channels, trigger injection) 401 whenever the
     # kernel hands the connection to a different worker than minted it.
-    command: sh -c "export OMNI_HARNESS_INTERNAL_AUTH_TOKEN=${OMNI_HARNESS_INTERNAL_AUTH_TOKEN:-$$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')} && cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-4}"
+    command: sh -c "export OMNI_HARNESS_INTERNAL_AUTH_TOKEN=${OMNI_HARNESS_INTERNAL_AUTH_TOKEN:-$$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')} && cd backend && export PYTHONPATH=. && exec uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-4}"
     volumes:
       # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
       - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro

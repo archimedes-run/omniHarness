@@ -206,7 +206,13 @@ services:
         UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
     container_name: omni-harness-gateway
-    command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && mkdir -p .omni-harness && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude=/app/backend/.omni-harness; } >> /app/logs/gateway.console.log 2>&1"
+    # The gateway's own shutdown has one deadline, 25 s by default
+    # (OMNI_HARNESS_SHUTDOWN_DEADLINE_SECONDS, app/gateway/shutdown.py), with its
+    # database closes reserved: this grace period leaves it room before SIGKILL.
+    # `exec` so uvicorn (through uv) gets the SIGTERM itself: as a child of
+    # `sh -c` it never saw it, and every stop ended in SIGKILL after the grace.
+    stop_grace_period: 30s
+    command: sh -c "{ cd backend && (uv sync || (echo '[startup] uv sync failed; recreating .venv and retrying once' && uv venv --allow-existing .venv && uv sync)) && mkdir -p .omni-harness && export PYTHONPATH=. && exec uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude=/app/backend/.omni-harness; } >> /app/logs/gateway.console.log 2>&1"
     volumes:
       # The watcher token (REQUIRED; scripts/ensure-watcher-token.sh creates it), read-only.
       - ${OMNI_HARNESS_SECRETS_DIR:-${HOME:?HOME must be set}/.omni-harness-secrets}/watcher.token:/run/secrets/watcher.token:ro

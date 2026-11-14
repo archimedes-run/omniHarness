@@ -265,7 +265,9 @@ def pytest_runtest_setup(item):
         sys.stderr.write(reason + "\n")
         sys.stderr.flush()
         os._exit(1)
-    pytest.exit(reason, returncode=1)
+    # A serial run has no fresh process to move to: each later test fails
+    # here, naming the cause, rather than on the state left behind.
+    pytest.fail(reason, pytrace=False)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -281,7 +283,7 @@ def pytest_runtest_protocol(item, nextitem):
         def _expired(signum, frame):
             faulthandler.dump_traceback(all_threads=True)
             _TAINTED_BY.append(item.nodeid)
-            raise HardTestTimeout(f"{item.nodeid} ran past {_HARD_TIMEOUT:.0f} s (OMNI_TEST_HARD_TIMEOUT); this worker restarts before its next test, which is reported as crashed")
+            raise HardTestTimeout(f"{item.nodeid} ran past {_HARD_TIMEOUT:.0f} s (OMNI_TEST_HARD_TIMEOUT); later tests in this process do not run beside it (under xdist the worker restarts and its next test is reported as crashed)")
 
         previous = signal.signal(signal.SIGALRM, _expired)
         signal.setitimer(signal.ITIMER_REAL, _HARD_TIMEOUT)

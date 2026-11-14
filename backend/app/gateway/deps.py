@@ -8,7 +8,6 @@ Initialization is handled directly in ``app.py`` via :class:`AsyncExitStack`.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -42,56 +41,27 @@ def get_config(request: Request) -> AppConfig:
     return config
 
 
-#: How long each runtime resource (the stream bridge, the checkpointer, the
-#: store, the database engine) gets to close at shutdown. A close can wait on
-#: something outside the gateway's control: a database connection whose
-#: worker thread has died never answers again (issue #192). Past the bound
-#: the close is logged and the shutdown carries on, so a worker's exit or a
-#: reload never hangs.
-RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 5.0
-
-
-async def bounded_shutdown_step(step: Any, what: str, timeout: float) -> bool:
-    """Run one shutdown step for at most ``timeout`` seconds; True if it finished.
-
-    NOT asyncio.wait_for: that cancels a step past its bound and then waits
-    for the cancelled step to finish, and a step stuck on a dead connection
-    does not finish when cancelled either (aiosqlite's close awaits its stop
-    in a finally, on the same dead thread). Past the bound the step is
-    cancelled and left behind; the shutdown carries on.
-    """
-    task = asyncio.ensure_future(step)
-    done, _ = await asyncio.wait({task}, timeout=timeout)
-    if not done:
-        task.cancel()
-        task.add_done_callback(lambda t: t.cancelled() or t.exception())
-        logger.warning("Shutdown: %s exceeded %.1fs; proceeding without it.", what, timeout)
-        return False
-    if not task.cancelled() and task.exception() is not None:
-        logger.warning("Shutdown: %s failed: %r", what, task.exception())
-    return True
-
-
-async def _bounded_close(close: Any, what: str) -> None:
-    """Await one runtime resource's close, within RUNTIME_SHUTDOWN_TIMEOUT_SECONDS."""
-    await bounded_shutdown_step(close, f"closing the {what}", RUNTIME_SHUTDOWN_TIMEOUT_SECONDS)
-
-
 @asynccontextmanager
 async def _bounded_context(cm: Any, what: str) -> AsyncGenerator[Any, None]:
-    """Enter ``cm`` as usual; its exit is bounded (_bounded_close)."""
+    """Enter ``cm`` as usual; its exit is a bounded data close
+    (app.gateway.shutdown: a close can wait on a database connection whose
+    worker thread has died, which never answers; issue #192)."""
+    from app.gateway import shutdown
+
     value = await cm.__aenter__()
     try:
         yield value
     except BaseException as exc:
-        await _bounded_close(cm.__aexit__(type(exc), exc, exc.__traceback__), what)
+        await shutdown.data_step(cm.__aexit__(type(exc), exc, exc.__traceback__), f"closing the {what}")
         raise
     else:
-        await _bounded_close(cm.__aexit__(None, None, None), what)
+        await shutdown.data_step(cm.__aexit__(None, None, None), f"closing the {what}")
 
 
 async def _close_engine_bounded(close_engine: Any) -> None:
-    await _bounded_close(close_engine(), "database engine")
+    from app.gateway import shutdown
+
+    await shutdown.data_step(close_engine(), "closing the database engine")
     from omniharness.persistence import engine as engine_module
 
     # A dispose cut off by the bound leaves the module pointing at an engine

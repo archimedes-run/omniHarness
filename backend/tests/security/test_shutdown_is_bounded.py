@@ -33,11 +33,11 @@ SHUTDOWN_BOUND_S = 10.0
 def short_bounds(monkeypatch):
     import sys
 
-    import app.gateway.deps as deps
-
     gateway_app = sys.modules["app.gateway.app"]  # the module (the package exports a FastAPI named app)
     monkeypatch.setattr(gateway_app, "_SHUTDOWN_HOOK_TIMEOUT_SECONDS", STEP_BOUND_S)
-    monkeypatch.setattr(deps, "RUNTIME_SHUTDOWN_TIMEOUT_SECONDS", STEP_BOUND_S)
+    monkeypatch.setenv("OMNI_HARNESS_SHUTDOWN_STEP_SECONDS", str(STEP_BOUND_S))
+    monkeypatch.setenv("OMNI_HARNESS_SHUTDOWN_DEADLINE_SECONDS", "8")
+    monkeypatch.setenv("OMNI_HARNESS_SHUTDOWN_DATA_RESERVE_SECONDS", "3")
 
 
 def _shut_down(client) -> float:
@@ -163,3 +163,112 @@ def test_shutdown_ends_with_a_trigger_engine_that_will_not_stop(make_gateway, sh
     _app, client = make_gateway()
     took = _shut_down(client)
     assert took < SHUTDOWN_BOUND_S, "the shutdown hung on the trigger engine's stop"
+
+
+def test_stalled_services_never_take_the_data_closes_time(make_gateway, monkeypatch):
+    """One deadline for the whole shutdown, inside the container's stop grace
+    period. Every stoppable service stalls at once; the data closes still run,
+    and finish, inside the deadline."""
+    import sys
+    from types import SimpleNamespace
+
+    import omniharness.persistence.engine as engine_module
+    from app.gateway.preview_sessions import PreviewSessionManager
+
+    deadline, step = 5.0, 2.0
+    monkeypatch.setenv("OMNI_HARNESS_SHUTDOWN_DEADLINE_SECONDS", str(deadline))
+    monkeypatch.setenv("OMNI_HARNESS_SHUTDOWN_DATA_RESERVE_SECONDS", "2.5")
+    monkeypatch.setenv("OMNI_HARNESS_SHUTDOWN_STEP_SECONDS", str(step))
+    gateway_app = sys.modules["app.gateway.app"]
+    monkeypatch.setattr(gateway_app, "_SHUTDOWN_HOOK_TIMEOUT_SECONDS", step)
+
+    async def started(_app):
+        return SimpleNamespace(lock=None)
+
+    import app.gateway.questions as questions
+    import app.gateway.resume as resume
+
+    monkeypatch.setattr(gateway_app, "_start_trigger_engine", started)
+    monkeypatch.setattr("app.trigger_engine.lifespan.stop", _will_not_stop)
+    monkeypatch.setattr("app.channels.service.stop_channel_service", _will_not_stop)
+    monkeypatch.setattr(PreviewSessionManager, "close", _will_not_stop)
+    monkeypatch.setattr(resume, "resume_expired_forever", _will_not_stop)
+    monkeypatch.setattr(questions, "sweep_forever", _will_not_stop)
+
+    closed: list[float] = []
+    real_close = engine_module.close_engine
+
+    async def slow_close():
+        await asyncio.sleep(0.4)  # a dispose that needs a moment, as one with connections out does
+        await real_close()
+        closed.append(time.monotonic())
+
+    monkeypatch.setattr(engine_module, "close_engine", slow_close)
+    app, client = make_gateway()
+    conn = app.state.checkpointer.conn
+    started_at = time.monotonic()
+    took = _shut_down(client)
+    assert took < deadline + 2, f"the shutdown ran past its deadline ({took:.1f}s)"
+    assert closed and closed[0] - started_at < deadline, "the stalled services took the database engine's close time"
+    assert conn._connection is None, "the checkpointer was not closed inside the deadline"
+
+
+def test_a_healthy_shutdown_abandons_nothing_and_keeps_the_data(make_gateway, caplog):
+    from _security_helpers import OWNER, login
+
+    from app.gateway import shutdown
+
+    app, client = make_gateway()
+    tid = client.post("/api/threads", json={}).json()["thread_id"]
+    with caplog.at_level("WARNING", logger="app.gateway.shutdown"):
+        took = _shut_down(client)
+    assert took < SHUTDOWN_BOUND_S
+    assert shutdown.abandoned() == [], f"a healthy shutdown abandoned {shutdown.abandoned()}"
+    assert not [r for r in caplog.records if r.name == "app.gateway.shutdown"], [r.getMessage() for r in caplog.records]
+
+    again, _ = make_gateway(initialize=False)
+    owner, resp = login(again, *OWNER)
+    with owner:
+        assert resp.status_code == 200, resp.text
+        assert owner.get(f"/api/threads/{tid}").status_code == 200, "the thread was not kept across the shutdown"
+
+
+_PROCESS_EXIT_SCRIPT = """
+import asyncio, logging, os
+logging.basicConfig(level=logging.WARNING)
+os.environ["OMNI_HARNESS_SHUTDOWN_STEP_SECONDS"] = "0.5"
+os.environ["OMNI_HARNESS_SHUTDOWN_DEADLINE_SECONDS"] = "3"
+os.environ["OMNI_HARNESS_SHUTDOWN_DATA_RESERVE_SECONDS"] = "1"
+from app.gateway import shutdown
+
+async def needs_three_cancels():
+    for _ in range(3):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            continue  # its cleanup awaits again, cancel after cancel
+
+async def lifespan_shutdown():
+    shutdown.begin()
+    await shutdown.service_step(needs_three_cancels(), "a step that needs three cancels")
+    print("detached:", await shutdown.finish(), flush=True)
+
+asyncio.run(lifespan_shutdown())  # as uvicorn runs it: cancels what is left and waits for it
+print("process exiting", flush=True)
+"""
+
+
+def test_the_process_exits_with_a_step_that_will_not_stop():
+    """asyncio.run (uvicorn) cancels every task left on the loop once more and
+    waits for them with no limit: an abandoned step that keeps awaiting after
+    that held the PROCESS at exit (a --reload supervisor then blocks)."""
+    import subprocess
+    import sys
+
+    try:
+        proc = subprocess.run([sys.executable, "-c", _PROCESS_EXIT_SCRIPT], capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the process did not exit: the loop's close waited on a step that would not stop")
+    assert proc.returncode == 0, proc.stderr
+    assert "process exiting" in proc.stdout, proc.stdout + proc.stderr
+    assert "a step that needs three cancels" in proc.stdout, "the step was not detached; this test proves nothing"
