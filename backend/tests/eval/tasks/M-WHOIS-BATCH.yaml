@@ -1,0 +1,48 @@
+id: M-WHOIS-BATCH
+title: Searches made at once share the turn's budget; past it the lead must answer
+mock_only: true
+source: live chat 2026-11-14 (budget per turn, batch calls)
+mode: thinking
+prompt: who is Jane Roe
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- max_lookups:
+    searches: 6
+- answer_contains:
+    values:
+    - Jane Roe
+    - Stopped early
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: jane roe biography
+    - name: web_search
+      args:
+        query: jane roe career
+    - name: web_search
+      args:
+        query: jane roe awards
+    - name: web_search
+      args:
+        query: jane roe interview
+    - name: web_search
+      args:
+        query: jane roe company
+    - name: web_search
+      args:
+        query: jane roe education
+    - name: web_search
+      args:
+        query: jane roe linkedin
+    - name: web_search
+      args:
+        query: jane roe news
+  - expect:
+      any_contains: research for this question has stopped
+    content: Jane Roe is an example person used in this test. [Profile](https://example.org/jane-roe)
+      and [News](https://news.example.com/jane-roe).

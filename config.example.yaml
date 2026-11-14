@@ -233,21 +233,28 @@ loop_detection:
 # ============================================================================
 # Research Budget
 # ============================================================================
-# Caps on the lead's web lookups in one task (one message and the runs that
-# resume it after a confirmation). Past a cap the lookup is not made and the
-# lead is told to answer with what it has and say what is still uncertain. A
-# repeat of a public web search or fetch already made in the task is answered
-# from that result: no network call, and it does not count. Ledger, file and
-# other private reads are never cached. The research subagent has the same
-# search and fetch caps.
+# ONE research budget per message (the turn and the runs that resume it after a
+# confirmation), shared by every web lookup made for it: the lead directly, the
+# research tool and any subagent. The defaults fit a simple factual question
+# ("who is X"); a request for N items scales the caps (searches = N + 4, up to
+# max_scaled_searches; fetches and time grow with it). Past a cap the lookup is
+# not made and the result says "budget spent: answer now"; after
+# hard_stop_after_refusals refusals the turn's tool calls end and the agent
+# must answer (its reply says it stopped early). A search with the same terms
+# as an earlier one is refused as a repeat. A repeat of a public web search or
+# fetch already made is answered from that result: no network call, and it
+# does not count. Ledger, file and other private reads are never cached.
 
 research_budget:
   enabled: true
-  max_searches: 8         # web_search + image_search per task
-  max_fetches: 10         # web_fetch per task (distinct URLs)
-  max_research: 3         # research (delegated web research) per task
+  max_searches: 6         # web_search + image_search per message (simple question)
+  max_fetches: 4          # web_fetch per message (distinct URLs)
+  max_research: 3         # research (delegated web research) per message
   answer_after_calls: 24  # after this many tool calls, each result says "write the answer now"
-  max_seconds: 150        # research time per task: from 60% each result says "answer now"; past it no lookups
+  max_seconds: 90         # research time per message: from 60% each result says "answer now"; past it no lookups
+  max_scaled_searches: 16 # ceiling for the item-scaled search cap (12 items get 16)
+  seconds_per_extra_search: 8  # research time added per item-scaled search (at most 2x max_seconds)
+  hard_stop_after_refusals: 2  # refused lookups before tool calls end and the agent must answer
   max_page_chars: 12000   # a fetched page is shortened to this for reading (JSON keeps its fields)
   subagent_max_searches: 5  # the research subagent's own, smaller budget per call...
   subagent_max_fetches: 5

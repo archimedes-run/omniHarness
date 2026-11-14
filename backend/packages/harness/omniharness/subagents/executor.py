@@ -429,12 +429,15 @@ class SubagentExecutor:
 
         # Reuse shared middleware composition with lead agent.
         middlewares = build_subagent_runtime_middlewares(app_config=app_config, model_name=self.model_name, lazy_init=True)
-        if self.config.name == "research":
-            # The read-only web researcher keeps the same per-task search and
-            # fetch budget and fetch cache as the lead (spec 009 review).
-            from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware, _budget
+        # Every subagent's web lookups count in the turn's ONE research budget
+        # (omniharness.agents.research_ledger), opened by the lead for this
+        # thread: a `task` subagent had no budget at all, and the research
+        # subagent only its own per-call one (live chat 2026-11-14). The
+        # research subagent also keeps its smaller per-call budget.
+        from omniharness.agents.middlewares.turn_budget_middleware import TurnBudgetMiddleware, _budget
 
-            middlewares.append(TurnBudgetMiddleware(_budget(app_config).for_subagent(), scale_to_items=False))
+        per_call = _budget(app_config).for_subagent() if self.config.name == "research" else _budget(app_config)
+        middlewares.append(TurnBudgetMiddleware(per_call, scale_to_items=False, shared="join"))
 
         # A checkpointer, for the same reason the lead agent gets one: without
         # it a middleware that suspends the run (a permission gate asking the
