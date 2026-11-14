@@ -38,8 +38,11 @@ def _now() -> float:
 
 
 class AppRepository:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession], *, clock=time.time) -> None:
         self._sf = session_factory
+        #: Seconds since the epoch; the request limiter's minute windows are
+        #: read from it (tests inject a fixed clock to cross a window on purpose).
+        self.clock = clock
 
     # ---- grants ----------------------------------------------------------------
 
@@ -220,7 +223,7 @@ class AppRepository:
 
     async def hit(self, *, owner_id: str, app_id: str) -> int:
         """Count one request in this minute's window; returns the count so far."""
-        window = int(_now() // 60)
+        window = int(self.clock() // 60)
         async with self._sf() as s:
             key = (AppRateRow.owner_id == owner_id, AppRateRow.app_id == app_id, AppRateRow.window == window)
             result = await s.execute(update(AppRateRow).where(*key).values(count=AppRateRow.count + 1))
