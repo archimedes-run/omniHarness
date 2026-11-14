@@ -329,3 +329,19 @@ def test_the_exemption_is_for_updates_only(tools, store):
     _, a = _create(tools)
     _, made = _create(tools, messages=_read_then(a["artifact_id"], "artifact_create"))
     assert store.get(OWNER, made["artifact_id"])["lineage"] == "content"
+
+
+def test_only_an_artifact_read_is_exempt_even_with_the_same_id_argument(tools, store):
+    """Another tool called with the artifact's id (an outside tool's result)
+    still taints: the exemption is for artifact_read results only."""
+    _, card = _create(tools)
+    aid = card["artifact_id"]
+    turn = [
+        user_turn("update my brief"),
+        AIMessage(content="", tool_calls=[{"name": "notes_fetch", "args": {"id": aid}, "id": "n1"}]),
+        ToolMessage(content="outside text", tool_call_id="n1", name="notes_fetch"),
+        AIMessage(content="", tool_calls=[{"name": "artifact_update", "args": {}, "id": "u1"}]),
+    ]
+    _update(tools, aid, 1, turn)
+    latest = store.versions(OWNER, aid)[0]
+    assert latest["lineage"] == "content" and latest["lineage_source"] == "notes_fetch"
