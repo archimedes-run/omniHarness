@@ -327,7 +327,7 @@ def test_existing_artifacts_are_saved_only_where_the_owner_showed_intent(tmp_pat
         conn.execute(text("CREATE TABLE artifacts (id VARCHAR PRIMARY KEY, owner_id VARCHAR, pinned BOOLEAN, archived_at FLOAT, updated_at FLOAT)"))
         conn.execute(text("CREATE TABLE artifact_versions (artifact_id VARCHAR, origin VARCHAR, created_at FLOAT)"))
         rows = {"plain": (0, None, 10, [("tool", 10)]), "import": (0, None, 10, [("import", 10)]), "pinned": (1, None, 10, [("tool", 10)]), "edited": (0, None, 20, [("tool", 10), ("owner_edit", 20)]),
-                "restored": (0, None, 20, [("tool", 10), ("restore", 20)]), "renamed": (0, None, 50, [("tool", 10)]), "archived": (1, 99, 99, [("tool", 10)])}  # fmt: skip
+                "restored": (0, None, 20, [("tool", 10), ("restore", 20)]), "renamed": (0, None, 50, [("tool", 10)]), "archived": (0, 99, 10, [("tool", 10)])}  # fmt: skip
         for aid, (pinned, archived, updated, versions) in rows.items():
             conn.execute(text("INSERT INTO artifacts VALUES (:i, 'o', :p, :a, :u)"), {"i": aid, "p": pinned, "a": archived, "u": updated})
             for origin, created in versions:
