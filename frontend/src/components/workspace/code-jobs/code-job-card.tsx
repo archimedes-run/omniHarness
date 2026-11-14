@@ -40,6 +40,7 @@ import { safeField, safeLines } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../artifacts";
+import { SaveToArtifacts } from "../artifacts/store/save-to-artifacts";
 import { COMPOSER_INSET_VAR } from "../chats/use-composer-inset";
 import { useNow } from "../home/use-now";
 
@@ -345,22 +346,25 @@ function JobView({
           }}
           data-testid="code-job-actions"
         >
-          <Button
-            size="sm"
-            onClick={() => {
-              // The built index.html itself: the panel opens it in preview.
-              select(published.path);
-              setOpen(true);
-            }}
-            data-testid="code-job-open-app"
-          >
-            <AppWindowIcon className="size-3.5" aria-hidden />
-            {layoutFailed
-              ? "Open the app (layout check failed)"
-              : layoutNoAnswer
-                ? "Open the app (layout not checked)"
-                : "Open the app"}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                // The built index.html itself: the panel opens it in preview.
+                select(published.path);
+                setOpen(true);
+              }}
+              data-testid="code-job-open-app"
+            >
+              <AppWindowIcon className="size-3.5" aria-hidden />
+              {layoutFailed
+                ? "Open the app (layout check failed)"
+                : layoutNoAnswer
+                  ? "Open the app (layout not checked)"
+                  : "Open the app"}
+            </Button>
+            <SaveToArtifacts threadId={threadId} path={published.path} />
+          </div>
         </div>
       ) : null}
 

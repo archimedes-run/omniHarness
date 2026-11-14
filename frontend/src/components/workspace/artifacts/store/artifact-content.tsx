@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  AppWindowIcon,
+  Globe2Icon,
   BarChart3Icon,
   Code2Icon,
   FileIcon,
@@ -26,9 +28,15 @@ import type {
   ArtifactVersionDetail,
   CodeContent,
 } from "@/core/artifacts/store-api";
-import { contentUrl } from "@/core/artifacts/store-api";
+import {
+  CODE_KINDS,
+  contentUrl,
+  downloadUrl,
+  shotUrl,
+} from "@/core/artifacts/store-api";
 import { useArtifactVersion } from "@/core/artifacts/store-hooks";
 import {
+  fileView,
   previewLines,
   previewMarkdown,
   titleText,
@@ -38,6 +46,7 @@ import { streamdownPlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
 
 import { ArtifactChart } from "./artifact-chart";
+import { LockedFrame } from "./locked-frame";
 
 /**
  * Spec 012 FR-013: static kinds rendered by the host with NO raw-HTML sink.
@@ -55,6 +64,9 @@ export const KIND_ICONS: Record<ArtifactKind, LucideIcon> = {
   chart: BarChart3Icon,
   image: ImageIcon,
   file: FileIcon,
+  html: Globe2Icon,
+  react: AppWindowIcon,
+  webapp: AppWindowIcon,
 };
 
 export function KindIcon({
@@ -292,7 +304,8 @@ export function ArtifactContent({
   artifact: Pick<
     ArtifactSummary,
     "id" | "kind" | "title" | "imported_from" | "origin_thread_id"
-  >;
+  > &
+    Partial<Pick<ArtifactSummary, "media_type">>;
   version: number;
   compact?: boolean;
   /** False in the store grid: a diagram shows its source lines there. */
@@ -303,9 +316,26 @@ export function ArtifactContent({
     artifact.kind === "code" ||
     artifact.kind === "mermaid" ||
     artifact.kind === "chart";
-  const { data, error, isLoading } = useArtifactVersion(artifact.id, version);
+  const code = isCodeKind(artifact.kind);
+  const { data, error, isLoading } = useArtifactVersion(
+    code ? null : artifact.id,
+    version,
+  );
   const title = titleText(artifact.title);
 
+  // Programs: only ever in the locked frame; a preview is the checks'
+  // screenshot (or an icon), never a live frame per card.
+  if (code) {
+    return compact ? (
+      <CodeShot
+        artifactId={artifact.id}
+        version={version}
+        kind={artifact.kind}
+      />
+    ) : (
+      <LockedFrame artifactId={artifact.id} version={version} title={title} />
+    );
+  }
   if (isLoading) {
     return (
       <p className="text-muted-foreground text-sm" role="status">
@@ -344,13 +374,136 @@ export function ArtifactContent({
     );
   }
   return (
-    <a
-      href={contentUrl(artifact.id, version)}
-      className="text-primary text-sm underline"
-      download
+    <FileView
+      artifactId={artifact.id}
+      version={version}
+      mediaType={artifact.media_type ?? data.media_type}
+      title={title}
+      compact={compact}
+    />
+  );
+}
+
+function isCodeKind(kind: ArtifactKind): boolean {
+  return (CODE_KINDS as readonly string[]).includes(kind);
+}
+
+/** A code artifact's preview: the checks' screenshot, else its icon. */
+function CodeShot({
+  artifactId,
+  version,
+  kind,
+}: {
+  artifactId: string;
+  version: number;
+  kind: ArtifactKind;
+}) {
+  const { resolvedTheme } = useTheme();
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div
+        className="text-muted-foreground flex h-24 flex-col items-center justify-center gap-1 text-xs"
+        data-testid="artifact-code-icon"
+      >
+        <KindIcon kind={kind} className="size-8" />
+        Open to view
+      </div>
+    );
+  }
+  return (
+    <img
+      src={shotUrl(
+        artifactId,
+        version,
+        resolvedTheme === "dark" ? "dark" : "light",
+      )}
+      alt=""
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      onError={() => setFailed(true)}
+      data-testid="artifact-code-shot"
+      className="mx-auto block h-auto max-h-32 max-w-full rounded-md object-contain"
+    />
+  );
+}
+
+const TEXT_CAP = 2 * 1024 * 1024;
+
+/** A `file` artifact: text as text, images as images, else a card to
+ * download it. Nothing is ever rendered as a page. */
+function FileView({
+  artifactId,
+  version,
+  mediaType,
+  title,
+  compact,
+}: {
+  artifactId: string;
+  version: number;
+  mediaType: string;
+  title: string;
+  compact: boolean;
+}) {
+  const view = fileView(mediaType);
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (view !== "text") return;
+    let live = true;
+    void fetch(contentUrl(artifactId, version), { credentials: "include" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        const body = await r.text();
+        if (live) setText(body.slice(0, TEXT_CAP));
+      })
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [artifactId, version, view]);
+  if (view === "image") {
+    return (
+      <ImageView
+        src={contentUrl(artifactId, version)}
+        alt={title}
+        compact={compact}
+      />
+    );
+  }
+  if (view === "text" && !failed) {
+    if (text === null) {
+      return (
+        <p className="text-muted-foreground text-sm" role="status">
+          Loading…
+        </p>
+      );
+    }
+    return compact ? (
+      <PlainPreview text={text} mono />
+    ) : (
+      <CodeView text={text} language="text" />
+    );
+  }
+  return (
+    <div
+      className="flex flex-col items-start gap-2"
+      data-testid="artifact-download-to-view"
     >
-      Download this file
-    </a>
+      <KindIcon kind="file" className="text-muted-foreground size-6" />
+      <p className="text-muted-foreground text-sm">
+        This file can&rsquo;t be shown here.
+      </p>
+      {!compact && (
+        <a
+          href={downloadUrl(artifactId, version)}
+          className="text-primary text-sm underline"
+          download
+        >
+          Download to view
+        </a>
+      )}
+    </div>
   );
 }
 

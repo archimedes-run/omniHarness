@@ -53,6 +53,7 @@ import { safeField } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
 import { ArtifactContent, codeOf, KindIcon } from "./artifact-content";
+import { SaveDownload } from "./artifact-save";
 
 /**
  * Spec 012 Slice 1: one artifact, in the chat's side panel or full page at
@@ -290,6 +291,7 @@ function PanelHeader({
           <span data-testid="artifact-note">{note}</span>
         </p>
       )}
+      <SaveDownload artifact={artifact} version={shown} />
       <div className="flex flex-wrap gap-1.5">
         <Button
           type="button"

@@ -33,13 +33,13 @@ import {
 import { cn } from "@/lib/utils";
 
 import { ArtifactContent, KindIcon } from "./artifact-content";
+import { SaveDownload } from "./artifact-save";
 
-type View = "all" | "recent" | "pinned" | "archived" | "chat";
+type View = "saved" | "pinned" | "recent" | "archived" | "unsaved";
 const VIEWS: { id: View; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "recent", label: "Recent" },
+  { id: "saved", label: "Saved" },
   { id: "pinned", label: "Pinned" },
-  { id: "chat", label: "By chat" },
+  { id: "recent", label: "Recent" },
   { id: "archived", label: "Archived" },
 ];
 const KINDS: ArtifactKind[] = [
@@ -49,18 +49,23 @@ const KINDS: ArtifactKind[] = [
   "mermaid",
   "svg",
   "image",
+  "html",
+  "react",
   "file",
 ];
 
 /**
- * Spec 012 FR-034: the Artifact store. Search (title and text), kind chips,
- * All, Recent, Pinned, By chat and Archived; a grid of cards with small
- * previews; each opens /workspace/artifacts/[id]. Titles are data, shown as
- * text. A server without the routes answers 404 once and the page says so
- * quietly (no retries).
+ * Spec 012 FR-034, with the owner's correction: the store holds what the
+ * owner SAVED. Tabs Saved (default), Pinned, Recent, Archived; search and
+ * kind chips; a grid of cards with small previews (code kinds: the checks'
+ * screenshot or an icon, never a live frame); each opens
+ * /workspace/artifacts/[id]. A quiet link lists the artifacts still in
+ * their chats (not saved), grouped by chat, each with Save, so nothing is
+ * lost. Titles are data, shown as text. A server without the routes answers
+ * 404 once and the page says so quietly (no retries).
  */
 export function ArtifactStorePage() {
-  const [view, setView] = useState<View>("all");
+  const [view, setView] = useState<View>("saved");
   const [kind, setKind] = useState<ArtifactKind | null>(null);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
@@ -76,8 +81,10 @@ export function ArtifactStorePage() {
     () => ({
       ...(kind ? { kind } : {}),
       ...(q ? { q } : {}),
+      ...(view === "saved" || view === "recent" ? { saved: true } : {}),
+      ...(view === "unsaved" ? { saved: false } : {}),
       ...(view === "pinned" ? { pinned: true } : {}),
-      ...(view === "archived" ? { archived: true } : {}),
+      ...(view === "archived" ? { archived: true, saved: "all" as const } : {}),
     }),
     [kind, q, view],
   );
@@ -99,7 +106,7 @@ export function ArtifactStorePage() {
     <PageColumn>
       <PageHeader
         title="Artifacts"
-        description="Everything the assistant made for you, across your chats: documents, code, charts, diagrams and images."
+        description="What you saved from your chats: documents, code, charts, diagrams, images and web pages."
         actions={
           usage.data || data?.usage ? (
             <UsageMeter usage={(usage.data ?? data?.usage)!} />
@@ -122,18 +129,31 @@ export function ArtifactStorePage() {
             data-testid="artifact-search"
           />
         </div>
-        <ChipRow label="View">
-          {VIEWS.map((v) => (
-            <Chip
-              key={v.id}
-              active={view === v.id}
-              onClick={() => setView(v.id)}
-              testId={`artifact-view-${v.id}`}
-            >
-              {v.label}
-            </Chip>
-          ))}
-        </ChipRow>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <ChipRow label="View">
+            {VIEWS.map((v) => (
+              <Chip
+                key={v.id}
+                active={view === v.id}
+                onClick={() => setView(v.id)}
+                testId={`artifact-view-${v.id}`}
+              >
+                {v.label}
+              </Chip>
+            ))}
+          </ChipRow>
+          <button
+            type="button"
+            onClick={() => setView(view === "unsaved" ? "saved" : "unsaved")}
+            className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2 max-md:min-h-11"
+            aria-pressed={view === "unsaved"}
+            data-testid="artifact-view-unsaved"
+          >
+            {view === "unsaved"
+              ? "Back to saved artifacts"
+              : "Artifacts still in their chats"}
+          </button>
+        </div>
         <ChipRow label="Kind">
           <Chip
             active={kind === null}
@@ -168,7 +188,19 @@ export function ArtifactStorePage() {
           Couldn&rsquo;t load your artifacts. Try again in a moment.
         </p>
       ) : items.length === 0 ? (
-        q || kind || view !== "all" ? (
+        view === "saved" && !q && !kind ? (
+          <EmptyState
+            title="Nothing saved yet"
+            body="Nothing saved yet. Press Save on any artifact in a chat to keep it here."
+            testId="artifacts-empty"
+          />
+        ) : view === "unsaved" && !q && !kind ? (
+          <EmptyState
+            title="Nothing waiting in your chats"
+            body="Every artifact from your chats is saved."
+            testId="artifacts-unsaved-empty"
+          />
+        ) : q || kind || view !== "saved" ? (
           <EmptyState
             title="Nothing matches"
             body="Try another search, kind or view."
@@ -181,7 +213,7 @@ export function ArtifactStorePage() {
             testId="artifacts-empty"
           />
         )
-      ) : view === "chat" ? (
+      ) : view === "unsaved" ? (
         <ByChat items={items} />
       ) : (
         <Grid items={items} />
@@ -306,7 +338,11 @@ function ByChat({ items }: { items: ArtifactSummary[] }) {
   return (
     <div className="flex flex-col gap-6" data-testid="artifact-by-chat">
       {[...groups.entries()].map(([thread, list]) => (
-        <section key={thread || "none"} className="flex flex-col gap-2">
+        <section
+          key={thread || "none"}
+          className="flex flex-col gap-2"
+          data-testid="artifact-unsaved-group"
+        >
           <h2 className="flex flex-wrap items-baseline gap-2 text-[15px] font-semibold">
             {thread ? (
               <>
@@ -345,10 +381,6 @@ function StoreCard({ artifact }: { artifact: ArtifactSummary }) {
           <p className="text-muted-foreground text-xs">
             Too large for the store: it lives in its chat.
           </p>
-        ) : artifact.kind === "file" ? (
-          <div className="text-muted-foreground flex h-full items-center justify-center">
-            <KindIcon kind="file" className="size-8" />
-          </div>
         ) : (
           <ArtifactContent
             artifact={artifact}
@@ -406,6 +438,13 @@ function StoreCard({ artifact }: { artifact: ArtifactSummary }) {
             <MessageSquareIcon className="size-3" aria-hidden />
             Open the chat that made it
           </Link>
+        )}
+        {!inChat && (
+          <SaveDownload
+            artifact={artifact}
+            version={artifact.latest_version}
+            size="xs"
+          />
         )}
       </div>
     </li>

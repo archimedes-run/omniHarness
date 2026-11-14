@@ -35,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "./context";
+import { SaveToArtifacts } from "./store/save-to-artifacts";
 
 export function ArtifactFileList({
   className,
@@ -160,6 +161,7 @@ export function ArtifactFileList({
                     {t.common.install}
                   </Button>
                 )}
+                <SaveToArtifacts threadId={threadId} path={downloadPath} />
                 <Button variant="ghost" asChild>
                   <a
                     href={urlOfArtifact({

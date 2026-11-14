@@ -91,7 +91,50 @@ export const KIND_WORDS: Record<ArtifactKind, string> = {
   chart: "Chart",
   image: "Image",
   file: "File",
+  html: "Web page",
+  react: "Web app",
+  webapp: "Web app",
 };
+
+export interface DownloadForm {
+  form?: string;
+  label: string;
+}
+
+/** What Download offers for a kind: one form, or a small menu. */
+export function downloadForms(kind: ArtifactKind): DownloadForm[] {
+  if (kind === "react")
+    return [
+      { form: "built", label: "Built page (.html)" },
+      { form: "source", label: "Source (.zip)" },
+    ];
+  if (kind === "webapp")
+    return [
+      { form: "built", label: "Site (.zip)" },
+      { form: "source", label: "Source (.zip)" },
+    ];
+  return [{ label: "Download" }];
+}
+
+/** How a `file` artifact is shown: text as text, images as images,
+ * anything else as a "Download to view" card. */
+export function fileView(
+  mediaType: string | null | undefined,
+): "text" | "image" | "download" {
+  const t = (mediaType ?? "").toLowerCase().split(";")[0]!.trim();
+  if (/^image\/(png|jpeg|gif|webp)$/.test(t)) return "image";
+  if (
+    t.startsWith("text/") ||
+    t === "application/json" ||
+    t === "application/xml" ||
+    t === "application/x-yaml" ||
+    t === "application/yaml"
+  ) {
+    // An HTML or SVG file is shown as its source text, never as a page.
+    return "text";
+  }
+  return "download";
+}
 
 export const ORIGIN_WORDS: Record<VersionOrigin, string> = {
   tool: "Made by the assistant",

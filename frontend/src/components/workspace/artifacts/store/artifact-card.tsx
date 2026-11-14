@@ -15,6 +15,7 @@ import {
 import { useArtifacts } from "../context";
 
 import { ArtifactContent, KindIcon } from "./artifact-content";
+import { SaveDownload } from "./artifact-save";
 
 /**
  * Spec 012 FR-009: the artifact card at the turn that made it, bound to the
@@ -93,7 +94,7 @@ export function ArtifactCard({
         )}
       </div>
       {data && (
-        <div>
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             type="button"
             size="sm"
@@ -105,6 +106,7 @@ export function ArtifactCard({
             <PanelRightOpenIcon />
             Open
           </Button>
+          <SaveDownload artifact={data} version={version} />
         </div>
       )}
     </article>

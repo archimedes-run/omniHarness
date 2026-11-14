@@ -17,7 +17,10 @@ export const STATIC_KINDS = [
   "chart",
   "image",
 ] as const;
-export type ArtifactKind = (typeof STATIC_KINDS)[number] | "file";
+/** Programs (Slice 2) and imported web apps: shown ONLY in the locked frame. */
+export const CODE_KINDS = ["html", "react", "webapp"] as const;
+export type CodeKind = (typeof CODE_KINDS)[number];
+export type ArtifactKind = (typeof STATIC_KINDS)[number] | CodeKind | "file";
 
 /** Kinds with an owner editor in S1 (api.md, POST /versions). */
 export const EDITABLE_KINDS: readonly ArtifactKind[] = [
@@ -61,6 +64,15 @@ export interface ArtifactSummary {
   size: number;
   created_at: string;
   updated_at: string;
+  /** Saved to the store by the owner. Absent on a gateway without the
+   * save routes: the Save and Download controls then stay hidden. */
+  saved?: boolean;
+  /** Code kinds (Slice 2). */
+  code?: {
+    build_state?: string | null;
+    check_state?: string | null;
+    shown_version?: number | null;
+  } | null;
 }
 
 export interface ArtifactVersion {
@@ -112,6 +124,7 @@ export interface ListQuery {
   kind?: ArtifactKind;
   pinned?: boolean;
   archived?: boolean | "all";
+  saved?: boolean | "all";
   thread?: string;
   q?: string;
   limit?: number;
@@ -178,6 +191,7 @@ export async function listArtifacts(query: ListQuery = {}): Promise<{
   const params = new URLSearchParams();
   if (query.kind) params.set("kind", query.kind);
   if (query.pinned !== undefined) params.set("pinned", String(query.pinned));
+  if (query.saved !== undefined) params.set("saved", String(query.saved));
   if (query.archived !== undefined)
     params.set("archived", String(query.archived));
   if (query.thread) params.set("thread", query.thread);
@@ -277,4 +291,50 @@ export async function deleteArtifact(
       version_count: versionCount,
     }),
   );
+}
+
+// -- Saving, downloading and importing (the store holds only what the
+// owner saves; nothing lands in it by itself) -------------------------------
+
+export async function setSaved(
+  id: string,
+  saved: boolean,
+): Promise<ArtifactSummary> {
+  return readResponse(
+    await send(`${base()}/${enc(id)}/${saved ? "save" : "unsave"}`, "POST"),
+  );
+}
+
+/** The download route of one version (an attachment); `form` picks one of
+ * the kind's download forms (react: "built" or "source"). */
+export function downloadUrl(id: string, n: number, form?: string): string {
+  const url = `${base()}/${enc(id)}/versions/${enc(String(n))}/download`;
+  return form ? `${url}?form=${enc(form)}` : url;
+}
+
+/** A file a chat produced (or a coding job's published site) saved into
+ * the store: the gateway reads it from the chat's outputs by path. */
+export async function importChatFile(
+  threadId: string,
+  path: string,
+): Promise<ArtifactSummary> {
+  const body = await readResponse<
+    { artifact?: ArtifactSummary } & Partial<ArtifactSummary>
+  >(await send(`${base()}/import`, "POST", { thread_id: threadId, path }));
+  return (body.artifact ?? body) as ArtifactSummary;
+}
+
+/** The locked frame's one-view URL (Slice 2). */
+export async function frameToken(
+  id: string,
+  n: number,
+): Promise<{ token: string; expires_in: number; url: string }> {
+  return readResponse(
+    await fetch(`${base()}/${enc(id)}/versions/${enc(String(n))}/frame-token`),
+  );
+}
+
+/** The checks' screenshot of a code version, for previews (404 if none). */
+export function shotUrl(id: string, n: number, theme: "light" | "dark") {
+  return `${base()}/${enc(id)}/versions/${enc(String(n))}/shots/${theme}.png`;
 }

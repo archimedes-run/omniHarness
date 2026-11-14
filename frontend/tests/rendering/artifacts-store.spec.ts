@@ -27,6 +27,10 @@ import { lowContrastText } from "./contrast-probe";
  * ARTIFACT_SHOTS=<dir> saves screenshots (light, dark, 390 px).
  */
 
+/** The app under test (PW_BASE_URL when a run uses another port). */
+const APP_HOST = new URL(process.env.PW_BASE_URL ?? "http://127.0.0.1:3000")
+  .host;
+
 test.use({
   timezoneId: "UTC",
   // CHROMIUM_EXECUTABLE: a local browser build, when the bundled one is not
@@ -52,7 +56,7 @@ async function setup(
   page.on("request", (req) => {
     const url = new URL(req.url());
     if (!/^https?:$/.test(url.protocol)) return;
-    if (url.host !== "127.0.0.1:3000") outside.push(req.url());
+    if (url.host !== APP_HOST) outside.push(req.url());
   });
   await page.addInitScript((t) => {
     try {
@@ -494,7 +498,7 @@ test.describe("the store page", () => {
         "data-artifact",
         IDS.archived,
       );
-      await page.getByTestId("artifact-view-chat").click();
+      await page.getByTestId("artifact-view-unsaved").click();
       await expect(page.getByTestId("artifact-by-chat")).toBeVisible();
     });
   }
