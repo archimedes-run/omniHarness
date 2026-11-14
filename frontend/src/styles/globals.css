@@ -370,6 +370,15 @@
   --chart-5: oklch(0.769 0.188 70.08);
   /* One-series charts (Settings → Evals); dataviz-validated on the light surface. */
   --chart-series: #3355d6;
+  /* Artifact charts (Spec 012): eight categorical slots, dataviz-validated. */
+  --artifact-series-1: #2a78d6;
+  --artifact-series-2: #eb6834;
+  --artifact-series-3: #1baf7a;
+  --artifact-series-4: #eda100;
+  --artifact-series-5: #e87ba4;
+  --artifact-series-6: #008300;
+  --artifact-series-7: #6250d6;
+  --artifact-series-8: #e34948;
   --sidebar: #eff0f2;
   --sidebar-foreground: #2f333a;
   --sidebar-primary: #3355d6;
@@ -439,6 +448,15 @@
   --chart-5: oklch(0.645 0.246 16.439);
   /* Validated on the dark surface (lightness band 0.48–0.67). */
   --chart-series: #6f8cf0;
+  /* Artifact charts (Spec 012): the same hues stepped for the dark surface. */
+  --artifact-series-1: #3987e5;
+  --artifact-series-2: #d95926;
+  --artifact-series-3: #199e70;
+  --artifact-series-4: #c98500;
+  --artifact-series-5: #d55181;
+  --artifact-series-6: #008300;
+  --artifact-series-7: #9085e9;
+  --artifact-series-8: #e66767;
   --sidebar: #17181c;
   --sidebar-foreground: #c9ccd2;
   --sidebar-primary: #8fa8ff;

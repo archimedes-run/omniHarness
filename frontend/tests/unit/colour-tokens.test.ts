@@ -119,6 +119,11 @@ const ALLOWED: Record<string, { reason: string; literals: string[] }> = {
       "text-white",
     ],
   },
+  "components/workspace/artifacts/store/artifact-code.tsx": {
+    reason:
+      "code viewer theme colours (the fixed dark editor theme, as code-editor.tsx)",
+    literals: ["#000000", "#8a8a8a"],
+  },
   "components/workspace/code-editor.tsx": {
     reason: "code editor theme colours (fixed light and dark themes)",
     literals: ["#000000", "#4a4a4a", "#aaaaaa"],

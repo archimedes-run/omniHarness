@@ -33,6 +33,12 @@ const RENDER_PATHS: Record<string, string> = {
     "chat: a search step's results (title, site, snippet; search-result-list.tsx renders them)",
   "core/questions/api.ts":
     "every question card (chat, Home, later the coding job and the builder) reads question, context, options and answer from these loaders",
+  "core/artifacts/store-logic.ts":
+    "every artifact card, panel and store card reads its title and lineage source through titleText and lineageWords (Spec 012)",
+  "components/workspace/artifacts/store/artifact-chart.tsx":
+    "a chart artifact's title, labels and values (Spec 012)",
+  "components/workspace/artifacts/store/artifact-panel.tsx":
+    "an artifact version's note, the assistant's words (Spec 012)",
   "components/workspace/questions/thread-question.tsx":
     "chat: a question's own text, shown until its card is read",
 };

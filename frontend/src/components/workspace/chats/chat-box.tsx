@@ -11,6 +11,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { useArtifactManifests } from "@/core/artifacts/hooks";
+import { panelKey, parsePanelKey } from "@/core/artifacts/store-logic";
 import {
   artifactManifestValue,
   normalizeArtifactEntries,
@@ -21,6 +22,7 @@ import {
   hasPresentFiles,
 } from "@/core/messages/utils";
 import { env } from "@/env";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 
 import {
@@ -28,6 +30,8 @@ import {
   ArtifactFileList,
   useArtifacts,
 } from "../artifacts";
+import { ArtifactOverlay } from "../artifacts/store/artifact-overlay";
+import { ArtifactPanel } from "../artifacts/store/artifact-panel";
 import { useThread } from "../messages/context";
 
 const CLOSE_MODE = { chat: 100, artifacts: 0 };
@@ -52,6 +56,12 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     selectedArtifact,
   } = useArtifacts();
   const { manifests } = useArtifactManifests({ threadId });
+  const isMobile = useIsMobile();
+  // Spec 012: a store artifact opened from its card ("omni-artifact:id@n").
+  const storeSelection = useMemo(
+    () => parsePanelKey(selectedArtifact),
+    [selectedArtifact],
+  );
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
   const prevArtifactsSignatureRef = useRef("");
@@ -140,80 +150,106 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     }
   }, [artifactPanelOpen]);
 
+  const storePanel = storeSelection ? (
+    <ArtifactPanel
+      key={storeSelection.id}
+      id={storeSelection.id}
+      version={storeSelection.version}
+      mode="panel"
+      onVersionChange={(n) => selectArtifact(panelKey(storeSelection.id, n))}
+      onClose={() => setArtifactsOpen(false)}
+    />
+  ) : null;
+
   return (
-    <ResizablePanelGroup
-      id={`${resizableIdBase}-panels`}
-      orientation="horizontal"
-      defaultLayout={{ chat: 100, artifacts: 0 }}
-      groupRef={layoutRef}
-    >
-      <ResizablePanel className="relative" defaultSize={100} id="chat">
-        {children}
-      </ResizablePanel>
-      <ResizableHandle
-        id={`${resizableIdBase}-separator`}
-        className={cn(
-          "opacity-33 hover:opacity-100",
-          !artifactPanelOpen && "pointer-events-none opacity-0",
-        )}
-      />
-      <ResizablePanel
-        className={cn(
-          "transition-all duration-300 ease-in-out",
-          !artifactsOpen && "opacity-0",
-        )}
-        id="artifacts"
+    <>
+      {/* At phone width a store artifact opens over the chat, full screen
+          (the split panel would be a sliver). */}
+      {isMobile && artifactPanelOpen && storePanel && (
+        <ArtifactOverlay onClose={() => setArtifactsOpen(false)}>
+          {storePanel}
+        </ArtifactOverlay>
+      )}
+      <ResizablePanelGroup
+        id={`${resizableIdBase}-panels`}
+        orientation="horizontal"
+        defaultLayout={{ chat: 100, artifacts: 0 }}
+        groupRef={layoutRef}
       >
-        <div
+        <ResizablePanel className="relative" defaultSize={100} id="chat">
+          {children}
+        </ResizablePanel>
+        <ResizableHandle
+          id={`${resizableIdBase}-separator`}
           className={cn(
-            "h-full p-4 transition-transform duration-300 ease-in-out",
-            artifactPanelOpen ? "translate-x-0" : "translate-x-full",
+            "opacity-33 hover:opacity-100",
+            !artifactPanelOpen && "pointer-events-none opacity-0",
           )}
+        />
+        <ResizablePanel
+          className={cn(
+            "transition-all duration-300 ease-in-out",
+            !artifactsOpen && "opacity-0",
+          )}
+          id="artifacts"
         >
-          {selectedArtifact ? (
-            <ArtifactFileDetail
-              className="size-full"
-              filepath={selectedArtifact}
-              threadId={threadId}
-            />
-          ) : (
-            <div className="relative flex size-full justify-center">
-              <div className="absolute top-1 right-1 z-30">
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setArtifactsOpen(false);
-                  }}
-                >
-                  <XIcon />
-                </Button>
-              </div>
-              {normalizedVisibleArtifacts.length === 0 ? (
-                <ConversationEmptyState
-                  icon={<FilesIcon />}
-                  title="No artifact selected"
-                  description="Select an artifact to view its details"
-                />
-              ) : (
-                <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
-                  <header className="shrink-0">
-                    <h2 className="text-lg font-medium">Artifacts</h2>
-                  </header>
-                  <main className="min-h-0 grow">
-                    <ArtifactFileList
-                      className="max-w-(--container-width-sm) p-4 pt-12"
-                      files={normalizedVisibleArtifacts}
-                      threadId={threadId}
-                    />
-                  </main>
+          <div
+            className={cn(
+              "h-full p-4 transition-transform duration-300 ease-in-out",
+              artifactPanelOpen ? "translate-x-0" : "translate-x-full",
+            )}
+          >
+            {storeSelection ? (
+              isMobile ? null : (
+                <div className="bg-background border-border size-full overflow-hidden rounded-xl border p-4">
+                  {storePanel}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      </ResizablePanel>
-    </ResizablePanelGroup>
+              )
+            ) : selectedArtifact ? (
+              <ArtifactFileDetail
+                className="size-full"
+                filepath={selectedArtifact}
+                threadId={threadId}
+              />
+            ) : (
+              <div className="relative flex size-full justify-center">
+                <div className="absolute top-1 right-1 z-30">
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setArtifactsOpen(false);
+                    }}
+                  >
+                    <XIcon />
+                  </Button>
+                </div>
+                {normalizedVisibleArtifacts.length === 0 ? (
+                  <ConversationEmptyState
+                    icon={<FilesIcon />}
+                    title="No artifact selected"
+                    description="Select an artifact to view its details"
+                  />
+                ) : (
+                  <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
+                    <header className="shrink-0">
+                      <h2 className="text-lg font-medium">Artifacts</h2>
+                    </header>
+                    <main className="min-h-0 grow">
+                      <ArtifactFileList
+                        className="max-w-(--container-width-sm) p-4 pt-12"
+                        files={normalizedVisibleArtifacts}
+                        threadId={threadId}
+                      />
+                    </main>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </>
   );
 };
 

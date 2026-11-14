@@ -4,6 +4,7 @@ import {
   LayoutGridIcon,
   MessageSquarePlus,
   MessagesSquare,
+  PackageIcon,
   PlugIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -29,7 +30,7 @@ import { useToolSources } from "@/core/tool-sources/hooks";
 const ROW = "max-md:h-11";
 
 /**
- * The sidebar (Feature 006): New chat · Chats · Apps (Spec 011, with pinned
+ * The sidebar (Feature 006): New chat · Chats · Artifacts (Spec 012) · Apps (Spec 011, with pinned
  * apps beneath it) · MCP Suite, then Recent chats;
  * the user and More in the footer. Agents, Skills, Automations and Tasks are
  * the capsule's panels; Inbox became Home (interim: /workspace/home).
@@ -99,6 +100,18 @@ export function WorkspaceNavChatList() {
             <Link className="text-inherit" href="/workspace/chats">
               <MessagesSquare />
               <span>{t.sidebar.chats}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/artifacts")}
+            className={ROW}
+            asChild
+          >
+            <Link className="text-inherit" href="/workspace/artifacts">
+              <PackageIcon />
+              <span>{t.sidebar.artifacts}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
