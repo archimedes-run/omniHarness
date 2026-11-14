@@ -1,0 +1,44 @@
+id: M-MEMORY-ON
+title: Without the request, memory is in the model's input as background
+mock_only: true
+source: 'live chat 2026-11-14 (control for M-MEMORY-OFF: the memory fixture is injected)'
+mode: thinking
+prompt: What can you do for me?
+tools: []
+confirm: none
+fixtures:
+  memory:
+    version: '1.0'
+    user:
+      workContext:
+        summary: Works on ZEBRA-7731 Opportunity scouting (judging, press, speaking) for a visa petition.
+      personalContext:
+        summary: ''
+      topOfMind:
+        summary: ZEBRA-7731 drafting an O-1 evidence plan.
+    history:
+      recentMonths:
+        summary: ''
+      earlierContext:
+        summary: ''
+      longTermBackground:
+        summary: ''
+    facts:
+    - id: f1
+      content: 'ZEBRA-7731: the owner wants Opportunity scouting (judging, press, speaking).'
+      category: goal
+      confidence: 0.95
+      createdAt: '2026-11-01T00:00:00Z'
+      source: t0
+budget:
+  seconds: 60
+checks:
+- answer_contains:
+    values:
+    - research
+mock:
+  lead:
+  - expect:
+      any_contains: ZEBRA-7731
+    content: I can research questions with sources, write and edit documents, work with files and code,
+      plan tasks and checklists, and use your connected apps once they are switched on in this chat.
