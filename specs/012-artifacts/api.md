@@ -4,7 +4,49 @@ The contract between the gateway (S1 backend) and the frontend (store page,
 inline artifact card, side panel). Requirements are in
 [`spec.md`](spec.md); this file names routes, JSON shapes, tool schemas and
 error codes only. Kinds in Slice 1: `markdown`, `code`, `svg`, `mermaid`,
-`chart`, `image`, plus `file` (only made by the importer; download only).
+`chart`, `image`, plus `file` and `webapp` (made only by the owner's "Save to
+artifacts" on a chat's output, below).
+
+## Saved and unsaved (owner decision, 2026-11-14)
+
+- An artifact the assistant makes is **unsaved**: it belongs to its chat
+  (inline card, the chat's artifact list) and is NOT on the store's Saved tab.
+  The owner's **Save** button makes it **saved**: the Saved tab lists saved
+  artifacts only. The new store page sends `saved` EXPLICITLY
+  (`GET /api/artifacts?saved=true` for Saved, `saved=false` for Unsaved);
+  the API's default stays `saved=all`, today's behaviour, so the deployed page
+  keeps working until the new one ships. `archived=true` (the Archived tab)
+  lists archived artifacts in every saved state.
+- Save, Unsave, Download and "Save to artifacts" (a chat's output file) are the
+  OWNER's buttons. No model tool can save: there is no `artifact_save` tool and
+  no rule for one, so the policy layer refuses the name.
+- Nothing is deleted on the owner's behalf. **Deleting a chat never deletes
+  artifacts** (neither the chat's delete nor a run-history thread delete):
+  they stay stored with `origin_thread_id` kept and `origin_deleted: true`,
+  so the UI can say "from a chat you deleted"; unsaved ones stay on the
+  Unsaved view until the owner saves them or deletes them (archive, then the
+  typed delete). An optional sweep that prunes unsaved artifacts not changed
+  for N days exists but ships OFF (`artifacts.prune_unsaved_after_days: null`
+  in config.yaml); when an owner turns it on it never touches saved, pinned or
+  archived artifacts, or any the owner edited, restored or copied.
+- Unsaved artifacts count toward the 1 GB per-owner cap like saved ones.
+- Owner intent saves: pinning, renaming, an owner edit or a restore sets
+  `saved: true` (the same rule the one-time migration applied to older
+  artifacts). An assistant update does not. Unsave also unpins. An archived
+  artifact may be saved, and archiving does not unsave.
+- Chat outputs are no longer imported automatically.
+
+### What the owner sees after this change is deployed
+
+Existing artifacts are migrated once (recorded as done in `artifact_meta`,
+separately from the columns, so a start that stopped half way finishes on the
+next one): saved = true for those the owner showed intent on (pinned; edited
+or restored by the owner; metadata changed after their latest version, which
+is how a rename shows; or archived), false for everything else, including the
+files the old importer pulled in. Nothing is deleted. The Saved tab is therefore nearly empty at
+first; every other artifact is still reachable from its chat (inline cards and
+the chat's artifact list) and from the store's "Unsaved" view
+(`saved=false`), where Save puts it back in the store.
 
 ## Conventions
 
@@ -73,6 +115,9 @@ A write over any cap is refused before anything is stored.
   "latest_version": 3,
   "version_count": 3,
   "pinned": false,
+  "saved": false,
+  "saved_at": null,
+  "origin_deleted": false,
   "archived": false,
   "archived_at": null,
   "origin_thread_id": "6c0e…",
@@ -91,7 +136,7 @@ A write over any cap is refused before anything is stored.
 - `lineage`, `lineage_source`, `language`, `media_type`, `size` describe the
   **latest** version.
 - `imported_from`: `"<thread_id>:/mnt/user-data/outputs/<path>"` for an
-  artifact the importer made, else `null`.
+  artifact saved from a chat's outputs ("Save to artifacts"), else `null`.
 - `origin_turn_id` is the run id of the turn that made it (null for imports
   and owner-made copies).
 - `title` (and `note`) are stored with control, bidi and line-break characters
@@ -152,7 +197,8 @@ A write over any cap is refused before anything is stored.
 | `svg` | SVG text | the text, as given, after it passed the allowlist | `image/svg+xml` |
 | `chart` | `omni-chart/1` object (or its JSON string) | JSON (sorted keys, compact) | `application/json` |
 | `image` | from a file in the chat's outputs (`source_path`) | the bytes | from magic bytes: `image/png`, `image/jpeg`, `image/webp`, `image/gif` |
-| `file` | importer only | the bytes | `application/octet-stream` |
+| `file` | "Save to artifacts" only | the bytes | `application/octet-stream`, or `text/plain` for UTF-8 text |
+| `webapp` | "Save to artifacts" on a directory only | a manifest JSON `{"entry", "files": {path: {"hash", "size", "media_type"}}}`; each file is its own blob | `application/vnd.omni-webapp+json` |
 
 Text must be valid UTF-8 without NUL. `language` is `[a-z0-9+#._-]{1,32}`
 (default `text`).
@@ -210,28 +256,15 @@ markup.
 
 ### `GET /api/artifacts`
 
-Query: `kind` (one kind), `pinned` (`true`/`false`), `archived` (`false`
+Query: `saved` (`true` default = the Saved tab, `false` = unsaved only, `all`),
+`kind` (one kind), `pinned` (`true`/`false`), `archived` (`false`
 default, `true` = only archived, `all`), `thread` (origin thread id), `q`
 (case-insensitive match on title and the latest text of text kinds), `limit`
 (1 to 200, default 50), `offset` (default 0). Sorted pinned first, then
 `updated_at` newest first.
 
-Opening the store also schedules the **importer** in the background (never
-blocks the response): every file under each of the owner's chats'
-`outputs` becomes an artifact with origin `import`, once per
-`(thread, path, content_hash)`; a changed file at the same path becomes a new
-version of its artifact. Files ≤ 10 MB are copied (deduplicated by hash);
-larger ones are recorded with `stored: "chat"` without being read.
-
-Importer rules: every file is opened without following links (relative to an
-opened outputs directory, `O_NOFOLLOW`, regular files only, no FIFOs), read
-from that open file only and at most 10 MB; a file that changes between the
-listing and the open is skipped. A file whose size and mtime match what was
-recorded is not read again. One pass looks at most 500 files per chat, 2,000
-files and 256 MB across all chats. A changed file becomes a new version of the
-artifact it made only when the owner has not pinned it and its latest version
-is still an import; otherwise (edited, restored, pinned, or another kind) it
-becomes a new artifact. An artifact the owner deleted is not made again.
+Opening the store imports nothing (chat outputs are no longer imported
+automatically; see `POST /api/artifacts/import`).
 
 ```json
 {"artifacts": [ArtifactSummary], "total": 12, "usage": {"used": 52311, "cap": 1073741824}}
@@ -239,8 +272,8 @@ becomes a new artifact. An artifact the owner deleted is not made again.
 
 ### `GET /api/artifacts/threads/{thread_id}`
 
-The artifacts made in (or imported from) one chat, for its inline cards. Also
-schedules the importer for that chat.
+The artifacts made in (or saved from) one chat, saved or not, for its inline
+cards.
 
 ```json
 {
@@ -261,8 +294,13 @@ schedules the importer for that chat.
 ### `GET /api/artifacts/{id}/versions/{n}`
 
 `Version` plus `"content"` for `markdown`, `mermaid` (string), `code`
-(`{"language","text"}`) and `chart` (the object). `svg`, `image` and `file`
-have `"content": null`: load them through the content route.
+(`{"language","text"}`) and `chart` (the object). `svg`, `image`, `file` and
+`webapp` have `"content": null`: load them through the content route (or, for
+`webapp`, the frame route of Slice 2). `webapp` versions also carry
+`"files": [{"path", "size", "media_type"}]` and `"entry"`.
+
+Every Version has `"render"`, how the store shows it (see "Rendering in the
+store").
 
 ### `GET /api/artifacts/{id}/versions/{n}/content`
 
@@ -280,7 +318,94 @@ the content hash.
 | `chart` | `application/json` | inline |
 | `svg` | `image/svg+xml` (render ONLY as `<img src>`) | inline |
 | `image` | its media type | inline |
-| `file` | `application/octet-stream` | attachment (title as filename) |
+| `file` with `render: "text"` | `text/plain; charset=utf-8` | inline |
+| `file` (any other) | `application/octet-stream` | attachment (title as filename) |
+| `webapp` | the bundle manifest, `application/json` (never a page; the app renders only in the locked frame) | inline |
+
+### `GET /api/artifacts/{id}/versions/{n}/download`
+
+The version as a file to keep. Same headers as the content route, plus
+`Content-Disposition: attachment; filename="<ascii>"; filename*=UTF-8''<utf-8>`.
+The name is built from the title: path separators, control, bidi and other
+unsafe characters removed, at most 100 characters before the extension, never
+empty (`artifact`), and the extension is the kind's own (a title's own
+extension is kept only when it already matches):
+
+| Kind | Extension and body |
+|---|---|
+| `markdown` | `.md` |
+| `code` | by language (`.py`, `.ts`, `.tsx`, `.js`, `.json`, `.sh`, `.go`, `.rs`, …; `.txt` when unknown), the code text |
+| `svg` | `.svg` |
+| `mermaid` | `.mmd` |
+| `chart` | `.json` (the omni-chart/1 spec) |
+| `image` | `.png`, `.jpg`, `.webp`, `.gif` by its type |
+| `file` | the title's own extension when it has one, else none; the bytes as stored |
+| `webapp` | `.zip` of the file set (paths as stored) |
+| `html` (S2) | `.html` (the stored document) |
+| `react` (S2) | `.html` (the built single document); `?source=zip` gives the sources as `.zip` |
+
+`409 lives_in_chat` for a version stored in its chat (download it from the
+chat).
+
+### `POST /api/artifacts/{id}/save` (CSRF) and `POST /api/artifacts/{id}/unsave` (CSRF)
+
+Owner session only. Idempotent. Save sets `saved: true` and `saved_at`
+(archived ones too). Unsave sets
+`saved: false`, `saved_at: null` and unpins. Returns `ArtifactSummary`.
+
+### `POST /api/artifacts/import` (CSRF): "Save to artifacts" on a chat's output
+
+Owner session only. Body: `{"thread_id": "…", "path": "/mnt/user-data/outputs/report.md"}`
+(a path under the chat's outputs; a relative path is taken under outputs).
+The chat must be the owner's (else `404 artifact_not_found`, no oracle).
+Every file is opened without following links, relative to the opened outputs
+directory (`O_NOFOLLOW`, regular files only, no FIFOs) and read from that open
+file only, at most its cap; a link, a hard link, a special file, a hidden file
+(a name starting with `.`, such as `.env`), a path with `..` or a path over
+400 characters is `422 invalid_request`.
+
+- A **file** becomes a SAVED artifact, origin `import`, lineage `import`
+  (source "a file from this chat"), `imported_from` set: kind by content
+  (`markdown` for `.md`, `mermaid` for `.mmd`, `svg` when it passes the SVG
+  rules, `image` by magic bytes, `code` by extension, else `file`; a `file`
+  that is UTF-8 text gets `render: "text"`). Cap 10 MB.
+- A **directory** with an `index.html` (a coding job's static web app) becomes
+  ONE saved artifact of kind `webapp`: an immutable file set, entry
+  `index.html`. Caps: at most 500 files and 20 MB in all, 12 directory levels
+  and 200 directories, regular files only. Links, hard links, special files,
+  hidden entries (`.name`) and names holding `\`, `:` or control or format
+  characters are skipped and listed in `skipped` (at most 200 listed). Over a
+  cap is `413 too_large`, nothing stored.
+- Saving the same path again with the same content returns the existing
+  artifact (`200`, `"created": false`); changed content is a new artifact.
+
+`{"artifact": ArtifactSummary, "created": true, "skipped": []}` (201).
+
+## Rendering in the store
+
+Every version has `render`; the store opens each kind so:
+
+| Kind | `render` | How the store shows it |
+|---|---|---|
+| `markdown` | `markdown` | the app's markdown renderer, raw HTML off |
+| `code` | `code` | the code viewer |
+| `svg` | `image` | `<img>` of the content route |
+| `mermaid` | `mermaid` | drawn in the isolated mermaid frame, shown as an image |
+| `chart` | `chart` | the in-repo chart renderer |
+| `image` | `image` | `<img>` of the content route |
+| `file`, UTF-8 text | `text` | the content route's text, shown as text |
+| `file`, anything else (PDF, office, archives) | `download` | a "Download to view" card (a PDF is not shown inline: the browser's viewer does not run in a sandboxed, script-free frame) |
+| `html`, `react` (S2) | `frame` | the locked frame (S2 `frame-token` / `frame.html`) |
+| `webapp` | `frame` | the locked frame, same route; see below |
+
+**`webapp` and the locked frame (contract with Slice 2, PR #218).** A webapp
+version is served ONLY through S2's `GET /api/artifacts/{id}/versions/{n}/frame-token`
+and `frame.html` with S2's artifact profile (its headers and CSP unchanged).
+For `webapp`, `frame.html` serves the entry document with its relative
+scripts, styles and images inlined from the stored file set (the Apps bundle
+inliner, `app/gateway/apps/bundle.py`), so the frame needs no second request
+and no network. No route serves a webapp's files one by one. Until S2's route
+handles `webapp`, the store shows the file list and Download (`.zip`).
 
 ### `PATCH /api/artifacts/{id}` (CSRF)
 
@@ -318,12 +443,12 @@ Only an **archived** artifact. Body: `{"confirm_id": "<the artifact id>", "versi
 Both must match (the UI's dialog names the artifact and its version count);
 otherwise `400 confirmation_mismatch` and nothing is removed. Removes the
 record, its versions and any blob no other version of this owner references.
-An imported artifact stays deleted (the importer remembers it). Returns
+Returns
 `{"deleted": "<id>"}`.
 
 ### `GET /api/artifacts/usage`
 
-`{"used": 52311, "cap": 1073741824}`.
+`{"used": 52311, "cap": 1073741824}` (saved and unsaved artifacts both count).
 
 ## Chat tools
 

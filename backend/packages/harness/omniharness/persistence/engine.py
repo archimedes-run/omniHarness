@@ -201,6 +201,11 @@ async def _run_additive_migrations(backend: str) -> None:
         ("users", "disabled_reason", "VARCHAR(256)", "NULL"),
     ]
 
+    # The Artifact store's saved flag (Spec 012, save model): added once, with
+    # its one-time rule for existing rows.
+    async with _engine.begin() as conn:
+        await conn.run_sync(migrate_artifacts_saved, backend)
+
     async with _engine.begin() as conn:
         for table, column, sql_type, default in _NEW_COLUMNS:
             try:
@@ -211,6 +216,53 @@ async def _run_additive_migrations(backend: str) -> None:
             except Exception:
                 # Column already exists (sqlite raises OperationalError); skip silently.
                 pass
+
+
+#: Existing artifacts the owner showed intent on become saved, once: pinned;
+#: edited or restored by the owner; metadata changed after their latest
+#: version (a rename, a pin and unpin); or archived (kept out of sight, still
+#: kept). Everything else (the old importer's files included) is unsaved, a
+#: view state only: nothing is deleted.
+ARTIFACTS_SAVED_RULE = """
+UPDATE artifacts SET saved = TRUE, saved_at = updated_at
+WHERE saved = FALSE AND (
+    pinned = TRUE
+    OR archived_at IS NOT NULL
+    OR id IN (SELECT artifact_id FROM artifact_versions WHERE origin IN ('owner_edit', 'restore'))
+    OR updated_at > (SELECT MAX(v.created_at) FROM artifact_versions v WHERE v.artifact_id = artifacts.id) + 1
+)
+"""
+ARTIFACTS_SAVED_RULE_KEY = "saved_rule_v1"
+
+
+def migrate_artifacts_saved(sync_conn, backend: str) -> bool:
+    """Add the save model's columns to an existing `artifacts` table, then
+    apply the one-time rule unless it is recorded as done in `artifact_meta`.
+    The record is separate from the columns: a start that added a column and
+    stopped before the rule finishes it on the next start. Returns True when
+    the rule ran now."""
+    import time
+
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("artifacts"):
+        return False
+    columns = {c["name"] for c in inspector.get_columns("artifacts")}
+    false = "FALSE" if backend == "postgres" else "0"
+    if "saved" not in columns:
+        sync_conn.execute(text(f"ALTER TABLE artifacts ADD COLUMN saved BOOLEAN NOT NULL DEFAULT {false}"))
+    if "saved_at" not in columns:
+        sync_conn.execute(text("ALTER TABLE artifacts ADD COLUMN saved_at FLOAT"))
+    if "origin_deleted" not in columns:
+        sync_conn.execute(text(f"ALTER TABLE artifacts ADD COLUMN origin_deleted BOOLEAN NOT NULL DEFAULT {false}"))
+    sync_conn.execute(text("CREATE TABLE IF NOT EXISTS artifact_meta (key VARCHAR(64) PRIMARY KEY, done_at FLOAT NOT NULL)"))
+    if sync_conn.execute(text("SELECT 1 FROM artifact_meta WHERE key = :k"), {"k": ARTIFACTS_SAVED_RULE_KEY}).first() is not None:
+        return False
+    sync_conn.execute(text(ARTIFACTS_SAVED_RULE))
+    sync_conn.execute(text("INSERT INTO artifact_meta (key, done_at) VALUES (:k, :t)"), {"k": ARTIFACTS_SAVED_RULE_KEY, "t": time.time()})
+    logger.info("artifacts: existing artifacts the owner pinned, edited, restored, renamed or archived are saved")
+    return True
 
 
 async def init_engine_from_config(config) -> None:

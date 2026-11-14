@@ -18,13 +18,13 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.gateway.artifacts_store import caps, kinds
+from app.gateway.artifacts_store import caps, downloads, kinds
 from app.gateway.artifacts_store.kinds import InvalidContent, TooLarge
-from app.gateway.artifacts_store.service import run_import
+from app.gateway.artifacts_store.service import import_from_chat
 from app.gateway.artifacts_store.store import ArtifactStore, NotEditable, StoreError
 from app.gateway.authz import require_permission
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
@@ -84,10 +84,6 @@ async def _call(fn, *args, **kwargs):
         raise _error(422, "invalid_content", "The content does not fit its kind.", reason=str(exc)) from None
 
 
-def _schedule_import(background: BackgroundTasks, store: ArtifactStore, owner: str, thread_id: str | None = None) -> None:
-    background.add_task(run_in_threadpool, run_import, store, owner, thread_id=thread_id)
-
-
 # -- reads ---------------------------------------------------------------------------------
 
 
@@ -95,8 +91,10 @@ def _schedule_import(background: BackgroundTasks, store: ArtifactStore, owner: s
 @require_permission("threads", "read")
 async def list_artifacts(
     request: Request,
-    background: BackgroundTasks,
-    kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "file"] | None = None,
+    # Default `all` (what the deployed store page expects); the new store page
+    # asks for `saved=true` explicitly.
+    saved: Literal["true", "false", "all"] = "all",
+    kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "file", "webapp"] | None = None,
     pinned: bool | None = None,
     archived: Literal["false", "true", "all"] = "false",
     thread: str | None = Query(None, max_length=128),
@@ -106,9 +104,8 @@ async def list_artifacts(
 ) -> dict:
     owner = owner_of(request)
     store = store_of(request)
-    rows, total = await _call(store.list, owner, kind=kind, pinned=pinned, archived=archived, thread=thread, q=q or None, limit=limit, offset=offset)
+    rows, total = await _call(store.list, owner, saved=saved, kind=kind, pinned=pinned, archived=archived, thread=thread, q=q or None, limit=limit, offset=offset)
     used = await _call(store.usage, owner)
-    _schedule_import(background, store, owner)
     return {"artifacts": rows, "total": total, "usage": {"used": used, "cap": caps.OWNER_BYTES}}
 
 
@@ -121,13 +118,12 @@ async def usage(request: Request) -> dict:
 
 @router.get("/threads/{thread_id}")
 @require_permission("threads", "read")
-async def thread_artifacts(thread_id: str, request: Request, background: BackgroundTasks) -> dict:
+async def thread_artifacts(thread_id: str, request: Request) -> dict:
     owner = owner_of(request)
     store = store_of(request)
     if not _THREAD.fullmatch(thread_id):
         return {"artifacts": []}
     rows = await _call(store.thread_artifacts, owner, thread_id)
-    _schedule_import(background, store, owner, thread_id)
     return {"artifacts": rows}
 
 
@@ -154,6 +150,9 @@ async def get_version(artifact_id: str, n: int, request: Request) -> dict:
     content = None
     if summary["kind"] in ("markdown", "mermaid", "code", "chart") and row.stored == "blob":
         content = kinds.content_for_api(summary["kind"], await _call(store.content, owner, row))
+    if summary["kind"] == "webapp":
+        files = await _call(store.bundle_files, owner, summary["id"], n)
+        return {**meta, "content": None, "entry": "index.html", "files": [{k: f[k] for k in ("path", "size", "media_type")} for f in files], "bundle_size": sum(f["size"] for f in files)}
     return {**meta, "content": content}
 
 
@@ -180,9 +179,33 @@ async def get_content(artifact_id: str, n: int, request: Request) -> Response:
         return Response(data, media_type="image/svg+xml", headers=headers)
     if kind == "image" and meta["media_type"] in kinds.IMAGE_TYPES:
         return Response(data, media_type=meta["media_type"], headers=headers)
-    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", summary["title"])[:100] or "artifact"
-    headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    if kind == "file" and meta["render"] == "text":
+        return Response(data, media_type="text/plain; charset=utf-8", headers=headers)
+    if kind == "webapp":
+        # The manifest only: a web app is never served as a page here.
+        return Response(data, media_type="application/json", headers=headers)
+    headers["Content-Disposition"] = downloads.disposition(downloads.filename(summary["title"], kind, meta, data))
     return Response(data, media_type="application/octet-stream", headers=headers)
+
+
+@router.get("/{artifact_id}/versions/{n}/download")
+@require_permission("threads", "read")
+async def download(artifact_id: str, n: int, request: Request) -> Response:
+    """The version as a file to keep: always an attachment, never rendered."""
+    owner = owner_of(request)
+    store = store_of(request)
+    summary, meta, row = await _call(store.version, owner, _check_id(artifact_id), n)
+    if row.stored != "blob":
+        raise _error(409, "lives_in_chat", "This file is too large for the store and lives in its chat.", thread_id=row.thread_id, path=f"/mnt/user-data/outputs/{row.chat_path}")
+    data = await _call(store.content, owner, row)
+    kind = summary["kind"]
+    if kind == "webapp":
+        files = await _call(store.bundle_files, owner, summary["id"], n)
+        body = await _call(downloads.webapp_zip, store, owner, files)
+    else:
+        body = downloads.body(kind, data)
+    headers = {**CONTENT_HEADERS, "ETag": f'"{row.content_hash}"', "Content-Disposition": downloads.disposition(downloads.filename(summary["title"], kind, meta, data))}
+    return Response(body, media_type="application/octet-stream", headers=headers)
 
 
 # -- writes (CSRF by the middleware) ----------------------------------------------------
@@ -226,6 +249,51 @@ async def patch_artifact(artifact_id: str, body: PatchBody, request: Request) ->
     if body.title is None and body.pinned is None:
         raise _error(422, "invalid_request", "Send a title, pinned, or both.")
     return await _call(store_of(request).patch, owner, _check_id(artifact_id), title=body.title, pinned=body.pinned)
+
+
+class ImportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    thread_id: str = Field(..., min_length=1, max_length=128)
+    path: str = Field(..., min_length=1, max_length=4096)
+
+
+@router.post("/import", status_code=201)
+@require_permission("threads", "write")
+async def import_chat_output(body: ImportBody, request: Request, response: Response) -> dict:
+    """The owner's "Save to artifacts" on a file (or web app directory) of one
+    of their chats' outputs: a SAVED artifact. Another account's chat, or a
+    chat that does not exist, is 404 like a missing artifact."""
+    owner = owner_of(request)
+    store = store_of(request)
+    if not _THREAD.fullmatch(body.thread_id) or not await _owns_thread(request, owner, body.thread_id):
+        raise _error(404, "artifact_not_found", "No such artifact.")
+    summary, created, skipped = await _call(import_from_chat, store, owner, body.thread_id, body.path)
+    if not created:
+        response.status_code = 200
+    return {"artifact": summary, "created": created, "skipped": skipped}
+
+
+async def _owns_thread(request: Request, owner: str, thread_id: str) -> bool:
+    from app.gateway.deps import get_thread_store
+
+    try:
+        return bool(await get_thread_store(request).check_access(thread_id, owner, require_existing=True))
+    except Exception:  # noqa: BLE001 — no store or no row: not theirs
+        return False
+
+
+@router.post("/{artifact_id}/save")
+@require_permission("threads", "write")
+async def save(artifact_id: str, request: Request) -> dict:
+    owner = owner_of(request)
+    return await _call(store_of(request).set_saved, owner, _check_id(artifact_id), True)
+
+
+@router.post("/{artifact_id}/unsave")
+@require_permission("threads", "write")
+async def unsave(artifact_id: str, request: Request) -> dict:
+    owner = owner_of(request)
+    return await _call(store_of(request).set_saved, owner, _check_id(artifact_id), False)
 
 
 @router.post("/{artifact_id}/archive")
