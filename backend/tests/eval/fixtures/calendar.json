@@ -1,0 +1,14 @@
+{
+  "_comment": "A week of 9 events for the calendar stub. day = offset from the Monday of the current week (0..6); times are local. Used by T03/T04 (spec 009 FR-072: private sources are fixture stubs under their real tool names).",
+  "events": [
+    {"day": 0, "start": "09:30", "end": "10:00", "title": "Team standup", "location": "Video call"},
+    {"day": 0, "start": "13:00", "end": "14:00", "title": "Dentist appointment", "location": "Fishtown Dental"},
+    {"day": 1, "start": "11:00", "end": "12:00", "title": "Quarterly planning review", "location": "Room 4B"},
+    {"day": 2, "start": "08:00", "end": "09:00", "title": "Gym with Sam", "location": "City Fitness"},
+    {"day": 2, "start": "15:00", "end": "15:30", "title": "Call with the landlord", "location": "Phone"},
+    {"day": 3, "start": "18:30", "end": "20:00", "title": "Book club", "location": "Free Library, Parkway Central"},
+    {"day": 4, "start": "10:00", "end": "11:00", "title": "Design critique", "location": "Video call"},
+    {"day": 5, "start": "10:00", "end": "13:00", "title": "Farmers market volunteering", "location": "Clark Park"},
+    {"day": 6, "start": "19:00", "end": "21:00", "title": "Dinner with Priya", "location": "Zahav"}
+  ]
+}

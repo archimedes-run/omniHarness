@@ -1,0 +1,33 @@
+id: M-REPEAT
+title: A repeat of a fetch already done in the turn is answered from the earlier result
+mock_only: true
+source: 'real-model eval 2026-11-13 (T07: the same pages fetched again; T01/T06: 40-80 calls, timeout)'
+mode: pro
+prompt: What does the Suraya restaurant page say about brunch?
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- tool_called:
+    name: web_fetch
+    min: 2
+- answer_contains:
+    values:
+    - brunch
+mock:
+  lead:
+  - tool_calls:
+    - name: web_fetch
+      args:
+        url: https://www.surayaphilly.com/
+  - expect:
+      tool: web_fetch
+    tool_calls:
+    - name: web_fetch
+      args:
+        url: https://www.surayaphilly.com/
+  - expect:
+      tool: web_fetch
+      contains: From earlier in this task
+    content: Suraya serves brunch on weekends [Suraya](https://www.surayaphilly.com/).

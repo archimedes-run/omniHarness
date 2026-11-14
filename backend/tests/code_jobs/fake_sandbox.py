@@ -38,8 +38,29 @@ def sleep(seconds: float) -> dict:
     return {"kind": "sleep", "delay": seconds}
 
 
+def layout_page(width: int, **fields) -> dict:
+    """One width of the layout probe's result (layout_probe.py), passing unless changed."""
+    return {"width": width, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "overflow_px": 0, "client_width": width, "offenders": [], "rendered": True, "svgs": [], **fields}
+
+
+def layout_result(**per_width: dict) -> str:
+    """The probe's result file: `w360={...}` changes the page at 360 px."""
+    return json.dumps({"v": 1, "widths": [360, 560, 1280], "pages": [layout_page(w, **per_width.get(f"w{w}", {})) for w in (360, 560, 1280)]})
+
+
 class FakeSandbox:
-    def __init__(self, scenario: list[dict], *, container: str = "omni-harness-sandbox-test0001", verify_exit: int | None = 0, verify_log: str = "built", kill_works: bool = True, stderr: str = "") -> None:
+    def __init__(
+        self,
+        scenario: list[dict],
+        *,
+        container: str = "omni-harness-sandbox-test0001",
+        verify_exit: int | None = 0,
+        verify_log: str = "built",
+        kill_works: bool = True,
+        stderr: str = "",
+        layout: str | None = None,
+        layout_exit: int | None = 0,
+    ) -> None:
         self.container = container
         self.scenario = scenario
         self.verify_exit = verify_exit
@@ -58,7 +79,11 @@ class FakeSandbox:
         self.before_exit = None
         self.verify_runs = 0
         self.verify_env = ""
-        #: "kill", "verify", "cleanup", "publish", in the order they ran.
+        #: The layout probe's result file (empty: it leaves none) and exit code.
+        self.layout = layout_result() if layout is None else layout
+        self.layout_exit = layout_exit
+        self.layout_runs: list[str] = []
+        #: "kill", "verify", "cleanup", "layout", "publish", in the order they ran.
         self.order: list[str] = []
 
     # -- filesystem --------------------------------------------------------------
@@ -99,6 +124,25 @@ class FakeSandbox:
             if self.kill_works:
                 self.killed.set()
             return 0, "__killed__"
+        if "layout_probe.py" in command and "sha256sum" in command:
+            directory = shlex.split(command.split(";", 1)[0])[0].split("=", 1)[1].rsplit("/", 1)[0]
+            self.layout_runs.append(command)
+            self.order.append("layout")
+            if self.layout:
+                self._put(f"{directory}/result.json", self.layout)
+            return self.layout_exit, ""
+        if "result.json" in command and "stat -c %s" in command:
+            content = self.read_text(shlex.split(command)[3])
+            return 0, str(len(content)) if content is not None else "none"
+        if "tail -c 4000" in command:
+            parts = shlex.split(command)
+            self._put(parts[5], (self.read_text(parts[3]) or "")[-4000:])
+            return 0, ""
+        if "__made__" in command:
+            return 0, "__made__"
+        if "__page__" in command:
+            path = shlex.split(command)[2]
+            return 0, "__page__" if self.read_text(path) else "__none__"
         if "timeout -k 5" in command and "verify.log" in command:
             log = re.search(r"> (\S+verify\.log)", command).group(1).strip("'")
             self._put(log, self.verify_log)
@@ -142,7 +186,7 @@ class FakeSandbox:
         if "__ok__" in command:
             parts = shlex.split(command)
             source = parts[2].rsplit("/index.html", 1)[0]
-            target = parts[parts.index("mkdir") + 2]
+            target = parts[parts.index("/usr/bin/mkdir") + 2]
             with self.lock:
                 items = [(p, c) for p, c in self.fs.items() if p.startswith(source + "/")]
             if not any(p == source + "/index.html" and c for p, c in items):
@@ -154,7 +198,7 @@ class FakeSandbox:
                 self._put(target + path[len(source) :], content)
             self.order.append("publish")
             return 0, "__ok__"
-        if command.startswith("rm -rf "):
+        if command.startswith(("rm -rf ", "/usr/bin/rm -rf ")):
             prefix = shlex.split(command)[2]
             with self.lock:
                 for path in [p for p in self.fs if p.startswith(prefix)]:

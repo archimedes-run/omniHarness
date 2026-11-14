@@ -33,8 +33,10 @@ Arguments:
 - done_criteria: checkable outcomes ("npm run build exits 0", "dist/index.html exists", "the counter increments").
 - verify_command: the command the system runs itself in project_dir after the worker stops, whose exit code decides "verified" (for example "npm run build"). Leave empty only when nothing can be built or tested.
 - expect_files: files (relative to project_dir) that must exist and be non-empty afterwards, for example ["dist/index.html"].
-- publish_dir: for a web app to show: the build folder relative to project_dir (usually "dist"). After verification it is copied to /mnt/user-data/outputs and opened in the artifact panel.
+- publish_dir: for a web app to show: the build folder relative to project_dir (usually "dist"). Once the build passes it is copied to /mnt/user-data/outputs and opened in the artifact panel
+  (an app whose layout check failed is still shown, marked; one that renders nothing is not).
 - inputs / constraints: anything else the worker needs (references, versions, limits). Never secrets.
+- fix_of: ONLY for the one automatic layout fix a result asks for: the id of the job whose layout check failed. Leave empty otherwise.
 
 The person sees live progress and can stop the job. The result's STATUS is decided by the system from evidence:
 verified (the verify command exited 0 and every expected file exists), unverified (no evidence), failed (the check failed), stopped, or blocked (budget, network or time limit).
@@ -92,6 +94,7 @@ async def code_job_tool(
     publish_dir: str | None = None,
     inputs: str | None = None,
     constraints: str | None = None,
+    fix_of: str | None = None,
 ) -> Command:
     def reply(text: str, artifacts: list[str] | None = None) -> Command:
         update: dict = {"messages": [ToolMessage(text, tool_call_id=tool_call_id)]}
@@ -121,7 +124,10 @@ async def code_job_tool(
             expect_files=[normalize_relative(f, "expect_files") for f in (expect_files or [])][:20],
             publish_dir=normalize_relative(publish_dir, "publish_dir") if (publish_dir or "").strip() else None,
             title=goal.strip().splitlines()[0][:80],
+            fix_of=(fix_of or "").strip() or None,
         )
+        if brief.fix_of and not re.fullmatch(r"[0-9a-f]{16}", brief.fix_of):
+            raise ValueError("fix_of must be the id of the job whose layout check failed")
         if brief.verify_command and ("\n" in brief.verify_command or "\x00" in brief.verify_command):
             raise ValueError("verify_command must be one line")
     except ValueError as exc:

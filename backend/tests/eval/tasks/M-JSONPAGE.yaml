@@ -1,0 +1,25 @@
+id: M-JSONPAGE
+title: A long JSON page is shortened without losing its fields
+mock_only: true
+source: 'real-model eval 2026-11-13 (T13: the PyPI JSON, ~100 KB with its README before
+  "version", fetched again and again)'
+mode: pro
+prompt: Latest bigpkg version from its package JSON.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- answer_contains:
+    values:
+    - 9.9.9
+mock:
+  lead:
+  - tool_calls:
+    - name: web_fetch
+      args:
+        url: https://pypi.example/pypi/bigpkg/json
+  - expect:
+      tool: web_fetch
+      contains: '"version": "9.9.9"'
+    content: The latest bigpkg version is 9.9.9 [package JSON](https://pypi.example/pypi/bigpkg/json).

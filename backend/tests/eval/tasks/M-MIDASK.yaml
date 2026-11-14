@@ -1,0 +1,33 @@
+id: M-MIDASK
+title: A question asked mid-task is sent back once
+mock_only: true
+source: spec 009 FR-056/FR-057 (mocked)
+mode: pro
+prompt: Find a good Saturday museum in Philadelphia.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- no_clarification
+- deferred_question
+- no_menu
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: saturday museum philadelphia
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: ask_clarification
+      args:
+        question: Art or history?
+        clarification_type: ambiguous_requirement
+        options:
+        - Art
+        - History
+  - expect:
+      contains: Not asked
+    content: Go to the [Philadelphia Museum of Art](https://philamuseum.org/) (I assumed art; it is open on Saturdays).

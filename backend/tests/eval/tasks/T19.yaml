@@ -1,0 +1,53 @@
+id: T19
+title: Compare 3 Next.js auth libraries with sources
+source: 'owner dogfooding (2026-10-25): compare 3 Next.js auth libraries with sources'
+mode: pro
+prompt: Compare 3 popular authentication libraries for a Next.js app, with sources.
+tools: []
+confirm: none
+budget:
+  seconds: 480
+  est_usd: 0.1
+checks:
+- min_links:
+    n: 3
+    distinct_hosts: 3
+- answer_contains:
+    any_of:
+    - Auth.js
+    - NextAuth
+    - Better Auth
+    - Clerk
+    - Lucia
+    - Supabase
+    - Kinde
+    - Auth0
+    - Firebase
+    - Stack Auth
+    - WorkOS
+    - Passport
+    - Iron Session
+    min_count: 3
+- no_menu
+- no_clarification
+mock:
+  lead:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: next.js auth libraries comparison
+  - expect:
+      tool: web_search
+      contains: authjs
+    content: '| Library | Model | Notes |
+
+      |---|---|---|
+
+      | Auth.js | open source | Next.js-native, many providers [Auth.js](https://authjs.dev/) |
+
+      | Better Auth | open source | TypeScript, plugins [Better Auth](https://www.better-auth.com/) |
+
+      | Lucia | guidance | Learn sessions yourself [Lucia](https://lucia-auth.com/) |
+
+
+      Sources: [Next.js authentication guide](https://nextjs.org/docs/app/guides/authentication).'

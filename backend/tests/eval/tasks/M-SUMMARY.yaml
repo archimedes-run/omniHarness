@@ -1,0 +1,118 @@
+id: M-SUMMARY
+title: Summarisation mid-task keeps the plan record
+mock_only: true
+source: spec 009 FR-059 (mocked)
+mode: pro
+prompt: Find 12 date-night restaurants in Philadelphia across Fishtown, Rittenhouse, Old City and East Passyunk, with links.
+tools: []
+confirm: none
+fixtures:
+  summarization_tokens: 700
+budget:
+  seconds: 60
+checks:
+- trace_step:
+    type: summary
+    min: 1
+- no_repeat_calls:
+    tools:
+    - web_search
+- min_links:
+    n: 12
+- verification_status:
+    allowed:
+    - verified
+mock:
+  lead:
+  - tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 12 restaurants across 4 neighbourhoods with links'
+          status: completed
+        - content: Search Fishtown
+          status: in_progress
+        - content: Search Rittenhouse
+          status: pending
+        - content: Search Old City
+          status: pending
+        - content: Search Passyunk
+          status: pending
+        - content: Write the list
+          status: pending
+  - tool_calls:
+    - name: web_search
+      args:
+        query: date night restaurants fishtown philadelphia
+  - tool_calls:
+    - name: web_search
+      args:
+        query: date night restaurants rittenhouse philadelphia
+  - tool_calls:
+    - name: web_search
+      args:
+        query: date night restaurants old city philadelphia
+  - tool_calls:
+    - name: web_search
+      args:
+        query: date night restaurants passyunk philadelphia
+  - expect:
+      any_contains: <plan_record>
+    tool_calls:
+    - name: write_todos
+      args:
+        todos:
+        - content: 'Done when: 12 restaurants across 4 neighbourhoods with links'
+          status: completed
+        - content: Search Fishtown
+          status: completed
+        - content: Search Rittenhouse
+          status: completed
+        - content: Search Old City
+          status: completed
+        - content: Search Passyunk
+          status: completed
+        - content: Write the list
+          status: completed
+  - expect:
+      any_contains: Already done and verified
+    content: '12 date-night restaurants across 4 neighbourhoods:
+
+
+      **Fishtown**
+
+      - [Suraya](https://www.surayaphilly.com/) - Lebanese with a garden.
+
+      - [Wm. Mulherin''s Sons](https://www.wmmulherinssons.com/) - wood-fired Italian.
+
+      - [Kalaya](https://www.kalayaphilly.com/) - Southern Thai.
+
+
+      **Rittenhouse**
+
+      - [Parc](https://www.parc-restaurant.com/) - French bistro.
+
+      - [Friday Saturday Sunday](https://www.fridaysaturdaysunday.com/) - tasting menu.
+
+      - [Ambra](https://www.ambrarestaurant.com/) - Italian tasting menu.
+
+
+      **Old City**
+
+      - [Fork](https://www.forkrestaurant.com/) - New American.
+
+      - [Royal Boucherie](https://www.royalboucherie.com/) - French brasserie.
+
+      - [Amada](https://www.amadarestaurant.com/) - Spanish tapas.
+
+
+      **East Passyunk**
+
+      - [Laurel](https://www.restaurantlaurel.com/) - tasting menu.
+
+      - [Bing Bing Dim Sum](https://www.bingbingdimsum.com/) - playful dim sum.
+
+      - [Fond](https://www.fondphilly.com/) - seasonal American.
+
+
+      Checked: every link came from this task''s searches.'

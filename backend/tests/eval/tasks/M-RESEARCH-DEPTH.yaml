@@ -1,0 +1,80 @@
+id: M-RESEARCH-DEPTH
+title: A research subagent can make all of its budgeted lookups before it answers
+mock_only: true
+source: 'real-model eval 2026-11-13 (T06, T07, T08: every research call failed with
+  a recursion limit of 24)'
+mode: pro
+prompt: Research the top 3 day trips from Lisbon and give me one brief with links.
+tools: []
+confirm: none
+budget:
+  seconds: 90
+checks:
+- tool_called:
+    name: research
+- min_links:
+    n: 3
+mock:
+  lead:
+  - tool_calls:
+    - name: research
+      args:
+        description: Lisbon day trips
+        brief: 'Goal: top 3 day trips from Lisbon. Inputs: none. Constraints: public
+          web. Done when: 3 trips with sources. Return: 3 items with source URLs.'
+  - expect:
+      tool: research
+      contains: Succeeded
+    content: 'Day trips: [Sintra](https://www.parquesdesintra.pt/), [Cascais](https://www.visitcascais.com/),
+      [Evora](https://www.visitevora.net/).'
+  sub:
+  - tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 0
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 1
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 2
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 3
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 4
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 5
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 6
+  - expect:
+      tool: web_search
+    tool_calls:
+    - name: web_search
+      args:
+        query: lisbon day trips 7
+  - expect:
+      tool: web_search
+    content: 'Sintra, Cascais, Evora. Sources: https://www.parquesdesintra.pt/ https://www.visitcascais.com/
+      https://www.visitevora.net/'

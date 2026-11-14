@@ -1,0 +1,44 @@
+id: M-DECLINE
+title: A declined card is not re-attempted, and is named
+mock_only: true
+source: spec 009 FR-058a (mocked)
+mode: pro
+prompt: Create a project called 'Eval Declined Idea'.
+tools: []
+confirm: decline:ledger_apply
+budget:
+  seconds: 60
+checks:
+- card_raised:
+    tool: ledger_apply
+- resumed:
+    min: 1
+- ledger_absent:
+    project: Eval Declined Idea
+- answer_contains:
+    values:
+    - not created
+mock:
+  lead:
+  - tool_calls:
+    - name: ledger_apply
+      args:
+        changes:
+        - op: create_project
+          name: Eval Declined Idea
+          why: test
+  - expect:
+      tool: ledger_apply
+    content: Proposed on a card.
+  - expect:
+      any_contains: declined this call
+    tool_calls:
+    - name: ledger_apply
+      args:
+        changes:
+        - op: create_project
+          name: Eval Declined Idea
+          why: test
+  - expect:
+      contains: declined this exact call
+    content: 'The project Eval Declined Idea was not created: you declined it.'

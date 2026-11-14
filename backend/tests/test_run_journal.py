@@ -553,3 +553,28 @@ class TestChatModelStartHumanMessage:
         j.on_chat_model_start({}, [], run_id=uuid4(), tags=["lead_agent"])
         await j.flush()
         assert j._first_human_msg is None
+
+
+class TestModelIdForCost:
+    """Spec 009 FR-080: the trace prices tokens by model. A reply whose
+    response_metadata names no model was priced as "unknown" (no cost, shown
+    as "-"); the journal now records the model id the call was made with."""
+
+    @pytest.mark.anyio
+    async def test_the_call_s_model_id_is_recorded_and_priced(self, journal_setup):
+        from langchain_core.messages import HumanMessage
+
+        from app.run_history.chat_trace import build_trace
+
+        j, store = journal_setup
+        run_id = uuid4()
+        j.on_chat_model_start({}, [[HumanMessage(content="hi")]], run_id=run_id, tags=["lead_agent"], metadata={"ls_model_name": "gpt-5"})
+        response = _make_llm_response("Hi", usage={"input_tokens": 10000, "output_tokens": 1000, "total_tokens": 11000})
+        response.generations[0][0].message.model_dump.return_value["response_metadata"] = {}
+        j.on_llm_end(response, run_id=run_id, parent_run_id=None, tags=["lead_agent"])
+        await j.flush()
+        events = await store.list_events("t1", "r1")
+        reply = [e for e in events if e["event_type"] == "llm.ai.response"][0]
+        assert reply["metadata"]["model"] == "gpt-5"
+        trace = build_trace(events, run_id="r1", thread_id="t1", status="success")
+        assert trace["cost_usd"] == pytest.approx(0.0225, abs=1e-6)

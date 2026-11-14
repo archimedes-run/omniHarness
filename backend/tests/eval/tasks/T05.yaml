@@ -1,0 +1,45 @@
+id: T05
+title: Emails from the last 2 days that need a reply
+source: inbox habit
+mode: pro
+prompt: Which emails from the last 2 days still need a reply from me?
+tools:
+- mail
+confirm: none
+budget:
+  seconds: 300
+  est_usd: 0.05
+checks:
+- tool_called:
+    name: mail_read
+- answer_contains:
+    any_of:
+    - Saturday dinner
+    - still on for 7
+    - Priya
+- answer_contains:
+    any_of:
+    - Q3 budget
+    - budget draft
+    - Dana
+- no_clarification
+- tool_not_called:
+    name: mail_draft
+mock:
+  lead:
+  - tool_calls:
+    - name: gmail_search_emails
+      args:
+        query: newer_than:2d
+  - expect:
+      tool: gmail_search_emails
+      contains: Q3 budget
+    content: 'Two emails still need a reply from you:
+
+
+      1. Priya Shah: "Saturday dinner: still on for 7?"
+
+      2. Dana Lee: "Can you review the Q3 budget draft by Friday?"
+
+
+      The others are notices or newsletters that need no reply.'

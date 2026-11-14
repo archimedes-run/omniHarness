@@ -37,6 +37,29 @@ def mark_user_turn(message: Any) -> Any:
     return message
 
 
+#: On a tool result, set by the policy layer (app.policy.middleware): the
+#: call's tier and outcome ("ran", "needs_confirmation", "refused") and its
+#: card id. Display and measurement data (the per-run trace, the todo gate's
+#: "stopped at a card"); no policy decision reads it back.
+POLICY_STEP_MARKER = "omniharness_policy_step"
+
+
+#: On the final reply, set by the policy layer when it appended its Tier 2
+#: disclosure block (app.policy.disclose): {"text": the appended block,
+#: "items": [{"tool", "text"}]}. Display data only, so the chat can show the
+#: block as a compact system note under the answer instead of as the
+#: assistant's own words. The reply's text still carries the block (channels,
+#: history, every test of the disclosure guarantee); no decision reads this.
+DISCLOSURE_MARKER = "omniharness_disclosure"
+
+
+#: On an invited agent's (a specialist's) final reply, set by its policy layer:
+#: its Tier 2 records, not appended to its own text. The task tool carries them
+#: back on its result as {"agent", "items"}, and the inviting agent's policy
+#: layer rolls them up onto its final reply "(via <agent>)": disclosed once.
+DELEGATED_DISCLOSURE_MARKER = "omniharness_delegated_disclosure"
+
+
 #: On the summary message that replaces history (summarization_middleware):
 #: what the summarized part of the CURRENT turn was, so the policy's
 #: private-read walk (app.policy.private_reads) can still judge it once the
@@ -113,3 +136,15 @@ def summarized_turn(messages: list[Any]) -> dict[str, Any]:
                 return {"turn_key": "", "tools": tools, "start_found": False}
             return {"turn_key": str(earlier.get("turn_key") or ""), "tools": [*prior, *tools], "start_found": earlier.get("start_found") is True}
     return {"turn_key": "", "tools": tools, "start_found": False}
+
+
+def delegated_result(text: str, result: Any, *, agent: str, tool_call_id: str, name: str) -> Any:
+    """A delegating tool's result. With Tier 2 records from the specialist
+    (`result.disclosures`), a ToolMessage carrying them under
+    DELEGATED_DISCLOSURE_MARKER, so the inviting agent's final reply discloses
+    them once, "(via <agent>)"; else the plain text, as before."""
+    if not getattr(result, "disclosures", None) or not tool_call_id:
+        return text
+    from langchain_core.messages import ToolMessage
+
+    return ToolMessage(content=text, tool_call_id=tool_call_id, name=name, additional_kwargs={DELEGATED_DISCLOSURE_MARKER: {"agent": agent, "items": list(result.disclosures)}})

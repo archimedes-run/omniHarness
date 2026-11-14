@@ -569,6 +569,10 @@ const NOT_AUDITED: Record<string, string> = {
     "audited in both themes and at phone width by tests/rendering/apps-host.spec.ts (it needs the fake bridge and the demo app)",
   "/workspace/runs/[firing_id]":
     "audited in both themes by tests/rendering/run-summary.spec.ts (it needs a run's summary stubbed)",
+  "/workspace/settings/evals":
+    "audited in both themes by tests/rendering/slice0-behaviour.spec.ts (it needs eval results stubbed)",
+  "/workspace/traces/[run_id]":
+    "audited in both themes by tests/rendering/slice0-behaviour.spec.ts (it needs a run's trace stubbed)",
 };
 
 /** src/app/workspace/** /page.tsx as route patterns, dynamic segments as [x]. */

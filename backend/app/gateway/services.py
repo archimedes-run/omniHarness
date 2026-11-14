@@ -621,7 +621,12 @@ def build_run_config(
     the LangGraph Platform-compatible HTTP API and the IM channel path behave
     identically.
     """
-    config: dict[str, Any] = {"recursion_limit": 100}
+    # 150, not 100 (spec 009 Slice 0): every middleware hook is a graph step,
+    # and Slice 0 added after_model hooks (the final-reply notice, the
+    # sent-back question, the checklist gate in every mode), so 100 cut
+    # channel and scheduled runs short after ~8 tool rounds. The web chat
+    # asks for 1000; the loop detector still stops a run that repeats itself.
+    config: dict[str, Any] = {"recursion_limit": 150}
     if request_config:
         # LangGraph >= 0.6.0 introduced ``context`` as the preferred way to
         # pass thread-level data and rejects requests that include both
@@ -1037,7 +1042,53 @@ async def start_run(
     # title from the checkpoint and calls thread_store.update_display_name
     # after the run completes.
 
+    _trace_when_done(request.app, record, owner_id=user_id, resume=server_resume[1] if server_resume is not None else None, assistant_id=body.assistant_id)
     return record
+
+
+def _trace_when_done(app: Any, record: Any, *, owner_id: str | None, resume: dict | None, assistant_id: str | None) -> None:
+    """When a lead run ends, write its per-run trace to the run history
+    (spec 009 FR-080). Fire-and-forget: the trace never holds up or fails the
+    run."""
+    if (assistant_id or "lead_agent") != "lead_agent" or getattr(record, "task", None) is None:
+        return
+    from app.run_history.chat_trace import record_chat_trace
+
+    def done(_task: Any) -> None:
+        status = getattr(getattr(record, "status", None), "value", None) or str(getattr(record, "status", ""))
+        try:
+            write = record_chat_trace(app, run_id=record.run_id, thread_id=record.thread_id, status=status, owner_id=owner_id, resume=dict(resume) if resume else None)
+            task = asyncio.get_running_loop().create_task(asyncio.wait_for(write, timeout=60))
+        except RuntimeError:
+            return
+        _TRACE_TASKS.add(task)
+        task.add_done_callback(_TRACE_TASKS.discard)
+
+    record.task.add_done_callback(done)
+
+
+#: Trace writes in flight (held so they are not garbage-collected mid-write).
+_TRACE_TASKS: set = set()
+
+
+async def drain_trace_tasks(timeout: float = 5.0) -> None:
+    """At shutdown, BEFORE the database engine closes: let the trace writes in
+    flight finish (bounded), then cancel what is left. A trace write still
+    holding a database connection while the engine was disposed held the
+    gateway's shutdown forever (seen in CI as a test stuck in teardown)."""
+    loop = asyncio.get_running_loop()
+    # Only this loop's writes: a task left by an earlier app (another event
+    # loop, already closed: tests build many) never finishes and is dropped.
+    for task in [t for t in _TRACE_TASKS if t.get_loop() is not loop]:
+        _TRACE_TASKS.discard(task)
+    pending = [t for t in _TRACE_TASKS if not t.done()]
+    if not pending:
+        return
+    _done, still = await asyncio.wait(pending, timeout=timeout)
+    for task in still:
+        task.cancel()
+    if still:
+        await asyncio.wait(still, timeout=timeout)
 
 
 async def sse_consumer(

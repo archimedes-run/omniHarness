@@ -581,6 +581,20 @@ class RunHistory:
         self._flush_wal()
         return row is not None
 
+    def delete_thread(self, thread_id: str, *, kind: str) -> int:
+        """Delete every run of one kind recorded for a thread (a chat's
+        traces when the chat is deleted): rows, blobs and data keys, as
+        delete_run does. Returns how many."""
+        with self._lock, self._connect() as c:
+            rows = c.execute("SELECT id, blob FROM runs WHERE thread_id = ? AND kind = ?", (thread_id, kind)).fetchall()
+            c.execute("DELETE FROM runs WHERE thread_id = ? AND kind = ?", (thread_id, kind))
+            for row in rows:
+                if row["blob"]:
+                    _shred(self.blobs / row["blob"])
+            self.key.destroy([row["id"] for row in rows])
+        self._flush_wal()
+        return len(rows)
+
     def _flush_wal(self) -> None:
         """Copy the WAL into the (secure_delete) database and truncate it to
         zero bytes. What can still remain, said plainly: blocks the filesystem
@@ -610,8 +624,11 @@ class RunHistory:
 
     # -- reads ------------------------------------------------------------
 
-    def list(self, *, kind: str | None = None, source_id: str | None = None, limit: int = 50) -> list[RunSummary]:
+    def list(self, *, kind: str | None = None, source_id: str | None = None, limit: int = 50, thread_id: str | None = None) -> list[RunSummary]:
         where, args = [], []
+        if thread_id:
+            where.append("thread_id = ?")
+            args.append(thread_id)
         if kind:
             where.append("kind = ?")
             args.append(kind)

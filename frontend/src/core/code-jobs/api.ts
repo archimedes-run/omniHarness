@@ -18,6 +18,25 @@ export interface CodeJobCommand {
   is_build?: boolean;
 }
 
+/** The system's layout check of a built web app (a headless browser at each
+ * width). `error`: the check itself could not run, never counted. */
+export interface CodeJobLayout {
+  outcome: "pass" | "fail" | "error";
+  widths: number[];
+  mode: "enforce" | "warn";
+  /** Each failure as shown, element names and error text included. */
+  failures: string[];
+  /** The failures in the system's own words (the job's reason). */
+  summary?: string[];
+  warnings: string[];
+  /** The system's wording for why there is no answer (a fixed set). */
+  error: string | null;
+  error_code?: string | null;
+  /** That no-answer counts against "verified" (its result could not be read). */
+  counted?: boolean;
+  seconds?: number;
+}
+
 export interface CodeJobResult {
   status: CodeJobStatus;
   reason: string | null;
@@ -30,6 +49,7 @@ export interface CodeJobResult {
     log_tail?: string;
   } | null;
   expected_files?: { path: string; exists: boolean; bytes: number }[];
+  layout?: CodeJobLayout | null;
   files_changed?: {
     added: string[];
     modified: string[];
@@ -51,6 +71,8 @@ export interface CodeJobResult {
   over_reservation_calls?: number;
   model?: string;
   published?: { artifact_id: string; path: string } | null;
+  /** This job is the one automatic fix of that job's layout failures. */
+  fix_of?: string | null;
   duration_s?: number;
 }
 
@@ -123,6 +145,7 @@ export type CodeJobStep =
       exists: boolean;
       bytes: number;
     }
+  | ({ seq: number; at: string; kind: "layout" } & CodeJobLayout)
   | {
       seq: number;
       at: string;

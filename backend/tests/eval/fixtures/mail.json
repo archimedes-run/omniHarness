@@ -1,0 +1,11 @@
+{
+  "_comment": "Six messages for the mail stub; hours_ago is relative to now. needs_reply marks the two the user still owes a reply to (T05). Used by T04/T05.",
+  "messages": [
+    {"id": "m1", "hours_ago": 3, "from": "Priya Shah <priya@example.org>", "subject": "Saturday dinner: still on for 7?", "body": "Hi! Are we still on for Saturday at 7? Let me know so I can confirm the reservation.", "needs_reply": true, "unread": true},
+    {"id": "m2", "hours_ago": 9, "from": "Building Management <office@example-apartments.com>", "subject": "Water shut-off notice for Thursday", "body": "Water will be shut off on Thursday from 9am to noon for maintenance. No action needed.", "needs_reply": false, "unread": true},
+    {"id": "m3", "hours_ago": 20, "from": "Dana Lee <dana@example.com>", "subject": "Can you review the Q3 budget draft by Friday?", "body": "Could you review the attached Q3 budget draft and send comments by Friday? Thanks!", "needs_reply": true, "unread": false},
+    {"id": "m4", "hours_ago": 26, "from": "Newsletter <news@example-weekly.com>", "subject": "This week in urban gardening", "body": "Ten tips for balcony tomatoes.", "needs_reply": false, "unread": false},
+    {"id": "m5", "hours_ago": 30, "from": "Sam Ortiz <sam@example.net>", "subject": "Re: gym schedule", "body": "Sounds good, see you Wednesday at 8. No need to reply.", "needs_reply": false, "unread": false},
+    {"id": "m6", "hours_ago": 40, "from": "Receipts <no-reply@example-shop.com>", "subject": "Your order has shipped", "body": "Order #4411 has shipped.", "needs_reply": false, "unread": false}
+  ]
+}

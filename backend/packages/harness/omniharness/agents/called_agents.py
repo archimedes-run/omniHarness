@@ -316,7 +316,9 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
         handed_off = True
         result = await _await_worker(future, holder)
         if result.status == SubagentStatus.COMPLETED and not result.model_failed:
-            return result.result or "(no answer)"
+            from omniharness.agents.turns import delegated_result
+
+            return delegated_result(result.result or "(no answer)", result, agent=agent, tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""), name=getattr(runtime, "tool_name", None) or "continue_agent")
         return f"{agent} could not continue: {result.error or result.result or result.status.value}. Continue can be pressed again."
     finally:
         if not handed_off:
@@ -386,5 +388,7 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
     holder = _new_holder(executor)
     result = await _await_worker(_start_worker(lambda: executor.execute(prompt, holder)), holder)
     if result.status == SubagentStatus.COMPLETED:
-        return result.result or "(no answer)"
+        from omniharness.agents.turns import delegated_result
+
+        return delegated_result(result.result or "(no answer)", result, agent=agent, tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""), name=CALL_AGENT_TOOL)
     return f"{agent} could not answer: {result.error or result.status.value}"

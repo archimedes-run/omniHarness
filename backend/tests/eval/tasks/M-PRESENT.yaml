@@ -1,0 +1,31 @@
+id: M-PRESENT
+title: A file written to outputs is presented even when the model forgets to
+mock_only: true
+source: 'owner rule 2026-11-13: files the agent writes are shown in the file panel (spec 009 FR-018)'
+mode: pro
+prompt: Write a short packing list to a markdown file.
+tools: []
+confirm: none
+budget:
+  seconds: 60
+checks:
+- file_in_outputs:
+    glob: '*.md'
+    min_bytes: 40
+- presented:
+    glob: packing-list.md
+- auto_presented:
+    glob: packing-list.md
+- tool_not_called:
+    name: present_files
+mock:
+  lead:
+  - tool_calls:
+    - name: write_file
+      args:
+        description: packing list
+        path: /mnt/user-data/outputs/packing-list.md
+        content: "# Packing list\n\n- Passport\n- Charger\n- Rain jacket\n- Toothbrush\n"
+  - expect:
+      tool: write_file
+    content: 'The packing list is ready: passport, charger, rain jacket and toothbrush.'

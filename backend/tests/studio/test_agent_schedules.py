@@ -32,6 +32,12 @@ from langchain_core.messages import AIMessage
 SOUL = "SOUL-MARKER-WRAP-UP: you wrap up the day."
 
 
+def _text(content) -> str:
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content)
+
+
 class RecordingFake(GenericFakeChatModel):
     """Answers from the script; records the tools bound and the prompts seen."""
 
@@ -43,7 +49,9 @@ class RecordingFake(GenericFakeChatModel):
         return self
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        self.prompts.append("\n".join(str(m.content) for m in messages if getattr(m, "type", "") == "system"))
+        # The text of each system message (its content may be a list of
+        # blocks: the checklist middleware appends its own block, spec 009).
+        self.prompts.append("\n".join(_text(m.content) for m in messages if getattr(m, "type", "") == "system"))
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
