@@ -127,7 +127,8 @@ A write over any cap is refused before anything is stored.
   untrusted before the call (and for automations, invited agents and unknown
   causes); `lineage_source` names what (tool names). One exception, for
   `artifact_update` only: an `artifact_read` of the SAME artifact whose read
-  version is `user` does not by itself make the update `content` (reading is
+  version (as recorded in that read's result, not the latest at update time)
+  is `user` does not by itself make the update `content` (reading is
   how an artifact is edited); any other untrusted result in the turn still
   does, and the policy layer's own checks are unchanged. Files indexed from a
   chat's outputs are `import`, source `"a file from this chat"`; the UI says
@@ -364,7 +365,8 @@ exports or promotes: such names have no rule and the policy layer refuses them.
   </artifact-1f2e3d4c>
   ```
 
-  The tag carries a random suffix per call. `artifact_list` returns the same
+  Its ToolMessage `artifact` field is `{"type": "omni_artifact_read", "artifact_id", "version"}`
+  (the version actually read; not a card). The tag carries a random suffix per call. `artifact_list` returns the same
   label and one JSON object per line inside `<artifacts-xxxxxxxx>…</artifacts-xxxxxxxx>`
   (`<` escaped as a JSON `\u003c`).
 

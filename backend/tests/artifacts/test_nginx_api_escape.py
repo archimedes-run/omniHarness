@@ -1,10 +1,10 @@
-"""An /api/ request whose path leaves /api/ after nginx decodes and normalises
-it (`/api/artifacts/..%2F..%2Fetc`) is answered 404 by nginx, never proxied to
-the frontend (which answered 500). Follow-up to Spec 012 S1."""
+"""A request whose raw path uses an encoded or literal traversal or separator
+trick never reaches the frontend: nginx answers 404 itself. Such a path can
+leave /api/ once nginx normalises it (`/api/artifacts/..%2F..%2Fetc`), and the
+frontend answered those with 500. Follow-up to Spec 012 S1."""
 
 from __future__ import annotations
 
-import re
 import shutil
 import socket
 import subprocess
@@ -22,10 +22,14 @@ CONFS = ("nginx.conf", "nginx.local.conf")
 @pytest.mark.parametrize("name", CONFS)
 def test_every_shipped_config_answers_escaped_api_paths_itself(name):
     text = (NGINX_DIR / name).read_text()
-    assert re.search(r"map \$request_uri \$api_escape \{[^}]*~\*\^/api/artifacts/ artifact;[^}]*~\*\^/api/ api;", text), "the map is missing"
+    assert "map $request_uri $raw_path" in text and "map $raw_path $path_trick" in text, "the maps are missing"
+    trick = text[text.index("map $raw_path $path_trick") :]
+    trick = trick[: trick.index("}")]
+    for needle in ("%2e", "%2f", "%5c", "//"):
+        assert needle in trick, needle
     root = text[text.index("        location / {") :]
     root = root[: root.index("proxy_pass")]
-    assert "if ($api_escape = artifact)" in root and "artifact_not_found" in root and "if ($api_escape = api)" in root, "location / proxies escaped /api/ paths"
+    assert "if ($path_trick_answer = artifact)" in root and "artifact_not_found" in root and "if ($path_trick_answer = plain)" in root, "location / proxies trick paths"
 
 
 def _port() -> int:
@@ -83,10 +87,35 @@ def test_the_local_config_really_answers_404(tmp_path):
                 time.sleep(0.05)
         status, body = _raw_get(listen, "/api/artifacts/..%2F..%2Fetc")
         assert status == 404 and "artifact_not_found" in body
-        status, body = _raw_get(listen, "/api/models/..%2F..%2Fx")
-        assert status == 404 and "frontend" not in body
+        # Every spelling that leaves /api/ after normalising: never the frontend.
+        for path in (
+            "/api/models/..%2F..%2Fx",
+            "//api/x/..%2F..%2Fy",
+            "/./api/x/..%2F..%2Fy",
+            "/%61pi/x/..%2F..%2Fy",
+            "/%2Fapi/x/..%2F..%2Fy",
+            "/a/..%2Fapi/x/..%2F..%2Fy",
+            "/a/%2E%2E/b",
+            "/a/..%5Cb",
+            "/workspace/./x",
+        ):
+            status, body = _raw_get(listen, path)
+            assert status == 404 and "frontend" not in body, (path, status, body)
+        status, body = _raw_get(listen, "//api/artifacts/..%2F..%2Fx")
+        assert status == 404 and "artifact_not_found" in body
+        # Normal paths still reach their upstream.
         assert _raw_get(listen, "/api/artifacts/abc") == (200, "gateway")
-        assert _raw_get(listen, "/workspace") == (200, "frontend")
+        for path in (
+            "/workspace",
+            "/workspace/chats/6c0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+            "/workspace/artifacts/Qm3x9V2kPz8aLr0tYw4bNc?v=2",
+            "/_next/static/chunks/x.js",
+            "/_next/static/chunks/app/workspace/page-0a1b2c3d4e5f.js",
+            "/mermaid-frame/mermaid.js",
+            "/en/docs/getting-started",
+            "/workspace/chats?next=%2Fworkspace%2Fhome",
+        ):
+            assert _raw_get(listen, path) == (200, "frontend"), path
     finally:
         proc.terminate()
         proc.wait(5)

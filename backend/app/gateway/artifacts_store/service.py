@@ -69,7 +69,7 @@ def turn_lineage(context: dict, *, exempt_read=None) -> tuple[str, str | None]:
     ("content", what): content read, an automation, an invited agent, or a
     cause nobody could tell (FR-007; unknown counts as content).
 
-    `exempt_read(args)`: for artifact_update only. A result of artifact_read
+    `exempt_read(args, result)`: for artifact_update only. A result of artifact_read
     for which it returns True (a read of the SAME artifact whose read version
     is lineage `user`) is left out of the walk: reading an artifact is how it
     is edited, and reading the owner's own text adds no outside content. Every
@@ -82,7 +82,7 @@ def turn_lineage(context: dict, *, exempt_read=None) -> tuple[str, str | None]:
     if not isinstance(messages, list):
         return "content", "unknown"
     if exempt_read is not None:
-        messages = [m for m in messages if not (is_tool_result(m) and _tool_name_of(messages, m) == "artifact_read" and exempt_read(_call_args(messages, m)))]
+        messages = [m for m in messages if not (is_tool_result(m) and _tool_name_of(messages, m) == "artifact_read" and exempt_read(_call_args(messages, m), m))]
     origin, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
     if origin == ORIGIN_USER:
         return "user", None
@@ -173,7 +173,7 @@ class GatewayArtifactController:
         if store is None:
             return _UNAVAILABLE, None
         owner_id, thread_id = self._who(context)
-        lineage, source = turn_lineage(context, exempt_read=lambda args: self._own_user_read(store, owner_id, artifact_id, args))
+        lineage, source = turn_lineage(context, exempt_read=lambda args, result: self._own_user_read(store, owner_id, artifact_id, args, result))
 
         def build(s, row) -> Canonical:
             if (content is None) == (edits is None):
@@ -199,31 +199,39 @@ class GatewayArtifactController:
         return f"Updated artifact {summary['id']}: version {version['n']} (based on {base_version}).", binding(summary, version)
 
     @staticmethod
-    def _own_user_read(store: ArtifactStore, owner_id: str, artifact_id: str, args: dict) -> bool:
-        """True for an artifact_read of THIS artifact whose version read has
-        lineage `user` (the latest when the read named no version)."""
+    def _own_user_read(store: ArtifactStore, owner_id: str, artifact_id: str, args: dict, result) -> bool:
+        """True for an artifact_read of THIS artifact whose version READ has
+        lineage `user`. The version is the one the read recorded in its
+        result's structured part, never what is latest now; a result without
+        it (or naming another artifact) is not exempt."""
         if not isinstance(args, dict) or args.get("id") != artifact_id:
             return False
+        read = result.get("artifact") if isinstance(result, dict) else getattr(result, "artifact", None)
+        if not isinstance(read, dict) or read.get("type") != "omni_artifact_read" or read.get("artifact_id") != artifact_id:
+            return False
         try:
-            n = args.get("version")
-            n = int(n) if n is not None else store.get(owner_id, artifact_id)["latest_version"]
-            return store.version(owner_id, artifact_id, n)[1]["lineage"] == "user"
-        except (StoreError, TypeError, ValueError):
+            return store.version(owner_id, artifact_id, int(read["version"]))[1]["lineage"] == "user"
+        except (StoreError, KeyError, TypeError, ValueError):
             return False
 
     # -- reads (fenced, untrusted) ---------------------------------------------------
 
     def read(self, context: dict, *, artifact_id: str, version: int | None) -> str:
+        return self.read_bound(context, artifact_id=artifact_id, version=version)[0]
+
+    def read_bound(self, context: dict, *, artifact_id: str, version: int | None) -> tuple[str, dict | None]:
+        """The fenced content, and which version was read: the tool result's
+        structured part, so a later update judges THAT version's lineage."""
         store = self._store()
         if store is None:
-            return _UNAVAILABLE
+            return _UNAVAILABLE, None
         owner_id, _ = self._who(context)
         try:
             summary = store.get(owner_id, artifact_id)
             n = version if version is not None else summary["latest_version"]
             summary, meta, row = store.version(owner_id, artifact_id, n)
         except StoreError as exc:
-            return _refusal("Not read", exc)
+            return _refusal("Not read", exc), None
         kind = summary["kind"]
         attrs = f'id="{_attr(summary["id"])}" version="{n}" latest="{summary["latest_version"]}" kind="{_attr(kind)}" lineage="{_attr(meta["lineage"])}" title="{_attr(summary["title"])}"'
         if kind in kinds.TEXT_KINDS and meta["stored"] == "blob":
@@ -237,7 +245,8 @@ class GatewayArtifactController:
         else:
             body = f"({kind} content, {meta['size']} bytes, {meta['media_type']}: not shown as text)"
         tag = f"artifact-{secrets.token_hex(4)}"
-        return f"{FENCE_LABEL}\n<{tag} {attrs}>\n{fence_text(body)}\n</{tag}>"
+        read = {"type": "omni_artifact_read", "artifact_id": summary["id"], "version": n}
+        return f"{FENCE_LABEL}\n<{tag} {attrs}>\n{fence_text(body)}\n</{tag}>", read
 
     def list(self, context: dict, *, query: str | None, kind: str | None, limit: int | None) -> str:
         store = self._store()
