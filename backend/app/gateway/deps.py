@@ -170,6 +170,26 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.ledger_service = None
             set_ledger_controller(None)
 
+        # The Artifact store (Spec 012): a SYNCHRONOUS store on the same
+        # database, like the ledger, because the artifact tools call it from a
+        # tool invocation. The artifact tools exist only while its controller
+        # is registered.
+        from omniharness.runtime.artifacts.controller import set_artifact_controller
+
+        if sf is not None:
+            from app.gateway.artifacts_store.service import GatewayArtifactController
+            from app.gateway.artifacts_store.store import ArtifactStore
+            from omniharness.persistence.ledger import make_sync_engine as make_artifact_engine
+
+            artifact_engine = make_artifact_engine(config.database.app_sqlalchemy_url)
+            stack.callback(artifact_engine.dispose)
+            app.state.artifact_store = ArtifactStore(artifact_engine)
+            set_artifact_controller(GatewayArtifactController(lambda: getattr(app.state, "artifact_store", None)))
+            stack.callback(set_artifact_controller, None)
+        else:
+            app.state.artifact_store = None
+            set_artifact_controller(None)
+
         # The chat builder (Spec 010): the builder tools exist only while this
         # controller is registered, and only in the owner's own chat
         # (omniharness.runtime.builder.surface).

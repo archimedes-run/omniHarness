@@ -54,7 +54,7 @@ from typing import Any
 from app.gateway.builder import drafts
 from app.gateway.builder.render import render_draft, render_live
 from omniharness.config import config_versions
-from omniharness.runtime.builder.surface import LEAD_AGENT, bootstrap_target, builder_refusal, forbidden_targets
+from omniharness.runtime.builder.surface import ASK_FIRST_PREFIX, LEAD_AGENT, bootstrap_target, builder_refusal, forbidden_targets
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,16 @@ ACCESS_KEYS = (config_versions.TOOLS_KEY, "tool_groups", "skills", "model", conf
 #: selected); it has none of the tool groups or apps it asked for until the
 #: permission card the save raises is confirmed with its button.
 NEW_AGENT_ACCESS = {"tool_groups": [], "skills": []}
+#: English words a bare build request is made of (verbs, the things the
+#: builder makes, pronouns, articles, fillers). A request names a subject when
+#: it has at least one word outside this list, in any script.
+GENERIC_REQUEST_WORDS = frozenset(
+    "a an the me my i i'd i'm we us our you your please pls can could would will shall just new another one ones some "
+    "quick simple basic create make build set setup up add start get give want need like to for with do something thing "
+    "agent agents skill skills automation automations workflow workflows bot bots assistant assistants helper helpers "
+    "it that this there here now help hi hey ok okay".split()
+)
+
 #: Fixed wording for refusals that reach the model: never free text taken
 #: from stored config or written by a model (a scan's reason).
 INVALID = {
@@ -118,6 +128,88 @@ def _not_done(lead: str, exc: Exception, confirmed: bool) -> str:
     return f"{lead}: {exc}"
 
 
+def _tokens(text: str) -> list[str]:
+    """Words of any script: NFKC, casefolded, split on anything that is not a
+    letter or a digit (an apostrophe stays inside a word)."""
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", text or "").casefold()
+    cleaned = "".join(ch if ch.isalnum() or ch == "'" else " " for ch in folded)
+    return [w.strip("'") for w in cleaned.split() if w.strip("'")]
+
+
+def _contains(words: list[str], wanted: list[str]) -> bool:
+    """`wanted` appears in `words` as whole words, in order, side by side."""
+    size = len(wanted)
+    return any(words[i : i + size] == wanted for i in range(len(words) - size + 1))
+
+
+def _message_text(message: Any) -> str:
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    return content if isinstance(content, str) else " ".join(str(p.get("text", "")) if isinstance(p, dict) else str(p) for p in content or [])
+
+
+def _owner_words(context: dict) -> list[str]:
+    """The owner's own words of the current request: their tagged message(s)
+    in the current turn, and an answer they gave on the Question card that
+    the builder's own "ask first" refusal raised (checked in the question
+    store: this thread, this owner, answered on the card, asked by the call
+    right after that refusal). Memory, injected context, read content and
+    older messages never count."""
+    from app.policy.lineage import is_user_turn
+    from omniharness.agents.working_loop import turn_messages
+
+    messages = context.get(MESSAGES_KEY)
+    turn = turn_messages(list(messages)) if isinstance(messages, list) else []
+    words = [_message_text(m) for m in turn if is_user_turn(m)]
+    asked = _asked_after_refusal(turn)
+    if not asked:
+        return words
+    from app.gateway.questions.service import get_store
+    from app.gateway.questions.store import VIA_BUTTON
+    from app.gateway.resume import QUESTION_ANSWER_MARKER
+
+    store = get_store()
+    for message in turn:
+        kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+        qid = (kwargs or {}).get(QUESTION_ANSWER_MARKER) if isinstance(kwargs, dict) else None
+        if not isinstance(qid, str):
+            continue
+        q = store.get(qid)
+        answer = (q.answer or {}) if q is not None else {}
+        if (
+            q is None
+            or q.state != "answered"
+            or q.thread_id != str(context.get("thread_id"))
+            or q.owner_id != str(context.get("user_id"))
+            or answer.get("via") != VIA_BUTTON
+            or str((q.asker.get("ref") or {}).get("tool_call_id") or "") not in asked
+        ):
+            continue
+        if answer.get("option") is not None:
+            words.append(q.options[int(answer["option"])]["label"])
+        elif answer.get("text"):
+            words.append(str(answer["text"]))
+    return words
+
+
+def _asked_after_refusal(turn: list[Any]) -> set[str]:
+    """Ids of the ask_clarification call made directly after the builder's
+    "ask first" refusal (one question per refusal)."""
+    out: set[str] = set()
+    for index, message in enumerate(turn):
+        name = message.get("name") if isinstance(message, dict) else getattr(message, "name", None)
+        kind = message.get("type") if isinstance(message, dict) else getattr(message, "type", None)
+        if kind == "tool" and name == "builder_draft" and _message_text(message).startswith(ASK_FIRST_PREFIX):
+            for later in turn[index + 1 :]:
+                calls = later.get("tool_calls") if isinstance(later, dict) else getattr(later, "tool_calls", None)
+                later_type = later.get("type") if isinstance(later, dict) else getattr(later, "type", None)
+                if later_type == "ai" and calls:
+                    out |= {str(c.get("id")) for c in calls if c.get("name") == "ask_clarification"}
+                    break
+    return out
+
+
 class GatewayBuilderController:
     """The BuilderController the gateway registers (app/gateway/deps.py)."""
 
@@ -134,8 +226,8 @@ class GatewayBuilderController:
             raise BuilderRefused("the builder needs a chat and a signed-in owner, and this run has neither.")
         return str(user_id), str(thread_id)
 
-    def _guard(self, context: dict) -> tuple[str, str]:
-        refusal = builder_refusal(context)
+    def _guard(self, context: dict, tool: str | None = None) -> tuple[str, str]:
+        refusal = builder_refusal(context, tool)
         if refusal is not None:
             raise BuilderRefused(refusal)
         return self._who(context)
@@ -394,7 +486,8 @@ class GatewayBuilderController:
 
                 groups = {c.name: c.group for c in cfg.tools if getattr(c, "group", None)}
                 out = []
-                for tool in get_available_tools(include_mcp=False, app_config=cfg, subagent_enabled=True):
+                # Every built-in an agent could be granted (artifacts included).
+                for tool in get_available_tools(include_mcp=False, app_config=cfg, subagent_enabled=True, artifact_tools=True):
                     try:
                         if integration_of(tool, config_groups=groups) == integration:
                             out.append(tool.name)
@@ -489,9 +582,9 @@ class GatewayBuilderController:
 
     # -- the tools ---------------------------------------------------------------
 
-    def draft(self, context: dict, *, kind: str, name: str, fields: dict[str, Any], guessed: list[str], replace_current: bool) -> str:
+    def draft(self, context: dict, *, kind: str, name: str, fields: dict[str, Any], guessed: list[str], replace_current: bool, owner_request: str = "") -> str:
         try:
-            user_id, thread_id = self._guard(context)
+            user_id, thread_id = self._guard(context, "builder_draft")
             if kind == "mcp_server":
                 return MCP_HANDOFF.format(request=str((fields or {}).get("request") or name or "(what they described)")[:500])
             if kind not in KINDS:
@@ -512,6 +605,16 @@ class GatewayBuilderController:
                     "Ask the user whether to drop that draft and start this one; if they agree, call builder_draft again with replace_current=true."
                 )
             live, version = self._live(user_id, kind, name)
+            if live is None and bootstrap_target(context) is None:
+                # Something NEW only when the owner said what it is for, in
+                # their own words in this chat: never from memory or from
+                # content the model read.
+                problem = self._request_problem(context, owner_request)
+                if problem:
+                    return (
+                        f"{ASK_FIRST_PREFIX} the {kind} is for ({problem}). Ask the user one question with ask_clarification (what should it do?);"
+                        " you may offer up to 3 suggestions, labelled as suggestions. Then stop. Once they answer, draft it with their words as owner_request."
+                    )
             snapshot, dropped, notes = self._compose(user_id, kind, name, dict(fields or {}), live)
             access_request = None
             if kind == "agent":
@@ -559,6 +662,22 @@ class GatewayBuilderController:
         if not isinstance(messages, list):
             return "unknown", ""
         return initiation_origin(messages, synthetic=is_synthetic_turn(context))
+
+    @staticmethod
+    def _request_problem(context: dict, quote: str) -> str | None:
+        """Why `quote` does not show the owner asked for this, or None. It must
+        name a subject (a word beyond the generic "create me an agent"), and
+        appear word for word in the owner's own words of THIS request: their
+        tagged message that started the current turn, or their answer on the
+        Question card the builder's own "ask first" refusal raised."""
+        wanted = _tokens(quote)
+        if not wanted:
+            return "no owner_request was given"
+        if all(w in GENERIC_REQUEST_WORDS for w in wanted):
+            return "the request only asks for one, without saying what it is for"
+        if not any(_contains(_tokens(text), wanted) for text in _owner_words(context)):
+            return "owner_request is not the user's own words from this request"
+        return None
 
     @staticmethod
     def _access_words(request: dict) -> str:
@@ -672,9 +791,9 @@ class GatewayBuilderController:
                 if not draft_id:
                     # The chat's current draft, pinned on the card: the card
                     # saves exactly the draft it shows.
-                    user_id, thread_id = self._guard(context)
+                    user_id, thread_id = self._guard(context, "builder_save")
                     draft_id = str((drafts.active(user_id, thread_id) or {}).get("draft_id") or "")
-                draft, live, version = self._ready_draft(context, draft_id)
+                draft, live, version = self._ready_draft(context, draft_id, tool="builder_save")
                 note = render_draft(draft, live=live, live_version=version)
                 if draft["kind"] == "automation":
                     line, why = self._automation_card(self._who(context)[0], draft["snapshot"])
@@ -716,10 +835,10 @@ class GatewayBuilderController:
             return f"the policy rules file in force has no rule for: {', '.join(missing)} (copy them from the shipped default_rules.yaml)."
         return None
 
-    def _ready_draft(self, context: dict, draft_id: str) -> tuple[dict, dict | None, int]:
+    def _ready_draft(self, context: dict, draft_id: str, *, tool: str | None = None) -> tuple[dict, dict | None, int]:
         """The draft, if it may be saved now: this chat's, the active one, not
         dropped, an allowed target, valid, and based on the current version."""
-        user_id, thread_id = self._guard(context)
+        user_id, thread_id = self._guard(context, tool)
         draft = drafts.get_draft(user_id, thread_id, draft_id) if draft_id else None
         if draft is None:
             raise BuilderRefused(f"there is no draft {draft_id!r} in this chat." if draft_id else "this chat has no draft to save; draft it with builder_draft first.")

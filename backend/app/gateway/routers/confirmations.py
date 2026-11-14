@@ -380,7 +380,7 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
 
     from app.policy.surface_run import SurfaceSnapshot
 
-    tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=get_app_config())
+    tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=get_app_config(), artifact_tools=True)
     registry = {getattr(t, "name", ""): t for t in tools}
     # The proposer's tools, built once: checked and run from the same list.
     snapshot = SurfaceSnapshot(current)

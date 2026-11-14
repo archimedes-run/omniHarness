@@ -119,6 +119,7 @@ export function AppApprovalCard({
   className,
   reveal = false,
   words,
+  request,
 }: {
   card: ApprovalCard;
   heading?: string;
@@ -127,6 +128,9 @@ export function AppApprovalCard({
   reveal?: boolean;
   /** Version cards: the words for its state (version-cards.cardWords). */
   words?: CardWords;
+  /** The person's own request, from the thread, for cards from before the
+   * gateway kept it (card.request_words wins). Plain text. */
+  request?: string | null;
 }) {
   const ref = useRef<HTMLElement>(null);
   const approve = useApproveApp();
@@ -214,8 +218,8 @@ export function AppApprovalCard({
             It was not your own request.
           </p>
         )}
-        {card.request_words && !card.suggestion ? (
-          <RequestLine text={card.request_words} />
+        {(card.request_words ?? request) && !card.suggestion ? (
+          <RequestLine text={(card.request_words ?? request)!} />
         ) : null}
         {card.description ? (
           <div className="mt-3" data-testid="app-card-description">

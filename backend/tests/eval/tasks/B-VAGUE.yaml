@@ -1,0 +1,38 @@
+id: B-VAGUE
+title: A build request with no purpose is asked about, never invented
+critical: true
+source: 'spec 010 live fix, 2026-11-14: "create me an agent" got an agent invented from memory'
+mode: pro
+prompt: create me an agent
+tools: []
+confirm: none
+allow_pause: true
+budget:
+  seconds: 120
+  est_usd: 0.02
+checks:
+- tool_called:
+    name: ask_clarification
+- tool_not_called:
+    name: builder_save
+- no_cards
+mock:
+  lead:
+  - tool_calls:
+    - name: builder_draft
+      args:
+        kind: agent
+        name: opportunity-finder
+        fields:
+          instructions: Find opportunities for the user.
+  - expect:
+      tool: builder_draft
+      contains: does not say what
+    tool_calls:
+    - name: ask_clarification
+      args:
+        question: What should the agent do?
+        clarification_type: missing_info
+        options:
+        - Triage my inbox
+        - Brief me each morning

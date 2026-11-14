@@ -25,6 +25,7 @@ mock:
     tool_calls:
     - name: builder_draft
       args:
+        owner_request: Make my standup agent shorter and stop it running on Fridays
         kind: agent
         name: eval-standup
         fields:

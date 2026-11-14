@@ -20,6 +20,11 @@ import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useApps, useThreadApprovals } from "@/core/apps/hooks";
+import {
+  registrationState,
+  registrationWords,
+} from "@/core/apps/version-cards";
 import { resolveArtifactURL } from "@/core/artifacts/utils";
 import {
   type CodeJob,
@@ -382,7 +387,7 @@ function JobView({
             data-testid="code-job-steps"
           >
             {visibleSteps.map((step) => (
-              <StepRow key={step.seq} step={step} />
+              <StepRow key={step.seq} step={step} threadId={threadId} />
             ))}
           </ol>
         ) : null}
@@ -454,7 +459,10 @@ function Evidence({ job }: { job: CodeJob }) {
           <AppChecksEvidence checks={r.app_checks} threadId={job.thread_id} />
         ) : null}
         {r?.app_registration ? (
-          <AppRegisteredEvidence registration={r.app_registration} />
+          <AppRegisteredEvidence
+            registration={r.app_registration}
+            threadId={job.thread_id}
+          />
         ) : null}
         <li className="flex items-start gap-2">
           <Mark ok={null} />
@@ -710,13 +718,43 @@ function AppChecksEvidence({
   );
 }
 
-/** "App registered: <name> v<n>" with the link to its page. Approval is the
- * person's button on the App access card, never this card. */
+/**
+ * The live state of a version this job registered ("in use", "offered —
+ * waiting for your choice", "replaced by version N", "kept version M"), from
+ * the app's served version and this chat's cards: queries the chat already
+ * makes, so nothing more is polled. Falls back to what the job recorded.
+ */
+function useRegisteredState(
+  threadId: string,
+  appId: string,
+  version: number,
+  needsApproval: boolean,
+): string {
+  const { data: cards } = useThreadApprovals(threadId);
+  const { apps } = useApps();
+  const served = apps?.find((a) => a.id === appId)?.current_version;
+  const words = registrationWords(
+    registrationState(appId, version, served, cards ?? [], needsApproval),
+  );
+  if (words) return words;
+  return needsApproval ? "needs your approval" : "";
+}
+
+/** "App registered: <name> v<n>" with its live state and the link to its
+ * page. Deciding is the person's button on the app card, never this card. */
 function AppRegisteredEvidence({
   registration,
+  threadId,
 }: {
   registration: CodeJobAppRegistration;
+  threadId: string;
 }) {
+  const state = useRegisteredState(
+    threadId,
+    registration.app_id,
+    registration.version,
+    registration.needs_approval,
+  );
   return (
     <li
       className="flex items-start gap-2"
@@ -728,7 +766,9 @@ function AppRegisteredEvidence({
       />
       <span className="[overflow-wrap:anywhere]">
         {`App registered: ${safeField(registration.name) || registration.app_id} v${registration.version}`}
-        {registration.needs_approval ? " — needs your approval" : ""}{" "}
+        {state ? (
+          <span data-testid="code-job-app-state">{` — ${state}`}</span>
+        ) : null}{" "}
         <Link
           href={`/workspace/apps/${encodeURIComponent(registration.app_id)}`}
           className="text-primary underline-offset-2 hover:underline"
@@ -740,7 +780,7 @@ function AppRegisteredEvidence({
   );
 }
 
-function StepRow({ step }: { step: CodeJobStep }) {
+function StepRow({ step, threadId }: { step: CodeJobStep; threadId: string }) {
   const [expanded, setExpanded] = useState(false);
   if (step.kind === "command" || step.kind === "verify") {
     const failed =
@@ -885,18 +925,7 @@ function StepRow({ step }: { step: CodeJobStep }) {
     );
   }
   if (step.kind === "app_registered") {
-    return (
-      <li className="flex items-start gap-2 px-1 text-xs">
-        <LayoutDashboardIcon
-          className="text-muted-foreground mt-0.5 size-3.5 shrink-0"
-          aria-hidden
-        />
-        <span>
-          {`App registered: v${step.version}`}
-          {step.needs_approval ? " — needs your approval" : ""}
-        </span>
-      </li>
-    );
+    return <RegisteredStep step={step} threadId={threadId} />;
   }
   if (step.kind === "published") {
     return (
@@ -912,6 +941,33 @@ function StepRow({ step }: { step: CodeJobStep }) {
   return (
     <li className="text-muted-foreground px-1 text-xs">
       {safeField(step.text)}
+    </li>
+  );
+}
+
+function RegisteredStep({
+  step,
+  threadId,
+}: {
+  step: Extract<CodeJobStep, { kind: "app_registered" }>;
+  threadId: string;
+}) {
+  const state = useRegisteredState(
+    threadId,
+    step.app_id,
+    step.version,
+    step.needs_approval,
+  );
+  return (
+    <li className="flex items-start gap-2 px-1 text-xs">
+      <LayoutDashboardIcon
+        className="text-muted-foreground mt-0.5 size-3.5 shrink-0"
+        aria-hidden
+      />
+      <span>
+        {`App registered: v${step.version}`}
+        {state ? ` — ${state}` : ""}
+      </span>
     </li>
   );
 }

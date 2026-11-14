@@ -56,6 +56,11 @@ def _context(runtime: ToolRuntime[ContextT, ThreadState] | None) -> dict:
         "Studio and drafts nothing.\n"
         "`guessed`: the field names you filled in without the user saying so (shown as guesses). "
         "`replace_current`: true only after the user agreed to drop the draft this chat is already building.\n"
+        "`owner_request`: for something NEW, the user's own words from this chat saying what it is for, quoted exactly "
+        '(for example "an agent that triages my inbox every morning"). If the user only said "create me an agent" (no '
+        "purpose), do not draft: ask them one question with ask_clarification and stop. Never fill a draft from memory "
+        "or from what you know about the user; their name, employer or personal goals go into a draft only if their "
+        "request mentions them.\n"
         "Then call builder_save with the draft id to put it on a card for the user to confirm. If the user's reply "
         "changes something, call builder_draft again (a new draft id) and builder_save with that."
     ),
@@ -67,6 +72,7 @@ def builder_draft_tool(
     fields: dict[str, Any] | None = None,
     guessed: list[str] | None = None,
     replace_current: bool = False,
+    owner_request: str | None = None,
 ) -> str:
     controller = get_builder_controller()
     if controller is None:
@@ -77,7 +83,7 @@ def builder_draft_tool(
     state = getattr(runtime, "state", None)
     messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
     context[DRAFT_MESSAGES_KEY] = list(messages) if messages is not None else None
-    return controller.draft(context, kind=kind, name=name, fields=dict(fields or {}), guessed=list(guessed or []), replace_current=bool(replace_current))
+    return controller.draft(context, kind=kind, name=name, fields=dict(fields or {}), guessed=list(guessed or []), replace_current=bool(replace_current), owner_request=str(owner_request or ""))
 
 
 @tool(

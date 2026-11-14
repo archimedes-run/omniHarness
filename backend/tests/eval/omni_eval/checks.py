@@ -321,6 +321,16 @@ def reply_contains_none(o: Outcome, values: list[str]) -> tuple[bool, str]:
     return not hits, f"reply contains {hits}" if hits else "none present"
 
 
+def reply_max_chars(o: Outcome, n: int) -> tuple[bool, str]:
+    """The final reply is at most `n` characters (a short stop, spec 010)."""
+    return len(o.final) <= n, f"{len(o.final)} characters (max {n})"
+
+
+def no_code_block(o: Outcome) -> tuple[bool, str]:
+    """The final reply has no code or JSON block."""
+    return "```" not in o.final, "a code block in the reply" if "```" in o.final else "no code block"
+
+
 def resumed(o: Outcome, min: int = 1) -> tuple[bool, str]:  # noqa: A002
     count = len([t for t in o.traces if t.get("resumed_from")])
     return count >= min, f"{count} resume run(s)"
@@ -394,6 +404,8 @@ CHECKS: dict[str, Callable[..., tuple[bool, str]]] = {
         trace_recorded,
         verification_status,
         reply_contains_none,
+        reply_max_chars,
+        no_code_block,
         resumed,
         no_divergence,
         trace_step,

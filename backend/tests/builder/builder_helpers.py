@@ -30,6 +30,12 @@ def new_thread(gw) -> str:
 
 
 def say(gw, thread_id: str, text: str, *, agent: str = "lead_agent", context: dict | None = None) -> dict:
+    # A scripted builder_draft quotes the owner's message it answers, as the
+    # model is told to (owner_request), unless the test sets one itself.
+    for message in gw.lead_script:
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            if tool_call.get("name") == "builder_draft" and "owner_request" not in tool_call.get("args", {}):
+                tool_call["args"]["owner_request"] = text
     body: dict = {"assistant_id": agent, "input": {"messages": [{"role": "user", "content": text}]}}
     if context:
         body["context"] = context

@@ -15,6 +15,7 @@ Integration ids (the same ids the tool catalog shows):
   ``builtin:<group>``     a config.yaml tool group (web, file:read, bash, ...)
   ``builtin:ledger``      Tasks and notes (the Project Ledger tools)
   ``builtin:workspace``   previews, coding jobs, MCP building and skill editing
+  ``builtin:artifacts``   make, change, read and list artifacts (Spec 012)
 
 The CORE tools are not assignable: every agent keeps them, because they are how
 a run talks to the user (present_files, ask_clarification), hands work on
@@ -52,6 +53,7 @@ CORE_TOOLS: frozenset[str] = frozenset(
 
 LEDGER_INTEGRATION = "builtin:ledger"
 WORKSPACE_INTEGRATION = "builtin:workspace"
+ARTIFACTS_INTEGRATION = "builtin:artifacts"
 #: In-process built-ins that are assignable, by tool name.
 BUILTIN_INTEGRATION_OF: Mapping[str, str] = {
     "ledger_read": LEDGER_INTEGRATION,
@@ -60,6 +62,10 @@ BUILTIN_INTEGRATION_OF: Mapping[str, str] = {
     "code_job": WORKSPACE_INTEGRATION,
     "mcp_build": WORKSPACE_INTEGRATION,
     "skill_manage": WORKSPACE_INTEGRATION,
+    "artifact_create": ARTIFACTS_INTEGRATION,
+    "artifact_update": ARTIFACTS_INTEGRATION,
+    "artifact_read": ARTIFACTS_INTEGRATION,
+    "artifact_list": ARTIFACTS_INTEGRATION,
 }
 
 

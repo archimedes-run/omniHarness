@@ -98,6 +98,7 @@ export function useThreadConfirmations(
               <AppCardStack
                 cards={cards}
                 wordsOf={appCards.wordsOf}
+                requestOf={appCards.requestOf}
                 testId="inline-app-cards"
               />
             </div>
@@ -128,7 +129,11 @@ export function useThreadConfirmations(
         onPickUp={onPickUp}
       />
       {/* Spec 011: app cards no turn names yet (button only), oldest first. */}
-      <AppCardStack cards={appCards.rest} wordsOf={appCards.wordsOf} />
+      <AppCardStack
+        cards={appCards.rest}
+        wordsOf={appCards.wordsOf}
+        requestOf={appCards.requestOf}
+      />
     </>
   ) : null;
 

@@ -17,7 +17,7 @@ from typing import Any, Protocol, runtime_checkable
 
 @runtime_checkable
 class BuilderController(Protocol):
-    def draft(self, context: dict, *, kind: str, name: str, fields: dict[str, Any], guessed: list[str], replace_current: bool) -> str:
+    def draft(self, context: dict, *, kind: str, name: str, fields: dict[str, Any], guessed: list[str], replace_current: bool, owner_request: str = "") -> str:
         """Record a draft in this thread (never in the store); its preview or diff."""
         ...
 

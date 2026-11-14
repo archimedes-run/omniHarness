@@ -232,7 +232,7 @@ def test_undo_from_chat_restores_as_a_new_version(gw) -> None:
 def test_a_save_without_a_draft_id_pins_the_chats_current_draft(gw) -> None:
     thread_id = new_thread(gw)
     script(gw, [call("builder_draft", DRAFT_AGENT, "c1")], [call("builder_save", {}, "c2")], "Draft.")
-    say(gw, thread_id, "make me an agent")
+    say(gw, thread_id, "make me an agent that triages my inbox")
     [card] = cards(gw, "builder_save")
     assert card["arguments_display"]["draft_id"] == "d-test-1", card["arguments_display"]
     script(gw, "Saved.")
