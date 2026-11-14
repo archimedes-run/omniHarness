@@ -58,7 +58,13 @@ logger = logging.getLogger(__name__)
 
 REASON = "restart"
 NOTICE_TEXT = "This reply was interrupted by a restart. Ask again."
-CHANNEL_LINE = NOTICE_TEXT
+#: When the cut-off message was not the owner's own turn (relayed or
+#: scheduled): no "ask again", no Try again.
+NOTICE_TEXT_NOT_OWNER = "This reply was interrupted by a restart."
+CHANNEL_LINE = NOTICE_TEXT_NOT_OWNER
+#: IM chats get the line only for a run that started this recently: an old
+#: stuck run found at a first deploy is closed without pinging anyone.
+CHANNEL_LINE_MAX_AGE_SECONDS = 30 * 60
 #: On the notice message (display data; the chat renders it as a system notice).
 NOTICE_MARKER = "omniharness_run_notice"
 #: Journal event recording that the run's notice was written (idempotence).
@@ -104,6 +110,10 @@ class WorkerLease:
                 return False
         except OSError:
             return True  # can't tell: never treat a run as orphaned on doubt
+
+    def others_alive(self) -> bool:
+        """Whether another worker on this host holds its lease now."""
+        return any(path.stem != self.worker_id and self.alive(path.stem) for path in self.dir.glob("*.lock"))
 
     def prune(self, older_than_seconds: float = 86400.0) -> None:
         """Remove dead workers' lock files older than a day."""
@@ -171,10 +181,12 @@ def is_orphaned(row: dict, *, lease: WorkerLease, run_manager: Any) -> bool:
     worker = str((row.get("metadata") or {}).get(WORKER_ID_KEY) or "")
     if worker:
         return not lease.alive(worker)
-    # Recorded before workers stamped their id: a previous process's, if it
-    # was last written before this one started.
+    # Recorded before workers stamped their id: a previous process's only if
+    # it was last written before this one started AND no other worker on
+    # this host is alive (an unstamped run of a live older worker is never
+    # touched; a rolling restart waits for the old workers to end).
     updated = _when(row.get("updated_at") or row.get("created_at"))
-    return updated is not None and updated < lease.started
+    return updated is not None and updated < lease.started and not lease.others_alive()
 
 
 # -- the notice ---------------------------------------------------------------
@@ -183,35 +195,49 @@ def is_orphaned(row: dict, *, lease: WorkerLease, run_manager: Any) -> bool:
 def _human_text(message: Any) -> str:
     content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
     if isinstance(content, list):
-        return " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict)).strip()
+        return " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict) and b.get("type", "text") == "text").strip()
     return str(content or "").strip()
 
 
-async def _turn_start(event_store: Any, row: dict) -> tuple[str | None, str | None]:
-    """(the person's message id, its text) for the interrupted run."""
-    message_id = text = None
-    if event_store is not None:
-        try:
-            events = await event_store.list_events(row["thread_id"], row["run_id"], event_types=["llm.human.input"], limit=5)
-        except Exception:  # noqa: BLE001
-            events = []
-        for event in events or []:
-            content = event.get("content")
-            if isinstance(content, dict):
-                message_id = content.get("id")
-                text = _human_text(content)
-                break
-    if text is None:
-        # The run's own input (the run row keeps it): a run that died before
-        # its first model call has no journal yet.
-        messages = (((row.get("kwargs") or {}).get("input") or {}).get("messages")) or []
-        for message in reversed(messages if isinstance(messages, list) else []):
-            kind = message.get("type") or message.get("role") if isinstance(message, dict) else getattr(message, "type", None)
-            if kind in ("human", "user"):
-                text = _human_text(message)
-                message_id = message_id or (message.get("id") if isinstance(message, dict) else getattr(message, "id", None))
-                break
-    return message_id, (text or None)
+def _kwargs(message: Any) -> dict:
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    return kwargs if isinstance(kwargs, dict) else {}
+
+
+def _has_attachments(message: Any) -> bool:
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    blocks = [b for b in content if isinstance(b, dict) and b.get("type", "text") != "text"] if isinstance(content, list) else []
+    return bool(_kwargs(message).get("files")) or bool(blocks)
+
+
+def _owner_turn(message: Any) -> bool:
+    """The server's own mark of the owner's turn (services.normalize_input
+    tags only the person's own message: never a relayed channel message, a
+    scheduled prompt or an invitation). Nothing else makes text re-sendable."""
+    from omniharness.agents.turns import USER_TURN_MARKER
+
+    kind = message.get("type") if isinstance(message, dict) else getattr(message, "type", None)
+    return kind == "human" and _kwargs(message).get(USER_TURN_MARKER) is True
+
+
+def _scheduled(row: dict) -> bool:
+    config = (row.get("kwargs") or {}).get("config") or {}
+    context = config.get("context") if isinstance(config, dict) else None
+    return isinstance(context, dict) and bool(context.get("turn_provenance") or context.get("trigger_rule_id"))
+
+
+async def _journal_human(event_store: Any, row: dict) -> Any:
+    """The person's message as the run's journal recorded it, if any."""
+    if event_store is None:
+        return None
+    try:
+        events = await event_store.list_events(row["thread_id"], row["run_id"], event_types=["llm.human.input"], limit=5)
+    except Exception:  # noqa: BLE001
+        return None
+    for event in events or []:
+        if isinstance(event.get("content"), dict):
+            return event["content"]
+    return None
 
 
 def _undisclosed_records(turn: list[Any]) -> tuple[list[Any], list[str]]:
@@ -253,76 +279,108 @@ def _undisclosed_records(turn: list[Any]) -> tuple[list[Any], list[str]]:
     return records, sources
 
 
-def build_notice(run_id: str, turn: list[Any], retry_text: str | None) -> Any:
+def build_notice(run_id: str, turn: list[Any], human: Any, *, scheduled: bool = False) -> Any:
+    """The notice for a cut-off turn. `human`: the turn's message (from the
+    thread state, else the journal), None when unknown."""
     from langchain_core.messages import AIMessage
 
     from app.policy.disclose import notice_line
     from omniharness.agents.turns import DISCLOSURE_MARKER
 
     records, sources = _undisclosed_records(turn)
-    content = NOTICE_TEXT
-    kwargs: dict[str, Any] = {NOTICE_MARKER: {"kind": "interrupted", "reason": REASON, "run_id": run_id, "retry_text": retry_text}}
+    owner = human is not None and _owner_turn(human) and not scheduled
+    retry_text = (_human_text(human) or None) if owner else None
+    base = NOTICE_TEXT if retry_text else NOTICE_TEXT_NOT_OWNER
+    content = base
+    kwargs: dict[str, Any] = {
+        NOTICE_MARKER: {
+            "kind": "interrupted",
+            "reason": REASON,
+            "run_id": run_id,
+            "retry_text": retry_text,
+            "had_attachments": bool(retry_text) and _has_attachments(human),
+            "automation": scheduled,
+        }
+    }
     if records:
         line = notice_line(records)
-        content = f"{NOTICE_TEXT}\n\n{line}"
+        content = f"{base}\n\n{line}"
         kwargs[DISCLOSURE_MARKER] = {
-            "text": content[len(NOTICE_TEXT) :],
+            "text": content[len(base) :],
             "items": [{"tool": r.tool_name, "text": r.sentence() + (f" (via {r.agent})" if r.agent else ""), "agent": r.agent, "grant": r.grant} for r in records],
             "sources": sources,
         }
     return AIMessage(id=notice_id(run_id), content=content, additional_kwargs=kwargs, response_metadata={"model_name": "server"})
 
 
-def _turn_bounds(messages: list[Any], human_id: str | None) -> tuple[int, int]:
-    """[start, end) of the interrupted run's turn in the thread's messages."""
+def _turn_bounds(messages: list[Any], human_id: str | None) -> tuple[int, int] | None:
+    """[start, end) of the interrupted run's turn in the thread's messages,
+    or None when its message is not in the thread's state."""
     from omniharness.agents.working_loop import is_turn_start
 
-    start = None
     if human_id:
         start = next((i for i, m in enumerate(messages) if getattr(m, "id", None) == human_id), None)
-    if start is None:
+    else:
+        # No journal (the run died before its first model call): only the
+        # thread's latest run gets a notice, so its turn is the last one.
         starts = [i for i, m in enumerate(messages) if is_turn_start(m)]
-        start = starts[-1] if starts else 0
+        start = starts[-1] if starts else None
+    if start is None:
+        return None
     end = next((j for j in range(start + 1, len(messages)) if is_turn_start(messages[j])), len(messages))
     return start, end
 
 
-async def write_notice(app_state: Any, row: dict) -> bool:
-    """Put the notice at the end of the run's turn, in the thread's state and
-    in the run's journal, once. True when it is there (now or already)."""
-    from omniharness.utils.time import now_iso
+async def write_notice(app_state: Any, row: dict) -> str:
+    """Put the notice at the end of the run's turn, in the thread's state
+    (through the run manager, so it is serialised with the run's own last
+    writes and with confirmed results posted to the chat) and in the run's
+    journal, once. Returns the state write's outcome ("written", "queued",
+    "elsewhere", "failed" or "no-state")."""
+    from app.gateway.thread_writes import write_thread_messages
 
     thread_id, run_id = str(row["thread_id"]), str(row["run_id"])
     checkpointer = getattr(app_state, "checkpointer", None)
     event_store = getattr(app_state, "run_event_store", None)
-    human_id, retry_text = await _turn_start(event_store, row)
-    notice = None
+    run_manager = app_state.run_manager
+    journal_human = await _journal_human(event_store, row)
+    scheduled = _scheduled(row)
+    built: dict[str, Any] = {}
+
+    def change(messages: list[Any]) -> list[Any] | None:
+        existing = next((m for m in messages if getattr(m, "id", None) == notice_id(run_id)), None)
+        if existing is not None:
+            built["notice"] = existing
+            return None
+        human_id = journal_human.get("id") if isinstance(journal_human, dict) else None
+        bounds = _turn_bounds(messages, human_id)
+        if bounds is None:
+            notice = build_notice(run_id, [], journal_human, scheduled=scheduled)
+            built["notice"] = notice
+            return [*messages, notice]
+        start, end = bounds
+        notice = build_notice(run_id, messages[start:end], messages[start], scheduled=scheduled)
+        built["notice"] = notice
+        return [*messages[:end], notice, *messages[end:]]
+
+    outcome = "no-state"
     if checkpointer is not None:
-        config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-        current = await checkpointer.aget_tuple(config)
-        if current is not None:
-            checkpoint = dict(getattr(current, "checkpoint", {}) or {})
-            values = dict(checkpoint.get("channel_values") or {})
-            messages = list(values.get("messages") or [])
-            existing = next((m for m in messages if getattr(m, "id", None) == notice_id(run_id)), None)
-            if existing is not None:
-                notice = existing
-            else:
-                start, end = _turn_bounds(messages, human_id)
-                notice = build_notice(run_id, messages[start:end], retry_text)
-                values["messages"] = [*messages[:end], notice, *messages[end:]]
-                checkpoint["channel_values"] = values
-                metadata = dict(getattr(current, "metadata", {}) or {})
-                metadata.update({"updated_at": now_iso(), "source": "update", "step": metadata.get("step", 0) + 1})
-                await checkpointer.aput(config, checkpoint, metadata, {})
-    if notice is None:
-        notice = build_notice(run_id, [], retry_text)
+
+        async def write() -> bool:
+            result = await write_thread_messages(checkpointer, thread_id, change)
+            built["state"] = "no-state" if result is None else "written"
+            return True
+
+        outcome = await run_manager.write_when_idle(thread_id, write)
+        if outcome == "written":
+            outcome = built.get("state", "written")
+    notice = built.get("notice") or build_notice(run_id, [], journal_human, scheduled=scheduled)
     if event_store is not None:
         done = await event_store.list_events(thread_id, run_id, event_types=[NOTICE_EVENT], limit=1)
         if not done:
             await event_store.put(thread_id=thread_id, run_id=run_id, event_type="llm.ai.response", category="message", content=notice.model_dump(), metadata={"caller": "server:run_recovery"})
             await event_store.put(thread_id=thread_id, run_id=run_id, event_type=NOTICE_EVENT, category="trace", content={"reason": REASON}, metadata={"status": "interrupted", "reason": REASON})
-    return True
+    return outcome
 
 
 # -- channels: one line ---------------------------------------------------------
@@ -362,6 +420,8 @@ def queue_channel_line(base_dir: Path, thread_id: str, run_id: str) -> None:
 
 
 async def drain_channel_lines(base_dir: Path) -> int:
+    """Send the queued lines (the outbox's lock is held only to take them, never
+    across a send); a failed send is tried once more, then dropped with a log."""
     from app.channels.service import get_channel_service
 
     service = get_channel_service()
@@ -369,23 +429,26 @@ async def drain_channel_lines(base_dir: Path) -> int:
         return 0
     from app.channels.message_bus import OutboundMessage
 
-    sent = 0
     with _locked_outbox(base_dir) as box:
         pending, box["items"] = box["items"], []
-        entries = service.store.list_entries() if getattr(service, "store", None) is not None else []
-        for item in pending:
-            for entry in entries:
-                if entry.get("thread_id") != item.get("thread_id"):
-                    continue
+    if not pending:
+        return 0
+    entries = service.store.list_entries() if getattr(service, "store", None) is not None else []
+    sent = 0
+    for item in pending:
+        for entry in entries:
+            if entry.get("thread_id") != item.get("thread_id"):
+                continue
+            message = OutboundMessage(channel_name=entry["channel_name"], chat_id=entry["chat_id"], thread_id=item["thread_id"], text=CHANNEL_LINE, thread_ts=entry.get("topic_id"))
+            for attempt in (1, 2):
                 try:
-                    await service.bus.publish_outbound(OutboundMessage(channel_name=entry["channel_name"], chat_id=entry["chat_id"], thread_id=item["thread_id"], text=CHANNEL_LINE, thread_ts=entry.get("topic_id")))
+                    await service.bus.publish_outbound(message)
                     sent += 1
+                    break
                 except Exception:  # noqa: BLE001 - one chat's failure never blocks the others
-                    logger.warning("run recovery: could not send the restart line to %s", entry.get("channel_name"), exc_info=True)
+                    if attempt == 2:
+                        logger.warning("run recovery: could not send the restart line to %s", entry.get("channel_name"), exc_info=True)
     return sent
-
-
-# -- the sweep and the graceful stop ---------------------------------------------
 
 
 async def _read_run(store: Any, run_id: str) -> dict | None:
@@ -396,45 +459,84 @@ async def _read_run(store: Any, run_id: str) -> dict | None:
         return await store.get(run_id)
 
 
+#: Notices claimed but not yet written into the thread's state (another
+#: worker's run held the chat): tried again at each pass.
+_PENDING: dict[str, dict] = {}
+
+
+async def _is_latest_run(store: Any, thread_id: str, run_id: str) -> bool:
+    try:
+        rows = await store.list_by_thread(thread_id, user_id=None, limit=1)
+    except TypeError:
+        rows = await store.list_by_thread(thread_id, limit=1)
+    return bool(rows) and str(rows[0].get("run_id")) == run_id
+
+
+def _recent(row: dict) -> bool:
+    created = _when(row.get("created_at"))
+    return created is not None and (datetime.now(UTC) - created).total_seconds() <= CHANNEL_LINE_MAX_AGE_SECONDS
+
+
+async def _notify(app_state: Any, row: dict, base_dir: Path) -> None:
+    """The notice (and the channel line, for a recent run) of a run this
+    caller has just marked interrupted."""
+    run_id, thread_id = str(row["run_id"]), str(row["thread_id"])
+    try:
+        outcome = await write_notice(app_state, row)
+    except Exception:  # noqa: BLE001 - kept for the next pass
+        logger.warning("run recovery: could not write the notice for run %s", run_id, exc_info=True)
+        _PENDING[run_id] = row
+        return
+    if outcome in ("elsewhere", "failed"):
+        _PENDING[run_id] = row
+        return
+    _PENDING.pop(run_id, None)
+    if _recent(row):
+        queue_channel_line(base_dir, thread_id, run_id)
+
+
 async def recover_orphaned_runs(app_state: Any, *, lease: WorkerLease, base_dir: Path) -> list[str]:
-    """Every dead worker's in-flight run: notice, then `interrupted`."""
+    """Every dead worker's in-flight run is marked interrupted FIRST (one
+    conditional update: exactly one sweeper wins); then, for the thread's
+    latest run only, the notice. An older stuck run (a first deploy finds
+    them) is closed silently: no notice, no channel line."""
     run_manager = app_state.run_manager
     store = getattr(app_state, "run_store", None)
     if store is None:
         return []
+    for row in list(_PENDING.values()):
+        await _notify(app_state, row, base_dir)
     done: list[str] = []
     for row in await store.list_active():
         if not is_orphaned(row, lease=lease, run_manager=run_manager):
             continue
         run_id, thread_id = str(row["run_id"]), str(row["thread_id"])
-        if await run_manager.thread_busy(thread_id):
-            continue  # a new run of this thread runs here: next pass
         async with _run_lock(base_dir, run_id):
-            fresh = await _read_run(store, run_id)
-            if not fresh or fresh.get("status") not in ("pending", "running"):
+            if not await store.mark_interrupted_if_active(run_id, error=REASON):
+                continue  # another sweeper (or the run itself) ended it
+            done.append(run_id)
+            if not await _is_latest_run(store, thread_id, run_id):
+                logger.info("run recovery: closed an older stuck run %s on thread %s (no notice)", run_id, thread_id)
                 continue
-            try:
-                await write_notice(app_state, {**row, **fresh})
-            except Exception:  # noqa: BLE001 - left active: the next pass tries again
-                logger.warning("run recovery: could not write the notice for run %s", run_id, exc_info=True)
-                continue
-            if await store.mark_interrupted_if_active(run_id, error=REASON):
-                done.append(run_id)
-                queue_channel_line(base_dir, thread_id, run_id)
-                thread_store = getattr(app_state, "thread_store", None)
-                if thread_store is not None:
-                    with contextlib.suppress(Exception):
-                        await thread_store.update_status(thread_id, "interrupted", user_id=None)
-                logger.info("run recovery: run %s on thread %s was interrupted by a restart; notice written", run_id, thread_id)
+            thread_store = getattr(app_state, "thread_store", None)
+            if thread_store is not None:
+                with contextlib.suppress(Exception):
+                    await thread_store.update_status(thread_id, "interrupted", user_id=None)
+            await _notify(app_state, row, base_dir)
+            logger.info("run recovery: run %s on thread %s was interrupted by a restart; notice written", run_id, thread_id)
     return done
 
 
 async def interrupt_live_runs(app_state: Any, *, base_dir: Path, wait_seconds: float = 3.0) -> list[str]:
-    """Graceful stop: this worker's in-flight runs end as interrupted by a
-    restart, with their journal flushed (the run worker's own end) and the
-    notice written now, before the process exits."""
+    """Graceful stop: this worker's runs still replying are cancelled with
+    reason "restart" (their worker flushes the journal and records it). A run
+    already ending (in its `finally`, its status set) is left alone. The
+    notice goes only to a run that ended interrupted by this stop."""
+    from omniharness.runtime.runs.schemas import RunStatus
+
     run_manager = app_state.run_manager
-    records = run_manager.live_records()
+    store = getattr(app_state, "run_store", None)
+    records = [r for r in run_manager.live_records() if r.status in (RunStatus.pending, RunStatus.running)]
     for record in records:
         record.interrupt_reason = REASON
         record.abort_action = "interrupt"
@@ -445,19 +547,17 @@ async def interrupt_live_runs(app_state: Any, *, base_dir: Path, wait_seconds: f
     if tasks:
         await asyncio.wait(tasks, timeout=wait_seconds)
     done: list[str] = []
-    store = getattr(app_state, "run_store", None)
     for record in records:
-        row = {"run_id": record.run_id, "thread_id": record.thread_id, "kwargs": record.kwargs, "status": record.status.value}
-        try:
-            await write_notice(app_state, row)
-        except Exception:  # noqa: BLE001 - the next start's sweep writes it
-            logger.warning("run recovery: could not write the notice for run %s at shutdown", record.run_id, exc_info=True)
-            continue
-        if store is not None:
-            # A task that did not finish in time: recorded here instead.
-            await store.mark_interrupted_if_active(record.run_id, error=REASON)
-        queue_channel_line(base_dir, record.thread_id, record.run_id)
-        done.append(record.run_id)
+        async with _run_lock(base_dir, record.run_id):
+            ended_by_us = record.status == RunStatus.interrupted and record.error == REASON
+            if not ended_by_us and store is not None and record.status in (RunStatus.pending, RunStatus.running):
+                # Its task did not finish in time: recorded here instead.
+                ended_by_us = await store.mark_interrupted_if_active(record.run_id, error=REASON)
+            if not ended_by_us:
+                continue
+            row = {"run_id": record.run_id, "thread_id": record.thread_id, "kwargs": record.kwargs, "created_at": record.created_at}
+            await _notify(app_state, row, base_dir)
+            done.append(record.run_id)
     return done
 
 
