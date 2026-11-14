@@ -1,4 +1,4 @@
-<!-- omni-harness:coding-job-rules v2 (tracked: backend/packages/harness/omniharness/code_jobs/AGENTS.md, baked into the sandbox as /etc/opencode/AGENTS.md) -->
+<!-- omni-harness:coding-job-rules v3 (tracked: backend/packages/harness/omniharness/code_jobs/AGENTS.md, baked into the sandbox as /etc/opencode/AGENTS.md) -->
 # Rules for this workspace
 
 You are a coding worker running inside an isolated container sandbox for one
@@ -47,6 +47,12 @@ says otherwise:
   visible focus style, no text under 12 px.
 - Before you finish, re-read your layout CSS for fixed widths (`width: 900px`,
   `min-width` on the page, unwrapped rows) and remove them.
+
+## Apps (OmniHarness apps)
+- If the project folder has `omni-kit/APP_RULES.md`, this job builds an app:
+  read that file first and follow it exactly. It overrides the web-app rules
+  above where they differ (one self-contained file, no network of any kind,
+  no HTML from strings, every tile in four states, Graphite tokens only).
 
 ## Finish properly
 - Build before you claim anything works. Run the project's build

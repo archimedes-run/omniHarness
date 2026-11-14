@@ -543,6 +543,69 @@ for (const scheme of ["light", "dark"] as const) {
         });
     });
 
+    test("an app job shows the app checks, the screenshots and the registration awaiting approval", async ({
+      page,
+    }) => {
+      const shot = (theme: string, width: number) => ({
+        theme,
+        width,
+        path: `/mnt/user-data/outputs/today/checks/shot-${theme}-${width}.png`,
+      });
+      const result = {
+        ...VERIFIED_RESULT,
+        layout: null,
+        app: { root: "job0123456789abc", design_pass: false },
+        app_checks: {
+          outcome: "pass",
+          summary: [],
+          failures: [],
+          design: ["touch targets under 24 px: a.row (180x20 px)"],
+          error: null,
+          bundle: { bytes: 48_000, limit: 2_097_152 },
+          shots: [shot("light", 360), shot("dark", 1280)],
+        },
+        app_registration: {
+          app_id: "today",
+          version: 2,
+          name: "Today",
+          needs_approval: true,
+          url: "/workspace/apps/today",
+        },
+      };
+      await open(
+        page,
+        scheme,
+        {
+          job: job("verified", { result }),
+          steps: STEPS,
+          month: { spent_usd: 0.31, cap_usd: 20 },
+        },
+        true,
+      );
+      const card = page.getByTestId("code-job-card");
+      const checks = card.getByTestId("code-job-app-checks");
+      await expect(checks).toHaveAttribute("data-outcome", "pass");
+      await expect(checks).toContainText(
+        "App checks passed: every theme, state and width · one file, 47 KB",
+      );
+      await expect(checks).toContainText(
+        "Design findings (not blocking): touch targets under 24 px",
+      );
+      await expect(
+        card.getByTestId("code-job-app-shots").getByRole("link"),
+      ).toHaveText(["light 360 px", "dark 1280 px"]);
+      const registered = card.getByTestId("code-job-app-registered");
+      await expect(registered).toContainText(
+        "App registered: Today v2 — needs your approval",
+      );
+      await expect(
+        registered.getByRole("link", { name: "Open" }),
+      ).toHaveAttribute("href", "/workspace/apps/today");
+      await aa(page);
+      if (SHOTS)
+        await card.screenshot({ path: `${SHOTS}/code-job-app-${scheme}.png` });
+    });
+
     test("a layout check whose result could not be read is counted and says so", async ({
       page,
     }) => {

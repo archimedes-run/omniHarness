@@ -436,3 +436,70 @@ style, image or font that is not inline or `data:`; also any `src`, `href`,
 governs it) but is scanned for the forbidden names and frame markup. The scan
 is defence in depth: a name built from strings at run time dodges it; the
 CSP's Trusted Types and the injected shim are the guards.
+
+## Coding-job app mode (PR 3a)
+
+`code_job` takes an optional `app` argument:
+
+```json
+{"name": "Today", "sources": ["calendar", "gh_review", "inbox"], "timezone": "Europe/London", "description": "My day at a glance"}
+```
+
+`sources` is a list of short names (`calendar`, `gh_review`, `gh_failing`,
+`gh_merged`, `ledger`, `sessions`, `automations`, `inbox`), catalog ids, or
+`{name, use, params?, fields?, refresh_s?}` objects (or a map of name to
+object). `timezone` fills every `tz` param. The gateway turns it into a
+manifest validated against the catalog; an invalid one starts no job.
+`verify_command`, `expect_files` and `publish_dir` default to `npm run build`,
+`["dist/index.html"]` and `dist`.
+
+Before the worker starts, the gateway writes into the project:
+`omni-app.json` (the starter manifest) and `omni-kit/` with `APP_RULES.md`,
+`omni.d.ts` (`OmniSources` generated from the sources), `graphite.css` (the
+Graphite tokens of `globals.css`, both themes, plus dashboard primitives),
+`mock-data.json` (every source in the four states), `omni-app.schema.json`
+and `omni-mock.js`, the mock shim with the sample data (never the platform shim). The worker's standing rules point at
+`omni-kit/APP_RULES.md`.
+
+After a passing build the gateway, not the worker:
+
+1. reads `omni-app.json` and validates it;
+2. reads the build folder and inlines it in process with `bundle.inline` (the
+   registration code): one file, at most 2 MB with the shim;
+3. scans the worker's source files (not `node_modules`, `dist`, `omni-kit` or
+   build configuration) for network calls, HTML from strings, `eval`, frames,
+   workers and dynamic `import()`;
+4. builds the MOCK document (a mock shim and the sample data as its first
+   script) and runs the layout probe in app mode in the sandbox: light and
+   dark x fresh, empty, not connected and failed x 360, 560 and 1280 px,
+   served with the app CSP plus `require-trusted-types-for 'script';
+   trusted-types 'none'`; it measures overflow, clipped charts, AA contrast
+   (computed styles, composited backgrounds), text under 12 px, touch targets
+   under 24 px, nested frames, CSP violations (the browser's own reports to
+   the probe's local server, plus a listener in an isolated world), the tile words of each state and that every source's sample data
+   shows when fresh, and saves a PNG per theme and width (fresh state);
+5. publishes the mock build to outputs as a preview, with the screenshots in
+   `checks/`, for the artifact panel, the job card and the lead's image tool.
+
+Only a clean pass registers: any other outcome (a failure, no answer, a check
+that could not run or be read) leaves the job `unverified` and registers
+nothing. The registered manifest's sources must equal the requested ones
+(`sources_changed` otherwise). The CSP and the sandbox are the guard; the
+source scan and the mock-literal check are defence in depth. Text size, touch targets and an empty
+state without "Nothing today" are design findings (not blocking). A verified
+job calls `register_app` with the job's owner, thread and origin: `user` when
+the person's own message led to the call, else `content` (the card is then a
+suggestion). A design pass keeps its app's origin unless other content entered
+the turn.
+
+Design passes are follow-ups by `fix_of` naming an app job: at most 3 per app
+(counted by the gateway from the first job of the app), same project; each
+verified pass registers a new version of the same app. The tool result states
+the fixed design checklist, which items the system measures, the screenshots
+and how many passes are left.
+
+Job steps added: `app_checks` (`outcome`, `summary`, `design_count`, `error`,
+`bundle`, `shots`) and `app_registered` (`app_id`, `version`, `name`,
+`needs_approval`, `suggestion`, `url`). The job result gains `app`,
+`app_checks`, `app_registration` or `app_registration_error`, and
+`design_passes_used`.

@@ -123,7 +123,21 @@ def start(app: FastAPI) -> None:
         owner = body.pop("owner_id", None)
         history.record(kind="code_job", source_id=job["id"], body=body, status=job["status"], thread_id=job["thread_id"], error=job.get("reason"), owner_id=owner)
 
-    manager = CodeJobManager(store=store, settings=settings, unavailable=unavailable, sandbox_for=lambda t, u: production_sandbox_for(t, u), relay_dir=base / "watch", record_history=record_history)
+    async def register_app(**kwargs):
+        # App mode (Spec 011 FR-028): registration in process, never by a route.
+        from app.gateway.apps.registry import register_app as register
+
+        return await register(app.state, **kwargs)
+
+    manager = CodeJobManager(
+        store=store,
+        settings=settings,
+        unavailable=unavailable,
+        sandbox_for=lambda t, u: production_sandbox_for(t, u),
+        relay_dir=base / "watch",
+        record_history=record_history,
+        register_app=register_app,
+    )
     app.state.code_job_manager = manager
     set_code_job_controller(manager)
 

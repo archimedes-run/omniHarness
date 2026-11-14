@@ -55,17 +55,10 @@ FORBIDDEN = (
 #: Frame-creating markup and attributes (FR-018), anywhere in the bundle.
 FRAMES = (
     ("frame markup", re.compile(r"<\s*(iframe|frame|frameset|object|embed|portal|fencedframe)\b", re.IGNORECASE)),
-    ("srcdoc", re.compile(r"\bsrcdoc\s*=|\.srcdoc\s*=|setAttribute(?:NS)?\s*\([^)]*?[\"']srcdoc[\"']", re.IGNORECASE)),
+    ("srcdoc", re.compile(r"\bsrcdoc\s*=|\.srcdoc\s*=|setAttribute(?:NS)?\s*\([^)]{0,200}?[\"']srcdoc[\"']", re.IGNORECASE)),
 )
 
-_SCRIPT_SRC = re.compile(r"<script\b([^>]*?)\bsrc\s*=\s*([\"'])(.*?)\2([^>]*)>\s*</script\s*>", re.IGNORECASE | re.DOTALL)
-_STYLESHEET = re.compile(r"<link\b(?=[^>]*\brel\s*=\s*([\"'])stylesheet\1)[^>]*?\bhref\s*=\s*([\"'])(.*?)\2[^>]*>", re.IGNORECASE | re.DOTALL)
-_INLINE_SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
-_URL_ATTR = re.compile(r"\b(src|href|srcset|poster|action|formaction|data|xlink:href)\s*=\s*([\"'])(.*?)\2", re.IGNORECASE | re.DOTALL)
-_CSS_URL = re.compile(r"url\(\s*([\"']?)(.*?)\1\s*\)", re.IGNORECASE)
 _CSS_IMPORT = re.compile(r"@import\b", re.IGNORECASE)
-_META_REFRESH = re.compile(r"<meta\b[^>]*http-equiv", re.IGNORECASE)
-_BASE = re.compile(r"<base\b", re.IGNORECASE)
 _SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 CSP_TEMPLATE = (
@@ -109,22 +102,200 @@ def _data_uri(path: str, data: bytes) -> str:
     return f"data:{kind};base64,{base64.b64encode(data).decode()}"
 
 
-def _inline_css(css: str, files: dict[str, bytes], base: str) -> str:
+def _css_urls(css: str):
+    """Each `url(...)` in `css`: (start, end, ref), in one linear pass (no
+    backtracking regex: the CSS is untrusted)."""
+    i, n = 0, len(css)
+    for m in _CSS_URL_OPEN.finditer(css):
+        if m.start() < i:
+            continue
+        j = m.end()
+        while j < n and css[j] in " \t\r\n\f":
+            j += 1
+        if j < n and css[j] in "\"'":
+            close = css.find(css[j], j + 1)
+            if close < 0:
+                raise BundleError("invalid_bundle", "a stylesheet has an unclosed url()")
+            ref, k = css[j + 1 : close], close + 1
+        else:
+            close = css.find(")", j)
+            if close < 0:
+                raise BundleError("invalid_bundle", "a stylesheet has an unclosed url()")
+            ref, k = css[j:close], close
+        while k < n and css[k] in " \t\r\n\f":
+            k += 1
+        if k >= n or css[k] != ")":
+            raise BundleError("invalid_bundle", "a stylesheet has an unclosed url()")
+        i = k + 1
+        yield m.start(), i, ref.strip()
+
+
+_CSS_URL_OPEN = re.compile(r"url\(", re.IGNORECASE)
+
+
+def _inline_css(css: str, files: dict[str, bytes], base: str, *, check_only: bool = False) -> str:
     if _CSS_IMPORT.search(css):
         raise BundleError("remote_url", "a stylesheet uses @import; inline it instead")
-
-    def url(m: re.Match) -> str:
-        ref = m.group(2).strip()
+    out, at = [], 0
+    for start, end, ref in _css_urls(css):
         if ref.lower().startswith("data:") or ref.startswith("#"):
-            return m.group(0)
+            continue
         if _is_remote(ref):
             raise BundleError("remote_url", f"a stylesheet loads {ref[:80]!r} from the network")
-        return f'url("{_data_uri(ref, _resolve(files, ref, base))}")'
+        if check_only:
+            raise BundleError("remote_url", f"an inline style loads {ref[:80]!r}")
+        out += [css[at:start], f'url("{_data_uri(ref, _resolve(files, ref, base))}")']
+        at = end
+    return "".join(out) + css[at:]
 
-    return _CSS_URL.sub(url, css)
+
+# -- a linear tokenizer -------------------------------------------------------
+#
+# The document is untrusted and up to BUNDLE_MAX_BYTES: it is read in ONE pass
+# with str.find and simple literal searches, never with a backtracking regex
+# that could rescan the rest of the document for every unclosed tag.
+
+_RAW = ("script", "style")
+_RAW_END = {name: re.compile(r"</" + name, re.IGNORECASE) for name in _RAW}
+_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-:_")
+_SPACE = " \t\r\n\f"
+_FRAME_TAGS = frozenset({"iframe", "frame", "frameset", "object", "embed", "portal", "fencedframe"})
+_URL_ATTRS = frozenset({"src", "href", "srcset", "poster", "action", "formaction", "data", "xlink:href"})
+
+
+class _Tag:
+    __slots__ = ("name", "start", "end", "attrs", "body", "close")
+
+    def __init__(self, name: str, start: int, end: int, attrs: list) -> None:
+        self.name = name
+        self.start = start  # of "<"
+        self.end = end  # after ">"
+        #: (name lowercased, value or None, value start, value end)
+        self.attrs = attrs
+        self.body: tuple[int, int] | None = None  # raw text of script/style
+        self.close: int | None = None  # after the end tag of script/style
+
+    def attr(self, name: str) -> str | None:
+        for a in self.attrs:
+            if a[0] == name:
+                return a[1]
+        return None
+
+
+def _tags(html: str) -> list[_Tag]:
+    """Start tags in document order (comments, end tags and text skipped);
+    script and style elements carry their raw text."""
+    out: list[_Tag] = []
+    n, i = len(html), 0
+    while True:
+        i = html.find("<", i)
+        if i < 0 or i + 1 >= n:
+            return out
+        c = html[i + 1]
+        if html.startswith("<!--", i):
+            j = html.find("-->", i + 4)
+            if j < 0:
+                return out
+            i = j + 3
+            continue
+        if c in "!?/":
+            j = html.find(">", i + 2)
+            if j < 0:
+                return out
+            i = j + 1
+            continue
+        if not c.isascii() or not c.isalpha():
+            i += 1
+            continue
+        j = i + 1
+        while j < n and html[j] in _NAME_CHARS:
+            j += 1
+        name = html[i + 1 : j].lower()
+        attrs = []
+        while True:
+            while j < n and html[j] in _SPACE + "/":
+                j += 1
+            if j >= n:
+                raise BundleError("invalid_bundle", f"a <{name[:20]}> tag is not closed")
+            if html[j] == ">":
+                j += 1
+                break
+            k = j
+            while j < n and html[j] not in _SPACE + "/>=":
+                j += 1
+            aname = html[k:j].lower()
+            while j < n and html[j] in _SPACE:
+                j += 1
+            if j < n and html[j] == "=":
+                j += 1
+                while j < n and html[j] in _SPACE:
+                    j += 1
+                if j < n and html[j] in "\"'":
+                    close = html.find(html[j], j + 1)
+                    if close < 0:
+                        raise BundleError("invalid_bundle", f"an attribute of <{name[:20]}> is not closed")
+                    attrs.append((aname, html[j + 1 : close], j + 1, close))
+                    j = close + 1
+                else:
+                    k = j
+                    while j < n and html[j] not in _SPACE + ">":
+                        j += 1
+                    attrs.append((aname, html[k:j], k, j))
+            else:
+                attrs.append((aname, None, j, j))
+        tag = _Tag(name, i, j, attrs)
+        if name in _RAW:
+            m = _RAW_END[name].search(html, j)
+            if m is None:
+                tag.body, tag.close = (j, n), n
+            else:
+                gt = html.find(">", m.end())
+                tag.body, tag.close = (j, m.start()), (gt + 1 if gt >= 0 else n)
+        out.append(tag)
+        i = tag.close if tag.close is not None else j
+
+
+def _drop_bundled_shim(html: str) -> str:
+    """The worker's own shim, by reference or inlined, is removed: only the
+    gateway's copy runs."""
+    parts, at = [], 0
+    for t in _tags(html):
+        if t.name != "script":
+            continue
+        src = t.attr("src")
+        body = html[t.body[0] : t.body[1]] if t.body else ""
+        if (src is not None and src.split("#", 1)[0].split("?", 1)[0].rsplit("/", 1)[-1] == SHIM_NAME) or body.lstrip().startswith(_SHIM_BANNER):
+            parts.append(html[at : t.start])
+            at = t.close or t.end
+    return "".join(parts) + html[at:]
+
+
+def _inject_first(html: str, script: str) -> str:
+    """`script` as the document's first script: before any other script, and
+    after the doctype (so the document stays in standards mode)."""
+    tag = f"<script>{script}</script>"
+    tags = _tags(html)
+    head = next((t for t in tags if t.name == "head"), None)
+    first = next((t for t in tags if t.name == "script"), None)
+    if head and (first is None or head.end <= first.start):
+        return html[: head.end] + tag + html[head.end :]
+    if first is not None:
+        return html[: first.start] + tag + html[first.start :]
+    opening = next((t for t in tags if t.name == "html"), None)
+    if opening is not None:
+        return html[: opening.end] + tag + html[opening.end :]
+    lower = html[:1024].lower()
+    at = lower.find("<!doctype")
+    at = html.find(">", at) + 1 if at >= 0 else 0
+    return html[:at] + tag + html[at:]
 
 
 def _scan_frames(html: str) -> None:
+    for t in _tags(html):
+        if t.name in _FRAME_TAGS:
+            raise BundleError("forbidden_markup", "the bundle carries frame markup; apps may not create frames")
+        if t.attr("srcdoc") is not None:
+            raise BundleError("forbidden_markup", "the bundle carries srcdoc; apps may not create frames")
     for name, pattern in FRAMES:
         if pattern.search(html):
             raise BundleError("forbidden_markup", f"the bundle carries {name}; apps may not create frames")
@@ -134,85 +305,75 @@ def shim() -> str:
     return SHIM_FILE.read_text(encoding="utf-8")
 
 
-def _drop_bundled_shim(html: str) -> str:
-    """The worker's own shim, by reference or inlined, is removed: only the
-    gateway's copy runs."""
-    html = re.sub(r"<script\b[^>]*\bsrc\s*=\s*([\"'])[^\"']*" + re.escape(SHIM_NAME) + r"(?:[?#][^\"']*)?\1[^>]*>\s*</script\s*>", "", html, flags=re.IGNORECASE)
-    return re.sub(r"<script\b[^>]*>\s*" + re.escape(_SHIM_BANNER) + r".*?</script\s*>", "", html, flags=re.IGNORECASE | re.DOTALL)
-
-
-def _inject_first(html: str, script: str) -> str:
-    """`script` as the document's first script: before any other script, and
-    after the doctype (so the document stays in standards mode)."""
-    tag = f"<script>{script}</script>"
-    first_script = re.search(r"<script\b", html, re.IGNORECASE)
-    head = re.search(r"<head\b[^>]*>", html, re.IGNORECASE)
-    if head and (first_script is None or head.end() <= first_script.start()):
-        return html[: head.end()] + tag + html[head.end() :]
-    if first_script is not None:
-        return html[: first_script.start()] + tag + html[first_script.start() :]
-    opening = re.search(r"<html\b[^>]*>", html, re.IGNORECASE) or re.search(r"<!doctype[^>]*>", html, re.IGNORECASE)
-    at = opening.end() if opening else 0
-    return html[:at] + tag + html[at:]
-
-
 def inline(files: dict[str, bytes], entry: str = ENTRY, *, platform_shim: str | None = None) -> tuple[bytes, list[str]]:
     """(the self-contained document, its script hashes) or BundleError. The
-    platform shim (default: the gateway's copy) becomes the first script."""
+    platform shim (default: the gateway's copy) becomes the first script.
+
+    Linear in the size of the input, which is capped before anything is
+    parsed (the entry and all files together at BUNDLE_MAX_BYTES)."""
     if entry not in files:
         raise BundleError("missing_file", f"the bundle has no {entry}")
+    if len(files[entry]) > BUNDLE_MAX_BYTES or sum(len(v) for v in files.values()) > BUNDLE_MAX_BYTES:
+        raise BundleError("bundle_too_large", f"the bundle's files are larger than {BUNDLE_MAX_BYTES} bytes before inlining")
     try:
         html = files[entry].decode("utf-8")
     except UnicodeDecodeError as exc:
         raise BundleError("invalid_bundle", f"{entry} is not UTF-8") from exc
+    if "\x00" in html:
+        raise BundleError("invalid_bundle", f"{entry} contains a NUL character")
     html = _drop_bundled_shim(html)
     _scan_frames(html)
-    if _META_REFRESH.search(html) or _BASE.search(html):
-        raise BundleError("remote_url", "the document uses <meta http-equiv> or <base>")
+    parts: list[str] = []
+    at = 0
 
-    def script(m: re.Match) -> str:
-        ref = m.group(3)
-        if _is_remote(ref):
-            raise BundleError("remote_url", f"a script loads {ref[:80]!r} from the network")
-        text = _resolve(files, ref, entry).decode("utf-8", errors="strict").replace("</script", "<\\/script")
-        attrs = " ".join(a.strip() for a in (m.group(1), m.group(4)) if a.strip())
-        return f"<script{' ' + attrs if attrs else ''}>{text}</script>"
+    def url_attr(t: _Tag) -> str:
+        """The start tag with each local URL attribute inlined as data:."""
+        out, k = [], t.start
+        for aname, value, vs, ve in t.attrs:
+            if aname not in _URL_ATTRS or value is None:
+                continue
+            ref = value.strip()
+            if not ref or ref.startswith("#") or ref.lower().startswith(("data:", "blob:")):
+                continue
+            if aname == "srcset" or _is_remote(ref) or ref.lower().startswith("javascript:"):
+                raise BundleError("remote_url", f"{aname}={ref[:80]!r} is not inline")
+            out += [html[k:vs], _data_uri(ref, _resolve(files, ref, entry))]
+            k = ve
+        return "".join(out) + html[k : t.end]
 
-    def stylesheet(m: re.Match) -> str:
-        ref = m.group(3)
-        if _is_remote(ref):
-            raise BundleError("remote_url", f"a stylesheet loads {ref[:80]!r} from the network")
-        css = _inline_css(_resolve(files, ref, entry).decode("utf-8"), files, ref)
-        return f"<style>{css}</style>"
-
-    html = _SCRIPT_SRC.sub(script, html)
-    html = _STYLESHEET.sub(stylesheet, html)
-
-    def attr(m: re.Match) -> str:
-        name, quote, ref = m.group(1), m.group(2), m.group(3).strip()
-        if not ref or ref.startswith("#") or ref.lower().startswith(("data:", "blob:")):
-            return m.group(0)
-        if name.lower() == "srcset" or _is_remote(ref) or ref.lower().startswith("javascript:"):
-            raise BundleError("remote_url", f"{name}={ref[:80]!r} is not inline")
-        return f"{name}={quote}{_data_uri(ref, _resolve(files, ref, entry))}{quote}"
-
-    # Markup only: script text is code, not attributes (a template literal
-    # building `href="${url}"` is not a file reference). The CSP governs it.
-    scripts: list[str] = []
-
-    def keep(m: re.Match) -> str:
-        scripts.append(m.group(0))
-        return f"\x00{len(scripts) - 1}\x00"
-
-    markup = _INLINE_SCRIPT.sub(keep, html)
-    markup = _URL_ATTR.sub(attr, markup)
-    markup = re.sub(r"<style\b([^>]*)>(.*?)</style\s*>", lambda m: f"<style{m.group(1)}>{_inline_css(m.group(2), files, entry)}</style>", markup, flags=re.IGNORECASE | re.DOTALL)
-    for m in re.finditer(r"\bstyle\s*=\s*([\"'])(.*?)\1", markup, re.IGNORECASE | re.DOTALL):
-        for u in _CSS_URL.finditer(m.group(2)):
-            ref = u.group(2).strip()
-            if not ref.lower().startswith("data:") and not ref.startswith("#"):
-                raise BundleError("remote_url", f"an inline style loads {ref[:80]!r}")
-    html = re.sub(r"\x00(\d+)\x00", lambda m: scripts[int(m.group(1))], markup)
+    for t in _tags(html):
+        if t.name == "meta" and t.attr("http-equiv") is not None or t.name == "base":
+            raise BundleError("remote_url", "the document uses <meta http-equiv> or <base>")
+        style = t.attr("style")
+        if style:
+            _inline_css(style, files, entry, check_only=True)
+        if t.name == "script":
+            src = t.attr("src")
+            if src is None:
+                continue
+            if _is_remote(src):
+                raise BundleError("remote_url", f"a script loads {src[:80]!r} from the network")
+            text = _resolve(files, src, entry).decode("utf-8", errors="strict").replace("</script", "<\\/script")
+            if "\x00" in text:
+                raise BundleError("invalid_bundle", "a script contains a NUL character")
+            kept = " ".join(n if v is None else (f'{n}="{v}"' if '"' not in v else f"{n}='{v}'") for n, v, _, _ in t.attrs if n != "src")
+            parts += [html[at : t.start], f"<script{' ' + kept if kept else ''}>{text}</script>"]
+            at = t.close
+        elif t.name == "style" and t.body:
+            css = _inline_css(html[t.body[0] : t.body[1]], files, entry)
+            parts += [html[at : t.body[0]], css]
+            at = t.body[1]
+        elif t.name == "link" and (t.attr("rel") or "").strip().lower() == "stylesheet" and t.attr("href") is not None:
+            ref = t.attr("href")
+            if _is_remote(ref):
+                raise BundleError("remote_url", f"a stylesheet loads {ref[:80]!r} from the network")
+            css = _inline_css(_resolve(files, ref, entry).decode("utf-8"), files, ref)
+            parts += [html[at : t.start], f"<style>{css}</style>"]
+            at = t.end
+        elif any(a[0] in _URL_ATTRS for a in t.attrs):
+            parts += [html[at : t.start], url_attr(t)]
+            at = t.end
+    html = "".join(parts) + html[at:]
     for name, pattern in FORBIDDEN:
         if pattern.search(html):
             raise BundleError("forbidden_api", f"the bundle names {name}, which apps may not use")
@@ -220,10 +381,12 @@ def inline(files: dict[str, bytes], entry: str = ENTRY, *, platform_shim: str | 
     # After the scan: the shim itself names the APIs it removes.
     html = _inject_first(html, (platform_shim if platform_shim is not None else shim()).replace("</script", "<\\/script"))
     hashes = []
-    for m in _INLINE_SCRIPT.finditer(html):
-        if re.search(r"\bsrc\s*=", m.group(1), re.IGNORECASE):
+    for t in _tags(html):
+        if t.name != "script":
+            continue
+        if t.attr("src") is not None:
             raise BundleError("remote_url", "a script still has a src")
-        hashes.append(base64.b64encode(hashlib.sha256(m.group(2).encode("utf-8")).digest()).decode())
+        hashes.append(base64.b64encode(hashlib.sha256(html[t.body[0] : t.body[1]].encode("utf-8")).digest()).decode())
     data = html.encode("utf-8")
     if len(data) > BUNDLE_MAX_BYTES:
         raise BundleError("bundle_too_large", f"the bundle is {len(data)} bytes after inlining; the limit is {BUNDLE_MAX_BYTES}")
