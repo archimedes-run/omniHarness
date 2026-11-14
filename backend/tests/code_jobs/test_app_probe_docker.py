@@ -94,7 +94,7 @@ def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> 
 
 #: Changes to the kit for starter cases: (old, new) in omni-react.tsx.
 #: Changes to the starter's App.tsx: how an app's calendar rows show times.
-ROW = "meta={item.all_day ? \"All day\" : item.start ? z.formatTime(item.start) : undefined} href={null} time={item.all_day ? null : (item.start ?? null)} />"
+ROW = 'meta={item.all_day ? "All day" : item.start ? z.formatTime(item.start) : undefined} href={null} time={item.all_day ? null : (item.start ?? null)} />'
 APP_CHANGES = {
     # Start at the left of the title, the end time in the meta.
     "start-left-end-right": ('title={String(item.title ?? "")} ' + ROW, 'title={`${item.start ? z.formatTime(item.start) : ""} ${item.title ?? ""}`} ' + ROW.replace("z.formatTime(item.start)", "z.formatTime(item.end!)")),
