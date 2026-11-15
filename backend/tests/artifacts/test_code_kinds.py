@@ -501,6 +501,7 @@ def test_one_automatic_fix_per_turn_even_without_fix_of(tools, store, sandbox):
     assert store.code_version(OWNER, aid, 2)[2].fix_of == 1
     text, card3 = update(tools, aid, 2, content=PAGE + "  ")
     assert card3 is None and "already made the one automatic fix" in text
+    assert "try again once they ask for a change" in text
     # A later turn (the owner asked again) may change it.
     _, card4 = tools.update(ctx(run_id="run-2"), artifact_id=aid, base_version=2, content=PAGE + "   ", edits=None, language=None, note=None)
     assert card4["version"] == 3

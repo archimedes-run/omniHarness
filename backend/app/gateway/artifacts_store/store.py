@@ -559,7 +559,7 @@ class ArtifactStore:
             .where(ArtifactCodeRow.artifact_id == row.id, ArtifactCodeRow.fix_of.is_not(None), scope, ArtifactVersionRow.n != version.n)
         ).scalar_one()
         if fixes:
-            raise FixRefused("This turn already made the one automatic fix of this artifact: do not run another. Tell the person what still fails.")
+            raise FixRefused("This turn already made the one automatic fix of this artifact: do not run another. Tell the person what still fails; you can try again once they ask for a change.")
         return version.base_version
 
     def _store_pages(self, s: Session, row: ArtifactRow, version: ArtifactVersionRow, code: dict, post: dict | None) -> tuple[bytes | None, str, dict]:
@@ -593,13 +593,13 @@ class ArtifactStore:
         if code is None:
             raise FixRefused(f"fix_of names no version of this artifact ({target}).")
         if code.fix_of is not None:
-            raise FixRefused("That version was already the automatic fix: do not run another automatic fix. Tell the person what still fails.")
+            raise FixRefused("That version was already the automatic fix: do not run another automatic fix. Tell the person what still fails; you can try again once they ask for a change.")
         state = check_dict(check)["state"] if code.build_state == "ok" else "build_failed"
         if state not in ("failed", "build_failed"):
             raise FixRefused("fix_of is only for a version whose checks failed.")
         taken = s.execute(select(func.count()).select_from(ArtifactCodeRow).where(ArtifactCodeRow.artifact_id == row.id, ArtifactCodeRow.fix_of == target)).scalar_one()
         if taken:
-            raise FixRefused("That version already had its one automatic fix.")
+            raise FixRefused("That version already had its one automatic fix. Tell the person what still fails; you can try again once they ask for a change.")
 
     def _prune(self, s: Session, row: ArtifactRow, post: dict) -> None:
         """Beyond the per-artifact cap: drop the oldest version that is neither
