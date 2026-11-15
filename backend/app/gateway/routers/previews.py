@@ -5,6 +5,7 @@ from fastapi.responses import Response
 
 from app.gateway.authz import get_auth_context, require_permission
 from app.gateway.deps import get_preview_session_manager
+from app.gateway.fetch_metadata import cross_site_navigation, refused_navigation
 from app.gateway.preview_sessions import (
     PreviewSessionCreateRequest,
     PreviewSessionLogsResponse,
@@ -107,6 +108,10 @@ async def proxy_preview_session(
     request: Request,
     path: str = "",
 ) -> Response:
+    # A navigation another site (or an opaque frame) starts is refused even
+    # with the session cookie; the preview's own loads are same-origin.
+    if cross_site_navigation(request):
+        return refused_navigation()
     manager = get_preview_session_manager(request)
     return await manager.proxy_request(
         user_id=_current_user_id(request),

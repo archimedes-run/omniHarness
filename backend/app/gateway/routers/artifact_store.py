@@ -30,6 +30,7 @@ from app.gateway.artifacts_store.kinds import InvalidContent, TooLarge
 from app.gateway.artifacts_store.service import import_from_chat
 from app.gateway.artifacts_store.store import ArtifactStore, NotEditable, StoreError
 from app.gateway.authz import require_permission
+from app.gateway.fetch_metadata import own_frame_request
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
 from omniharness.runtime.user_context import DEFAULT_USER_ID
 
@@ -446,7 +447,7 @@ async def frame_html(artifact_id: str, n: int, request: Request, t: str | None =
     store = store_of(request)
     artifact_id = _check_id(artifact_id)
     payload = frame_token_mod.verify(t, owner, artifact_id, n)
-    if request.headers.get("sec-fetch-dest") != "iframe" or request.headers.get("sec-fetch-site") != "same-origin" or payload is None:
+    if not own_frame_request(request) or payload is None:
         return _inert()
     if path is not None and (not _PAGE_PATH.fullmatch(path) or any(seg in (".", "..") for seg in path.split("/"))):
         return _inert(404)
