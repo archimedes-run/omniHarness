@@ -1,22 +1,22 @@
 "use client";
 
 import {
-  ArchiveIcon,
-  ArchiveRestoreIcon,
-  CopyIcon,
-  ExternalLinkIcon,
+  BookmarkIcon,
+  CheckIcon,
+  CodeIcon,
+  DownloadIcon,
+  EllipsisIcon,
+  EyeIcon,
   HistoryIcon,
-  MessageSquareIcon,
+  MaximizeIcon,
+  MessageCircleIcon,
   PencilIcon,
   PinIcon,
-  PinOffIcon,
-  RotateCcwIcon,
-  Trash2Icon,
-  TypeIcon,
+  SparkleIcon,
   XIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -27,44 +27,96 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { atText } from "@/core/apps/wording";
 import {
   ArtifactsApiError,
+  downloadUrl,
   EDITABLE_KINDS,
   isCodeKind,
   type ArtifactDetail,
-  type ArtifactVersion,
 } from "@/core/artifacts/store-api";
 import {
   useArtifactActions,
   useArtifactVersion,
+  useCodeActions,
+  useSaveArtifact,
   useStoreArtifact,
 } from "@/core/artifacts/store-hooks";
 import {
+  checkWords,
   confirmText,
+  downloadForms,
+  formatBytes,
   KIND_WORDS,
-  lineageWords,
   originWords,
   refusalWords,
+  sourceChip,
   titleText,
 } from "@/core/artifacts/store-logic";
 import { safeField } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
-import { CodeKindView } from "./artifact-code-kind";
+import { canRebuild, CodeKindView } from "./artifact-code-kind";
 import { ArtifactContent, codeOf, KindIcon } from "./artifact-content";
-import { SaveDownload } from "./artifact-save";
+import { VersionsDrawer } from "./artifact-versions";
+import {
+  AskBox,
+  CheckChip,
+  DeviceToggles,
+  IconButton,
+  iconButtonClass,
+  PlainChip,
+  SourceChip,
+  Tip,
+  useCanAsk,
+  type Device,
+} from "./viewer-parts";
+
+/** Below this width the viewer is "compact" (a phone, or a narrow side
+ * panel): Versions, Pin, Open chat and Full screen move into More. */
+const COMPACT_PX = 600;
+
+/** The viewer's own width (the side panel is narrower than the window). */
+function useCompact(ref: React.RefObject<HTMLElement | null>) {
+  const [compact, setCompact] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () =>
+      setCompact(el.getBoundingClientRect().width < COMPACT_PX);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return compact;
+}
 
 /**
- * Spec 012 Slice 1: one artifact, in the chat's side panel or full page at
- * /workspace/artifacts/[id]. Shows the chosen version; Versions lists them
- * all (View, "Restore this version", which makes a NEW version); the owner
- * edits markdown, code and mermaid in a plain editor (a new version on the
- * base it was opened from; a stale base says "A newer version exists");
- * Rename, Pin, Duplicate, Archive; Delete permanently only when archived,
- * after typing the title.
+ * Spec 012: one artifact, in the chat's side panel (or over the chat at
+ * phone width) and on the full page /workspace/artifacts/[id]. ONE header
+ * row: the title (click or the pencil to rename), the version pill, the
+ * save state, then icon buttons (Ask to change, Preview, Code, Download,
+ * Versions, Pin, Open the chat that made it, More) and, at the far end,
+ * Full screen and Close. A thin chip row (checks, source; preview sizes
+ * for code that runs), the content, the versions drawer and a docked
+ * "Ask for a change…" box. Buttons that do not apply are not shown.
  */
 export function ArtifactPanel({
   id,
@@ -80,8 +132,6 @@ export function ArtifactPanel({
   onClose?: () => void;
 }) {
   const { data, error, isLoading, refetch } = useStoreArtifact(id);
-  const [showVersions, setShowVersions] = useState(false);
-  const [editing, setEditing] = useState(false);
 
   if (isLoading) {
     return (
@@ -96,7 +146,16 @@ export function ArtifactPanel({
       (error.code === "artifact_not_found" || error.status === 404);
     return (
       <div className="flex flex-col gap-2 p-4" data-testid="artifact-missing">
-        <PanelClose onClose={onClose} />
+        {onClose && (
+          <IconButton
+            label="Close"
+            onClick={onClose}
+            className="self-end"
+            data-testid="artifact-close"
+          >
+            <XIcon />
+          </IconButton>
+        )}
         <p className="text-muted-foreground text-sm" role="status">
           {gone
             ? "This artifact isn't available."
@@ -110,113 +169,75 @@ export function ArtifactPanel({
       ? version
       : data.latest_version;
   return (
-    <section
-      className={cn(
-        "flex min-h-0 w-full min-w-0 flex-col gap-3",
-        mode === "panel" ? "h-full" : "",
-      )}
-      data-testid="artifact-panel"
-      data-artifact={data.id}
-      data-version={shown}
-      aria-label={titleText(data.title)}
-    >
-      <PanelHeader
-        artifact={data}
-        shown={shown}
-        mode={mode}
-        onClose={onClose}
-        showVersions={showVersions}
-        onToggleVersions={() => setShowVersions((v) => !v)}
-        onEdit={() => setEditing(true)}
-        editing={editing}
-      />
-      {showVersions && (
-        <VersionList
-          artifact={data}
-          shown={shown}
-          onView={(n) => {
-            setEditing(false);
-            onVersionChange(n);
-          }}
-        />
-      )}
-      <div
-        className={cn(
-          "min-h-0 min-w-0",
-          mode === "panel" ? "flex-1 overflow-auto" : "",
-        )}
-      >
-        {editing ? (
-          <ArtifactEditor
-            artifact={data}
-            onDone={(n) => {
-              setEditing(false);
-              if (n) onVersionChange(n);
-            }}
-            onReload={async () => (await refetch()).data?.latest_version}
-          />
-        ) : isCodeKind(data.kind) ? (
-          <CodeKindView
-            artifact={data}
-            version={shown}
-            onVersionChange={onVersionChange}
-          />
-        ) : (
-          <ArtifactContent artifact={data} version={shown} />
-        )}
-      </div>
-    </section>
+    <Viewer
+      artifact={data}
+      shown={shown}
+      mode={mode}
+      onClose={onClose}
+      onVersionChange={onVersionChange}
+      reload={async () => (await refetch()).data?.latest_version}
+    />
   );
 }
 
-function PanelClose({ onClose }: { onClose?: () => void }) {
-  if (!onClose) return null;
-  return (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      onClick={onClose}
-      aria-label="Close"
-      className="self-end max-md:size-11"
-    >
-      <XIcon />
-    </Button>
-  );
-}
-
-function PanelHeader({
+function Viewer({
   artifact,
   shown,
   mode,
   onClose,
-  showVersions,
-  onToggleVersions,
-  onEdit,
-  editing,
+  onVersionChange,
+  reload,
 }: {
   artifact: ArtifactDetail;
   shown: number;
   mode: "panel" | "page";
   onClose?: () => void;
-  showVersions: boolean;
-  onToggleVersions: () => void;
-  onEdit: () => void;
-  editing: boolean;
+  onVersionChange: (n: number) => void;
+  reload: () => Promise<number | undefined>;
 }) {
+  const section = useRef<HTMLElement>(null);
+  const compact = useCompact(section);
   const actions = useArtifactActions(artifact.id);
+  const codeActions = useCodeActions(artifact.id);
+  const canAsk = useCanAsk();
+  const askInput = useRef<HTMLInputElement>(null);
+  const previewBox = useRef<HTMLDivElement | null>(null);
+  const drawerOpener = useRef<HTMLElement | null>(null);
+  const keepFocus = useRef(false);
+
+  const [drawer, setDrawer] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editingSource, setEditingSource] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [details, setDetails] = useState(false);
+  const [tab, setTab] = useState<"preview" | "code">("preview");
+  const [device, setDevice] = useState<Device>("desk");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
+
   const title = titleText(artifact.title);
   const v = artifact.versions.find((x) => x.n === shown);
-  const lineage = v ? lineageWords(v.lineage, v.lineage_source) : null;
-  const note = safeField(v?.note);
+  const code = isCodeKind(artifact.kind);
+  const built = v?.code
+    ? v.code.build_state === "ok"
+    : !(
+        artifact.code?.build_state === "build_failed" &&
+        shown === artifact.latest_version
+      );
+  const forms = downloadForms(artifact.kind, built);
   const editable =
     EDITABLE_KINDS.includes(artifact.kind) &&
     !artifact.archived &&
     shown === artifact.latest_version;
+  const rebuildable = canRebuild(artifact, shown);
+  const fullscreen = code && tab === "preview" && built;
+  const chatHref =
+    artifact.origin_thread_id && !artifact.origin_deleted
+      ? `/workspace/chats/${encodeURIComponent(artifact.origin_thread_id)}`
+      : null;
+  const fullHref = `/workspace/artifacts/${encodeURIComponent(artifact.id)}?v=${shown}`;
 
   const run = async (fn: () => Promise<unknown>, ok: string) => {
     setMessage(null);
@@ -227,372 +248,749 @@ function PanelHeader({
       setMessage({ ok: false, text: refusalWords(err) });
     }
   };
+  const view = (n: number) => {
+    setEditing(false);
+    setEditingSource(false);
+    onVersionChange(n);
+  };
+  const toggleDrawer = (opener: HTMLElement | null) => {
+    if (drawer) {
+      setDrawer(false);
+      drawerOpener.current?.focus();
+    } else {
+      drawerOpener.current = opener;
+      setDrawer(true);
+    }
+  };
+  const closeDrawer = () => {
+    setDrawer(false);
+    requestAnimationFrame(() => drawerOpener.current?.focus());
+  };
+  const togglePin = () =>
+    void run(
+      () => actions.patch.mutateAsync({ pinned: !artifact.pinned }),
+      artifact.pinned ? "Unpinned." : "Pinned.",
+    );
+  const goFullscreen = () =>
+    void previewBox.current?.requestFullscreen?.().catch(() => undefined);
 
   return (
-    <header className="flex min-w-0 flex-col gap-2">
-      <div className="flex min-w-0 items-start gap-2">
-        <KindIcon kind={artifact.kind} className="mt-1" />
-        <div className="min-w-0 flex-1">
-          {renaming ? (
-            <RenameForm
-              initial={confirmText(artifact.title)}
-              pending={actions.patch.isPending}
-              onCancel={() => setRenaming(false)}
-              onSave={(t) =>
-                void run(async () => {
-                  await actions.patch.mutateAsync({ title: t });
-                  setRenaming(false);
-                }, "Renamed.")
-              }
-            />
-          ) : (
+    <section
+      ref={section}
+      className={cn(
+        "bg-card flex w-full min-w-0 flex-col",
+        mode === "panel" ? "h-full min-h-0" : "border-border rounded-xl border",
+      )}
+      data-testid="artifact-panel"
+      data-artifact={artifact.id}
+      data-version={shown}
+      data-compact={compact ? "true" : "false"}
+      aria-label={title}
+    >
+      <header
+        className="border-border flex h-[60px] min-w-0 shrink-0 items-center gap-1.5 border-b pr-3.5 pl-5 max-sm:pr-2 max-sm:pl-3 pointer-coarse:h-auto pointer-coarse:min-h-[60px]"
+        data-testid="artifact-header"
+      >
+        <KindIcon
+          kind={artifact.kind}
+          className="text-muted-foreground size-[18px] max-sm:hidden"
+        />
+        {renaming ? (
+          <RenameInline
+            initial={confirmText(artifact.title)}
+            onCancel={() => setRenaming(false)}
+            onSave={(t) => {
+              setRenaming(false);
+              if (t === confirmText(artifact.title)) return;
+              void run(
+                () => actions.patch.mutateAsync({ title: t }),
+                "Renamed.",
+              );
+            }}
+          />
+        ) : (
+          <div className="group ml-1 flex min-w-14 shrink items-center max-sm:ml-0">
             <h2
-              className="truncate text-base font-semibold"
+              className="cursor-text truncate text-base font-semibold"
               title={title}
+              onClick={() => setRenaming(true)}
               data-testid="artifact-title"
             >
               {title}
             </h2>
+            <IconButton
+              label="Rename"
+              onClick={() => setRenaming(true)}
+              className="-ml-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:hidden [&_svg]:size-[13px]"
+              data-testid="artifact-rename-pencil"
+            >
+              <PencilIcon />
+            </IconButton>
+          </div>
+        )}
+        {!compact && (
+          <button
+            type="button"
+            onClick={(e) => toggleDrawer(e.currentTarget)}
+            aria-expanded={drawer}
+            aria-label={`Version ${shown} of ${artifact.latest_version}. Show versions`}
+            className="border-border text-muted-foreground hover:text-foreground focus-visible:outline-primary h-[26px] shrink-0 cursor-pointer rounded-full border px-2 text-xs whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 pointer-coarse:h-11"
+            data-testid="artifact-version-label"
+          >
+            v{shown}
+            {shown !== artifact.latest_version && (
+              <span className="max-sm:hidden">
+                {" "}
+                (latest v{artifact.latest_version})
+              </span>
+            )}{" "}
+            ▾
+          </button>
+        )}
+        <SaveState artifact={artifact} compact={compact} />
+        <span
+          className="bg-border mx-1 h-5 w-px shrink-0 max-sm:hidden"
+          aria-hidden
+        />
+        <div
+          className={cn(
+            "flex min-w-0 shrink-0 items-center",
+            compact ? "gap-0.5" : "gap-1.5",
           )}
-          <p className="text-muted-foreground flex flex-wrap gap-x-2 text-xs">
-            <span>{KIND_WORDS[artifact.kind]}</span>
-            <span data-testid="artifact-version-label">
-              Version {shown}
-              {shown !== artifact.latest_version &&
-                ` (latest: ${artifact.latest_version})`}
-            </span>
-            {artifact.pinned && <span>Pinned</span>}
-            {artifact.archived && (
-              <span className="text-warning">Archived</span>
-            )}
-          </p>
+          role="toolbar"
+          aria-label="Artifact actions"
+        >
+          {canAsk && (
+            <IconButton
+              label="Ask to change"
+              primary
+              onClick={() => askInput.current?.focus()}
+              data-testid="artifact-ask-change"
+            >
+              <SparkleIcon />
+            </IconButton>
+          )}
+          {code && (
+            <>
+              <IconButton
+                label="Preview"
+                pressed={tab === "preview"}
+                onClick={() => setTab("preview")}
+                data-testid="artifact-tab-preview"
+              >
+                <EyeIcon />
+              </IconButton>
+              <IconButton
+                label="Code"
+                pressed={tab === "code"}
+                onClick={() => setTab("code")}
+                data-testid="artifact-tab-code"
+              >
+                <CodeIcon />
+              </IconButton>
+            </>
+          )}
+          <DownloadControl
+            artifactId={artifact.id}
+            version={shown}
+            forms={forms}
+          />
+          {!compact && (
+            <>
+              <IconButton
+                label="Versions"
+                tip="Versions · compare, restore"
+                aria-expanded={drawer}
+                onClick={(e) => toggleDrawer(e.currentTarget)}
+                data-testid="artifact-versions-toggle"
+              >
+                <HistoryIcon />
+              </IconButton>
+              {!artifact.archived && (
+                <IconButton
+                  label="Pin to sidebar"
+                  tip={
+                    artifact.pinned
+                      ? "Pinned to sidebar · click to unpin"
+                      : "Pin to sidebar"
+                  }
+                  pressed={artifact.pinned}
+                  disabled={actions.patch.isPending}
+                  onClick={togglePin}
+                  data-testid="artifact-pin"
+                >
+                  <PinIcon />
+                </IconButton>
+              )}
+              {chatHref && (
+                <Tip label="Open the chat that made it">
+                  <Link
+                    href={chatHref}
+                    aria-label="Open the chat that made it"
+                    className={iconButtonClass()}
+                    data-testid="artifact-open-chat"
+                  >
+                    <MessageCircleIcon />
+                  </Link>
+                </Tip>
+              )}
+            </>
+          )}
+          <DropdownMenu>
+            <Tip label="More · rename, duplicate, archive, details">
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="More actions"
+                  className={iconButtonClass()}
+                  data-testid="artifact-more"
+                >
+                  <EllipsisIcon />
+                </button>
+              </DropdownMenuTrigger>
+            </Tip>
+            <DropdownMenuContent
+              align="start"
+              className="w-[220px] rounded-xl p-1.5"
+              data-testid="artifact-more-menu"
+              onCloseAutoFocus={(e) => {
+                if (keepFocus.current) {
+                  e.preventDefault();
+                  keepFocus.current = false;
+                }
+              }}
+            >
+              {editable && !editing && !rebuildable && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setEditing(true);
+                  }}
+                  data-testid="artifact-edit"
+                >
+                  Edit
+                </DropdownMenuItem>
+              )}
+              {rebuildable && !editingSource && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setTab("code");
+                    setEditingSource(true);
+                  }}
+                  data-testid="artifact-edit-source"
+                >
+                  Edit source
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onSelect={() => {
+                  keepFocus.current = true;
+                  setRenaming(true);
+                }}
+                data-testid="artifact-rename"
+              >
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={actions.duplicate.isPending}
+                onSelect={() =>
+                  void run(
+                    () => actions.duplicate.mutateAsync(shown),
+                    "Copied. The copy is in your Artifacts.",
+                  )
+                }
+                data-testid="artifact-duplicate"
+              >
+                Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={actions.archive.isPending}
+                onSelect={() =>
+                  void run(
+                    () => actions.archive.mutateAsync(!artifact.archived),
+                    artifact.archived
+                      ? "Restored from the archive."
+                      : "Archived.",
+                  )
+                }
+                data-testid="artifact-archive"
+              >
+                {artifact.archived ? "Restore from archive" : "Archive"}
+              </DropdownMenuItem>
+              {artifact.archived && (
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setDeleting(true)}
+                  data-testid="artifact-delete"
+                >
+                  Delete permanently
+                </DropdownMenuItem>
+              )}
+              {compact && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      keepFocus.current = true;
+                      drawerOpener.current = document.querySelector(
+                        `[data-artifact="${artifact.id}"] [data-testid=artifact-more]`,
+                      );
+                      setDrawer(true);
+                    }}
+                    data-testid="artifact-versions-toggle"
+                  >
+                    Versions
+                  </DropdownMenuItem>
+                  {!artifact.archived && (
+                    <DropdownMenuItem
+                      disabled={actions.patch.isPending}
+                      onSelect={togglePin}
+                      data-testid="artifact-pin"
+                    >
+                      {artifact.pinned
+                        ? "Unpin from sidebar"
+                        : "Pin to sidebar"}
+                    </DropdownMenuItem>
+                  )}
+                  {chatHref && (
+                    <DropdownMenuItem asChild>
+                      <Link href={chatHref} data-testid="artifact-open-chat">
+                        Open the chat that made it
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
+                  {fullscreen && (
+                    <DropdownMenuItem
+                      onSelect={goFullscreen}
+                      data-testid="artifact-fullscreen"
+                    >
+                      Full screen
+                    </DropdownMenuItem>
+                  )}
+                </>
+              )}
+              {mode === "panel" && (
+                <DropdownMenuItem asChild>
+                  <Link href={fullHref} data-testid="artifact-open-page">
+                    Open full page
+                  </Link>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => setDetails(true)}
+                className="text-muted-foreground"
+                data-testid="artifact-details"
+              >
+                Details · checks, source, technical notes
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        {mode === "panel" && (
-          <Button
-            asChild
-            size="icon-sm"
-            variant="ghost"
-            className="max-md:size-11"
+        <span className="flex-1" />
+        {fullscreen && !compact && (
+          <IconButton
+            label="Full screen"
+            onClick={goFullscreen}
+            data-testid="artifact-fullscreen"
           >
-            <Link
-              href={`/workspace/artifacts/${encodeURIComponent(artifact.id)}?v=${shown}`}
-              aria-label="Open full page"
-              title="Open full page"
-            >
-              <ExternalLinkIcon />
-            </Link>
-          </Button>
+            <MaximizeIcon />
+          </IconButton>
         )}
-        <PanelClose onClose={onClose} />
-      </div>
-      {lineage && (
-        <p
-          className="border-warning/40 text-foreground w-fit rounded-md border px-2 py-0.5 text-xs"
-          data-testid="artifact-lineage"
-        >
-          {lineage}
-        </p>
-      )}
-      {note && (
-        <p className="text-muted-foreground text-xs">
-          <span className="font-medium">The assistant&rsquo;s note:</span>{" "}
-          <span data-testid="artifact-note">{note}</span>
-        </p>
-      )}
-      {artifact.origin_deleted && (
-        <p
-          className="text-muted-foreground text-xs"
-          data-testid="artifact-origin-deleted"
-        >
-          From a chat you deleted
-        </p>
-      )}
-      {/* Code kinds: the viewer below has its own downloads. */}
-      <SaveDownload
-        artifact={artifact}
-        version={shown}
-        download={!isCodeKind(artifact.kind)}
-      />
-      <div className="flex flex-wrap gap-1.5">
-        <Button
-          type="button"
-          size="sm"
-          variant={showVersions ? "secondary" : "outline"}
-          aria-expanded={showVersions}
-          onClick={onToggleVersions}
-          data-testid="artifact-versions-toggle"
-          className="max-md:min-h-11"
-        >
-          <HistoryIcon />
-          Versions ({artifact.version_count})
-        </Button>
-        {editable && !editing && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onEdit}
-            data-testid="artifact-edit"
-            className="max-md:min-h-11"
+        {onClose && (
+          <IconButton
+            label="Close"
+            onClick={onClose}
+            data-testid="artifact-close"
           >
-            <PencilIcon />
-            Edit
-          </Button>
+            <XIcon />
+          </IconButton>
         )}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={() => setRenaming(true)}
-          data-testid="artifact-rename"
-          className="max-md:min-h-11"
-        >
-          <TypeIcon />
-          Rename
-        </Button>
-        {!artifact.archived && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-pressed={artifact.pinned}
-            disabled={actions.patch.isPending}
-            onClick={() =>
-              void run(
-                () => actions.patch.mutateAsync({ pinned: !artifact.pinned }),
-                artifact.pinned ? "Unpinned." : "Pinned.",
-              )
-            }
-            data-testid="artifact-pin"
-            className="max-md:min-h-11"
-          >
-            {artifact.pinned ? <PinOffIcon /> : <PinIcon />}
-            {artifact.pinned ? "Unpin" : "Pin"}
-          </Button>
+      </header>
+
+      <div
+        className="border-border flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b px-5 py-2.5 max-sm:px-3"
+        data-testid="artifact-chips"
+      >
+        {code && v?.code?.build_state === "ok" && (
+          <CheckChip
+            check={v.code.check}
+            findings={v.code.findings}
+            pending={codeActions.checkAgain.isPending}
+            onCheckAgain={() => codeActions.checkAgain.mutate(shown)}
+          />
         )}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={actions.duplicate.isPending}
-          onClick={() =>
-            void run(
-              () => actions.duplicate.mutateAsync(shown),
-              "Copied. The copy is in your Artifacts.",
-            )
-          }
-          data-testid="artifact-duplicate"
-          className="max-md:min-h-11"
-        >
-          <CopyIcon />
-          Duplicate
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={actions.archive.isPending}
-          onClick={() =>
-            void run(
-              () => actions.archive.mutateAsync(!artifact.archived),
-              artifact.archived ? "Restored from the archive." : "Archived.",
-            )
-          }
-          data-testid="artifact-archive"
-          className="max-md:min-h-11"
-        >
-          {artifact.archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-          {artifact.archived ? "Restore from archive" : "Archive"}
-        </Button>
-        {artifact.archived && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="text-destructive max-md:min-h-11"
-            onClick={() => setDeleting(true)}
-            data-testid="artifact-delete"
-          >
-            <Trash2Icon />
-            Delete permanently
-          </Button>
+        {v && (
+          <SourceChip
+            kind={artifact.kind}
+            lineage={v.lineage}
+            source={v.lineage_source}
+          />
         )}
-        {artifact.origin_thread_id && !artifact.origin_deleted && (
-          <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
-            <Link
-              href={`/workspace/chats/${encodeURIComponent(artifact.origin_thread_id)}`}
-              data-testid="artifact-open-chat"
-            >
-              <MessageSquareIcon />
-              Open the chat that made it
-            </Link>
-          </Button>
+        {artifact.origin_deleted && (
+          <PlainChip testId="artifact-origin-deleted">
+            From a chat you deleted
+          </PlainChip>
+        )}
+        {artifact.archived && <PlainChip>Archived</PlainChip>}
+        <span className="flex-1" />
+        {code && tab === "preview" && built && (
+          <DeviceToggles device={device} onChange={setDevice} />
         )}
       </div>
       {message && (
         <p
           role={message.ok ? "status" : "alert"}
           className={cn(
-            "text-sm",
+            "border-border border-b px-5 py-1.5 text-sm max-sm:px-3",
             message.ok ? "text-foreground" : "text-destructive",
           )}
+          data-testid="artifact-message"
         >
           {message.text}
         </p>
+      )}
+
+      <div className={cn("flex min-w-0", mode === "panel" && "min-h-0 flex-1")}>
+        <div
+          className={cn(
+            "bg-background flex min-w-0 flex-1 flex-col p-[22px] max-sm:p-3",
+            mode === "panel" ? "min-h-0 overflow-auto" : "rounded-b-xl",
+          )}
+          data-testid="artifact-stage"
+        >
+          {editing ? (
+            <ArtifactEditor
+              artifact={artifact}
+              onDone={(n) => {
+                setEditing(false);
+                if (n) onVersionChange(n);
+              }}
+              onReload={reload}
+            />
+          ) : code ? (
+            <CodeKindView
+              artifact={artifact}
+              version={shown}
+              onVersionChange={onVersionChange}
+              tab={tab}
+              device={device}
+              editingSource={editingSource}
+              onEditSourceDone={() => setEditingSource(false)}
+              boxRef={previewBox}
+            />
+          ) : (
+            <div className="border-border bg-card min-w-0 rounded-[14px] border p-5 max-sm:p-3">
+              <ArtifactContent artifact={artifact} version={shown} />
+            </div>
+          )}
+        </div>
+        {drawer && !compact && (
+          <VersionsDrawer
+            artifact={artifact}
+            shown={shown}
+            onView={view}
+            onClose={closeDrawer}
+            asSheet={false}
+          />
+        )}
+      </div>
+      {drawer && compact && (
+        <Sheet open onOpenChange={(o) => !o && closeDrawer()}>
+          <SheetContent
+            side="bottom"
+            className="bg-card gap-0 rounded-t-xl p-0"
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              drawerOpener.current?.focus();
+            }}
+          >
+            <SheetTitle className="sr-only">Versions</SheetTitle>
+            <SheetDescription className="sr-only">
+              View, compare or restore a version.
+            </SheetDescription>
+            <VersionsDrawer
+              artifact={artifact}
+              shown={shown}
+              onView={view}
+              onClose={closeDrawer}
+              asSheet
+            />
+          </SheetContent>
+        </Sheet>
+      )}
+      {canAsk && (
+        <AskBox ref={askInput} artifactId={artifact.id} version={shown} />
+      )}
+      {details && (
+        <DetailsDialog
+          artifact={artifact}
+          shown={shown}
+          onClose={() => setDetails(false)}
+        />
       )}
       {deleting && (
         <DeleteDialog artifact={artifact} onClose={() => setDeleting(false)} />
       )}
-    </header>
+    </section>
   );
 }
 
-function RenameForm({
+/** Inline rename: Enter or leaving the field saves, Escape cancels. The
+ * same rule as before: 1 to 120 characters after trimming. */
+function RenameInline({
   initial,
-  pending,
   onSave,
   onCancel,
 }: {
   initial: string;
-  pending: boolean;
   onSave: (title: string) => void;
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(initial);
-  const trimmed = value.trim();
+  const done = useRef(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  const finish = (save: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    const t = value.trim();
+    if (save && t && t.length <= 120) onSave(t);
+    else onCancel();
+  };
   return (
-    <form
-      className="flex flex-wrap items-center gap-1.5"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (trimmed && trimmed.length <= 120) onSave(trimmed);
+    <Input
+      ref={ref}
+      value={value}
+      maxLength={120}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+        }
       }}
-    >
-      <Input
-        value={value}
-        maxLength={120}
-        onChange={(e) => setValue(e.target.value)}
-        aria-label="Title"
-        className="h-8 min-w-0 flex-[1_1_180px]"
-        autoFocus
-        data-testid="artifact-rename-input"
-      />
-      <Button type="submit" size="sm" disabled={!trimmed || pending}>
-        Save
-      </Button>
-      <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
-        Cancel
-      </Button>
-    </form>
+      onBlur={() => finish(true)}
+      aria-label="Title"
+      className="ml-1 h-8 min-w-0 flex-[0_1_320px] text-base font-semibold"
+      data-testid="artifact-rename-input"
+    />
   );
 }
 
-function VersionList({
+/** "✓ Saved" (its menu offers Unsave) or "Save", in the same spot; the
+ * existing optimistic save with its rollback. */
+function SaveState({
+  artifact,
+  compact,
+}: {
+  artifact: ArtifactDetail;
+  compact: boolean;
+}) {
+  const save = useSaveArtifact(artifact.id);
+  const saved = save.isPending
+    ? save.variables
+    : save.isSuccess
+      ? save.data.saved
+      : artifact.saved;
+  const cls =
+    "focus-visible:outline-primary inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1 rounded-full px-1.5 text-xs whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 pointer-coarse:h-11";
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {saved ? (
+        <DropdownMenu>
+          <Tip label="Saved · click to unsave">
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(cls, "text-success hover:bg-surface-raised")}
+                aria-label="Saved. More options"
+                data-testid="artifact-store-saved"
+              >
+                <CheckIcon
+                  className="size-[13px]"
+                  strokeWidth={2.5}
+                  aria-hidden
+                />
+                <span className={cn(compact && "sr-only")}>Saved</span>
+              </button>
+            </DropdownMenuTrigger>
+          </Tip>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem
+              onSelect={() => save.mutate(false)}
+              data-testid="artifact-store-unsave"
+            >
+              Unsave
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <Tip label="Save to your Artifacts">
+          <button
+            type="button"
+            className={cn(
+              cls,
+              "border-border text-foreground hover:bg-surface-raised border px-2",
+            )}
+            disabled={save.isPending}
+            onClick={() => save.mutate(true)}
+            data-testid="artifact-store-save"
+          >
+            <BookmarkIcon className="size-[13px]" aria-hidden />
+            <span className={cn(compact && "sr-only")}>Save</span>
+          </button>
+        </Tip>
+      )}
+      {save.isError && (
+        <span role="alert" className="text-destructive text-xs max-sm:sr-only">
+          {refusalWords(save.error)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Download: one form downloads at once; several open a menu of exactly the
+ * forms the download route offers for this kind. */
+function DownloadControl({
+  artifactId,
+  version,
+  forms,
+}: {
+  artifactId: string;
+  version: number;
+  forms: ReturnType<typeof downloadForms>;
+}) {
+  if (forms.length === 0) return null;
+  if (forms.length === 1) {
+    const f = forms[0]!;
+    const label = f.label === "Download" ? "Download" : `Download · ${f.label}`;
+    return (
+      <Tip label={label}>
+        <a
+          href={downloadUrl(artifactId, version, f.form)}
+          download
+          aria-label="Download"
+          className={iconButtonClass()}
+          data-testid="artifact-download"
+          data-form={f.form}
+        >
+          <DownloadIcon />
+        </a>
+      </Tip>
+    );
+  }
+  return (
+    <DropdownMenu>
+      <Tip label={`Download · ${forms.map((f) => f.label).join(", ")}`}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Download"
+            className={iconButtonClass()}
+            data-testid="artifact-download-menu"
+          >
+            <DownloadIcon />
+          </button>
+        </DropdownMenuTrigger>
+      </Tip>
+      <DropdownMenuContent align="start" data-testid="artifact-download-list">
+        {forms.map((f) => (
+          <DropdownMenuItem key={f.form} asChild>
+            <a
+              href={downloadUrl(artifactId, version, f.form)}
+              download
+              data-testid="artifact-download-form"
+              data-form={f.form}
+            >
+              {f.label}
+            </a>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** More → Details: the technical bits the header no longer shows. */
+function DetailsDialog({
   artifact,
   shown,
-  onView,
+  onClose,
 }: {
   artifact: ArtifactDetail;
   shown: number;
-  onView: (n: number) => void;
+  onClose: () => void;
 }) {
-  const actions = useArtifactActions(artifact.id);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
-    null,
-  );
-  const restore = async (v: ArtifactVersion) => {
-    setMessage(null);
-    try {
-      const r = await actions.restore.mutateAsync({
-        version: v.n,
-        base: artifact.latest_version,
-      });
-      setMessage({
-        ok: true,
-        text: `Restored version ${v.n} as version ${r.version.n}.`,
-      });
-      onView(r.version.n);
-    } catch (err) {
-      setMessage({ ok: false, text: refusalWords(err) });
-    }
-  };
+  const v = artifact.versions.find((x) => x.n === shown);
+  const note = safeField(v?.note);
+  const check = v?.code?.check;
+  const failures = check?.failures ?? [];
+  const findings = v?.code?.findings ?? [];
+  const rows: [string, string][] = [
+    ["Kind", KIND_WORDS[artifact.kind]],
+    ["Version", `${shown} of ${artifact.latest_version}`],
+    ["Made", `${v ? originWords(v.origin) : ""} · ${atText(v?.created_at)}`],
+    ["Size", formatBytes(v?.size ?? artifact.size)],
+    ["Type", safeField(v?.media_type ?? artifact.media_type)],
+    [
+      "Source",
+      v ? sourceChip(artifact.kind, v.lineage, v.lineage_source).label : "",
+    ],
+  ];
+  if (artifact.origin_deleted) rows.push(["Chat", "From a chat you deleted"]);
   return (
-    <div data-testid="artifact-versions">
-      <ol className="border-border divide-border max-h-72 divide-y overflow-auto rounded-lg border">
-        {artifact.versions.map((v) => {
-          const lineage = lineageWords(v.lineage, v.lineage_source);
-          const note = safeField(v.note);
-          return (
-            <li
-              key={v.n}
-              className={cn(
-                "flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2",
-                v.n === shown && "bg-muted/50",
-              )}
-              data-version={v.n}
-            >
-              <span className="w-8 font-medium tabular-nums">v{v.n}</span>
-              <div className="min-w-0 flex-[1_1_180px] text-xs">
-                <p className="text-foreground">
-                  {originWords(v.origin)}
-                  <span className="text-muted-foreground">
-                    {" · "}
-                    {atText(v.created_at)}
-                  </span>
-                </p>
-                {lineage && <p className="text-muted-foreground">{lineage}</p>}
-                {note && (
-                  <p className="text-muted-foreground truncate" title={note}>
-                    The assistant&rsquo;s note: {note}
-                  </p>
-                )}
-              </div>
-              {v.n !== shown && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => onView(v.n)}
-                  data-testid="artifact-version-view"
-                  className="max-md:min-h-11"
-                >
-                  View
-                </Button>
-              )}
-              {v.n !== artifact.latest_version && !artifact.archived && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={actions.restore.isPending}
-                  onClick={() => void restore(v)}
-                  data-testid="artifact-version-restore"
-                  className="max-md:min-h-11"
-                >
-                  <RotateCcwIcon />
-                  Restore this version
-                </Button>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-      <p className="text-muted-foreground mt-1 text-xs">
-        Restore makes a new version with that version&rsquo;s content; nothing
-        is deleted.
-      </p>
-      {message && (
-        <p
-          role={message.ok ? "status" : "alert"}
-          className={cn(
-            "mt-1 text-sm",
-            message.ok ? "text-foreground" : "text-destructive",
-          )}
-        >
-          {message.text}
-        </p>
-      )}
-    </div>
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent data-testid="artifact-details-dialog">
+        <DialogHeader>
+          <DialogTitle>Details</DialogTitle>
+          <DialogDescription className="break-all">
+            {titleText(artifact.title)}
+          </DialogDescription>
+        </DialogHeader>
+        {note && (
+          <p className="text-sm">
+            <span className="font-medium">The assistant&rsquo;s note:</span>{" "}
+            <span data-testid="artifact-note">{note}</span>
+          </p>
+        )}
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+          {rows.map(([k, val]) => (
+            <div key={k} className="contents">
+              <dt className="text-muted-foreground">{k}</dt>
+              <dd className="min-w-0 break-words">{val}</dd>
+            </div>
+          ))}
+        </dl>
+        {v?.code && (
+          <div className="flex flex-col gap-1 text-sm">
+            <p className="font-medium">Checks</p>
+            <p>
+              {v.code.build_state === "build_failed"
+                ? "This version did not build."
+                : checkWords(check?.state, check?.summary).label}
+            </p>
+            {(failures.length > 0 || findings.length > 0) && (
+              <ul className="text-muted-foreground list-disc pl-5 text-xs">
+                {failures.map((f, i) => (
+                  <li key={`f${i}`}>{safeField(f)}</li>
+                ))}
+                {findings.map((f, i) => (
+                  <li key={`s${i}`}>{safeField(f)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

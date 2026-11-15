@@ -132,10 +132,16 @@ for (const theme of ["light", "dark"] as const) {
       await aa(page);
       await shot(page, `panel-code-${theme}-${width}`);
 
-      // "Ask the assistant" puts a reference (never the content) in the composer.
+      // "Ask to change" focuses the docked box; the request carries a
+      // reference (never the content) into this chat. With a draft in the
+      // chat box, it goes in front of the draft (not sent).
       await panel.getByTestId("artifact-ask-change").click();
+      await expect(panel.getByTestId("artifact-ask-input")).toBeFocused();
+      await page.locator("textarea[name='message']").fill("draft");
+      await panel.getByTestId("artifact-ask-input").fill("make it blue");
+      await panel.getByTestId("artifact-ask-send").click();
       await expect(page.locator("textarea[name='message']")).toHaveValue(
-        `[artifact ${PAGE_ID} v1] `,
+        `[artifact ${PAGE_ID} v1] make it blue\n\ndraft`,
       );
 
       await page.goto("/workspace/artifacts");
@@ -161,14 +167,20 @@ test("react: failed check is labelled, Code shows the files, Rebuild posts the e
     `[data-testid=artifact-panel][data-artifact="${REACT_ID}"]`,
   );
   await expect(panel.getByTestId("artifact-check")).toContainText(
+    "Check failed",
+  );
+  await panel.getByTestId("artifact-check").click();
+  await expect(panel.getByTestId("artifact-check-sentence")).toContainText(
     "Layout check failed",
   );
+  await page.keyboard.press("Escape");
   await expect(panel.locator('[data-testid="artifact-frame"]')).toBeVisible();
   await panel.getByTestId("artifact-tab-code").click();
   await expect(panel.getByTestId("artifact-react-files")).toContainText(
     "styles.css",
   );
-  await panel.getByTestId("artifact-edit-source").click();
+  await panel.getByTestId("artifact-more").click();
+  await page.getByTestId("artifact-edit-source").click();
   await panel
     .getByTestId("artifact-source-draft")
     .fill("export default () => <p>New</p>;\n");
@@ -216,9 +228,9 @@ test("webapp: pages by relative path in the locked frame, downloads offered", as
   await expect(frame).toHaveAttribute("src", /&path=about\.html#n=/);
   const inner = (await (await frame.elementHandle())!.contentFrame())!;
   await expect(inner.locator("h1")).toHaveText("About us");
-  // A web app downloads as its file set (.zip): no separate page download.
-  await expect(panel.getByTestId("artifact-download-page")).toHaveCount(0);
-  await expect(panel.getByTestId("artifact-download-source")).toHaveAttribute(
+  // A web app downloads as its file set (.zip): one download, no menu.
+  await expect(panel.getByTestId("artifact-download-menu")).toHaveCount(0);
+  await expect(panel.getByTestId("artifact-download")).toHaveAttribute(
     "href",
     new RegExp(`/api/artifacts/${id}/versions/1/download$`),
   );

@@ -254,7 +254,7 @@ test.describe("Save and Download on every artifact", () => {
     });
     const panel = page.getByTestId("artifact-panel");
     await expect(panel.getByTestId("artifact-store-saved")).toBeVisible();
-    await expect(panel.getByTestId("artifact-store-download")).toHaveAttribute(
+    await expect(panel.getByTestId("artifact-download")).toHaveAttribute(
       "href",
       `/api/artifacts/${IDS.md}/versions/2/download`,
     );
@@ -267,17 +267,20 @@ test.describe("Save and Download on every artifact", () => {
     expect(log.writes.map((w) => w.path)).toContain(
       `/api/artifacts/${SAVED_IDS.react}/save`,
     );
-    await expect(panel.getByTestId("artifact-download-page")).toHaveAttribute(
-      "href",
-      `/api/artifacts/${SAVED_IDS.react}/versions/1/download`,
-    );
-    await expect(panel.getByTestId("artifact-download-source")).toHaveAttribute(
-      "href",
-      `/api/artifacts/${SAVED_IDS.react}/versions/1/download?source=zip`,
-    );
+    // ONE Download control: the code kind's menu (page and source).
     await expect(panel.getByTestId("artifact-store-download")).toHaveCount(0);
     await expect(panel.getByTestId("artifact-store-download-menu")).toHaveCount(
       0,
+    );
+    await panel.getByTestId("artifact-download-menu").click();
+    const forms = page.getByTestId("artifact-download-form");
+    await expect(forms.nth(0)).toHaveAttribute(
+      "href",
+      `/api/artifacts/${SAVED_IDS.react}/versions/1/download`,
+    );
+    await expect(forms.nth(1)).toHaveAttribute(
+      "href",
+      `/api/artifacts/${SAVED_IDS.react}/versions/1/download?source=zip`,
     );
   });
 });
@@ -318,7 +321,7 @@ test.describe("code kinds run from the store exactly as in chat", () => {
           `[data-testid=artifact-panel][data-artifact="${SAVED_IDS.html}"]`,
         );
         await expect(panel.getByTestId("artifact-check")).toContainText(
-          "Checked: no network attempts seen",
+          "Checked",
         );
         const frame = await lockedFrame(panel, SAVED_IDS.html, theme);
         const inner = (await (await frame.elementHandle())!.contentFrame())!;
@@ -346,7 +349,7 @@ test.describe("code kinds run from the store exactly as in chat", () => {
           `[data-testid=artifact-panel][data-artifact="${SAVED_IDS.webapp}"]`,
         );
         await expect(panel.getByTestId("artifact-check")).toContainText(
-          "Layout not checked: saved from its chat",
+          "Not checked",
         );
         let frame = await lockedFrame(panel, SAVED_IDS.webapp, theme);
         let inner = (await (await frame.elementHandle())!.contentFrame())!;
@@ -360,9 +363,7 @@ test.describe("code kinds run from the store exactly as in chat", () => {
         inner = (await (await frame.elementHandle())!.contentFrame())!;
         await expect(inner.locator("h1")).toHaveText("About this site");
         // One download: the file set as a .zip.
-        await expect(
-          panel.getByTestId("artifact-download-source"),
-        ).toHaveAttribute(
+        await expect(panel.getByTestId("artifact-download")).toHaveAttribute(
           "href",
           `/api/artifacts/${SAVED_IDS.webapp}/versions/1/download`,
         );

@@ -1,21 +1,14 @@
 "use client";
 
-import {
-  DownloadIcon,
-  HammerIcon,
-  MessageSquarePlusIcon,
-  PencilIcon,
-} from "lucide-react";
+import { HammerIcon } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useRef, useState } from "react";
+import { useState } from "react";
 
-import { useOptionalPromptInputController } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ArtifactsApiError,
   type ArtifactDetail,
-  downloadUrl,
   type ReactSource,
 } from "@/core/artifacts/store-api";
 import {
@@ -31,12 +24,8 @@ const ArtifactCode = dynamic(
   () => import("./artifact-code").then((m) => m.ArtifactCode),
   { ssr: false },
 );
-import {
-  CheckDetails,
-  CheckLabel,
-  FullscreenButton,
-  LockedFrame,
-} from "./artifact-frame";
+import { LockedFrame } from "./artifact-frame";
+import { DEVICE_WIDTH, type Device } from "./viewer-parts";
 
 const LANG: Record<string, string> = {
   tsx: "tsx",
@@ -48,53 +37,45 @@ const LANG: Record<string, string> = {
 };
 
 /**
- * Spec 012 Slice 2: an html or react version in the panel and on the full
- * page: its checks label, Preview (the locked frame, full screen) and Code
- * (read-only CodeMirror; react: one file at a time; Edit source + Rebuild).
- * Opening the panel is "Open anyway": a version that failed its checks is
- * shown, labelled.
+ * Spec 012 Slice 2: an html, react or webapp version in the viewer: Preview
+ * (the locked frame, at the chosen preview size) or Code (read-only
+ * CodeMirror; react: one file at a time; the source editor + Rebuild).
+ * The viewer's header owns the tab, the size, the downloads, the checks
+ * chip and full screen (whose target is `boxRef`). Opening the panel is
+ * "Open anyway": a version that failed its checks is shown, labelled.
  */
 export function CodeKindView({
   artifact,
   version,
   onVersionChange,
+  tab,
+  device = "desk",
+  editingSource = false,
+  onEditSourceDone,
+  boxRef,
 }: {
   artifact: ArtifactDetail;
   version: number;
   onVersionChange: (n: number) => void;
+  tab: "preview" | "code";
+  device?: Device;
+  editingSource?: boolean;
+  onEditSourceDone?: () => void;
+  boxRef?: React.RefObject<HTMLDivElement | null>;
 }) {
-  const [tab, setTab] = useState<"preview" | "code">("preview");
-  const [editing, setEditing] = useState(false);
   const [page, setPage] = useState<string | undefined>(undefined);
   const v = artifact.versions.find((x) => x.n === version);
   const code = v?.code;
   const { data: detail } = useArtifactVersion(artifact.id, version);
-  const actions = useCodeActions(artifact.id);
-  const box = useRef<HTMLDivElement | null>(null);
   const title = titleText(artifact.title);
   const build = artifact.code?.build;
   const pages = (detail?.pages ?? []).filter((p) => p.ok).map((p) => p.path);
-  const canRebuild =
-    artifact.kind === "react" &&
-    !artifact.archived &&
-    version === artifact.latest_version &&
-    build?.state !== "running";
 
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
       data-testid="artifact-code-kind"
     >
-      {code?.build_state === "ok" && (
-        <>
-          <CheckLabel
-            check={code.check}
-            pending={actions.checkAgain.isPending}
-            onCheckAgain={() => actions.checkAgain.mutate(version)}
-          />
-          <CheckDetails check={code.check} findings={code.findings} />
-        </>
-      )}
       {build?.state === "running" && (
         <p
           className="text-muted-foreground text-xs"
@@ -115,73 +96,6 @@ export function CodeKindView({
             .
           </p>
         )}
-      <div
-        className="flex flex-wrap items-center gap-1.5"
-        role="tablist"
-        aria-label="View"
-      >
-        {(["preview", "code"] as const).map((t) => (
-          <Button
-            key={t}
-            type="button"
-            size="sm"
-            role="tab"
-            aria-selected={tab === t}
-            variant={tab === t ? "secondary" : "ghost"}
-            onClick={() => setTab(t)}
-            data-testid={`artifact-tab-${t}`}
-            className="max-md:min-h-11"
-          >
-            {t === "preview" ? "Preview" : "Code"}
-          </Button>
-        ))}
-        <span className="flex-1" />
-        {tab === "preview" && code?.build_state === "ok" && (
-          <FullscreenButton target={box} />
-        )}
-        {tab === "code" && canRebuild && !editing && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setEditing(true)}
-            data-testid="artifact-edit-source"
-            className="max-md:min-h-11"
-          >
-            <PencilIcon />
-            Edit source
-          </Button>
-        )}
-        <AskButton artifactId={artifact.id} version={version} />
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {code?.build_state === "ok" && artifact.kind !== "webapp" && (
-          <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
-            <a
-              href={downloadUrl(artifact.id, version, "page")}
-              download
-              data-testid="artifact-download-page"
-            >
-              <DownloadIcon />
-              Page (.html)
-            </a>
-          </Button>
-        )}
-        <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
-          <a
-            href={downloadUrl(
-              artifact.id,
-              version,
-              artifact.kind === "webapp" ? "page" : "source",
-            )}
-            download
-            data-testid="artifact-download-source"
-          >
-            <DownloadIcon />
-            {artifact.kind === "webapp" ? "Files (.zip)" : "Source (.zip)"}
-          </a>
-        </Button>
-      </div>
       {tab === "preview" ? (
         code?.build_state === "build_failed" ? (
           <div
@@ -217,45 +131,56 @@ export function CodeKindView({
           </div>
         ) : (
           <div
-            ref={box}
-            className="bg-background flex min-h-[60vh] min-w-0 flex-1 flex-col [&:fullscreen]:p-0"
+            ref={boxRef}
+            className="[&:fullscreen]:bg-background flex min-w-0 flex-1 flex-col items-center [&:fullscreen]:p-0 [&:fullscreen>[data-device]]:flex-1"
+            data-testid="artifact-preview-box"
           >
-            {artifact.kind === "webapp" && pages.length > 1 && (
-              <div
-                className="flex flex-wrap gap-1 pb-2"
-                data-testid="artifact-webapp-pages"
-              >
-                {pages.map((p) => (
-                  <Button
-                    key={p}
-                    type="button"
-                    size="sm"
-                    variant={
-                      (page ?? detail?.entry) === p ? "secondary" : "ghost"
-                    }
-                    onClick={() => setPage(p)}
-                    className="h-7 font-mono text-xs max-md:min-h-11"
-                  >
-                    {safeField(p)}
-                  </Button>
-                ))}
-              </div>
-            )}
-            <LockedFrame
-              entry={artifact.kind === "webapp" ? page : undefined}
-              artifactId={artifact.id}
-              version={version}
-              title={title}
-              variant="panel"
-              className="flex min-h-0 flex-1 flex-col"
-            />
+            <div
+              className="border-border bg-card flex w-full max-w-full flex-col overflow-hidden rounded-[14px] border"
+              style={{
+                width: DEVICE_WIDTH[device],
+                marginInline: "auto",
+              }}
+              data-testid="artifact-device-frame"
+              data-device={device}
+            >
+              {artifact.kind === "webapp" && pages.length > 1 && (
+                <div
+                  className="border-border flex flex-wrap gap-1 border-b p-2"
+                  data-testid="artifact-webapp-pages"
+                >
+                  {pages.map((p) => (
+                    <Button
+                      key={p}
+                      type="button"
+                      size="sm"
+                      variant={
+                        (page ?? detail?.entry) === p ? "secondary" : "ghost"
+                      }
+                      onClick={() => setPage(p)}
+                      className="h-7 font-mono text-xs max-md:min-h-11"
+                    >
+                      {safeField(p)}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              <LockedFrame
+                entry={artifact.kind === "webapp" ? page : undefined}
+                artifactId={artifact.id}
+                version={version}
+                title={title}
+                variant="panel"
+                className="flex min-h-0 flex-1 flex-col"
+              />
+            </div>
           </div>
         )
-      ) : editing && detail?.source ? (
+      ) : editingSource && detail?.source ? (
         <ReactSourceEditor
           artifact={artifact}
           source={detail.source}
-          onDone={() => setEditing(false)}
+          onDone={() => onEditSourceDone?.()}
         />
       ) : artifact.kind === "webapp" ? (
         <ul className="text-sm" data-testid="artifact-webapp-files">
@@ -275,6 +200,16 @@ export function CodeKindView({
         />
       )}
     </div>
+  );
+}
+
+/** True when a react version's source can be edited and rebuilt here. */
+export function canRebuild(artifact: ArtifactDetail, version: number) {
+  return (
+    artifact.kind === "react" &&
+    !artifact.archived &&
+    version === artifact.latest_version &&
+    artifact.code?.build?.state !== "running"
   );
 }
 
@@ -390,40 +325,5 @@ function ReactSourceEditor({
         </Button>
       </div>
     </div>
-  );
-}
-
-/** FR-011: "Ask the assistant to change this" puts a reference (id and
- * version, never the content) into this chat's composer. Only in a chat. */
-export function AskButton({
-  artifactId,
-  version,
-}: {
-  artifactId: string;
-  version: number;
-}) {
-  const controller = useOptionalPromptInputController();
-  if (!controller) return null;
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      onClick={() => {
-        const ref = `[artifact ${artifactId} v${version}] `;
-        const now = controller.textInput.value;
-        controller.textInput.setInput(now.includes(ref) ? now : `${ref}${now}`);
-        requestAnimationFrame(() =>
-          document
-            .querySelector<HTMLTextAreaElement>("textarea[name='message']")
-            ?.focus(),
-        );
-      }}
-      data-testid="artifact-ask-change"
-      className="max-md:min-h-11"
-    >
-      <MessageSquarePlusIcon />
-      Ask the assistant to change this
-    </Button>
   );
 }

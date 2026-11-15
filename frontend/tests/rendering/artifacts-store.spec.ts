@@ -246,10 +246,16 @@ test.describe("the side panel, per kind", () => {
     // Raw HTML is OFF: a tag markdown has no syntax for stays text.
     await expect(md.locator("kbd")).toHaveCount(0);
     await expect(md).toContainText("<kbd>RAW</kbd>");
-    await expect(panel.getByTestId("artifact-note")).toHaveText(
+    // The source chip is neutral for a static kind; the note is in Details.
+    await expect(panel.getByTestId("artifact-lineage")).toHaveText(
+      "Made from what the assistant read (web_fetch)",
+    );
+    await panel.getByTestId("artifact-more").click();
+    await page.getByTestId("artifact-details").click();
+    await expect(page.getByTestId("artifact-note")).toHaveText(
       "Shortened the title",
     );
-    await expect(panel.getByTestId("artifact-lineage")).toBeVisible();
+    await page.keyboard.press("Escape");
     await assertInert(page, outside, panel);
     await shot(page, "panel-markdown");
   });
@@ -367,7 +373,7 @@ test.describe("versions", () => {
     const panel = await openPanel(page, IDS.md, 1);
     await expect(panel).toHaveAttribute("data-version", "1");
     await expect(panel.getByTestId("artifact-version-label")).toContainText(
-      "Version 1 (latest: 2)",
+      "v1 (latest v2)",
     );
     await panel.getByTestId("artifact-versions-toggle").click();
     const v1 = panel.locator(
@@ -382,7 +388,7 @@ test.describe("versions", () => {
         body: { version: 1, base_version: 2 },
       },
     ]);
-    await expect(panel.getByRole("status")).toContainText(
+    await expect(panel.getByTestId("artifact-versions")).toContainText(
       "Restored version 1 as version 3",
     );
   });
@@ -398,6 +404,7 @@ test.describe("versions", () => {
     await expect(page.getByTestId("artifact-markdown")).toBeVisible();
     await aa(page);
     await shot(page, "page-markdown-light");
+    await page.getByTestId("artifact-more").click();
     await page.getByTestId("artifact-edit").click();
     const draft = page.getByTestId("artifact-draft");
     await expect(draft).toHaveValue(/Project brief/);
@@ -429,12 +436,16 @@ test.describe("versions", () => {
     await page.goto(`/workspace/artifacts/${IDS.md}`, {
       waitUntil: "networkidle",
     });
+    await page.getByTestId("artifact-more").click();
+    await expect(page.getByTestId("artifact-rename")).toBeVisible();
     await expect(page.getByTestId("artifact-delete")).toHaveCount(0);
+    await page.keyboard.press("Escape");
     await page.goto(`/workspace/artifacts/${IDS.archived}`, {
       waitUntil: "networkidle",
     });
     const title = page.getByTestId("artifact-title");
     await expect(title).toHaveAttribute("title", /^Old notes with a very long/);
+    await page.getByTestId("artifact-more").click();
     await page.getByTestId("artifact-delete").click();
     const dialog = page.getByTestId("artifact-delete-dialog");
     await expect(dialog).toContainText("3 versions");
@@ -522,14 +533,16 @@ test.describe("the store page", () => {
       new RegExp(`/workspace/artifacts/${IDS.chart}`),
     );
     await expect(page.getByTestId("artifact-chart")).toBeVisible();
-    await expect(page.getByTestId("artifact-open-chat")).toHaveAttribute(
-      "href",
-      `/workspace/chats/${THREAD}`,
-    );
     await noHorizontalScroll(page);
     await shot(page, "page-chart-390-dark");
     await assertInert(page, outside);
     await aa(page);
+    // At phone width "Open the chat that made it" is in More.
+    await page.getByTestId("artifact-more").click();
+    await expect(page.getByTestId("artifact-open-chat")).toHaveAttribute(
+      "href",
+      `/workspace/chats/${THREAD}`,
+    );
   });
 
   test("empty store: the empty state", async ({ page }) => {
