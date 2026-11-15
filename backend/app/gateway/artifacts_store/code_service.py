@@ -15,6 +15,7 @@ read as not checked / interrupted).
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 
@@ -66,9 +67,12 @@ def check_version(store: ArtifactStore, owner_id: str, artifact_id: str, n: int,
         return "not_checked", checks.error("unreadable")
     if code.build_state != "ok":
         return "not_checked", checks.error("site_missing")
-    from app.gateway.artifacts_store.frame import frame_sha256, stored_document
+    from app.gateway.artifacts_store import frame
 
-    stored = stored_document(summary["kind"], store.content(owner_id, version))
+    try:
+        stored = store.page_document(owner_id, artifact_id, n)
+    except StoreError:
+        return "not_checked", checks.error("site_missing")
     sha = code.frame_sha256 or ""
     ops = sandbox_for(thread_id, owner_id)
     if ops is None:
@@ -79,9 +83,10 @@ def check_version(store: ArtifactStore, owner_id: str, artifact_id: str, n: int,
         result, shots = checks.run(ops, stored, beat=lambda: store.beat_check(owner_id, artifact_id, n))
     finally:
         _close(ops)
+    result = checks.with_findings(result, frame.blocking(json.loads(code.findings or "[]")))
     state = checks.state_of(result)
     # Recorded against the bytes the checks loaded: the version's own.
-    store.set_check(owner_id, artifact_id, n, state=state, result=result, frame_sha256=frame_sha256(stored), shots=shots)
+    store.set_check(owner_id, artifact_id, n, state=state, result=result, frame_sha256=frame.frame_sha256(stored), shots=shots)
     return state, result
 
 

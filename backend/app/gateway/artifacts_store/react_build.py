@@ -19,7 +19,6 @@ only fenced, as data).
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import re
@@ -27,6 +26,7 @@ import secrets
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app.gateway.artifacts_store import caps, frame
 from app.gateway.artifacts_store.kinds import Canonical, InvalidContent, TooLarge
@@ -61,6 +61,12 @@ def recipe(entry: str) -> dict:
     return {"tool": "esbuild", "versions": dict(VERSIONS), "entry": entry, "mount": "default export rendered into #root", "format": "iife", "jsx": "automatic", "minify": True, "install": "npm --ignore-scripts"}
 
 
+#: The build's package.json and lockfile, tracked (react_kit/): `npm ci`
+#: installs exactly these tarballs (integrity-checked), nothing resolved anew.
+_KIT = Path(__file__).with_name("react_kit")
+PACKAGE_LOCK = (_KIT / "package-lock.json").read_text(encoding="utf-8")
+
+
 def package_json() -> str:
     return json.dumps({"name": "omni-artifact", "private": True, "version": "0.0.0", "dependencies": {"react": VERSIONS["react"], "react-dom": VERSIONS["react-dom"]}, "devDependencies": {"esbuild": VERSIONS["esbuild"]}}, indent=2)
 
@@ -74,7 +80,7 @@ def command(directory: str) -> str:
     """npm install, then esbuild, under a hard stop. Output to build.log."""
     keep = " ".join(f'{name}="${{{name}:-}}"' for name in PASS_ENV)
     inner = (
-        f"{NODE_BIN}/npm install --no-audit --no-fund --ignore-scripts --loglevel=error --no-package-lock >> build.log 2>&1 && "
+        f"{NODE_BIN}/npm ci --no-audit --no-fund --ignore-scripts --loglevel=error >> build.log 2>&1 && "
         f"{NODE_BIN}/node ./node_modules/esbuild/bin/esbuild src/{ENTRY} --bundle --minify --format=iife --jsx=automatic --target=es2020 "
         "--loader:.js=jsx --define:process.env.NODE_ENV='\"production\"' --outfile=dist/app.js --log-level=error --log-limit=20 >> build.log 2>&1"
     )
@@ -85,21 +91,11 @@ def command(directory: str) -> str:
 
 
 def read_bytes(ops, path: str, cap: int) -> bytes | None:
-    """A regular file (not a link) of at most `cap` bytes, read through
-    `head -c cap+1`; None when missing, a link, or over the cap."""
-    _, size = ops.sh(f"[ -f {_q(path)} ] && [ ! -L {_q(path)} ] && {B}/stat -c %s {_q(path)} 2>/dev/null || echo none", timeout=15)
-    size = size.strip().splitlines()[-1] if size.strip() else ""
-    if not size.isdigit() or int(size) > cap:
-        return None
-    tmp = f"/tmp/omni-art-b64-{secrets.token_hex(8)}"
-    ops.sh(f"[ -f {_q(path)} ] && [ ! -L {_q(path)} ] && {B}/head -c {cap + 1} {_q(path)} | {B}/base64 -w0 > {_q(tmp)} 2>/dev/null; true", timeout=30)
-    encoded = ops.read_text(tmp) or ""
-    ops.sh(f"{B}/rm -f {_q(tmp)}", timeout=15)
-    try:
-        data = base64.b64decode(encoded.strip(), validate=True)
-    except ValueError:
-        return None
-    return data if len(data) <= cap else None
+    """The build output through the checks' capped read (one command, at most
+    cap+1 bytes, a regular file, never a link)."""
+    from app.gateway.artifacts_store.checks import capped_read
+
+    return capped_read(ops, path, cap, timeout=60)
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -126,6 +122,7 @@ def build(ops, source: dict, *, beat: Callable[[], None] | None = None) -> Build
             ops.write(f"{directory}/src/{path}", text)
         ops.write(f"{directory}/src/{ENTRY}", entry_module(entry))
         ops.write(f"{directory}/package.json", package_json())
+        ops.write(f"{directory}/package-lock.json", PACKAGE_LOCK)
         if beat:
             beat()
         code, out = ops.sh(command(directory), timeout=caps.REACT_BUILD_SECONDS + 30)

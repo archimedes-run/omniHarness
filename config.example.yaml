@@ -565,6 +565,16 @@ agents_api:
   enabled: false
 
 # ============================================================================
+# Artifact store (Spec 012)
+# ============================================================================
+# Unsaved artifacts (the ones the assistant made that the owner did not Save)
+# are kept until the owner deletes them; deleting a chat never deletes them.
+# Set a number of days to prune unsaved artifacts not changed for that long;
+# saved, pinned, archived and owner-edited ones are never pruned.
+artifacts:
+  prune_unsaved_after_days: null # off: nothing is deleted on the owner's behalf
+
+# ============================================================================
 # Skill Self-Evolution Configuration
 # ============================================================================
 # Allow the agent to autonomously create and improve skills in skills/custom/.

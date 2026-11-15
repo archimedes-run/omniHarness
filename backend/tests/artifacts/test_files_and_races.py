@@ -8,10 +8,10 @@ import os
 
 import pytest
 
-import app.gateway.artifacts_store.service as service
 from app.gateway.artifacts_store import blobs, caps, safe_open
-from app.gateway.artifacts_store.kinds import canonical
-from app.gateway.artifacts_store.service import GatewayArtifactController, run_import
+from app.gateway.artifacts_store.kinds import TooLarge, canonical
+from app.gateway.artifacts_store.service import GatewayArtifactController, import_from_chat
+from app.gateway.artifacts_store.store import InvalidRequest
 from app.policy.lineage import user_turn
 from omniharness.config.paths import get_paths
 from omniharness.runtime.artifacts.controller import MESSAGES_KEY
@@ -30,8 +30,16 @@ def outputs(store):
 
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
-    monkeypatch.setattr(service, "_LAST_FULL_IMPORT", {})
     monkeypatch.setattr(safe_open, "BEFORE_OPEN", None)
+
+
+def _save(store, rel):
+    """The owner's "Save to artifacts"; returns the refusal class or None."""
+    try:
+        import_from_chat(store, OWNER, THREAD, f"/mnt/user-data/outputs/{rel}")
+    except (InvalidRequest, TooLarge) as exc:
+        return type(exc)
+    return None
 
 
 def _titles(store) -> set[str]:
@@ -58,7 +66,7 @@ def test_a_file_swapped_for_a_symlink_after_the_check_is_not_read(store, outputs
     secret.write_text("# owner's private notes")
     (outputs / "notes.md").write_text("# fine")
     monkeypatch.setattr(safe_open, "BEFORE_OPEN", _swap_to_symlink(secret))
-    run_import(store, OWNER, thread_id=THREAD)
+    assert _save(store, "notes.md") is InvalidRequest
     assert _titles(store) == set(), "a symlink swapped in after the listing was followed"
     (outputs / "notes.md").unlink()
     (outputs / "pic.png").write_bytes(PNG)
@@ -82,13 +90,13 @@ def test_a_parent_directory_swapped_for_a_symlink_is_not_followed(store, outputs
         (root / "sub").symlink_to(elsewhere)
 
     monkeypatch.setattr(safe_open, "BEFORE_OPEN", swap_parent)
-    run_import(store, OWNER, thread_id=THREAD)
+    assert _save(store, "sub/a.md") is InvalidRequest
     assert _titles(store) == set()
 
 
 def test_a_fifo_is_never_opened_and_never_blocks(store, outputs, monkeypatch):
     os.mkfifo(outputs / "pipe.md")
-    run_import(store, OWNER, thread_id=THREAD)  # would hang on a blocking open
+    assert _save(store, "pipe.md") is InvalidRequest  # would hang on a blocking open
     assert _titles(store) == set()
     (outputs / "pic.png").write_bytes(PNG)
 
@@ -110,7 +118,7 @@ def test_a_file_growing_past_the_cap_after_the_check_is_refused(store, outputs, 
             handle.write(b"x" * 200)
 
     monkeypatch.setattr(safe_open, "BEFORE_OPEN", grow)
-    run_import(store, OWNER, thread_id=THREAD)
+    assert _save(store, "grow.md") is TooLarge
     assert _titles(store) == set()
     (outputs / "pic.png").write_bytes(PNG)
     text, card = _image(store)
@@ -137,57 +145,6 @@ def test_reads_stop_at_the_cap_plus_one_byte(tmp_path, monkeypatch):
     for bad in ("../f", "/f", "a//f", ".", ""):
         with pytest.raises(safe_open.Refused):
             safe_open.read_under(tmp_path, bad, 60)
-
-
-def test_an_unchanged_file_is_not_read_again_and_a_big_one_never(store, outputs, monkeypatch):
-    monkeypatch.setattr(caps, "BINARY_VERSION_BYTES", 100)
-    (outputs / "a.md").write_text("# a")
-    (outputs / "big.bin").write_bytes(b"\x01" * 500)
-    opened: list[str] = []
-    real = safe_open.read_under
-    monkeypatch.setattr(safe_open, "read_under", lambda root, rel, cap, **kw: (opened.append(rel), real(root, rel, cap, **kw))[1])
-    run_import(store, OWNER, thread_id=THREAD)
-    assert opened == ["a.md"], "the file over the cap was read"
-    big = next(a for a in store.list(OWNER)[0] if a["title"] == "big.bin")
-    assert store.versions(OWNER, big["id"])[0]["stored"] == "chat"
-    opened.clear()
-    assert run_import(store, OWNER, thread_id=THREAD) == 0
-    assert opened == [], "an unchanged file (same size and mtime) was read again"
-
-
-def test_one_pass_has_a_budget_across_chats(store, monkeypatch):
-    monkeypatch.setattr(service, "MAX_FILES_PER_PASS", 3)
-    for t in ("t1", "t2"):
-        out = get_paths().sandbox_outputs_dir(t, user_id=OWNER)
-        out.mkdir(parents=True)
-        for i in range(3):
-            (out / f"{t}-{i}.md").write_text(f"# {t} {i}")
-    run_import(store, OWNER)
-    assert len(_titles(store)) == 3
-
-
-def test_a_changed_file_never_lands_on_the_owners_own_work(store, outputs):
-    """A changed chat file becomes a NEW artifact when the owner edited, restored
-    or pinned the one it made; otherwise a new version of it."""
-    (outputs / "plan.md").write_text("# v1")
-    run_import(store, OWNER, thread_id=THREAD)
-    [first] = store.list(OWNER)[0]
-    store.add_version(OWNER, first["id"], base_version=1, canon=canonical("markdown", "# owner's words"), lineage="user", lineage_source=None, origin="owner_edit")
-    os.utime(outputs / "plan.md", ns=(1, 1))
-    (outputs / "plan.md").write_text("# worker v2")
-    run_import(store, OWNER, thread_id=THREAD)
-    rows = store.list(OWNER)[0]
-    assert len(rows) == 2 and store.get(OWNER, first["id"])["latest_version"] == 2, "the owner's edit was buried under the worker's file"
-    # Untouched by the owner: a new version.
-    other = next(r for r in rows if r["id"] != first["id"])
-    (outputs / "plan.md").write_text("# worker v3, longer")
-    run_import(store, OWNER, thread_id=THREAD)
-    assert store.get(OWNER, other["id"])["latest_version"] == 2
-    # Pinned: left alone again.
-    store.patch(OWNER, other["id"], pinned=True)
-    (outputs / "plan.md").write_text("# worker v4, longer still")
-    run_import(store, OWNER, thread_id=THREAD)
-    assert store.get(OWNER, other["id"])["latest_version"] == 2 and store.list(OWNER)[1] == 3
 
 
 def test_a_blob_unlinked_between_write_and_commit_is_restored(store, monkeypatch):

@@ -263,11 +263,16 @@ class CodeJobManager:
             report = f"Coding job not started: this month's coding-job cap (${settings.monthly_cap_usd:.2f}) is reached (${month:.2f} spent). The owner can raise it in config (code_jobs.monthly_cap_usd)."
             return CodeJobOutcome(job_id="", status="blocked", report=report)
 
-        if implied := app_mode.implied_pass(self.store, thread_id, brief):
+        if implied := app_mode.implied_pass(self.store, thread_id, brief, turn):
             import dataclasses
 
             logger.info("code job: a follow-up on %s is the design pass its last app job asked for (%s)", brief.project_dir, implied)
             brief = dataclasses.replace(brief, fix_of=implied)
+        elif updated := app_mode.implied_update(self.store, thread_id, brief, turn):
+            import dataclasses
+
+            logger.info("code job: a job on %s in a new owner request to change app %s is its update", brief.project_dir, updated)
+            brief = dataclasses.replace(brief, app={"update": updated})
         if brief.fix_of and (why := self._fix_refusal(thread_id, brief)):
             return CodeJobOutcome(job_id="", status="blocked", report=f"Coding job not started: {why}. Do not run another automatic fix or design pass; report the results you have.")
         app, why = app_mode.context_for(self.store, thread_id, brief, turn, owner_id=user_id)

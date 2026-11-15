@@ -322,6 +322,10 @@ def starter_app(manifest: dict) -> str:
             meta_expr = (f"item.{meta} ? z.formatTime(item.{meta}) : undefined" if is_time else f"item.{meta} ?? undefined") if meta else "undefined"
             link = "item.link ?? null" if "link" in item_fields else "null"
             time_attr = f" time={{item.{meta} ?? null}}" if is_time and meta == "start" else ""
+            if "all_day" in item_fields and is_time and meta:
+                # An all-day event has a date, not a time: never formatted as one.
+                meta_expr = f'item.all_day ? "All day" : {meta_expr}'
+                time_attr = f" time={{item.all_day ? null : (item.{meta} ?? null)}}" if time_attr else ""
             body += [
                 '      <ul className="omni-list">',
                 "        {data.items.slice(0, 5).map((item, i) => (",

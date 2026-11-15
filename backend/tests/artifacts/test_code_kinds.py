@@ -26,10 +26,10 @@ OWNER = "owner-1"
 PAGE = "<!doctype html><html><head><style>body{margin:0}</style></head><body><main><h1>Hello</h1></main><script>document.querySelector('h1').onclick=()=>{}</script></body></html>"
 REACT = {"entry": "App.tsx", "files": {"App.tsx": "export default function App(){ return <h1>Hi</h1>; }", "styles.css": "h1{color:var(--foreground)}"}}
 
-APP_CSP_EXACT = (
-    "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
+APP_TEMPLATE_EXACT = (
+    "sandbox allow-scripts; default-src 'none'; script-src {scripts}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
     "media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; "
-    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'"
 )
 
 
@@ -61,9 +61,14 @@ def update(tools, aid, base, content=None, edits=None, fix_of=None, messages=Non
 # -- the frame profile (FR-016, FR-031) ------------------------------------------------
 
 
-def test_artifact_profile_is_exact_and_differs_from_the_app_profile_only_where_stated():
-    assert frame.CSP == APP_CSP_EXACT
-    assert frame.SANDBOX == "allow-scripts"
+def test_the_frame_has_the_apps_profile_exactly():
+    doc, hashes = frame.frame_document(PAGE.encode())
+    assert frame.csp(hashes) == bundle.csp(hashes) == APP_TEMPLATE_EXACT.format(scripts=" ".join(f"'sha256-{h}'" for h in hashes))
+    assert frame.PROFILE["csp_template"] == bundle.CSP_TEMPLATE == APP_TEMPLATE_EXACT
+    policy = frame.csp(hashes)
+    assert "'unsafe-inline'" not in policy.split("script-src", 1)[1].split(";", 1)[0]
+    assert "require-trusted-types-for 'script'; trusted-types 'none'" in policy
+    assert frame.PROFILE["sandbox"] == "allow-scripts"
     assert frame.HEADERS == {
         "Cache-Control": "private, no-store",
         "Referrer-Policy": "no-referrer",
@@ -74,19 +79,55 @@ def test_artifact_profile_is_exact_and_differs_from_the_app_profile_only_where_s
         "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-read=(), clipboard-write=()",
         "Content-Disposition": 'inline; filename="artifact.html"',
     }
-    app = dict(d.split(" ", 1) for d in bundle.csp(["abc"]).split("; "))
-    art = dict(d.split(" ", 1) for d in frame.CSP.split("; "))
-    differing = {k for k in set(app) | set(art) if app.get(k) != art.get(k)}
-    assert differing == {"script-src", "require-trusted-types-for", "trusted-types"}
-    assert art["script-src"] == "'unsafe-inline'" and "require-trusted-types-for" not in art
 
 
-def test_the_frame_document_starts_with_the_gateways_shim():
-    doc = frame.frame_document(PAGE.encode()).decode()
-    first = doc.index("<script>")
-    assert doc[first + 8 :].startswith(frame.SHIM.replace("</script", "<\\/script")[:200])
-    assert doc.index("<script>") < doc.index("onclick")
+def test_the_shim_is_prepended_as_the_first_bytes_after_the_doctype():
+    doc, hashes = frame.frame_document(PAGE.encode())
+    assert doc.decode().startswith("<!doctype html><script>" + frame.SHIM.replace("</script", "<\\/script")[:120])
+    assert hashes[0] == frame.SHIM_HASH
+    bare, _ = frame.frame_document(b"<p>no doctype</p><script>1</script>")
+    assert bare.decode().startswith("<script>")
     assert frame.frame_sha256(PAGE.encode()) == frame.frame_sha256(PAGE.encode())
+
+
+@pytest.mark.parametrize(
+    "html, hidden",
+    [
+        # A comment the gateway's tokenizer reads as open and the browser as closed.
+        ("<!doctype html><!--><script>window.__P=window['RTC'+'PeerConnection']</script><!-- --><p>x</p>", "window.__P=window['RTC'+'PeerConnection']"),
+        ("<!doctype html><!---><script>window.__P=1</script><!-- --><p>x</p>", "window.__P=1"),
+        ("<!doctype html><!--!><script>window.__P=2</script>--><p>x</p>", None),
+        # A visible script later: a parser-placed shim would land after the hidden one.
+        ("<!doctype html><!--><script>window.__P=3</script><!-- --><p>x</p><script>var ok = 1</script>", "window.__P=3"),
+    ],
+)
+def test_a_script_hidden_from_the_tokenizer_gets_no_hash_and_the_shim_still_comes_first(html, hidden):
+    """Whatever a parser makes of a comment, the shim is the first script: it
+    is prepended, not placed by parsing. A script the gateway's parser does
+    not see has no hash (it does not run); one it sees runs after the shim."""
+    doc, hashes = frame.frame_document(html.encode())
+    assert doc.decode().index("<script>") == len("<!doctype html>")
+    assert hashes[0] == frame.SHIM_HASH
+
+
+def test_the_shim_is_first_even_without_a_doctype_and_with_a_head():
+    doc, _ = frame.frame_document(b"<html><head><title>t</title></head><body><script>var a = 1</script></body></html>")
+    assert doc.decode().startswith("<script>")
+
+
+def test_what_the_strict_profile_will_not_run_is_a_blocking_finding():
+    html = '<!doctype html><button onclick="go()">x</button><a href="javascript:go()">y</a><script src="a.js"></script><script>el.innerHTML = s; eval("1")</script>'
+    _, findings = frame.canonical_html(html)
+    block = frame.blocking(findings)
+    assert frame.HANDLER_WORDS in block and frame.JS_URL_WORDS in block and frame.SINK_WORDS in block and frame.STRING_CODE_WORDS in block and frame.SCRIPT_SRC_WORDS in block
+    _, clean = frame.canonical_html(PAGE)
+    assert frame.blocking(clean) == []
+
+
+def test_a_blocking_finding_fails_the_check_with_its_reason(tools, store, sandbox):
+    text, card = create(tools, content='<!doctype html><button onclick="go()">x</button>')
+    info = store.get(OWNER, card["artifact_id"])["code"]
+    assert info["check_state"] == "failed" and "System checks FAILED: will not run in the frame" in text and "fix_of=1" in text
 
 
 # -- the scan (refusals and findings) ---------------------------------------------------
@@ -140,6 +181,7 @@ def test_html_caps_and_text_rules():
         {"entry": "App.tsx", "files": {"App.exe": "x"}},
         {"entry": "Missing.tsx", "files": {"App.tsx": "x"}},
         {"entry": "App.tsx", "files": {"App.tsx": "new RTCPeerConnection()"}},
+        {"entry": "App.tsx", "files": {"App.tsx": "x", "b/c.tsx": 'import y from "../../../z"'}},
         {"entry": "App.tsx", "files": {f"f{i}.ts": "x" for i in range(51)}},
         {"entry": "App.tsx", "files": {}, "extra": 1},
     ],
@@ -196,7 +238,7 @@ def test_a_build_whose_output_is_a_link_fails_and_keeps_the_last_good_version(to
 
     def sh(command, *, timeout=30):
         out = real_sh(command, timeout=timeout)
-        if "npm install" in command:
+        if "npm ci " in command:
             box.links.update(k for k in box.files if k.endswith("/dist/app.js"))
         return out
 
@@ -231,8 +273,10 @@ def test_html_create_runs_the_checks_on_the_exact_bytes(tools, store, sandbox):
     text, card = create(tools)
     assert "System checks passed" in text
     _, version, code, check = store.code_version(OWNER, card["artifact_id"], 1)
-    assert seen["doc"].encode() == frame.frame_document(PAGE.encode())
-    assert seen["check"]["csp"] == frame.CSP and re.fullmatch(r"[0-9a-f]{32}", seen["check"]["nonce"])
+    doc, hashes = frame.frame_document(PAGE.encode())
+    assert seen["doc"].encode() == doc
+    assert seen["check"]["csp"] == frame.csp(hashes) and re.fullmatch(r"[0-9a-f]{32}", seen["check"]["nonce"])
+    assert sandbox["ops"].quiesced == 1  # leftovers stopped before the probe's folder was made
     assert check.state == "passed" and check.frame_sha256 == code.frame_sha256 == frame.frame_sha256(PAGE.encode())
     assert store.shot(OWNER, card["artifact_id"], 1, "light") == PNG
     assert sandbox["ops"].closed
@@ -332,9 +376,9 @@ def test_fix_of_a_passing_version_is_refused(tools, store, sandbox):
 
 def test_react_fix_is_refused_before_a_build_is_spent(tools, store, sandbox):
     _, card = create(tools, "react", REACT)
-    builds = [c for c in sandbox["ops"].commands if "npm install" in c]
+    builds = [c for c in sandbox["ops"].commands if "npm ci " in c]
     text, card2 = update(tools, card["artifact_id"], 1, content=REACT, fix_of=1)
-    assert card2 is None and len([c for c in sandbox["ops"].commands if "npm install" in c]) == len(builds)
+    assert card2 is None and len([c for c in sandbox["ops"].commands if "npm ci " in c]) == len(builds)
 
 
 # -- react: build, versions, source --------------------------------------------------------
@@ -348,7 +392,7 @@ def test_react_build_stores_bundle_source_and_recipe(tools, store, sandbox):
     assert 'getElementById("root")' in html and "<style>body{margin:0}</style>" in html and frame.SHIM[:40] not in html
     assert json.loads(store.source(OWNER, code)) == REACT
     assert json.loads(code.recipe)["versions"] == react_build.VERSIONS
-    build = next(c for c in sandbox["ops"].commands if "npm install" in c)
+    build = next(c for c in sandbox["ops"].commands if "npm ci " in c)
     assert "--ignore-scripts" in build and "env -i PATH=/opt/nodejs/22/bin:/usr/bin:/bin" in build and f"timeout -k 5 {caps.REACT_BUILD_SECONDS}" in build
     assert store.usage(OWNER) == version.size + code.source_size
 
@@ -411,3 +455,76 @@ def test_html_update_after_reading_it_stays_user_led(tools, store, sandbox):
 def test_parse_rejects_malformed_values():
     for raw in ("[]", json.dumps({"v": 1, "mode": "artifact", "nonce": "n", "prod_sha256": "s", "runs": [{"theme": "dark"}]})):
         assert checks.parse(raw, exit_code=0, nonce="n", prod_sha256="s")["outcome"] == "error"
+
+
+# -- review round: WebRTC watch, exit status, capped reads, one fix per turn --------------
+
+
+def test_a_webrtc_attempt_seen_by_the_probe_fails_the_check(tools, store, sandbox):
+    sandbox["ops"].probe = failing(rtc=3)
+    text, card = create(tools)
+    assert store.get(OWNER, card["artifact_id"])["code"]["check_state"] == "failed" and "network" in text
+
+
+def test_a_run_without_the_webrtc_watch_is_not_checked(tools, store, sandbox):
+    sandbox["ops"].probe = failing(rtc_watched=False)
+    _, card = create(tools)
+    assert store.get(OWNER, card["artifact_id"])["code"]["check_state"] == "not_checked"
+
+
+@pytest.mark.parametrize("code", [137, 143, 1])
+def test_a_result_from_a_probe_that_did_not_exit_cleanly_is_not_counted(tools, store, sandbox, code):
+    sandbox["ops"].probe = lambda check, doc: (code, passing(check, doc))
+    _, card = create(tools)
+    assert store.get(OWNER, card["artifact_id"])["code"]["check_state"] == "not_checked"
+
+
+def test_capped_read_refuses_a_file_that_grows_or_is_a_link(sandbox):
+    ops = sandbox["ops"]
+    ops.files["/r/result.json"] = "{}"
+    assert checks.capped_read(ops, "/r/result.json", 10) == b"{}"
+    ops.grow["/r/result.json"] = 50
+    assert checks.capped_read(ops, "/r/result.json", 10) is None
+    ops.grow.clear()
+    ops.links.add("/r/result.json")
+    assert checks.capped_read(ops, "/r/result.json", 10) is None
+
+
+def test_one_automatic_fix_per_turn_even_without_fix_of(tools, store, sandbox):
+    sandbox["ops"].probe = failing(violations=["img-src"])
+    _, card = create(tools)
+    aid = card["artifact_id"]
+    _, card2 = update(tools, aid, 1, content=PAGE + " ")  # no fix_of: still the automatic fix
+    assert card2["version"] == 2
+    assert store.code_version(OWNER, aid, 2)[2].fix_of == 1
+    text, card3 = update(tools, aid, 2, content=PAGE + "  ")
+    assert card3 is None and "already made the one automatic fix" in text
+    # A later turn (the owner asked again) may change it.
+    _, card4 = tools.update(ctx(run_id="run-2"), artifact_id=aid, base_version=2, content=PAGE + "   ", edits=None, language=None, note=None)
+    assert card4["version"] == 3
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"App.tsx": 'import x from "../../etc/passwd";\nexport default () => null;'},
+        {"App.tsx": 'import x from "/abs/file";\nexport default () => null;'},
+        {"App.tsx": 'import x from "lodash";\nexport default () => null;'},
+        {"App.tsx": 'const x = require("https://cdn/x.js");\nexport default () => null;'},
+        {"App.tsx": "export default () => <div dangerouslySetInnerHTML={{__html: s}} />;"},
+        {"App.tsx": 'import "./a.css";\nexport default () => null;', "a.css": '@import "../../x.css";'},
+    ],
+)
+def test_react_sources_stay_inside_the_project(files):
+    with pytest.raises(InvalidContent):
+        frame.canonical_react_source({"entry": "App.tsx", "files": files})
+
+
+def test_the_build_installs_exactly_the_tracked_lockfile():
+    import json as _json
+
+    lock = _json.loads(react_build.PACKAGE_LOCK)
+    pkg = _json.loads(react_build.package_json())
+    assert lock["packages"][""]["dependencies"] == pkg["dependencies"] and lock["packages"][""]["devDependencies"] == pkg["devDependencies"]
+    assert all(v.get("integrity", "").startswith("sha512-") for k, v in lock["packages"].items() if k)
+    assert "npm ci " in react_build.command("/tmp/x") and "npm install" not in react_build.command("/tmp/x")

@@ -380,7 +380,7 @@ def test_preview_artifact_token_route_rejects_expired_token(tmp_path, monkeypatc
 
     monkeypatch.setattr(artifacts_router, "get_paths", lambda: paths)
 
-    from app.gateway.auth.config import get_auth_config
+    from app.gateway.auth.derived import derived_key
 
     now = datetime.now(UTC)
     token = jwt.encode(
@@ -392,7 +392,7 @@ def test_preview_artifact_token_route_rejects_expired_token(tmp_path, monkeypatc
             "iat": now - timedelta(minutes=20),
             "exp": now - timedelta(minutes=10),
         },
-        get_auth_config().jwt_secret,
+        derived_key(artifacts_router.PREVIEW_TOKEN_TYPE),
         algorithm="HS256",
     )
 

@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from app.gateway.auth.config import get_auth_config
+from app.gateway.auth.derived import derived_key
 from app.gateway.authz import require_permission
 from app.gateway.path_utils import resolve_thread_virtual_path
 from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
@@ -483,12 +483,12 @@ def _create_preview_token(thread_id: str, user_id: str, root_virtual_path: str) 
         "iat": now,
         "exp": now + timedelta(seconds=PREVIEW_TOKEN_TTL_SECONDS),
     }
-    return jwt.encode(payload, get_auth_config().jwt_secret, algorithm="HS256")
+    return jwt.encode(payload, derived_key(PREVIEW_TOKEN_TYPE), algorithm="HS256")
 
 
 def _decode_preview_token(token: str) -> dict[str, str]:
     try:
-        payload = jwt.decode(token, get_auth_config().jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(token, derived_key(PREVIEW_TOKEN_TYPE), algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Preview token expired")
     except jwt.PyJWTError:

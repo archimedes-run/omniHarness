@@ -19,10 +19,11 @@ from app.gateway.artifacts_store import caps
 
 #: Kinds the chat tools make in Slice 1.
 TOOL_KINDS = ("markdown", "code", "svg", "mermaid", "chart", "image", "html", "react")
-#: Kinds a stored artifact may have (`file`: the importer only).
-STORED_KINDS = (*TOOL_KINDS, "webapp", "file")
+#: Kinds a stored artifact may have (`file` and `webapp`: only the owner's
+#: "Save to artifacts" on a chat's output makes them).
+STORED_KINDS = (*TOOL_KINDS, "file", "webapp")
 #: Code kinds (Slice 2): programs, run only in the locked frame (FR-016).
-#: `webapp`: a static file set saved from a coding job (not made by a tool).
+#: `webapp`: a static file set the owner saved from a chat (not made by a tool).
 CODE_KINDS = frozenset({"html", "react", "webapp"})
 TEXT_KINDS = frozenset({"markdown", "code", "svg", "mermaid", "chart", "html", "react"})
 #: Kinds the owner edits in place (FR-010; html in Slice 2; react is rebuilt
@@ -42,7 +43,7 @@ MEDIA_TYPES = {
     "file": "application/octet-stream",
     "html": "text/html",
     "react": "text/html",
-    "webapp": "application/json",
+    "webapp": "application/vnd.omni-webapp+json",
 }
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 _LANGUAGE = re.compile(r"^[a-z0-9+#._-]{1,32}$")
@@ -151,6 +152,19 @@ def canonical(kind: str, content: Any, *, language: str | None = None) -> Canoni
         _check_size(kind, len(data))
         return Canonical(data, MEDIA_TYPES[kind])
     raise InvalidContent("this kind cannot be made this way.")
+
+
+#: How the store shows each kind (api.md "Rendering in the store").
+RENDER = {"markdown": "markdown", "code": "code", "svg": "image", "mermaid": "mermaid", "chart": "chart", "image": "image", "webapp": "frame", "html": "frame", "react": "frame"}
+
+
+def render_of(kind: str, media_type: str, stored: str = "blob") -> str:
+    """`file`: text when it is UTF-8 text, else a download card."""
+    if stored != "blob":
+        return "download"
+    if kind == "file":
+        return "text" if media_type == "text/plain" else "download"
+    return RENDER.get(kind, "download")
 
 
 def text_of(kind: str, data: bytes) -> str:
