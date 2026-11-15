@@ -55,6 +55,7 @@ import { cn } from "@/lib/utils";
 
 import { CodeKindView } from "./artifact-code-kind";
 import { ArtifactContent, codeOf, KindIcon } from "./artifact-content";
+import { SaveDownload } from "./artifact-save";
 
 /**
  * Spec 012 Slice 1: one artifact, in the chat's side panel or full page at
@@ -298,6 +299,20 @@ function PanelHeader({
           <span data-testid="artifact-note">{note}</span>
         </p>
       )}
+      {artifact.origin_deleted && (
+        <p
+          className="text-muted-foreground text-xs"
+          data-testid="artifact-origin-deleted"
+        >
+          From a chat you deleted
+        </p>
+      )}
+      {/* Code kinds: the viewer below has its own downloads. */}
+      <SaveDownload
+        artifact={artifact}
+        version={shown}
+        download={!isCodeKind(artifact.kind)}
+      />
       <div className="flex flex-wrap gap-1.5">
         <Button
           type="button"
@@ -402,7 +417,7 @@ function PanelHeader({
             Delete permanently
           </Button>
         )}
-        {artifact.origin_thread_id && (
+        {artifact.origin_thread_id && !artifact.origin_deleted && (
           <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
             <Link
               href={`/workspace/chats/${encodeURIComponent(artifact.origin_thread_id)}`}

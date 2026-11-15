@@ -16,6 +16,10 @@ import { IDS, installFakeStore } from "./artifacts/fake-store";
  *   and passes the SVG allowlist (an <img> appears only then).
  */
 
+/** The app under test (PW_BASE_URL when a run uses another port). */
+const APP_HOST = new URL(process.env.PW_BASE_URL ?? "http://127.0.0.1:3000")
+  .host;
+
 test.use({
   timezoneId: "UTC",
   launchOptions: {
@@ -79,7 +83,7 @@ function requestLog(page: Page) {
     const req = res.request();
     const url = new URL(req.url());
     if (!/^https?:$/.test(url.protocol)) return;
-    const path = url.host === "127.0.0.1:3000" ? url.pathname : req.url();
+    const path = url.host === APP_HOST ? url.pathname : req.url();
     const fromFrame = req.frame() !== page.mainFrame();
     if (PAYLOAD_PATH.test(path) || (fromFrame && !FRAME_FILES.test(path))) {
       log.push(path);

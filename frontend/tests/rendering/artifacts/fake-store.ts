@@ -2,6 +2,14 @@ import { deflateSync } from "node:zlib";
 
 import type { Page, Route } from "@playwright/test";
 
+import {
+  CLEAN_PAGE,
+  type CodeLog,
+  type CodeRec,
+  codeRoute,
+  codeSummary,
+} from "./fake-code";
+
 /**
  * Spec 012 Slice 1: a fake artifact store for the rendering specs. It serves
  * the gateway's /api/artifacts routes as specs/012-artifacts/api.md defines
@@ -142,6 +150,11 @@ interface Rec {
   size: number;
   versions: Version[];
   updated: number;
+  /** Saved by the owner (default true: every fixture shows on Saved). */
+  saved?: boolean;
+  /** Its chat was deleted (the artifact stays). */
+  origin_deleted?: boolean;
+  media_type?: string;
 }
 
 function fixtures(): Rec[] {
@@ -249,14 +262,36 @@ const summary = (r: Rec) => {
     lineage: latest.lineage,
     lineage_source: latest.lineage_source,
     language: r.language,
-    media_type: "text/plain",
+    media_type: r.media_type ?? "text/plain",
     size: r.size,
     created_at: iso(-3600),
     updated_at: iso(r.updated),
+    saved: r.saved ?? true,
+    saved_at: r.saved === false ? null : iso(-30),
+    origin_deleted: r.origin_deleted ?? false,
   };
 };
 
+/** api.md "Rendering in the store" (kinds.render_of). */
+const RENDER: Record<string, string> = {
+  markdown: "markdown",
+  code: "code",
+  svg: "image",
+  mermaid: "mermaid",
+  chart: "chart",
+  image: "image",
+};
+const renderOf = (r: Rec, v: Version) =>
+  v.stored === "chat"
+    ? "download"
+    : r.kind === "file"
+      ? r.media_type === "text/plain"
+        ? "text"
+        : "download"
+      : (RENDER[r.kind] ?? "download");
+
 const version = (r: Rec, v: Version) => ({
+  render: renderOf(r, v),
   n: v.n,
   content_hash: "a".repeat(64),
   size: 100,
@@ -287,6 +322,12 @@ export interface StoreOptions {
   empty?: boolean;
   /** Extra mermaid artifacts: id (22 chars) -> source. */
   mermaid?: Record<string, string>;
+  /** The save model's fixtures: "on" marks only the brief and the chart
+   * saved and adds saved files, code kinds (html, a webapp with pages, an
+   * unsaved react app; served by fake-code.ts, the gateway's own shim and
+   * profile) and an artifact from a deleted chat; "failing" also answers
+   * save/unsave 500 (to see the optimistic rollback). */
+  saving?: "on" | "failing";
 }
 
 const json = (body: unknown, status = 200) => ({
@@ -300,7 +341,7 @@ const notFound = (code = "artifact_not_found") =>
 export async function installFakeStore(
   page: Page,
   opts: StoreOptions = {},
-): Promise<{ log: StoreLog; recs: Rec[] }> {
+): Promise<{ log: StoreLog; recs: Rec[]; codeLog: CodeLog }> {
   const recs = opts.empty ? [] : fixtures();
   for (const [id, source] of Object.entries(opts.mermaid ?? {})) {
     recs.push({
@@ -326,7 +367,14 @@ export async function installFakeStore(
       updated: -5,
     });
   }
+  const code: CodeRec[] = [];
+  if (opts.saving && !opts.empty) {
+    for (const r of recs) r.saved = r.id === IDS.md || r.id === IDS.chart;
+    recs.push(...savedFixtures());
+    code.push(...codeFixtures());
+  }
   const log: StoreLog = { gets: [], writes: [] };
+  const codeLog: CodeLog = { frames: [], refused: [], writes: [] };
   let stale = !!opts.staleOnce;
   const find = (id: string) => recs.find((r) => r.id === id);
 
@@ -349,24 +397,69 @@ export async function installFakeStore(
         contentType: "application/json",
       });
 
+    if (method === "POST" && path === "/api/artifacts/import") {
+      const body = req.postDataJSON() as { thread_id: string; path: string };
+      // A directory (no extension) is one webapp; a file is a file.
+      const site = !/\.[A-Za-z0-9]+$/.test(body.path);
+      const rec: Rec = {
+        id: `Imported${String(recs.length).padStart(14, "0")}`,
+        kind: site ? "webapp" : "file",
+        title: body.path.split("/").pop() ?? "file",
+        pinned: false,
+        archived: false,
+        origin_thread_id: body.thread_id,
+        imported_from: `${body.thread_id}:${body.path}`,
+        language: null,
+        size: 10,
+        versions: [
+          {
+            n: 1,
+            content: null,
+            lineage: "user",
+            lineage_source: null,
+            origin: "import",
+            note: null,
+          },
+        ],
+        updated: -1,
+        saved: true,
+        media_type: site ? "application/vnd.omni-webapp+json" : "text/plain",
+      };
+      recs.push(rec);
+      return route.fulfill(
+        json({ artifact: summary(rec), created: true, skipped: [] }, 201),
+      );
+    }
     if (path === "/api/artifacts") {
       const p = url.searchParams;
-      let list = [...recs];
+      type Row = { r: Rec | CodeRec; s: ReturnType<typeof summary> };
+      let list: Row[] = [
+        ...recs.map((r) => ({ r, s: summary(r) })),
+        ...code.map((r) => ({
+          r,
+          s: codeSummary(r) as unknown as ReturnType<typeof summary>,
+        })),
+      ];
+      const saved = p.get("saved") ?? "all";
+      if (saved === "true") list = list.filter((x) => x.s.saved);
+      else if (saved === "false") list = list.filter((x) => !x.s.saved);
       const archived = p.get("archived") ?? "false";
-      if (archived === "true") list = list.filter((r) => r.archived);
-      else if (archived === "false") list = list.filter((r) => !r.archived);
-      if (p.get("kind")) list = list.filter((r) => r.kind === p.get("kind"));
-      if (p.get("pinned") === "true") list = list.filter((r) => r.pinned);
+      if (archived === "true") list = list.filter((x) => x.s.archived);
+      else if (archived === "false") list = list.filter((x) => !x.s.archived);
+      if (p.get("kind")) list = list.filter((x) => x.s.kind === p.get("kind"));
+      if (p.get("pinned") === "true") list = list.filter((x) => x.s.pinned);
       if (p.get("thread"))
-        list = list.filter((r) => r.origin_thread_id === p.get("thread"));
+        list = list.filter((x) => x.s.origin_thread_id === p.get("thread"));
       const q = (p.get("q") ?? "").toLowerCase();
-      if (q) list = list.filter((r) => r.title.toLowerCase().includes(q));
+      if (q) list = list.filter((x) => x.s.title.toLowerCase().includes(q));
       list.sort(
-        (a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated,
+        (a, b) =>
+          Number(b.s.pinned) - Number(a.s.pinned) ||
+          b.s.updated_at.localeCompare(a.s.updated_at),
       );
       return route.fulfill(
         json({
-          artifacts: list.map(summary),
+          artifacts: list.map((x) => x.s),
           total: list.length,
           usage: { used: 52311, cap: 1073741824 },
         }),
@@ -377,8 +470,22 @@ export async function installFakeStore(
     }
     const m = /^\/api\/artifacts\/([^/]+)(?:\/(.*))?$/.exec(path);
     if (!m) return route.fulfill(notFound());
-    const rec = find(m[1]!);
     const rest = m[2] ?? "";
+    const program = code.find((r) => r.id === m[1]);
+    if (program) {
+      if (method === "POST" && (rest === "save" || rest === "unsave")) {
+        if (opts.saving === "failing")
+          return route.fulfill(
+            json({ detail: { code: "error", message: "" } }, 500),
+          );
+        program.saved = rest === "save";
+        return route.fulfill(json(codeSummary(program)));
+      }
+      if (method === "GET" && /^versions\/\d+\/download$/.test(rest))
+        return route.fulfill(download(program.id));
+      return codeRoute(route, program, rest, codeLog);
+    }
+    const rec = find(m[1]!);
     if (!rec) return route.fulfill(notFound());
     const latest = () => rec.versions[rec.versions.length - 1]!;
     const body = (req.postData() ? req.postDataJSON() : {}) as Record<
@@ -410,6 +517,12 @@ export async function installFakeStore(
             status: 200,
             headers: { ...headers, "Content-Type": "image/svg+xml" },
             body: HOSTILE_SVG,
+          });
+        if (rec.kind === "file" && rec.media_type)
+          return route.fulfill({
+            status: 200,
+            headers: { ...headers, "Content-Type": rec.media_type },
+            body: rec.media_type === "image/png" ? PNG : FILE_TEXT,
           });
         if (rec.kind === "image")
           return route.fulfill({
@@ -508,6 +621,22 @@ export async function installFakeStore(
         json({ artifact: summary(rec), version: version(rec, next) }, 201),
       );
     }
+    if (method === "POST" && (rest === "save" || rest === "unsave")) {
+      if (opts.saving === "failing")
+        return route.fulfill(
+          json({ detail: { code: "error", message: "" } }, 500),
+        );
+      rec.saved = rest === "save";
+      if (!rec.saved) rec.pinned = false;
+      return route.fulfill(json(summary(rec)));
+    }
+    if (method === "GET" && /^versions\/(\d+)\/download$/.test(rest)) {
+      if (rec.versions.some((v) => v.stored === "chat"))
+        return route.fulfill(
+          json({ detail: { code: "lives_in_chat", message: "" } }, 409),
+        );
+      return route.fulfill(download(rec.id));
+    }
     if (method === "POST" && rest === "duplicate") {
       return route.fulfill(json(summary(rec), 201));
     }
@@ -538,8 +667,17 @@ export async function installFakeStore(
     }
     return route.fulfill(notFound());
   });
-  return { log, recs };
+  return { log, recs, codeLog };
 }
+
+const download = (id: string) => ({
+  status: 200,
+  headers: {
+    "Content-Type": "application/octet-stream",
+    "Content-Disposition": `attachment; filename="artifact-${id}"`,
+  },
+  body: "downloaded",
+});
 
 /** A chat whose turns made artifacts: each tool result carries the card. */
 export function threadState() {
@@ -631,4 +769,97 @@ export async function installThread(page: Page) {
   await page.route("**/api/threads/*/artifacts/manifests", (route) =>
     route.fulfill(json({ manifests: [] })),
   );
+}
+
+export const FILE_TEXT = `name,score\nAda,3\n<script>${CANARY}</script>,1\n`;
+
+export const SAVED_IDS = {
+  html: "HtmlPageJJJJJJJJJJJJJJ",
+  react: "ReactAppKKKKKKKKKKKKKK",
+  webapp: "WebAppSiteOOOOOOOOOOOO",
+  csv: "CsvFileLLLLLLLLLLLLLLL",
+  zip: "ZipFileMMMMMMMMMMMMMMM",
+  orphan: "OrphanNotesPPPPPPPPPPP",
+} as const;
+
+function savedFixtures(): Rec[] {
+  const one = (content: unknown): Version[] => [
+    {
+      n: 1,
+      content,
+      lineage: "user",
+      lineage_source: null,
+      origin: "tool",
+      note: null,
+    },
+  ];
+  const rec = (
+    id: string,
+    kind: string,
+    title: string,
+    over: Partial<Rec> = {},
+  ): Rec => ({
+    id,
+    kind,
+    title,
+    pinned: false,
+    archived: false,
+    origin_thread_id: THREAD,
+    imported_from: null,
+    language: null,
+    size: 1200,
+    versions: one(null),
+    updated: -20,
+    saved: true,
+    ...over,
+  });
+  return [
+    // A chat's output saved with "Save to artifacts": UTF-8 text is
+    // text/plain (render "text"); anything else is a download card.
+    rec(SAVED_IDS.csv, "file", "scores.csv", { media_type: "text/plain" }),
+    rec(SAVED_IDS.zip, "file", "bundle.zip", {
+      media_type: "application/octet-stream",
+    }),
+    rec(SAVED_IDS.orphan, "markdown", "Notes from a deleted chat", {
+      versions: one("# Notes\n\nKept after the chat was deleted."),
+      origin_deleted: true,
+      updated: -25,
+    }),
+  ];
+}
+
+/** A two-page site, saved from a coding job's directory. */
+export const SITE_ABOUT = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--background);color:var(--foreground)}
+main{padding:20px}</style></head><body><main><h1 id="h">About this site</h1><p>The second page of the set.</p></main></body></html>`;
+
+function codeFixtures(): CodeRec[] {
+  return [
+    {
+      id: SAVED_IDS.html,
+      kind: "html",
+      title: "Tip calculator",
+      html: CLEAN_PAGE,
+    },
+    {
+      id: SAVED_IDS.webapp,
+      kind: "webapp",
+      title: "site",
+      html: CLEAN_PAGE.replace("Tip calculator", "Site home"),
+      pages: { "about.html": SITE_ABOUT },
+      check: "not_checked",
+      summary: ["saved from its chat"],
+    },
+    {
+      id: SAVED_IDS.react,
+      kind: "react",
+      title: "Todo app",
+      html: CLEAN_PAGE.replace("Tip calculator", "Todo app"),
+      source: {
+        entry: "App.tsx",
+        files: { "App.tsx": "export default () => null;" },
+      },
+      saved: false,
+    },
+  ];
 }

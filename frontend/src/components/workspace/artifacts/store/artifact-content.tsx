@@ -29,7 +29,11 @@ import type {
   ArtifactVersionDetail,
   CodeContent,
 } from "@/core/artifacts/store-api";
-import { contentUrl } from "@/core/artifacts/store-api";
+import {
+  contentUrl,
+  downloadUrl,
+  isCodeKind,
+} from "@/core/artifacts/store-api";
 import { useArtifactVersion } from "@/core/artifacts/store-hooks";
 import {
   previewLines,
@@ -41,6 +45,7 @@ import { streamdownPlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
 
 import { ArtifactChart } from "./artifact-chart";
+import { StoreShot } from "./artifact-frame";
 
 /**
  * Spec 012 FR-013: static kinds rendered by the host with NO raw-HTML sink.
@@ -298,7 +303,8 @@ export function ArtifactContent({
   artifact: Pick<
     ArtifactSummary,
     "id" | "kind" | "title" | "imported_from" | "origin_thread_id"
-  >;
+  > &
+    Partial<Pick<ArtifactSummary, "media_type" | "code">>;
   version: number;
   compact?: boolean;
   /** False in the store grid: a diagram shows its source lines there. */
@@ -309,9 +315,17 @@ export function ArtifactContent({
     artifact.kind === "code" ||
     artifact.kind === "mermaid" ||
     artifact.kind === "chart";
-  const { data, error, isLoading } = useArtifactVersion(artifact.id, version);
+  const code = isCodeKind(artifact.kind);
+  const { data, error, isLoading } = useArtifactVersion(
+    code ? null : artifact.id,
+    version,
+  );
   const title = titleText(artifact.title);
 
+  // Programs run ONLY in the locked frame, which the callers mount (the
+  // chat card's CodeCardPreview, the viewer's CodeKindView). Here a preview
+  // is the checks' screenshot or the kind's icon, never a frame.
+  if (code) return <StoreShot artifact={artifact} />;
   if (isLoading) {
     return (
       <p className="text-muted-foreground text-sm" role="status">
@@ -350,13 +364,94 @@ export function ArtifactContent({
     );
   }
   return (
-    <a
-      href={contentUrl(artifact.id, version)}
-      className="text-primary text-sm underline"
-      download
+    <FileView
+      artifactId={artifact.id}
+      version={version}
+      render={data.render}
+      title={title}
+      compact={compact}
+    />
+  );
+}
+
+const TEXT_CAP = 2 * 1024 * 1024;
+
+/** A `file` artifact, by the gateway's `render` (api.md "Rendering in the
+ * store"): UTF-8 text as text, anything else a card to download it. Nothing
+ * is ever rendered as a page. */
+function FileView({
+  artifactId,
+  version,
+  render,
+  title,
+  compact,
+}: {
+  artifactId: string;
+  version: number;
+  render: ArtifactVersionDetail["render"];
+  title: string;
+  compact: boolean;
+}) {
+  const view =
+    render === "text" ? "text" : render === "image" ? "image" : "download";
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (view !== "text") return;
+    let live = true;
+    void fetch(contentUrl(artifactId, version), { credentials: "include" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        const body = await r.text();
+        if (live) setText(body.slice(0, TEXT_CAP));
+      })
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [artifactId, version, view]);
+  if (view === "image") {
+    return (
+      <ImageView
+        src={contentUrl(artifactId, version)}
+        alt={title}
+        compact={compact}
+      />
+    );
+  }
+  if (view === "text" && !failed) {
+    if (text === null) {
+      return (
+        <p className="text-muted-foreground text-sm" role="status">
+          Loading…
+        </p>
+      );
+    }
+    return compact ? (
+      <PlainPreview text={text} mono />
+    ) : (
+      <CodeView text={text} language="text" />
+    );
+  }
+  return (
+    <div
+      className="flex flex-col items-start gap-2"
+      data-testid="artifact-download-to-view"
     >
-      Download this file
-    </a>
+      <KindIcon kind="file" className="text-muted-foreground size-6" />
+      <p className="text-muted-foreground text-sm">
+        This file can&rsquo;t be shown here.
+      </p>
+      {!compact && (
+        <a
+          href={downloadUrl(artifactId, version, "page")}
+          className="text-primary text-sm underline"
+          download
+        >
+          Download to view
+        </a>
+      )}
+    </div>
   );
 }
 

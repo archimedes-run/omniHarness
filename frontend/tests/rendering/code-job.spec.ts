@@ -765,3 +765,45 @@ for (const scheme of ["light", "dark"] as const) {
     });
   });
 }
+
+test("Save to artifacts on a built app saves its directory (one web app)", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const imports: unknown[] = [];
+  await open(
+    page,
+    "light",
+    {
+      job: job("verified", { result: VERIFIED_RESULT }),
+      steps: STEPS,
+      month: { spent_usd: 0.31, cap_usd: 20 },
+    },
+    true,
+  );
+  await page.route("**/api/artifacts/import", (route) => {
+    imports.push(route.request().postDataJSON());
+    return route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        artifact: { id: "CounterSiteAAAAAAAAAAA", kind: "webapp" },
+        created: true,
+        skipped: [],
+      }),
+    });
+  });
+  const card = page.getByTestId("code-job-card");
+  await card
+    .getByTestId("code-job-actions")
+    .getByTestId("save-to-artifacts")
+    .click();
+  await expect(card.getByTestId("save-to-artifacts-done")).toHaveAttribute(
+    "href",
+    "/workspace/artifacts/CounterSiteAAAAAAAAAAA",
+  );
+  // The published index.html's DIRECTORY, never the page file alone.
+  expect(imports).toEqual([
+    { thread_id: THREAD, path: "/mnt/user-data/outputs/counter-app" },
+  ]);
+});

@@ -69,6 +69,11 @@ export interface ArtifactSummary {
   size: number;
   created_at: string;
   updated_at: string;
+  /** Saved by the owner (the Saved tab lists only these). */
+  saved: boolean;
+  saved_at: string | null;
+  /** Its chat was deleted; the artifact is kept and still opens. */
+  origin_deleted: boolean;
   /** Code kinds only (api.md "Code kinds"). */
   code?: CodeSummary;
 }
@@ -116,7 +121,20 @@ export interface ReactSource {
   files: Record<string, string>;
 }
 
+/** How the store shows a version (api.md "Rendering in the store"). */
+export type RenderTarget =
+  | "markdown"
+  | "code"
+  | "image"
+  | "mermaid"
+  | "chart"
+  | "text"
+  | "download"
+  | "frame";
+
 export interface ArtifactVersion {
+  /** Set by the gateway on every version it describes. */
+  render?: RenderTarget | null;
   n: number;
   content_hash: string;
   size: number;
@@ -175,6 +193,7 @@ export interface ListQuery {
   kind?: ArtifactKind;
   pinned?: boolean;
   archived?: boolean | "all";
+  saved?: boolean | "all";
   thread?: string;
   q?: string;
   limit?: number;
@@ -241,6 +260,7 @@ export async function listArtifacts(query: ListQuery = {}): Promise<{
   const params = new URLSearchParams();
   if (query.kind) params.set("kind", query.kind);
   if (query.pinned !== undefined) params.set("pinned", String(query.pinned));
+  if (query.saved !== undefined) params.set("saved", String(query.saved));
   if (query.archived !== undefined)
     params.set("archived", String(query.archived));
   if (query.thread) params.set("thread", query.thread);
@@ -339,6 +359,38 @@ export async function deleteArtifact(
       confirm_id: id,
       version_count: versionCount,
     }),
+  );
+}
+
+// -- Saving and saving a chat's output (the store holds only what the
+// owner saves; nothing lands in it by itself; api.md "Saved and unsaved") ---
+
+/** Save or unsave (unsave also unpins). Idempotent. */
+export async function setSaved(
+  id: string,
+  saved: boolean,
+): Promise<ArtifactSummary> {
+  return readResponse(
+    await send(`${base()}/${enc(id)}/${saved ? "save" : "unsave"}`, "POST"),
+  );
+}
+
+export interface ImportResult {
+  artifact: ArtifactSummary;
+  /** False when the same path with the same content was saved before. */
+  created: boolean;
+  /** Entries of a web app directory that were left out (at most 200). */
+  skipped: string[];
+}
+
+/** "Save to artifacts" on a chat's output file or web app directory: a
+ * SAVED artifact read by the gateway from the chat's outputs by path. */
+export async function importChatFile(
+  threadId: string,
+  path: string,
+): Promise<ImportResult> {
+  return readResponse(
+    await send(`${base()}/import`, "POST", { thread_id: threadId, path }),
   );
 }
 

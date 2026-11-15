@@ -8,6 +8,7 @@ import type {
   ArtifactKind,
   ArtifactSummary,
   ArtifactsApiError,
+  ListQuery,
   VersionOrigin,
 } from "./store-api";
 
@@ -98,6 +99,71 @@ export const KIND_WORDS: Record<ArtifactKind, string> = {
   webapp: "Web app",
   file: "File",
 };
+
+export interface DownloadForm {
+  /** downloadUrl's form: "page" is the route itself, "source" adds
+   * `?source=zip` (html and react only; api.md "Downloads of code kinds"). */
+  form: "page" | "source";
+  label: string;
+}
+
+/** What Download offers for a kind (GET …/versions/{n}/download): html and
+ * react the built page and their sources (a version that did not build has
+ * no page), webapp its file set as a .zip, every other kind one file. */
+export function downloadForms(
+  kind: ArtifactKind,
+  built = true,
+): DownloadForm[] {
+  if (kind === "html" || kind === "react") {
+    const source: DownloadForm = { form: "source", label: "Source (.zip)" };
+    return built ? [{ form: "page", label: "Page (.html)" }, source] : [source];
+  }
+  if (kind === "webapp") return [{ form: "page", label: "Files (.zip)" }];
+  return [{ form: "page", label: "Download" }];
+}
+
+/** The store page's tabs (Saved is the default) and the "still in their
+ * chats" view. */
+export type StoreView =
+  | "saved"
+  | "all"
+  | "pinned"
+  | "recent"
+  | "archived"
+  | "unsaved";
+
+/** The list query of a view. `saved` is ALWAYS sent: the API's default is
+ * `all` (api.md GET /api/artifacts), so the Saved tab must ask for it. */
+export function storeViewQuery(view: StoreView): ListQuery {
+  switch (view) {
+    case "saved":
+    case "recent":
+      return { saved: true };
+    case "unsaved":
+      return { saved: false };
+    case "pinned":
+      return { saved: "all", pinned: true };
+    case "archived":
+      return { saved: "all", archived: true };
+    case "all":
+      return { saved: "all" };
+  }
+}
+
+/** "From a chat you deleted": the artifact stays and still opens, but its
+ * chat link would lead nowhere. */
+export function originChatOf(
+  a: Pick<ArtifactSummary, "origin_thread_id" | "origin_deleted">,
+): { threadId: string } | { deleted: true } | null {
+  if (a.origin_deleted) return { deleted: true };
+  return a.origin_thread_id ? { threadId: a.origin_thread_id } : null;
+}
+
+/** A coding job publishes `<dir>/index.html`; "Save to artifacts" saves the
+ * DIRECTORY, which the gateway stores as one webapp (api.md, POST import). */
+export function webAppDirOf(path: string): string {
+  return path.replace(/\/index\.html$/, "");
+}
 
 export const ORIGIN_WORDS: Record<VersionOrigin, string> = {
   tool: "Made by the assistant",

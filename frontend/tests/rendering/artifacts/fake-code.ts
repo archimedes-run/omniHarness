@@ -131,6 +131,8 @@ export interface CodeRec {
   buildFailed?: boolean;
   source?: { entry: string; files: Record<string, string> };
   summary?: string[];
+  /** The save model (api.md "Saved and unsaved"); default saved. */
+  saved?: boolean;
 }
 
 /** As the gateway does it (artifacts_store/frame.py): the shim PREPENDED as
@@ -269,7 +271,7 @@ function check(rec: CodeRec) {
   };
 }
 
-function summary(rec: CodeRec) {
+export function codeSummary(rec: CodeRec) {
   return {
     id: rec.id,
     kind: rec.kind,
@@ -277,6 +279,9 @@ function summary(rec: CodeRec) {
     latest_version: 1,
     version_count: 1,
     pinned: false,
+    saved: rec.saved ?? true,
+    saved_at: rec.saved === false ? null : iso(-30),
+    origin_deleted: false,
     archived: false,
     archived_at: null,
     origin_thread_id: THREAD,
@@ -300,6 +305,7 @@ function summary(rec: CodeRec) {
 
 function version(rec: CodeRec) {
   return {
+    render: "frame",
     n: 1,
     content_hash: "b".repeat(64),
     size: rec.html.length,
@@ -332,6 +338,103 @@ export interface CodeLog {
   writes: { path: string; body: unknown }[];
 }
 
+/** One code artifact's routes (detail, version, frame token, frame
+ * document, shots, check, rebuild, refused), as the gateway answers them;
+ * shared with the store's fake (fake-store.ts). */
+export async function codeRoute(
+  route: Route,
+  rec: CodeRec,
+  rest: string,
+  log: CodeLog,
+): Promise<void> {
+  const req = route.request();
+  const url = new URL(req.url());
+  const path = url.pathname;
+  const method = req.method();
+  if (method === "GET" && rest === "")
+    return route.fulfill(
+      json({ ...codeSummary(rec), versions: [version(rec)] }),
+    );
+  if (method === "GET" && rest === "versions/1")
+    return route.fulfill(
+      json({
+        ...version(rec),
+        content: rec.kind === "html" ? rec.html : null,
+        source: rec.source ?? null,
+        ...(rec.kind === "webapp"
+          ? {
+              entry: "index.html",
+              files: ["index.html", ...Object.keys(rec.pages ?? {})].map(
+                (p) => ({ path: p, size: 100, media_type: "text/html" }),
+              ),
+              pages: ["index.html", ...Object.keys(rec.pages ?? {})].map(
+                (p) => ({ path: p, ok: true, reason: null }),
+              ),
+            }
+          : {}),
+        build_log: rec.buildFailed
+          ? "src/App.tsx:1:1: ERROR: Unexpected"
+          : null,
+      }),
+    );
+  if (method === "GET" && rest === "versions/1/frame-token") {
+    if (rec.buildFailed)
+      return route.fulfill(
+        json({ detail: { code: "build_failed", message: "" } }, 409),
+      );
+    return route.fulfill(
+      json({
+        token: "tok",
+        expires_in: 300,
+        url: `/api/artifacts/${rec.id}/versions/1/frame.html?t=tok-${rec.id}`,
+      }),
+    );
+  }
+  if (method === "GET" && rest === "versions/1/frame.html") {
+    const headers = await req.allHeaders();
+    log.frames.push({
+      path: path + url.search,
+      dest: headers["sec-fetch-dest"],
+    });
+    if (url.searchParams.get("t") !== `tok-${rec.id}`)
+      return route.fulfill({
+        status: 403,
+        body: "Open this artifact in OmniHarness.",
+      });
+    const page = url.searchParams.get("path");
+    const html = page === null ? rec.html : rec.pages?.[page];
+    if (html === undefined)
+      return route.fulfill({
+        status: 404,
+        body: "Open this artifact in OmniHarness.",
+      });
+    const doc = frameDocument(html);
+    return route.fulfill({
+      status: 200,
+      headers: frameHeaders(doc),
+      body: doc,
+    });
+  }
+  const shot = /^versions\/1\/shots\/(light|dark)\.png$/.exec(rest);
+  if (method === "GET" && shot)
+    return route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "image/png" },
+      body: png(shot[1] === "dark" ? [40, 44, 60] : [210, 222, 255]),
+    });
+  if (method === "POST" && rest === "refused") {
+    log.refused.push(req.postDataJSON());
+    return route.fulfill({ status: 204, body: "" });
+  }
+  if (method === "POST" && rest === "versions/1/check")
+    return route.fulfill(json({ state: "pending" }, 202));
+  if (method === "POST" && rest === "rebuild")
+    return route.fulfill(json({ build: null }, 202));
+  return route.fulfill(
+    json({ detail: { code: "artifact_not_found", message: "" } }, 404),
+  );
+}
+
 export async function installCodeStore(
   page: Page,
   recs: CodeRec[],
@@ -351,7 +454,7 @@ export async function installCodeStore(
     if (path === "/api/artifacts")
       return route.fulfill(
         json({
-          artifacts: recs.map(summary),
+          artifacts: recs.map(codeSummary),
           total: recs.length,
           usage: { used: 1000, cap: 1073741824 },
         }),
@@ -366,87 +469,7 @@ export async function installCodeStore(
       return route.fulfill(
         json({ detail: { code: "artifact_not_found", message: "" } }, 404),
       );
-    const rest = m[2] ?? "";
-    if (method === "GET" && rest === "")
-      return route.fulfill(json({ ...summary(rec), versions: [version(rec)] }));
-    if (method === "GET" && rest === "versions/1")
-      return route.fulfill(
-        json({
-          ...version(rec),
-          content: rec.kind === "html" ? rec.html : null,
-          source: rec.source ?? null,
-          ...(rec.kind === "webapp"
-            ? {
-                entry: "index.html",
-                files: ["index.html", ...Object.keys(rec.pages ?? {})].map(
-                  (p) => ({ path: p, size: 100, media_type: "text/html" }),
-                ),
-                pages: ["index.html", ...Object.keys(rec.pages ?? {})].map(
-                  (p) => ({ path: p, ok: true, reason: null }),
-                ),
-              }
-            : {}),
-          build_log: rec.buildFailed
-            ? "src/App.tsx:1:1: ERROR: Unexpected"
-            : null,
-        }),
-      );
-    if (method === "GET" && rest === "versions/1/frame-token") {
-      if (rec.buildFailed)
-        return route.fulfill(
-          json({ detail: { code: "build_failed", message: "" } }, 409),
-        );
-      return route.fulfill(
-        json({
-          token: "tok",
-          expires_in: 300,
-          url: `/api/artifacts/${rec.id}/versions/1/frame.html?t=tok-${rec.id}`,
-        }),
-      );
-    }
-    if (method === "GET" && rest === "versions/1/frame.html") {
-      const headers = await req.allHeaders();
-      log.frames.push({
-        path: path + url.search,
-        dest: headers["sec-fetch-dest"],
-      });
-      if (url.searchParams.get("t") !== `tok-${rec.id}`)
-        return route.fulfill({
-          status: 403,
-          body: "Open this artifact in OmniHarness.",
-        });
-      const page = url.searchParams.get("path");
-      const html = page === null ? rec.html : rec.pages?.[page];
-      if (html === undefined)
-        return route.fulfill({
-          status: 404,
-          body: "Open this artifact in OmniHarness.",
-        });
-      const doc = frameDocument(html);
-      return route.fulfill({
-        status: 200,
-        headers: frameHeaders(doc),
-        body: doc,
-      });
-    }
-    const shot = /^versions\/1\/shots\/(light|dark)\.png$/.exec(rest);
-    if (method === "GET" && shot)
-      return route.fulfill({
-        status: 200,
-        headers: { "Content-Type": "image/png" },
-        body: png(shot[1] === "dark" ? [40, 44, 60] : [210, 222, 255]),
-      });
-    if (method === "POST" && rest === "refused") {
-      log.refused.push(req.postDataJSON());
-      return route.fulfill({ status: 204, body: "" });
-    }
-    if (method === "POST" && rest === "versions/1/check")
-      return route.fulfill(json({ state: "pending" }, 202));
-    if (method === "POST" && rest === "rebuild")
-      return route.fulfill(json({ build: null }, 202));
-    return route.fulfill(
-      json({ detail: { code: "artifact_not_found", message: "" } }, 404),
-    );
+    return codeRoute(route, rec, m[2] ?? "", log);
   });
   return log;
 }

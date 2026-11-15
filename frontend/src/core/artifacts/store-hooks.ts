@@ -16,6 +16,9 @@ import {
   restoreVersion,
   saveVersion,
   type ListQuery,
+  importChatFile,
+  setSaved,
+  type ArtifactSummary,
 } from "./store-api";
 import { retryUnless4xx } from "./store-logic";
 
@@ -135,4 +138,61 @@ export function useArtifactActions(id: string) {
       ...opts,
     }),
   };
+}
+
+// -- Save, unsave, "Save to artifacts" (owner clicks only) ------------------
+
+/** Save or unsave, optimistically: the detail and every list update at
+ * once and roll back if the gateway refuses. */
+export function useSaveArtifact(id: string) {
+  const client = useQueryClient();
+  const detailKey = [...ARTIFACTS_KEY, "artifact", id];
+  return useMutation({
+    mutationFn: (saved: boolean) => setSaved(id, saved),
+    retry: false,
+    onMutate: async (saved: boolean) => {
+      await client.cancelQueries({ queryKey: detailKey });
+      const before = client.getQueryData<ArtifactDetail>(detailKey);
+      if (before) client.setQueryData(detailKey, { ...before, saved });
+      return { before };
+    },
+    onError: (_err, _saved, ctx) => {
+      if (ctx?.before) client.setQueryData(detailKey, ctx.before);
+    },
+    onSuccess: (summary) => {
+      const before = client.getQueryData<ArtifactDetail>(detailKey);
+      if (before) client.setQueryData(detailKey, { ...before, ...summary });
+      // Lists change in place (an item saved from "still in their chats"
+      // stays, marked Saved; Unsave also unpins) and refetch on the next
+      // visit.
+      const isList = (q: { queryKey: readonly unknown[] }) =>
+        q.queryKey[0] === ARTIFACTS_KEY[0] && q.queryKey[1] === "list";
+      client.setQueriesData<{ artifacts: ArtifactSummary[] }>(
+        { predicate: isList },
+        (old) =>
+          old && {
+            ...old,
+            artifacts: old.artifacts.map((a) =>
+              a.id === id ? { ...a, ...summary } : a,
+            ),
+          },
+      );
+      void client.invalidateQueries({ predicate: isList, refetchType: "none" });
+    },
+  });
+}
+
+/** "Save to artifacts" on a chat's output file, or on a coding job's
+ * published directory (one webapp). */
+export function useImportChatFile(threadId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => importChatFile(threadId, path),
+    retry: false,
+    onSettled: () =>
+      client.invalidateQueries({
+        predicate: (q) =>
+          q.queryKey[0] === ARTIFACTS_KEY[0] && q.queryKey[1] === "list",
+      }),
+  });
 }
