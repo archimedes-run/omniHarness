@@ -15,8 +15,13 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 WIDTHS = (360, 560, 1280)
 
 
+def charts(**over):
+    """The chart measurements of a page with nothing wrong (CHART_MEASURE)."""
+    return {"seen": 0, "overlap": [], "row_overlap": [], "clipped": [], "contrast": [], "unmeasured": 0, **over}
+
+
 def page(width, **over):
-    return {"width": width, "overflow_px": 0, "client_width": width, "offenders": [], "rendered": True, "svgs": [], **over}
+    return {"width": width, "overflow_px": 0, "client_width": width, "offenders": [], "rendered": True, "svgs": [], "charts": charts(), **over}
 
 
 class FakeSandbox:

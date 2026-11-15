@@ -11,7 +11,7 @@ import json
 import re
 
 import pytest
-from fake_sandbox import PNG, FakeSandbox, failing, passing
+from fake_sandbox import PNG, FakeSandbox, failing, page, passing
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.gateway.apps import bundle
@@ -292,8 +292,8 @@ def test_html_create_runs_the_checks_on_the_exact_bytes(tools, store, sandbox):
         (failing(violations=["connect-src"]), "network"),
         (failing(blocked=2), "network"),
         (failing(errors=1, first_error="TypeError: boom"), "uncaught error"),
-        (failing(pages=[{"width": w, "overflow_px": 40 if w == 360 else 0, "client_width": w, "offenders": ["div#wide"], "rendered": True, "svgs": []} for w in (360, 560, 1280)]), "overflows sideways at 360"),
-        (failing(pages=[{"width": w, "overflow_px": 0, "client_width": w, "offenders": [], "rendered": False, "svgs": []} for w in (360, 560, 1280)]), "rendered nothing"),
+        (failing(pages=[page(w, overflow_px=40 if w == 360 else 0, offenders=["div#wide"]) for w in (360, 560, 1280)]), "overflows sideways at 360"),
+        (failing(pages=[page(w, rendered=False) for w in (360, 560, 1280)]), "rendered nothing"),
         (failing(loaded=False, load_error="slow"), "did not load"),
     ],
 )

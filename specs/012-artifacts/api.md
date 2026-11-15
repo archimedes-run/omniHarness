@@ -582,7 +582,14 @@ Run by the gateway in the chat's sandbox on the exact frame document (its
 SHA-256 is recorded), after a tool write, an owner edit, a restore of a
 version whose checks are not copied, and Check again: the coding jobs'
 layout probe at 360, 560 and 1280 px in the light and the dark theme
-(overflow, a clipped chart), the render check (loaded, rendered something,
+(overflow, a clipped chart), the chart check (at every width and theme:
+text in one SVG, or the text of neighbouring items in a row of short labels,
+overlapping by more than 1.5 px; chart text cut off by its SVG's box or a
+box hiding overflow, by more than 2 px, CSS ellipsis and line clamps
+allowed; a solid data mark in a chart-like SVG below 3:1 against what is
+drawn behind it, thin or dashed lines, tints, background shapes and tracks
+excluded, gradients and patterns counted as not measured, a warning), the
+render check (loaded, rendered something,
 no uncaught error) and the no-network watch: any CSP violation, any request
 to anything but the probe's own server, and any WebRTC construction in any
 frame of the page (the probe wraps the constructors in every document before

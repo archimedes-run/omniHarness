@@ -7,6 +7,9 @@ the chat's sandbox on the EXACT frame document the frame route serves
 
 * layout at 360, 560 and 1280 px, in the light and the dark theme: no
   sideways overflow, no chart cut off by its own box;
+* readable charts at every width and theme (layout_probe.CHART_MEASURE):
+  chart labels that do not overlap and are not cut off, and chart marks
+  (bars, lines, points, slices) at 3:1 or more against what is behind them;
 * the render check: the page loaded and rendered something at every width
   and threw no uncaught error (a react bundle that fails to mount renders
   nothing);
@@ -70,6 +73,34 @@ def _widths(ws: list[int]) -> str:
     return ", ".join(str(w) for w in ws) + " px"
 
 
+#: The chart marks the probe names, in the words the model reads.
+MARKS = {"bars": "chart bars", "points": "chart points", "lines": "chart lines", "slices": "chart slices or areas"}
+CHART_CONTRAST = 3.0
+
+
+def _labels(entry: dict) -> str:
+    names = [layout_mod._text(v, 24) for v in (entry.get("labels") or [])[:2] if isinstance(v, str)]  # noqa: SLF001
+    names = [n for n in names if n]
+    return " (" + " and ".join(f"'{n}'" for n in names) + ")" if names else ""
+
+
+def _charts(page: dict) -> dict | None:
+    """The page's chart measurements, or None when missing or malformed (the
+    run is then unreadable: fail closed)."""
+    charts = page.get("charts")
+    if not isinstance(charts, dict) or charts.get("failed") is not None:
+        return None
+    if _int(charts.get("seen")) is None or _int(charts.get("unmeasured")) is None:
+        return None
+    for key in ("overlap", "row_overlap", "clipped", "contrast"):
+        if not isinstance(charts.get(key), list) or not all(isinstance(e, dict) for e in charts[key]):
+            return None
+    for entry in charts["contrast"]:
+        if entry.get("kind") not in MARKS or isinstance(entry.get("ratio"), bool) or not isinstance(entry.get("ratio"), (int, float)) or not 1 <= entry["ratio"] < CHART_CONTRAST:
+            return None
+    return charts
+
+
 def base(seconds: float = 0.0) -> dict:
     return {"kind": "artifact", "widths": list(WIDTHS), "themes": list(THEMES), "seconds": round(seconds, 1), "outcome": "pass", "summary": [], "failures": [], "warnings": [], "error": None, "error_code": None, "shots": []}
 
@@ -123,6 +154,11 @@ def _parse(raw: str | None, *, exit_code: int | None, nonce: str, prod_sha256: s
     blank: list[str] = []
     errors: dict[str, list[str]] = {}
     network: list[str] = []
+    overlap: dict[str, list[str]] = {}
+    row_overlap: dict[str, list[str]] = {}
+    cut: dict[str, list[str]] = {}
+    faint: dict[str, dict] = {}  # theme -> {"ratio", "kinds", "widths"}
+    seen = unmeasured = 0
     for i, run in enumerate(runs):
         theme = THEMES[i]
         if not isinstance(run, dict) or run.get("theme") != theme:
@@ -158,6 +194,28 @@ def _parse(raw: str | None, *, exit_code: int | None, nonce: str, prod_sha256: s
             over = _int(page.get("overflow_px"))
             if over is None or not isinstance(page.get("rendered"), bool) or not isinstance(page.get("svgs"), list):
                 return error("unreadable", seconds)
+            charts = _charts(page)
+            if charts is None:
+                return error("unreadable", seconds)
+            seen = max(seen, charts["seen"])
+            unmeasured = max(unmeasured, charts["unmeasured"])
+            for entry in charts["overlap"][:3]:
+                overlap.setdefault(f"{width}", []).append(theme)
+                failures.append(f"chart labels overlap: {layout_mod._where(entry.get('where'))} at {width} px ({theme}){_labels(entry)}")  # noqa: SLF001
+            for entry in charts["row_overlap"][:3]:
+                row_overlap.setdefault(f"{width}", []).append(theme)
+                failures.append(f"labels in a row overlap: {layout_mod._where(entry.get('where'))} at {width} px ({theme}){_labels(entry)}")  # noqa: SLF001
+            for entry in charts["clipped"][:3]:
+                cut.setdefault(f"{width}", []).append(theme)
+                failures.append(f"chart text cut off: {layout_mod._where(entry.get('where'))} at {width} px ({theme}){_labels(entry)}")  # noqa: SLF001
+            for entry in charts["contrast"][:3]:
+                slot = faint.setdefault(theme, {"ratio": 99.0, "kinds": [], "widths": []})
+                slot["ratio"] = min(slot["ratio"], float(entry["ratio"]))
+                if entry["kind"] not in slot["kinds"]:
+                    slot["kinds"].append(entry["kind"])
+                if width not in slot["widths"]:
+                    slot["widths"].append(width)
+                failures.append(f"{MARKS[entry['kind']]} too faint against the background: {layout_mod._where(entry.get('where'))} at {width} px ({theme}; {float(entry['ratio']):.2f}:1, needs 3:1)")  # noqa: SLF001
             if not page["rendered"]:
                 blank.append(f"{width} px {theme}")
             if over > 1:
@@ -189,8 +247,19 @@ def _parse(raw: str | None, *, exit_code: int | None, nonce: str, prod_sha256: s
         summary.append(f"overflows sideways at {width} px ({', '.join(themes)})")
     if clipped:
         summary.append(f"a chart is cut off ({'; '.join(clipped[:3])})")
+    for width, themes in overlap.items():
+        summary.append(f"chart labels overlap at {width} px ({', '.join(dict.fromkeys(themes))}): wrap, rotate, shorten or thin them")
+    for width, themes in row_overlap.items():
+        summary.append(f"labels in a row overlap at {width} px ({', '.join(dict.fromkeys(themes))}): let them wrap or shorten them")
+    for width, themes in cut.items():
+        summary.append(f"chart text is cut off at {width} px ({', '.join(dict.fromkeys(themes))}): keep every label inside the chart")
+    for theme, slot in faint.items():
+        kinds = " and ".join(MARKS[k] for k in slot["kinds"][:2])
+        summary.append(f"{kinds} have too little contrast with the background in {theme} (worst {slot['ratio']:.2f}:1, needs 3:1): use a theme colour such as var(--primary)")
+    if unmeasured:
+        warnings.append("some chart colours (gradients, patterns or images behind them) were not measured")
     shots = [s for s in (data.get("shots") or []) if isinstance(s, dict) and s.get("file") and s.get("theme") in THEMES and _int(s.get("bytes"), SHOT_MAX_BYTES)]
-    return {**base(seconds), "outcome": "fail" if failures else "pass", "summary": summary[:8], "failures": failures[:14], "warnings": list(dict.fromkeys(warnings))[:5], "shots": shots[:2]}
+    return {**base(seconds), "outcome": "fail" if failures else "pass", "summary": summary[:8], "failures": failures[:14], "warnings": list(dict.fromkeys(warnings))[:5], "shots": shots[:2], "charts": seen}
 
 
 def state_of(result: dict) -> str:
@@ -287,7 +356,8 @@ def model_lines(result: dict, state: str) -> list[str]:
     """What the model reads in the (trusted) tool result: system words only."""
     widths = "/".join(str(w) for w in WIDTHS)
     if state == "passed":
-        return [f"System checks passed: no network attempts seen, it renders, layout fits at {widths} px in light and dark (a quality check, not a guarantee)."]
+        charts = "; charts readable (labels neither overlap nor cut off, marks at 3:1 or more)" if result.get("charts") else ""
+        return [f"System checks passed: no network attempts seen, it renders, layout fits at {widths} px in light and dark{charts} (a quality check, not a guarantee)."]
     if state == "failed":
         return ["System checks FAILED: " + "; ".join(result.get("summary") or ["see the details"]) + "."]
     return ["System checks gave no answer: " + "; ".join(result.get("summary") or ["the checks did not run"]) + ". The version is not shown as checked."]
