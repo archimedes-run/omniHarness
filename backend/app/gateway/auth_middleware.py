@@ -21,6 +21,7 @@ from app.gateway.auth.errors import AuthErrorCode, AuthErrorResponse
 from app.gateway.authz import AuthContext, permissions_for
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, get_internal_user, is_valid_internal_auth_token
 from app.gateway.ownership import SECOND_ACCOUNT_REFUSED, account_admitted
+from app.gateway.preview_frame import LIVE_PATH_RE
 from omniharness.runtime.user_context import reset_current_user, set_current_user
 
 # Paths that never require authentication.
@@ -56,6 +57,10 @@ def _is_public(path: str) -> bool:
     if _PUBLIC_ARTIFACT_PREVIEW_TOKEN_RE.match(stripped):
         return True
     if _PUBLIC_ARTIFACT_PREVIEW_SHIM_RE.match(stripped):
+        return True
+    # The live preview's frame link: its token authorizes that one preview
+    # (preview_frame.py); the opaque frame carries no session.
+    if LIVE_PATH_RE.match(stripped):
         return True
     return any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES)
 

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useThread } from "@/components/workspace/messages/context";
 
 import {
+  createPreviewFrameLink,
   createPreviewSession,
   createPreviewSessionFromManifest,
   loadArtifactManifests,
@@ -178,6 +179,41 @@ export function useRestartPreviewSession({ threadId }: { threadId: string }) {
       });
     },
   });
+}
+
+/** Ask for a fresh link at half its remaining life (never more often than
+ * every 5 s): with the gateway's 10 minutes, every 5 minutes. */
+export function previewFrameRefreshMs(expiresAt: string, now = Date.now()) {
+  const left = Date.parse(expiresAt) - now;
+  return Math.max(5_000, Number.isFinite(left) ? left / 2 : 5_000);
+}
+
+/** The live preview's frame link, asked for again before it lapses. */
+export function usePreviewFrameLink({
+  threadId,
+  previewId,
+  enabled = true,
+}: {
+  threadId: string;
+  previewId?: string;
+  enabled?: boolean;
+}) {
+  const { isMock } = useThread();
+  const { data, error } = useQuery({
+    queryKey: ["preview-frame-link", threadId, previewId],
+    queryFn: () => createPreviewFrameLink({ threadId, previewId: previewId! }),
+    enabled: enabled && !isMock && Boolean(previewId),
+    gcTime: 0,
+    staleTime: 0,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.data
+        ? previewFrameRefreshMs(query.state.data.expires_at)
+        : false,
+  });
+  return { link: data, error };
 }
 
 export function usePreviewSessionLogs({

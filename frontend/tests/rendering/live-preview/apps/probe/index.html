@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Probe</title></head>
+  <body>
+    <p id="status">probing</p>
+    <script>
+      // Reports what the page can reach from inside its frame.
+      (async () => {
+        const out = {};
+        try { out.cookie = document.cookie; } catch (e) { out.cookie = "threw"; }
+        try {
+          const r = await fetch(location.origin + "/api/v1/auth/me?probe=1", { credentials: "include" });
+          out.api = await r.text();
+        } catch (e) { out.api = "blocked: " + e.name; }
+        try { out.parent = window.parent.document.title; } catch (e) { out.parent = "blocked"; }
+        try { out.storage = typeof window.localStorage.getItem; } catch (e) { out.storage = "threw"; }
+        out.origin = self.origin;
+        document.getElementById("status").textContent = JSON.stringify(out);
+        window.parent.postMessage({ probe: out }, "*");
+      })();
+    </script>
+  </body>
+</html>

@@ -16,6 +16,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
+from app.gateway import preview_frame
 from omniharness.community.aio_sandbox.aio_sandbox import AioSandbox
 from omniharness.community.aio_sandbox.aio_sandbox_provider import (
     AioSandboxProvider,
@@ -89,6 +90,16 @@ _HOP_BY_HOP_REQUEST_HEADERS = {
     "cookie",
     "host",
     "transfer-encoding",
+    # The browser's view of the gateway hop, not of the dev server: from the
+    # opaque preview frame these say "null" and "cross-site", which a dev
+    # server's own same-origin checks would refuse, and the referer would
+    # carry the frame link.
+    "origin",
+    "referer",
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-user",
 }
 _HOP_BY_HOP_RESPONSE_HEADERS = {
     "connection",
@@ -295,12 +306,27 @@ def _preview_html_shim(proxy_root: str) -> str:
     return (
         "<script>"
         "(function(){"
-        f"const proxyRoot={proxy_root_json};"
+        f"let proxyRoot={proxy_root_json};"
+        # The root ends in the frame link's token; the panel sends a fresh one
+        # before it lapses. Paths still naming an older token move to the
+        # current one, so the app keeps loading after a refresh.
+        "const linkPrefix=proxyRoot.slice(0,proxyRoot.lastIndexOf('/')+1);"
         "const rewrite=function(value){"
         "if(typeof value!=='string'||!value||value.startsWith('//')||!value.startsWith('/')) return value;"
+        "if(value.startsWith(linkPrefix)){const rest=value.slice(linkPrefix.length);const cut=rest.indexOf('/');return proxyRoot+(cut<0?'':rest.slice(cut));}"
         "if(value===proxyRoot||value.startsWith(proxyRoot+'/')) return value;"
         "return proxyRoot+value;"
         "};"
+        "window.addEventListener('message',function(ev){"
+        "if(ev.source!==window.parent)return;"
+        "const d=ev.data;"
+        "if(!d||d.type!=='omniharness:preview-root'||typeof d.root!=='string')return;"
+        "if(!d.root.startsWith(linkPrefix)||!/^[A-Za-z0-9._~-]+$/.test(d.root.slice(linkPrefix.length)))return;"
+        "proxyRoot=d.root;"
+        "window.__OMNI_HARNESS_PREVIEW_PROXY_ROOT__=proxyRoot;"
+        "const b=document.querySelector('base[data-omni-preview]');"
+        "if(b)b.href=proxyRoot+'/';"
+        "});"
         "const originalFetch=window.fetch.bind(window);"
         "window.fetch=function(input,init){"
         "if(typeof input==='string'){return originalFetch(rewrite(input),init);}"
@@ -336,9 +362,9 @@ def _preview_html_shim(proxy_root: str) -> str:
         "try{"
         "const payload=JSON.stringify({type:type,message:String(msg).slice(0,2000)});"
         "if(navigator.sendBeacon){"
-        "navigator.sendBeacon(proxyRoot+'/__omni_preview__/client-error',new Blob([payload],{type:'application/json'}));"
+        "navigator.sendBeacon(proxyRoot+'/__omni_preview__/client-error',new Blob([payload],{type:'text/plain'}));"
         "}else{"
-        "fetch(proxyRoot+'/__omni_preview__/client-error',{method:'POST',body:payload,headers:{'content-type':'application/json'},keepalive:true}).catch(function(){});"
+        "fetch(proxyRoot+'/__omni_preview__/client-error',{method:'POST',body:payload,headers:{'content-type':'text/plain'},keepalive:true}).catch(function(){});"
         "}"
         "}catch(e){}"
         "};"
@@ -359,8 +385,13 @@ def _preview_html_shim(proxy_root: str) -> str:
 
 
 def _inject_preview_shim(html: str, proxy_root: str) -> str:
-    base_tag = f'<base href="{proxy_root}/">'
-    shim = _preview_html_shim(proxy_root)
+    # Imported here: the routers package imports this module.
+    from app.gateway.routers.artifacts import PREVIEW_STORAGE_SHIM_JS
+
+    base_tag = f'<base href="{proxy_root}/" data-omni-preview>'
+    # The frame has an opaque origin, where localStorage/sessionStorage and
+    # document.cookie throw: the static preview's in-memory stand-in, first.
+    shim = f"<script>{PREVIEW_STORAGE_SHIM_JS}</script>{_preview_html_shim(proxy_root)}"
     rewritten = _rewrite_root_relative_html_urls(html, proxy_root)
     if _HTML_HEAD_RE.search(rewritten):
         return _HTML_HEAD_RE.sub(lambda match: f"{match.group(0)}{base_tag}{shim}", rewritten, count=1)
@@ -413,13 +444,19 @@ class PreviewSessionResponse(BaseModel):
     command: str
     port: int | None = None
     status: PreviewSessionStatus
-    proxy_url: str
     logs_url: str
     created_at: str
     updated_at: str
     expires_at: str
     exit_code: int | None = None
     error: str | None = None
+
+
+class PreviewFrameResponse(BaseModel):
+    """The live preview's frame link (preview_frame.py) and when it lapses."""
+
+    frame_url: str
+    expires_at: str
 
 
 class PreviewSessionLogsResponse(BaseModel):
@@ -450,9 +487,6 @@ class _PreviewSessionRecord:
     error: str | None = None
     client_errors: list[dict] = dataclasses_field(default_factory=list)
 
-    def proxy_url(self) -> str:
-        return f"/api/threads/{self.thread_id}/previews/{self.id}/proxy"
-
     def logs_url(self) -> str:
         return f"/api/threads/{self.thread_id}/previews/{self.id}/logs"
 
@@ -466,7 +500,6 @@ class _PreviewSessionRecord:
             command=self.command,
             port=self.port or None,
             status=self.status,
-            proxy_url=self.proxy_url(),
             logs_url=self.logs_url(),
             created_at=_isoformat(self.created_at),
             updated_at=_isoformat(self.updated_at),
@@ -666,16 +699,40 @@ class PreviewSessionManager:
             with contextlib.suppress(Exception):
                 await self._stop_and_cleanup_session(session_id)
 
+    def frame_link(self, *, user_id: str, thread_id: str, preview_id: str) -> PreviewFrameResponse:
+        """A fresh frame link for the owner's own preview (preview_frame.py)."""
+        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        token, expires = preview_frame.mint_token(owner_id=session.user_id, thread_id=session.thread_id, preview_id=session.id)
+        return PreviewFrameResponse(
+            frame_url=preview_frame.frame_root(thread_id=session.thread_id, preview_id=session.id, token=token),
+            expires_at=_isoformat(datetime.fromtimestamp(expires, tz=UTC)),
+        )
+
+    def frame_session(self, *, thread_id: str, preview_id: str, token: str) -> _PreviewSessionRecord | None:
+        """The preview a frame link opens, or None when the token has expired.
+        Anything else that does not match (another thread, preview or owner, a
+        forged or malformed token, no such preview) is a 404."""
+        session = self._sessions.get(preview_id)
+        if session is None or session.thread_id != thread_id:
+            raise HTTPException(status_code=404, detail="Preview not found")
+        verdict = preview_frame.token_valid(token, owner_id=session.user_id, thread_id=thread_id, preview_id=preview_id)
+        if verdict is None:
+            return None
+        if not verdict:
+            raise HTTPException(status_code=404, detail="Preview not found")
+        return session
+
     async def proxy_request(
         self,
         *,
-        user_id: str,
-        thread_id: str,
-        preview_id: str,
+        session: _PreviewSessionRecord,
+        token: str,
         request: Request,
         path: str,
     ) -> Response:
-        session = self._require_session(user_id=user_id, thread_id=thread_id, preview_id=preview_id)
+        """Forward one request of the frame link to the preview's dev server."""
+        if preview_frame.is_preflight(request):
+            return preview_frame.preflight_response(request)
         # Skip the expensive per-request refresh for already-running sessions.
         # The status-polling endpoint (GET /previews and GET /previews/{id}/logs)
         # refreshes status every ~3 s via background polling. Probing on every
@@ -711,7 +768,7 @@ class PreviewSessionManager:
                             session.client_errors = session.client_errors[-100:]
                 except Exception:
                     pass
-            return Response(status_code=204)
+            return Response(status_code=204, headers=preview_frame.frame_response_headers({}, request))
 
         body = await request.body()
         try:
@@ -731,11 +788,14 @@ class PreviewSessionManager:
 
         session.updated_at = _now_utc()
         session.expires_at = session.updated_at + timedelta(seconds=self._idle_timeout_seconds)
-        proxy_root = session.proxy_url()
-        headers = _sanitize_proxy_response_headers(
-            dict(forwarded["headers"]),
-            proxy_root=proxy_root,
-            port=session.port,
+        proxy_root = preview_frame.frame_root(thread_id=session.thread_id, preview_id=session.id, token=token)
+        headers = preview_frame.frame_response_headers(
+            _sanitize_proxy_response_headers(
+                dict(forwarded["headers"]),
+                proxy_root=proxy_root,
+                port=session.port,
+            ),
+            request,
         )
         payload = forwarded["body"]
         content_type = headers.get("content-type", "")

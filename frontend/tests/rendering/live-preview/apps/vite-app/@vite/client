@@ -1,0 +1,12 @@
+// A dev server's HMR client: it opens a websocket to its server and carries
+// on when that fails (the preview proxy has no websocket).
+const status = document.createElement("meta");
+status.name = "hmr";
+try {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/`);
+  ws.addEventListener("error", () => { status.content = "failed"; console.debug("[vite] failed to connect to websocket"); });
+  ws.addEventListener("open", () => { status.content = "open"; });
+} catch (e) {
+  status.content = "threw";
+}
+document.head.appendChild(status);

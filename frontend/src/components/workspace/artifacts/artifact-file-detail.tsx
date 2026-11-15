@@ -25,6 +25,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { toast } from "sonner";
@@ -54,6 +55,7 @@ import {
   useArtifactContent,
   useArtifactManifests,
   useCreatePreviewFromManifest,
+  usePreviewFrameLink,
   usePreviewSessionLogs,
   usePreviewSessions,
   useProjectFileContent,
@@ -241,6 +243,11 @@ function ArtifactFileDetailInner({
     }
     return previews.find((preview) => preview.artifact_id === manifestId);
   }, [manifestId, previews]);
+  const { link: previewFrameLink } = usePreviewFrameLink({
+    threadId,
+    previewId: previewSession?.id,
+    enabled: Boolean(isDynamicManifest) && previewSession?.status === "running",
+  });
   const { logs: previewLogs } = usePreviewSessionLogs({
     threadId,
     previewId: previewSession?.id,
@@ -250,7 +257,7 @@ function ArtifactFileDetailInner({
   const displayContent = content ?? "";
   const previewUrl = useMemo(() => {
     if (isDynamicManifest) {
-      return previewSession?.proxy_url;
+      return previewFrameLink?.frame_url;
     }
     if (isWriteFile || language !== "html") {
       return undefined;
@@ -262,7 +269,7 @@ function ArtifactFileDetailInner({
     isMock,
     isWriteFile,
     language,
-    previewSession?.proxy_url,
+    previewFrameLink?.frame_url,
     threadId,
   ]);
 
@@ -453,13 +460,13 @@ function ArtifactFileDetailInner({
                 }
               }}
             >
-              <ToggleGroupItem value="preview">
+              <ToggleGroupItem value="preview" aria-label="Preview">
                 <EyeIcon />
               </ToggleGroupItem>
-              <ToggleGroupItem value="logs">
+              <ToggleGroupItem value="logs" aria-label="Logs">
                 <ActivityIcon />
               </ToggleGroupItem>
-              <ToggleGroupItem value="files">
+              <ToggleGroupItem value="files" aria-label="Files">
                 <FolderTreeIcon />
               </ToggleGroupItem>
             </ToggleGroup>
@@ -753,14 +760,7 @@ function DynamicArtifactPreviewPanel({
 
   // Only show the live preview iframe when the server is confirmed running
   if (previewStatus === "running" && previewUrl) {
-    return (
-      <iframe
-        key={previewUrl}
-        className="size-full"
-        src={previewUrl}
-        title={manifest.title}
-      />
-    );
+    return <LivePreviewFrame url={previewUrl} title={manifest.title} />;
   }
 
   const errorMessage =
@@ -1014,6 +1014,45 @@ function ProjectFilesPanel({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The live preview's sandbox: an opaque origin (never allow-same-origin), so
+ * the app the agent runs shares nothing of this app's origin, storage or
+ * session. Scripts run and forms submit; no popups, modal dialogs, downloads
+ * or top navigation. The gateway sends the same sandbox as a response header
+ * (backend/app/gateway/preview_frame_profile.json).
+ */
+export const LIVE_PREVIEW_SANDBOX = "allow-scripts allow-forms";
+
+/**
+ * The live preview frame. It loads the first link it is given and keeps it: a
+ * fresh link (asked for before the old one lapses) goes to the page's shim as
+ * a message, so the app keeps its state and moves its later loads to the new
+ * link. The frame's origin is opaque, so the message's target is "*"; it
+ * carries only this preview's own link.
+ */
+function LivePreviewFrame({ url, title }: { url: string; title: string }) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [src] = useState(url);
+  useEffect(() => {
+    if (url === src) return;
+    frameRef.current?.contentWindow?.postMessage(
+      { type: "omniharness:preview-root", root: url },
+      "*",
+    );
+  }, [url, src]);
+  return (
+    <iframe
+      ref={frameRef}
+      className="size-full"
+      src={src}
+      title={title}
+      sandbox={LIVE_PREVIEW_SANDBOX}
+      referrerPolicy="no-referrer"
+      data-testid="live-preview-frame"
+    />
   );
 }
 

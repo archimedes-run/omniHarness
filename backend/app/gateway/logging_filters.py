@@ -6,11 +6,14 @@ PREVIEW_TOKEN_LOG_RE = re.compile(r"(/artifacts/preview-token/)[^/\s?]+")
 PREVIEW_TOKEN_REDACTION = r"\1[redacted]"
 #: The locked frame's document route: its query carries a view token.
 FRAME_QUERY_LOG_RE = re.compile(r"(/frame\.html)\?[^\s\"']*")
+#: The live preview's frame link: a path segment carries its token.
+LIVE_PREVIEW_LOG_RE = re.compile(r"(/previews/[^/\s?]+/live/)[^/\s?\"']+")
 
 
 def mask_preview_token_urls(value: str) -> str:
-    """Redact short-lived artifact preview tokens and frame view tokens from
-    loggable URL strings."""
+    """Redact short-lived artifact preview tokens, frame view tokens and live
+    preview frame tokens from loggable URL strings."""
+    value = LIVE_PREVIEW_LOG_RE.sub(r"\1[redacted]", value)
     return FRAME_QUERY_LOG_RE.sub(r"\1?[redacted]", PREVIEW_TOKEN_LOG_RE.sub(PREVIEW_TOKEN_REDACTION, value))
 
 

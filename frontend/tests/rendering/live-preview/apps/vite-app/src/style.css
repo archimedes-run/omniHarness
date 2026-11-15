@@ -1,0 +1,9 @@
+#title {
+  color: rgb(1, 2, 3);
+}
+#about {
+  color: rgb(4, 5, 6);
+}
+body {
+  background: url(/src/logo.svg) no-repeat -100px -100px;
+}

@@ -1,0 +1,10 @@
+{
+  "comment": "The live preview's sandboxed frame (preview_frame.py): the iframe's sandbox and the headers of every response on its frame link. One source for the gateway and the frontend's rendering specs.",
+  "sandbox": "allow-scripts allow-forms",
+  "headers": {
+    "Content-Security-Policy": "sandbox allow-scripts allow-forms",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Resource-Policy": "cross-origin"
+  }
+}

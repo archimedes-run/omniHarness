@@ -629,12 +629,26 @@ gateway's log nor nginx's access log (`$safe_request_uri`).
 
 Other routes that can answer with model-authored HTML under the owner's
 cookie (a chat's file preview `/api/threads/{t}/artifacts/preview/…`, the
-plain file view when it answers HTML, the live preview proxy) refuse a
-navigation (`Sec-Fetch-Dest` iframe or document) whose `Sec-Fetch-Site` is
-present and is neither `same-origin` nor `none`, with the same inert page
+plain file view when it answers HTML) refuse a navigation (`Sec-Fetch-Dest`
+iframe or document) whose `Sec-Fetch-Site` is present and is neither
+`same-origin` nor `none`, with the same inert page
 (`app/gateway/fetch_metadata.py`, shared with this route). A request without
 those headers is answered as before; a preview's nested pages go to its token
 route, which needs no cookie and is unchanged.
+
+The live preview of a running web app (a dev server in the thread's sandbox)
+has no cookie route. The panel asks `POST /api/threads/{t}/previews/{p}/frame`
+for a frame link, `/api/threads/{t}/previews/{p}/live/{token}/…`, and shows it
+in `<iframe sandbox="allow-scripts allow-forms">`. The token is bound to the
+owner, the thread and the preview, signed with a key derived for that purpose
+(never the session secret), lives 10 minutes and opens that preview only; the
+panel asks again at half its life and hands the fresh link to the running
+page without reloading it. Every response on the link carries
+`Content-Security-Policy: sandbox allow-scripts allow-forms` (so the link
+opened on its own is inert too), `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer` and `Cross-Origin-Resource-Policy:
+cross-origin` (`app/gateway/preview_frame.py`, `preview_frame_profile.json`).
+The token is written to neither the gateway's log nor nginx's access log.
 
 `path` (webapp only): one page of the set by its stored relative path
 (default: the entry). Only pages prepared at save are served; anything else

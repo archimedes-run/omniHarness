@@ -117,7 +117,7 @@ def test_preview_session_record_has_client_errors_field():
 def test_preview_html_shim_contains_error_capture():
     from app.gateway.preview_sessions import _preview_html_shim
 
-    shim = _preview_html_shim("/api/threads/t1/previews/p1/proxy")
+    shim = _preview_html_shim("/api/threads/t1/previews/p1/live/v1.1.x")
     assert "_reportErr" in shim
     assert "__omni_preview__/client-error" in shim
     assert "unhandledrejection" in shim
@@ -165,13 +165,7 @@ async def test_proxy_request_intercepts_client_error():
 
         @app.post("/proxy/{path:path}")
         async def proxy(path: str, request: Request):
-            return await manager.proxy_request(
-                user_id="u1",
-                thread_id="t1",
-                preview_id="prev1",
-                request=request,
-                path=path,
-            )
+            return await manager.proxy_request(session=session, token="v1.1.x", request=request, path=path)
 
         client = TestClient(app, raise_server_exceptions=True)
         payload = json.dumps({"type": "error", "message": "ReferenceError: foo is not defined"})

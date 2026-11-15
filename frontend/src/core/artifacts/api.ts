@@ -36,13 +36,19 @@ export interface PreviewSession {
   command: string;
   port?: number | null;
   status: "starting" | "running" | "failed" | "stopped";
-  proxy_url: string;
   logs_url: string;
   created_at: string;
   updated_at: string;
   expires_at: string;
   exit_code?: number | null;
   error?: string | null;
+}
+
+/** The live preview's frame link: short-lived, for its sandboxed frame only
+ * (the gateway's preview_frame.py). Ask again before `expires_at`. */
+export interface PreviewFrameLink {
+  frame_url: string;
+  expires_at: string;
 }
 
 export interface PreviewSessionLogsResponse {
@@ -189,6 +195,23 @@ export async function createPreviewSessionFromManifest({
     throw new Error(error.detail ?? "Failed to create preview session");
   }
   return response.json() as Promise<PreviewSession>;
+}
+
+export async function createPreviewFrameLink({
+  threadId,
+  previewId,
+}: {
+  threadId: string;
+  previewId: string;
+}): Promise<PreviewFrameLink> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/threads/${threadId}/previews/${previewId}/frame`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to open the live preview: ${response.status}`);
+  }
+  return response.json() as Promise<PreviewFrameLink>;
 }
 
 export async function loadPreviewSessionLogs({
