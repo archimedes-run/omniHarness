@@ -166,6 +166,8 @@ export function CheckChip({
 
   useEffect(() => {
     if (!open) return;
+    // Focus moves into the popover; Escape brings it back to the chip.
+    box.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
@@ -233,7 +235,8 @@ export function CheckChip({
           id={id}
           role="dialog"
           aria-label="Check details"
-          className="bg-popover text-popover-foreground border-border absolute top-[calc(100%+6px)] left-0 z-40 flex w-[min(320px,calc(100vw-32px))] flex-col gap-2 rounded-xl border p-3 text-xs shadow-lg"
+          tabIndex={-1}
+          className="bg-popover text-popover-foreground border-border absolute top-[calc(100%+6px)] left-0 z-40 flex w-[min(320px,calc(100vw-32px))] flex-col gap-2 rounded-xl border p-3 text-xs shadow-lg outline-none"
           data-testid="artifact-check-popover"
         >
           <p className="text-sm" data-testid="artifact-check-sentence">

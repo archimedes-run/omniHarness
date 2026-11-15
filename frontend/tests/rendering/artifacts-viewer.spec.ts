@@ -573,6 +573,7 @@ test.describe("the checks chip", () => {
     await expect(chip).toHaveAttribute("aria-expanded", "false");
     await chip.click();
     await expect(chip).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("artifact-check-popover")).toBeFocused();
     await expect(page.getByTestId("artifact-check-sentence")).toHaveText(
       "Checked: no network attempts seen; fits 360 to 1280 px in light and dark",
     );
