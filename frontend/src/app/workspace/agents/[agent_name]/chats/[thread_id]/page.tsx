@@ -146,6 +146,8 @@ export default function AgentChatPage() {
     // A confirmed call still running when its card answered: its result is
     // posted into this chat when it finishes, and read from the thread then.
     pickUpPosted,
+    // Older turns not loaded yet: app cards anchored there wait for them.
+    !hasMoreHistory,
   );
 
   const tokenUsageInlineMode = tokenUsageEnabled

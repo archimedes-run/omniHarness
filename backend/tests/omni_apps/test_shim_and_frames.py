@@ -38,7 +38,7 @@ def test_the_shim_is_present_and_names_what_it_removes() -> None:
 def test_the_shim_is_injected_first_and_hashed_first() -> None:
     html, hashes = bundle.inline({"index.html": b"<!doctype html><html><head><title>x</title></head><body><script>var a=1;</script></body></html>"})
     text = html.decode()
-    assert text.startswith("<!doctype html><html><head><script>" + bundle.shim() + "</script>"), "after the doctype, before every script"
+    assert text.startswith("<!doctype html><script>" + bundle.shim() + "</script><html>"), "the first bytes after the doctype"
     assert hashes == [_sha(bundle.shim()), _sha("var a=1;")]
 
 

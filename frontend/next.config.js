@@ -45,6 +45,14 @@ const config = {
         ],
       },
       {
+        // The shipped font files are public: any origin may load them. The
+        // demo thread pages are served sandboxed (an opaque origin), and a
+        // font request is a CORS request, so they need this to keep their
+        // fonts (Spec 012 S2 review).
+        source: "/fonts/:path*",
+        headers: [{ key: "Access-Control-Allow-Origin", value: "*" }],
+      },
+      {
         // Spec 011: the Apps library and app host pages. src/proxy.ts sets
         // their policy per request, with frame-src scoped to this origin's
         // /api/apps/ (it needs the request's host). This static one,

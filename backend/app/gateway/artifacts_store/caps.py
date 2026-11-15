@@ -17,8 +17,19 @@ BINARY_VERSION_BYTES = 10 * MB
 VERSIONS_PER_ARTIFACT = 200
 #: Distinct blobs per owner.
 OWNER_BYTES = 1024 * MB
+#: A saved web app (a chat's static site): its whole file set.
+WEBAPP_BYTES = 20 * MB
+WEBAPP_FILES = 500
 #: Display-sanitised title and note lengths.
 TITLE_CHARS = 120
 NOTE_CHARS = 300
 #: Latest text kept for search.
 SEARCH_TEXT_CHARS = 200_000
+#: React sources of one version (canonical JSON of {entry, files}) and the
+#: built, inlined bundle (FR-004).
+REACT_SOURCE_BYTES = 2 * MB
+REACT_BUNDLE_BYTES = 2 * MB
+#: The react build's wall time in the sandbox (FR-017).
+REACT_BUILD_SECONDS = 120
+#: Build log tail kept with a failed build.
+BUILD_LOG_CHARS = 4000

@@ -53,11 +53,24 @@ def _context(runtime: ToolRuntime[ContextT, ThreadState] | None, *, with_turn: b
         '"type":"category|time|number"},"series":[{"field":"value","label":"Value"}],"data":[{"day":"Mon","value":3}],'
         '"units":"optional"}. At most 8 series and 5,000 rows; pie and donut take exactly one series. '
         "svg must be plain SVG: no script, foreignObject, event attributes or external links. "
-        "Text is limited to 2 MB. `note`: one short line on what you made (shown as your words)."
+        "Text is limited to 2 MB. `note`: one short line on what you made (shown as your words).\n"
+        "Code kinds run only in a locked, sandboxed frame with NO network (no fetch, no outside images, fonts or "
+        "scripts; use data: URLs and inline SVG), no storage that persists, no popups, no frames:\n"
+        "- html: `content` is ONE self-contained HTML document. The frame runs ONLY inline <script> blocks: no "
+        "on... attributes (onclick=...), no javascript: links, no <script src>; attach handlers with addEventListener. "
+        "No innerHTML, outerHTML, insertAdjacentHTML or document.write, no eval: build elements with "
+        "document.createElement, append and textContent. A page that breaks these rules fails its checks.\n"
+        '- react: `content` is {"entry":"App.tsx","files":{"App.tsx":"...","styles.css":"..."}} (TSX/TS/JSX/JS/CSS, '
+        "at most 50 files, 2 MB). The entry's DEFAULT EXPORT is the component the system mounts. Only react and "
+        "react-dom can be imported (plus the project's own files by relative path; write plain CSS); no "
+        "dangerouslySetInnerHTML. The system builds it in this chat's sandbox.\n"
+        "Both get the system checks (layout at 360, 560 and 1280 px in light and dark, no network, it renders). The "
+        'frame sets class "dark" on <html> and CSS variables (--background, --foreground, --card, --muted, '
+        "--muted-foreground, --primary, --primary-foreground, --border, --accent, --destructive, --ring): use them."
     ),
 )
 def artifact_create_tool(
-    kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image"],
+    kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "html", "react"],
     title: str,
     runtime: ToolRuntime[ContextT, ThreadState],
     content: str | dict[str, Any] | None = None,
@@ -80,7 +93,9 @@ def artifact_create_tool(
         "`content` (the whole new content, same kind) or `edits`: a list of exact replacements "
         '[{"old":"text that occurs exactly once","new":"its replacement"}] for markdown, code, mermaid or svg. '
         "Refused if the artifact changed since base_version (read it again), if it is archived, or if the kind would "
-        "change. `note`: one short line on what changed."
+        "change. `note`: one short line on what changed. html takes content or edits; react takes the whole "
+        "{entry, files} content. `fix_of`: ONLY when a result asks for the one automatic fix of a code artifact "
+        "whose checks failed: the version number it fixes. Leave empty otherwise."
     ),
 )
 def artifact_update_tool(
@@ -91,11 +106,21 @@ def artifact_update_tool(
     edits: list[dict[str, str]] | None = None,
     language: str | None = None,
     note: str | None = None,
+    fix_of: int | None = None,
 ) -> tuple[str, dict | None]:
     controller = get_artifact_controller()
     if controller is None:
         return _UNAVAILABLE, None
-    return controller.update(_context(runtime, with_turn=True), artifact_id=str(id), base_version=int(base_version), content=content, edits=list(edits) if edits is not None else None, language=language, note=note)
+    return controller.update(
+        _context(runtime, with_turn=True),
+        artifact_id=str(id),
+        base_version=int(base_version),
+        content=content,
+        edits=list(edits) if edits is not None else None,
+        language=language,
+        note=note,
+        fix_of=int(fix_of) if fix_of is not None else None,
+    )
 
 
 @tool(

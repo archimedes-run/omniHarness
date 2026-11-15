@@ -498,8 +498,9 @@ test.describe("the store page", () => {
         "data-artifact",
         IDS.archived,
       );
+      // Every fixture here is saved: the "still in their chats" view is empty.
       await page.getByTestId("artifact-view-unsaved").click();
-      await expect(page.getByTestId("artifact-by-chat")).toBeVisible();
+      await expect(page.getByTestId("artifacts-unsaved-empty")).toBeVisible();
     });
   }
 

@@ -27,15 +27,12 @@ import logging
 import os
 import re
 import secrets
-import stat
-import threading
-import time
-from pathlib import Path
 from typing import Any
 
 from app.gateway.artifacts_store import blobs, caps, kinds, safe_open
+from app.gateway.artifacts_store import store as store_mod
 from app.gateway.artifacts_store.kinds import Canonical, InvalidContent, TooLarge
-from app.gateway.artifacts_store.store import Archived, ArtifactStore, InvalidRequest, QuotaExceeded, StoreError
+from app.gateway.artifacts_store.store import ArtifactStore, InvalidRequest, QuotaExceeded, StoreError
 from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
 from omniharness.runtime.artifacts.controller import MESSAGES_KEY, TOOL_CALL_KEY
 from omniharness.runtime.user_context import get_effective_user_id
@@ -152,6 +149,8 @@ class GatewayArtifactController:
             return _UNAVAILABLE, None
         owner_id, thread_id = self._who(context)
         lineage, source = turn_lineage(context)
+        if kind in kinds.CODE_KINDS:
+            return self._code_write(store, context, owner_id, thread_id, kind=kind, title=title, content=content, lineage=lineage, source=source, note=note)
         try:
             if kind not in kinds.TOOL_KINDS:
                 raise InvalidRequest(f"kind must be one of {', '.join(kinds.TOOL_KINDS)}.")
@@ -168,17 +167,25 @@ class GatewayArtifactController:
             return _refusal("Not created", exc), None
         return f"Created {kind} artifact {summary['id']} version {version['n']}. It is shown to the user as a card in this chat.", binding(summary, version)
 
-    def update(self, context: dict, *, artifact_id: str, base_version: int, content: Any, edits: list[dict] | None, language: str | None, note: str | None) -> tuple[str, dict | None]:
+    def update(self, context: dict, *, artifact_id: str, base_version: int, content: Any, edits: list[dict] | None, language: str | None, note: str | None, fix_of: int | None = None) -> tuple[str, dict | None]:
         store = self._store()
         if store is None:
             return _UNAVAILABLE, None
         owner_id, thread_id = self._who(context)
         lineage, source = turn_lineage(context, exempt_read=lambda args, result: self._own_user_read(store, owner_id, artifact_id, args, result))
+        try:
+            current = store.get(owner_id, artifact_id)
+        except StoreError as exc:
+            return _refusal("Not changed", exc), None
+        if current["kind"] in kinds.CODE_KINDS:
+            return self._code_write(store, context, owner_id, thread_id, kind=current["kind"], content=content, edits=edits, lineage=lineage, source=source, note=note, artifact_id=artifact_id, base_version=base_version, fix_of=fix_of)
+        if fix_of is not None:
+            return "Not changed: fix_of is only for html and react artifacts whose checks failed.", None
 
         def build(s, row) -> Canonical:
             if (content is None) == (edits is None):
                 raise InvalidRequest("pass either content or edits.")
-            if row.kind in ("image", "file"):
+            if row.kind in ("image", "file", "webapp"):
                 raise InvalidRequest(f"a {row.kind} artifact cannot be changed with artifact_update.")
             latest = store.latest_bytes(s, row)
             lang = language
@@ -197,6 +204,106 @@ class GatewayArtifactController:
         except (InvalidContent, TooLarge, StoreError) as exc:
             return _refusal("Not changed", exc), None
         return f"Updated artifact {summary['id']}: version {version['n']} (based on {base_version}).", binding(summary, version)
+
+    def _code_write(
+        self,
+        store: ArtifactStore,
+        context: dict,
+        owner_id: str,
+        thread_id: str | None,
+        *,
+        kind: str,
+        content: Any,
+        lineage: str,
+        source: str | None,
+        note: str | None,
+        title: str | None = None,
+        edits: list[dict] | None = None,
+        artifact_id: str | None = None,
+        base_version: int | None = None,
+        fix_of: int | None = None,
+    ) -> tuple[str, dict | None]:
+        """Create or update an html or react artifact (Slice 2): validate and
+        scan, build react in the chat's sandbox, store the version, then run
+        the system checks on the stored bytes. The result names ids, numbers,
+        states and the system's own words only (a trusted acknowledgement);
+        the page's own text (check details, build log) is read through
+        artifact_read, fenced."""
+        from app.gateway.artifacts_store import checks as checks_mod
+        from app.gateway.artifacts_store import code_service, frame
+
+        lead = "Not created" if artifact_id is None else "Not changed"
+        write = dict(lineage=lineage, lineage_source=source, origin="tool", note=note, thread_id=thread_id, turn_id=context.get("run_id"), tool_call_id=context.get(TOOL_CALL_KEY))
+        try:
+            if artifact_id is not None:
+                if (content is None) == (edits is None):
+                    raise InvalidRequest("pass either content or edits.")
+                if kind == "react" and edits is not None:
+                    raise InvalidRequest("a react artifact takes content: the whole {entry, files} object.")
+                latest = store.get(owner_id, artifact_id)
+                if latest["latest_version"] != base_version:
+                    raise store_mod.Stale(f"This artifact changed: the latest version is {latest['latest_version']}.", current_version=latest["latest_version"])
+            if kind == "html":
+                fix = {"fix_of": fix_of} if fix_of is not None else {}
+
+                def make(s=None, row=None):
+                    text = content
+                    if edits is not None:
+                        text = apply_edits(kinds.text_of("html", store.latest_bytes(s, row)), edits)
+                    canon, findings = frame.canonical_html(text)
+                    canon = Canonical(canon.data, canon.media_type, None, text)
+                    return canon, {"build_state": "ok", "findings": findings, "recipe": {"tool": "none", "kind": "html"}, **fix}
+
+                if artifact_id is None:
+                    canon, code = make()
+                    summary, version = store.create(owner_id, kind=kind, title=title or "", canon=canon, code=code, **write)
+                else:
+                    summary, version = store.add_version(owner_id, artifact_id, base_version=int(base_version), build=make, **write)
+            else:
+                data, parsed = frame.canonical_react_source(content)
+                if fix_of is not None and artifact_id is not None:
+                    # Refuse a fix the rule forbids BEFORE spending a build on it.
+                    store.check_fix(owner_id, artifact_id, int(fix_of))
+                built = code_service.build_react(owner_id, thread_id, parsed)
+                if built is None:
+                    raise InvalidRequest("react artifacts are built in this chat's sandbox, which is not available here.")
+                findings = frame.react_source_findings(parsed) + built.findings
+                code = {"source": data, "recipe": built.recipe, "build_log": built.log, "findings": findings, **({"fix_of": fix_of} if fix_of is not None else {})}
+                if built.ok:
+                    canon, code["build_state"] = built.canon, "ok"
+                else:
+                    canon, code["build_state"] = Canonical(data, "application/json", None, None), "build_failed"
+                    code["build_log"] = (built.reason + "\n" + built.log).strip()
+                if artifact_id is None:
+                    summary, version = store.create(owner_id, kind=kind, title=title or "", canon=canon, code=code, **write)
+                else:
+                    summary, version = store.add_version(owner_id, artifact_id, base_version=int(base_version), canon=canon, code=code, **write)
+        except (InvalidContent, TooLarge, StoreError) as exc:
+            return _refusal(lead, exc), None
+        n = version["n"]
+        code_info = version.get("code") or {}
+        verb = f"Created {kind} artifact {summary['id']} version {n}." if artifact_id is None else f"Updated artifact {summary['id']}: version {n} (based on {base_version})."
+        lines = [verb + " It is shown to the user as a card in this chat."]
+        state = "build_failed"
+        if code_info.get("build_state") == "build_failed":
+            shown = (summary.get("code") or {}).get("shown_version")
+            lines.append("The react build FAILED; the version is stored with its log" + (f" and version {shown} stays the one shown." if shown else "."))
+        else:
+            state, result = code_service.check_version(store, owner_id, summary["id"], n, thread_id)
+            lines += checks_mod.model_lines(result, state)
+        findings = code_info.get("findings") or []
+        if findings:
+            lines.append(f"The scan found {len(findings)} thing(s) the frame blocks (no network, no outside files).")
+        if state in ("failed", "build_failed"):
+            if fix_of is not None:
+                lines.append(f"This version was the automatic fix of version {fix_of}: do not run another automatic fix. Tell the person what still fails; they can ask for another try.")
+            else:
+                lines.append(
+                    f"Run ONE automatic fix now, without asking: read the details with artifact_read(id={summary['id']}, version={n}), then call artifact_update with fix_of={n} and base_version={n}. Only one automatic fix is allowed."
+                )
+        elif findings:
+            lines.append(f"Read the list with artifact_read(id={summary['id']}, version={n}).")
+        return "\n".join(lines), binding(summary, version)
 
     @staticmethod
     def _own_user_read(store: ArtifactStore, owner_id: str, artifact_id: str, args: dict, result) -> bool:
@@ -234,7 +341,10 @@ class GatewayArtifactController:
             return _refusal("Not read", exc), None
         kind = summary["kind"]
         attrs = f'id="{_attr(summary["id"])}" version="{n}" latest="{summary["latest_version"]}" kind="{_attr(kind)}" lineage="{_attr(meta["lineage"])}" title="{_attr(summary["title"])}"'
-        if kind in kinds.TEXT_KINDS and meta["stored"] == "blob":
+        if kind in kinds.CODE_KINDS and meta["stored"] == "blob":
+            body, extra = self._code_body(store, owner_id, summary["id"], n, kind, row)
+            attrs += extra
+        elif kind in kinds.TEXT_KINDS and meta["stored"] == "blob":
             data = store.content(owner_id, row)
             if kind == "code":
                 code = json.loads(data)
@@ -247,6 +357,42 @@ class GatewayArtifactController:
         tag = f"artifact-{secrets.token_hex(4)}"
         read = {"type": "omni_artifact_read", "artifact_id": summary["id"], "version": n}
         return f"{FENCE_LABEL}\n<{tag} {attrs}>\n{fence_text(body)}\n</{tag}>", read
+
+    @staticmethod
+    def _code_body(store: ArtifactStore, owner_id: str, artifact_id: str, n: int, kind: str, row) -> tuple[str, str]:
+        """The SOURCE of a code version (html: the document; react: each file),
+        then the build log, the scan's findings and the checks' details, all
+        inside the fence (the page's and the compiler's words are data)."""
+        _summary, _v, code, check = store.code_version(owner_id, artifact_id, n)
+        from app.gateway.artifacts_store.store import check_dict
+
+        parts: list[str] = []
+        if kind == "html":
+            parts.append(store.content(owner_id, row).decode("utf-8"))
+        elif kind == "webapp":
+            files = store.bundle_files(owner_id, artifact_id, n)
+            parts.append("files: " + ", ".join(f["path"] for f in files))
+            budget = 200_000
+            for f in files:
+                if f["path"].lower().endswith((".html", ".htm", ".css", ".js", ".mjs", ".json", ".txt", ".svg")) and f["size"] <= budget:
+                    budget -= f["size"]
+                    parts.append(f"----- file: {f['path']} -----\n{blobs.read(owner_id, f['content_hash']).decode('utf-8', 'replace')}")
+        else:
+            src = json.loads(store.source(owner_id, code) or b"{}")
+            parts.append(f"entry: {src.get('entry')}")
+            for path, text in (src.get("files") or {}).items():
+                parts.append(f"----- file: {path} -----\n{text}")
+        info = check_dict(check) if code.build_state == "ok" else None
+        tail = []
+        if code.build_state == "build_failed" and code.build_log:
+            tail.append("----- build log (tail) -----\n" + code.build_log)
+        findings = json.loads(code.findings or "[]")
+        if findings:
+            tail.append("----- scan findings (the frame blocks these) -----\n" + "\n".join(f"- {f}" for f in findings))
+        if info and (info["failures"] or info["summary"]):
+            tail.append(f"----- system checks: {info['state']} -----\n" + "\n".join(f"- {f}" for f in (info["failures"] or info["summary"])))
+        attrs = f' build_state="{_attr(code.build_state)}" checks="{_attr(info["state"] if info else "none")}"' + (f' fix_of="{code.fix_of}"' if code.fix_of else "")
+        return "\n".join(parts + tail), attrs
 
     def list(self, context: dict, *, query: str | None, kind: str | None, limit: int | None) -> str:
         store = self._store()
@@ -262,7 +408,7 @@ class GatewayArtifactController:
         return f'{FENCE_LABEL}\n<{tag} total="{total}" shown="{len(rows)}">\n' + "\n".join(lines) + f"\n</{tag}>"
 
 
-# -- the lazy importer (FR-037) ----------------------------------------------------------
+# -- "Save to artifacts" on a chat's output (owner only) --------------------------------
 
 CODE_LANGUAGES = {
     ".py": "python", ".js": "javascript", ".mjs": "javascript", ".ts": "typescript", ".tsx": "tsx", ".jsx": "jsx",
@@ -271,20 +417,15 @@ CODE_LANGUAGES = {
     ".rb": "ruby", ".php": "php", ".swift": "swift", ".sql": "sql", ".yaml": "yaml", ".yml": "yaml",
     ".toml": "toml", ".xml": "xml", ".txt": "text", ".r": "r", ".lua": "lua",
 }  # fmt: skip
-MAX_FILES_PER_THREAD = 500
-#: One pass, across every chat of the owner.
-MAX_FILES_PER_PASS = 2000
-MAX_BYTES_PER_PASS = 256 * 1024 * 1024
-_THREAD_DIR = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-_IMPORT_LOCKS: dict[str, threading.Lock] = {}
-_IMPORT_LOCKS_GUARD = threading.Lock()
-_LAST_FULL_IMPORT: dict[str, float] = {}
-FULL_IMPORT_INTERVAL = 30.0
+TEXT_FILE_MEDIA = "text/plain"
+MAX_PATH_CHARS = 400
+WEBAPP_ENTRY = "index.html"
 
 
 def detect(name: str, data: bytes) -> tuple[str, Canonical]:
     """Kind and canonical content of a file from a chat's outputs. Anything
-    that fails its kind's checks is kept as a `file` (download only)."""
+    that fails its kind's checks is kept as a `file` (UTF-8 text: shown as
+    text; anything else: download only)."""
     ext = os.path.splitext(name)[1].lower()
     media = kinds.sniff_image(data)
     if media is not None and len(data) <= caps.BINARY_VERSION_BYTES:
@@ -305,147 +446,119 @@ def detect(name: str, data: bytes) -> tuple[str, Canonical]:
                 return "code", kinds.canonical("code", text, language=CODE_LANGUAGES[ext])
         except (InvalidContent, TooLarge):
             pass
+    if text is not None and "\x00" not in text:
+        return "file", Canonical(data, TEXT_FILE_MEDIA)  # shown as text in the store
     return "file", Canonical(data, kinds.MEDIA_TYPES["file"])
 
 
-def _owner_lock(owner_id: str) -> threading.Lock:
-    with _IMPORT_LOCKS_GUARD:
-        return _IMPORT_LOCKS.setdefault(owner_id, threading.Lock())
+def _relative(path: str) -> str:
+    """The path under the chat's outputs, from a virtual or relative path."""
+    if path.startswith(OUTPUTS_PREFIX):
+        path = path[len(OUTPUTS_PREFIX) :]
+    elif path.rstrip("/") == OUTPUTS_PREFIX.rstrip("/"):
+        path = ""
+    path = path.strip("/")
+    if len(path) > MAX_PATH_CHARS:
+        raise InvalidRequest(f"path is longer than {MAX_PATH_CHARS} characters.")
+    safe_open.components(path or "x")  # refuses "..", ".", empty parts, NUL
+    return path
 
 
-def run_import(store: ArtifactStore, owner_id: str, *, thread_id: str | None = None) -> int:
-    """Index the owner's chat outputs (all chats, or one). Idempotent by
-    (thread, path, content hash); never raises. Returns artifacts made or updated."""
-    if thread_id is None:
-        last = _LAST_FULL_IMPORT.get(owner_id, 0.0)
-        if time.monotonic() - last < FULL_IMPORT_INTERVAL:
-            return 0
-    lock = _owner_lock(owner_id)
-    if not lock.acquire(blocking=False):
-        return 0
-    try:
-        if thread_id is None:
-            _LAST_FULL_IMPORT[owner_id] = time.monotonic()
-        threads_root = get_paths().user_dir(owner_id) / "threads"
-        if thread_id is not None:
-            names = [thread_id] if _THREAD_DIR.match(thread_id) else []
-        else:
-            names = sorted(p.name for p in threads_root.iterdir() if p.is_dir() and _THREAD_DIR.match(p.name)) if threads_root.is_dir() else []
-        made = 0
-        budget = _Budget()
-        for name in names:
-            try:
-                made += _import_thread(store, owner_id, name, budget)
-            except Exception:  # noqa: BLE001 — one chat failing never stops the rest
-                logger.warning("artifact importer: a chat could not be indexed", exc_info=True)
-        return made
-    finally:
-        lock.release()
-
-
-class _Budget:
-    """One pass's limits across every chat: files looked at and bytes read."""
-
-    def __init__(self) -> None:
-        self.files = MAX_FILES_PER_PASS
-        self.bytes = MAX_BYTES_PER_PASS
-
-    def take(self, size: int) -> bool:
-        if self.files <= 0 or self.bytes < size:
-            return False
-        self.files -= 1
-        self.bytes -= size
-        return True
-
-
-def _import_thread(store: ArtifactStore, owner_id: str, thread_id: str, budget: _Budget) -> int:
+def import_from_chat(store: ArtifactStore, owner_id: str, thread_id: str, path: str) -> tuple[dict, bool, list[str]]:
+    """The owner's "Save to artifacts" on one file (or a web app directory) of
+    a chat's outputs: a SAVED artifact. Every file is read through safe_open
+    (no link followed, regular files only, from its own fd, within the cap).
+    Returns (summary, created, skipped paths)."""
     outputs = get_paths().sandbox_outputs_dir(thread_id, user_id=owner_id)
-    if outputs.is_symlink() or not outputs.is_dir():
-        return 0
-    made = 0
-    seen = 0
-    # The listing only proposes names: every file is opened by safe_open,
-    # relative to directory fds and without following links.
-    for dirpath, dirnames, filenames in os.walk(outputs, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        for filename in sorted(filenames):
-            if filename.startswith("."):
-                continue
-            path = Path(dirpath) / filename
-            rel = path.relative_to(outputs).as_posix()
-            if len(rel) > 400:
-                continue
-            try:
-                info = os.lstat(path)
-            except OSError:
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                continue  # links, FIFOs, devices: never imported
-            seen += 1
-            if seen > MAX_FILES_PER_THREAD:
-                return made
-            made += _import_file(store, owner_id, thread_id, outputs, rel, info, budget)
-    return made
-
-
-def _import_file(store: ArtifactStore, owner_id: str, thread_id: str, outputs: Path, rel: str, info: os.stat_result, budget: _Budget) -> int:
-    size, mtime_ns = info.st_size, info.st_mtime_ns
-    if store.import_unchanged(owner_id, thread_id, rel, size, mtime_ns):
-        return 0  # same size and mtime as recorded: not read again
-    canon: Canonical | None = None
-    chat_ref = None
-    if size > caps.BINARY_VERSION_BYTES:
-        # Never read: recorded as living in its chat, keyed by a fingerprint
-        # of (path, size, mtime) instead of a content hash.
-        if not budget.take(0):
-            return 0
-        content_hash = blobs.sha256(f"chat:{rel}:{size}:{mtime_ns}".encode())
-        kind = "file"
-        chat_ref = (content_hash, size, rel)
-    else:
-        if not budget.take(size):
-            return 0
+    try:
+        rel = _relative(path)
+    except safe_open.Refused:
+        raise InvalidRequest("path must be a plain path under the chat's outputs.") from None
+    common = {"lineage": "import", "lineage_source": IMPORT_SOURCE, "origin": "import", "thread_id": thread_id, "imported_from": f"{thread_id}:{OUTPUTS_PREFIX}{rel}", "saved": True}
+    if rel and not safe_open.is_dir_under(outputs, rel):
+        if rel.rsplit("/", 1)[-1].startswith("."):
+            raise InvalidRequest("hidden files (such as .env) are not saved as artifacts.")
         try:
-            data = safe_open.read_under(outputs, rel, caps.BINARY_VERSION_BYTES, expect=info)
-        except safe_open.Refused:
-            return 0
+            data = safe_open.read_under(outputs, rel, caps.BINARY_VERSION_BYTES)
+        except safe_open.Refused as exc:
+            if str(exc) in ("over the cap", "grew past the cap"):
+                raise TooLarge(caps.BINARY_VERSION_BYTES + 1, caps.BINARY_VERSION_BYTES) from None
+            raise InvalidRequest("path must be a plain file under the chat's outputs.") from None
         content_hash = blobs.sha256(data)
+        existing = store.import_existing(owner_id, thread_id, rel, content_hash)
+        if existing:
+            return existing, False, []
         kind, canon = detect(rel.rsplit("/", 1)[-1], data)
-    if store.import_known(owner_id, thread_id, rel, content_hash):
-        return 0
-    target = store.import_target(owner_id, thread_id, rel)
-    if target == "deleted":
-        return 0  # the owner deleted what this path made: not made again
-    if target:
+        summary, _ = store.create(owner_id, kind=kind, title=rel.rsplit("/", 1)[-1], canon=canon, **common)
+        store.record_import(owner_id, thread_id, rel, content_hash, summary["id"])
+        return summary, True, []
+    # A directory: a coding job's static web app, ONE webapp artifact.
+    try:
+        files, skipped = safe_open.read_tree(outputs, rel, max_files=caps.WEBAPP_FILES, max_bytes=caps.WEBAPP_BYTES)
+    except safe_open.Refused as exc:
+        if str(exc) in ("too many files", "over the size cap", "too deep", "too many directories"):
+            raise TooLarge(caps.WEBAPP_BYTES + 1, caps.WEBAPP_BYTES) from None
+        raise InvalidRequest("path must be a plain directory under the chat's outputs.") from None
+    if WEBAPP_ENTRY not in files:
+        raise InvalidRequest(f"a web app directory needs an {WEBAPP_ENTRY} at its top level.")
+    bundle = {p: (data, webapp_media_type(p)) for p, data in files.items()}
+    manifest = kinds.dumps({"entry": WEBAPP_ENTRY, "files": {p: {"hash": blobs.sha256(d), "size": len(d), "media_type": m} for p, (d, m) in sorted(bundle.items())}})
+    content_hash = blobs.sha256(manifest)
+    existing = store.import_existing(owner_id, thread_id, rel or ".", content_hash)
+    if existing:
+        return existing, False, skipped
+    title = (rel.rsplit("/", 1)[-1] if rel else "web app") or "web app"
+    summary, _ = store.create(owner_id, kind="webapp", title=title, canon=Canonical(manifest, kinds.MEDIA_TYPES["webapp"]), bundle=bundle, **common)
+    store.record_import(owner_id, thread_id, rel or ".", content_hash, summary["id"])
+    return summary, True, skipped
+
+
+_WEBAPP_TYPES = {
+    ".html": "text/html", ".htm": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
+    ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2",
+    ".txt": "text/plain", ".map": "application/json", ".wasm": "application/wasm",
+}  # fmt: skip
+
+
+def webapp_media_type(path: str) -> str:
+    return _WEBAPP_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+
+
+# -- the optional sweep of unsaved artifacts (OFF by default) ------------------------
+
+SWEEP_EVERY_SECONDS = 6 * 3600
+
+
+def prune_after_days(config) -> float | None:
+    """`artifacts.prune_unsaved_after_days` from config.yaml, or None (the
+    default: nothing is ever pruned on the owner's behalf)."""
+    section = getattr(config, "artifacts", None)
+    value = section.get("prune_unsaved_after_days") if isinstance(section, dict) else getattr(section, "prune_unsaved_after_days", None)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        return None
+    return float(value)
+
+
+def sweep_once(store: ArtifactStore, days: float) -> int:
+    """Prune every owner's unsaved artifacts older than `days` (never saved,
+    pinned or archived ones). Returns how many were removed."""
+    removed = 0
+    for owner_id in store.owners():
         try:
-            summary = store.get(owner_id, target)
-            latest = store.versions(owner_id, target)[0]
-        except StoreError:
-            target = None
-        else:
-            # A changed file never lands on top of the owner's own work: an
-            # artifact the owner pinned, edited or restored, or of another
-            # kind, is left as it is and the file becomes a NEW artifact.
-            if summary["pinned"] or latest["origin"] != "import" or summary["kind"] != kind:
-                target = None
-    kwargs = {"lineage": "import", "lineage_source": IMPORT_SOURCE, "origin": "import", "thread_id": thread_id}
-    artifact_id = None
-    for attempt in ("blob", "chat"):
-        try:
-            if target:
-                s, _ = store.add_version(owner_id, target, base_version=summary["latest_version"], canon=canon, chat_ref=chat_ref, **kwargs)
-            else:
-                s, _ = store.create(owner_id, kind=kind, title=rel.rsplit("/", 1)[-1], canon=canon, chat_ref=chat_ref, imported_from=f"{thread_id}:{OUTPUTS_PREFIX}{rel}", **kwargs)
-            artifact_id = s["id"]
-            break
-        except QuotaExceeded:
-            if attempt == "chat":
-                return 0
-            canon, chat_ref = None, (content_hash, size, rel)  # over quota: it stays in its chat
-        except Archived:
-            artifact_id = target
-            break
-        except StoreError:
-            return 0
-    store.record_import(owner_id, thread_id, rel, content_hash, artifact_id, size=size, mtime_ns=mtime_ns)
-    return 1
+            removed += store.prune_unsaved(owner_id, older_than_days=days)
+        except Exception:  # noqa: BLE001 — one owner failing never stops the rest
+            logger.warning("artifact sweep: an owner's unsaved artifacts could not be pruned", exc_info=True)
+    if removed:
+        logger.info("artifact sweep: removed %d unsaved artifacts older than %s days", removed, days)
+    return removed
+
+
+async def sweep_loop(store: ArtifactStore, days: float) -> None:
+    import asyncio
+
+    from fastapi.concurrency import run_in_threadpool
+
+    while True:
+        await run_in_threadpool(sweep_once, store, days)
+        await asyncio.sleep(SWEEP_EVERY_SECONDS)

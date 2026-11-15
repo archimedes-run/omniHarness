@@ -16,8 +16,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from app.gateway.auth.config import get_auth_config
+from app.gateway.auth.derived import derived_key
 from app.gateway.authz import require_permission
+from app.gateway.fetch_metadata import cross_site_navigation, refused_navigation
 from app.gateway.path_utils import resolve_thread_virtual_path
 from omniharness.config.paths import VIRTUAL_PATH_PREFIX, get_paths
 from omniharness.runtime.user_context import get_effective_user_id
@@ -483,12 +484,12 @@ def _create_preview_token(thread_id: str, user_id: str, root_virtual_path: str) 
         "iat": now,
         "exp": now + timedelta(seconds=PREVIEW_TOKEN_TTL_SECONDS),
     }
-    return jwt.encode(payload, get_auth_config().jwt_secret, algorithm="HS256")
+    return jwt.encode(payload, derived_key(PREVIEW_TOKEN_TYPE), algorithm="HS256")
 
 
 def _decode_preview_token(token: str) -> dict[str, str]:
     try:
-        payload = jwt.decode(token, get_auth_config().jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(token, derived_key(PREVIEW_TOKEN_TYPE), algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Preview token expired")
     except jwt.PyJWTError:
@@ -684,7 +685,11 @@ async def preview_artifact(thread_id: str, artifact_path: str, request: Request)
     This route is intentionally separate from the download/view artifact route:
     it only serves files under ``/mnt/user-data/outputs`` and allows a narrow
     set of static web asset types inline with iframe-oriented security headers.
+    A navigation another site (or an opaque frame) starts is refused even with
+    the session cookie (fetch_metadata).
     """
+    if cross_site_navigation(request):
+        return refused_navigation()
     return _build_preview_response(
         thread_id,
         artifact_path,
@@ -1026,6 +1031,8 @@ async def get_artifact(thread_id: str, path: str, request: Request, download: bo
         # Add cache headers to avoid repeated ZIP extraction (cache for 5 minutes)
         cache_headers = {"Cache-Control": "private, max-age=300"}
         download_name = Path(internal_path).name or actual_skill_path.stem
+        if mime_type in ACTIVE_CONTENT_MIME_TYPES and cross_site_navigation(request):
+            return refused_navigation()
         if download or mime_type in ACTIVE_CONTENT_MIME_TYPES:
             return Response(content=content, media_type=mime_type or "application/octet-stream", headers=_build_attachment_headers(download_name, cache_headers))
 
@@ -1049,6 +1056,8 @@ async def get_artifact(thread_id: str, path: str, request: Request, download: bo
         raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
 
     mime_type, _ = mimetypes.guess_type(actual_path)
+    if mime_type in ACTIVE_CONTENT_MIME_TYPES and cross_site_navigation(request):
+        return refused_navigation()
 
     if download:
         return FileResponse(path=actual_path, filename=actual_path.name, media_type=mime_type, headers=_build_attachment_headers(actual_path.name))

@@ -8,6 +8,7 @@ import type {
   ArtifactKind,
   ArtifactSummary,
   ArtifactsApiError,
+  ListQuery,
   VersionOrigin,
 } from "./store-api";
 
@@ -18,6 +19,9 @@ const KINDS = new Set<string>([
   "mermaid",
   "chart",
   "image",
+  "html",
+  "react",
+  "webapp",
   "file",
 ]);
 const ID = /^[A-Za-z0-9_-]{22}$/;
@@ -90,50 +94,75 @@ export const KIND_WORDS: Record<ArtifactKind, string> = {
   mermaid: "Diagram",
   chart: "Chart",
   image: "Image",
-  file: "File",
   html: "Web page",
-  react: "Web app",
+  react: "React app",
   webapp: "Web app",
+  file: "File",
 };
 
 export interface DownloadForm {
-  form?: string;
+  /** downloadUrl's form: "page" is the route itself, "source" adds
+   * `?source=zip` (html and react only; api.md "Downloads of code kinds"). */
+  form: "page" | "source";
   label: string;
 }
 
-/** What Download offers for a kind: one form, or a small menu. */
-export function downloadForms(kind: ArtifactKind): DownloadForm[] {
-  if (kind === "react")
-    return [
-      { form: "built", label: "Built page (.html)" },
-      { form: "source", label: "Source (.zip)" },
-    ];
-  if (kind === "webapp")
-    return [
-      { form: "built", label: "Site (.zip)" },
-      { form: "source", label: "Source (.zip)" },
-    ];
-  return [{ label: "Download" }];
+/** What Download offers for a kind (GET …/versions/{n}/download): html and
+ * react the built page and their sources (a version that did not build has
+ * no page), webapp its file set as a .zip, every other kind one file. */
+export function downloadForms(
+  kind: ArtifactKind,
+  built = true,
+): DownloadForm[] {
+  if (kind === "html" || kind === "react") {
+    const source: DownloadForm = { form: "source", label: "Source (.zip)" };
+    return built ? [{ form: "page", label: "Page (.html)" }, source] : [source];
+  }
+  if (kind === "webapp") return [{ form: "page", label: "Files (.zip)" }];
+  return [{ form: "page", label: "Download" }];
 }
 
-/** How a `file` artifact is shown: text as text, images as images,
- * anything else as a "Download to view" card. */
-export function fileView(
-  mediaType: string | null | undefined,
-): "text" | "image" | "download" {
-  const t = (mediaType ?? "").toLowerCase().split(";")[0]!.trim();
-  if (/^image\/(png|jpeg|gif|webp)$/.test(t)) return "image";
-  if (
-    t.startsWith("text/") ||
-    t === "application/json" ||
-    t === "application/xml" ||
-    t === "application/x-yaml" ||
-    t === "application/yaml"
-  ) {
-    // An HTML or SVG file is shown as its source text, never as a page.
-    return "text";
+/** The store page's tabs (Saved is the default) and the "still in their
+ * chats" view. */
+export type StoreView =
+  | "saved"
+  | "all"
+  | "pinned"
+  | "recent"
+  | "archived"
+  | "unsaved";
+
+/** The list query of a view. `saved` is ALWAYS sent: the API's default is
+ * `all` (api.md GET /api/artifacts), so the Saved tab must ask for it. */
+export function storeViewQuery(view: StoreView): ListQuery {
+  switch (view) {
+    case "saved":
+    case "recent":
+      return { saved: true };
+    case "unsaved":
+      return { saved: false };
+    case "pinned":
+      return { saved: "all", pinned: true };
+    case "archived":
+      return { saved: "all", archived: true };
+    case "all":
+      return { saved: "all" };
   }
-  return "download";
+}
+
+/** "From a chat you deleted": the artifact stays and still opens, but its
+ * chat link would lead nowhere. */
+export function originChatOf(
+  a: Pick<ArtifactSummary, "origin_thread_id" | "origin_deleted">,
+): { threadId: string } | { deleted: true } | null {
+  if (a.origin_deleted) return { deleted: true };
+  return a.origin_thread_id ? { threadId: a.origin_thread_id } : null;
+}
+
+/** A coding job publishes `<dir>/index.html`; "Save to artifacts" saves the
+ * DIRECTORY, which the gateway stores as one webapp (api.md, POST import). */
+export function webAppDirOf(path: string): string {
+  return path.replace(/\/index\.html$/, "");
 }
 
 export const ORIGIN_WORDS: Record<VersionOrigin, string> = {
@@ -287,4 +316,34 @@ export function previewLines(text: string, lines = 6, chars = 400): string {
     .slice(0, lines)
     .map((l) => l.replace(/[\p{Cc}\p{Cf}]/gu, "").slice(0, chars))
     .join("\n");
+}
+
+/** Words for a code version's checks (FR-018): what the label says. The
+ * check runs in the chat's sandbox and is a quality signal, not a guarantee:
+ * the words report what was seen, never promise anything. */
+export function checkWords(
+  state: "pending" | "passed" | "failed" | "not_checked" | null | undefined,
+  summary: string[] = [],
+): { label: string; tone: "ok" | "warn" | "muted" } {
+  const first = safeField(summary[0] ?? "");
+  switch (state) {
+    case "passed":
+      return {
+        label:
+          "Checked: no network attempts seen; fits 360 to 1280 px in light and dark",
+        tone: "ok",
+      };
+    case "failed":
+      return {
+        label: `Layout check failed: ${first || "see the details"}`,
+        tone: "warn",
+      };
+    case "pending":
+      return { label: "Checking the layout…", tone: "muted" };
+    default:
+      return {
+        label: `Layout not checked${first ? `: ${first}` : ""}`,
+        tone: "warn",
+      };
+  }
 }

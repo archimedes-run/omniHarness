@@ -116,6 +116,13 @@ export function ArtifactFileList({
           manifest && !manifestId ? artifactManifestValue(manifest) : file;
         const downloadPath =
           manifest?.entrypoint_path ?? manifest?.manifest_path ?? file;
+        // "Save to artifacts": a file as itself; a static site as its whole
+        // directory (one web app); a live app has no static file set.
+        const savePath = manifest
+          ? manifest.preview.mode === "static"
+            ? manifest.root_path
+            : null
+          : file;
         const manifestBadge =
           manifest?.preview.mode === "dev_server" ? "Live App" : "Static Site";
         return (
@@ -161,7 +168,14 @@ export function ArtifactFileList({
                     {t.common.install}
                   </Button>
                 )}
-                <SaveToArtifacts threadId={threadId} path={downloadPath} />
+                {savePath && (
+                  <SaveToArtifacts
+                    threadId={threadId}
+                    path={savePath}
+                    compact
+                    className="max-md:size-11"
+                  />
+                )}
                 <Button variant="ghost" asChild>
                   <a
                     href={urlOfArtifact({

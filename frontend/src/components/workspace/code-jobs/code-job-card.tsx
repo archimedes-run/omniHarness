@@ -25,6 +25,7 @@ import {
   registrationState,
   registrationWords,
 } from "@/core/apps/version-cards";
+import { webAppDirOf } from "@/core/artifacts/store-logic";
 import { resolveArtifactURL } from "@/core/artifacts/utils";
 import {
   type CodeJob,
@@ -363,7 +364,11 @@ function JobView({
                   ? "Open the app (layout not checked)"
                   : "Open the app"}
             </Button>
-            <SaveToArtifacts threadId={threadId} path={published.path} />
+            {/* The published DIRECTORY: saved as one web app. */}
+            <SaveToArtifacts
+              threadId={threadId}
+              path={webAppDirOf(published.path)}
+            />
           </div>
         </div>
       ) : null}

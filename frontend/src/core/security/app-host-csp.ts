@@ -1,4 +1,4 @@
-import { contentSecurityPolicy } from "./page-csp";
+import { contentSecurityPolicy, pageFrameSrc } from "./page-csp";
 
 /** A Host header we will put in a policy: a name or IPv4/IPv6, an optional port. */
 const HOST =
@@ -12,6 +12,14 @@ const HOST =
  * host over https. A Host header that is not a plain host[:port] frames
  * nothing at all.
  */
+/** Every other page (Spec 012 S2): frame-src is the path list of
+ * page-csp.js FRAME_PATHS on this host, never bare 'self' and never blob:. */
+export function workspaceHostPolicy(host: string | null): string {
+  return contentSecurityPolicy({
+    frameSrc: host && HOST.test(host) ? pageFrameSrc(host) : "'none'",
+  });
+}
+
 export function appHostPolicy(host: string | null): string {
   const frameSrc =
     host && HOST.test(host) ? `http://${host}/api/apps/` : "'none'";

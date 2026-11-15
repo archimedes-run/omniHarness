@@ -3,7 +3,7 @@
 import { PanelRightOpenIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ArtifactKind } from "@/core/artifacts/store-api";
+import { type ArtifactKind, isCodeKind } from "@/core/artifacts/store-api";
 import { useStoreArtifact } from "@/core/artifacts/store-hooks";
 import {
   KIND_WORDS,
@@ -11,10 +11,12 @@ import {
   panelKey,
   titleText,
 } from "@/core/artifacts/store-logic";
+import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../context";
 
 import { ArtifactContent, KindIcon } from "./artifact-content";
+import { CodeCardPreview } from "./artifact-frame";
 import { SaveDownload } from "./artifact-save";
 
 /**
@@ -40,6 +42,7 @@ export function ArtifactCard({
   const v = data?.versions.find((x) => x.n === version);
   const lineage = v ? lineageWords(v.lineage, v.lineage_source) : null;
   const title = data ? titleText(data.title) : KIND_WORDS[kind];
+  const isCode = isCodeKind(data?.kind ?? kind);
 
   return (
     <article
@@ -80,7 +83,7 @@ export function ArtifactCard({
           {lineage}
         </p>
       )}
-      <div className="max-h-44 min-w-0 overflow-hidden">
+      <div className={cn("min-w-0", isCode ? "" : "max-h-44 overflow-hidden")}>
         {isLoading ? (
           <p className="text-muted-foreground text-xs" role="status">
             Loading…
@@ -89,6 +92,8 @@ export function ArtifactCard({
           <p className="text-muted-foreground text-xs" role="status">
             This artifact isn&rsquo;t available.
           </p>
+        ) : isCodeKind(data.kind) ? (
+          <CodeCardPreview artifact={data} version={version} onOpen={open} />
         ) : (
           <ArtifactContent artifact={data} version={version} compact />
         )}

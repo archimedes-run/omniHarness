@@ -2,12 +2,13 @@
 
 import {
   AppWindowIcon,
-  Globe2Icon,
   BarChart3Icon,
   Code2Icon,
   FileIcon,
   FileTextIcon,
+  GlobeIcon,
   ImageIcon,
+  LayoutTemplateIcon,
   type LucideIcon,
   NetworkIcon,
   ShapesIcon,
@@ -29,14 +30,12 @@ import type {
   CodeContent,
 } from "@/core/artifacts/store-api";
 import {
-  CODE_KINDS,
   contentUrl,
   downloadUrl,
-  shotUrl,
+  isCodeKind,
 } from "@/core/artifacts/store-api";
 import { useArtifactVersion } from "@/core/artifacts/store-hooks";
 import {
-  fileView,
   previewLines,
   previewMarkdown,
   titleText,
@@ -46,7 +45,7 @@ import { streamdownPlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
 
 import { ArtifactChart } from "./artifact-chart";
-import { LockedFrame } from "./locked-frame";
+import { StoreShot } from "./artifact-frame";
 
 /**
  * Spec 012 FR-013: static kinds rendered by the host with NO raw-HTML sink.
@@ -63,10 +62,10 @@ export const KIND_ICONS: Record<ArtifactKind, LucideIcon> = {
   mermaid: NetworkIcon,
   chart: BarChart3Icon,
   image: ImageIcon,
-  file: FileIcon,
-  html: Globe2Icon,
+  html: GlobeIcon,
   react: AppWindowIcon,
-  webapp: AppWindowIcon,
+  webapp: LayoutTemplateIcon,
+  file: FileIcon,
 };
 
 export function KindIcon({
@@ -305,7 +304,7 @@ export function ArtifactContent({
     ArtifactSummary,
     "id" | "kind" | "title" | "imported_from" | "origin_thread_id"
   > &
-    Partial<Pick<ArtifactSummary, "media_type">>;
+    Partial<Pick<ArtifactSummary, "media_type" | "code">>;
   version: number;
   compact?: boolean;
   /** False in the store grid: a diagram shows its source lines there. */
@@ -323,19 +322,10 @@ export function ArtifactContent({
   );
   const title = titleText(artifact.title);
 
-  // Programs: only ever in the locked frame; a preview is the checks'
-  // screenshot (or an icon), never a live frame per card.
-  if (code) {
-    return compact ? (
-      <CodeShot
-        artifactId={artifact.id}
-        version={version}
-        kind={artifact.kind}
-      />
-    ) : (
-      <LockedFrame artifactId={artifact.id} version={version} title={title} />
-    );
-  }
+  // Programs run ONLY in the locked frame, which the callers mount (the
+  // chat card's CodeCardPreview, the viewer's CodeKindView). Here a preview
+  // is the checks' screenshot or the kind's icon, never a frame.
+  if (code) return <StoreShot artifact={artifact} />;
   if (isLoading) {
     return (
       <p className="text-muted-foreground text-sm" role="status">
@@ -377,75 +367,33 @@ export function ArtifactContent({
     <FileView
       artifactId={artifact.id}
       version={version}
-      mediaType={artifact.media_type ?? data.media_type}
+      render={data.render}
       title={title}
       compact={compact}
     />
   );
 }
 
-function isCodeKind(kind: ArtifactKind): boolean {
-  return (CODE_KINDS as readonly string[]).includes(kind);
-}
-
-/** A code artifact's preview: the checks' screenshot, else its icon. */
-function CodeShot({
-  artifactId,
-  version,
-  kind,
-}: {
-  artifactId: string;
-  version: number;
-  kind: ArtifactKind;
-}) {
-  const { resolvedTheme } = useTheme();
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return (
-      <div
-        className="text-muted-foreground flex h-24 flex-col items-center justify-center gap-1 text-xs"
-        data-testid="artifact-code-icon"
-      >
-        <KindIcon kind={kind} className="size-8" />
-        Open to view
-      </div>
-    );
-  }
-  return (
-    <img
-      src={shotUrl(
-        artifactId,
-        version,
-        resolvedTheme === "dark" ? "dark" : "light",
-      )}
-      alt=""
-      referrerPolicy="no-referrer"
-      loading="lazy"
-      onError={() => setFailed(true)}
-      data-testid="artifact-code-shot"
-      className="mx-auto block h-auto max-h-32 max-w-full rounded-md object-contain"
-    />
-  );
-}
-
 const TEXT_CAP = 2 * 1024 * 1024;
 
-/** A `file` artifact: text as text, images as images, else a card to
- * download it. Nothing is ever rendered as a page. */
+/** A `file` artifact, by the gateway's `render` (api.md "Rendering in the
+ * store"): UTF-8 text as text, anything else a card to download it. Nothing
+ * is ever rendered as a page. */
 function FileView({
   artifactId,
   version,
-  mediaType,
+  render,
   title,
   compact,
 }: {
   artifactId: string;
   version: number;
-  mediaType: string;
+  render: ArtifactVersionDetail["render"];
   title: string;
   compact: boolean;
 }) {
-  const view = fileView(mediaType);
+  const view =
+    render === "text" ? "text" : render === "image" ? "image" : "download";
   const [text, setText] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -496,7 +444,7 @@ function FileView({
       </p>
       {!compact && (
         <a
-          href={downloadUrl(artifactId, version)}
+          href={downloadUrl(artifactId, version, "page")}
           className="text-primary text-sm underline"
           download
         >

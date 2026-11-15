@@ -17,16 +17,21 @@ export const STATIC_KINDS = [
   "chart",
   "image",
 ] as const;
-/** Programs (Slice 2) and imported web apps: shown ONLY in the locked frame. */
+/** Slice 2: programs, shown ONLY in the locked frame (artifact-frame.tsx). */
 export const CODE_KINDS = ["html", "react", "webapp"] as const;
 export type CodeKind = (typeof CODE_KINDS)[number];
 export type ArtifactKind = (typeof STATIC_KINDS)[number] | CodeKind | "file";
 
-/** Kinds with an owner editor in S1 (api.md, POST /versions). */
+export function isCodeKind(kind: ArtifactKind): kind is CodeKind {
+  return kind === "html" || kind === "react" || kind === "webapp";
+}
+
+/** Kinds with an owner editor (api.md, POST /versions); react is rebuilt. */
 export const EDITABLE_KINDS: readonly ArtifactKind[] = [
   "markdown",
   "code",
   "mermaid",
+  "html",
 ];
 
 /** Kinds whose version detail carries `content` inline. */
@@ -64,18 +69,72 @@ export interface ArtifactSummary {
   size: number;
   created_at: string;
   updated_at: string;
-  /** Saved to the store by the owner. Absent on a gateway without the
-   * save routes: the Save and Download controls then stay hidden. */
-  saved?: boolean;
-  /** Code kinds (Slice 2). */
-  code?: {
-    build_state?: string | null;
-    check_state?: string | null;
-    shown_version?: number | null;
+  /** Saved by the owner (the Saved tab lists only these). */
+  saved: boolean;
+  saved_at: string | null;
+  /** Its chat was deleted; the artifact is kept and still opens. */
+  origin_deleted: boolean;
+  /** Code kinds only (api.md "Code kinds"). */
+  code?: CodeSummary;
+}
+
+export type CheckState = "pending" | "passed" | "failed" | "not_checked";
+
+export interface CodeSummary {
+  build_state: "ok" | "build_failed" | null;
+  check_state: CheckState | null;
+  /** The newest version that built: what a card shows. */
+  shown_version: number | null;
+  build: {
+    state: "running" | "done" | "failed" | "interrupted";
+    base_version: number;
+    reason: string | null;
+    result_version: number | null;
+    started_at: string;
   } | null;
 }
 
+export interface CheckInfo {
+  state: CheckState;
+  /** The system's words. */
+  summary: string[];
+  /** May carry the page's own names: text only. */
+  failures: string[];
+  warnings: string[];
+  widths?: number[];
+  themes?: string[];
+  shots: { light: boolean; dark: boolean };
+  checked_at: string | null;
+}
+
+export interface CodeVersionInfo {
+  build_state: "ok" | "build_failed";
+  has_source: boolean;
+  findings: string[];
+  fix_of: number | null;
+  recipe: Record<string, unknown> | null;
+  check: CheckInfo | null;
+}
+
+export interface ReactSource {
+  entry: string;
+  files: Record<string, string>;
+}
+
+/** How the store shows a version (api.md "Rendering in the store"). */
+export type RenderTarget =
+  | "markdown"
+  | "code"
+  | "image"
+  | "mermaid"
+  | "chart"
+  | "text"
+  | "download"
+  | "frame";
+
 export interface ArtifactVersion {
+  /** Set by the gateway on every version it describes. */
+  render?: RenderTarget | null;
   n: number;
   content_hash: string;
   size: number;
@@ -91,6 +150,7 @@ export interface ArtifactVersion {
   tool_call_id: string | null;
   stored: "blob" | "chat";
   created_at: string;
+  code?: CodeVersionInfo | null;
 }
 
 export type CodeContent = { language: string; text: string };
@@ -99,6 +159,15 @@ export interface ArtifactVersionDetail extends ArtifactVersion {
   /** markdown, mermaid: string; code: {language, text}; chart: the spec
    * object; svg, image, file: null (load through the content route). */
   content: unknown;
+  /** webapp: its entry page and file list. */
+  /** webapp (the save model): its entry, files, and pages prepared at save. */
+  entry?: string;
+  files?: { path: string; size: number; media_type: string }[];
+  pages?: { path: string; ok: boolean; reason: string | null }[];
+  /** react: the {entry, files} source. */
+  source?: ReactSource | null;
+  /** A failed build's log tail (the compiler's words: text only). */
+  build_log?: string | null;
 }
 
 export interface ArtifactDetail extends ArtifactSummary {
@@ -293,9 +362,10 @@ export async function deleteArtifact(
   );
 }
 
-// -- Saving, downloading and importing (the store holds only what the
-// owner saves; nothing lands in it by itself) -------------------------------
+// -- Saving and saving a chat's output (the store holds only what the
+// owner saves; nothing lands in it by itself; api.md "Saved and unsaved") ---
 
+/** Save or unsave (unsave also unpins). Idempotent. */
 export async function setSaved(
   id: string,
   saved: boolean,
@@ -305,27 +375,29 @@ export async function setSaved(
   );
 }
 
-/** The download route of one version (an attachment); `form` picks one of
- * the kind's download forms (react: "built" or "source"). */
-export function downloadUrl(id: string, n: number, form?: string): string {
-  const url = `${base()}/${enc(id)}/versions/${enc(String(n))}/download`;
-  return form ? `${url}?form=${enc(form)}` : url;
+export interface ImportResult {
+  artifact: ArtifactSummary;
+  /** False when the same path with the same content was saved before. */
+  created: boolean;
+  /** Entries of a web app directory that were left out (at most 200). */
+  skipped: string[];
 }
 
-/** A file a chat produced (or a coding job's published site) saved into
- * the store: the gateway reads it from the chat's outputs by path. */
+/** "Save to artifacts" on a chat's output file or web app directory: a
+ * SAVED artifact read by the gateway from the chat's outputs by path. */
 export async function importChatFile(
   threadId: string,
   path: string,
-): Promise<ArtifactSummary> {
-  const body = await readResponse<
-    { artifact?: ArtifactSummary } & Partial<ArtifactSummary>
-  >(await send(`${base()}/import`, "POST", { thread_id: threadId, path }));
-  return (body.artifact ?? body) as ArtifactSummary;
+): Promise<ImportResult> {
+  return readResponse(
+    await send(`${base()}/import`, "POST", { thread_id: threadId, path }),
+  );
 }
 
-/** The locked frame's one-view URL (Slice 2). */
-export async function frameToken(
+// -- Slice 2: the locked frame and code kinds -------------------------------------
+
+/** A short-lived token for ONE view of one version's frame. */
+export async function getFrameToken(
   id: string,
   n: number,
 ): Promise<{ token: string; expires_in: number; url: string }> {
@@ -334,7 +406,40 @@ export async function frameToken(
   );
 }
 
-/** The checks' screenshot of a code version, for previews (404 if none). */
+/** A code version to keep (always an attachment): the built page (.html,
+ * with a network-blocking CSP meta tag) or its sources (.zip). */
+export function downloadUrl(id: string, n: number, form: "page" | "source") {
+  const url = `${base()}/${enc(id)}/versions/${enc(String(n))}/download`;
+  return form === "source" ? `${url}?source=zip` : url;
+}
+
+/** The checks' own screenshot (1280 px) for previews: shown as <img> only. */
 export function shotUrl(id: string, n: number, theme: "light" | "dark") {
   return `${base()}/${enc(id)}/versions/${enc(String(n))}/shots/${theme}.png`;
+}
+
+export async function rebuildArtifact(
+  id: string,
+  body: { base_version: number; content: ReactSource },
+): Promise<{ build: CodeSummary["build"] }> {
+  return readResponse(await send(`${base()}/${enc(id)}/rebuild`, "POST", body));
+}
+
+export async function checkAgain(
+  id: string,
+  n: number,
+): Promise<{ state: CheckState }> {
+  return readResponse(
+    await send(`${base()}/${enc(id)}/versions/${enc(String(n))}/check`, "POST"),
+  );
+}
+
+/** A frame message the host dropped (codes only; api.md POST /refused). */
+export function reportFrameRefusal(
+  id: string,
+  refusal: { reason: string; type?: string },
+): void {
+  void send(`${base()}/${enc(id)}/refused`, "POST", refusal).catch(
+    () => undefined,
+  );
 }

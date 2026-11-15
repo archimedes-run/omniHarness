@@ -33,6 +33,7 @@ import { atText } from "@/core/apps/wording";
 import {
   ArtifactsApiError,
   EDITABLE_KINDS,
+  isCodeKind,
   type ArtifactDetail,
   type ArtifactVersion,
 } from "@/core/artifacts/store-api";
@@ -52,6 +53,7 @@ import {
 import { safeField } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
+import { CodeKindView } from "./artifact-code-kind";
 import { ArtifactContent, codeOf, KindIcon } from "./artifact-content";
 import { SaveDownload } from "./artifact-save";
 
@@ -152,6 +154,12 @@ export function ArtifactPanel({
               if (n) onVersionChange(n);
             }}
             onReload={async () => (await refetch()).data?.latest_version}
+          />
+        ) : isCodeKind(data.kind) ? (
+          <CodeKindView
+            artifact={data}
+            version={shown}
+            onVersionChange={onVersionChange}
           />
         ) : (
           <ArtifactContent artifact={data} version={shown} />
@@ -291,7 +299,20 @@ function PanelHeader({
           <span data-testid="artifact-note">{note}</span>
         </p>
       )}
-      <SaveDownload artifact={artifact} version={shown} />
+      {artifact.origin_deleted && (
+        <p
+          className="text-muted-foreground text-xs"
+          data-testid="artifact-origin-deleted"
+        >
+          From a chat you deleted
+        </p>
+      )}
+      {/* Code kinds: the viewer below has its own downloads. */}
+      <SaveDownload
+        artifact={artifact}
+        version={shown}
+        download={!isCodeKind(artifact.kind)}
+      />
       <div className="flex flex-wrap gap-1.5">
         <Button
           type="button"
@@ -396,7 +417,7 @@ function PanelHeader({
             Delete permanently
           </Button>
         )}
-        {artifact.origin_thread_id && (
+        {artifact.origin_thread_id && !artifact.origin_deleted && (
           <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
             <Link
               href={`/workspace/chats/${encodeURIComponent(artifact.origin_thread_id)}`}

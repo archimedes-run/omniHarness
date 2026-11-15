@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type ArtifactDetail,
   archiveArtifact,
+  checkAgain,
+  type ReactSource,
+  rebuildArtifact,
   deleteArtifact,
   duplicateArtifact,
   getArtifact,
@@ -12,10 +16,8 @@ import {
   restoreVersion,
   saveVersion,
   type ListQuery,
-  ArtifactsApiError,
   importChatFile,
   setSaved,
-  type ArtifactDetail,
   type ArtifactSummary,
 } from "./store-api";
 import { retryUnless4xx } from "./store-logic";
@@ -40,7 +42,32 @@ export function useStoreArtifact(id: string | null) {
     retry: retryUnless4xx,
     staleTime: 10_000,
     refetchOnWindowFocus: false,
+    // Slice 2: while a code version's checks or a Rebuild run, poll (bounded
+    // by the gateway's own liveness: a stale run reads not checked / interrupted).
+    refetchInterval: (query) => (codeBusy(query.state.data) ? 2500 : false),
   });
+}
+
+/** A check pending or a build running on this artifact. */
+export function codeBusy(data: ArtifactDetail | undefined): boolean {
+  if (!data?.code) return false;
+  if (data.code.build?.state === "running") return true;
+  return data.versions.some((v) => v.code?.check?.state === "pending");
+}
+
+export function useCodeActions(id: string) {
+  const invalidate = useInvalidate();
+  return {
+    rebuild: useMutation({
+      mutationFn: (body: { base_version: number; content: ReactSource }) =>
+        rebuildArtifact(id, body),
+      onSettled: invalidate,
+    }),
+    checkAgain: useMutation({
+      mutationFn: (n: number) => checkAgain(id, n),
+      onSettled: invalidate,
+    }),
+  };
 }
 
 /** A version never changes: read once. */
@@ -113,29 +140,7 @@ export function useArtifactActions(id: string) {
   };
 }
 
-// -- Save, unsave, import (owner clicks only) --------------------------------
-
-const SAVE_UNAVAILABLE = [...ARTIFACTS_KEY, "save-unavailable"] as const;
-
-/** True once a save route answered 404: the gateway has no save routes,
- * so the Save and Download controls hide (one request, no retries). */
-export function useSaveUnavailable(): boolean {
-  const { data } = useQuery({
-    queryKey: SAVE_UNAVAILABLE,
-    queryFn: () => false,
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
-  return data === true;
-}
-
-function isMissingRoute(err: unknown): boolean {
-  return (
-    err instanceof ArtifactsApiError &&
-    err.status === 404 &&
-    err.code !== "artifact_not_found"
-  );
-}
+// -- Save, unsave, "Save to artifacts" (owner clicks only) ------------------
 
 /** Save or unsave, optimistically: the detail and every list update at
  * once and roll back if the gateway refuses. */
@@ -151,15 +156,15 @@ export function useSaveArtifact(id: string) {
       if (before) client.setQueryData(detailKey, { ...before, saved });
       return { before };
     },
-    onError: (err, _saved, ctx) => {
+    onError: (_err, _saved, ctx) => {
       if (ctx?.before) client.setQueryData(detailKey, ctx.before);
-      if (isMissingRoute(err)) client.setQueryData(SAVE_UNAVAILABLE, true);
     },
     onSuccess: (summary) => {
       const before = client.getQueryData<ArtifactDetail>(detailKey);
       if (before) client.setQueryData(detailKey, { ...before, ...summary });
       // Lists change in place (an item saved from "still in their chats"
-      // stays, marked Saved) and refetch on the next visit.
+      // stays, marked Saved; Unsave also unpins) and refetch on the next
+      // visit.
       const isList = (q: { queryKey: readonly unknown[] }) =>
         q.queryKey[0] === ARTIFACTS_KEY[0] && q.queryKey[1] === "list";
       client.setQueriesData<{ artifacts: ArtifactSummary[] }>(
@@ -168,7 +173,7 @@ export function useSaveArtifact(id: string) {
           old && {
             ...old,
             artifacts: old.artifacts.map((a) =>
-              a.id === id ? { ...a, saved: summary.saved } : a,
+              a.id === id ? { ...a, ...summary } : a,
             ),
           },
       );
@@ -177,15 +182,13 @@ export function useSaveArtifact(id: string) {
   });
 }
 
-/** Save a chat file (or a coding job's published site) into the store. */
+/** "Save to artifacts" on a chat's output file, or on a coding job's
+ * published directory (one webapp). */
 export function useImportChatFile(threadId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => importChatFile(threadId, path),
     retry: false,
-    onError: (err) => {
-      if (isMissingRoute(err)) client.setQueryData(SAVE_UNAVAILABLE, true);
-    },
     onSettled: () =>
       client.invalidateQueries({
         predicate: (q) =>

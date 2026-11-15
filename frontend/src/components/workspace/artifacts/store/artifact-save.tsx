@@ -15,38 +15,46 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { downloadUrl, type ArtifactSummary } from "@/core/artifacts/store-api";
-import {
-  useSaveArtifact,
-  useSaveUnavailable,
-} from "@/core/artifacts/store-hooks";
+import { useSaveArtifact } from "@/core/artifacts/store-hooks";
 import { downloadForms, refusalWords } from "@/core/artifacts/store-logic";
 
 /**
  * Spec 012 (owner's correction): nothing lands in the store by itself. Each
  * artifact offers **Save** (then "Saved ✓", with Unsave in its menu) and
- * **Download** (one form, or a small menu of forms). Owner clicks only.
- * Hidden when the gateway has no save routes (no `saved` field, or a save
- * route answered 404).
+ * **Download** (one form, or a small menu of forms) through the gateway's
+ * download route (api.md GET …/download). Owner clicks only. An archived
+ * artifact may be saved too.
  */
 export function SaveDownload({
   artifact,
   version,
   size = "sm",
+  download = true,
 }: {
-  artifact: Pick<ArtifactSummary, "id" | "kind" | "saved" | "archived">;
+  artifact: Pick<
+    ArtifactSummary,
+    "id" | "kind" | "saved" | "code" | "latest_version"
+  >;
   version: number;
   size?: "sm" | "xs";
+  /** False where the view has its own downloads (the code-kind viewer). */
+  download?: boolean;
 }) {
-  const unavailable = useSaveUnavailable();
   const save = useSaveArtifact(artifact.id);
-  if (unavailable || typeof artifact.saved !== "boolean") return null;
   // Optimistic: the pressed state shows at once; a refusal rolls it back.
   const saved = save.isPending
     ? save.variables
     : save.isSuccess
-      ? (save.data.saved ?? save.variables)
+      ? save.data.saved
       : artifact.saved;
-  const forms = downloadForms(artifact.kind);
+  // A code version that did not build has no page to download. The summary
+  // speaks for the latest version only; for an older one the gateway's 409
+  // build_failed still answers.
+  const built = !(
+    artifact.code?.build_state === "build_failed" &&
+    version === artifact.latest_version
+  );
+  const forms = download ? downloadForms(artifact.kind, built) : [];
   const cls =
     size === "xs" ? "h-7 px-2 text-xs max-md:min-h-11" : "max-md:min-h-11";
   return (
@@ -62,7 +70,7 @@ export function SaveDownload({
               size="sm"
               variant="secondary"
               className={cls}
-              data-testid="artifact-saved"
+              data-testid="artifact-store-saved"
               aria-label="Saved. More options"
             >
               <CheckIcon />
@@ -73,7 +81,7 @@ export function SaveDownload({
           <DropdownMenuContent align="start">
             <DropdownMenuItem
               onSelect={() => save.mutate(false)}
-              data-testid="artifact-unsave"
+              data-testid="artifact-store-unsave"
             >
               Unsave
             </DropdownMenuItem>
@@ -85,20 +93,20 @@ export function SaveDownload({
           size="sm"
           variant="outline"
           className={cls}
-          disabled={save.isPending || artifact.archived}
+          disabled={save.isPending}
           onClick={() => save.mutate(true)}
-          data-testid="artifact-save"
+          data-testid="artifact-store-save"
         >
           <BookmarkIcon />
           Save
         </Button>
       )}
-      {forms.length === 1 ? (
+      {forms.length === 0 ? null : forms.length === 1 ? (
         <Button asChild size="sm" variant="ghost" className={cls}>
           <a
             href={downloadUrl(artifact.id, version, forms[0]!.form)}
             download
-            data-testid="artifact-download"
+            data-testid="artifact-store-download"
           >
             <DownloadIcon />
             Download
@@ -112,7 +120,7 @@ export function SaveDownload({
               size="sm"
               variant="ghost"
               className={cls}
-              data-testid="artifact-download-menu"
+              data-testid="artifact-store-download-menu"
             >
               <DownloadIcon />
               Download
@@ -125,7 +133,7 @@ export function SaveDownload({
                 <a
                   href={downloadUrl(artifact.id, version, f.form)}
                   download
-                  data-testid="artifact-download-form"
+                  data-testid="artifact-store-download-form"
                   data-form={f.form}
                 >
                   {f.label}

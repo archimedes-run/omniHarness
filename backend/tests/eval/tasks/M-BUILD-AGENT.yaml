@@ -30,11 +30,5 @@ mock:
         - description
   - expect:
       tool: builder_draft
-      contains: recorded in this chat
-    tool_calls:
-    - name: builder_save
-      args: {}
-  - expect:
-      tool: builder_save
-      contains: confirm
-    content: Here is Inbox triage on a card. Save it with the button, or reply yes.
+      contains: save card is now shown
+    content: I drafted Inbox triage. Review the card below and press Save, or tell me what to change.
