@@ -273,7 +273,11 @@ async def _resume(runtime: Any, context: dict, resume: dict) -> str:
             return f"{agent} cannot continue: {exc}."
         raw = context.get("selected_sources")
         selected = sorted(raw) if isinstance(raw, (list, set, tuple)) else surface.get("selected_sources")
-        tools = subagent_base_tools(
+        from omniharness.utils.off_loop import call_off_loop
+
+        # Off the event loop: assembly can start a process per connector toolkit.
+        tools = await call_off_loop(
+            subagent_base_tools,
             model_name=surface.get("model_name"),
             tool_groups=surface.get("tool_groups"),
             app_config=app_config,
@@ -371,7 +375,10 @@ async def call_agent_tool(runtime: ToolRuntime, agent: str, prompt: str) -> str:
     raw = context.get("selected_sources")
     selected = sorted(raw) if isinstance(raw, (list, set, tuple)) else None
     # Its tools: the chat's selection, within the agent's own tool groups.
-    tools = subagent_base_tools(model_name=model_name, tool_groups=tool_groups, app_config=app_config, selected_sources=selected, user_id=user_id, tool_access=tool_access)
+    from omniharness.utils.off_loop import call_off_loop
+
+    # Off the event loop: assembly can start a process per connector toolkit.
+    tools = await call_off_loop(subagent_base_tools, model_name=model_name, tool_groups=tool_groups, app_config=app_config, selected_sources=selected, user_id=user_id, tool_access=tool_access)
     state = getattr(runtime, "state", None) or {}
     executor = SubagentExecutor(
         config=config,

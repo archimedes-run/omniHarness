@@ -10,6 +10,8 @@ no store and no file, only the process's in-memory tool cache.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 
 from app.gateway.authz import require_permission
@@ -24,6 +26,7 @@ router = APIRouter(prefix="/api", tags=["tool-sources"])
 async def retry_tool_sources(request: Request) -> ToolSourcesView:
     from omniharness.mcp import cache
 
-    cache.reset_mcp_tools_cache()
+    # Off the event loop: the reset waits for a load in progress.
+    await asyncio.to_thread(cache.reset_mcp_tools_cache)
     await cache.initialize_mcp_tools()
     return await describe_for_request(request, None)

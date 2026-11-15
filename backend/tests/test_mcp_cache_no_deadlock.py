@@ -80,3 +80,49 @@ def test_concurrent_async_and_threaded_lookups_load_the_servers_once(slow_mcp) -
     results = _run_with_deadline(many(), 10)
     assert all(r == ["tool-a", "tool-b"] for r in results)
     assert len(slow_mcp) == 1
+
+
+def test_a_reader_never_sees_an_empty_list_while_another_thread_resets_a_stale_cache(monkeypatch) -> None:
+    """Assemblies now run in several threads at once. With the stale check and
+    the reset outside the lock, a reader that saw the cache initialised could
+    read it just after another thread reset it, and got no MCP tools."""
+    import sys
+
+    async def get_mcp_tools():
+        await asyncio.sleep(0.001)
+        return ["tool-a"]
+
+    import omniharness.mcp.tools as mcp_tools
+
+    mtime = {"value": 1.0}
+    monkeypatch.setattr(mcp_tools, "get_mcp_tools", get_mcp_tools)
+    monkeypatch.setattr(cache, "_get_config_mtime", lambda: mtime["value"])
+    cache.reset_mcp_tools_cache()
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    empty: list[int] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            if cache.get_cached_mcp_tools() == []:
+                empty.append(1)
+
+    def touch() -> None:
+        while not stop.is_set():
+            mtime["value"] += 1.0  # the config changed: the cache is stale
+            time.sleep(0.002)
+
+    try:
+        cache.get_cached_mcp_tools()
+        threads = [threading.Thread(target=reader) for _ in range(6)] + [threading.Thread(target=touch)]
+        for t in threads:
+            t.start()
+        time.sleep(1.5)
+        stop.set()
+        for t in threads:
+            t.join(10)
+    finally:
+        sys.setswitchinterval(previous)
+        cache.reset_mcp_tools_cache()
+    assert not empty, f"{len(empty)} reads returned no MCP tools during a reload"

@@ -99,7 +99,11 @@ export interface PickerProps {
   statusError?: unknown;
   connectorsAvailable: boolean;
   overCap: boolean;
-  count: { count: number; cap: number } | null;
+  count: {
+    count: number;
+    cap: number;
+    not_loaded?: { name: string; reason: string }[];
+  } | null;
   onToggleIntegration: (id: string, on: boolean) => void;
   // Skills
   skills: { name: string; description: string }[];
@@ -570,6 +574,15 @@ const CONNECT_TONE = {
 const LINK_BUTTON =
   "text-primary inline-flex min-h-11 min-w-14 items-center justify-end text-[13px] underline underline-offset-2 disabled:opacity-60 focus-visible:ring-ring rounded-sm outline-none focus-visible:ring-2";
 
+/** Connected toolkits that did not load this time, in words. */
+function notLoadedLine(items: { name: string; reason: string }[]) {
+  const names = items.map((i) => i.name).join(", ");
+  const why = items.every((i) => i.reason === "timed_out")
+    ? "did not answer in time"
+    : "could not be loaded";
+  return `Not loaded this time: ${names} (${why}). ${items.length > 1 ? "Their" : "Its"} tools are not counted, and a reply now would not have them.`;
+}
+
 function IntegrationsTab({
   integrations,
   integrationsLoading,
@@ -601,6 +614,15 @@ function IntegrationsTab({
           {overCap && ": at the limit. Turn one off before turning another on."}
         </p>
       )}
+      {count?.not_loaded?.length ? (
+        <p
+          className="text-warning px-4 pb-1 text-xs"
+          role="status"
+          data-testid="tools-not-loaded"
+        >
+          {notLoadedLine(count.not_loaded)}
+        </p>
+      ) : null}
       {statusError ? (
         <p className="text-warning px-4 pb-1 text-xs" role="status">
           Live status could not be read, so each status is unknown.

@@ -157,6 +157,10 @@ async def run_agent(
     runtime_ctx: dict[str, Any] = {}
 
     journal = None
+    #: Whether the graph has been handed the input. Until then nothing has
+    #: recorded the person's message: a run stopped while its agent is still
+    #: being built journals it itself (_journal_unsent_input).
+    graph_started = False
 
     #: The journal write _end started, when it outlived its bound: the
     #: finally block never starts a second write beside it.
@@ -280,10 +284,17 @@ async def run_agent(
             config.setdefault("callbacks", []).append(journal)
 
         runnable_config = RunnableConfig(**config)
+        # Off the event loop: building the agent assembles its tools, and a
+        # connector toolkit starts a process and lists its tools over it. On
+        # the loop, every request the gateway serves waited for that. Not
+        # shielded: a stop or restart meanwhile ends the run at once, and the
+        # build's result is dropped.
+        from omniharness.utils.off_loop import call_off_loop
+
         if ctx.app_config is not None and _agent_factory_supports_app_config(agent_factory):
-            agent = agent_factory(config=runnable_config, app_config=ctx.app_config)
+            agent = await call_off_loop(agent_factory, config=runnable_config, app_config=ctx.app_config)
         else:
-            agent = agent_factory(config=runnable_config)
+            agent = await call_off_loop(agent_factory, config=runnable_config)
 
         # 4. Attach checkpointer and store
         if checkpointer is not None:
@@ -324,6 +335,7 @@ async def run_agent(
         logger.info("Run %s: streaming with modes %s (requested: %s)", run_id, lg_modes, requested_modes)
 
         # 7. Stream using graph.astream
+        graph_started = True
         if len(lg_modes) == 1 and not stream_subgraphs:
             # Single mode, no subgraphs: astream yields raw chunks
             single_mode = lg_modes[0]
@@ -376,6 +388,8 @@ async def run_agent(
 
     except asyncio.CancelledError:
         action = record.abort_action
+        if not graph_started and action != "rollback":
+            _journal_unsent_input(journal, graph_input, run_id)
         if action == "rollback":
             await _end(RunStatus.error, error="Rolled back by user")
             try:
@@ -601,6 +615,33 @@ def _lg_mode_to_sse_event(mode: str) -> str:
     """
     # All LG modes map 1:1 to SSE event names — "messages" stays "messages"
     return mode
+
+
+def _journal_unsent_input(journal: Any, graph_input: dict, run_id: str) -> None:
+    """Journal the person's message of a run stopped before its graph started.
+
+    The journal records the message at the first model call, and the graph
+    saves it at its first step; a run stopped while its agent was being built
+    reached neither, so its message was in no history and the restart notice
+    could not offer it again (or found the previous turn's). Recorded as the
+    first model call would have, with an id of its own.
+    """
+    if journal is None:
+        return
+    try:
+        message = _extract_human_message(graph_input)
+        if message is None:
+            return
+        if not message.id:
+            import uuid
+
+            # The same object the run's record holds as its input: the
+            # restart notice reads it there (run_recovery._row_human).
+            message.id = str(uuid.uuid4())
+        content = message.model_dump()
+        journal.record_human_input(content, message.text)
+    except Exception:  # noqa: BLE001 - the run still ends; the notice is the fallback
+        logger.warning("Run %s: could not journal the message of a run stopped before it started", run_id, exc_info=True)
 
 
 def _extract_human_message(graph_input: dict) -> HumanMessage | None:

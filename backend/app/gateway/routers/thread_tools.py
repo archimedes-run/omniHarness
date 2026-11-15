@@ -14,6 +14,7 @@ the caller's connected toolkits (app.gateway.tool_selection.thread_sources).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -67,10 +68,19 @@ class SelectionUpdateRequest(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class NotLoaded(BaseModel):
+    toolkit: str
+    name: str
+    reason: str = Field(description='"timed_out": it did not answer in time; "failed": it answered with an error')
+
+
 class CountResponse(BaseModel):
     count: int
     cap: int
     over_cap: bool
+    #: Connected toolkits that did not load this time (their tools are not
+    #: counted, and a run started now would not have them either).
+    not_loaded: list[NotLoaded] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +211,7 @@ async def get_thread_tools_count(thread_id: str, request: Request) -> CountRespo
     from app.gateway.tool_selection import thread_sources
     from omniharness.config import get_app_config
     from omniharness.tools.tools import ToolCapExceededError, get_available_tools, offered_tool_count, resolve_model_tool_cap
+    from omniharness.utils.off_loop import call_off_loop
 
     user_id = _get_user_id(request)
     get_thread_tool_selection_repo(request)
@@ -214,10 +225,32 @@ async def get_thread_tools_count(thread_id: str, request: Request) -> CountRespo
     # the cap are deferred to tool_search (tools.fit_connectors_to_cap), so the
     # count is what the model receives. Over the cap only when the tools that
     # cannot be deferred exceed it — the UI shows "N / cap" and blocks
-    # enabling more.
-    try:
-        tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap, artifact_tools=True)
-        count = offered_tool_count(tools)
-    except ToolCapExceededError as exc:
-        count = exc.count
-    return CountResponse(count=count, cap=cap, over_cap=count > cap)
+    # enabling more. Off the event loop: connector toolkits start a process
+    # each, and the whole gateway waited while they listed their tools.
+    async def count_now() -> CountResponse:
+        from omniharness.tools.connector_tools import collect_not_loaded, toolkit_name
+
+        with collect_not_loaded() as skipped:
+            try:
+                tools = await call_off_loop(get_available_tools, selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap, artifact_tools=True)
+                count = offered_tool_count(tools)
+            except ToolCapExceededError as exc:
+                count = exc.count
+        not_loaded = [NotLoaded(toolkit=tk, name=toolkit_name(tk), reason=reason) for tk, reason in skipped]
+        return CountResponse(count=count, cap=cap, over_cap=count > cap, not_loaded=not_loaded)
+
+    # One assembly per (user, selection) at a time: page opens that ask while
+    # one is loading share its answer instead of each starting every
+    # toolkit's process. Nothing is kept once it is answered.
+    key = (id(asyncio.get_running_loop()), user_id, tuple(sorted(sources)), cap)
+    task = _COUNTS_IN_FLIGHT.get(key)
+    if task is None or task.done():
+        task = asyncio.ensure_future(count_now())
+        _COUNTS_IN_FLIGHT[key] = task
+        task.add_done_callback(lambda done, key=key: _COUNTS_IN_FLIGHT.pop(key, None) if _COUNTS_IN_FLIGHT.get(key) is done else None)
+    # Shielded: one asker leaving does not cancel the others' answer.
+    return await asyncio.shield(task)
+
+
+#: (loop, user, sorted sources, cap) -> the count being assembled for it.
+_COUNTS_IN_FLIGHT: dict[tuple, asyncio.Future] = {}
