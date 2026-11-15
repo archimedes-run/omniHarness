@@ -718,7 +718,9 @@ test.describe("rename, save, pin", () => {
       waitUntil: "networkidle",
     });
     await page.getByTestId("artifact-store-save").click();
-    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(
+      page.getByTestId("artifact-header").getByRole("alert"),
+    ).toBeVisible();
     await expect(page.getByTestId("artifact-store-save")).toBeVisible();
   });
 
