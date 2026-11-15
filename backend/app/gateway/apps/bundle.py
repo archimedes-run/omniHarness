@@ -27,6 +27,9 @@ import re
 from pathlib import Path
 
 BUNDLE_MAX_BYTES = 2 * 1024 * 1024
+#: Local references (script src, stylesheet href, URL attributes, CSS url())
+#: one bundle may inline. Each counts against BUNDLE_MAX_BYTES as it is met.
+MAX_LOCAL_REFS = 256
 ENTRY = "index.html"
 #: The gateway's copy of the generated platform shim, byte-identical to
 #: frontend/src/core/apps/shim/omni-shim.js (tests/omni_apps/test_bundle.py
@@ -84,22 +87,67 @@ def csp(script_hashes: list[str]) -> str:
     return CSP_TEMPLATE.format(scripts=scripts)
 
 
-def _resolve(files: dict[str, bytes], ref: str, base: str = "") -> bytes:
+def _resolve(files: dict[str, bytes], ref: str, base: str = "") -> tuple[str, bytes]:
     ref = ref.split("#", 1)[0].split("?", 1)[0]
     path = posixpath.normpath(posixpath.join(posixpath.dirname(base), ref.lstrip("/"))) if not ref.startswith("/") else posixpath.normpath(ref.lstrip("/"))
     if path.startswith("..") or path not in files:
         raise BundleError("missing_file", f"the bundle has no file {ref!r}")
-    return files[path]
+    return path, files[path]
+
+
+class _Out:
+    """The inlined document as it is built: a running size checked BEFORE
+    each piece is made (so a bundle that would grow past BUNDLE_MAX_BYTES is
+    refused at once), each local file encoded once however often it is
+    referenced, and at most MAX_LOCAL_REFS references."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = files
+        self.parts: list[str] = []
+        self.size = 0
+        self.refs = 0
+        self._cache: dict[tuple[str, str], str] = {}
+
+    def _grow(self, n: int) -> None:
+        self.size += n
+        if self.size > BUNDLE_MAX_BYTES:
+            raise BundleError("bundle_too_large", f"the bundle grows past {BUNDLE_MAX_BYTES} bytes when inlined")
+
+    def add(self, text: str) -> None:
+        self._grow(len(text))
+        self.parts.append(text)
+
+    def _file(self, ref: str, base: str) -> tuple[str, bytes]:
+        self.refs += 1
+        if self.refs > MAX_LOCAL_REFS:
+            raise BundleError("bundle_too_large", f"the bundle references local files more than {MAX_LOCAL_REFS} times")
+        return _resolve(self.files, ref, base)
+
+    def data_uri(self, ref: str, base: str) -> None:
+        path, data = self._file(ref, base)
+        kind = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        self._grow(len(kind) + 13 + 4 * ((len(data) + 2) // 3))  # "data:" + kind + ";base64," + base64
+        key = ("uri", path)
+        if key not in self._cache:
+            self._cache[key] = f"data:{kind};base64,{base64.b64encode(data).decode()}"
+        self.parts.append(self._cache[key])
+
+    def text(self, ref: str, base: str, what: str) -> tuple[str, str]:
+        """(path, the file's UTF-8 text), counted against the size first."""
+        path, data = self._file(ref, base)
+        self._grow(len(data))
+        key = ("text", path)
+        if key not in self._cache:
+            try:
+                self._cache[key] = data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise BundleError("invalid_bundle", f"{what} {ref[:80]!r} is not UTF-8") from exc
+        return path, self._cache[key]
 
 
 def _is_remote(ref: str) -> bool:
     ref = ref.strip()
     return ref.startswith("//") or (bool(_SCHEME.match(ref)) and not ref.lower().startswith("data:"))
-
-
-def _data_uri(path: str, data: bytes) -> str:
-    kind = mimetypes.guess_type(path)[0] or "application/octet-stream"
-    return f"data:{kind};base64,{base64.b64encode(data).decode()}"
 
 
 def _css_urls(css: str):
@@ -133,20 +181,25 @@ def _css_urls(css: str):
 _CSS_URL_OPEN = re.compile(r"url\(", re.IGNORECASE)
 
 
-def _inline_css(css: str, files: dict[str, bytes], base: str, *, check_only: bool = False) -> str:
+def _inline_css(css: str, out: _Out | None, base: str) -> None:
+    """Each local url() of `css` as data:, written to `out`; with no `out`
+    (an inline style attribute) any non-data url() is refused."""
     if _CSS_IMPORT.search(css):
         raise BundleError("remote_url", "a stylesheet uses @import; inline it instead")
-    out, at = [], 0
+    at = 0
     for start, end, ref in _css_urls(css):
         if ref.lower().startswith("data:") or ref.startswith("#"):
             continue
         if _is_remote(ref):
             raise BundleError("remote_url", f"a stylesheet loads {ref[:80]!r} from the network")
-        if check_only:
+        if out is None:
             raise BundleError("remote_url", f"an inline style loads {ref[:80]!r}")
-        out += [css[at:start], f'url("{_data_uri(ref, _resolve(files, ref, base))}")']
+        out.add(css[at:start] + 'url("')
+        out.data_uri(ref, base)
+        out.add('")')
         at = end
-    return "".join(out) + css[at:]
+    if out is not None:
+        out.add(css[at:])
 
 
 # -- a linear tokenizer -------------------------------------------------------
@@ -155,8 +208,11 @@ def _inline_css(css: str, files: dict[str, bytes], base: str, *, check_only: boo
 # with str.find and simple literal searches, never with a backtracking regex
 # that could rescan the rest of the document for every unclosed tag.
 
+#: Elements whose content is text up to their own end tag (the HTML
+#: tokenizer's script data, RAWTEXT and RCDATA states; `plaintext` never
+#: ends). Markup and comments inside them are text.
 _RAW = ("script", "style")
-_RAW_END = {name: re.compile(r"</" + name, re.IGNORECASE) for name in _RAW}
+_TEXT_ELEMENTS = frozenset({"script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript"})
 _NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-:_")
 _SPACE = " \t\r\n\f"
 _FRAME_TAGS = frozenset({"iframe", "frame", "frameset", "object", "embed", "portal", "fencedframe"})
@@ -182,9 +238,81 @@ class _Tag:
         return None
 
 
+def _comment_end(html: str, i: int) -> int:
+    """After the comment that starts at `i` ("<!--"), as the HTML tokenizer
+    ends it: "<!-->" and "<!--->" are complete (abrupt closing), otherwise
+    the first "-->" or "--!>"; a nested "<!--" changes nothing; unclosed, it
+    runs to the end."""
+    n = len(html)
+    if html.startswith(">", i + 4):
+        return i + 5
+    if html.startswith("->", i + 4):
+        return i + 6
+    a, b = html.find("-->", i + 4), html.find("--!>", i + 4)
+    ends = [e + 3 for e in (a,) if e >= 0] + [e + 4 for e in (b,) if e >= 0]
+    return min(ends) if ends else n
+
+
+def _end_of_text_element(html: str, name: str, j: int) -> tuple[int, int]:
+    """(where the content ends, after its end tag): the first "</name"
+    followed by space, "/" or ">", in any letter case."""
+    n, needle, k = len(html), "</" + name, j
+    while True:
+        k = html.find("</", k)
+        if k < 0:
+            return n, n
+        seg = html[k : k + len(needle) + 1].lower()
+        if seg.startswith(needle) and (len(seg) == len(needle) or seg[len(needle)] in _SPACE + "/>"):
+            gt = html.find(">", k + len(needle))
+            return k, (gt + 1 if gt >= 0 else n)
+        k += 2
+
+
+def _parse_tag(html: str, i: int, name_start: int) -> tuple[str, int, list]:
+    """(name, after ">", attributes) of the tag whose name starts at `name_start`."""
+    n, j = len(html), name_start
+    while j < n and html[j] in _NAME_CHARS:
+        j += 1
+    name = html[name_start:j].lower()
+    attrs = []
+    while True:
+        while j < n and html[j] in _SPACE + "/":
+            j += 1
+        if j >= n:
+            raise BundleError("invalid_bundle", f"a <{name[:20]}> tag is not closed")
+        if html[j] == ">":
+            return name, j + 1, attrs
+        k = j
+        while j < n and html[j] not in _SPACE + "/>=":
+            j += 1
+        aname = html[k:j].lower()
+        while j < n and html[j] in _SPACE:
+            j += 1
+        if j < n and html[j] == "=":
+            j += 1
+            while j < n and html[j] in _SPACE:
+                j += 1
+            if j < n and html[j] in "\"'":
+                close = html.find(html[j], j + 1)
+                if close < 0:
+                    raise BundleError("invalid_bundle", f"an attribute of <{name[:20]}> is not closed")
+                attrs.append((aname, html[j + 1 : close], j + 1, close))
+                j = close + 1
+            else:
+                k = j
+                while j < n and html[j] not in _SPACE + ">":
+                    j += 1
+                attrs.append((aname, html[k:j], k, j))
+        else:
+            attrs.append((aname, None, j, j))
+
+
 def _tags(html: str) -> list[_Tag]:
-    """Start tags in document order (comments, end tags and text skipped);
-    script and style elements carry their raw text."""
+    """Start tags in document order, read as the HTML tokenizer reads them:
+    comments (with the abrupt forms), bogus comments ("<!x>", "<?x>",
+    "</ x>"), end tags (attributes and all) and text skipped; the content of
+    script, style, textarea, title and the other text elements is text, and
+    script and style carry it."""
     out: list[_Tag] = []
     n, i = len(html), 0
     while True:
@@ -193,66 +321,45 @@ def _tags(html: str) -> list[_Tag]:
             return out
         c = html[i + 1]
         if html.startswith("<!--", i):
-            j = html.find("-->", i + 4)
-            if j < 0:
-                return out
-            i = j + 3
+            i = _comment_end(html, i)
             continue
-        if c in "!?/":
+        if c in "!?":
             j = html.find(">", i + 2)
             if j < 0:
                 return out
             i = j + 1
             continue
+        if c == "/":
+            d = html[i + 2] if i + 2 < n else ""
+            if d.isascii() and d.isalpha():
+                _name, i, _attrs = _parse_tag(html, i, i + 2)  # an end tag: skipped
+            elif d == ">":
+                i += 3
+            elif d == "":
+                return out
+            else:
+                j = html.find(">", i + 2)  # "</ x>": a bogus comment
+                if j < 0:
+                    return out
+                i = j + 1
+            continue
         if not c.isascii() or not c.isalpha():
             i += 1
             continue
-        j = i + 1
-        while j < n and html[j] in _NAME_CHARS:
-            j += 1
-        name = html[i + 1 : j].lower()
-        attrs = []
-        while True:
-            while j < n and html[j] in _SPACE + "/":
-                j += 1
-            if j >= n:
-                raise BundleError("invalid_bundle", f"a <{name[:20]}> tag is not closed")
-            if html[j] == ">":
-                j += 1
-                break
-            k = j
-            while j < n and html[j] not in _SPACE + "/>=":
-                j += 1
-            aname = html[k:j].lower()
-            while j < n and html[j] in _SPACE:
-                j += 1
-            if j < n and html[j] == "=":
-                j += 1
-                while j < n and html[j] in _SPACE:
-                    j += 1
-                if j < n and html[j] in "\"'":
-                    close = html.find(html[j], j + 1)
-                    if close < 0:
-                        raise BundleError("invalid_bundle", f"an attribute of <{name[:20]}> is not closed")
-                    attrs.append((aname, html[j + 1 : close], j + 1, close))
-                    j = close + 1
-                else:
-                    k = j
-                    while j < n and html[j] not in _SPACE + ">":
-                        j += 1
-                    attrs.append((aname, html[k:j], k, j))
-            else:
-                attrs.append((aname, None, j, j))
+        name, j, attrs = _parse_tag(html, i, i + 1)
         tag = _Tag(name, i, j, attrs)
-        if name in _RAW:
-            m = _RAW_END[name].search(html, j)
-            if m is None:
-                tag.body, tag.close = (j, n), n
-            else:
-                gt = html.find(">", m.end())
-                tag.body, tag.close = (j, m.start()), (gt + 1 if gt >= 0 else n)
+        if name == "plaintext":
+            out.append(tag)
+            return out
+        if name in _TEXT_ELEMENTS:
+            end, after = _end_of_text_element(html, name, j)
+            if name in _RAW:
+                tag.body, tag.close = (j, end), after
+            out.append(tag)
+            i = after
+            continue
         out.append(tag)
-        i = tag.close if tag.close is not None else j
+        i = j
 
 
 def _drop_bundled_shim(html: str) -> str:
@@ -270,24 +377,21 @@ def _drop_bundled_shim(html: str) -> str:
     return "".join(parts) + html[at:]
 
 
+#: A doctype at the very start (after an optional BOM and white space). It
+#: ends at its first ">", as the tokenizer ends it.
+_DOCTYPE = re.compile(r"\ufeff?[ \t\r\n\f]*<!doctype(?=[ \t\r\n\f>])[^<>]{0,500}>", re.IGNORECASE)
+
+
 def _inject_first(html: str, script: str) -> str:
-    """`script` as the document's first script: before any other script, and
-    after the doctype (so the document stays in standards mode)."""
-    tag = f"<script>{script}</script>"
-    tags = _tags(html)
-    head = next((t for t in tags if t.name == "head"), None)
-    first = next((t for t in tags if t.name == "script"), None)
-    if head and (first is None or head.end <= first.start):
-        return html[: head.end] + tag + html[head.end :]
-    if first is not None:
-        return html[: first.start] + tag + html[first.start :]
-    opening = next((t for t in tags if t.name == "html"), None)
-    if opening is not None:
-        return html[: opening.end] + tag + html[opening.end :]
-    lower = html[:1024].lower()
-    at = lower.find("<!doctype")
-    at = html.find(">", at) + 1 if at >= 0 else 0
-    return html[:at] + tag + html[at:]
+    """`script` PREPENDED: the first bytes after a leading doctype (the
+    document stays in standards mode), else the very first bytes (a script
+    before <html> is valid: the parser opens the head for it). Never placed
+    by parsing, so no markup or comment trick can put a script before it."""
+    m = _DOCTYPE.match(html)
+    if m is None and html.lstrip("\ufeff" + _SPACE)[:9].lower() == "<!doctype":
+        raise BundleError("invalid_bundle", "the document's doctype is malformed")
+    at = m.end() if m else 0
+    return html[:at] + f"<script>{script}</script>" + html[at:]
 
 
 def inject_first(html: str, script: str) -> str:
@@ -328,57 +432,62 @@ def inline(files: dict[str, bytes], entry: str = ENTRY, *, platform_shim: str | 
         raise BundleError("invalid_bundle", f"{entry} contains a NUL character")
     html = _drop_bundled_shim(html)
     _scan_frames(html)
-    parts: list[str] = []
+    out = _Out(files)
     at = 0
-
-    def url_attr(t: _Tag) -> str:
-        """The start tag with each local URL attribute inlined as data:."""
-        out, k = [], t.start
-        for aname, value, vs, ve in t.attrs:
-            if aname not in _URL_ATTRS or value is None:
-                continue
-            ref = value.strip()
-            if not ref or ref.startswith("#") or ref.lower().startswith(("data:", "blob:")):
-                continue
-            if aname == "srcset" or _is_remote(ref) or ref.lower().startswith("javascript:"):
-                raise BundleError("remote_url", f"{aname}={ref[:80]!r} is not inline")
-            out += [html[k:vs], _data_uri(ref, _resolve(files, ref, entry))]
-            k = ve
-        return "".join(out) + html[k : t.end]
 
     for t in _tags(html):
         if t.name == "meta" and t.attr("http-equiv") is not None or t.name == "base":
             raise BundleError("remote_url", "the document uses <meta http-equiv> or <base>")
         style = t.attr("style")
         if style:
-            _inline_css(style, files, entry, check_only=True)
+            _inline_css(style, None, entry)
         if t.name == "script":
             src = t.attr("src")
             if src is None:
                 continue
             if _is_remote(src):
                 raise BundleError("remote_url", f"a script loads {src[:80]!r} from the network")
-            text = _resolve(files, src, entry).decode("utf-8", errors="strict").replace("</script", "<\\/script")
+            _path, text = out.text(src, entry, "a script")
             if "\x00" in text:
                 raise BundleError("invalid_bundle", "a script contains a NUL character")
             kept = " ".join(n if v is None else (f'{n}="{v}"' if '"' not in v else f"{n}='{v}'") for n, v, _, _ in t.attrs if n != "src")
-            parts += [html[at : t.start], f"<script{' ' + kept if kept else ''}>{text}</script>"]
+            out.add(html[at : t.start])
+            out.add(f"<script{' ' + kept if kept else ''}>")
+            out.add(text.replace("</script", "<\\/script"))
+            out.add("</script>")
             at = t.close
         elif t.name == "style" and t.body:
-            css = _inline_css(html[t.body[0] : t.body[1]], files, entry)
-            parts += [html[at : t.body[0]], css]
+            out.add(html[at : t.body[0]])
+            _inline_css(html[t.body[0] : t.body[1]], out, entry)
             at = t.body[1]
         elif t.name == "link" and (t.attr("rel") or "").strip().lower() == "stylesheet" and t.attr("href") is not None:
             ref = t.attr("href")
             if _is_remote(ref):
                 raise BundleError("remote_url", f"a stylesheet loads {ref[:80]!r} from the network")
-            css = _inline_css(_resolve(files, ref, entry).decode("utf-8"), files, ref)
-            parts += [html[at : t.start], f"<style>{css}</style>"]
+            path, css = out.text(ref, entry, "a stylesheet")
+            out.add(html[at : t.start])
+            out.add("<style>")
+            _inline_css(css.replace("</style", "<\\/style"), out, path)
+            out.add("</style>")
             at = t.end
         elif any(a[0] in _URL_ATTRS for a in t.attrs):
-            parts += [html[at : t.start], url_attr(t)]
+            out.add(html[at : t.start])
+            k = t.start
+            for aname, value, vs, ve in t.attrs:
+                if aname not in _URL_ATTRS or value is None:
+                    continue
+                ref = value.strip()
+                if not ref or ref.startswith("#") or ref.lower().startswith(("data:", "blob:")):
+                    continue
+                if aname == "srcset" or _is_remote(ref) or ref.lower().startswith("javascript:"):
+                    raise BundleError("remote_url", f"{aname}={ref[:80]!r} is not inline")
+                out.add(html[k:vs])
+                out.data_uri(ref, entry)
+                k = ve
+            out.add(html[k : t.end])
             at = t.end
-    html = "".join(parts) + html[at:]
+    out.add(html[at:])
+    html = "".join(out.parts)
     for name, pattern in FORBIDDEN:
         if pattern.search(html):
             raise BundleError("forbidden_api", f"the bundle names {name}, which apps may not use")
