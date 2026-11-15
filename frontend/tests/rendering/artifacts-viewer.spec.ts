@@ -811,9 +811,13 @@ test.describe("phone width", () => {
       const card = page.locator(`[data-testid=artifact-card]`);
       const overlay = page.getByTestId("artifact-panel-mobile");
       await expect(async () => {
-        await card.getByTestId("artifact-card-open").click({ timeout: 2000 });
-        await expect(overlay).toBeVisible({ timeout: 1000 });
-      }).toPass({ timeout: 20_000 });
+        // The card's live frame can keep resizing it (never "stable"):
+        // press regardless, and check that the overlay opened.
+        const open = card.getByTestId("artifact-card-open");
+        await open.scrollIntoViewIfNeeded();
+        await open.click({ timeout: 3000, force: true });
+        await expect(overlay).toBeVisible({ timeout: 2000 });
+      }).toPass({ timeout: 40_000 });
       const panel = overlay.getByTestId("artifact-panel");
       await expect(panel.getByTestId("artifact-frame")).toBeVisible();
       await expect(panel).toHaveAttribute("data-compact", "true");
