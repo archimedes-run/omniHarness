@@ -33,6 +33,7 @@ import { atText } from "@/core/apps/wording";
 import {
   ArtifactsApiError,
   EDITABLE_KINDS,
+  isCodeKind,
   type ArtifactDetail,
   type ArtifactVersion,
 } from "@/core/artifacts/store-api";
@@ -52,6 +53,7 @@ import {
 import { safeField } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
+import { CodeKindView } from "./artifact-code-kind";
 import { ArtifactContent, codeOf, KindIcon } from "./artifact-content";
 
 /**
@@ -151,6 +153,12 @@ export function ArtifactPanel({
               if (n) onVersionChange(n);
             }}
             onReload={async () => (await refetch()).data?.latest_version}
+          />
+        ) : isCodeKind(data.kind) ? (
+          <CodeKindView
+            artifact={data}
+            version={shown}
+            onVersionChange={onVersionChange}
           />
         ) : (
           <ArtifactContent artifact={data} version={shown} />

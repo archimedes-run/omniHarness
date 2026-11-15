@@ -3,6 +3,13 @@ import path from "path";
 
 import type { NextRequest } from "next/server";
 
+import { demoHeaders, resolveDemoFile } from "@/core/demo/demo-files";
+
+/**
+ * A demo thread's file. `mnt/user-data/...` maps to the thread's folder under
+ * public/demo/threads/{id}/user-data/...; anything else, a bad id, or a path
+ * that leaves that folder is 404.
+ */
 export async function GET(
   request: NextRequest,
   {
@@ -14,36 +21,28 @@ export async function GET(
     }>;
   },
 ) {
-  const threadId = (await params).thread_id;
-  let artifactPath = (await params).artifact_path?.join("/") ?? "";
+  const { thread_id: threadId, artifact_path } = await params;
+  const artifactPath = artifact_path?.join("/") ?? "";
   if (artifactPath.startsWith("mnt/")) {
-    artifactPath = path.resolve(
+    const file = resolveDemoFile(
       process.cwd(),
-      artifactPath.replace("mnt/", `public/demo/threads/${threadId}/`),
+      threadId,
+      artifactPath.slice("mnt/".length),
     );
-    if (fs.existsSync(artifactPath)) {
+    if (file) {
+      const headers = new Headers(demoHeaders(file));
       if (request.nextUrl.searchParams.get("download") === "true") {
-        // Attach the file to the response
-        const headers = new Headers();
-        headers.set(
-          "Content-Disposition",
-          `attachment; filename="${artifactPath}"`,
-        );
-        return new Response(fs.readFileSync(artifactPath), {
-          status: 200,
-          headers,
-        });
+        const name = path.basename(file).replace(/[^A-Za-z0-9._-]/g, "_");
+        headers.set("Content-Disposition", `attachment; filename="${name}"`);
       }
-      if (artifactPath.endsWith(".mp4")) {
-        return new Response(fs.readFileSync(artifactPath), {
-          status: 200,
-          headers: {
-            "Content-Type": "video/mp4",
-          },
-        });
-      }
-      return new Response(fs.readFileSync(artifactPath), { status: 200 });
+      return new Response(fs.readFileSync(file), { status: 200, headers });
     }
   }
-  return new Response("File not found", { status: 404 });
+  return new Response("File not found", {
+    status: 404,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }

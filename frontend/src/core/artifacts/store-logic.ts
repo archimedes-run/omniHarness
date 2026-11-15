@@ -18,6 +18,9 @@ const KINDS = new Set<string>([
   "mermaid",
   "chart",
   "image",
+  "html",
+  "react",
+  "webapp",
   "file",
 ]);
 const ID = /^[A-Za-z0-9_-]{22}$/;
@@ -90,6 +93,9 @@ export const KIND_WORDS: Record<ArtifactKind, string> = {
   mermaid: "Diagram",
   chart: "Chart",
   image: "Image",
+  html: "Web page",
+  react: "React app",
+  webapp: "Web app",
   file: "File",
 };
 
@@ -244,4 +250,34 @@ export function previewLines(text: string, lines = 6, chars = 400): string {
     .slice(0, lines)
     .map((l) => l.replace(/[\p{Cc}\p{Cf}]/gu, "").slice(0, chars))
     .join("\n");
+}
+
+/** Words for a code version's checks (FR-018): what the label says. The
+ * check runs in the chat's sandbox and is a quality signal, not a guarantee:
+ * the words report what was seen, never promise anything. */
+export function checkWords(
+  state: "pending" | "passed" | "failed" | "not_checked" | null | undefined,
+  summary: string[] = [],
+): { label: string; tone: "ok" | "warn" | "muted" } {
+  const first = safeField(summary[0] ?? "");
+  switch (state) {
+    case "passed":
+      return {
+        label:
+          "Checked: no network attempts seen; fits 360 to 1280 px in light and dark",
+        tone: "ok",
+      };
+    case "failed":
+      return {
+        label: `Layout check failed: ${first || "see the details"}`,
+        tone: "warn",
+      };
+    case "pending":
+      return { label: "Checking the layout…", tone: "muted" };
+    default:
+      return {
+        label: `Layout not checked${first ? `: ${first}` : ""}`,
+        tone: "warn",
+      };
+  }
 }

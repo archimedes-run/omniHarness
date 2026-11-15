@@ -17,6 +17,7 @@ import {
   ArtifactsApiError,
   type ArtifactKind,
   type ArtifactSummary,
+  isCodeKind,
   type ListQuery,
 } from "@/core/artifacts/store-api";
 import {
@@ -33,6 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { ArtifactContent, KindIcon } from "./artifact-content";
+import { StoreShot } from "./artifact-frame";
 
 type View = "all" | "recent" | "pinned" | "archived" | "chat";
 const VIEWS: { id: View; label: string }[] = [
@@ -45,6 +47,9 @@ const VIEWS: { id: View; label: string }[] = [
 const KINDS: ArtifactKind[] = [
   "markdown",
   "code",
+  "html",
+  "react",
+  "webapp",
   "chart",
   "mermaid",
   "svg",
@@ -345,6 +350,8 @@ function StoreCard({ artifact }: { artifact: ArtifactSummary }) {
           <p className="text-muted-foreground text-xs">
             Too large for the store: it lives in its chat.
           </p>
+        ) : isCodeKind(artifact.kind) ? (
+          <StoreShot artifact={artifact} />
         ) : artifact.kind === "file" ? (
           <div className="text-muted-foreground flex h-full items-center justify-center">
             <KindIcon kind="file" className="size-8" />
