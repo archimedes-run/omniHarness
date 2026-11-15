@@ -19,15 +19,57 @@
  * A NEXT_PUBLIC_*_BASE_URL on another origin is added to connect-src, since
  * the browser then talks to it directly.
  *
- * `frameSrc`: "'self' blob:" for most pages (artifact previews); the Apps
- * pages pass this origin's /api/apps/ only (Spec 011 FR-017).
+ * `frameSrc`: always path-scoped, never bare 'self' and never blob: (a frame
+ * that navigates itself may only reach documents that start with a shim or
+ * need a session it does not carry). src/proxy.ts passes the request's own
+ * host: the Apps pages this origin's /api/apps/ (Spec 011 FR-017), every
+ * other page FRAME_PATHS (Spec 012 S2). The static default, 'none', stands
+ * only if the proxy did not run.
  *
  * Applied to pages only, not /api/* or /mock/api/*: those serve the
  * gateway's responses and artifacts (an app preview the user built, a demo
  * thread's HTML), which run in the artifact iframe; frame-ancestors 'none'
  * would break that, and their own loads are not the app's.
  */
-export function contentSecurityPolicy({ frameSrc = "'self' blob:" } = {}) {
+/**
+ * The path prefixes a non-Apps page may frame, and why:
+ * - /api/artifacts/   the locked frame for code artifacts (Spec 012 S2)
+ * - /api/threads/     a chat's file previews and live preview sessions
+ *                     (artifact-file-detail: /artifacts/..., /previews/.../proxy)
+ * - /mock/api/threads/ the same for demo threads
+ * - /mermaid-frame/   the isolated mermaid drawing frame (Spec 012 FR-015)
+ */
+export const FRAME_PATHS = [
+  "/api/artifacts/",
+  "/api/threads/",
+  "/mock/api/threads/",
+  "/mermaid-frame/",
+];
+
+/** frame-src for a page served to `host` (plus the backend's own origin when
+ * it is another one); "'none'" when the host is unknown. */
+export function pageFrameSrc(host) {
+  if (!host) return "'none'";
+  const origins = new Set([`http://${host}`]);
+  const value = process.env.NEXT_PUBLIC_BACKEND_BASE_URL?.trim();
+  if (value) {
+    try {
+      origins.add(new URL(value).origin);
+    } catch {
+      // A relative path: this origin, already listed.
+    }
+  }
+  const out = [];
+  for (const origin of origins) {
+    for (const path of FRAME_PATHS) {
+      if (origin.endsWith(`://${host}`) || !path.startsWith("/mermaid-frame/"))
+        out.push(`${origin}${path}`);
+    }
+  }
+  return out.join(" ");
+}
+
+export function contentSecurityPolicy({ frameSrc = "'none'" } = {}) {
   const dev = process.env.NODE_ENV !== "production";
   const connect = new Set(["'self'"]);
   for (const key of [

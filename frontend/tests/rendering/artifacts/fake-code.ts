@@ -39,7 +39,7 @@ export function sabotage(name: string): boolean {
  * value written; shadow roots and srcdoc unguarded). */
 function sabotageShim(text: string): string {
   if (sabotage("old-shim-guards"))
-    return text
+    text = text
       .replace(
         "var t = once(v); checkHtml([t]); desc.set.call(this, t);",
         "checkHtml([v]); desc.set.call(this, v);",
@@ -51,6 +51,14 @@ function sabotageShim(text: string): string {
       .replace(
         "if (observer) observer.observe(root",
         "if (false) observer.observe(root",
+      )
+      .replace(
+        "function watchShadows(node) {",
+        "function watchShadows(node) { return;",
+      )
+      .replace(
+        'lock(Registry, "define", function',
+        'void (Registry, "define", function',
       );
   const s = sabotage("no-rtc-guard")
     ? "no-rtc-guard"

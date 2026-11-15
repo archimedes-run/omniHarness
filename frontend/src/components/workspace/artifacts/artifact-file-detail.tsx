@@ -1026,24 +1026,6 @@ export function ArtifactFilePreview({
   language: string;
   previewUrl?: string;
 }) {
-  const [fallbackHtmlPreviewUrl, setFallbackHtmlPreviewUrl] =
-    useState<string>();
-
-  useEffect(() => {
-    if (language !== "html" || previewUrl) {
-      setFallbackHtmlPreviewUrl(undefined);
-      return;
-    }
-
-    const blob = new Blob([content ?? ""], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    setFallbackHtmlPreviewUrl(url);
-
-    return () => {
-      URL.revokeObjectURL(url);
-    };
-  }, [content, language, previewUrl]);
-
   if (language === "markdown") {
     return (
       <div className="size-full px-4">
@@ -1063,7 +1045,10 @@ export function ArtifactFilePreview({
         className="size-full"
         title="Artifact preview"
         sandbox="allow-scripts allow-forms"
-        src={previewUrl ?? fallbackHtmlPreviewUrl}
+        // Without a preview URL the text is shown through srcdoc (it was a
+        // blob: URL): the page frames no blob: (page-csp.js FRAME_PATHS), and
+        // srcdoc keeps the same sandbox and the page's own policy.
+        {...(previewUrl ? { src: previewUrl } : { srcDoc: content ?? "" })}
       />
     );
   }

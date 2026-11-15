@@ -472,7 +472,13 @@ const GATED = [
   "app/workspace/artifacts",
   "core/artifacts",
 ];
-const ALLOWLIST: string[] = [];
+const ALLOWLIST: string[] = [
+  // A chat file's html text with no preview URL: shown in a sandboxed
+  // (allow-scripts allow-forms, no same-origin) iframe through srcdoc. It was
+  // a blob: URL with the same sandbox and policy; Spec 012 S2 removed blob:
+  // from every page's frame-src, so srcdoc carries it (reviewed).
+  "components/workspace/artifacts/artifact-file-detail.tsx",
+];
 const SINK =
   /dangerouslySetInnerHTML|\.innerHTML\b|\.outerHTML\b|insertAdjacentHTML|document\.write|createContextualFragment|srcdoc/;
 

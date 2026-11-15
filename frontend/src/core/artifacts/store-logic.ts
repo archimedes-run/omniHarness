@@ -252,7 +252,9 @@ export function previewLines(text: string, lines = 6, chars = 400): string {
     .join("\n");
 }
 
-/** Words for a code version's checks (FR-018): what the label says. */
+/** Words for a code version's checks (FR-018): what the label says. The
+ * check runs in the chat's sandbox and is a quality signal, not a guarantee:
+ * the words report what was seen, never promise anything. */
 export function checkWords(
   state: "pending" | "passed" | "failed" | "not_checked" | null | undefined,
   summary: string[] = [],
@@ -261,7 +263,8 @@ export function checkWords(
   switch (state) {
     case "passed":
       return {
-        label: "Checked: fits 360 to 1280 px in light and dark, no network",
+        label:
+          "Checked: no network attempts seen; fits 360 to 1280 px in light and dark",
         tone: "ok",
       };
     case "failed":
