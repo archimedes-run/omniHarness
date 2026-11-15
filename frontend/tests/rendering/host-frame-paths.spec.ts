@@ -70,3 +70,21 @@ test("each allowed frame path loads; other paths and blob: are refused; srcdoc s
   });
   expect(ran).toBe(true);
 });
+
+test("demo threads: /mock/api/threads/ is framed only on a page opened with ?mock=true", async ({
+  page,
+}) => {
+  for (const [url, framed] of [
+    ["/workspace/chats/new", false],
+    ["/workspace/chats/new?mock=true", true],
+  ] as const) {
+    const doc = page.waitForResponse(
+      (r) => r.request().resourceType() === "document",
+    );
+    await page.goto(url);
+    const csp = (await doc).headers()["content-security-policy"] ?? "";
+    const frameSrc = /frame-src ([^;]+)/.exec(csp)![1]!;
+    expect(frameSrc.includes("/mock/api/threads/"), url).toBe(framed);
+    expect(frameSrc).not.toMatch(/blob:|'self'/);
+  }
+});

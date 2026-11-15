@@ -36,19 +36,21 @@
  * - /api/artifacts/   the locked frame for code artifacts (Spec 012 S2)
  * - /api/threads/     a chat's file previews and live preview sessions
  *                     (artifact-file-detail: /artifacts/..., /previews/.../proxy)
- * - /mock/api/threads/ the same for demo threads
  * - /mermaid-frame/   the isolated mermaid drawing frame (Spec 012 FR-015)
+ * - /mock/api/threads/ the same as /api/threads/ for demo threads: only on a
+ *                     page opened in demo mode (`?mock=true`, the flag the
+ *                     chat page uses to read the mock API)
  */
 export const FRAME_PATHS = [
   "/api/artifacts/",
   "/api/threads/",
-  "/mock/api/threads/",
   "/mermaid-frame/",
 ];
+export const DEMO_FRAME_PATHS = ["/mock/api/threads/"];
 
 /** frame-src for a page served to `host` (plus the backend's own origin when
  * it is another one); "'none'" when the host is unknown. */
-export function pageFrameSrc(host) {
+export function pageFrameSrc(host, { demo = false } = {}) {
   if (!host) return "'none'";
   const origins = new Set([`http://${host}`]);
   const value = process.env.NEXT_PUBLIC_BACKEND_BASE_URL?.trim();
@@ -61,7 +63,9 @@ export function pageFrameSrc(host) {
   }
   const out = [];
   for (const origin of origins) {
-    for (const path of FRAME_PATHS) {
+    for (const path of demo
+      ? [...FRAME_PATHS, ...DEMO_FRAME_PATHS]
+      : FRAME_PATHS) {
       if (origin.endsWith(`://${host}`) || !path.startsWith("/mermaid-frame/"))
         out.push(`${origin}${path}`);
     }
