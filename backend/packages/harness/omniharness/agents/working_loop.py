@@ -433,6 +433,143 @@ def strip_internal_names(reply: str) -> tuple[str, bool]:
     return text, text != reply
 
 
+def raised_save_card(messages: list[Any]) -> str | None:
+    """The name of the new item whose save card the builder raised itself in
+    THIS turn (spec 010), or None; not in a resume (the card was answered)."""
+    found = _raised_draft(messages)
+    return found[0] if found else None
+
+
+def _raised_draft(messages: list[Any]) -> tuple[str, dict] | None:
+    """(name, the draft call's fields) of the save card the builder raised in
+    this turn, or None."""
+    from omniharness.runtime.builder.surface import SAVE_CARD_SHOWN
+
+    turn = turn_messages(list(messages))
+    if any(_kwargs(m).get(RESUME_OUTCOME_MARKER) for m in turn):
+        return None
+    calls: dict[str, dict] = {}
+    for message in turn:
+        if _type(message) == "ai":
+            for call in _tool_calls(message):
+                calls[str(call.get("id") or "")] = dict(call.get("args") or {})
+    found = None
+    for message in turn:
+        if _type(message) == "tool" and (_name(message) or "") == "builder_draft":
+            hit = re.search(re.escape(SAVE_CARD_SHOWN) + r" for `([^`]+)`", text_of(message))
+            if hit:
+                call_id = str((message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", "")) or "")
+                found = (hit.group(1), dict(calls.get(call_id, {}).get("fields") or {}))
+    return found
+
+
+#: A sentence that already points to the card.
+_POINTS_TO_CARD = re.compile(r"(?i)review the card|press save|on (?:its|the) card|the card below")
+#: Consecutive words a block must share with the draft's own text to count
+#: as restating it.
+RESTATE_RUN = 8
+#: The draft fields whose text a reply may restate.
+_DRAFT_TEXT_FIELDS = ("instructions", "description", "body", "prompt", "soul")
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", (text or "").lower())
+
+
+def _draft_texts(fields: dict) -> list[str]:
+    return [" ".join(str(fields.get(key)).split()) for key in _DRAFT_TEXT_FIELDS if isinstance(fields.get(key), str) and fields.get(key).strip()]
+
+
+def _restates_draft(block: str, fields: dict) -> bool:
+    """Whether a block restates the draft itself: it contains one of the
+    draft's texts whole, or RESTATE_RUN consecutive words of one."""
+    flat = " ".join(block.split()).lower()
+    words = _words(block)
+    runs = {tuple(words[i : i + RESTATE_RUN]) for i in range(len(words) - RESTATE_RUN + 1)}
+    for text in _draft_texts(fields):
+        if text.lower() in flat:
+            return True
+        tokens = _words(text)
+        if any(tuple(tokens[i : i + RESTATE_RUN]) in runs for i in range(len(tokens) - RESTATE_RUN + 1)):
+            return True
+    return False
+
+
+def _fence_is_draft(block: str, fields: dict) -> bool:
+    """Whether a fenced block's content parses to the draft's fields: a
+    mapping that shares at least one field with the draft, each shared field
+    with the draft's value."""
+    body = re.sub(r"^```[^\n]*\n?|```$", "", block.strip())
+    parsed: Any = None
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        try:
+            import yaml
+
+            parsed = yaml.safe_load(body)
+        except Exception:  # noqa: BLE001 — not YAML either: not the draft
+            parsed = None
+    if not isinstance(parsed, dict):
+        return False
+
+    def same(a: Any, b: Any) -> bool:
+        if isinstance(a, str) and isinstance(b, str):
+            return " ".join(a.split()) == " ".join(b.split())
+        return a == b
+
+    shared = [k for k in parsed if k in fields]
+    return bool(shared) and all(same(parsed[k], fields[k]) for k in shared)
+
+
+def save_card_reply(reply: str, name: str, messages: list[Any] | None = None) -> tuple[str, bool]:
+    """After the builder raised a save card: the reply stays as written except
+    for the blocks (paragraphs, lists, code blocks) that restate the draft
+    itself: its own text (whole, or RESTATE_RUN consecutive words of it), or
+    a code block whose content parses to the draft's fields. Nothing else is
+    removed. Then the fixed line is added when no sentence points to the
+    card already."""
+    line = f"I drafted {name}. Review the card below and press Save, or tell me what to change."
+    found = _raised_draft(messages or []) if messages else None
+    fields = found[1] if found else {}
+
+    # Blocks: code fences whole, prose split on blank lines; each with the
+    # separator that followed it, so what stays is byte for byte.
+    blocks: list[tuple[str, str, bool]] = []
+    for part in re.split(r"(```[\s\S]*?```)", reply or ""):
+        if not part:
+            continue
+        if part.startswith("```"):
+            blocks.append((part, "", True))
+            continue
+        pieces = re.split(r"(\n\s*\n)", part)
+        for i in range(0, len(pieces), 2):
+            text, sep = pieces[i], pieces[i + 1] if i + 1 < len(pieces) else ""
+            if text or sep:
+                blocks.append((text, sep, False))
+    # Whitespace between two code blocks is the separator of the first.
+    merged: list[tuple[str, str, bool]] = []
+    for text, sep, fence in blocks:
+        if merged and not text.strip():
+            last = merged[-1]
+            merged[-1] = (last[0], last[1] + text + sep, last[2])
+            continue
+        merged.append((text, sep, fence))
+    kept: list[tuple[str, str]] = []
+    removed_any = False
+    for text, sep, fence in merged:
+        if text.strip() and (_restates_draft(text, fields) or (fence and _fence_is_draft(text, fields))):
+            removed_any = True
+            continue
+        kept.append((text, sep))
+    remainder = "".join(t + s for t, s in kept).rstrip() if removed_any else (reply or "")
+    if not remainder.strip():
+        return line, line != reply
+    if _POINTS_TO_CARD.search(remainder):
+        return remainder, removed_any
+    return f"{remainder.rstrip()}\n\n{line}", True
+
+
 def called_builder(messages: list[Any]) -> bool:
     """This turn called any chat-builder tool (spec 010)."""
     return any(str(call.get("name") or "").startswith("builder_") for message in turn_messages(list(messages)) if _type(message) == "ai" for call in _tool_calls(message))

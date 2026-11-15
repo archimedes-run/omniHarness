@@ -120,3 +120,31 @@ def _foreign_purpose(text: str, words: list[str]) -> bool:
         else:
             count += 1
     return count >= 3
+
+
+#: Verbs that ask for something to be made.
+BUILD_VERBS = frozenset("create make build add draft design new setup".split())
+#: Two-word build verbs, and "I want / I need a ...".
+BUILD_PHRASES = (("set", "up"), ("spin", "up"), ("put", "together"))
+#: Any other action on an agent, skill or automation: not a build request.
+OTHER_ACTIONS = frozenset("delete remove list show run edit update pause resume rename stop check disable enable open view test fix change move copy archive restore undo is are was does did why what where how".split())
+
+
+def is_build_request(text: str) -> bool:
+    """The text asks for a NEW agent, skill or automation: a build verb (or "I
+    want / need a ...") governs a build noun, and no other action is asked
+    ("delete my agent", "show my skills" and "hi assistant" are not)."""
+    words = tokens(text)
+    nouns = NOUNS - {"something", "one", "thing"}
+    at = next((i for i, w in enumerate(words) if w in nouns), None)
+    if at is None:
+        return False
+    before = words[:at]
+    if any(w in OTHER_ACTIONS for w in before):
+        return False
+    if any(w in BUILD_VERBS for w in before):
+        return True
+    if any(before[i : i + 2] == list(p) for p in BUILD_PHRASES for i in range(len(before) - 1)):
+        return True
+    joined = " ".join(before)
+    return bool(re.search(r"\b(?:i\s+(?:want|need|would\s+like)|i'd\s+like)\b.*\b(a|an|new|another)\b", joined))
