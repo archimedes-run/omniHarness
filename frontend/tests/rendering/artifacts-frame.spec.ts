@@ -598,7 +598,12 @@ test("the host page frames only its listed paths: no bare 'self', no blob:", asy
   const frameSrc = /frame-src ([^;]+)/.exec(csp)![1]!.trim().split(/\s+/);
   const origin = new URL(host()).host;
   expect(frameSrc.sort()).toEqual(
-    ["/api/artifacts/", "/api/threads/", "/mermaid-frame/"]
+    [
+      "/api/artifacts/",
+      "/api/threads/",
+      "/mermaid-frame/",
+      "/mock/api/threads/",
+    ]
       .map((p) => `http://${origin}${p}`)
       .sort(),
   );

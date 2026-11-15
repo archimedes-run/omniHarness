@@ -37,20 +37,22 @@
  * - /api/threads/     a chat's file previews and live preview sessions
  *                     (artifact-file-detail: /artifacts/..., /previews/.../proxy)
  * - /mermaid-frame/   the isolated mermaid drawing frame (Spec 012 FR-015)
- * - /mock/api/threads/ the same as /api/threads/ for demo threads: only on a
- *                     page opened in demo mode (`?mock=true`, the flag the
- *                     chat page uses to read the mock API)
+ * - /mock/api/threads/ demo threads' files. Always listed: a page's policy is
+ *                     fixed at its full load, and the app moves into a demo
+ *                     thread client-side. The route confines the id and path
+ *                     and sends `Content-Security-Policy: sandbox` on every
+ *                     response, so nothing it serves can run script.
  */
 export const FRAME_PATHS = [
   "/api/artifacts/",
   "/api/threads/",
   "/mermaid-frame/",
+  "/mock/api/threads/",
 ];
-export const DEMO_FRAME_PATHS = ["/mock/api/threads/"];
 
 /** frame-src for a page served to `host` (plus the backend's own origin when
  * it is another one); "'none'" when the host is unknown. */
-export function pageFrameSrc(host, { demo = false } = {}) {
+export function pageFrameSrc(host) {
   if (!host) return "'none'";
   const origins = new Set([`http://${host}`]);
   const value = process.env.NEXT_PUBLIC_BACKEND_BASE_URL?.trim();
@@ -63,9 +65,7 @@ export function pageFrameSrc(host, { demo = false } = {}) {
   }
   const out = [];
   for (const origin of origins) {
-    for (const path of demo
-      ? [...FRAME_PATHS, ...DEMO_FRAME_PATHS]
-      : FRAME_PATHS) {
+    for (const path of FRAME_PATHS) {
       if (origin.endsWith(`://${host}`) || !path.startsWith("/mermaid-frame/"))
         out.push(`${origin}${path}`);
     }

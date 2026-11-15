@@ -22,12 +22,7 @@ export function proxy(request: NextRequest) {
     path === "/workspace/apps" || path.startsWith("/workspace/apps/");
   response.headers.set(
     "Content-Security-Policy",
-    apps
-      ? appHostPolicy(host)
-      : workspaceHostPolicy(host, {
-          // Demo mode: the same flag the chat page reads (use-thread-chat).
-          demo: request.nextUrl.searchParams.get("mock") === "true",
-        }),
+    apps ? appHostPolicy(host) : workspaceHostPolicy(host),
   );
   return response;
 }

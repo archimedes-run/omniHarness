@@ -13,8 +13,8 @@ import {
 import { workspaceHostPolicy } from "@/core/security/app-host-csp";
 
 /** Spec 012 S2 review: the demo file route stays inside its thread's folder,
- * says what it serves, and the page frames /mock/api/threads/ only in demo
- * mode. */
+ * says what it serves, and every page frames /mock/api/threads/ (safe to
+ * allow: every response is sandboxed). */
 
 function tree() {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "demo-"));
@@ -111,22 +111,16 @@ describe("demo files", () => {
 });
 
 describe("page frame-src", () => {
-  it("lists /mock/api/threads/ only in demo mode", () => {
-    const frameSrc = (csp: string) =>
-      /frame-src ([^;]+)/.exec(csp)![1]!.split(" ");
-    const normal = frameSrc(workspaceHostPolicy("app.example:2026"));
-    const demo = frameSrc(
-      workspaceHostPolicy("app.example:2026", { demo: true }),
-    );
-    expect(normal).toEqual([
+  it("lists exactly the four paths, /mock/api/threads/ included, never blob: or 'self'", () => {
+    const frameSrc = /frame-src ([^;]+)/
+      .exec(workspaceHostPolicy("app.example:2026"))![1]!
+      .split(" ");
+    expect(frameSrc).toEqual([
       "http://app.example:2026/api/artifacts/",
       "http://app.example:2026/api/threads/",
       "http://app.example:2026/mermaid-frame/",
-    ]);
-    expect(demo).toEqual([
-      ...normal,
       "http://app.example:2026/mock/api/threads/",
     ]);
-    expect(normal.join(" ")).not.toMatch(/blob:|'self'/);
+    expect(frameSrc.join(" ")).not.toMatch(/blob:|'self'/);
   });
 });

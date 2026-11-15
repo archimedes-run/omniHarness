@@ -14,12 +14,9 @@ const HOST =
  */
 /** Every other page (Spec 012 S2): frame-src is the path list of
  * page-csp.js FRAME_PATHS on this host, never bare 'self' and never blob:. */
-export function workspaceHostPolicy(
-  host: string | null,
-  { demo = false }: { demo?: boolean } = {},
-): string {
+export function workspaceHostPolicy(host: string | null): string {
   return contentSecurityPolicy({
-    frameSrc: host && HOST.test(host) ? pageFrameSrc(host, { demo }) : "'none'",
+    frameSrc: host && HOST.test(host) ? pageFrameSrc(host) : "'none'",
   });
 }
 
