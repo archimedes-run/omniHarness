@@ -67,16 +67,11 @@ FORBIDDEN = [
     "artifact_restore",
     "artifact_purge",
     "artifact_grant",
-    "artifact_save",
-    "artifact_unsave",
-    "save_artifact",
-    "artifact_import",
-    "artifact_download",
 ]
 
 
 @pytest.mark.parametrize("name", FORBIDDEN)
-def test_no_rule_lets_a_model_archive_delete_share_export_promote_or_save(shipped, name):
+def test_no_rule_lets_a_model_archive_delete_share_export_or_promote(shipped, name):
     assert classify(name, {}, shipped).refused, f"{name} matched a rule: the model could call it"
 
 

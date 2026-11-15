@@ -50,12 +50,6 @@ Every slice: backend and frontend in one PR; tests through `create_app()`; sabot
 - **Gates**: standard gates below; **independent security review** (policy tiers, storage paths, host rendering).
 - **Dogfood**: create one of each static kind from chat, update, undo, edit markdown in place, find it in the store, open the chat that made it.
 
-### S1b: Saved artifacts (owner decision 2026-11-14, spec FR-060 to FR-066)
-
-- **Backend**: `saved` / `saved_at` on artifacts (added once, with the intent rule for existing rows, in `persistence/engine.py`); save and unsave routes; `saved` filter (default true); download route (`artifacts_store/downloads.py`); owner-only "Save to artifacts" (`POST /api/artifacts/import`) through `safe_open`, with the `webapp` file set (`artifact_bundle_files`); the automatic importer removed; deleting a chat never deletes artifacts (they are marked `origin_deleted`); the optional sweep, off by default.
-- **Frontend**: Save and Download on every card and in the panel; Saved and Unsaved tabs; "Save to artifacts" on chat output files; the render matrix (`render` on each version).
-- **Tests**: authz, CSRF and owner scoping of save; the default listing; download headers and hostile titles; link-safe import; the sweep never touches saved; the migration rule; no model path to save. Each guard sabotaged.
-
 ### S2: Code kinds in the locked frame, versions for builds
 
 - **Backend**: artifact frame route `/api/artifacts/{id}/versions/{n}/frame.html` with the artifact profile (FR-031), reusing `apps/bundle.py` inlining and the 011 scan; react build step (gateway-written script run in the chat's sandbox, esbuild through the registries proxy, 120 s cap, `build_state`); layout check hook (FR-018); `html` file sets from coding-job publishes.

@@ -66,13 +66,7 @@ function factsOf(message: Message): MessageFacts {
  * newest undecided card is open; a decided or replaced one is one line with a
  * disclosure. Cards no turn names yet go at the end.
  */
-export function useThreadAppCards(
-  threadId: string,
-  messages: Message[],
-  /** Every turn is loaded; else cards whose turn is behind "Load more"
-   * wait for it (an undecided one shows at the end, labelled). */
-  complete = true,
-) {
+export function useThreadAppCards(threadId: string, messages: Message[]) {
   const { data } = useThreadApprovals(threadId);
   const { apps } = useApps();
   // What each coding job registered, read from the job cards' own queries
@@ -120,21 +114,15 @@ export function useThreadAppCards(
       (apps ?? []).map((a) => [a.id, a.current_version] as const),
     );
     const facts = messages.map(factsOf);
-    const anchors = placeCards(facts, ordered, registrations, complete);
+    const anchors = placeCards(facts, ordered, registrations);
     const placed = new Map<string, ApprovalCard[]>();
     const rest: ApprovalCard[] = [];
-    const earlier = new Set<string>();
     for (const card of ordered) {
       const index = anchors.get(card.id);
       const key =
         index === undefined ? null : (messages[index]?.id ?? `index-${index}`);
-      if (key === null) {
-        // Its turn is behind "Load more": it appears there once loaded. An
-        // undecided card must stay reachable, so it shows at the end.
-        if (!complete && card.status !== "pending") continue;
-        rest.push(card);
-        if (!complete) earlier.add(card.id);
-      } else placed.set(key, [...(placed.get(key) ?? []), card]);
+      if (key === null) rest.push(card);
+      else placed.set(key, [...(placed.get(key) ?? []), card]);
     }
     const wordsOf = (card: ApprovalCard) =>
       cardWords(
@@ -150,8 +138,8 @@ export function useThreadAppCards(
       const index = anchors.get(card.id);
       return index === undefined ? null : requestBefore(facts, index);
     };
-    return { placed, rest, wordsOf, requestOf, earlier };
-  }, [data, apps, messages, registrations, complete]);
+    return { placed, rest, wordsOf, requestOf };
+  }, [data, apps, messages, registrations]);
 }
 
 /** Cards for a group of messages (after its last named message), or the rest. */
@@ -159,35 +147,23 @@ export function AppCardStack({
   cards,
   wordsOf,
   requestOf,
-  earlier,
   testId = "thread-app-approvals",
 }: {
   cards: ApprovalCard[];
   wordsOf: (card: ApprovalCard) => CardWords;
   requestOf?: (card: ApprovalCard) => string | null;
-  /** Cards shown here though their turn is not loaded yet. */
-  earlier?: Set<string>;
   testId?: string;
 }) {
   if (cards.length === 0) return null;
   return (
     <div className="flex w-full flex-col gap-2" data-testid={testId}>
       {cards.map((card) => (
-        <div key={card.id} className="flex w-full flex-col gap-1">
-          {earlier?.has(card.id) ? (
-            <p
-              className="text-muted-foreground text-xs"
-              data-testid="app-card-earlier"
-            >
-              From earlier in this chat
-            </p>
-          ) : null}
-          <ThreadAppCard
-            card={card}
-            words={wordsOf(card)}
-            request={requestOf?.(card) ?? null}
-          />
-        </div>
+        <ThreadAppCard
+          key={card.id}
+          card={card}
+          words={wordsOf(card)}
+          request={requestOf?.(card) ?? null}
+        />
       ))}
     </div>
   );

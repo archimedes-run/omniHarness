@@ -30,11 +30,6 @@ class ArtifactRow(Base):
     promoted_app_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     latest_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    #: In the owner's store (the Saved tab). False: it belongs to its chat.
-    saved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    saved_at: Mapped[float | None] = mapped_column(Float, nullable=True)
-    #: The chat that made it was deleted (the artifact itself is kept).
-    origin_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     archived_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     #: The latest version's text for text kinds (search, FR-034); never served.
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -98,34 +93,3 @@ class ArtifactImportRow(Base):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (UniqueConstraint("owner_id", "thread_id", "path", "content_hash", name="uq_artifact_imports_key"), Index("ix_artifact_imports_owner_thread_path", "owner_id", "thread_id", "path"))
-
-
-class ArtifactBundleFileRow(Base):
-    """One file of a `webapp` version's immutable file set (content in the blob
-    store by hash). Written with its version, never updated."""
-
-    __tablename__ = "artifact_bundle_files"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    artifact_id: Mapped[str] = mapped_column(String(32), nullable=False)
-    n: Mapped[int] = mapped_column(Integer, nullable=False)
-    path: Mapped[str] = mapped_column(String(500), nullable=False)
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    size: Mapped[int] = mapped_column(Integer, nullable=False)
-    media_type: Mapped[str] = mapped_column(String(100), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("artifact_id", "n", "path", name="uq_artifact_bundle_files_path"),
-        Index("ix_artifact_bundle_files_owner_hash", "owner_id", "content_hash"),
-    )
-
-
-class ArtifactMetaRow(Base):
-    """One-time store migrations, recorded as done (separately from any column
-    they add, so a crash between the two is finished on the next start)."""
-
-    __tablename__ = "artifact_meta"
-
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    done_at: Mapped[float] = mapped_column(Float, nullable=False)

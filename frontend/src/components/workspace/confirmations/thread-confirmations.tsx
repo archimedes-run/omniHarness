@@ -28,8 +28,6 @@ export function useThreadConfirmations(
   onContinue?: (agent: string, actionId: string) => void,
   onResumed?: (runId: string) => void,
   onPickUp?: (actionIds: string[]) => Promise<Record<string, PostedResult>>,
-  /** Every turn of the thread is loaded (no "Load more" left). */
-  historyComplete = true,
 ) {
   const { pending } = usePendingConfirmations();
   // A run that just finished may have stated a plan: read the pending set
@@ -63,7 +61,7 @@ export function useThreadConfirmations(
   }, [messages, ids]);
 
   // Spec 011: app cards, each after the turn that registered its version.
-  const appCards = useThreadAppCards(threadId, messages, historyComplete);
+  const appCards = useThreadAppCards(threadId, messages);
 
   const afterGroup = useCallback(
     (group: Message[]) => {
@@ -135,7 +133,6 @@ export function useThreadConfirmations(
         cards={appCards.rest}
         wordsOf={appCards.wordsOf}
         requestOf={appCards.requestOf}
-        earlier={appCards.earlier}
       />
     </>
   ) : null;

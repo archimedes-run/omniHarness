@@ -44,11 +44,13 @@ def gateway(tmp_path, monkeypatch):
     reset_extensions_config()
     set_auth_config(AuthConfig(jwt_secret=os.environ["AUTH_JWT_SECRET"]))
 
+    import app.gateway.artifacts_store.service as service
     import app.gateway.deps as deps
     from app.gateway.app import create_app
 
     monkeypatch.setattr(deps, "_cached_local_provider", None)
     monkeypatch.setattr(deps, "_cached_repo", None)
+    monkeypatch.setattr(service, "_LAST_FULL_IMPORT", {})
 
     with TestClient(create_app()) as client:
         resp = client.post("/api/v1/auth/initialize", json={"email": "owner@example.com", "password": "Str0ng!Pass99"})

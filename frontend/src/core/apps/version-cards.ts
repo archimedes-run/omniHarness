@@ -242,9 +242,6 @@ export function placeCards(
   messages: MessageFacts[],
   cards: Pick<ApprovalCard, "id" | "app_id" | "version" | "created_at">[],
   registrations: Map<string, JobRegistration[]>,
-  /** Every turn is loaded. When not, a card older than every placed card
-   * (its turn is behind "Load more") is left out, not guessed. */
-  complete = true,
 ): Map<string, number> {
   const anchors = anchorCards(
     messages.map((m) => m.text),
@@ -268,8 +265,6 @@ export function placeCards(
     const later = placed
       .filter((c) => time(c) > time(card))
       .sort((a, b) => time(a) - time(b))[0];
-    const between = placed.some((c) => time(c) <= time(card));
-    if (later && !complete && !between) continue; // behind "Load more"
     if (later) {
       const at = anchors.get(later.id)!;
       let before = -1;
