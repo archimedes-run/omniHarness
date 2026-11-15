@@ -200,3 +200,31 @@ describe("live slot", () => {
     expect(liveSlotHolder()).toBeNull();
   });
 });
+
+describe("link gate", () => {
+  it("one dialog, a cooldown, and only while the frame has the focus", async () => {
+    const { LinkGate, LINK_COOLDOWN_MS, splitLink } =
+      await import("@/core/artifacts/link-gate");
+    const g = new LinkGate();
+    expect(g.request("https://a.example", false, 0)).toEqual({
+      ok: false,
+      reason: "open_without_click",
+    });
+    expect(g.request("https://a.example", true, 0)).toEqual({ ok: true });
+    expect(g.request("https://a.example", true, 1)).toEqual({
+      ok: false,
+      reason: "open_busy",
+    });
+    g.closed(10);
+    expect(
+      g.request("https://a.example", true, 10 + LINK_COOLDOWN_MS - 1),
+    ).toEqual({ ok: false, reason: "open_too_soon" });
+    expect(g.request("https://a.example", true, 10 + LINK_COOLDOWN_MS)).toEqual(
+      { ok: true },
+    );
+    expect(splitLink("https://a.example/p?q=secret#h")).toEqual({
+      base: "https://a.example/p",
+      rest: "?q=secret#h",
+    });
+  });
+});

@@ -56,10 +56,14 @@ def _context(runtime: ToolRuntime[ContextT, ThreadState] | None, *, with_turn: b
         "Text is limited to 2 MB. `note`: one short line on what you made (shown as your words).\n"
         "Code kinds run only in a locked, sandboxed frame with NO network (no fetch, no outside images, fonts or "
         "scripts; use data: URLs and inline SVG), no storage that persists, no popups, no frames:\n"
-        "- html: `content` is ONE self-contained HTML document (inline <style> and <script>).\n"
+        "- html: `content` is ONE self-contained HTML document. The frame runs ONLY inline <script> blocks: no "
+        "on... attributes (onclick=...), no javascript: links, no <script src>; attach handlers with addEventListener. "
+        "No innerHTML, outerHTML, insertAdjacentHTML or document.write, no eval: build elements with "
+        "document.createElement, append and textContent. A page that breaks these rules fails its checks.\n"
         '- react: `content` is {"entry":"App.tsx","files":{"App.tsx":"...","styles.css":"..."}} (TSX/TS/JSX/JS/CSS, '
         "at most 50 files, 2 MB). The entry's DEFAULT EXPORT is the component the system mounts. Only react and "
-        "react-dom are available (no other packages; write plain CSS). The system builds it in this chat's sandbox.\n"
+        "react-dom can be imported (plus the project's own files by relative path; write plain CSS); no "
+        "dangerouslySetInnerHTML. The system builds it in this chat's sandbox.\n"
         "Both get the system checks (layout at 360, 560 and 1280 px in light and dark, no network, it renders). The "
         'frame sets class "dark" on <html> and CSS variables (--background, --foreground, --card, --muted, '
         "--muted-foreground, --primary, --primary-foreground, --border, --accent, --destructive, --ring): use them."

@@ -4,9 +4,52 @@ The contract between the gateway and the frontend (store page, inline
 artifact card, side panel, the locked frame). Requirements are in
 [`spec.md`](spec.md); this file names routes, JSON shapes, tool schemas and
 error codes only. Kinds in Slice 1: `markdown`, `code`, `svg`, `mermaid`,
-`chart`, `image`, plus `file` (only made by the importer; download only).
-Slice 2 adds the code kinds `html`, `react` and `webapp` (a stored static
-file set), which run only in the locked frame: see
+`chart`, `image`, plus `file` and `webapp` (made only by the owner's "Save to
+artifacts" on a chat's output, below).
+
+## Saved and unsaved (owner decision, 2026-11-14)
+
+- An artifact the assistant makes is **unsaved**: it belongs to its chat
+  (inline card, the chat's artifact list) and is NOT on the store's Saved tab.
+  The owner's **Save** button makes it **saved**: the Saved tab lists saved
+  artifacts only. The new store page sends `saved` EXPLICITLY
+  (`GET /api/artifacts?saved=true` for Saved, `saved=false` for Unsaved);
+  the API's default stays `saved=all`, today's behaviour, so the deployed page
+  keeps working until the new one ships. `archived=true` (the Archived tab)
+  lists archived artifacts in every saved state.
+- Save, Unsave, Download and "Save to artifacts" (a chat's output file) are the
+  OWNER's buttons. No model tool can save: there is no `artifact_save` tool and
+  no rule for one, so the policy layer refuses the name.
+- Nothing is deleted on the owner's behalf. **Deleting a chat never deletes
+  artifacts** (neither the chat's delete nor a run-history thread delete):
+  they stay stored with `origin_thread_id` kept and `origin_deleted: true`,
+  so the UI can say "from a chat you deleted"; unsaved ones stay on the
+  Unsaved view until the owner saves them or deletes them (archive, then the
+  typed delete). An optional sweep that prunes unsaved artifacts not changed
+  for N days exists but ships OFF (`artifacts.prune_unsaved_after_days: null`
+  in config.yaml); when an owner turns it on it never touches saved, pinned or
+  archived artifacts, or any the owner edited, restored or copied.
+- Unsaved artifacts count toward the 1 GB per-owner cap like saved ones.
+- Owner intent saves: pinning, renaming, an owner edit or a restore sets
+  `saved: true` (the same rule the one-time migration applied to older
+  artifacts). An assistant update does not. Unsave also unpins. An archived
+  artifact may be saved, and archiving does not unsave.
+- Chat outputs are no longer imported automatically.
+
+### What the owner sees after this change is deployed
+
+Existing artifacts are migrated once (recorded as done in `artifact_meta`,
+separately from the columns, so a start that stopped half way finishes on the
+next one): saved = true for those the owner showed intent on (pinned; edited
+or restored by the owner; metadata changed after their latest version, which
+is how a rename shows; or archived), false for everything else, including the
+files the old importer pulled in. Nothing is deleted. The Saved tab is therefore nearly empty at
+first; every other artifact is still reachable from its chat (inline cards and
+the chat's artifact list) and from the store's "Unsaved" view
+(`saved=false`), where Save puts it back in the store.
+
+Slice 2 adds the code kinds `html` and `react`, and renders `webapp`; all
+three run only in the locked frame: see
 [Code kinds (Slice 2)](#code-kinds-slice-2).
 
 ## Conventions
@@ -84,6 +127,9 @@ A write over any cap is refused before anything is stored.
   "latest_version": 3,
   "version_count": 3,
   "pinned": false,
+  "saved": false,
+  "saved_at": null,
+  "origin_deleted": false,
   "archived": false,
   "archived_at": null,
   "origin_thread_id": "6c0e…",
@@ -102,7 +148,7 @@ A write over any cap is refused before anything is stored.
 - `lineage`, `lineage_source`, `language`, `media_type`, `size` describe the
   **latest** version.
 - `imported_from`: `"<thread_id>:/mnt/user-data/outputs/<path>"` for an
-  artifact the importer made, else `null`.
+  artifact saved from a chat's outputs ("Save to artifacts"), else `null`.
 - `origin_turn_id` is the run id of the turn that made it (null for imports
   and owner-made copies).
 - `title` (and `note`) are stored with control, bidi and line-break characters
@@ -163,7 +209,8 @@ A write over any cap is refused before anything is stored.
 | `svg` | SVG text | the text, as given, after it passed the allowlist | `image/svg+xml` |
 | `chart` | `omni-chart/1` object (or its JSON string) | JSON (sorted keys, compact) | `application/json` |
 | `image` | from a file in the chat's outputs (`source_path`) | the bytes | from magic bytes: `image/png`, `image/jpeg`, `image/webp`, `image/gif` |
-| `file` | importer only | the bytes | `application/octet-stream` |
+| `file` | "Save to artifacts" only | the bytes | `application/octet-stream`, or `text/plain` for UTF-8 text |
+| `webapp` | "Save to artifacts" on a directory only | a manifest JSON `{"entry", "files": {path: {"hash", "size", "media_type"}}}`; each file is its own blob | `application/vnd.omni-webapp+json` |
 | `html` (S2) | one HTML document (string) | the document as given, after the scan | `text/html` |
 | `react` (S2) | `{"entry": "App.tsx", "files": {"App.tsx": "…"}}` | the built, inlined document (no shim); the canonical source JSON is a second blob | `text/html` |
 
@@ -223,28 +270,15 @@ markup.
 
 ### `GET /api/artifacts`
 
-Query: `kind` (one kind), `pinned` (`true`/`false`), `archived` (`false`
+Query: `saved` (`true` default = the Saved tab, `false` = unsaved only, `all`),
+`kind` (one kind), `pinned` (`true`/`false`), `archived` (`false`
 default, `true` = only archived, `all`), `thread` (origin thread id), `q`
 (case-insensitive match on title and the latest text of text kinds), `limit`
 (1 to 200, default 50), `offset` (default 0). Sorted pinned first, then
 `updated_at` newest first.
 
-Opening the store also schedules the **importer** in the background (never
-blocks the response): every file under each of the owner's chats'
-`outputs` becomes an artifact with origin `import`, once per
-`(thread, path, content_hash)`; a changed file at the same path becomes a new
-version of its artifact. Files ≤ 10 MB are copied (deduplicated by hash);
-larger ones are recorded with `stored: "chat"` without being read.
-
-Importer rules: every file is opened without following links (relative to an
-opened outputs directory, `O_NOFOLLOW`, regular files only, no FIFOs), read
-from that open file only and at most 10 MB; a file that changes between the
-listing and the open is skipped. A file whose size and mtime match what was
-recorded is not read again. One pass looks at most 500 files per chat, 2,000
-files and 256 MB across all chats. A changed file becomes a new version of the
-artifact it made only when the owner has not pinned it and its latest version
-is still an import; otherwise (edited, restored, pinned, or another kind) it
-becomes a new artifact. An artifact the owner deleted is not made again.
+Opening the store imports nothing (chat outputs are no longer imported
+automatically; see `POST /api/artifacts/import`).
 
 ```json
 {"artifacts": [ArtifactSummary], "total": 12, "usage": {"used": 52311, "cap": 1073741824}}
@@ -252,8 +286,8 @@ becomes a new artifact. An artifact the owner deleted is not made again.
 
 ### `GET /api/artifacts/threads/{thread_id}`
 
-The artifacts made in (or imported from) one chat, for its inline cards. Also
-schedules the importer for that chat.
+The artifacts made in (or saved from) one chat, saved or not, for its inline
+cards.
 
 ```json
 {
@@ -274,8 +308,13 @@ schedules the importer for that chat.
 ### `GET /api/artifacts/{id}/versions/{n}`
 
 `Version` plus `"content"` for `markdown`, `mermaid` (string), `code`
-(`{"language","text"}`) and `chart` (the object). `svg`, `image` and `file`
-have `"content": null`: load them through the content route.
+(`{"language","text"}`) and `chart` (the object). `svg`, `image`, `file` and
+`webapp` have `"content": null`: load them through the content route (or, for
+`webapp`, the frame route of Slice 2). `webapp` versions also carry
+`"files": [{"path", "size", "media_type"}]` and `"entry"`.
+
+Every Version has `"render"`, how the store shows it (see "Rendering in the
+store").
 
 ### `GET /api/artifacts/{id}/versions/{n}/content`
 
@@ -293,8 +332,94 @@ the content hash.
 | `chart` | `application/json` | inline |
 | `svg` | `image/svg+xml` (render ONLY as `<img src>`) | inline |
 | `image` | its media type | inline |
-| `file` | `application/octet-stream` | attachment (title as filename) |
+| `file` with `render: "text"` | `text/plain; charset=utf-8` | inline |
+| `file` (any other) | `application/octet-stream` | attachment (title as filename) |
+| `webapp` | the bundle manifest, `application/json` (never a page; the app renders only in the locked frame) | inline |
 | `html`, `react` (S2) | `text/plain; charset=utf-8` (the stored document as text, never a page) | inline |
+
+### `GET /api/artifacts/{id}/versions/{n}/download`
+
+The version as a file to keep. Same headers as the content route, plus
+`Content-Disposition: attachment; filename="<ascii>"; filename*=UTF-8''<utf-8>`.
+The name is built from the title: path separators, control, bidi and other
+unsafe characters removed, at most 100 characters before the extension, never
+empty (`artifact`), and the extension is the kind's own (a title's own
+extension is kept only when it already matches):
+
+| Kind | Extension and body |
+|---|---|
+| `markdown` | `.md` |
+| `code` | by language (`.py`, `.ts`, `.tsx`, `.js`, `.json`, `.sh`, `.go`, `.rs`, …; `.txt` when unknown), the code text |
+| `svg` | `.svg` |
+| `mermaid` | `.mmd` |
+| `chart` | `.json` (the omni-chart/1 spec) |
+| `image` | `.png`, `.jpg`, `.webp`, `.gif` by its type |
+| `file` | the title's own extension when it has one, else none; the bytes as stored |
+| `webapp` | `.zip` of the file set (paths as stored) |
+| `html` (S2) | `.html` (the stored document) |
+| `react` (S2) | `.html` (the built single document); `?source=zip` gives the sources as `.zip` |
+
+`409 lives_in_chat` for a version stored in its chat (download it from the
+chat).
+
+### `POST /api/artifacts/{id}/save` (CSRF) and `POST /api/artifacts/{id}/unsave` (CSRF)
+
+Owner session only. Idempotent. Save sets `saved: true` and `saved_at`
+(archived ones too). Unsave sets
+`saved: false`, `saved_at: null` and unpins. Returns `ArtifactSummary`.
+
+### `POST /api/artifacts/import` (CSRF): "Save to artifacts" on a chat's output
+
+Owner session only. Body: `{"thread_id": "…", "path": "/mnt/user-data/outputs/report.md"}`
+(a path under the chat's outputs; a relative path is taken under outputs).
+The chat must be the owner's (else `404 artifact_not_found`, no oracle).
+Every file is opened without following links, relative to the opened outputs
+directory (`O_NOFOLLOW`, regular files only, no FIFOs) and read from that open
+file only, at most its cap; a link, a hard link, a special file, a hidden file
+(a name starting with `.`, such as `.env`), a path with `..` or a path over
+400 characters is `422 invalid_request`.
+
+- A **file** becomes a SAVED artifact, origin `import`, lineage `import`
+  (source "a file from this chat"), `imported_from` set: kind by content
+  (`markdown` for `.md`, `mermaid` for `.mmd`, `svg` when it passes the SVG
+  rules, `image` by magic bytes, `code` by extension, else `file`; a `file`
+  that is UTF-8 text gets `render: "text"`). Cap 10 MB.
+- A **directory** with an `index.html` (a coding job's static web app) becomes
+  ONE saved artifact of kind `webapp`: an immutable file set, entry
+  `index.html`. Caps: at most 500 files and 20 MB in all, 12 directory levels
+  and 200 directories, regular files only. Links, hard links, special files,
+  hidden entries (`.name`) and names holding `\`, `:` or control or format
+  characters are skipped and listed in `skipped` (at most 200 listed). Over a
+  cap is `413 too_large`, nothing stored.
+- Saving the same path again with the same content returns the existing
+  artifact (`200`, `"created": false`); changed content is a new artifact.
+
+`{"artifact": ArtifactSummary, "created": true, "skipped": []}` (201).
+
+## Rendering in the store
+
+Every version has `render`; the store opens each kind so:
+
+| Kind | `render` | How the store shows it |
+|---|---|---|
+| `markdown` | `markdown` | the app's markdown renderer, raw HTML off |
+| `code` | `code` | the code viewer |
+| `svg` | `image` | `<img>` of the content route |
+| `mermaid` | `mermaid` | drawn in the isolated mermaid frame, shown as an image |
+| `chart` | `chart` | the in-repo chart renderer |
+| `image` | `image` | `<img>` of the content route |
+| `file`, UTF-8 text | `text` | the content route's text, shown as text |
+| `file`, anything else (PDF, office, archives) | `download` | a "Download to view" card (a PDF is not shown inline: the browser's viewer does not run in a sandboxed, script-free frame) |
+| `html`, `react` (S2) | `frame` | the locked frame (S2 `frame-token` / `frame.html`) |
+| `webapp` | `frame` | the locked frame, same route; see below |
+
+**`webapp` and the locked frame (contract with Slice 2, PR #218).** A webapp
+version is served ONLY through S2's `GET /api/artifacts/{id}/versions/{n}/frame-token`
+and `frame.html` under the frame's profile (the Apps profile, below). Each
+page is inlined once at save time from the stored file set (the Apps bundle
+inliner, `app/gateway/apps/bundle.py`) and served from that stored result,
+so the frame needs no second request and no network. No route serves a
+webapp's files one by one. See [`webapp` in the frame](#webapp-in-the-frame-the-save-models-file-set).
 
 ### `PATCH /api/artifacts/{id}` (CSRF)
 
@@ -332,12 +457,12 @@ Only an **archived** artifact. Body: `{"confirm_id": "<the artifact id>", "versi
 Both must match (the UI's dialog names the artifact and its version count);
 otherwise `400 confirmation_mismatch` and nothing is removed. Removes the
 record, its versions and any blob no other version of this owner references.
-An imported artifact stays deleted (the importer remembers it). Returns
+Returns
 `{"deleted": "<id>"}`.
 
 ### `GET /api/artifacts/usage`
 
-`{"used": 52311, "cap": 1073741824}`.
+`{"used": 52311, "cap": 1073741824}` (saved and unsaved artifacts both count).
 
 ## Chat tools
 
@@ -402,9 +527,9 @@ bindings (`versions_in_thread[].tool_call_id`) for chats reloaded from history.
 
 ## Code kinds (Slice 2)
 
-`html` and `react` artifacts are programs. They are never rendered by the
-host page and never served as a page of this origin: only in the **locked
-frame** below.
+`html`, `react` and `webapp` artifacts are programs. They are never rendered
+by the host page and never served as a page of this origin: only in the
+**locked frame** below.
 
 ### Objects: what code kinds add
 
@@ -458,44 +583,55 @@ SHA-256 is recorded), after a tool write, an owner edit, a restore of a
 version whose checks are not copied, and Check again: the coding jobs'
 layout probe at 360, 560 and 1280 px in the light and the dark theme
 (overflow, a clipped chart), the render check (loaded, rendered something,
-no uncaught error) and the no-network watch (any CSP violation or any
-request to anything but the probe's own server fails it). A fresh,
-unguessable folder per run, the probe's checksum, a per-run nonce and the
-document's hash echoed back; anything else is `not_checked`. A version that
-fails is stored and viewable, labelled.
+no uncaught error) and the no-network watch: any CSP violation, any request
+to anything but the probe's own server, and any WebRTC construction in any
+frame of the page (the probe wraps the constructors in every document before
+its scripts run and is told through a CDP binding the page cannot reach)
+fails it. A run whose WebRTC watch did not start is `not_checked`. Before the
+probe's fresh, unguessable folder is made, processes the sandbox user
+started since the sandbox's own services are stopped (as a coding job's
+checks do; a dev server the chat started there stops too). The probe's
+checksum, a per-run nonce, the document's hash and a clean exit (status 0)
+are all required; anything else is `not_checked`. Every file is read back in
+one capped command (`head -c cap+1`, never a link). A version that fails is
+stored and viewable, labelled. A **blocking finding** (below) fails the check
+with its words.
 
 ### `GET /api/artifacts/{id}/versions/{n}/frame-token`
 
-`{"token": "…", "expires_in": 300, "url": "/api/artifacts/{id}/versions/{n}/frame.html?t=…"}`.
-A short-lived token for one view of one version (owner, artifact, version
-bound). `409 build_failed` for a version with no document.
+`{"token": "…", "expires_in": 120, "url": "/api/artifacts/{id}/versions/{n}/frame.html?t=…"}`.
+A token for ONE view of one version: an HMAC under a key derived for this
+purpose only (never the session secret; never a session), carrying owner,
+artifact, version, expiry and a random nonce. The frame route records the
+nonce on first use, so the token serves one document and is worthless after
+(a reload, or the frame's own code reading its URL). Ask for a new one per
+view. `409 build_failed` for a version with no document.
 
 ### `GET /api/artifacts/{id}/versions/{n}/frame.html?t=…[&path=…]`
 
-`path` (webapp only): the relative path of one `.html`/`.htm` page of the
-version's file set (default: its entry). Plain segments only (letters,
-digits, `_ . @ + -`), no `..`, no leading `/`, no backslash, at most 10
-deep; anything else, a non-page file, or `path` on html/react is `404` with
-the inert page. The page is served INLINED: the gateway inlines that page's
-local stylesheets, scripts and images (data: URLs) into one document; no
-other file of the set is ever served to the frame (the CSP has no `'self'`),
-so a webapp has no network either. The same token covers every page of the
-version.
+The locked frame's document: the stored document (webapp: the page prepared
+at save, see below) with the gateway's shim
+(`artifacts_store/frame/artifact-shim.js`) PREPENDED as the first bytes after
+the doctype (never placed by parsing the document). Served ONLY when the
+request carries the owner's session, an unused token for this owner and
+version, `Sec-Fetch-Dest: iframe` and `Sec-Fetch-Site: same-origin`.
+Anything else (a top-level open, a fetch, another site, no, a used or a bad
+token) gets `403` with an inert page ("Open this artifact in OmniHarness.")
+under `default-src 'none'; style-src 'unsafe-inline'; sandbox;
+frame-ancestors 'none'`. The query string is not written to the access log.
 
-The locked frame's document: the stored document (webapp: the inlined page) with the gateway's shim
-(`artifacts_store/frame/artifact-shim.js`) injected as its first script.
-Served ONLY when the request carries the owner's session, a valid token for
-this owner and version, `Sec-Fetch-Dest: iframe` and `Sec-Fetch-Site:
-same-origin`. Anything else (a top-level open, a fetch, another site, no or
-a bad token) gets `403` with an inert page ("Open this artifact in
-OmniHarness.") under `default-src 'none'; style-src 'unsafe-inline';
-sandbox; frame-ancestors 'none'`.
+`path` (webapp only): one page of the set by its stored relative path
+(default: the entry). Only pages prepared at save are served; anything else
+(a non-page file, a page that could not be prepared, `..`, a leading `/`, or
+`path` on html/react) is `404` with the inert page.
 
-The document's headers, exactly (`artifacts_store/frame/profile.json`, the
-one source both sides read):
+The document's CSP is the **Apps profile** (Spec 011 FR-016), built by the
+same function (`app/gateway/apps/bundle.py` `csp()`), with one `'sha256-…'`
+per inline script of the served document (the shim's first). A script the
+gateway's parser does not see gets no hash and does not run:
 
 ```
-Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'sha256-…' …; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'
 Cache-Control: private, no-store
 Referrer-Policy: no-referrer
 X-Content-Type-Options: nosniff
@@ -506,9 +642,12 @@ Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 Content-Disposition: inline; filename="artifact.html"
 ```
 
-This is the **artifact profile** (FR-031): the app profile of Spec 011 with
-`script-src 'unsafe-inline'` instead of hashes and without the Trusted Types
-directives (a test fails on any other difference).
+There is no separate artifact profile: a test asserts the frame's CSP equals
+the Apps builder's output for the same hashes. Under it, inline event
+handler attributes, `javascript:` URLs, `<script src>` and HTML or code from
+strings (innerHTML, outerHTML, insertAdjacentHTML, document.write, eval) do
+not run. The gateway reports each as a **blocking finding** ("Will not run in
+the frame: …") at store time, and the check fails with it.
 
 The host embeds it as
 `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" src="{url}#n={nonce}&t={light|dark}">`,
@@ -524,8 +663,11 @@ with `sandbox` exactly `allow-scripts`.
   load or hello, a wrong nonce, or no hello tears the frame down.
 - Frame → host, on the port only: `{v:1, type:"ready"}`,
   `{v:1, type:"size", height}` (clamped 120 to 1200), `{v:1, type:"open", url}`
-  (`https:` only; opened after the owner confirms the host's "Open link?"
-  dialog naming the host). Anything else is dropped and reported.
+  (`https:` only, no credentials). The host raises its "Open link?" dialog
+  (the full URL, the query and fragment highlighted) only while the frame
+  holds the focus (the owner clicked into it), one dialog at a time, with a
+  pause after one closes; the link opens only on the owner's button.
+  Anything else is dropped and reported.
 - Host → frame, on the port: `{v:1, type:"theme", theme, vars}`; `vars` maps
   CSS custom properties (`--[a-z0-9-]{1,48}`) to plain values.
 - Nothing a frame sends reaches the model, starts a tool call or answers a
@@ -565,19 +707,29 @@ Logged as `artifact_message_refused`. Codes only: no free text from a frame.
 ### Chat tools (S2 changes)
 
 - `artifact_create(kind="html", content="<!doctype html>…")`: one
-  self-contained document. Refused (`invalid_content`): frame markup
+  self-contained document. The tool description tells the model the frame's
+  rule: scripts in inline `<script>` blocks only, handlers with
+  `addEventListener`, no `on…` attributes, no `javascript:` links, no
+  innerHTML, outerHTML, insertAdjacentHTML, document.write or eval (build with
+  DOM calls and `textContent`). Refused (`invalid_content`): frame markup
   (`iframe`, `frame`, `object`, `embed`, `portal`, `fencedframe`, `srcdoc`),
-  `RTCPeerConnection`, `RTCDataChannel`, `XSLTProcessor`. Remote references,
-  `@import`, `<meta http-equiv>`, `<base>`, WebSocket, EventSource, eval,
-  fetch, sendBeacon, serviceWorker are **findings** (stored, reported).
+  `RTCPeerConnection`, `RTCDataChannel`, `XSLTProcessor`. What the profile
+  will not run is a **blocking finding**; remote references, `@import`,
+  `<meta http-equiv>`, `<base>`, WebSocket, EventSource, fetch, sendBeacon,
+  serviceWorker are findings. All are stored and reported.
 - `artifact_create(kind="react", content={"entry", "files"})`: TSX, TS, JSX,
   JS, CSS, JSON files, short relative paths, no `..`, no name starting
-  `__omni`. The entry's default export is mounted into `#root`. Built in the
-  chat's sandbox (react and react-dom only); refused when there is no sandbox.
+  `__omni`. Imports: the project's own files by relative path (never above
+  it), `react`, `react-dom` (and their `jsx-runtime` / `client`) only; no
+  absolute paths or URLs; `dangerouslySetInnerHTML` is refused. The entry's
+  default export is mounted into `#root`. Built in the chat's sandbox with
+  `npm ci` from the tracked lockfile (`artifacts_store/react_kit/`); refused
+  when there is no sandbox.
 - `artifact_update(…, fix_of?: int)`: html takes `content` or `edits`;
-  react takes the whole `content`. `fix_of` names the version whose checks (or
-  build) failed; refused for a version that passed, a version that is itself
-  a fix, or one already fixed.
+  react takes the whole `content`. A tool's change of a version whose checks
+  (or build) failed IS the automatic fix whatever its arguments (recorded as
+  `fix_of`); one per artifact per turn. An explicit `fix_of` is refused for a
+  version that passed, a version that is itself a fix, or one already fixed.
 - The result names ids, numbers, states and the system's own words (checks
   passed / FAILED with the summary / gave no answer, the number of findings,
   and, after a failure, the instruction for the ONE automatic fix). The
@@ -585,43 +737,37 @@ Logged as `artifact_message_refused`. Codes only: no free text from a frame.
   are read with `artifact_read`, fenced.
 - `artifact_read` of a code kind returns, inside the fence: html the
   document; react `entry:` and each file under `----- file: PATH -----`;
-  then a failed build's log, the findings and the checks' failures. The tag
-  carries `build_state`, `checks` and `fix_of`.
+  webapp its file list and text files; then a failed build's log, the
+  findings and the checks' failures. The tag carries `build_state`, `checks`
+  and `fix_of`.
 - Tiers are unchanged (`artifact_create`, `artifact_update`: Tier 2,
   disclosed once; the build runs inside the call, so there is no second
-  disclosure). No promote, export or share tool.
+  disclosure). No promote, export, save or share tool.
 
-### `webapp`: a stored static file set (for the Save flow)
+### `webapp` in the frame (the save model's file set)
 
-One version is ONE canonical blob: JSON `{"entry": "index.html", "files":
-{"<path>": "<base64>"}}` (sorted keys), 1 to 300 files, at most 2 MB
-decoded, paths under the rules above. Made in the gateway (no chat tool
-makes one) with:
+A `webapp` is made only by the owner's "Save to artifacts" on a chat's
+directory (`POST /api/artifacts/import`, above), stored as its immutable file
+set. At save time the gateway prepares every `.html`/`.htm` page of it (the
+entry first, at most 50): each page is inlined from ONLY the files it and
+its stylesheets reference (so one page is bounded by the inliner's 2 MB cap
+whatever the size of the set), links between pages become fragments, and
+the result is scanned and stored. The frame route serves the stored page and
+never inlines on request. A page that cannot be prepared (a remote script,
+a missing file, over the cap) is listed with its reason; if the entry cannot
+be, the version is `build_failed`. `GET /versions/{n}` of a webapp adds
+`"pages": [{"path", "ok", "reason"}]`. Its checks are `not_checked` ("saved
+from its chat") until Check again.
 
-```python
-from app.gateway.artifacts_store.frame import canonical_webapp
-canon, findings = canonical_webapp({"index.html": b"...", "css/a.css": b"..."}, "index.html")
-store.create(owner_id, kind="webapp", title=..., canon=canon, lineage=..., lineage_source=..., origin=...,
-             thread_id=..., code={"findings": findings, "recipe": {"tool": "none", "kind": "webapp", "from": "<where>"}})
-```
+### Downloads of code kinds
 
-`canonical_webapp` refuses (`InvalidContent`) a bad path, a missing or
-non-html entry, an entry that does not inline (a remote script or
-stylesheet, a missing local file) and the scan's refusals; `TooLarge` over
-the cap. The version's checks run on the inlined entry like any code kind.
-`GET /versions/{n}` adds `"webapp": {"entry", "files": [{"path", "size"}]}`.
-`artifact_read` lists the files and returns its text files, fenced.
-
-### `GET /api/artifacts/{id}/versions/{n}/download?form=page|source`
-
-Always an attachment (`Content-Disposition: attachment; filename="<title>.html"`
-or `"<title>-source.zip"`, title reduced to `[A-Za-z0-9._-]`), with the
-content route's headers. `page` (`application/octet-stream`): the built
-document (webapp: the inlined entry) with a network-blocking CSP `<meta>`
-first in `<head>`, no shim; `409 build_failed` for a failed build. `source`
-(`application/zip`): html `index.html`; react its files; webapp its set;
-every name re-checked under the path rules, plain files (mode 0644), fixed
-timestamps.
+Through the save model's `GET /api/artifacts/{id}/versions/{n}/download`
+(names and headers as above): `html` and `react` give the built page
+(`.html`) with a restrictive CSP `<meta>` prepended by the gateway (first
+after the doctype), so a saved copy runs under that policy (no outside
+loads), no shim; `409 build_failed` for a failed build. `?source=zip` gives
+the sources as `<title>-source.zip` (html `index.html`, react its files;
+names re-checked, plain files, fixed timestamps). `webapp` is its `.zip`.
 
 ### The frame component (frontend)
 

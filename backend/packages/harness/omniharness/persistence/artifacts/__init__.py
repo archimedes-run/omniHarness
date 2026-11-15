@@ -1,3 +1,3 @@
-from omniharness.persistence.artifacts.model import ArtifactBuildRow, ArtifactCheckRow, ArtifactCodeRow, ArtifactImportRow, ArtifactRow, ArtifactVersionRow
+from omniharness.persistence.artifacts.model import ArtifactBuildRow, ArtifactBundleFileRow, ArtifactCheckRow, ArtifactCodeRow, ArtifactFrameUseRow, ArtifactImportRow, ArtifactMetaRow, ArtifactPageRow, ArtifactRow, ArtifactVersionRow
 
-__all__ = ["ArtifactBuildRow", "ArtifactCheckRow", "ArtifactCodeRow", "ArtifactImportRow", "ArtifactRow", "ArtifactVersionRow"]
+__all__ = ["ArtifactBuildRow", "ArtifactBundleFileRow", "ArtifactCheckRow", "ArtifactCodeRow", "ArtifactFrameUseRow", "ArtifactImportRow", "ArtifactMetaRow", "ArtifactPageRow", "ArtifactRow", "ArtifactVersionRow"]

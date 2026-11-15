@@ -93,6 +93,16 @@ def _site(root: Path, name: str, js_change, css_change, prod_js_change=None) -> 
 
 
 #: Changes to the kit for starter cases: (old, new) in omni-react.tsx.
+#: Changes to the starter's App.tsx: how an app's calendar rows show times.
+ROW = 'meta={item.all_day ? "All day" : item.start ? z.formatTime(item.start) : undefined} href={null} time={item.all_day ? null : (item.start ?? null)} />'
+APP_CHANGES = {
+    # Start at the left of the title, the end time in the meta.
+    "start-left-end-right": ('title={String(item.title ?? "")} ' + ROW, 'title={`${item.start ? z.formatTime(item.start) : ""} ${item.title ?? ""}`} ' + ROW.replace("z.formatTime(item.start)", "z.formatTime(item.end!)")),
+    # A range in the meta: "9:30–9:45 AM".
+    "range": (ROW, ROW.replace("z.formatTime(item.start)", 'z.formatTime(item.start).replace(/ [AP]M$/, "") + "–" + z.formatTime(item.end!)')),
+    # Only the end time: a design finding, not a failure (the Timeline shows each start).
+    "end-only": (ROW, ROW.replace("z.formatTime(item.start)", "z.formatTime(item.end!)")),
+}
 KIT_CHANGES = {
     # A broken kit: event times formatted in UTC, the rest unchanged.
     "utc-rows": ('const time = new Intl.DateTimeFormat("en-US", { timeZone: tz,', 'const time = new Intl.DateTimeFormat("en-US", { timeZone: "UTC",'),
@@ -111,8 +121,8 @@ def _starter_site(root: Path, tz: str, kit_change: str | None = None) -> str:
     suffix = f"-{kit_change}" if kit_change else ""
     project = project.with_name(project.name + suffix)
     for rel, content in app_kit.kit_files(manifest).items():
-        if kit_change and rel == "omni-kit/omni-react.tsx":
-            old, new = KIT_CHANGES[kit_change]
+        if kit_change in KIT_CHANGES and rel == "omni-kit/omni-react.tsx" or kit_change in APP_CHANGES and rel == "omni-kit/starter/App.tsx":
+            old, new = {**KIT_CHANGES, **APP_CHANGES}[kit_change]
             assert old in content, kit_change
             content = content.replace(old, new)
         (project / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +193,7 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     starters = [_starter_site(root, tz) for tz in STARTER_ZONES]
     starters.append(_starter_site(root, "America/New_York", "axis-24h"))
     utc_rows = _starter_site(root, "America/New_York", "utc-rows")
+    shapes = [_starter_site(root, "America/New_York", shape) for shape in APP_CHANGES]
     os.chmod(root, 0o777)
     for d in root.rglob("*"):
         os.chmod(d, 0o777)
@@ -227,9 +238,16 @@ def test_the_app_probe_passes_a_good_app_and_fails_each_broken_copy(tmp_path) ->
     assert not good["errors_detail"]
     crash = results["uses_innerhtml"]["errors_detail"]
     assert crash and "TrustedHTML" in crash[0]["message"] and crash[0]["frames"]
-    for name in [*starters, "chart_titles_ny"]:
+    for name in [*starters, *shapes, "chart_titles_ny"]:
         r = results[name]
         assert r["outcome"] == "pass", (name, r["failures"], r.get("error"))
+    # The kit's own parts carry no design finding of their own.
+    for name in starters:
+        assert not [d for d in results[name]["design"] if "under 12 px" in d], (name, results[name]["design"])
+    # A row's end time or range beside its start is fine; only the end: a finding.
+    for name in shapes:
+        notes = [d for d in results[name]["design"] if "shows no start time" in d]
+        assert notes == (["the event 'Team standup' shows no start time (shows 9:45 AM); expected 9:30 AM somewhere in its row"] if name.endswith("end-only") else []), (name, results[name]["design"])
     # The kit's marked event times, read and compared per event: a kit that
     # formats them in UTC fails, naming the event.
     r = results[utc_rows]

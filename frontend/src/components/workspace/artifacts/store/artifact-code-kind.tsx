@@ -6,6 +6,7 @@ import {
   MessageSquarePlusIcon,
   PencilIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useRef, useState } from "react";
 
 import { useOptionalPromptInputController } from "@/components/ai-elements/prompt-input";
@@ -25,7 +26,11 @@ import { refusalWords, titleText } from "@/core/artifacts/store-logic";
 import { safeField } from "@/core/display/safe";
 import { cn } from "@/lib/utils";
 
-import { ArtifactCode } from "./artifact-code";
+// CodeMirror loads only when the Code tab is opened (an empty chat ships none).
+const ArtifactCode = dynamic(
+  () => import("./artifact-code").then((m) => m.ArtifactCode),
+  { ssr: false },
+);
 import {
   CheckDetails,
   CheckLabel,
@@ -68,9 +73,7 @@ export function CodeKindView({
   const box = useRef<HTMLDivElement | null>(null);
   const title = titleText(artifact.title);
   const build = artifact.code?.build;
-  const pages = (detail?.webapp?.files ?? [])
-    .map((f) => f.path)
-    .filter((p) => /\.html?$/i.test(p));
+  const pages = (detail?.pages ?? []).filter((p) => p.ok).map((p) => p.path);
   const canRebuild =
     artifact.kind === "react" &&
     !artifact.archived &&
@@ -152,7 +155,7 @@ export function CodeKindView({
         <AskButton artifactId={artifact.id} version={version} />
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        {code?.build_state === "ok" && (
+        {code?.build_state === "ok" && artifact.kind !== "webapp" && (
           <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
             <a
               href={downloadUrl(artifact.id, version, "page")}
@@ -166,12 +169,16 @@ export function CodeKindView({
         )}
         <Button asChild size="sm" variant="ghost" className="max-md:min-h-11">
           <a
-            href={downloadUrl(artifact.id, version, "source")}
+            href={downloadUrl(
+              artifact.id,
+              version,
+              artifact.kind === "webapp" ? "page" : "source",
+            )}
             download
             data-testid="artifact-download-source"
           >
             <DownloadIcon />
-            Source (.zip)
+            {artifact.kind === "webapp" ? "Files (.zip)" : "Source (.zip)"}
           </a>
         </Button>
       </div>
@@ -224,9 +231,7 @@ export function CodeKindView({
                     type="button"
                     size="sm"
                     variant={
-                      (page ?? detail?.webapp?.entry) === p
-                        ? "secondary"
-                        : "ghost"
+                      (page ?? detail?.entry) === p ? "secondary" : "ghost"
                     }
                     onClick={() => setPage(p)}
                     className="h-7 font-mono text-xs max-md:min-h-11"
@@ -254,7 +259,7 @@ export function CodeKindView({
         />
       ) : artifact.kind === "webapp" ? (
         <ul className="text-sm" data-testid="artifact-webapp-files">
-          {(detail?.webapp?.files ?? []).map((f) => (
+          {(detail?.files ?? []).map((f) => (
             <li key={f.path} className="font-mono text-xs">
               {safeField(f.path)}{" "}
               <span className="text-muted-foreground">({f.size} bytes)</span>

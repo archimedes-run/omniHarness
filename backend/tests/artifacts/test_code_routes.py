@@ -7,6 +7,7 @@ import pytest
 from fake_sandbox import FakeSandbox, failing
 from langchain_core.messages import AIMessage
 
+from app.gateway.apps import bundle
 from app.gateway.artifacts_store import code_service, frame
 from app.gateway.artifacts_store.service import GatewayArtifactController
 from app.gateway.internal_auth import create_internal_auth_headers
@@ -42,42 +43,77 @@ def token(gateway, aid, n=1):
 def test_frame_is_served_only_to_this_apps_iframe_with_a_view_token(gateway, sandbox):
     aid = make(gateway)
     c = gateway.client
+    # Anything else is inert: a top-level open, a fetch, another site (each with a fresh token).
+    for headers in ({}, {**IFRAME, "Sec-Fetch-Dest": "document"}, {**IFRAME, "Sec-Fetch-Dest": "empty"}, {**IFRAME, "Sec-Fetch-Site": "cross-site"}, {**IFRAME, "Sec-Fetch-Site": "same-site"}):
+        resp = c.get(token(gateway, aid)["url"], headers=headers)
+        assert resp.status_code == 403 and "secret-marker" not in resp.text, headers
+        assert resp.headers["content-security-policy"].startswith("default-src 'none'") and "sandbox" in resp.headers["content-security-policy"]
     url = token(gateway, aid)["url"]
     ok = c.get(url, headers=IFRAME)
     assert ok.status_code == 200
-    assert ok.headers["content-security-policy"] == frame.CSP
+    doc, hashes = frame.frame_document(PAGE.encode())
+    assert ok.content == doc and ok.headers["content-security-policy"] == bundle.csp(hashes)
     for name, value in frame.HEADERS.items():
         assert ok.headers[name] == value, name
     assert ok.headers["content-type"] == "text/html; charset=utf-8"
-    assert ok.text.index("<script>") < ok.text.index("secret-marker")
-    assert frame.SHIM[:60] in ok.text
-    # Anything else is inert: a top-level open, a fetch, another site, no or a bad token.
-    for headers in ({}, {**IFRAME, "Sec-Fetch-Dest": "document"}, {**IFRAME, "Sec-Fetch-Dest": "empty"}, {**IFRAME, "Sec-Fetch-Site": "cross-site"}, {**IFRAME, "Sec-Fetch-Site": "same-site"}):
-        resp = c.get(url, headers=headers)
-        assert resp.status_code == 403 and "secret-marker" not in resp.text, headers
-        assert resp.headers["content-security-policy"].startswith("default-src 'none'") and "sandbox" in resp.headers["content-security-policy"]
+    assert ok.text.startswith("<!doctype html><script>")
+    # ONE document per token: the same URL again (a reload, or the frame's
+    # own code reading location.href) gets nothing.
+    again = c.get(url, headers=IFRAME)
+    assert again.status_code == 403 and "secret-marker" not in again.text
     bare = f"/api/artifacts/{aid}/versions/1/frame.html"
     assert "secret-marker" not in c.get(bare, headers=IFRAME).text
-    assert "secret-marker" not in c.get(bare + "?t=forged", headers=IFRAME).text
+    assert "secret-marker" not in c.get(bare + "?t=forged.x", headers=IFRAME).text
 
 
-def test_a_token_is_bound_to_owner_artifact_and_version(gateway, sandbox):
+def test_a_token_is_bound_to_owner_artifact_and_version_and_cannot_be_altered(gateway, sandbox):
+    import base64
+    import json as _json
+
     a = make(gateway)
     b = make(gateway, content=PAGE.replace("Hello", "Other"))
     c = gateway.client
     t_a = token(gateway, a)["token"]
     assert "secret-marker" not in c.get(f"/api/artifacts/{b}/versions/1/frame.html?t={t_a}", headers=IFRAME).text
     gateway.store.add_version(gateway.user_id, a, base_version=1, canon=frame.canonical_html(PAGE + " ")[0], lineage="user", lineage_source=None, origin="owner_edit", code={})
-    assert c.get(f"/api/artifacts/{a}/versions/2/frame.html?t={t_a}", headers=IFRAME).status_code == 403
+    assert c.get(f"/api/artifacts/{a}/versions/2/frame.html?t={token(gateway, a)['token']}", headers=IFRAME).status_code == 403
+    body, mac = token(gateway, a, 2)["token"].split(".")
+    payload = _json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    payload["a"] = b
+    payload["n"] = 1
+    forged = base64.urlsafe_b64encode(_json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=") + "." + mac
+    assert c.get(f"/api/artifacts/{b}/versions/1/frame.html?t={forged}", headers=IFRAME).status_code == 403
 
 
 def test_an_expired_token_is_refused(gateway, sandbox, monkeypatch):
-    import app.gateway.routers.artifact_store as routes
+    from app.gateway.artifacts_store import frame_token
 
     aid = make(gateway)
-    monkeypatch.setattr(routes, "FRAME_TOKEN_SECONDS", -30)
+    monkeypatch.setattr(frame_token, "SECONDS", -30)
     url = token(gateway, aid)["url"]
     assert gateway.client.get(url, headers=IFRAME).status_code == 403
+
+
+def test_a_frame_token_is_not_a_session(gateway, sandbox):
+    """Purpose-bound key, not the session secret: as a session cookie it is nothing."""
+    from fastapi.testclient import TestClient
+
+    aid = make(gateway)
+    t = token(gateway, aid)["token"]
+    stranger = TestClient(gateway.app)
+    stranger.cookies.set("access_token", t)
+    assert stranger.get("/api/v1/auth/me").status_code == 401
+    assert stranger.get("/api/artifacts").status_code == 401
+
+
+def test_the_frame_query_never_reaches_the_access_log():
+    import logging
+
+    from app.gateway.routers.artifact_store import _RedactFrameQuery
+
+    record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d', ("1.2.3.4:5", "GET", "/api/artifacts/a/versions/1/frame.html?t=secret.token&path=x", "1.1", 200), None)
+    _RedactFrameQuery().filter(record)
+    assert "secret" not in record.getMessage() and "frame.html?[redacted]" in record.getMessage()
 
 
 def test_the_internal_token_is_refused_on_frame_routes(gateway, sandbox):
@@ -161,88 +197,94 @@ def test_failing_check_label_and_refusal_log(gateway, sandbox, caplog):
     assert gateway.client.post(f"/api/artifacts/{aid}/refused", json={"reason": "Free text here"}).status_code == 422
 
 
-# -- webapp (a stored file set) and downloads (owner update) -----------------------------
+# -- webapp (the save model's file set) and downloads ----------------------------------
 
 SITE = {
     "index.html": b'<!doctype html><html><head><link rel="stylesheet" href="css/site.css"></head><body><h1 id=home-marker>Home</h1><img src="img/dot.png"><a href="about.html">About</a><script src="js/app.js"></script></body></html>',
     "about.html": b"<!doctype html><html><head></head><body><h1 id=about-marker>About</h1></body></html>",
+    "broken.html": b'<!doctype html><script src="https://cdn.example/x.js"></script>',
     "css/site.css": b"h1{color:var(--primary)}",
     "js/app.js": b"document.title='site'",
     "img/dot.png": b"\x89PNG\r\n\x1a\nxx",
+    "big/blob.bin": b"x" * (3 * 1024 * 1024),  # in the set, referenced by no page
 }
 
 
 def make_webapp(gateway, files=SITE):
-    canon, findings = frame.canonical_webapp(files, "index.html")
-    code = {"findings": findings, "recipe": {"tool": "none", "kind": "webapp"}}
-    summary, _ = gateway.store.create(gateway.user_id, kind="webapp", title="My site", canon=canon, lineage="user", lineage_source=None, origin="tool", thread_id="thread-a", code=code)
+    """Through the save model's own storage (store.create with the bundle)."""
+    from app.gateway.artifacts_store import kinds
+    from app.gateway.artifacts_store.kinds import Canonical
+    from app.gateway.artifacts_store.service import webapp_media_type
+
+    bundle_files = {p: (d, webapp_media_type(p)) for p, d in files.items()}
+    manifest = kinds.dumps({"entry": "index.html", "files": {p: {"size": len(d)} for p, (d, _) in sorted(bundle_files.items())}})
+    summary, _ = gateway.store.create(
+        gateway.user_id,
+        kind="webapp",
+        title="My site",
+        canon=Canonical(manifest, kinds.MEDIA_TYPES["webapp"]),
+        bundle=bundle_files,
+        lineage="import",
+        lineage_source="a file from this chat",
+        origin="import",
+        thread_id="thread-a",
+        saved=True,
+    )
     return summary["id"]
 
 
-def test_webapp_pages_are_served_inlined_by_relative_path(gateway, sandbox):
+def test_webapp_pages_are_inlined_once_at_save_and_served_by_relative_path(gateway, sandbox, monkeypatch):
     aid = make_webapp(gateway)
     c = gateway.client
-    url = token(gateway, aid)["url"]
-    home = c.get(url, headers=IFRAME)
+    pages = {p["path"]: p for p in c.get(f"/api/artifacts/{aid}/versions/1").json()["pages"]}
+    assert pages["index.html"]["ok"] and pages["about.html"]["ok"] and not pages["broken.html"]["ok"]
+    # The request path never inlines: the stored page is served.
+    from app.gateway.apps import bundle as bundle_mod
+
+    def boom(*a, **k):
+        raise AssertionError("inlined on the request path")
+
+    monkeypatch.setattr(bundle_mod, "inline", boom)
+    home = c.get(token(gateway, aid)["url"], headers=IFRAME)
     assert home.status_code == 200 and "home-marker" in home.text
-    assert home.headers["content-security-policy"] == frame.CSP
-    assert "h1{color:var(--primary)}" in home.text and "data:image/png;base64," in home.text and "document.title='site'" in home.text
-    assert 'href="css/site.css"' not in home.text and 'src="js/app.js"' not in home.text
-    about = c.get(url + "&path=about.html", headers=IFRAME)
-    assert about.status_code == 200 and "about-marker" in about.text and about.headers["content-security-policy"] == frame.CSP
-    for bad in ("../index.html", "/index.html", "css/site.css", "js/app.js", "missing.html", "a/../index.html", "about.html%00", ".hidden.html", "about.html/"):
-        resp = c.get(url + "&path=" + bad, headers=IFRAME)
+    doc, hashes = frame.frame_document(gateway.store.page_document(gateway.user_id, aid, 1))
+    assert home.content == doc and home.headers["content-security-policy"] == bundle.csp(hashes)
+    assert "h1{color:var(--primary)}" in home.text and "data:image/png;base64," in home.text and 'src="js/app.js"' not in home.text
+    about = c.get(token(gateway, aid)["url"] + "&path=about.html", headers=IFRAME)
+    assert about.status_code == 200 and "about-marker" in about.text
+    for bad in ("../index.html", "/index.html", "css/site.css", "js/app.js", "broken.html", "missing.html", "a/../index.html", "about.html%00", "./about.html", "big/blob.bin"):
+        resp = c.get(token(gateway, aid)["url"] + "&path=" + bad, headers=IFRAME)
         assert resp.status_code in (403, 404) and "marker" not in resp.text, bad
-    # Without the iframe headers a page is inert too.
-    assert "about-marker" not in c.get(url + "&path=about.html").text
-    v = c.get(f"/api/artifacts/{aid}/versions/1").json()
-    assert v["webapp"]["entry"] == "index.html" and {f["path"] for f in v["webapp"]["files"]} == set(SITE)
-    assert v["code"]["check"]["state"] in ("pending", "passed", "not_checked")
 
 
-@pytest.mark.parametrize(
-    "files, entry",
-    [
-        ({"../x.html": b"x"}, "../x.html"),
-        ({"/abs.html": b"x"}, "/abs.html"),
-        ({"a\\b.html": b"x"}, "a\\b.html"),
-        ({"index.html": b"<iframe src=x></iframe>"}, "index.html"),
-        ({"index.html": b"<img src='https://x/y.png'><script src='https://cdn/x.js'></script>"}, "index.html"),
-        ({"style.css": b"x"}, "style.css"),
-        ({"index.html": b"x"}, "other.html"),
-    ],
-)
-def test_webapp_sets_are_refused_when_unsafe(files, entry):
-    from app.gateway.artifacts_store.kinds import InvalidContent
-
-    with pytest.raises(InvalidContent):
-        frame.canonical_webapp(files, entry)
+def test_a_webapp_whose_entry_cannot_be_shown_is_a_failed_build(gateway, sandbox):
+    aid = make_webapp(gateway, {"index.html": b'<!doctype html><script src="https://cdn.example/x.js"></script>'})
+    v = gateway.client.get(f"/api/artifacts/{aid}/versions/1").json()
+    assert v["code"]["build_state"] == "build_failed" and gateway.client.get(f"/api/artifacts/{aid}/versions/1/frame-token").status_code == 409
 
 
-def test_webapp_size_cap():
-    from app.gateway.artifacts_store import caps
-    from app.gateway.artifacts_store.kinds import TooLarge
-
-    with pytest.raises(TooLarge):
-        frame.canonical_webapp({"index.html": b"<p>x</p>", "big.bin": b"x" * caps.WEBAPP_FILES_BYTES}, "index.html")
+def test_webapp_page_bound_comes_from_the_page_not_the_set():
+    files = {"index.html": b"<p>ok</p>", "huge.html": b'<img src="a.png">', "a.png": b"\x89PNG" + b"x" * (3 * 1024 * 1024)}
+    done, failed, _ = frame.webapp_pages(files, "index.html")
+    assert "index.html" in done and "huge.html" in failed
 
 
-def test_download_page_and_source(gateway, sandbox):
+def test_download_follows_the_save_model_names(gateway, sandbox):
     import io
     import zipfile
 
     aid = make(gateway, "react", REACT)
-    page = gateway.client.get(f"/api/artifacts/{aid}/versions/1/download?form=page")
+    page = gateway.client.get(f"/api/artifacts/{aid}/versions/1/download")
     assert page.status_code == 200 and page.headers["content-type"] == "application/octet-stream"
-    assert page.headers["content-disposition"].startswith("attachment;") and page.headers["content-security-policy"] == "default-src 'none'; sandbox"
-    assert page.text.index("Content-Security-Policy") < page.text.index("<script")
-    src = gateway.client.get(f"/api/artifacts/{aid}/versions/1/download?form=source")
+    assert page.headers["content-disposition"].startswith('attachment; filename="Page.html"')
+    assert page.text.startswith("<!doctype html>" + frame.DOWNLOAD_META)
+    src = gateway.client.get(f"/api/artifacts/{aid}/versions/1/download?source=zip")
     zf = zipfile.ZipFile(io.BytesIO(src.content))
     assert zf.namelist() == ["App.tsx"] and zf.read("App.tsx").decode() == REACT["files"]["App.tsx"]
-    site = make_webapp(gateway)
-    names = zipfile.ZipFile(io.BytesIO(gateway.client.get(f"/api/artifacts/{site}/versions/1/download?form=source").content)).namelist()
-    assert sorted(names) == sorted(SITE) and all(not n.startswith("/") and ".." not in n for n in names)
+    assert "Page-source.zip" in src.headers["content-disposition"]
+    html = make(gateway)
+    assert gateway.client.get(f"/api/artifacts/{html}/versions/1/download").text.startswith("<!doctype html>" + frame.DOWNLOAD_META)
     sandbox["ops"].build = lambda files: (1, {}, "error")
     failed = make(gateway, "react", REACT)
-    assert gateway.client.get(f"/api/artifacts/{failed}/versions/1/download?form=page").status_code == 409
-    assert gateway.client.get(f"/api/artifacts/{failed}/versions/1/download?form=source").status_code == 200
+    assert gateway.client.get(f"/api/artifacts/{failed}/versions/1/download").status_code == 409
+    assert gateway.client.get(f"/api/artifacts/{failed}/versions/1/download?source=zip").status_code == 200

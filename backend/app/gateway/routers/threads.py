@@ -253,6 +253,17 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
     except Exception:
         logger.warning("Could not close the questions of thread %s", sanitize_log_param(thread_id), exc_info=True)
 
+    # Deleting a chat NEVER deletes artifacts (Spec 012 FR-062): they stay
+    # stored, only marked as coming from a deleted chat.
+    artifact_store = getattr(request.app.state, "artifact_store", None)
+    if artifact_store is not None:
+        try:
+            from fastapi.concurrency import run_in_threadpool
+
+            await run_in_threadpool(artifact_store.mark_origin_deleted, get_effective_user_id(), thread_id)
+        except Exception:
+            logger.warning("Could not mark the artifacts of deleted thread %s", sanitize_log_param(thread_id), exc_info=True)
+
     # Clean local filesystem
     response = _delete_thread_data(thread_id, user_id=get_effective_user_id())
 

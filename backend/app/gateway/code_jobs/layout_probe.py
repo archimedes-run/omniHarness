@@ -334,6 +334,30 @@ APP_WATCH = r"""
 })()
 """
 
+#: Artifact mode (Spec 012): added to EVERY document of the page, every frame
+#: included, before any of the page's scripts. The WebRTC constructors are
+#: wrapped so each construction is reported through a CDP binding the page
+#: cannot reach afterwards (the reference is kept in this closure and the
+#: global removed). The page's shim then removes the constructors anyway: a
+#: report means a working constructor was reached somewhere (another realm).
+RTC_WATCH = r"""
+(function () {
+  var report = window.__omniRtcSeen;
+  try { delete window.__omniRtcSeen; } catch (e) {}
+  if (typeof report !== 'function') return;
+  ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel'].forEach(function (name) {
+    var Original = window[name];
+    if (typeof Original !== 'function') return;
+    var Wrapped = function () {
+      try { report(name); } catch (e) {}
+      return Reflect.construct(Original, arguments, new.target || Wrapped);
+    };
+    Wrapped.prototype = Original.prototype;
+    try { Object.defineProperty(window, name, { value: Wrapped, writable: true, configurable: true }); } catch (e) {}
+  });
+})()
+"""
+
 #: Runs in the page, in the isolated world, after MEASURE: contrast, small
 #: text, small touch targets, nested frames, and the tile words. Returns
 #: numbers, booleans and short filtered strings only.
@@ -486,7 +510,9 @@ APP_MEASURE = r"""
   }
   // The calendar's sample times, read where each EVENT's time is shown,
   // never from clock-like text elsewhere (an hour axis, a header clock).
-  // 1. Elements the kit marks with data-omni-time="<iso>": their own text.
+  // 1. Elements the kit marks with data-omni-time="<iso>" (a Row, a
+  //    Timeline block's title): right when the event's local START shows
+  //    anywhere in their text; an end time or a range beside it is ignored.
   // 2. Otherwise: the smallest container (a few levels up) holding the
   //    event's title and a time, outside any chart.
   const tcfg = cfg.times || {};
@@ -499,10 +525,13 @@ APP_MEASURE = r"""
     const el = markedEls[i];
     const when = at(el.getAttribute('data-omni-time') || '');
     const ev = events.find((e) => at(e.iso) === when);
-    const shown = (el.textContent || '').trim().slice(0, 80);
+    const parts = [];
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(), k = 0; n && k < 40; n = tw.nextNode(), k++) parts.push(n.nodeValue || '');
+    const shown = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 240);
     if (!ev || !shown) continue;
     markedTitles.add(ev.title);
-    const clock = (shown.match(/\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?/) || [''])[0];
+    const clock = (shown.split(ev.title).join(' ').match(/\d{1,2}:\d{2}(?:\s?[AaPp]\.?[Mm]\.?)?/) || [''])[0];
     marked.push({ kind: 'marked', title: ev.title, shown: clock, ok: new RegExp(ev.local_re).test(shown), wrong: !!ev.shifted_re && new RegExp(ev.shifted_re).test(shown) });
   }
   const inChart = (n) => !!(n && n.closest && n.closest('svg,[data-omni-axis],.omni-timeline'));
@@ -914,6 +943,8 @@ class Check:
                 self.cdp.send("Fetch.failRequest", {"requestId": p.get("requestId"), "errorReason": "BlockedByClient"}, session)
         elif method == "Page.loadEventFired":
             page["_loaded"].set()
+        elif method == "Runtime.bindingCalled" and p.get("name") == "__omniRtcSeen":
+            page["rtc"] = page.get("rtc", 0) + 1
         elif method == "Runtime.exceptionThrown":
             d = p.get("exceptionDetails") or {}
             full = str(((d.get("exception") or {}).get("description")) or d.get("text") or "error")
@@ -1097,7 +1128,7 @@ class Check:
     def check_artifact_run(self, theme):
         """One theme of an artifact's frame document (Spec 012): every width,
         the blocked-request watch, a screenshot at the widest width."""
-        run = {"theme": theme, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False, "blocked": 0}
+        run = {"theme": theme, "loaded": False, "crashed": False, "errors": 0, "first_error": "", "pages": [], "violations": [], "watched": False, "blocked": 0, "rtc": 0, "rtc_watched": False}
         cdp = self.cdp
         target = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
         session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
@@ -1108,6 +1139,9 @@ class Check:
             cdp.call("Page.enable", None, session)
             cdp.call("Runtime.enable", None, session)
             cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": APP_WATCH, "worldName": WORLD}, session)
+            cdp.call("Runtime.addBinding", {"name": "__omniRtcSeen"}, session)
+            cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": RTC_WATCH}, session)
+            run["rtc_watched"] = True
             cdp.call("Emulation.setDeviceMetricsOverride", {"width": WIDTHS[0], "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
             nav = cdp.call("Page.navigate", {"url": f"{self.origin}/prod/?t={theme}#t={theme}"}, session)
             if nav.get("errorText"):
@@ -1152,6 +1186,7 @@ class Check:
             self.pages.pop(session, None)
             run.pop("_loaded", None)
             run.pop("_worlds", None)
+            run["rtc"] = int(run.get("rtc") or 0)
             try:
                 cdp.call("Target.closeTarget", {"targetId": target}, timeout=3)
             except CdpError:

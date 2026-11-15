@@ -55,12 +55,20 @@
       if (args[i] != null && FRAME_HTML.test(String(args[i]))) refuseFrame();
     }
   }
-  function guardMethod(obj, name) {
+  // Each HTML argument is turned into a string ONCE; that same string is
+  // checked and passed on (an object whose toString answers differently on
+  // each call cannot pass the check with one value and write another).
+  function once(v) { return v == null ? "" : String(v); }
+  function guardMethod(obj, name, at) {
     var f = obj && obj[name];
     if (typeof f !== "function") return;
     lock(obj, name, function () {
-      checkHtml(arguments);
-      return f.apply(this, arguments);
+      var args = Array.prototype.slice.call(arguments);
+      for (var i = 0; i < args.length; i++) {
+        if (at === -1 || i === at) args[i] = once(args[i]);
+      }
+      checkHtml(at === -1 ? args : [args[at]]);
+      return f.apply(this, args);
     });
   }
   function guardSetter(proto, name) {
@@ -69,7 +77,7 @@
     try {
       Object.defineProperty(proto, name, {
         get: desc.get,
-        set: function (v) { checkHtml([v]); desc.set.call(this, v); },
+        set: function (v) { var t = once(v); checkHtml([t]); desc.set.call(this, t); },
         enumerable: desc.enumerable,
         configurable: false
       });
@@ -87,22 +95,38 @@
       if (FRAME_TAGS[String(qname).split(":").pop().toLowerCase()]) refuseFrame();
       return createElementNS.apply(this, arguments);
     });
-    guardMethod(DocProto, "write");
-    guardMethod(DocProto, "writeln");
+    guardMethod(DocProto, "write", -1);
+    guardMethod(DocProto, "writeln", -1);
   }
   var ElProto = w.Element && w.Element.prototype;
   guardSetter(ElProto, "innerHTML");
   guardSetter(ElProto, "outerHTML");
-  guardMethod(ElProto, "insertAdjacentHTML");
-  guardMethod(ElProto, "setHTMLUnsafe");
+  guardMethod(ElProto, "insertAdjacentHTML", 1);
+  guardMethod(ElProto, "setHTMLUnsafe", 0);
   guardSetter(w.ShadowRoot && w.ShadowRoot.prototype, "innerHTML");
-  guardMethod(w.ShadowRoot && w.ShadowRoot.prototype, "setHTMLUnsafe");
-  guardMethod(w.Range && w.Range.prototype, "createContextualFragment");
-  guardMethod(w.DOMParser && w.DOMParser.prototype, "parseFromString");
-  guardMethod(w.Document, "parseHTMLUnsafe");
+  guardMethod(w.ShadowRoot && w.ShadowRoot.prototype, "setHTMLUnsafe", 0);
+  guardMethod(w.Range && w.Range.prototype, "createContextualFragment", 0);
+  guardMethod(w.DOMParser && w.DOMParser.prototype, "parseFromString", 0);
+  guardMethod(w.Document, "parseHTMLUnsafe", 0);
   lock(w, "XSLTProcessor", undefined);
+  // srcdoc in any form is refused (a frame cannot be had anyway; this stops
+  // the attribute on whatever element carries it).
+  var IFrameProto = w.HTMLIFrameElement && w.HTMLIFrameElement.prototype;
+  if (IFrameProto) {
+    try { Object.defineProperty(IFrameProto, "srcdoc", { get: function () { return ""; }, set: refuseFrame, configurable: false }); } catch (_e) { /* locked */ }
+  }
+  ["setAttribute", "setAttributeNS", "toggleAttribute"].forEach(function (name) {
+    var f = ElProto && ElProto[name];
+    if (typeof f !== "function") return;
+    lock(ElProto, name, function () {
+      var attr = name === "setAttributeNS" ? arguments[1] : arguments[0];
+      if (String(attr).split(":").pop().toLowerCase() === "srcdoc") refuseFrame();
+      return f.apply(this, arguments);
+    });
+  });
+  var observer = null;
   try {
-    new MutationObserver(function (records) {
+    observer = new MutationObserver(function (records) {
       for (var i = 0; i < records.length; i++) {
         var added = records[i].addedNodes;
         for (var j = 0; j < added.length; j++) {
@@ -113,8 +137,20 @@
           for (var k = 0; k < inner.length; k++) inner[k].remove();
         }
       }
-    }).observe(d, { childList: true, subtree: true });
+    });
+    observer.observe(d, { childList: true, subtree: true });
   } catch (_e) { /* the guards above stand */ }
+  // Shadow trees are not in the document's subtree: every shadow root made
+  // here is observed the same way (and closed ones are refused nothing
+  // else: the HTML guards above hold inside them too).
+  var attachShadow = ElProto && ElProto.attachShadow;
+  if (typeof attachShadow === "function") {
+    lock(ElProto, "attachShadow", function () {
+      var root = attachShadow.apply(this, arguments);
+      try { if (observer) observer.observe(root, { childList: true, subtree: true }); } catch (_e) { /* the guards stand */ }
+      return root;
+    });
+  }
 
   // In-memory storage: an opaque origin has none, and nothing may persist.
   function memoryStorage() {

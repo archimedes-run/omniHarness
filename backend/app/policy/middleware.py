@@ -57,16 +57,18 @@ _WOULD_RUN: Any = object()
 #: One lock per (owner, thread), held while a Tier 3 call is checked against
 #: that thread's open proposals and saved (PolicyMiddleware.
 #: _require_confirmation). Per thread: other chats never wait on it.
-_PROPOSING: dict[tuple[str, str], threading.Lock] = {}
+#: Re-entrant: the builder holds it across its own checks and the card it
+#: raises (server_cards.card_lock).
+_PROPOSING: dict[tuple[str, str], threading.RLock] = {}
 _PROPOSING_GUARD = threading.Lock()
 
 
-def _proposing(owner_id: Any, thread_id: Any) -> threading.Lock:
+def _proposing(owner_id: Any, thread_id: Any) -> threading.RLock:
     key = (str(owner_id or ""), str(thread_id or ""))
     with _PROPOSING_GUARD:
         lock = _PROPOSING.get(key)
         if lock is None:
-            lock = _PROPOSING[key] = threading.Lock()
+            lock = _PROPOSING[key] = threading.RLock()
         return lock
 
 
@@ -1363,10 +1365,9 @@ class PolicyMiddleware(AgentMiddleware):
 
     def _run_markers(self, request) -> tuple[tuple[str, str], ...]:
         """The scheduled run's markers in this call's context, if any."""
-        from .provenance import FIRING_KEY, GRANTS_OWNER_KEY, PROVENANCE_KEY, RULE_KEY
+        from .server_cards import run_markers_of
 
-        context = self._runtime_context(request) or {}
-        return tuple((k, str(context[k])) for k in (PROVENANCE_KEY, RULE_KEY, FIRING_KEY, GRANTS_OWNER_KEY) if context.get(k))
+        return run_markers_of(self._runtime_context(request) or {})
 
     def _is_invited(self, request) -> bool:
         from omniharness.agents.invitation import DELEGATION_CHAIN_KEY, INVITED_ORIGIN_KEY
@@ -1409,10 +1410,10 @@ class PolicyMiddleware(AgentMiddleware):
     def _requester(request) -> str:
         """Who asked. FR-031: a subagent's call is classified identically, so
         the requester is not always the lead agent."""
-        context = getattr(getattr(request, "runtime", None), "context", None) or {}
-        # The bootstrap flow is the lead setting up a new agent, not that agent
-        # (it does not exist yet): its cards are the lead's (spec 010).
-        return context.get("invited_agent") or (None if context.get("is_bootstrap") else context.get("agent_name")) or "lead_agent"
+        from .server_cards import requester_of
+
+        # The same rule a server-raised card uses (server_cards).
+        return requester_of(getattr(getattr(request, "runtime", None), "context", None) or {})
 
     @staticmethod
     def _delegation_chain(request) -> tuple[str, ...]:

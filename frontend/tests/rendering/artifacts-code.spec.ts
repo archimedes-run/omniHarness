@@ -210,13 +210,11 @@ test("webapp: pages by relative path in the locked frame, downloads offered", as
   await expect(frame).toHaveAttribute("src", /&path=about\.html#n=/);
   const inner = (await (await frame.elementHandle())!.contentFrame())!;
   await expect(inner.locator("h1")).toHaveText("About us");
-  await expect(panel.getByTestId("artifact-download-page")).toHaveAttribute(
-    "href",
-    new RegExp(`/api/artifacts/${id}/versions/1/download\\?form=page$`),
-  );
+  // A web app downloads as its file set (.zip): no separate page download.
+  await expect(panel.getByTestId("artifact-download-page")).toHaveCount(0);
   await expect(panel.getByTestId("artifact-download-source")).toHaveAttribute(
     "href",
-    /form=source$/,
+    new RegExp(`/api/artifacts/${id}/versions/1/download$`),
   );
   await shot(page, "full-page-webapp-light-1280");
 });

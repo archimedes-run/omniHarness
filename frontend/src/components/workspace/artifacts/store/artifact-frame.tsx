@@ -27,6 +27,7 @@ import {
   readThemeVars,
   type FrameTheme,
 } from "@/core/artifacts/frame-host";
+import { LinkGate, splitLink } from "@/core/artifacts/link-gate";
 import {
   liveSlotHolder,
   setCardVisible,
@@ -93,7 +94,12 @@ export function LockedFrame({
   const [error, setError] = useState<string | null>(null);
   const [height, setHeight] = useState(variant === "inline" ? 220 : 600);
   const [torn, setTorn] = useState(false);
-  const [link, setLink] = useState<string | null>(null);
+  const [link, setLinkState] = useState<string | null>(null);
+  const linkGate = useRef(new LinkGate());
+  const setLink = (value: string | null) => {
+    if (value === null) linkGate.current.closed(Date.now());
+    setLinkState(value);
+  };
   const [attempt, setAttempt] = useState(0);
   const themeRef = useRef(theme);
   themeRef.current = theme;
@@ -107,7 +113,16 @@ export function LockedFrame({
       theme: themeRef.current,
       vars: readThemeVars(),
       onSize: (h) => live && setHeight(h),
-      onOpenRequest: (url) => live && setLink(url),
+      onOpenRequest: (url) => {
+        if (!live) return;
+        const r = linkGate.current.request(
+          url,
+          document.activeElement === frameRef.current,
+          Date.now(),
+        );
+        if (r.ok) setLink(url);
+        else reportFrameRefusal(artifactId, { reason: r.reason, type: "open" });
+      },
       onTornDown: () => live && setTorn(true),
       reportRefusal: (r) => reportFrameRefusal(artifactId, r),
     });
@@ -138,6 +153,7 @@ export function LockedFrame({
     return () => cancelAnimationFrame(id);
   }, [theme]);
 
+  const parts = link ? splitLink(link) : null;
   const host = link ? new URL(link).host : "";
   return (
     <div
@@ -208,6 +224,22 @@ export function LockedFrame({
               </strong>
               . It opens in a new tab, without this app&rsquo;s session.
             </DialogDescription>
+            {parts && (
+              <p
+                className="bg-muted rounded-md px-2 py-1 font-mono text-xs break-all"
+                data-testid="artifact-open-link-url"
+              >
+                <span>{safeField(parts.base)}</span>
+                {parts.rest && (
+                  <mark
+                    className="bg-warning/25 text-foreground rounded-sm"
+                    title="Everything after the address is sent to that site"
+                  >
+                    {safeField(parts.rest)}
+                  </mark>
+                )}
+              </p>
+            )}
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setLink(null)}>

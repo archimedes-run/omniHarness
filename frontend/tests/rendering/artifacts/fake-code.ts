@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
@@ -19,7 +20,7 @@ import type { Page, Route } from "@playwright/test";
 const FRAME_DIR = "../../../../backend/app/gateway/artifacts_store/frame/";
 export const PROFILE = JSON.parse(
   readFileSync(new URL(FRAME_DIR + "profile.json", import.meta.url), "utf8"),
-) as { csp: string; headers: Record<string, string>; sandbox: string };
+) as { csp_template: string; headers: Record<string, string>; sandbox: string };
 const SHIM = () =>
   sabotageShim(
     readFileSync(
@@ -28,9 +29,34 @@ const SHIM = () =>
     ),
   ).replace(/<\/script/gi, "<\\/script");
 
-/** no-rtc-guard: WebRTC left in; no-frame-guard: frames allowed and kept. */
+/** ARTIFACT_SABOTAGE_FRAME is a comma list (sabotage runs only). */
+export function sabotage(name: string): boolean {
+  return (process.env.ARTIFACT_SABOTAGE_FRAME ?? "").split(",").includes(name);
+}
+
+/** no-rtc-guard: WebRTC left in; no-frame-guard: frames allowed and kept;
+ * old-shim-guards: the guards as they were (the value checked is not the
+ * value written; shadow roots and srcdoc unguarded). */
 function sabotageShim(text: string): string {
-  const s = process.env.ARTIFACT_SABOTAGE_FRAME;
+  if (sabotage("old-shim-guards"))
+    return text
+      .replace(
+        "var t = once(v); checkHtml([t]); desc.set.call(this, t);",
+        "checkHtml([v]); desc.set.call(this, v);",
+      )
+      .replace(
+        'try { Object.defineProperty(IFrameProto, "srcdoc"',
+        "try { void (IFrameProto",
+      )
+      .replace(
+        "if (observer) observer.observe(root",
+        "if (false) observer.observe(root",
+      );
+  const s = sabotage("no-rtc-guard")
+    ? "no-rtc-guard"
+    : sabotage("no-frame-guard")
+      ? "no-frame-guard"
+      : "";
   if (s === "no-rtc-guard")
     return text.replace(
       "for (var r = 0; r < RTC.length; r++) lock(w, RTC[r], undefined);",
@@ -99,24 +125,110 @@ export interface CodeRec {
   summary?: string[];
 }
 
+/** As the gateway does it (artifacts_store/frame.py): the shim PREPENDED as
+ * the first bytes after a leading doctype, never placed by parsing. */
 export function frameDocument(html: string): string {
-  if (process.env.ARTIFACT_SABOTAGE_FRAME === "no-shim") return html;
+  if (sabotage("no-shim")) return html;
   const tag = `<script>${SHIM()}</script>`;
-  const head = /<head[^>]*>/i.exec(html);
-  if (head) return html.replace(head[0], head[0] + tag);
-  return tag + html;
+  if (sabotage("old-injection")) {
+    // As before: placed by parsing (before the first script a comment-skipping
+    // scan sees), so a script hidden from that scan runs first.
+    const first = firstScriptAt(html);
+    return first < 0
+      ? html + tag
+      : html.slice(0, first) + tag + html.slice(first);
+  }
+  const m = /^\uFEFF?[ \t\r\n\f]*<!doctype[^>]{0,1000}>/i.exec(html);
+  return m ? m[0] + tag + html.slice(m[0].length) : tag + html;
 }
 
-export function frameHeaders(): Record<string, string> {
-  const s = process.env.ARTIFACT_SABOTAGE_FRAME;
-  const csp =
-    s === "open-connect"
-      ? PROFILE.csp.replace("connect-src 'none'", "connect-src *")
-      : PROFILE.csp;
+function firstScriptAt(doc: string): number {
+  let i = 0;
+  for (;;) {
+    i = doc.indexOf("<", i);
+    if (i < 0) return -1;
+    if (doc.startsWith("<!--", i)) {
+      const j = doc.indexOf("-->", i + 4);
+      if (j < 0) return -1;
+      i = j + 3;
+      continue;
+    }
+    if (/^<script[\s>]/i.test(doc.slice(i, i + 8))) return i;
+    i += 1;
+  }
+}
+
+/** As the gateway's tokenizer (apps/bundle.py `_comment_end`) and browsers
+ * end a comment: "<!-->" and "<!--->" are complete, else the first "-->" or
+ * "--!>"; unclosed, it runs to the end. */
+function commentEnd(doc: string, i: number): number {
+  if (doc.startsWith("<!-->", i)) return i + 5;
+  if (doc.startsWith("<!--->", i)) return i + 6;
+  const ends = [doc.indexOf("-->", i + 4), doc.indexOf("--!>", i + 4)].filter(
+    (x) => x >= 0,
+  );
+  if (!ends.length) return doc.length;
+  const at = Math.min(...ends);
+  return at + (doc.startsWith("-->", at) ? 3 : 4);
+}
+
+/** The hashes of the inline scripts, found as the gateway's tokenizer finds
+ * them (comments as above; script bodies up to the next "</script"). */
+export function scriptHashes(doc: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  for (;;) {
+    i = doc.indexOf("<", i);
+    if (i < 0) break;
+    if (doc.startsWith("<!--", i)) {
+      i = commentEnd(doc, i);
+      continue;
+    }
+    const m = /^<script(\s[^>]*)?>/i.exec(doc.slice(i, i + 400));
+    if (!m) {
+      i += 1;
+      continue;
+    }
+    const start = i + m[0].length;
+    const end = doc.toLowerCase().indexOf("</script", start);
+    const stop = end < 0 ? doc.length : end;
+    if (!/\ssrc\s*=/i.test(m[1] ?? "")) {
+      const h = createHash("sha256")
+        .update(doc.slice(start, stop), "utf8")
+        .digest("base64");
+      if (!out.includes(h)) out.push(h);
+    }
+    i = stop;
+  }
+  return out;
+}
+
+/** The frame's CSP: the Apps profile template with the hashes (profile.json
+ * keeps a copy of bundle.CSP_TEMPLATE; a backend test keeps them equal).
+ * ARTIFACT_SABOTAGE_FRAME=loose-profile serves the earlier, looser profile. */
+export function frameCsp(doc: string): string {
+  const hashes =
+    scriptHashes(doc)
+      .map((h) => `'sha256-${h}'`)
+      .join(" ") || "'none'";
+  let csp = PROFILE.csp_template.replace("{scripts}", hashes);
+  if (sabotage("loose-profile"))
+    csp = csp
+      .replace(/script-src [^;]+/, "script-src 'unsafe-inline'")
+      .replace(
+        "; require-trusted-types-for 'script'; trusted-types 'none'",
+        "",
+      );
+  if (sabotage("open-connect"))
+    csp = csp.replace("connect-src 'none'", "connect-src *");
+  return csp;
+}
+
+export function frameHeaders(doc: string): Record<string, string> {
   return {
     ...PROFILE.headers,
     "Content-Type": "text/html; charset=utf-8",
-    ...(s === "no-csp" ? {} : { "Content-Security-Policy": csp }),
+    ...(sabotage("no-csp") ? {} : { "Content-Security-Policy": frameCsp(doc) }),
   };
 }
 
@@ -255,15 +367,17 @@ export async function installCodeStore(
           ...version(rec),
           content: rec.kind === "html" ? rec.html : null,
           source: rec.source ?? null,
-          webapp:
-            rec.kind === "webapp"
-              ? {
-                  entry: "index.html",
-                  files: ["index.html", ...Object.keys(rec.pages ?? {})].map(
-                    (p) => ({ path: p, size: 100 }),
-                  ),
-                }
-              : null,
+          ...(rec.kind === "webapp"
+            ? {
+                entry: "index.html",
+                files: ["index.html", ...Object.keys(rec.pages ?? {})].map(
+                  (p) => ({ path: p, size: 100, media_type: "text/html" }),
+                ),
+                pages: ["index.html", ...Object.keys(rec.pages ?? {})].map(
+                  (p) => ({ path: p, ok: true, reason: null }),
+                ),
+              }
+            : {}),
           build_log: rec.buildFailed
             ? "src/App.tsx:1:1: ERROR: Unexpected"
             : null,
@@ -300,10 +414,11 @@ export async function installCodeStore(
           status: 404,
           body: "Open this artifact in OmniHarness.",
         });
+      const doc = frameDocument(html);
       return route.fulfill({
         status: 200,
-        headers: frameHeaders(),
-        body: frameDocument(html),
+        headers: frameHeaders(doc),
+        body: doc,
       });
     }
     const shot = /^versions\/1\/shots\/(light|dark)\.png$/.exec(rest);

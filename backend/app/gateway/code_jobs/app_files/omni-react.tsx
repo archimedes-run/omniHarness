@@ -150,8 +150,10 @@ export function zoned(tz: string) {
 
 /**
  * A list row: the title truncates (with the full text as a tooltip), the meta
- * stays. Pass `time` (the ISO time the meta shows) for an event: the meta is
- * marked data-omni-time, which the system's checks read.
+ * stays. For an event, pass `time`: the event's START (ISO). The row is
+ * marked data-omni-time, and the system's checks expect that start, in the
+ * app's time zone, somewhere in the row's text (title or meta); an end time,
+ * a range or a duration beside it is fine.
  */
 export function Row({ title, meta, badge, href, time }: { title: string; meta?: string; badge?: ReactNode; href?: string | null; time?: string | null }) {
   const label = href ? (
@@ -164,11 +166,11 @@ export function Row({ title, meta, badge, href, time }: { title: string; meta?: 
     </span>
   );
   return (
-    <li className="omni-row">
+    <li className="omni-row" data-omni-time={time ?? undefined}>
       {badge ? <span className="omni-row-badge">{badge}</span> : null}
       {label}
       {meta ? (
-        <span className="omni-row-meta" data-omni-time={time ?? undefined}>
+        <span className="omni-row-meta">
           {meta}
         </span>
       ) : null}

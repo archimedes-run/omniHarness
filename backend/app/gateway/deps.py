@@ -186,6 +186,16 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.artifact_store = ArtifactStore(artifact_engine)
             set_artifact_controller(GatewayArtifactController(lambda: getattr(app.state, "artifact_store", None)))
             stack.callback(set_artifact_controller, None)
+            # The sweep of unsaved artifacts ships OFF: it runs only when the
+            # owner sets artifacts.prune_unsaved_after_days in config.yaml.
+            from app.gateway.artifacts_store.service import prune_after_days, sweep_loop
+
+            days = prune_after_days(config)
+            if days is not None:
+                import asyncio
+
+                sweep = asyncio.get_running_loop().create_task(sweep_loop(app.state.artifact_store, days))
+                stack.callback(sweep.cancel)
         else:
             app.state.artifact_store = None
             set_artifact_controller(None)

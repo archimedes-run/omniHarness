@@ -1,6 +1,6 @@
 {
-  "comment": "Spec 012 FR-016, FR-031: the artifact profile of the locked frame. The single source of the frame's CSP and headers: app/gateway/artifacts_store/frame.py serves them, the frontend's rendering specs read this file. Differs from the app profile (apps/bundle.py CSP_TEMPLATE) only in script-src and the Trusted Types directives (tests/artifacts/test_frame.py).",
-  "csp": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+  "comment": "Spec 012 FR-016, FR-031: the locked frame for code artifacts. Its CSP is the Apps profile, built by app/gateway/apps/bundle.py csp() with the hashes of the document's inline scripts (csp_template is a copy for the frontend's rendering specs; a test keeps it identical to bundle.CSP_TEMPLATE). These are the other headers of the frame document.",
+  "csp_template": "sandbox allow-scripts; default-src 'none'; script-src {scripts}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'",
   "headers": {
     "Cache-Control": "private, no-store",
     "Referrer-Policy": "no-referrer",
@@ -12,5 +12,8 @@
     "Content-Disposition": "inline; filename=\"artifact.html\""
   },
   "sandbox": "allow-scripts",
-  "size": {"min": 120, "max": 1200}
+  "size": {
+    "min": 120,
+    "max": 1200
+  }
 }

@@ -27,6 +27,9 @@ class FakeSandbox:
         self.links: set[str] = set()
         #: path -> the size `stat` reports (a file that grows after the check)
         self.stat_size: dict[str, int] = {}
+        #: path -> bytes it gains between being listed and being read
+        self.grow: dict[str, int] = {}
+        self.quiesced = 0
         self.commands: list[str] = []
         #: probe(check: dict, document: str) -> (exit code, result dict or raw str or None)
         self.probe = probe or (lambda check, doc: (0, passing(check, doc)))
@@ -66,7 +69,7 @@ class FakeSandbox:
                     if shot.get("file"):
                         self.files[f"{directory}/{shot['file']}"] = PNG
             return code, ""
-        if "npm install" in command:
+        if "npm ci " in command:
             directory = shlex.split(command.split("cd ", 1)[1])[0]
             src = {p[len(directory) + 5 :]: c for p, c in self.files.items() if p.startswith(directory + "/src/")}
             code, out, log = self.build(src)
@@ -80,6 +83,18 @@ class FakeSandbox:
             if path in self.links or path not in self.files:
                 return 0, "none"
             return 0, str(self.stat_size.get(path, len(self._bytes(path))))
+        m = re.search(r"\[ -f (\S+) \] && \[ ! -L \S+ \] && /usr/bin/head -c (\d+) \S+ \| /usr/bin/base64 -w0; echo", command)
+        if m:
+            path, n = shlex.split(m.group(1))[0], int(m.group(2))
+            if path in self.files and path not in self.links:
+                data = self._bytes(path)
+                if path in self.grow:
+                    data = data + b"x" * self.grow[path]  # grew after any earlier look
+                return 0, base64.b64encode(data[:n]).decode() + "\n"
+            return 1, "\n"
+        if "ps -eo pid=,user=,etimes=" in command:
+            self.quiesced += 1
+            return 0, ""
         m = re.search(r"\[ -f (\S+) \] && \[ ! -L \S+ \] && /usr/bin/head -c (\d+) \S+ \| /usr/bin/base64 -w0 > (\S+)", command)
         if m:
             path, n, tmp = shlex.split(m.group(1))[0], int(m.group(2)), shlex.split(m.group(3))[0]
@@ -100,7 +115,7 @@ class FakeSandbox:
 
 def passing(check, doc, **over):
     """The probe's answer for THIS run (its nonce, the sha of the document it loaded)."""
-    runs = [{"theme": t, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "pages": [page(w) for w in WIDTHS], "violations": [], "watched": True, "blocked": 0} for t in ("light", "dark")]
+    runs = [{"theme": t, "loaded": True, "crashed": False, "errors": 0, "first_error": "", "pages": [page(w) for w in WIDTHS], "violations": [], "watched": True, "blocked": 0, "rtc": 0, "rtc_watched": True} for t in ("light", "dark")]
     result = {
         "v": 1,
         "mode": "artifact",

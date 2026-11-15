@@ -104,7 +104,8 @@ def _parse(raw: str | None, *, exit_code: int | None, nonce: str, prod_sha256: s
         code = data.get("setup_error")
         return error(code if code in layout_mod.ERRORS and code not in ("no_answer", "no_python", "checksum") else "unreadable", seconds)
     # Made by THIS run of the probe on THESE bytes, or it does not count.
-    if data.get("mode") != "artifact" or data.get("nonce") != nonce or data.get("prod_sha256") != prod_sha256 or exit_code == 98:
+    # A result counts only from a probe that EXITED 0 having written it itself.
+    if data.get("mode") != "artifact" or data.get("nonce") != nonce or data.get("prod_sha256") != prod_sha256 or exit_code != 0:
         return error("tampered", seconds)
     runs = data.get("runs")
     if not isinstance(runs, list) or len(runs) > len(THEMES):
@@ -131,6 +132,12 @@ def _parse(raw: str | None, *, exit_code: int | None, nonce: str, prod_sha256: s
             return error("unreadable", seconds)
         violations = [v for v in (run.get("violations") or []) if isinstance(v, str)]
         blocked = _int(run.get("blocked")) or 0
+        rtc = _int(run.get("rtc")) or 0
+        if run.get("rtc_watched") is not True:
+            return error("unreadable", seconds)
+        if rtc:
+            network.append(theme)
+            failures.append(f"tried WebRTC in the {theme} theme ({rtc} attempt(s) seen by the system)")
         if violations or blocked:
             network.append(theme)
             names = ", ".join(sorted({v for v in violations if v})[:6])
@@ -185,24 +192,64 @@ def state_of(result: dict) -> str:
     return {"pass": "passed", "fail": "failed"}.get(result.get("outcome"), "not_checked")
 
 
-def read_small(ops, path: str, limit: int) -> str | None:
-    """A regular file (never a link) of at most `limit` bytes, or None."""
-    _, size = ops.sh(f"[ -f {_q(path)} ] && [ ! -L {_q(path)} ] && {B}/stat -c %s {_q(path)} 2>/dev/null || echo none", timeout=15)
-    size = size.strip().splitlines()[-1] if size.strip() else ""
-    if not size.isdigit():
+def capped_read(ops, path: str, cap: int, *, timeout: int = 30) -> bytes | None:
+    """A regular file (not a link) read in ONE command through `head -c cap+1`,
+    its bytes coming back on that command's own output: whatever the file
+    becomes meanwhile (it grows, it is swapped), at most cap+1 bytes are read,
+    and more than `cap` is refused. None when missing, a link, or over."""
+    import base64 as b64
+
+    _, out = ops.sh(f"[ -f {_q(path)} ] && [ ! -L {_q(path)} ] && {B}/head -c {cap + 1} {_q(path)} | {B}/base64 -w0; echo", timeout=timeout)
+    text = (out or "").strip()
+    if not text or len(text) > (cap + 3) * 4 // 3 + 4:
         return None
-    if int(size) > limit:
-        return ""
-    return ops.read_text(path)
+    try:
+        data = b64.b64decode(text, validate=True)
+    except ValueError:
+        return None
+    return data if len(data) <= cap else None
+
+
+def read_small(ops, path: str, limit: int) -> str | None:
+    """A small text file through capped_read, or None."""
+    data = capped_read(ops, path, limit)
+    if data is None:
+        return None
+    return data.decode("utf-8", "replace")
+
+
+#: Before the probe's folder exists: every process the sandbox user started
+#: after the sandbox's own services is stopped (a resident watcher could
+#: otherwise read the run's nonce and race the result). The services are the
+#: sandbox user's processes started within the first minute of the container.
+QUIESCE = (
+    # This command's ancestors (the control session) and descendants stay.
+    f'anc=" $$ "; q=$$; while [ "$q" -gt 1 ] 2>/dev/null; do q=$({B}/ps -o ppid= -p $q | {B}/tr -d \' \'); anc="$anc$q "; done; '
+    f"boot=$({B}/stat -c %Y /proc/1); now=$({B}/date +%s); "
+    f"for p in $({B}/ps -eo pid=,user=,etimes= | {B}/awk -v up=$((now-boot)) '$2 == \"gem\" && (up - $3) > 60 {{ print $1 }}'); do "
+    'case "$anc" in *" $p "*) continue;; esac; '
+    f'q=$p; mine=0; while [ "$q" -gt 1 ] 2>/dev/null; do [ "$q" = "$$" ] && mine=1 && break; q=$({B}/ps -o ppid= -p $q 2>/dev/null | {B}/tr -d \' \'); [ -z "$q" ] && break; done; '
+    "[ $mine = 0 ] && /bin/kill -KILL $p 2>/dev/null; done; true"
+)
+
+
+def with_findings(result: dict, blocking_findings: list[str]) -> dict:
+    """A page the strict profile will not run fails the check, in those words."""
+    if not blocking_findings or result.get("outcome") == "error":
+        return result
+    words = [f.split(": ", 1)[1] if ": " in f else f for f in blocking_findings]
+    out = dict(result)
+    out["outcome"] = "fail"
+    out["summary"] = [f"will not run in the frame: {w}" for w in words][:3] + list(result.get("summary") or [])
+    out["failures"] = [f"will not run in the frame: {w}" for w in words] + list(result.get("failures") or [])
+    return out
 
 
 def run(ops, stored: bytes, *, beat: Callable[[], None] | None = None) -> tuple[dict, dict[str, bytes]]:
     """Run the checks on `stored` (a version's stored document) in the sandbox
     behind `ops`. Returns (result, {theme: png}). Never raises: a failure to
     run is an `error` result (not_checked)."""
-    from app.gateway.code_jobs.app_mode import read_png
-
-    document = frame.frame_document(stored)
+    document, hashes = frame.frame_document(stored)
     text = document.decode("utf-8")
     nonce = secrets.token_hex(16)
     directory = f"/tmp/omni-art-{secrets.token_hex(16)}"
@@ -212,12 +259,13 @@ def run(ops, stored: bytes, *, beat: Callable[[], None] | None = None) -> tuple[
     raw: str | None = None
     shots: dict[str, bytes] = {}
     try:
+        ops.sh(QUIESCE, timeout=30)
         _, made = ops.sh(f"{B}/mkdir -m 700 {_q(directory)} && {B}/mkdir -p -m 755 {_q(prod)} && echo __made__", timeout=15)
         if "__made__" not in made:
             return error("server", time.monotonic() - t0), {}
         ops.write(f"{directory}/layout_probe.py", layout_mod.SCRIPT)
         ops.write(f"{prod}/index.html", text)
-        csp = frame.CSP
+        csp = frame.csp(hashes)
         ops.write(f"{directory}/check.json", json.dumps({"csp": csp, "nonce": nonce}))
         if beat:
             beat()
@@ -230,10 +278,10 @@ def run(ops, stored: bytes, *, beat: Callable[[], None] | None = None) -> tuple[
         if result["outcome"] in ("pass", "fail"):
             for shot in result.get("shots") or []:
                 try:
-                    png = read_png(ops, f"{directory}/{shot['file']}")
+                    png = capped_read(ops, f"{directory}/{shot['file']}", SHOT_MAX_BYTES, timeout=60)
                 except Exception:  # noqa: BLE001 - a screenshot is shown, never evidence
                     png = None
-                if png:
+                if png and png.startswith(b"\x89PNG\r\n\x1a\n"):
                     shots[shot["theme"]] = png
         return result, shots
     except Exception:  # noqa: BLE001 - the sandbox API failed: no answer (fail closed)

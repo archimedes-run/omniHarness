@@ -123,3 +123,7 @@ QUESTION_ANSWER_KEY = "omniharness_question_answer"
 #: they do not make the turn "content" (app.policy.lineage).
 BUILDER_QUESTION_MARKER = "omniharness_builder_question"
 OWNER_ANSWER_MARKER = "omniharness_owner_answer"
+
+#: In builder_draft's result when the builder raised the save card itself for
+#: a new item (spec 010): the lead says one short line and stops.
+SAVE_CARD_SHOWN = "A save card is now shown to the person"

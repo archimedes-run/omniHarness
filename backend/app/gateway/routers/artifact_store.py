@@ -18,25 +18,35 @@ from __future__ import annotations
 import json
 import logging
 import re
-import secrets
-import time
 from typing import Any, Literal
 
-import jwt
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.gateway.artifacts_store import caps, code_service, frame, kinds
+from app.gateway.artifacts_store import caps, code_service, downloads, frame, kinds
+from app.gateway.artifacts_store import frame_token as frame_token_mod
 from app.gateway.artifacts_store.kinds import InvalidContent, TooLarge
-from app.gateway.artifacts_store.service import run_import
+from app.gateway.artifacts_store.service import import_from_chat
 from app.gateway.artifacts_store.store import ArtifactStore, NotEditable, StoreError
-from app.gateway.auth.config import get_auth_config
 from app.gateway.authz import require_permission
 from app.gateway.internal_auth import INTERNAL_AUTH_HEADER_NAME, is_valid_internal_auth_token
 from omniharness.runtime.user_context import DEFAULT_USER_ID
 
 logger = logging.getLogger(__name__)
+
+
+class _RedactFrameQuery(logging.Filter):
+    """The frame route's query (a view token) never reaches the access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "/frame.html?" in args[2]:
+            record.args = (*args[:2], args[2].split("?", 1)[0] + "?[redacted]", *args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactFrameQuery())
 
 router = APIRouter(prefix="/api/artifacts", tags=["artifact-store"])
 
@@ -92,10 +102,6 @@ async def _call(fn, *args, **kwargs):
         raise _error(422, "invalid_content", "The content does not fit its kind.", reason=str(exc)) from None
 
 
-def _schedule_import(background: BackgroundTasks, store: ArtifactStore, owner: str, thread_id: str | None = None) -> None:
-    background.add_task(run_in_threadpool, run_import, store, owner, thread_id=thread_id)
-
-
 # -- reads ---------------------------------------------------------------------------------
 
 
@@ -103,7 +109,9 @@ def _schedule_import(background: BackgroundTasks, store: ArtifactStore, owner: s
 @require_permission("threads", "read")
 async def list_artifacts(
     request: Request,
-    background: BackgroundTasks,
+    # Default `all` (what the deployed store page expects); the new store page
+    # asks for `saved=true` explicitly.
+    saved: Literal["true", "false", "all"] = "all",
     kind: Literal["markdown", "code", "svg", "mermaid", "chart", "image", "file", "html", "react", "webapp"] | None = None,
     pinned: bool | None = None,
     archived: Literal["false", "true", "all"] = "false",
@@ -114,9 +122,8 @@ async def list_artifacts(
 ) -> dict:
     owner = owner_of(request)
     store = store_of(request)
-    rows, total = await _call(store.list, owner, kind=kind, pinned=pinned, archived=archived, thread=thread, q=q or None, limit=limit, offset=offset)
+    rows, total = await _call(store.list, owner, saved=saved, kind=kind, pinned=pinned, archived=archived, thread=thread, q=q or None, limit=limit, offset=offset)
     used = await _call(store.usage, owner)
-    _schedule_import(background, store, owner)
     return {"artifacts": rows, "total": total, "usage": {"used": used, "cap": caps.OWNER_BYTES}}
 
 
@@ -129,13 +136,12 @@ async def usage(request: Request) -> dict:
 
 @router.get("/threads/{thread_id}")
 @require_permission("threads", "read")
-async def thread_artifacts(thread_id: str, request: Request, background: BackgroundTasks) -> dict:
+async def thread_artifacts(thread_id: str, request: Request) -> dict:
     owner = owner_of(request)
     store = store_of(request)
     if not _THREAD.fullmatch(thread_id):
         return {"artifacts": []}
     rows = await _call(store.thread_artifacts, owner, thread_id)
-    _schedule_import(background, store, owner, thread_id)
     return {"artifacts": rows}
 
 
@@ -162,15 +168,16 @@ async def get_version(artifact_id: str, n: int, request: Request) -> dict:
     content = None
     if summary["kind"] in ("markdown", "mermaid", "code", "chart", "html") and row.stored == "blob":
         content = kinds.content_for_api(summary["kind"], await _call(store.content, owner, row))
+    if summary["kind"] == "webapp":
+        files = await _call(store.bundle_files, owner, summary["id"], n)
+        pages = await _call(store.pages, owner, summary["id"], n)
+        return {**meta, "content": None, "entry": "index.html", "files": [{k: f[k] for k in ("path", "size", "media_type")} for f in files], "bundle_size": sum(f["size"] for f in files), "pages": pages}
     out = {**meta, "content": content}
-    if summary["kind"] in kinds.CODE_KINDS and row.stored == "blob":
+    if summary["kind"] in ("html", "react") and row.stored == "blob":
         _, _, code, _ = await _call(store.code_version, owner, artifact_id, n)
         if summary["kind"] == "react":
             src = await _call(store.source, owner, code)
             out["source"] = json.loads(src) if src else None
-        if summary["kind"] == "webapp":
-            entry, files = await _call(frame.webapp_set, await _call(store.content, owner, row))
-            out["webapp"] = {"entry": entry, "files": [{"path": p, "size": len(b)} for p, b in sorted(files.items())]}
         out["build_log"] = code.build_log
     return out
 
@@ -194,7 +201,7 @@ async def get_content(artifact_id: str, n: int, request: Request) -> Response:
         return Response(str(code.get("text", "")).encode("utf-8"), media_type="text/plain; charset=utf-8", headers=headers)
     if kind == "chart":
         return Response(data, media_type="application/json", headers=headers)
-    if kind in kinds.CODE_KINDS:
+    if kind in ("html", "react"):
         # Source as TEXT, never as a page: code runs only in the frame route.
         headers["Content-Disposition"] = "inline"
         return Response(data, media_type="text/plain; charset=utf-8", headers=headers)
@@ -202,9 +209,46 @@ async def get_content(artifact_id: str, n: int, request: Request) -> Response:
         return Response(data, media_type="image/svg+xml", headers=headers)
     if kind == "image" and meta["media_type"] in kinds.IMAGE_TYPES:
         return Response(data, media_type=meta["media_type"], headers=headers)
-    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", summary["title"])[:100] or "artifact"
-    headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    if kind == "file" and meta["render"] == "text":
+        return Response(data, media_type="text/plain; charset=utf-8", headers=headers)
+    if kind == "webapp":
+        # The manifest only: a web app is never served as a page here.
+        return Response(data, media_type="application/json", headers=headers)
+    headers["Content-Disposition"] = downloads.disposition(downloads.filename(summary["title"], kind, meta, data))
     return Response(data, media_type="application/octet-stream", headers=headers)
+
+
+@router.get("/{artifact_id}/versions/{n}/download")
+@require_permission("threads", "read")
+async def download(artifact_id: str, n: int, request: Request, source: Literal["zip"] | None = Query(None)) -> Response:
+    """The version as a file to keep: always an attachment, never rendered."""
+    owner = owner_of(request)
+    store = store_of(request)
+    summary, meta, row = await _call(store.version, owner, _check_id(artifact_id), n)
+    if row.stored != "blob":
+        raise _error(409, "lives_in_chat", "This file is too large for the store and lives in its chat.", thread_id=row.thread_id, path=f"/mnt/user-data/outputs/{row.chat_path}")
+    data = await _call(store.content, owner, row)
+    kind = summary["kind"]
+    name = downloads.filename(summary["title"], kind, meta, data)
+    if kind == "webapp":
+        files = await _call(store.bundle_files, owner, summary["id"], n)
+        body = await _call(downloads.webapp_zip, store, owner, files)
+    elif kind in ("html", "react") and source == "zip":
+        # Slice 2: the sources as a .zip (react: its files; html: index.html).
+        _, _, code, _ = await _call(store.code_version, owner, summary["id"], n)
+        files = await _call(frame.source_files, kind, data, await _call(store.source, owner, code))
+        body = await _call(downloads.files_zip, files)
+        name = name.rsplit(".", 1)[0] + "-source.zip"
+    elif kind in ("html", "react"):
+        # The built page with a restrictive policy prepended by the gateway.
+        _, _, code, _ = await _call(store.code_version, owner, summary["id"], n)
+        if code.build_state != "ok":
+            raise _error(409, "build_failed", "This version did not build; download its sources instead (?source=zip).")
+        body = await _call(frame.download_page, data)
+    else:
+        body = downloads.body(kind, data)
+    headers = {**CONTENT_HEADERS, "ETag": f'"{row.content_hash}"', "Content-Disposition": downloads.disposition(name)}
+    return Response(body, media_type="application/octet-stream", headers=headers)
 
 
 # -- writes (CSRF by the middleware) ----------------------------------------------------
@@ -248,6 +292,51 @@ async def patch_artifact(artifact_id: str, body: PatchBody, request: Request) ->
     if body.title is None and body.pinned is None:
         raise _error(422, "invalid_request", "Send a title, pinned, or both.")
     return await _call(store_of(request).patch, owner, _check_id(artifact_id), title=body.title, pinned=body.pinned)
+
+
+class ImportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    thread_id: str = Field(..., min_length=1, max_length=128)
+    path: str = Field(..., min_length=1, max_length=4096)
+
+
+@router.post("/import", status_code=201)
+@require_permission("threads", "write")
+async def import_chat_output(body: ImportBody, request: Request, response: Response) -> dict:
+    """The owner's "Save to artifacts" on a file (or web app directory) of one
+    of their chats' outputs: a SAVED artifact. Another account's chat, or a
+    chat that does not exist, is 404 like a missing artifact."""
+    owner = owner_of(request)
+    store = store_of(request)
+    if not _THREAD.fullmatch(body.thread_id) or not await _owns_thread(request, owner, body.thread_id):
+        raise _error(404, "artifact_not_found", "No such artifact.")
+    summary, created, skipped = await _call(import_from_chat, store, owner, body.thread_id, body.path)
+    if not created:
+        response.status_code = 200
+    return {"artifact": summary, "created": created, "skipped": skipped}
+
+
+async def _owns_thread(request: Request, owner: str, thread_id: str) -> bool:
+    from app.gateway.deps import get_thread_store
+
+    try:
+        return bool(await get_thread_store(request).check_access(thread_id, owner, require_existing=True))
+    except Exception:  # noqa: BLE001 — no store or no row: not theirs
+        return False
+
+
+@router.post("/{artifact_id}/save")
+@require_permission("threads", "write")
+async def save(artifact_id: str, request: Request) -> dict:
+    owner = owner_of(request)
+    return await _call(store_of(request).set_saved, owner, _check_id(artifact_id), True)
+
+
+@router.post("/{artifact_id}/unsave")
+@require_permission("threads", "write")
+async def unsave(artifact_id: str, request: Request) -> dict:
+    owner = owner_of(request)
+    return await _call(store_of(request).set_saved, owner, _check_id(artifact_id), False)
 
 
 @router.post("/{artifact_id}/archive")
@@ -314,9 +403,6 @@ async def delete_artifact(artifact_id: str, body: DeleteBody, request: Request) 
 
 # -- code kinds: the locked frame, checks, rebuild (Slice 2) ------------------------------
 
-FRAME_TOKEN_TYPE = "artifact_frame"
-#: A view's token lives this long; a frame (re)loaded later asks for a new one.
-FRAME_TOKEN_SECONDS = 300
 #: Served instead of the artifact to anything but this app's own frame request.
 INERT_PAGE = b'<!doctype html><html><head><meta charset="utf-8"><title>Artifact</title></head><body style="font:14px system-ui,sans-serif;margin:2rem">Open this artifact in OmniHarness.</body></html>'
 INERT_HEADERS = {
@@ -327,6 +413,7 @@ INERT_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cache-Control": "private, no-store",
 }
+_PAGE_PATH = re.compile(r"^[A-Za-z0-9_@+-][A-Za-z0-9_.@+ -]{0,199}(/[A-Za-z0-9_@+-][A-Za-z0-9_.@+ -]{0,199}){0,11}$")
 
 
 def _schedule_check(background: BackgroundTasks, store: ArtifactStore, owner: str, summary: dict, version: dict) -> None:
@@ -340,26 +427,6 @@ def _schedule_check(background: BackgroundTasks, store: ArtifactStore, owner: st
     background.add_task(run_in_threadpool, code_service.check_version, store, owner, summary["id"], version["n"], summary.get("origin_thread_id"))
 
 
-def _frame_token(owner: str, artifact_id: str, n: int) -> str:
-    now = int(time.time())
-    payload = {"typ": FRAME_TOKEN_TYPE, "sub": owner, "aid": artifact_id, "n": n, "iat": now, "exp": now + FRAME_TOKEN_SECONDS, "jti": secrets.token_urlsafe(12)}
-    return jwt.encode(payload, get_auth_config().jwt_secret, algorithm="HS256")
-
-
-def _token_ok(token: str | None, owner: str, artifact_id: str, n: int) -> bool:
-    if not token or len(token) > 1024:
-        return False
-    try:
-        payload = jwt.decode(token, get_auth_config().jwt_secret, algorithms=["HS256"])
-    except jwt.PyJWTError:
-        return False
-    return payload.get("typ") == FRAME_TOKEN_TYPE and payload.get("sub") == owner and payload.get("aid") == artifact_id and payload.get("n") == n
-
-
-def summary_kind(store: ArtifactStore, owner: str, artifact_id: str) -> str:
-    return store.get(owner, artifact_id)["kind"]
-
-
 def _inert(status: int = 403) -> Response:
     return Response(INERT_PAGE, status_code=status, media_type="text/html; charset=utf-8", headers=INERT_HEADERS)
 
@@ -367,47 +434,43 @@ def _inert(status: int = 403) -> Response:
 @router.get("/{artifact_id}/versions/{n}/frame-token")
 @require_permission("threads", "read")
 async def frame_token(artifact_id: str, n: int, request: Request) -> dict:
-    """A short-lived token for ONE view of one version's frame (the host
-    page asks for it right before it creates the iframe)."""
+    """A token for ONE view of one version's frame (the host asks for it
+    right before it creates the iframe): purpose-bound, short-lived, single
+    use (artifacts_store/frame_token.py)."""
     owner = owner_of(request)
     store = store_of(request)
     artifact_id = _check_id(artifact_id)
     _, _, code, _ = await _call(store.code_version, owner, artifact_id, n)
     if code.build_state != "ok":
         raise _error(409, "build_failed", "This version did not build; it has no document to show.")
-    token = _frame_token(owner, artifact_id, n)
-    return {"token": token, "expires_in": FRAME_TOKEN_SECONDS, "url": f"/api/artifacts/{artifact_id}/versions/{n}/frame.html?t={token}"}
+    token = frame_token_mod.mint(owner, artifact_id, n)
+    return {"token": token, "expires_in": frame_token_mod.SECONDS, "url": f"/api/artifacts/{artifact_id}/versions/{n}/frame.html?t={token}"}
 
 
 @router.get("/{artifact_id}/versions/{n}/frame.html")
 @require_permission("threads", "read")
-async def frame_html(artifact_id: str, n: int, request: Request, t: str | None = Query(None, max_length=1024), path: str | None = Query(None, max_length=1100)) -> Response:
-    """The locked frame's document (FR-016, FR-031). Served ONLY to this
-    app's own iframe request (Sec-Fetch-Dest: iframe, Sec-Fetch-Site:
-    same-origin) carrying a valid view token for this owner and version;
-    anything else (a top-level open, a link, a fetch, another site) gets an
-    inert page. The document carries the CSP's sandbox directive too, so even
-    if it were opened as a page it would run in an opaque origin."""
+async def frame_html(artifact_id: str, n: int, request: Request, t: str | None = Query(None, max_length=512), path: str | None = Query(None, max_length=2400)) -> Response:
+    """The locked frame's document (FR-016, FR-031), under the Apps profile.
+    Served ONLY to this app's own iframe request (Sec-Fetch-Dest: iframe,
+    Sec-Fetch-Site: same-origin) with a view token for this owner and
+    version, ONCE (its nonce is recorded on first use); anything else gets an
+    inert page. `path`: one page of a webapp (already inlined at save time)."""
     owner = owner_of(request)
     store = store_of(request)
     artifact_id = _check_id(artifact_id)
-    if request.headers.get("sec-fetch-dest") != "iframe" or request.headers.get("sec-fetch-site") != "same-origin" or not _token_ok(t, owner, artifact_id, n):
+    payload = frame_token_mod.verify(t, owner, artifact_id, n)
+    if request.headers.get("sec-fetch-dest") != "iframe" or request.headers.get("sec-fetch-site") != "same-origin" or payload is None:
+        return _inert()
+    if path is not None and (not _PAGE_PATH.fullmatch(path) or any(seg in (".", "..") for seg in path.split("/"))):
+        return _inert(404)
+    if not await run_in_threadpool(store.consume_frame_nonce, payload["x"], float(payload["e"])):
         return _inert()
     try:
-        _, version, code, _ = await run_in_threadpool(store.code_version, owner, artifact_id, n)
+        page = await run_in_threadpool(store.page_document, owner, artifact_id, n, path)
     except StoreError:
         return _inert(404)
-    if code.build_state != "ok" or version.stored != "blob":
-        return _inert(409)
-    data = await run_in_threadpool(store.content, owner, version)
-    try:
-        # A webapp page by relative path (strict path rules), inlined; html
-        # and react take no path. Anything else: inert.
-        page = await run_in_threadpool(frame.stored_document, summary_kind(store, owner, artifact_id), data, path)
-    except InvalidContent:
-        return _inert(404)
-    document = frame.frame_document(page)
-    return Response(document, media_type="text/html; charset=utf-8", headers={**frame.HEADERS, "Content-Security-Policy": frame.CSP})
+    document, hashes = frame.frame_document(page)
+    return Response(document, media_type="text/html; charset=utf-8", headers={**frame.HEADERS, "Content-Security-Policy": frame.csp(hashes)})
 
 
 @router.get("/{artifact_id}/versions/{n}/shots/{theme}.png")
@@ -452,7 +515,7 @@ def _run_rebuild(store: ArtifactStore, owner: str, artifact_id: str, base_versio
         if built is None:
             store.end_build(owner, artifact_id, state="failed", reason="react artifacts are built in their chat's sandbox, which is not available here")
             return
-        code = {"source": data, "recipe": built.recipe, "build_log": built.log, "findings": built.findings, "build_state": "ok" if built.ok else "build_failed"}
+        code = {"source": data, "recipe": built.recipe, "build_log": built.log, "findings": frame.react_source_findings(parsed) + built.findings, "build_state": "ok" if built.ok else "build_failed"}
         canon = built.canon if built.ok else kinds.Canonical(data, "application/json")
         if not built.ok:
             code["build_log"] = (built.reason + "\n" + built.log).strip()
@@ -506,43 +569,3 @@ async def message_refused(artifact_id: str, body: RefusedIn, request: Request) -
     _check_id(artifact_id)
     logger.info("artifact_message_refused artifact=%s reason=%s type=%s", artifact_id, body.reason, body.type or "-")
     return Response(status_code=204)
-
-
-def _safe_filename(title: str, ext: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", title).strip("._")[:80] or "artifact"
-    return f"{stem}{ext}"
-
-
-@router.get("/{artifact_id}/versions/{n}/download")
-@require_permission("threads", "read")
-async def download(artifact_id: str, n: int, request: Request, form: Literal["page", "source"] = Query("page")) -> Response:
-    """A code version to keep: `page` the built page (.html, with a
-    network-blocking CSP meta tag), `source` its sources (.zip, built here
-    from the stored blob; names checked again). Always an attachment, never
-    rendered on this origin."""
-    import io
-    import zipfile
-
-    owner = owner_of(request)
-    store = store_of(request)
-    artifact_id = _check_id(artifact_id)
-    summary, version, code, _ = await _call(store.code_version, owner, artifact_id, n)
-    kind = summary["kind"]
-    data = await _call(store.content, owner, version)
-    headers = {**CONTENT_HEADERS}
-    if form == "page":
-        if code.build_state != "ok":
-            raise _error(409, "build_failed", "This version did not build; download its source instead.")
-        body = await _call(frame.download_page, kind, data)
-        headers["Content-Disposition"] = f'attachment; filename="{_safe_filename(summary["title"], ".html")}"'
-        return Response(body, media_type="application/octet-stream", headers=headers)
-    source = await _call(store.source, owner, code)
-    files = await _call(frame.source_files, kind, data, source)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, content in sorted(files.items()):
-            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
-            info.external_attr = 0o644 << 16  # a plain file: no links, no exec bits
-            zf.writestr(info, content)
-    headers["Content-Disposition"] = f'attachment; filename="{_safe_filename(summary["title"], "-source.zip")}"'
-    return Response(buf.getvalue(), media_type="application/zip", headers=headers)

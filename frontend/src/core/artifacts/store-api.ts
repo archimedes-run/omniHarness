@@ -142,7 +142,10 @@ export interface ArtifactVersionDetail extends ArtifactVersion {
    * object; svg, image, file: null (load through the content route). */
   content: unknown;
   /** webapp: its entry page and file list. */
-  webapp?: { entry: string; files: { path: string; size: number }[] } | null;
+  /** webapp (the save model): its entry, files, and pages prepared at save. */
+  entry?: string;
+  files?: { path: string; size: number; media_type: string }[];
+  pages?: { path: string; ok: boolean; reason: string | null }[];
   /** react: the {entry, files} source. */
   source?: ReactSource | null;
   /** A failed build's log tail (the compiler's words: text only). */
@@ -354,7 +357,8 @@ export async function getFrameToken(
 /** A code version to keep (always an attachment): the built page (.html,
  * with a network-blocking CSP meta tag) or its sources (.zip). */
 export function downloadUrl(id: string, n: number, form: "page" | "source") {
-  return `${base()}/${enc(id)}/versions/${enc(String(n))}/download?form=${form}`;
+  const url = `${base()}/${enc(id)}/versions/${enc(String(n))}/download`;
+  return form === "source" ? `${url}?source=zip` : url;
 }
 
 /** The checks' own screenshot (1280 px) for previews: shown as <img> only. */

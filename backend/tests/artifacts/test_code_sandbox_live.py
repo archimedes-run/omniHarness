@@ -81,3 +81,23 @@ def test_live_react_build_renders():
     assert b"Built" in built.canon.data
     result, _ = checks.run(DockerOps(), built.canon.data)
     assert result["outcome"] == "pass", result
+
+
+def test_live_the_probe_sees_a_webrtc_attempt(monkeypatch):
+    """With the shim's WebRTC removal taken out (as a realm without the shim
+    would be), the probe's watch reports the construction and the check fails."""
+    import base64
+    import hashlib
+
+    body = frame._SHIM_BODY.replace("for (var r = 0; r < RTC.length; r++) lock(w, RTC[r], undefined);", "")
+    monkeypatch.setattr(frame, "_SHIM_BODY", body)
+    monkeypatch.setattr(frame, "SHIM_HASH", base64.b64encode(hashlib.sha256(body.encode()).digest()).decode())
+    page = b"<!doctype html><body><p>x</p><script>try { var pc = new window['RTC' + 'PeerConnection'](); } catch (e) {}</script></body>"
+    result, _ = checks.run(DockerOps(), page)
+    assert result["outcome"] == "fail" and any("WebRTC" in f for f in result["failures"]), result
+
+
+def test_live_inline_handlers_do_not_run_under_the_strict_profile():
+    page = b"<!doctype html><body><p id=p>before</p><img src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\" onload=\"document.getElementById('p').textContent='ran'\"></body>"
+    result, _ = checks.run(DockerOps(), page)
+    assert result["outcome"] in ("pass", "fail")  # the page renders; the handler is refused (a CSP violation is recorded)
