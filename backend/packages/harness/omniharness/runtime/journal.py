@@ -431,6 +431,14 @@ class RunJournal(BaseCallbackHandler):
 
     # -- Public methods (called by worker) --
 
+    def record_human_input(self, content: dict, text: str) -> None:
+        """Record the person's message when no model call will (a run stopped
+        before its graph started), as on_chat_model_start records it."""
+        if self._first_human_msg:
+            return
+        self.set_first_human_message(text)
+        self._put(event_type="llm.human.input", category="message", content=content, metadata={"caller": "lead_agent"})
+
     def set_first_human_message(self, content: str) -> None:
         """Record the first human message for convenience fields."""
         self._first_human_msg = content[:2000] if content else None

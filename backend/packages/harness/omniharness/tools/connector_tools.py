@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
+import contextvars
 import logging
 import os
 import sys
@@ -57,9 +59,52 @@ def _api_key() -> str:
 
 #: How long one toolkit may take to start its server and list its tools before
 #: it is skipped for this assembly. Toolkits load concurrently, so this bounds
-#: the whole load, not each one in turn. Overridden by the environment.
+#: the whole load, not each one in turn. Overridden by the environment. It
+#: must cover a COLD start (the first load after a restart starts a Python
+#: process and fetches the toolkit's tool list from the provider): set too
+#: low, a toolkit that works is skipped on every first turn.
 TOOLKIT_LOAD_TIMEOUT_ENV = "CONNECTOR_TOOLKIT_LOAD_TIMEOUT_SECONDS"
 DEFAULT_TOOLKIT_LOAD_TIMEOUT_SECONDS = 15.0
+
+
+#: Where a caller collects the connected toolkits that did not load this time
+#: (`collect_not_loaded`): a list shared by reference, so it fills from the
+#: worker thread and the loader's own loop alike.
+_NOT_LOADED: contextvars.ContextVar[list[tuple[str, str]] | None] = contextvars.ContextVar("connector_toolkits_not_loaded", default=None)
+#: Why a toolkit did not load.
+TIMED_OUT = "timed_out"
+FAILED = "failed"
+
+
+@contextlib.contextmanager
+def collect_not_loaded():
+    """Collect ``(toolkit, TIMED_OUT | FAILED)`` for each connected toolkit
+    that is skipped by the assemblies made inside this block."""
+    found: list[tuple[str, str]] = []
+    token = _NOT_LOADED.set(found)
+    try:
+        yield found
+    finally:
+        _NOT_LOADED.reset(token)
+
+
+def _note_not_loaded(toolkit: str, reason: str) -> None:
+    found = _NOT_LOADED.get()
+    if found is not None and (toolkit, reason) not in found:
+        found.append((toolkit, reason))
+
+
+def toolkit_name(slug: str) -> str:
+    """The display name of a connector toolkit ("GMAIL" -> "Gmail")."""
+    return next((tk["name"] for tk in CONNECTOR_TOOLKITS if tk["slug"] == slug.upper()), slug)
+
+
+def toolkit_of_tool(tool_name: str) -> str | None:
+    """The connector toolkit a tool name belongs to, or None."""
+    for slug in CONNECTOR_SLUGS:
+        if tool_name.startswith(f"{_server_name(slug)}_"):
+            return slug
+    return None
 
 
 def _toolkit_load_timeout() -> float:
@@ -160,8 +205,10 @@ async def _load_connector_tools_async(user_id: str, toolkits: set[str]) -> list[
             return await asyncio.wait_for(load_one(toolkit, account_id), timeout=timeout)
         except TimeoutError:
             logger.warning("Skipping connector toolkit %s for user %s: timed out after %gs", toolkit, user_id, timeout)
+            _note_not_loaded(toolkit, TIMED_OUT)
         except Exception as exc:
             logger.warning("Skipping connector toolkit %s for user %s: %s", toolkit, user_id, exc)
+            _note_not_loaded(toolkit, FAILED)
         return []
 
     # All toolkits at once (one slow toolkit no longer delays the rest), the

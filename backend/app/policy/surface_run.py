@@ -174,17 +174,34 @@ class SurfaceSnapshot:
         self.selection = selection
         self.app_config = app_config
         self._tools: dict[str, dict[str, Any]] = {}
+        #: action id -> connector toolkits that did not load for its tools.
+        self.not_loaded: dict[str, list[tuple[str, str]]] = {}
 
     def tools(self, action: PendingAction) -> dict[str, Any]:
         """name -> tool, for the action's surface with the chat's current selection."""
         if action.id not in self._tools:
             from omniharness.agents.tool_surface import tools_for_surface
             from omniharness.config import get_app_config
+            from omniharness.tools.connector_tools import collect_not_loaded
 
             config = self.app_config or get_app_config()
-            built = tools_for_surface(surface_now(action.surface, self.selection), app_config=config)
+            with collect_not_loaded() as skipped:
+                built = tools_for_surface(surface_now(action.surface, self.selection), app_config=config)
             self._tools[action.id] = {getattr(t, "name", ""): t for t in built}
+            self.not_loaded[action.id] = list(skipped)
         return self._tools[action.id]
+
+
+def timed_out_reason(tool_name: str, not_loaded: list[tuple[str, str]]) -> str | None:
+    """The card's words when `tool_name` is missing because its connector
+    toolkit did not answer within the load limit this time; None otherwise.
+    Said before the claim, so the card stays open to confirm again."""
+    from omniharness.tools.connector_tools import TIMED_OUT, toolkit_name, toolkit_of_tool
+
+    toolkit = toolkit_of_tool(tool_name)
+    if toolkit is None or (toolkit, TIMED_OUT) not in not_loaded:
+        return None
+    return f"{tool_name} was not run: the {toolkit_name(toolkit)} connector did not answer in time. Nothing has run. Confirm again to try again."
 
 
 def _names(surface: dict, app_config: Any) -> set[str]:
@@ -208,6 +225,9 @@ def unavailable_reason(action: PendingAction, selection: list[str] | None, *, ap
         now = set(snapshot.tools(action)) if snapshot is not None else _names(surface_now(action.surface, selection), config)
         if action.tool_name in now:
             return None
+        timed_out = timed_out_reason(action.tool_name, snapshot.not_loaded.get(action.id, [])) if snapshot is not None else None
+        if timed_out is not None:
+            return timed_out
     except LookupError as exc:
         # The proposing agent was deleted (or its surface cannot be rebuilt):
         # a refusal with the reason, not an exception out of the route (500).

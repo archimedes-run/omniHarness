@@ -379,10 +379,12 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
         sources = set(current)
 
     from app.policy.surface_run import SurfaceSnapshot
+    from omniharness.tools.connector_tools import collect_not_loaded
     from omniharness.utils.off_loop import call_off_loop
 
     # Off the event loop: connector toolkits start a process each.
-    tools = await call_off_loop(get_available_tools, selected_sources=sources, user_id=user_id, app_config=get_app_config(), artifact_tools=True)
+    with collect_not_loaded() as not_loaded:
+        tools = await call_off_loop(get_available_tools, selected_sources=sources, user_id=user_id, app_config=get_app_config(), artifact_tools=True)
     registry = {getattr(t, "name", ""): t for t in tools}
     # The proposer's tools, built once: checked and run from the same list.
     snapshot = SurfaceSnapshot(current)
@@ -399,8 +401,13 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
             return run_on_surface(action, tool_name, arguments, selection=current, snapshot=snapshot)
         tool = registry.get(tool_name)
         if tool is None:
+            from app.policy.surface_run import timed_out_reason
+
             # Loud. A confirmation that cannot execute must say why; the defect
             # this whole feature exists to close was a quiet one.
+            timed_out = timed_out_reason(tool_name, not_loaded)
+            if timed_out is not None:
+                raise LookupError(timed_out)
             raise LookupError(f"tool {tool_name!r} is not available to this thread, so the confirmation cannot be completed")
         # The thread and user the action belongs to reach a tool that reads
         # its runtime (the ledger tools do). Invoking with the stored arguments
@@ -414,8 +421,11 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
         return invoke(tool, arguments, runtime=runtime, state={}, call_id=f"confirmed-{tool_name}")
 
     def unavailable(action: Any) -> str | None:
-        from app.policy.surface_run import unavailable_reason
+        from app.policy.surface_run import timed_out_reason, unavailable_reason
 
+        if not action.surface and action.tool_name not in registry:
+            # Its connector did not answer in time: said before the claim.
+            return timed_out_reason(action.tool_name, not_loaded)
         return unavailable_reason(action, current, snapshot=snapshot)
 
     run.unavailable = unavailable  # type: ignore[attr-defined]

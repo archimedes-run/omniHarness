@@ -79,3 +79,66 @@ def test_a_slow_connector_load_does_not_hold_other_requests(studio, monkeypatch)
     assert answered_at < count["done"]
     # The toolkit's tools are counted, as before.
     assert count["body"]["count"] >= 2
+
+
+def _gmail_chat(studio, monkeypatch, client_class) -> str:
+    import omniharness.tools.connector_tools as connector_tools
+
+    client = studio.client
+    repo = client.app.state.composio_connection_repo
+    client.portal.call(lambda: repo.upsert(user_id=studio.user_id, toolkit="GMAIL", composio_connection_id="ca-GMAIL", status="active"))
+
+    async def active(user_id, toolkits):
+        return {"GMAIL": "ca-GMAIL"} if "GMAIL" in toolkits else {}
+
+    monkeypatch.setenv("COMPOSIO_API_KEY", "test-key")
+    monkeypatch.setattr(connector_tools, "_active_accounts_for_user", active)
+    monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", client_class)
+    return client.post("/api/threads", json={}).json()["thread_id"]
+
+
+def test_page_opens_asking_at_once_share_one_assembly(studio, monkeypatch) -> None:
+    """Five tabs opening the chat while its toolkits load start them once, not
+    five times (every assembly starts a process per toolkit)."""
+    started: list[str] = []
+    base = _slow_client(["send_email", "fetch_emails"])
+
+    class Counting(base):
+        async def get_tools(self):
+            started.append(self.server)
+            return await super().get_tools()
+
+    tid = _gmail_chat(studio, monkeypatch, Counting)
+    answers: list[dict] = []
+
+    def ask() -> None:
+        answers.append(studio.client.get(f"/api/threads/{tid}/tools/count").json())
+
+    askers = [threading.Thread(target=ask) for _ in range(5)]
+    for t in askers:
+        t.start()
+        time.sleep(0.05)
+    for t in askers:
+        t.join(30)
+    assert len(answers) == 5 and len({a["count"] for a in answers}) == 1, answers
+    assert started == ["connector-gmail"], started
+    # Nothing is kept once answered: the next ask loads again (a disconnect
+    # or a grant change takes effect at once).
+    studio.client.get(f"/api/threads/{tid}/tools/count")
+    assert started == ["connector-gmail", "connector-gmail"]
+
+
+def test_a_toolkit_that_does_not_answer_in_time_is_named_in_the_count(studio, monkeypatch) -> None:
+    import omniharness.tools.connector_tools as connector_tools
+
+    class Hanging:
+        def __init__(self, connections, tool_name_prefix=False):
+            pass
+
+        async def get_tools(self):
+            await asyncio.sleep(30)
+
+    monkeypatch.setenv(connector_tools.TOOLKIT_LOAD_TIMEOUT_ENV, "0.5")
+    tid = _gmail_chat(studio, monkeypatch, Hanging)
+    body = studio.client.get(f"/api/threads/{tid}/tools/count").json()
+    assert body["not_loaded"] == [{"toolkit": "GMAIL", "name": "Gmail", "reason": "timed_out"}], body

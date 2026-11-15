@@ -240,6 +240,26 @@ async def _journal_human(event_store: Any, row: dict) -> Any:
     return None
 
 
+def _row_human(row: dict) -> Any:
+    """The person's message as the run was started with it (the run's own
+    input), for a run that ended before anything recorded it: stopped while
+    its agent was being built. The worker gives it an id then
+    (worker._journal_unsent_input), so the notice can tell it is not in the
+    thread's state and does not take an earlier turn for it."""
+    graph_input = (row.get("kwargs") or {}).get("input")
+    messages = graph_input.get("messages") if isinstance(graph_input, dict) else None
+    for message in reversed(messages if isinstance(messages, list) else []):
+        kind = message.get("type") if isinstance(message, dict) else getattr(message, "type", None)
+        if kind == "human":
+            return message
+    return None
+
+
+def _message_id(message: Any) -> str | None:
+    value = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
+    return str(value) if value else None
+
+
 def _undisclosed_records(turn: list[Any]) -> tuple[list[Any], list[str]]:
     """The Tier 2 actions that ran in the cut-off part of the turn and were
     not disclosed on an earlier final reply of it (FR-063: exactly once, on
@@ -344,6 +364,8 @@ async def write_notice(app_state: Any, row: dict) -> str:
     event_store = getattr(app_state, "run_event_store", None)
     run_manager = app_state.run_manager
     journal_human = await _journal_human(event_store, row)
+    if journal_human is None:
+        journal_human = _row_human(row)
     scheduled = _scheduled(row)
     built: dict[str, Any] = {}
 
@@ -352,7 +374,7 @@ async def write_notice(app_state: Any, row: dict) -> str:
         if existing is not None:
             built["notice"] = existing
             return None
-        human_id = journal_human.get("id") if isinstance(journal_human, dict) else None
+        human_id = _message_id(journal_human) if journal_human is not None else None
         bounds = _turn_bounds(messages, human_id)
         if bounds is None:
             notice = build_notice(run_id, [], journal_human, scheduled=scheduled)

@@ -140,22 +140,22 @@ def get_cached_mcp_tools() -> list[BaseTool]:
     Returns:
         List of cached MCP tools.
     """
-    global _cache_initialized
+    # The stale check, the reset and the read under the lock: assemblies run
+    # in several threads at once, and a reader between another thread's
+    # reset and its reload read an empty list (no MCP tools for that run).
+    with _initialization_lock:
+        if _is_cache_stale():
+            logger.info("MCP cache is stale, resetting for re-initialization...")
+            _reset_locked()
+        if _cache_initialized:
+            return _mcp_tools_cache or []
 
-    # Check if cache is stale due to config file changes
-    if _is_cache_stale():
-        logger.info("MCP cache is stale, resetting for re-initialization...")
-        reset_mcp_tools_cache()
-
-    if not _cache_initialized:
-        logger.info("MCP tools not initialized, performing lazy initialization...")
-        try:
-            return _load_once()
-        except Exception:
-            logger.exception("Failed to lazy-initialize MCP tools")
-            return []
-
-    return _mcp_tools_cache or []
+    logger.info("MCP tools not initialized, performing lazy initialization...")
+    try:
+        return _load_once()
+    except Exception:
+        logger.exception("Failed to lazy-initialize MCP tools")
+        return []
 
 
 def reset_mcp_tools_cache() -> None:
@@ -163,6 +163,12 @@ def reset_mcp_tools_cache() -> None:
 
     This is useful for testing or when you want to reload MCP tools.
     """
+    with _initialization_lock:
+        _reset_locked()
+
+
+def _reset_locked() -> None:
+    """Reset the cache; the caller holds _initialization_lock."""
     global _mcp_tools_cache, _cache_initialized, _config_mtime
     _mcp_tools_cache = None
     _cache_initialized = False

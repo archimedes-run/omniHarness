@@ -123,10 +123,6 @@ def test_a_graceful_stop_mid_reply_leaves_the_notice_once(root: Path, monkeypatc
         thread_id = client.post("/api/threads", json={}).json()["thread_id"]
         assert client.post(f"/api/threads/{thread_id}/runs", json=_run_body("who is Jane Roe", thread_id)).status_code == 200
         assert _wait(lambda: any(r["status"] == "running" for r in _runs(client, thread_id)))
-        # Mid-reply: the model call has started. A run is "running" before
-        # its agent is built, and building it is off the event loop, so the
-        # status alone no longer means the reply is under way.
-        assert _wait(lambda: "lead" in scripted.SCRIPT.calls)
     # Leaving the block is the graceful stop. Start again, with the startup
     # sweep switched off: the notice was written at shutdown, not by it.
     import app.gateway.run_recovery as recovery

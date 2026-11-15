@@ -50,24 +50,42 @@ async def test_what_it_set_before_raising_stays_set():
 
 
 @pytest.mark.anyio
-async def test_a_cancelled_caller_is_cancelled_once_the_call_has_returned():
-    """As inline: the call cannot be interrupted, so the caller does not move
-    on while it is still running, and keeps what it set."""
+async def test_a_cancelled_caller_stops_waiting_at_once_and_keeps_nothing():
+    """A stop or restart must not wait for a build that is not answering
+    (a toolkit up to its time limit): the caller is cancelled at once and the
+    thread's result, context changes included, is dropped."""
     import time
 
-    finished = threading.Event()
+    release = threading.Event()
 
     def assemble() -> None:
-        time.sleep(0.3)
-        _VAR.set("finished")
-        finished.set()
+        release.wait(5)
+        _VAR.set("late")
 
+    _VAR.set("caller")
     task = asyncio.ensure_future(call_off_loop(assemble))
     await asyncio.sleep(0.05)
+    started = time.monotonic()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert finished.is_set()
+    assert time.monotonic() - started < 0.5
+    release.set()
+    await asyncio.sleep(0.05)
+    assert _VAR.get() == "caller"
+
+
+@pytest.mark.anyio
+async def test_assembly_runs_in_its_own_pool_not_the_default_one():
+    """The default pool also serves journal writes, card statements, password
+    hashing and DNS: assembly never takes its threads."""
+    names = {}
+
+    def assemble() -> None:
+        names["thread"] = threading.current_thread().name
+
+    await call_off_loop(assemble)
+    assert names["thread"].startswith("tool-assembly"), names
 
 
 @pytest.mark.anyio

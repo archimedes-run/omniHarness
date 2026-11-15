@@ -11,6 +11,14 @@ caller's context, and then applies to the caller's context every context
 variable the call set. Assembly sets some that the caller reads afterwards
 (the deferred-tool registry ``tool_search`` uses, for one), so the result is
 the same as calling inline: only the thread differs.
+
+Assembly has its own small pool, never the loop's default one: that pool also
+serves the run journal's batch writes, card statements, password hashing and
+DNS lookups, which must not queue behind toolkits starting up.
+
+A cancelled caller stops waiting at once and the thread's result is dropped:
+building tools has no side effect that must finish, and a stop or restart
+must not wait for a toolkit that is not answering.
 """
 
 from __future__ import annotations
@@ -19,35 +27,29 @@ import asyncio
 import contextvars
 import functools
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+#: Threads for tool assembly. Identical tools-count requests share one
+#: assembly (routers/thread_tools), so a few page opens do not fill it.
+ASSEMBLY_WORKERS = 6
+_ASSEMBLY_POOL = ThreadPoolExecutor(max_workers=ASSEMBLY_WORKERS, thread_name_prefix="tool-assembly")
 
 _UNSET = object()
 
 
 async def call_off_loop[T](fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
-    """``fn(*args, **kwargs)`` in a worker thread, keeping its context changes."""
+    """``fn(*args, **kwargs)`` in the assembly pool, keeping its context changes."""
     context = contextvars.copy_context()
-    future = asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, fn, *args, **kwargs))
-    cancelled: asyncio.CancelledError | None = None
-    while True:
-        try:
-            # Shielded: a cancellation is delivered when the call has
-            # returned, as it would be inline (an inline call cannot be
-            # interrupted), so a cancelled caller never moves on while the
-            # call is still running or with only half of its changes.
-            result = await asyncio.shield(future)
-            break
-        except asyncio.CancelledError as exc:
-            cancelled = exc
-        except Exception:
-            # What it set before raising stays set, as it would inline.
-            _adopt(context)
-            if cancelled is not None:
-                raise cancelled from None
-            raise
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(_ASSEMBLY_POOL, functools.partial(context.run, fn, *args, **kwargs))
+    except Exception:
+        # Raised (not cancelled: then the thread may still be running, and
+        # nothing of it is kept): what it set before raising stays set, as it
+        # would inline.
+        _adopt(context)
+        raise
     _adopt(context)
-    if cancelled is not None:
-        raise cancelled
     return result
 
 

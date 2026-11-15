@@ -29,6 +29,8 @@ export type ToolCount = {
   count: number;
   cap: number;
   over_cap: boolean;
+  /** Connected toolkits that did not load this time (not counted). */
+  not_loaded?: { toolkit: string; name: string; reason: string }[];
 };
 
 export async function getToolsCatalog(): Promise<ToolCatalog> {
