@@ -35,19 +35,6 @@ from omniharness.runtime.user_context import DEFAULT_USER_ID
 
 logger = logging.getLogger(__name__)
 
-
-class _RedactFrameQuery(logging.Filter):
-    """The frame route's query (a view token) never reaches the access log."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "/frame.html?" in args[2]:
-            record.args = (*args[:2], args[2].split("?", 1)[0] + "?[redacted]", *args[3:])
-        return True
-
-
-logging.getLogger("uvicorn.access").addFilter(_RedactFrameQuery())
-
 router = APIRouter(prefix="/api/artifacts", tags=["artifact-store"])
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{22}$")

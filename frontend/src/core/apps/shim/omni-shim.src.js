@@ -188,6 +188,7 @@
             ? node.querySelectorAll(FRAME_SELECTOR)
             : [];
           for (var k = 0; k < inner.length; k++) inner[k].remove();
+          watchShadows(node);
         }
       }
     });
@@ -208,6 +209,66 @@
         /* the guards stand */
       }
       return root;
+    });
+  }
+  // Shadow roots that exist without attachShadow (declarative ones from the
+  // document's markup, any present at start): each open one is observed and
+  // swept too, now, when the document is parsed, and as hosts are added.
+  var watched = typeof WeakSet === "function" ? new WeakSet() : null;
+  function watchShadows(node) {
+    try {
+      var hosts = node.querySelectorAll ? node.querySelectorAll("*") : [];
+      var list = node.shadowRoot ? [node] : [];
+      for (var i = 0; i < hosts.length; i++) {
+        if (hosts[i].shadowRoot) list.push(hosts[i]);
+      }
+      for (var j = 0; j < list.length; j++) {
+        var root = list[j].shadowRoot;
+        if (!observer || (watched && watched.has(root))) continue;
+        if (watched) watched.add(root);
+        observer.observe(root, { childList: true, subtree: true });
+        var frames = root.querySelectorAll(FRAME_SELECTOR);
+        for (var k = 0; k < frames.length; k++) frames[k].remove();
+        watchShadows(root);
+      }
+    } catch (_e) {
+      /* the guards stand */
+    }
+  }
+  watchShadows(document);
+  document.addEventListener("DOMContentLoaded", function () {
+    watchShadows(document);
+  });
+  // A customised built-in element extending a frame (class X extends
+  // HTMLIFrameElement, defined with { extends: "iframe" }) would make a frame
+  // with `new X()`, without createElement: refused at definition.
+  var Registry = w.CustomElementRegistry && w.CustomElementRegistry.prototype;
+  var define = Registry && Registry.define;
+  var FRAME_CLASSES = [
+    "HTMLIFrameElement",
+    "HTMLObjectElement",
+    "HTMLEmbedElement",
+    "HTMLFrameElement",
+    "HTMLFrameSetElement",
+    "HTMLFencedFrameElement",
+    "HTMLPortalElement",
+  ];
+  if (typeof define === "function") {
+    lock(Registry, "define", function (name, ctor, options) {
+      var ext = options && options.extends;
+      ext = ext === undefined || ext === null ? undefined : String(ext);
+      if (ext !== undefined && FRAME_TAGS[ext.toLowerCase()]) refuseFrame();
+      for (var i = 0; i < FRAME_CLASSES.length; i++) {
+        var C = w[FRAME_CLASSES[i]];
+        if (C && ctor && (ctor === C || ctor.prototype instanceof C))
+          refuseFrame();
+      }
+      return define.call(
+        this,
+        name,
+        ctor,
+        ext === undefined ? undefined : { extends: ext },
+      );
     });
   }
 

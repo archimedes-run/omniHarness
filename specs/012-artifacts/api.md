@@ -587,15 +587,21 @@ no uncaught error) and the no-network watch: any CSP violation, any request
 to anything but the probe's own server, and any WebRTC construction in any
 frame of the page (the probe wraps the constructors in every document before
 its scripts run and is told through a CDP binding the page cannot reach)
-fails it. A run whose WebRTC watch did not start is `not_checked`. Before the
-probe's fresh, unguessable folder is made, processes the sandbox user
-started since the sandbox's own services are stopped (as a coding job's
-checks do; a dev server the chat started there stops too). The probe's
-checksum, a per-run nonce, the document's hash and a clean exit (status 0)
-are all required; anything else is `not_checked`. Every file is read back in
-one capped command (`head -c cap+1`, never a link). A version that fails is
-stored and viewable, labelled. A **blocking finding** (below) fails the check
-with its words.
+fails it. A run whose WebRTC watch did not start is `not_checked`. The
+probe's fresh, unguessable folder, its checksum, a per-run nonce, the
+document's hash and a clean exit (status 0) are all required; anything else
+is `not_checked`. Every file is read back in one capped command
+(`head -c cap+1`, never a link). The checks never stop any other process in
+the sandbox. A version that fails is stored and viewable, labelled. A
+**blocking finding** (below) fails the check with its words.
+
+**The check is a quality signal, not a security boundary.** It runs inside
+the chat's sandbox, which the chat's own code shares, so code there can
+disturb or imitate it. Nothing depends on it: every version, passed,
+failed, unchecked or with a forged result, is served the identical frame
+document under the identical headers; the frame's profile and sandbox are
+the boundary. The UI words it as an observation ("Checked: no network
+attempts seen…"), never as a guarantee.
 
 ### `GET /api/artifacts/{id}/versions/{n}/frame-token`
 
@@ -618,7 +624,8 @@ version, `Sec-Fetch-Dest: iframe` and `Sec-Fetch-Site: same-origin`.
 Anything else (a top-level open, a fetch, another site, no, a used or a bad
 token) gets `403` with an inert page ("Open this artifact in OmniHarness.")
 under `default-src 'none'; style-src 'unsafe-inline'; sandbox;
-frame-ancestors 'none'`. The query string is not written to the access log.
+frame-ancestors 'none'`. The query string is written to neither the
+gateway's log nor nginx's access log (`$safe_request_uri`).
 
 `path` (webapp only): one page of the set by its stored relative path
 (default: the entry). Only pages prepared at save are served; anything else
@@ -728,8 +735,11 @@ Logged as `artifact_message_refused`. Codes only: no free text from a frame.
 - `artifact_update(…, fix_of?: int)`: html takes `content` or `edits`;
   react takes the whole `content`. A tool's change of a version whose checks
   (or build) failed IS the automatic fix whatever its arguments (recorded as
-  `fix_of`); one per artifact per turn. An explicit `fix_of` is refused for a
-  version that passed, a version that is itself a fix, or one already fixed.
+  `fix_of`): one per artifact per turn (the turn's run id; with none, one
+  until the owner next acts on the artifact). A tool's change of a version
+  that passed or was not checked is not an automatic fix and is not capped.
+  An explicit `fix_of` is refused for a version that passed, a version that
+  is itself a fix, or one already fixed.
 - The result names ids, numbers, states and the system's own words (checks
   passed / FAILED with the summary / gave no answer, the number of findings,
   and, after a failure, the instruction for the ONE automatic fix). The

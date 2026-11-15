@@ -276,7 +276,9 @@ def test_html_create_runs_the_checks_on_the_exact_bytes(tools, store, sandbox):
     doc, hashes = frame.frame_document(PAGE.encode())
     assert seen["doc"].encode() == doc
     assert seen["check"]["csp"] == frame.csp(hashes) and re.fullmatch(r"[0-9a-f]{32}", seen["check"]["nonce"])
-    assert sandbox["ops"].quiesced == 1  # leftovers stopped before the probe's folder was made
+    # The checks never stop the sandbox's other processes (a preview server,
+    # a coding job, the model's own background work).
+    assert not any(re.search(r"\bkill\b|pkill|killall", c) for c in sandbox["ops"].commands)
     assert check.state == "passed" and check.frame_sha256 == code.frame_sha256 == frame.frame_sha256(PAGE.encode())
     assert store.shot(OWNER, card["artifact_id"], 1, "light") == PNG
     assert sandbox["ops"].closed
@@ -528,3 +530,17 @@ def test_the_build_installs_exactly_the_tracked_lockfile():
     assert lock["packages"][""]["dependencies"] == pkg["dependencies"] and lock["packages"][""]["devDependencies"] == pkg["devDependencies"]
     assert all(v.get("integrity", "").startswith("sha512-") for k, v in lock["packages"].items() if k)
     assert "npm ci " in react_build.command("/tmp/x") and "npm install" not in react_build.command("/tmp/x")
+
+
+def test_one_automatic_fix_even_without_a_turn_id(tools, store, sandbox):
+    sandbox["ops"].probe = failing(violations=["img-src"])
+    _, card = tools.create(ctx(run_id=None), kind="html", title="P", content=PAGE, language=None, source_path=None, note=None)
+    aid = card["artifact_id"]
+    _, card2 = tools.update(ctx(run_id=None), artifact_id=aid, base_version=1, content=PAGE + " ", edits=None, language=None, note=None)
+    assert card2["version"] == 2
+    text, card3 = tools.update(ctx(run_id=None), artifact_id=aid, base_version=2, content=PAGE + "  ", edits=None, language=None, note=None)
+    assert card3 is None and "already made the one automatic fix" in text
+    # The owner acting on it opens a new round.
+    store.add_version(OWNER, aid, base_version=2, canon=frame.canonical_html(PAGE + "   ")[0], lineage="user", lineage_source=None, origin="owner_edit", code={})
+    _, card4 = tools.update(ctx(run_id=None), artifact_id=aid, base_version=3, content=PAGE + "    ", edits=None, language=None, note=None)
+    assert card4["version"] == 4
