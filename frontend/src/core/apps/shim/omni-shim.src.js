@@ -107,12 +107,22 @@
       if (args[i] != null && FRAME_HTML.test(String(args[i]))) refuseFrame();
     }
   }
-  function guardMethod(obj, name) {
+  // Each HTML argument is turned into a string ONCE; that same string is
+  // checked and passed on (a value whose toString answers differently on
+  // each call cannot pass with one value and write another).
+  function once(v) {
+    return v == null ? "" : String(v);
+  }
+  function guardMethod(obj, name, at) {
     var f = obj && obj[name];
     if (typeof f !== "function") return;
     lock(obj, name, function () {
-      checkHtml(arguments);
-      return f.apply(this, arguments);
+      var args = Array.prototype.slice.call(arguments);
+      for (var i = 0; i < args.length; i++) {
+        if (at === -1 || i === at) args[i] = once(args[i]);
+      }
+      checkHtml(at === -1 ? args : [args[at]]);
+      return f.apply(this, args);
     });
   }
   function guardSetter(proto, name) {
@@ -122,8 +132,9 @@
       Object.defineProperty(proto, name, {
         get: d.get,
         set: function (v) {
-          checkHtml([v]);
-          d.set.call(this, v);
+          var t = once(v);
+          checkHtml([t]);
+          d.set.call(this, t);
         },
         enumerable: d.enumerable,
         configurable: false,
@@ -145,24 +156,25 @@
       if (FRAME_TAGS[local]) refuseFrame();
       return createElementNS.apply(this, arguments);
     });
-    guardMethod(DocProto, "write");
-    guardMethod(DocProto, "writeln");
+    guardMethod(DocProto, "write", -1);
+    guardMethod(DocProto, "writeln", -1);
   }
   var ElProto = w.Element && w.Element.prototype;
   guardSetter(ElProto, "innerHTML");
   guardSetter(ElProto, "outerHTML");
-  guardMethod(ElProto, "insertAdjacentHTML");
-  guardMethod(ElProto, "setHTMLUnsafe");
+  guardMethod(ElProto, "insertAdjacentHTML", 1);
+  guardMethod(ElProto, "setHTMLUnsafe", 0);
   guardSetter(w.ShadowRoot && w.ShadowRoot.prototype, "innerHTML");
-  guardMethod(w.ShadowRoot && w.ShadowRoot.prototype, "setHTMLUnsafe");
-  guardMethod(w.Range && w.Range.prototype, "createContextualFragment");
-  guardMethod(w.DOMParser && w.DOMParser.prototype, "parseFromString");
-  guardMethod(w.Document, "parseHTMLUnsafe");
+  guardMethod(w.ShadowRoot && w.ShadowRoot.prototype, "setHTMLUnsafe", 0);
+  guardMethod(w.Range && w.Range.prototype, "createContextualFragment", 0);
+  guardMethod(w.DOMParser && w.DOMParser.prototype, "parseFromString", 0);
+  guardMethod(w.Document, "parseHTMLUnsafe", 0);
   // XSLT can build elements without createElement or an HTML string.
   lock(w, "XSLTProcessor", undefined);
   // And anything that appears anyway is removed before it can load.
+  var observer = null;
   try {
-    new MutationObserver(function (records) {
+    observer = new MutationObserver(function (records) {
       for (var i = 0; i < records.length; i++) {
         var added = records[i].addedNodes;
         for (var j = 0; j < added.length; j++) {
@@ -176,11 +188,88 @@
             ? node.querySelectorAll(FRAME_SELECTOR)
             : [];
           for (var k = 0; k < inner.length; k++) inner[k].remove();
+          watchShadows(node);
         }
       }
-    }).observe(document, { childList: true, subtree: true });
+    });
+    observer.observe(document, { childList: true, subtree: true });
   } catch (_e) {
     /* no observer: the guards above stand */
+  }
+  // Shadow trees are outside the document's subtree: each one made here is
+  // observed the same way.
+  var attachShadow = ElProto && ElProto.attachShadow;
+  if (typeof attachShadow === "function") {
+    lock(ElProto, "attachShadow", function () {
+      var root = attachShadow.apply(this, arguments);
+      try {
+        if (observer)
+          observer.observe(root, { childList: true, subtree: true });
+      } catch (_e) {
+        /* the guards stand */
+      }
+      return root;
+    });
+  }
+  // Shadow roots that exist without attachShadow (declarative ones from the
+  // document's markup, any present at start): each open one is observed and
+  // swept too, now, when the document is parsed, and as hosts are added.
+  var watched = typeof WeakSet === "function" ? new WeakSet() : null;
+  function watchShadows(node) {
+    try {
+      var hosts = node.querySelectorAll ? node.querySelectorAll("*") : [];
+      var list = node.shadowRoot ? [node] : [];
+      for (var i = 0; i < hosts.length; i++) {
+        if (hosts[i].shadowRoot) list.push(hosts[i]);
+      }
+      for (var j = 0; j < list.length; j++) {
+        var root = list[j].shadowRoot;
+        if (!observer || (watched && watched.has(root))) continue;
+        if (watched) watched.add(root);
+        observer.observe(root, { childList: true, subtree: true });
+        var frames = root.querySelectorAll(FRAME_SELECTOR);
+        for (var k = 0; k < frames.length; k++) frames[k].remove();
+        watchShadows(root);
+      }
+    } catch (_e) {
+      /* the guards stand */
+    }
+  }
+  watchShadows(document);
+  document.addEventListener("DOMContentLoaded", function () {
+    watchShadows(document);
+  });
+  // A customised built-in element extending a frame (class X extends
+  // HTMLIFrameElement, defined with { extends: "iframe" }) would make a frame
+  // with `new X()`, without createElement: refused at definition.
+  var Registry = w.CustomElementRegistry && w.CustomElementRegistry.prototype;
+  var define = Registry && Registry.define;
+  var FRAME_CLASSES = [
+    "HTMLIFrameElement",
+    "HTMLObjectElement",
+    "HTMLEmbedElement",
+    "HTMLFrameElement",
+    "HTMLFrameSetElement",
+    "HTMLFencedFrameElement",
+    "HTMLPortalElement",
+  ];
+  if (typeof define === "function") {
+    lock(Registry, "define", function (name, ctor, options) {
+      var ext = options && options.extends;
+      ext = ext === undefined || ext === null ? undefined : String(ext);
+      if (ext !== undefined && FRAME_TAGS[ext.toLowerCase()]) refuseFrame();
+      for (var i = 0; i < FRAME_CLASSES.length; i++) {
+        var C = w[FRAME_CLASSES[i]];
+        if (C && ctor && (ctor === C || ctor.prototype instanceof C))
+          refuseFrame();
+      }
+      return define.call(
+        this,
+        name,
+        ctor,
+        ext === undefined ? undefined : { extends: ext },
+      );
+    });
   }
 
   /** True when no WebRTC constructor is reachable here. */

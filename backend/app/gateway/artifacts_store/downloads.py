@@ -82,3 +82,15 @@ def webapp_zip(store, owner_id: str, files: list[dict]) -> bytes:
         for f in files:
             archive.writestr(f["path"], blobs.read(owner_id, f["content_hash"]))
     return out.getvalue()
+
+
+def files_zip(files: dict[str, bytes]) -> bytes:
+    """Source files as a .zip: plain files (0644), fixed timestamps; names were
+    checked by the caller."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in sorted(files.items()):
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, data)
+    return out.getvalue()

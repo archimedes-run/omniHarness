@@ -8,6 +8,14 @@ from pydantic import BaseModel
 from app.gateway.auth.config import get_auth_config
 from app.gateway.auth.errors import TokenError
 
+#: The only kind of token the session secret signs (auth/derived.py keys sign
+#: everything else).
+SESSION_TYP = "session"
+#: The claims a session token from before `typ` existed carries, exactly.
+#: Accepted until those tokens expire (token_expiry_days); anything else
+#: without `typ: session` is refused.
+_LEGACY_CLAIMS = frozenset({"sub", "exp", "iat", "ver"})
+
 
 class TokenPayload(BaseModel):
     """JWT token payload."""
@@ -33,7 +41,7 @@ def create_access_token(user_id: str, expires_delta: timedelta | None = None, to
     expiry = expires_delta or timedelta(days=config.token_expiry_days)
 
     now = datetime.now(UTC)
-    payload = {"sub": user_id, "exp": now + expiry, "iat": now, "ver": token_version}
+    payload = {"sub": user_id, "exp": now + expiry, "iat": now, "ver": token_version, "typ": SESSION_TYP}
     return jwt.encode(payload, config.jwt_secret, algorithm="HS256")
 
 
@@ -46,6 +54,13 @@ def decode_token(token: str) -> TokenPayload | TokenError:
     config = get_auth_config()
     try:
         payload = jwt.decode(token, config.jwt_secret, algorithms=["HS256"])
+        if not isinstance(payload, dict):
+            return TokenError.MALFORMED
+        typ = payload.get("typ")
+        if typ != SESSION_TYP and not (typ is None and set(payload) <= _LEGACY_CLAIMS):
+            # Not a session token (another purpose, or a forged shape).
+            return TokenError.MALFORMED
+        payload.pop("typ", None)
         return TokenPayload(**payload)
     except jwt.ExpiredSignatureError:
         return TokenError.EXPIRED

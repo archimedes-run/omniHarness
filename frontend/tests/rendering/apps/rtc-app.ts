@@ -16,6 +16,7 @@
  * - blank-create: createElement("iframe") with no src, then WebRTC from its
  *   initial about:blank realm, reached through window[n].
  * - blank-innerhtml: the same frame written with innerHTML.
+ * - custom-builtin: `new F()` of a customised built-in extending HTMLIFrameElement.
  * - xslt: an <iframe> made by XSLTProcessor (no createElement, no HTML string).
  *
  * `hello`: served without the shim, the script says the shim's hello itself.
@@ -72,6 +73,12 @@ export function rtcScript(
   });
   attempt("blank-innerhtml", function () {
     var d = document.createElement("div"); d.innerHTML = "<iframe></iframe>"; document.body.appendChild(d); return rtc(lastRealm());
+  });
+  attempt("custom-builtin", function () {
+    var C = window.customElements; if (!C) return "no-ce";
+    var F = class extends HTMLIFrameElement {};
+    C.define("x-frame-" + Math.random().toString(36).slice(2), F, { extends: "iframe" });
+    var f = new F(); f.srcdoc = S; document.body.appendChild(f); return "made";
   });
   attempt("xslt", function () {
     var X = window.XSLTProcessor; if (!X) return "no-xslt";

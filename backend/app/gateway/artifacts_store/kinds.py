@@ -18,19 +18,33 @@ from typing import Any
 from app.gateway.artifacts_store import caps
 
 #: Kinds the chat tools make in Slice 1.
-TOOL_KINDS = ("markdown", "code", "svg", "mermaid", "chart", "image")
+TOOL_KINDS = ("markdown", "code", "svg", "mermaid", "chart", "image", "html", "react")
 #: Kinds a stored artifact may have (`file` and `webapp`: only the owner's
 #: "Save to artifacts" on a chat's output makes them).
 STORED_KINDS = (*TOOL_KINDS, "file", "webapp")
-TEXT_KINDS = frozenset({"markdown", "code", "svg", "mermaid", "chart"})
-#: Kinds the owner edits in place in Slice 1 (FR-010; document and spreadsheet arrive in S4).
-OWNER_EDIT_KINDS = frozenset({"markdown", "code", "mermaid"})
+#: Code kinds (Slice 2): programs, run only in the locked frame (FR-016).
+#: `webapp`: a static file set the owner saved from a chat (not made by a tool).
+CODE_KINDS = frozenset({"html", "react", "webapp"})
+TEXT_KINDS = frozenset({"markdown", "code", "svg", "mermaid", "chart", "html", "react"})
+#: Kinds the owner edits in place (FR-010; html in Slice 2; react is rebuilt
+#: from edited source through its own route; document and spreadsheet arrive in S4).
+OWNER_EDIT_KINDS = frozenset({"markdown", "code", "mermaid", "html"})
 #: Kinds `artifact_update` may change with exact {old, new} edits.
-EDIT_KINDS = frozenset({"markdown", "code", "mermaid", "svg"})
+EDIT_KINDS = frozenset({"markdown", "code", "mermaid", "svg", "html"})
 #: Kinds whose latest text is kept for search.
-SEARCH_KINDS = frozenset({"markdown", "code", "mermaid"})
+SEARCH_KINDS = frozenset({"markdown", "code", "mermaid", "html"})
 
-MEDIA_TYPES = {"markdown": "text/markdown", "mermaid": "text/vnd.mermaid", "code": "text/plain", "svg": "image/svg+xml", "chart": "application/json", "file": "application/octet-stream", "webapp": "application/vnd.omni-webapp+json"}
+MEDIA_TYPES = {
+    "markdown": "text/markdown",
+    "mermaid": "text/vnd.mermaid",
+    "code": "text/plain",
+    "svg": "image/svg+xml",
+    "chart": "application/json",
+    "file": "application/octet-stream",
+    "html": "text/html",
+    "react": "text/html",
+    "webapp": "application/vnd.omni-webapp+json",
+}
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 _LANGUAGE = re.compile(r"^[a-z0-9+#._-]{1,32}$")
 
@@ -120,6 +134,11 @@ def canonical(kind: str, content: Any, *, language: str | None = None) -> Canoni
         _check_size(kind, len(data))
         check_svg(text)
         return Canonical(data, MEDIA_TYPES[kind])
+    if kind == "html":
+        from app.gateway.artifacts_store.frame import canonical_html
+
+        canon, _ = canonical_html(content)
+        return Canonical(canon.data, canon.media_type, None, content)
     if kind == "chart":
         if isinstance(content, str):
             raw = content.encode("utf-8", "replace")
@@ -156,7 +175,7 @@ def text_of(kind: str, data: bytes) -> str:
 
 
 def content_for_api(kind: str, data: bytes) -> Any:
-    if kind in ("markdown", "mermaid"):
+    if kind in ("markdown", "mermaid", "html"):
         return data.decode("utf-8")
     if kind in ("code", "chart"):
         return json.loads(data)

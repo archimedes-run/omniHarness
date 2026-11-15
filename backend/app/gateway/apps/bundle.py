@@ -414,9 +414,12 @@ def shim() -> str:
     return SHIM_FILE.read_text(encoding="utf-8")
 
 
-def inline(files: dict[str, bytes], entry: str = ENTRY, *, platform_shim: str | None = None) -> tuple[bytes, list[str]]:
+def inline(files: dict[str, bytes], entry: str = ENTRY, *, platform_shim: str | None = None, forbid: bool = True) -> tuple[bytes, list[str]]:
     """(the self-contained document, its script hashes) or BundleError. The
     platform shim (default: the gateway's copy) becomes the first script.
+    `forbid=False` (artifacts, Spec 012: their own scan decides what is
+    refused and what is a finding) skips the FORBIDDEN names check only;
+    frame markup and remote references are refused either way.
 
     Linear in the size of the input, which is capped before anything is
     parsed (the entry and all files together at BUNDLE_MAX_BYTES)."""
@@ -488,7 +491,7 @@ def inline(files: dict[str, bytes], entry: str = ENTRY, *, platform_shim: str | 
             at = t.end
     out.add(html[at:])
     html = "".join(out.parts)
-    for name, pattern in FORBIDDEN:
+    for name, pattern in FORBIDDEN if forbid else ():
         if pattern.search(html):
             raise BundleError("forbidden_api", f"the bundle names {name}, which apps may not use")
     _scan_frames(html)  # again, with the bundle's scripts inlined
