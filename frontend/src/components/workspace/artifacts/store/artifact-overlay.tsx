@@ -3,6 +3,8 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
+import { tooltipEscapes } from "./viewer-parts";
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -24,11 +26,14 @@ export function ArtifactOverlay({
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     const el = ref.current;
-    const first = el?.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? el)?.focus();
+    // The dialog itself takes focus (Tab then starts at its first control):
+    // focusing the first control showed its tooltip over the title.
+    el?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (!el) return;
       if (e.key === "Escape") {
+        // A menu, popover, sheet or field inside handled it first.
+        if (e.defaultPrevented && !tooltipEscapes.has(e)) return;
         e.preventDefault();
         closeRef.current();
         return;
@@ -60,7 +65,7 @@ export function ArtifactOverlay({
     <div
       ref={ref}
       tabIndex={-1}
-      className="bg-background fixed inset-0 z-50 flex flex-col overflow-hidden p-4 outline-none"
+      className="bg-background fixed inset-0 z-50 flex flex-col overflow-hidden outline-none"
       role="dialog"
       aria-modal="true"
       aria-label="Artifact"

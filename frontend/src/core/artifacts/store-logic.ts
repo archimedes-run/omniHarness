@@ -201,7 +201,7 @@ export function lineageWords(
 ): string | null {
   if (lineage === "user") return null;
   if (isImported(lineage, source)) return "Imported from its chat";
-  const named = safeField(source);
+  const named = namedSource(source);
   return named
     ? `Made from content the assistant read (${named})`
     : "Made from content the assistant read";
@@ -346,4 +346,62 @@ export function checkWords(
         tone: "warn",
       };
   }
+}
+
+/** A lineage source worth naming: the gateway's "unknown" placeholder and
+ * an empty list name nothing (the words then carry no parenthetical). */
+function namedSource(source: string | null | undefined): string {
+  const named = safeField(source);
+  return named.toLowerCase() === "unknown" ? "" : named;
+}
+
+/** The viewer's source chip. NEUTRAL unless the version came from content
+ * the assistant read AND its kind can run code (html, react, webapp): only
+ * then is it the warning-styled "From content the assistant read". The
+ * origin itself is the gateway's; this only words it. */
+export function sourceChip(
+  kind: ArtifactKind,
+  lineage: string,
+  source: string | null | undefined,
+): { label: string; tone: "neutral" | "warn" } {
+  if (lineage === "user")
+    return { label: "From your request", tone: "neutral" };
+  if (isImported(lineage, source)) {
+    return { label: "Imported from its chat", tone: "neutral" };
+  }
+  const named = namedSource(source);
+  const tail = named ? ` (${named})` : "";
+  const runs = kind === "html" || kind === "react" || kind === "webapp";
+  return runs
+    ? { label: `From content the assistant read${tail}`, tone: "warn" }
+    : { label: `Made from what the assistant read${tail}`, tone: "neutral" };
+}
+
+/** The viewer's checks chip: short words; the full sentence (checkWords) is
+ * in its popover. */
+export function checkChip(
+  state: "pending" | "passed" | "failed" | "not_checked" | null | undefined,
+): { label: string; tone: "ok" | "warn" | "neutral" } {
+  switch (state) {
+    case "passed":
+      return { label: "Checked", tone: "ok" };
+    case "failed":
+      return { label: "Check failed", tone: "warn" };
+    case "pending":
+      return { label: "Checking…", tone: "neutral" };
+    default:
+      return { label: "Not checked", tone: "neutral" };
+  }
+}
+
+/** One or two short lines for a version in the versions drawer: its note,
+ * trimmed; "First version" for v1 without one; else what made it. */
+export function versionSummary(
+  v: { n: number; note: string | null; origin: string },
+  max = 90,
+): string {
+  const note = safeField(v.note).replace(/\s+/g, " ").trim();
+  if (note)
+    return note.length > max ? `${note.slice(0, max - 1).trimEnd()}…` : note;
+  return v.n === 1 ? "First version" : originWords(v.origin);
 }

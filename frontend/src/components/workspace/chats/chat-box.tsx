@@ -36,6 +36,8 @@ import { useThread } from "../messages/context";
 
 const CLOSE_MODE = { chat: 100, artifacts: 0 };
 const OPEN_MODE = { chat: 60, artifacts: 40 };
+// A store artifact's viewer gets the wider share (its header is one row).
+const VIEWER_MODE = { chat: 40, artifacts: 60 };
 
 const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   children,
@@ -136,6 +138,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     return artifactsOpen;
   }, [artifactsOpen, artifacts]);
 
+  const viewerOpen = storeSelection !== null;
   const resizableIdBase = useMemo(() => {
     return pathname.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   }, [pathname]);
@@ -143,12 +146,12 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   useEffect(() => {
     if (layoutRef.current) {
       if (artifactPanelOpen) {
-        layoutRef.current.setLayout(OPEN_MODE);
+        layoutRef.current.setLayout(viewerOpen ? VIEWER_MODE : OPEN_MODE);
       } else {
         layoutRef.current.setLayout(CLOSE_MODE);
       }
     }
-  }, [artifactPanelOpen]);
+  }, [artifactPanelOpen, viewerOpen]);
 
   const storePanel = storeSelection ? (
     <ArtifactPanel
@@ -195,13 +198,14 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
         >
           <div
             className={cn(
-              "h-full p-4 transition-transform duration-300 ease-in-out",
+              "h-full transition-transform duration-300 ease-in-out",
+              storeSelection ? "p-0" : "p-4",
               artifactPanelOpen ? "translate-x-0" : "translate-x-full",
             )}
           >
             {storeSelection ? (
               isMobile ? null : (
-                <div className="bg-background border-border size-full overflow-hidden rounded-xl border p-4">
+                <div className="border-border size-full overflow-hidden border-l">
                   {storePanel}
                 </div>
               )

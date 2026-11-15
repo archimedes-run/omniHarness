@@ -133,6 +133,35 @@ export interface CodeRec {
   summary?: string[];
   /** The save model (api.md "Saved and unsaved"); default saved. */
   saved?: boolean;
+  /** The viewer: versions 1..N (default one, as before). Restore appends. */
+  history?: HistoryEntry[];
+  /** The version's origin (default the owner's request). */
+  lineage?: "user" | "content" | "import";
+  lineage_source?: string | null;
+  findings?: string[];
+}
+
+export interface HistoryEntry {
+  note: string | null;
+  html?: string;
+  source?: { entry: string; files: Record<string, string> };
+  lineage?: "user" | "content" | "import";
+  lineage_source?: string | null;
+  origin?: string;
+}
+
+function latest(rec: CodeRec): number {
+  return rec.history?.length ?? 1;
+}
+
+function entry(rec: CodeRec, n: number): HistoryEntry {
+  return (
+    rec.history?.[n - 1] ?? {
+      note: "A small page",
+      lineage: rec.lineage,
+      lineage_source: rec.lineage_source,
+    }
+  );
 }
 
 /** As the gateway does it (artifacts_store/frame.py): the shim PREPENDED as
@@ -276,8 +305,8 @@ export function codeSummary(rec: CodeRec) {
     id: rec.id,
     kind: rec.kind,
     title: rec.title,
-    latest_version: 1,
-    version_count: 1,
+    latest_version: latest(rec),
+    version_count: latest(rec),
     pinned: false,
     saved: rec.saved ?? true,
     saved_at: rec.saved === false ? null : iso(-30),
@@ -297,34 +326,35 @@ export function codeSummary(rec: CodeRec) {
     code: {
       build_state: rec.buildFailed ? "build_failed" : "ok",
       check_state: rec.buildFailed ? null : (rec.check ?? "passed"),
-      shown_version: rec.buildFailed ? null : 1,
+      shown_version: rec.buildFailed ? null : latest(rec),
       build: null,
     },
   };
 }
 
-function version(rec: CodeRec) {
+function version(rec: CodeRec, n = 1) {
+  const e = entry(rec, n);
   return {
     render: "frame",
-    n: 1,
+    n,
     content_hash: "b".repeat(64),
     size: rec.html.length,
     media_type: "text/html",
     language: null,
-    lineage: "user",
-    lineage_source: null,
-    origin: "tool",
-    base_version: null,
-    note: "A small page",
+    lineage: e.lineage ?? "user",
+    lineage_source: e.lineage_source ?? null,
+    origin: e.origin ?? "tool",
+    base_version: n > 1 ? n - 1 : null,
+    note: e.note,
     thread_id: THREAD,
     turn_id: "run-1",
     tool_call_id: `call-${rec.id}`,
     stored: "blob",
-    created_at: iso(-3600),
+    created_at: iso(-3600 + (n - 1) * 240),
     code: {
       build_state: rec.buildFailed ? "build_failed" : "ok",
       has_source: rec.kind === "react",
-      findings: [],
+      findings: rec.findings ?? [],
       fix_of: null,
       recipe: rec.kind === "react" ? { tool: "esbuild" } : { tool: "none" },
       check: rec.buildFailed ? null : check(rec),
@@ -353,14 +383,30 @@ export async function codeRoute(
   const method = req.method();
   if (method === "GET" && rest === "")
     return route.fulfill(
-      json({ ...codeSummary(rec), versions: [version(rec)] }),
+      json({
+        ...codeSummary(rec),
+        versions: Array.from({ length: latest(rec) }, (_, i) =>
+          version(rec, i + 1),
+        ),
+      }),
     );
+  if (method === "POST" && rest === "restore" && rec.history) {
+    const body = req.postDataJSON() as { version: number };
+    const from = entry(rec, body.version);
+    rec.history.push({ ...from, origin: "restore", note: null });
+    return route.fulfill(json({ version: version(rec, latest(rec)) }));
+  }
+  // Versions other than 1 answer like version 1, with their own source.
+  const vm = /^versions\/(\d+)(\/.*)?$/.exec(rest);
+  const vn = vm ? Number(vm[1]) : 1;
+  if (vm && vn > 1 && vn <= latest(rec)) rest = `versions/1${vm[2] ?? ""}`;
+  const ve = entry(rec, vn);
   if (method === "GET" && rest === "versions/1")
     return route.fulfill(
       json({
-        ...version(rec),
-        content: rec.kind === "html" ? rec.html : null,
-        source: rec.source ?? null,
+        ...version(rec, vn),
+        content: rec.kind === "html" ? (ve.html ?? rec.html) : null,
+        source: ve.source ?? rec.source ?? null,
         ...(rec.kind === "webapp"
           ? {
               entry: "index.html",
@@ -386,7 +432,7 @@ export async function codeRoute(
       json({
         token: "tok",
         expires_in: 300,
-        url: `/api/artifacts/${rec.id}/versions/1/frame.html?t=tok-${rec.id}`,
+        url: `/api/artifacts/${rec.id}/versions/${vn}/frame.html?t=tok-${rec.id}`,
       }),
     );
   }
@@ -402,7 +448,7 @@ export async function codeRoute(
         body: "Open this artifact in OmniHarness.",
       });
     const page = url.searchParams.get("path");
-    const html = page === null ? rec.html : rec.pages?.[page];
+    const html = page === null ? (ve.html ?? rec.html) : rec.pages?.[page];
     if (html === undefined)
       return route.fulfill({
         status: 404,
