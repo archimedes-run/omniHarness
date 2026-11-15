@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from test_preview_sessions_router import _FakeAioSandbox, _make_preview_app, _make_user, preview_test_context  # noqa: F401
+from test_preview_sessions_router import _FakeAioSandbox, _make_preview_app, _make_user, _owner_account_admitted, preview_test_context  # noqa: F401
 
 from app.gateway import preview_frame
 from app.gateway.preview_frame import LIVE_PATH_RE, mint_token, token_valid
@@ -321,13 +321,13 @@ def test_the_sandbox_is_reached_as_the_previews_owner(ctx, monkeypatch):
     from omniharness.runtime.user_context import get_effective_user_id
 
     seen = []
-    real = ctx["manager"]._get_sandbox_for_existing_session_sync
+    real = ctx["manager"]._existing_sandbox
 
     def spy(session):
         seen.append(get_effective_user_id())
         return real(session)
 
-    monkeypatch.setattr(ctx["manager"], "_get_sandbox_for_existing_session_sync", spy)
+    monkeypatch.setattr(ctx["manager"], "_existing_sandbox", spy)
     assert ctx["client"].get(f"{ctx['root']}/src/main.js").status_code == 200
     assert seen == [OWNER]
     assert get_effective_user_id() != OWNER  # and only for that request

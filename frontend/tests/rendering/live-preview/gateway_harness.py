@@ -105,7 +105,14 @@ def build(thread: str):
     async def existing(session):
         return sandbox
 
+    async def admitted(user_id: str) -> bool:
+        return user_id == str(OWNER)
+
+    # The sandbox lookups (the owner's routes, and the frame link's own) and
+    # the owner's account check, with no sandbox provider or account store.
     manager._get_sandbox_for_existing_session = existing  # type: ignore[method-assign]
+    manager._existing_sandbox = lambda session: sandbox  # type: ignore[method-assign]
+    previews._owner_admitted = admitted
     now = datetime.now(UTC)
     for app in ("vite-app", "site", "probe"):
         manager._sessions[f"preview_{app}"] = _PreviewSessionRecord(

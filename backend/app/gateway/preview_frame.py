@@ -45,18 +45,24 @@ TOKEN_TTL_SECONDS = 10 * 60
 #: rendering specs) and these headers, whose CSP is the same sandbox.
 FRAME_HEADERS: dict[str, str] = dict(json.loads((Path(__file__).parent / "preview_frame_profile.json").read_text(encoding="utf-8"))["headers"])
 
-#: Headers of the dev server's own response that the frame headers replace.
-_REPLACED_RESPONSE_HEADERS = frozenset(
+#: The dev server's response headers the link passes on; every other one is
+#: dropped (cookies, site-data and reporting headers, transport policies,
+#: service worker scope...). Content-Length and Content-Encoding are the
+#: gateway's own (the body is decoded and may be rewritten). Location arrives
+#: already rewritten onto the link; Vary is merged with the link's own; a
+#: Content-Security-Policy is kept beside the sandbox.
+_PASSED_RESPONSE_HEADERS = frozenset(
     {
-        "x-content-type-options",
-        "referrer-policy",
-        "cross-origin-resource-policy",
-        "access-control-allow-origin",
-        "access-control-allow-credentials",
-        "access-control-allow-methods",
-        "access-control-allow-headers",
-        "access-control-expose-headers",
-        "access-control-max-age",
+        "content-type",
+        "cache-control",
+        "etag",
+        "last-modified",
+        "expires",
+        "content-language",
+        "content-disposition",
+        "accept-ranges",
+        "content-range",
+        "location",
     }
 )
 
@@ -142,22 +148,20 @@ def preflight_response(request: Request) -> Response:
 
 
 def frame_response_headers(headers: dict[str, str], request: Request) -> dict[str, str]:
-    """The dev server's response headers with the frame's set on top. A
-    Content-Security-Policy of its own is kept beside the sandbox (both apply)."""
+    """The link's headers over the dev server's ALLOWED ones (see
+    ``_PASSED_RESPONSE_HEADERS``). A Content-Security-Policy of its own is
+    kept beside the sandbox (both apply); its Vary is merged with the link's."""
     out: dict[str, str] = {}
     upstream_csp = ""
     upstream_vary = ""
     for key, value in headers.items():
         lowered = key.lower()
-        if lowered in _REPLACED_RESPONSE_HEADERS:
-            continue
         if lowered == "content-security-policy":
             upstream_csp = value
-            continue
-        if lowered == "vary":
+        elif lowered == "vary":
             upstream_vary = value
-            continue
-        out[key] = value
+        elif lowered in _PASSED_RESPONSE_HEADERS:
+            out[lowered] = value
     out.update(FRAME_HEADERS)
     if upstream_csp:
         out["Content-Security-Policy"] = f"{FRAME_HEADERS['Content-Security-Policy']}, {upstream_csp}"
@@ -167,3 +171,10 @@ def frame_response_headers(headers: dict[str, str], request: Request) -> dict[st
     if vary:
         out["Vary"] = vary
     return out
+
+
+def error_response(status_code: int, message: str, request: Request) -> Response:
+    """An error on the link: plain text under the link's own headers (the
+    sandbox, nosniff, no-referrer, CORS for the frame), never cached."""
+    headers = {**frame_response_headers({}, request), "Cache-Control": "private, no-store"}
+    return Response(message[:500], status_code=status_code, media_type="text/plain; charset=utf-8", headers=headers)

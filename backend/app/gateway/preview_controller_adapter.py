@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.gateway.display_safe import model_line
 from omniharness.config.paths import get_paths
 from omniharness.preview.preview_controller import PreviewStatusSummary
 
@@ -100,11 +101,11 @@ class GatewayPreviewController:
         session_record = self._manager._sessions.get(active_response.id)
         client_errors: list[str] = []
         if session_record is not None:
-            for err in getattr(session_record, "client_errors", []):
-                if isinstance(err, dict):
-                    client_errors.append(err.get("message") or str(err))
-                else:
-                    client_errors.append(str(err))
+            # Text the previewed page wrote: one line each, bounded (it is
+            # shown to the model as data; preview_verification_middleware).
+            for err in getattr(session_record, "client_errors", [])[-20:]:
+                text = err.get("message") if isinstance(err, dict) else err
+                client_errors.append(model_line(text)[:500])
 
         return PreviewStatusSummary(
             has_web_app=has_web_app,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 from fastapi import APIRouter, HTTPException, Request
@@ -17,6 +18,8 @@ from app.gateway.preview_sessions import (
 from app.gateway.routers.artifacts import get_artifact_manifest_for_preview
 from omniharness.config.paths import get_paths
 from omniharness.runtime.user_context import reset_current_user, set_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threads", tags=["previews"])
 
@@ -123,17 +126,39 @@ async def proxy_preview_frame(
     public, csrf_middleware exempts it), and every response carries the
     frame's sandbox. Navigations from the frame itself are cross-site by
     design (an opaque origin), so no Fetch Metadata refusal here."""
-    manager = get_preview_session_manager(request)
-    session = manager.frame_session(thread_id=thread_id, preview_id=preview_id, token=token)
-    if session is None:
-        return preview_frame.expired_response()
-    # The preview's owner, as the auth middleware would stamp it on a session
-    # route: the sandbox provider resolves the thread's data by this user.
-    owner = set_current_user(SimpleNamespace(id=session.user_id))
     try:
-        return await manager.proxy_request(session=session, token=token, request=request, path=path)
-    finally:
-        reset_current_user(owner)
+        manager = get_preview_session_manager(request)
+        session = manager.frame_session(thread_id=thread_id, preview_id=preview_id, token=token)
+        if session is None:
+            return preview_frame.expired_response()
+        # The owner's account, checked on every request: a token of an account
+        # that is gone or no longer admitted opens nothing.
+        if not await _owner_admitted(session.user_id):
+            return preview_frame.error_response(404, "Preview not found", request)
+        # The preview's owner, as the auth middleware would stamp it on a session
+        # route: anything resolving the thread's data does so by this user.
+        owner = set_current_user(SimpleNamespace(id=session.user_id))
+        try:
+            return await manager.proxy_request(session=session, token=token, request=request, path=path)
+        finally:
+            reset_current_user(owner)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else "Preview request failed"
+        return preview_frame.error_response(exc.status_code, detail, request)
+    except Exception:
+        logger.exception("live preview request failed")
+        return preview_frame.error_response(500, "Preview request failed", request)
+
+
+async def _owner_admitted(user_id: str) -> bool:
+    from app.gateway.deps import get_local_provider
+    from app.gateway.ownership import account_admitted
+
+    try:
+        user = await get_local_provider().get_user(user_id)
+    except Exception:
+        return False
+    return await account_admitted(user)
 
 
 @router.post("/{thread_id}/artifacts/manifests/{artifact_id}/preview", response_model=PreviewSessionResponse)
