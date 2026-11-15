@@ -427,9 +427,12 @@ test.describe("static kinds render in the store", () => {
     await page.goto(`/workspace/artifacts/${IDS.mermaid}`, {
       waitUntil: "networkidle",
     });
-    await expect(
-      page.getByTestId("artifact-mermaid").locator("img"),
-    ).toBeVisible({ timeout: 15_000 });
+    // The testid is the <img> itself: the diagram drawn in its frame.
+    await expect(page.getByTestId("artifact-mermaid")).toHaveAttribute(
+      "src",
+      /^data:image\/svg\+xml;base64,/,
+      { timeout: 20_000 },
+    );
   });
 
   test("an artifact from a deleted chat opens, labelled, with no chat link", async ({
