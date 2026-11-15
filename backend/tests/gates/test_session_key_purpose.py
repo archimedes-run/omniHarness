@@ -15,13 +15,30 @@ import jwt
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-key-session-purpose-gate-min-32")
 
-APP = Path(__file__).resolve().parents[2] / "app"
+BACKEND = Path(__file__).resolve().parents[2]
+APP = BACKEND / "app"
+HARNESS = BACKEND / "packages" / "harness" / "omniharness"
 ALLOWED = {"gateway/auth/config.py", "gateway/auth/jwt.py", "gateway/auth/derived.py"}
+#: Every place the secret's ENVIRONMENT variable may appear, and why.
+ENV_ALLOWED = {
+    "app/gateway/auth/config.py": "reads it: the session secret itself",
+    "app/gateway/secret_usage.py": "names it in the table of secrets the gateway uses (no read)",
+    "packages/harness/omniharness/utils/safe_env.py": "names it in the list kept out of child environments (no read)",
+    "packages/harness/omniharness/community/aio_sandbox/sandbox_auth.py": (
+        "derives per-sandbox API keys by HMAC (container name) from it when the internal token is unset; the keys are never tokens the gateway accepts and the sandbox never sees the secret"
+    ),
+}
 
 
 def test_only_the_auth_modules_touch_the_session_secret():
     users = sorted(str(p.relative_to(APP)) for p in APP.rglob("*.py") if re.search(r"\bjwt_secret\b", p.read_text(encoding="utf-8")))
     assert set(users) <= ALLOWED, users
+
+
+def test_the_secret_is_read_from_the_environment_only_where_listed():
+    found = sorted(str(p.relative_to(BACKEND)) for root in (APP, HARNESS) for p in root.rglob("*.py") if "AUTH_JWT_SECRET" in p.read_text(encoding="utf-8"))
+    assert set(found) <= set(ENV_ALLOWED), sorted(set(found) - set(ENV_ALLOWED))
+    assert set(found) == set(ENV_ALLOWED), "a listed reader moved: update ENV_ALLOWED"
 
 
 def test_every_session_token_carries_the_session_typ():

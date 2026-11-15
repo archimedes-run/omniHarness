@@ -75,6 +75,7 @@ const ALL = [
   "srcdoc-attribute",
   "blank-create",
   "blank-innerhtml",
+  "custom-builtin",
   "xslt",
 ];
 

@@ -16,9 +16,14 @@ the chat's sandbox on the EXACT frame document the frame route serves
 
 Fail closed, as in app mode: a fresh, unguessable probe folder per run, the
 probe script run only when its checksum matches, a per-run nonce and the
-SHA-256 of the document it loaded both echoed back in the result. A result
-without them (or with others), an unreadable result, a missing sandbox: the
-version is `not_checked`, never shown as checked. A version that fails is
+SHA-256 of the document it loaded both echoed back in the result, and a
+clean exit. A result without them (or with others), an unreadable result, a
+missing sandbox: the version is `not_checked`, never shown as checked.
+
+The result is produced INSIDE the chat's sandbox, which the chat's own code
+shares: it is a quality signal for the owner, NOT a security boundary. The
+frame isolates every version the same way whatever its checks say (the
+gateway never kills the sandbox's other processes to run them). A version that fails is
 still stored and viewable, labelled with what failed (artifacts are the
 owner's drafts).
 
@@ -218,21 +223,6 @@ def read_small(ops, path: str, limit: int) -> str | None:
     return data.decode("utf-8", "replace")
 
 
-#: Before the probe's folder exists: every process the sandbox user started
-#: after the sandbox's own services is stopped (a resident watcher could
-#: otherwise read the run's nonce and race the result). The services are the
-#: sandbox user's processes started within the first minute of the container.
-QUIESCE = (
-    # This command's ancestors (the control session) and descendants stay.
-    f'anc=" $$ "; q=$$; while [ "$q" -gt 1 ] 2>/dev/null; do q=$({B}/ps -o ppid= -p $q | {B}/tr -d \' \'); anc="$anc$q "; done; '
-    f"boot=$({B}/stat -c %Y /proc/1); now=$({B}/date +%s); "
-    f"for p in $({B}/ps -eo pid=,user=,etimes= | {B}/awk -v up=$((now-boot)) '$2 == \"gem\" && (up - $3) > 60 {{ print $1 }}'); do "
-    'case "$anc" in *" $p "*) continue;; esac; '
-    f'q=$p; mine=0; while [ "$q" -gt 1 ] 2>/dev/null; do [ "$q" = "$$" ] && mine=1 && break; q=$({B}/ps -o ppid= -p $q 2>/dev/null | {B}/tr -d \' \'); [ -z "$q" ] && break; done; '
-    "[ $mine = 0 ] && /bin/kill -KILL $p 2>/dev/null; done; true"
-)
-
-
 def with_findings(result: dict, blocking_findings: list[str]) -> dict:
     """A page the strict profile will not run fails the check, in those words."""
     if not blocking_findings or result.get("outcome") == "error":
@@ -259,7 +249,6 @@ def run(ops, stored: bytes, *, beat: Callable[[], None] | None = None) -> tuple[
     raw: str | None = None
     shots: dict[str, bytes] = {}
     try:
-        ops.sh(QUIESCE, timeout=30)
         _, made = ops.sh(f"{B}/mkdir -m 700 {_q(directory)} && {B}/mkdir -p -m 755 {_q(prod)} && echo __made__", timeout=15)
         if "__made__" not in made:
             return error("server", time.monotonic() - t0), {}
@@ -298,7 +287,7 @@ def model_lines(result: dict, state: str) -> list[str]:
     """What the model reads in the (trusted) tool result: system words only."""
     widths = "/".join(str(w) for w in WIDTHS)
     if state == "passed":
-        return [f"System checks passed (layout at {widths} px in light and dark, no network, it renders)."]
+        return [f"System checks passed: no network attempts seen, it renders, layout fits at {widths} px in light and dark (a quality check, not a guarantee)."]
     if state == "failed":
         return ["System checks FAILED: " + "; ".join(result.get("summary") or ["see the details"]) + "."]
     return ["System checks gave no answer: " + "; ".join(result.get("summary") or ["the checks did not run"]) + ". The version is not shown as checked."]

@@ -545,15 +545,21 @@ class ArtifactStore:
         state = check_dict(check)["state"] if code.build_state == "ok" else "build_failed"
         if state not in ("failed", "build_failed"):
             return None
+        # The turn: its run id; without one (a context that carries none),
+        # everything since the owner last acted on the artifact counts as one.
         if version.turn_id:
-            fixes = s.execute(
-                select(func.count())
-                .select_from(ArtifactCodeRow)
-                .join(ArtifactVersionRow, (ArtifactVersionRow.artifact_id == ArtifactCodeRow.artifact_id) & (ArtifactVersionRow.n == ArtifactCodeRow.n))
-                .where(ArtifactCodeRow.artifact_id == row.id, ArtifactCodeRow.fix_of.is_not(None), ArtifactVersionRow.turn_id == version.turn_id, ArtifactVersionRow.n != version.n)
-            ).scalar_one()
-            if fixes:
-                raise FixRefused("This turn already made the one automatic fix of this artifact: do not run another. Tell the person what still fails.")
+            scope = ArtifactVersionRow.turn_id == version.turn_id
+        else:
+            since = s.execute(select(func.max(ArtifactVersionRow.n)).where(ArtifactVersionRow.artifact_id == row.id, ArtifactVersionRow.origin != "tool")).scalar_one_or_none() or 0
+            scope = ArtifactVersionRow.n > since
+        fixes = s.execute(
+            select(func.count())
+            .select_from(ArtifactCodeRow)
+            .join(ArtifactVersionRow, (ArtifactVersionRow.artifact_id == ArtifactCodeRow.artifact_id) & (ArtifactVersionRow.n == ArtifactCodeRow.n))
+            .where(ArtifactCodeRow.artifact_id == row.id, ArtifactCodeRow.fix_of.is_not(None), scope, ArtifactVersionRow.n != version.n)
+        ).scalar_one()
+        if fixes:
+            raise FixRefused("This turn already made the one automatic fix of this artifact: do not run another. Tell the person what still fails.")
         return version.base_version
 
     def _store_pages(self, s: Session, row: ArtifactRow, version: ArtifactVersionRow, code: dict, post: dict | None) -> tuple[bytes | None, str, dict]:

@@ -109,11 +109,46 @@ def test_a_frame_token_is_not_a_session(gateway, sandbox):
 def test_the_frame_query_never_reaches_the_access_log():
     import logging
 
-    from app.gateway.routers.artifact_store import _RedactFrameQuery
+    from app.gateway.logging_filters import PreviewTokenRedactionFilter
 
     record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d', ("1.2.3.4:5", "GET", "/api/artifacts/a/versions/1/frame.html?t=secret.token&path=x", "1.1", 200), None)
-    _RedactFrameQuery().filter(record)
+    PreviewTokenRedactionFilter().filter(record)
     assert "secret" not in record.getMessage() and "frame.html?[redacted]" in record.getMessage()
+
+
+def test_isolation_never_depends_on_the_check(gateway, sandbox, monkeypatch):
+    """The check is advisory: a passed, failed, unchecked or forged-pass version
+    of the same document gets the identical frame document and headers."""
+    from fake_sandbox import failing, passing
+
+    served = []
+    for probe in (None, failing(violations=["connect-src"]), "none", "forged"):
+        if probe == "none":
+            monkeypatch.setattr(code_service, "sandbox_factory", lambda t, o: None)
+        elif probe == "forged":
+            monkeypatch.setattr(code_service, "sandbox_factory", lambda t, o: sandbox["ops"])
+            sandbox["ops"].probe = lambda check, doc: (0, passing({**check, "nonce": "f" * 32}, doc))
+        elif probe is not None:
+            sandbox["ops"].probe = probe
+        aid = make(gateway)
+        resp = gateway.client.get(token(gateway, aid)["url"], headers=IFRAME)
+        served.append((resp.status_code, resp.content, {k: v for k, v in resp.headers.items() if k.lower() not in ("date", "content-length", "server")}))
+    states = [s for s in served]
+    assert all(x == states[0] for x in states) and states[0][0] == 200
+
+
+def test_frame_and_thread_files_need_the_session_cookie(gateway, sandbox):
+    """A frame that navigates itself to these arrives cross-site without the
+    (SameSite=Lax) cookie: without it they answer 401, never a document."""
+    from fastapi.testclient import TestClient
+
+    aid = make(gateway)
+    url = token(gateway, aid)["url"]
+    stranger = TestClient(gateway.app)
+    for path in (url, f"/api/artifacts/{aid}/versions/1/content", "/api/threads/thread-a/artifacts/mnt/user-data/outputs/x.html", "/api/threads/thread-a/previews/p1/proxy/"):
+        resp = stranger.get(path, headers={**IFRAME, "Sec-Fetch-Site": "cross-site"})
+        assert resp.status_code in (401, 403), path
+        assert b"<script" not in resp.content.lower(), path
 
 
 def test_the_internal_token_is_refused_on_frame_routes(gateway, sandbox):

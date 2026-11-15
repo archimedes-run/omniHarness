@@ -101,3 +101,15 @@ def test_live_inline_handlers_do_not_run_under_the_strict_profile():
     page = b"<!doctype html><body><p id=p>before</p><img src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\" onload=\"document.getElementById('p').textContent='ran'\"></body>"
     result, _ = checks.run(DockerOps(), page)
     assert result["outcome"] in ("pass", "fail")  # the page renders; the handler is refused (a CSP violation is recorded)
+
+
+def test_live_a_process_started_before_the_check_survives_it():
+    ops = DockerOps()
+    ops.sh("nohup sleep 600 >/dev/null 2>&1 & echo $! > /tmp/omni-survivor.pid", timeout=10)
+    pid = ops.sh("cat /tmp/omni-survivor.pid", timeout=10)[1].strip()
+    checks.run(ops, CLEAN.encode())
+    # Alive, not a zombie (a killed orphan stays a zombie under this
+    # container's init, and kill -0 would still succeed on it).
+    _, state = ops.sh(f"grep '^State:' /proc/{pid}/status", timeout=10)
+    ops.sh(f"kill {pid}", timeout=10)
+    assert state.split()[1:2] and state.split()[1] in ("S", "R"), f"the check stopped a process it did not start: {state!r}"
