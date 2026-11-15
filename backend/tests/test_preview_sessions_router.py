@@ -123,6 +123,10 @@ class _FakeAioSandboxProvider:
     def get(self, sandbox_id: str):
         return self._sandbox if self._active else None
 
+    def peek(self, sandbox_id: str):
+        """The real provider's peek: no reclaim from the warm pool."""
+        return self._sandbox if self._active and sandbox_id == "sandbox-1" else None
+
     def release(self) -> None:
         """Simulate the agent releasing the sandbox after a run."""
         self._active = False
@@ -142,6 +146,16 @@ def _make_preview_app(*, user: User, manager: PreviewSessionManager):
     app.state.preview_session_manager = manager
     app.include_router(previews_router.router)
     return app
+
+
+@pytest.fixture(autouse=True)
+def _owner_account_admitted(monkeypatch):
+    """The frame link checks the owner's account (no account store here)."""
+
+    async def admitted(user_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr(previews_router, "_owner_admitted", admitted)
 
 
 @pytest.fixture()

@@ -421,6 +421,52 @@ def _sanitize_proxy_response_headers(headers: dict[str, str], *, proxy_root: str
     return sanitized
 
 
+_CLIENT_ERROR_PATH = "/__omni_preview__/client-error"
+#: A report from the page: at most this many bytes are read.
+_CLIENT_ERROR_MAX_BODY = 8 * 1024
+_CLIENT_ERROR_MAX_TYPE = 32
+_CLIENT_ERROR_MAX_MESSAGE = 2000
+#: What a preview keeps: the newest reports, within both bounds.
+_CLIENT_ERROR_MAX_ENTRIES = 50
+_CLIENT_ERROR_MAX_TOTAL = 32 * 1024
+
+
+async def _read_capped(request: Request, limit: int) -> bytes | None:
+    """The body, or None when it is longer than ``limit`` (not read further)."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        return None
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _record_client_error(session: _PreviewSessionRecord, body: bytes | None) -> None:
+    """Keep ``{type, message}`` (strings, bounded) from a page's error report;
+    anything else (too long, not JSON, not an object) is dropped."""
+    if not body:
+        return
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except ValueError:
+        return
+    if not isinstance(data, dict):
+        return
+    entry = {
+        "type": str(data.get("type", ""))[:_CLIENT_ERROR_MAX_TYPE],
+        "message": str(data.get("message", ""))[:_CLIENT_ERROR_MAX_MESSAGE],
+    }
+    errors = [*session.client_errors, entry][-_CLIENT_ERROR_MAX_ENTRIES:]
+    while errors and sum(len(e["type"]) + len(e["message"]) for e in errors) > _CLIENT_ERROR_MAX_TOTAL:
+        errors.pop(0)
+    session.client_errors = errors
+
+
 class PreviewSessionCreateRequest(BaseModel):
     artifact_id: str = Field(min_length=1, max_length=128)
     root_path: str = Field(min_length=1, max_length=512)
@@ -730,46 +776,31 @@ class PreviewSessionManager:
         request: Request,
         path: str,
     ) -> Response:
-        """Forward one request of the frame link to the preview's dev server."""
+        """Forward one request of the frame link to the preview's dev server.
+
+        The link revives nothing: it uses the sandbox the preview already has
+        (no acquire, no idle timer touched), never refreshes or extends the
+        preview (the owner's own status polling does that), and answers a
+        preview that is not running with 409. Errors come back as
+        ``HTTPException`` for the route to answer under the link's headers."""
         if preview_frame.is_preflight(request):
             return preview_frame.preflight_response(request)
-        # Skip the expensive per-request refresh for already-running sessions.
-        # The status-polling endpoint (GET /previews and GET /previews/{id}/logs)
-        # refreshes status every ~3 s via background polling. Probing on every
-        # proxied asset request (HTML, JS chunks, CSS, images) runs concurrent
-        # nodejs.execute_code calls inside the shared container and overloads the
-        # sandbox executor, causing probe failures that flip the status back to
-        # "starting" and 409s for all subsequent asset requests.
         if session.status != "running":
-            await self._refresh_session(session)
-        if session.status == "stopped":
-            raise HTTPException(status_code=409, detail="Preview session is stopped")
-        if session.status == "failed":
-            raise HTTPException(status_code=502, detail=session.error or "Preview session failed")
+            raise HTTPException(status_code=409, detail="Preview is not running")
         if session.port == 0:
             raise HTTPException(status_code=409, detail="Preview session has not exposed a port yet")
 
-        sandbox = await self._get_sandbox_for_existing_session(session)
         proxy_path = f"/{path.lstrip('/')}" if path else "/"
         if request.url.query:
             proxy_path = f"{proxy_path}?{request.url.query}"
 
         # Feature 3: intercept client-error reports from the preview shim.
         # The path is reserved and never forwarded to the sandbox.
-        _CLIENT_ERROR_PATH = "/__omni_preview__/client-error"
-        if proxy_path == _CLIENT_ERROR_PATH or proxy_path.split("?")[0] == _CLIENT_ERROR_PATH:
-            body = await request.body()
-            if body:
-                try:
-                    error_data = json.loads(body.decode("utf-8", errors="replace"))
-                    if isinstance(error_data, dict):
-                        session.client_errors.append(error_data)
-                        if len(session.client_errors) > 100:
-                            session.client_errors = session.client_errors[-100:]
-                except Exception:
-                    pass
+        if proxy_path.split("?")[0] == _CLIENT_ERROR_PATH:
+            _record_client_error(session, await _read_capped(request, _CLIENT_ERROR_MAX_BODY))
             return Response(status_code=204, headers=preview_frame.frame_response_headers({}, request))
 
+        sandbox = self._existing_sandbox(session)
         body = await request.body()
         try:
             forwarded = await asyncio.to_thread(
@@ -781,13 +812,9 @@ class PreviewSessionManager:
                 body=body or None,
             )
         except Exception as exc:
-            # Forward failed — refresh to detect any process exit, then surface a 502
-            with contextlib.suppress(Exception):
-                await self._refresh_session(session, touch=False)
-            raise HTTPException(status_code=502, detail=f"Preview request failed: {exc}") from exc
+            logger.debug("preview fetch failed for %s: %s", session.id, exc)
+            raise HTTPException(status_code=502, detail="The preview's dev server did not answer") from exc
 
-        session.updated_at = _now_utc()
-        session.expires_at = session.updated_at + timedelta(seconds=self._idle_timeout_seconds)
         proxy_root = preview_frame.frame_root(thread_id=session.thread_id, preview_id=session.id, token=token)
         headers = preview_frame.frame_response_headers(
             _sanitize_proxy_response_headers(
@@ -1032,6 +1059,15 @@ class PreviewSessionManager:
         if not isinstance(sandbox, AioSandbox):
             raise HTTPException(status_code=500, detail="Failed to acquire AIO sandbox")
         return sandbox_id, sandbox
+
+    def _existing_sandbox(self, session: _PreviewSessionRecord) -> AioSandbox:
+        """The sandbox this preview already runs in, as it is: nothing is
+        acquired, restarted or marked active (the frame link's lookup)."""
+        provider = get_sandbox_provider()
+        sandbox = provider.peek(session.sandbox_id) if isinstance(provider, AioSandboxProvider) and session.sandbox_id else None
+        if not isinstance(sandbox, AioSandbox):
+            raise HTTPException(status_code=404, detail="Preview sandbox is not available")
+        return sandbox
 
     async def _get_sandbox_for_existing_session(self, session: _PreviewSessionRecord) -> AioSandbox:
         return await asyncio.to_thread(self._get_sandbox_for_existing_session_sync, session)

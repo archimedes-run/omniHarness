@@ -655,7 +655,21 @@ page without reloading it. Every response on the link carries
 opened on its own is inert too), `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer` and `Cross-Origin-Resource-Policy:
 cross-origin` (`app/gateway/preview_frame.py`, `preview_frame_profile.json`).
-The token is written to neither the gateway's log nor nginx's access log.
+The link passes on only an allowlist of the dev server's response headers
+(content type, caching and validators, language, disposition, ranges, the
+rewritten `Location`, `Vary` merged and a CSP kept beside the sandbox). It
+revives nothing: it uses the preview's sandbox as it is, does not extend the
+preview's idle expiry (the owner's status polling does), answers a preview that
+is not running with `409`, and every error comes back as plain text under the
+same headers. The owner's account is checked on every request. Error reports
+the page sends (`__omni_preview__/client-error`) are bounded (8 KB a report,
+`type` and `message` only, newest 50 kept) and reach the model labelled as
+untrusted output from the page.
+
+The token is written to neither the gateway's log nor nginx's access log (the
+request line and the `Referer` field). nginx's error log is not filtered: on
+an upstream error it prints the raw request line, token included, so treat
+that log as holding live links for up to 10 minutes.
 
 `path` (webapp only): one page of the set by its stored relative path
 (default: the entry). Only pages prepared at save are served; anything else

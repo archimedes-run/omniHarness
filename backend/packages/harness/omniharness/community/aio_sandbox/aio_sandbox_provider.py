@@ -634,6 +634,13 @@ class AioSandboxProvider(SandboxProvider):
                 self._last_activity[sandbox_id] = time.time()
             return sandbox
 
+    def peek(self, sandbox_id: str) -> Sandbox | None:
+        """An active sandbox by ID, without marking it active: no idle timer is
+        reset and nothing is reclaimed from the warm pool (the live preview's
+        frame link reads through this)."""
+        with self._lock:
+            return self._sandboxes.get(sandbox_id)
+
     def info(self, sandbox_id: str) -> SandboxInfo | None:
         """The container behind an acquired sandbox (its name keys the coding
         job token to that one container, spec 009)."""

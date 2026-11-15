@@ -85,6 +85,11 @@ def _proxy_client(monkeypatch):
     app = make_authed_test_app()
     app.include_router(previews_router.router)
     monkeypatch.setattr(previews_router, "get_preview_session_manager", lambda request: _FakeManager())
+
+    async def admitted(user_id):
+        return True
+
+    monkeypatch.setattr(previews_router, "_owner_admitted", admitted)
     return TestClient(app)
 
 
